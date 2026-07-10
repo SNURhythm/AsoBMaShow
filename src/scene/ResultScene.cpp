@@ -21,6 +21,7 @@
 #include "../skin/SkinTypes.h"
 
 #include <algorithm>
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -203,7 +204,8 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
 }
 
 CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
-                                            const RhythmState &resultState) {
+                                            const RhythmState &resultState,
+                                            const ScoreProvenance &provenance) {
   CourseReplayData replay;
   replay.courseId = session.courseId;
   replay.courseName = session.courseName;
@@ -222,6 +224,7 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
   replay.completedCharts =
       static_cast<int>(session.completedResults.size());
   replay.totalCharts = static_cast<int>(session.entries.size());
+  replay.provenance = provenance;
   const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
   if (result_presentation::isFullComboCourseResult(
           replay.completedCharts, replay.totalCharts, session.entries.size(),
@@ -246,18 +249,18 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
 }
 } // namespace
 
-ResultScene::ResultScene(ApplicationContext &context,
-                         const bms_parser::ChartMeta &meta,
-                         const RhythmState &state, const ReplayData *replay,
-                         bool shouldSaveScore, const ReplayData *retrySource,
-                         ResultPracticeOptions practiceOptions,
-                         bool autoPlayResult,
-                         ResultCourseOptions courseOptions,
-                         std::string pacemakerTarget,
-                         std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
-                         bms_parser::Chart *reusableRetryChart,
-                         std::optional<ResultPacemakerData> pacemakerOverride)
+ResultScene::ResultScene(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const ScoreProvenance &attemptProvenance,
+    const ReplayData *replay, bool shouldSaveScore,
+    const ReplayData *retrySource, ResultPracticeOptions practiceOptions,
+    bool autoPlayResult, ResultCourseOptions courseOptions,
+    std::string pacemakerTarget,
+    std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
+    bms_parser::Chart *reusableRetryChart,
+    std::optional<ResultPacemakerData> pacemakerOverride)
     : Scene(context), meta(meta), resultState(state),
+      attemptProvenance(attemptProvenance),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
       retryData(retrySource != nullptr
@@ -349,8 +352,8 @@ void ResultScene::saveScore() {
       const int totalCharts =
           static_cast<int>(courseOptions.session->entries.size());
       if (ScoreDBHelper::GetInstance().SaveCourseScore(
-              *courseOptions.session, resultState, completedCharts,
-              totalCharts)) {
+              *courseOptions.session, resultState, completedCharts, totalCharts,
+              attemptProvenance)) {
         courseOptions.session->courseScoreSaved = true;
       } else {
         SDL_Log("Failed to save course score: %s",
@@ -364,7 +367,8 @@ void ResultScene::saveScore() {
     return;
   }
 
-  if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState)) {
+  if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState,
+                                              attemptProvenance)) {
     SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
   }
 }
@@ -407,9 +411,8 @@ void ResultScene::saveReplay() {
       return;
     }
 
-    auto courseReplay =
-        std::make_shared<CourseReplayData>(
-            courseReplayDataForSession(*session, resultState));
+    auto courseReplay = std::make_shared<CourseReplayData>(
+        courseReplayDataForSession(*session, resultState, attemptProvenance));
     if (courseReplay->stages.empty()) {
       return;
     }
@@ -433,6 +436,9 @@ void ResultScene::saveReplay() {
     return;
   }
   replaySaved = true;
+
+  assert(replayToSave->provenance == attemptProvenance);
+  replayToSave->provenance = attemptProvenance;
 
   if (!ReplayDBHelper::GetInstance().SaveReplay(*replayToSave).has_value()) {
     SDL_Log("Failed to save replay for chart: %s", meta.Title.c_str());
@@ -882,8 +888,8 @@ void ResultScene::showCourseResult() {
   RhythmState courseState = courseResultStateForSession(*session);
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
-          context, courseMeta, courseState, nullptr, false, nullptr,
-          ResultPracticeOptions{}, false,
+          context, courseMeta, courseState, session->aggregateProvenance(),
+          nullptr, false, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
                               .session = session}),
       false);

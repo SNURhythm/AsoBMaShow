@@ -37,6 +37,49 @@ constexpr long long kCoursePauseHoldMicros = 650000LL;
 constexpr long long kCoursePauseRewindMicros = 260000LL;
 constexpr float kPi = 3.14159265358979323846f;
 
+Judge makeEffectiveJudge(int rank, CourseJudgementConstraint constraint) {
+  Judge judge(rank);
+  judge.applyCourseJudgementConstraint(constraint);
+  return judge;
+}
+
+InputDeviceCategory provenanceDeviceCategory(input::DeviceClass deviceClass) {
+  switch (deviceClass) {
+  case input::DeviceClass::Keyboard:
+    return InputDeviceCategory::Keyboard;
+  case input::DeviceClass::GameController:
+    return InputDeviceCategory::GameController;
+  case input::DeviceClass::Joystick:
+    return InputDeviceCategory::Joystick;
+  case input::DeviceClass::Touch:
+    return InputDeviceCategory::Touch;
+  case input::DeviceClass::Midi:
+    return InputDeviceCategory::Midi;
+  }
+  return InputDeviceCategory::Unknown;
+}
+
+StartOptions resolvePlayStartInputDevices(StartOptions options,
+                                          const InputProfile &profile,
+                                          int keyMode) {
+  if (!options.inputDeviceCategories.empty()) {
+    return options;
+  }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
+  options.inputDeviceCategories = {InputDeviceCategory::Touch};
+#else
+  InputBindingResolver resolver(profile, makeGameplayInputScopes(keyMode), {});
+  for (const auto deviceClass : resolver.activeDeviceClasses()) {
+    options.inputDeviceCategories.push_back(
+        provenanceDeviceCategory(deviceClass));
+  }
+  if (options.inputDeviceCategories.empty()) {
+    options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
+  }
+#endif
+  return options;
+}
+
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -332,19 +375,26 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              bms_parser::Chart *chart, StartOptions options)
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
-      judge(chart->Meta.Rank), options(std::move(options)) {
-  judge.applyCourseJudgementConstraint(this->options.courseConstraints.judgement);
+      judge(makeEffectiveJudge(chart->Meta.Rank,
+                               options.courseConstraints.judgement)),
+      options(resolvePlayStartInputDevices(
+          std::move(options), context.inputProfile, chart->Meta.KeyMode)),
+      attemptProvenance(captureScoreProvenanceAtPlayStart(
+          this->options, this->chart->Meta, judge.timingWindows)) {
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
 GamePlayScene::GamePlayScene(ApplicationContext &context,
                              std::unique_ptr<bms_parser::Chart> chart,
                              StartOptions options)
-    : Scene(context), ownedChart(std::move(chart)),
-      chart(ownedChart.get()), judge(this->chart->Meta.Rank),
-      options(std::move(options)) {
+    : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
+      judge(makeEffectiveJudge(this->chart->Meta.Rank,
+                               options.courseConstraints.judgement)),
+      options(resolvePlayStartInputDevices(
+          std::move(options), context.inputProfile, this->chart->Meta.KeyMode)),
+      attemptProvenance(captureScoreProvenanceAtPlayStart(
+          this->options, this->chart->Meta, judge.timingWindows)) {
   this->options.ownsChart = true;
-  judge.applyCourseJudgementConstraint(this->options.courseConstraints.judgement);
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
@@ -823,6 +873,7 @@ bool GamePlayScene::restartCourseFromBeginning() {
   session->completedResults.clear();
   if (!session->courseReplayPlayback) {
     session->replayStages.clear();
+    session->stageProvenance.clear();
   }
   session->carriedGauge.reset();
   session->carriedCombo = 0;
@@ -1139,6 +1190,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.playOption2 = options.playOption2;
   recordedReplay.playOption2Seed = options.playOption2Seed;
   recordedReplay.assistOption = assist_options::normalize(options.assistOption);
+  recordedReplay.provenance = attemptProvenance;
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
   recordedReplay.finalScore = 0;
@@ -1332,6 +1384,10 @@ void GamePlayScene::update(float dt) {
     options.courseSession->maxCombo =
         std::max(options.courseSession->maxCombo, state->maxCombo);
     options.courseSession->recordResult(chart->Meta, *state);
+    if (!options.courseSession->courseReplayPlayback) {
+      options.courseSession->recordStageProvenance(
+          options.courseSession->currentIndex, attemptProvenance);
+    }
     if (shouldRecordReplay()) {
       options.courseSession->recordReplayStage(recordedReplay);
     }
@@ -1399,13 +1455,12 @@ void GamePlayScene::update(float dt) {
         }
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
-                context, resultMeta, *state, replayToSave,
+                context, resultMeta, *state, attemptProvenance, replayToSave,
                 !options.autoPlay && !options.practiceMode &&
                     !isReplayPlayback() && !isCoursePlayback(),
                 retrySource, practiceResultOptions,
-                options.autoPlay ||
-                    (options.replayData != nullptr &&
-                     options.replayData->autoPlay),
+                options.autoPlay || (options.replayData != nullptr &&
+                                     options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
                 std::move(ownedReusableRetryChart), reusableRetryChart,
                 gbattleResultPacemaker),
