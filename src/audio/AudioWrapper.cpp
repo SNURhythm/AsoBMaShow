@@ -786,6 +786,54 @@ bool AudioWrapper::scheduleSound(const path_t &path, audio::Bus bus,
   return true;
 }
 
+bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
+                                       long long startMicros) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
+    SDL_Log("Sound not found: %s", path_t_to_utf8(path).c_str());
+    return false;
+  }
+
+  if (!backend) {
+    backendState.store(audio::playback::BackendRunState::Unknown,
+                       std::memory_order_release);
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Audio backend is unavailable for scheduled %s",
+                 path_t_to_utf8(path).c_str());
+    return false;
+  }
+  const auto observed = backend->observeState();
+  backendState.store(observed.state, std::memory_order_release);
+  if (!audio::playback::CanMutateCallbackStateDirectly(observed.state)) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Audio backend is not stopped for staged %s: %s",
+                 path_t_to_utf8(path).c_str(), observed.diagnostic.c_str());
+    return false;
+  }
+
+  auto &soundData = soundDataList[indexIt->second];
+  const uint64_t sequence =
+      scheduledSoundSequence.fetch_add(1, std::memory_order_acq_rel);
+
+  {
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    if (!audio::playback::InsertScheduledSound(
+            callbackState, {.soundData = soundData.get(),
+                            .bus = bus,
+                            .startMicros = startMicros,
+                            .sequence = sequence})) {
+      SDL_Log("Audio scheduling capacity exhausted; dropping scheduled %s",
+              path_t_to_utf8(path).c_str());
+      return false;
+    }
+  }
+
+  return true;
+}
+
 audio::playback::BackendOperationResult AudioWrapper::startDevice() {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);

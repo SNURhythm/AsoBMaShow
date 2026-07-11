@@ -90,6 +90,21 @@ RunAfterConfirmedStart(Lifecycle &lifecycle, std::string_view context,
   return result;
 }
 
+template <typename Lifecycle>
+[[nodiscard]] audio::playback::BackendOperationResult
+RollbackStagedAudio(Lifecycle &lifecycle, std::string_view context,
+                    audio::playback::BackendOperationResult failure) {
+  const auto rollback =
+      ContextualizeFailure(lifecycle.stopSounds(), context, "staged rollback");
+  if (!rollback.success) {
+    if (!failure.diagnostic.empty()) {
+      failure.diagnostic += "; ";
+    }
+    failure.diagnostic += rollback.diagnostic;
+  }
+  return failure;
+}
+
 template <typename Lifecycle, typename WakeScheduler>
 [[nodiscard]] audio::playback::BackendOperationResult
 StopSessionForTransition(Lifecycle &lifecycle, std::string_view context,
@@ -136,6 +151,40 @@ StartPlayback(Lifecycle &lifecycle, std::string_view context,
     }
     std::invoke(std::forward<WakeScheduler>(wakeScheduler));
   });
+}
+
+template <typename Lifecycle, typename StageAudio, typename CommitAudio,
+          typename WakeScheduler>
+[[nodiscard]] audio::playback::BackendOperationResult
+StartPlayback(Lifecycle &lifecycle, std::string_view context,
+              SessionState &state, CursorPosition target,
+              StageAudio &&stageAudio, CommitAudio &&commitAudio,
+              WakeScheduler &&wakeScheduler, ClockState clock = {}) {
+  auto staged = ContextualizeFailure(
+      std::invoke(std::forward<StageAudio>(stageAudio)), context, "stage");
+  if (!staged.success) {
+    return RollbackStagedAudio(lifecycle, context, std::move(staged));
+  }
+
+  auto started =
+      ContextualizeFailure(lifecycle.startDevice(), context, "start");
+  if (!started.success) {
+    return RollbackStagedAudio(lifecycle, context, std::move(started));
+  }
+
+  {
+    std::lock_guard<std::mutex> positionLock(state.positionMutex);
+    state.stopwatch.reset();
+    state.audioCursor = target.audio;
+    state.bmpCursor = target.bmp;
+    state.bmpLayerCursor = target.bmpLayer;
+    std::invoke(std::forward<CommitAudio>(commitAudio));
+    state.schedulerActive.store(true, std::memory_order_release);
+    state.isPlaying.store(true, std::memory_order_release);
+    RestoreClockState(state.stopwatch, clock);
+  }
+  std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+  return started;
 }
 
 template <typename CommitAudio, typename WakeScheduler>
@@ -227,6 +276,67 @@ ExecuteSeekTransition(Lifecycle &lifecycle, std::string_view context,
       state.isPlaying.store(true, std::memory_order_release);
       std::invoke(std::forward<WakeScheduler>(wakeScheduler));
       return result;
+    }
+  }
+
+  state.schedulerActive.store(false, std::memory_order_release);
+  state.isPlaying.store(false, std::memory_order_release);
+  state.stopwatch.pause();
+  std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+  return result;
+}
+
+template <typename Lifecycle, typename StageAudio, typename CommitAudio,
+          typename WakeScheduler>
+[[nodiscard]] audio::playback::BackendOperationResult
+ExecuteSeekTransition(Lifecycle &lifecycle, std::string_view context,
+                      SessionState &state, CursorPosition target,
+                      long long visualMicros, StageAudio &&stageAudio,
+                      CommitAudio &&commitAudio,
+                      WakeScheduler &&wakeScheduler) {
+  std::lock_guard<std::mutex> transitionLock(state.transitionMutex);
+  std::lock_guard<std::mutex> positionLock(state.positionMutex);
+  const auto snapshot = CaptureSeekState(state);
+
+  if (!snapshot.wasPlaying) {
+    state.stopwatch.seek(visualMicros);
+    state.audioCursor = target.audio;
+    state.bmpCursor = target.bmp;
+    state.bmpLayerCursor = target.bmpLayer;
+    std::invoke(std::forward<CommitAudio>(commitAudio), snapshot.wasPlaying);
+    state.schedulerActive.store(false, std::memory_order_release);
+    std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+    return {.success = true};
+  }
+
+  state.isPlaying.store(false, std::memory_order_release);
+  state.stopwatch.pause();
+  std::invoke(wakeScheduler);
+
+  auto result = ContextualizeFailure(lifecycle.stopSounds(), context, "stop");
+  if (result.success) {
+    result = ContextualizeFailure(
+        std::invoke(std::forward<StageAudio>(stageAudio)), context, "stage");
+    if (!result.success) {
+      result = RollbackStagedAudio(lifecycle, context, std::move(result));
+    } else {
+      result = ContextualizeFailure(lifecycle.startDevice(), context, "start");
+      if (!result.success) {
+        result = RollbackStagedAudio(lifecycle, context, std::move(result));
+      } else {
+        state.stopwatch.seek(visualMicros);
+        state.audioCursor = target.audio;
+        state.bmpCursor = target.bmp;
+        state.bmpLayerCursor = target.bmpLayer;
+        std::invoke(std::forward<CommitAudio>(commitAudio), snapshot.wasPlaying);
+        if (snapshot.wasClockRunning) {
+          state.stopwatch.resume();
+        }
+        state.schedulerActive.store(true, std::memory_order_release);
+        state.isPlaying.store(true, std::memory_order_release);
+        std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+        return result;
+      }
     }
   }
 

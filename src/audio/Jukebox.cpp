@@ -2818,14 +2818,18 @@ void Jukebox::playKeySound(int wav) {
   });
 }
 
-void Jukebox::scheduleAudioFromCursor() {
-  while (audioCursor < audioList.size()) {
-    const auto &target = audioList[audioCursor];
+bool Jukebox::scheduleAudioFromCursor(size_t cursor) {
+  while (cursor < audioList.size()) {
+    const auto &target = audioList[cursor];
     if (const auto it = wavTableAbs.find(target.wav); it != wavTableAbs.end()) {
-      audio.scheduleSound(it->second, target.bus, target.timeMicros);
+      if (!audio.stageScheduledSound(it->second, target.bus,
+                                     target.timeMicros)) {
+        return false;
+      }
     }
-    audioCursor++;
+    ++cursor;
   }
+  return true;
 }
 
 void Jukebox::playOverlappingAudioAt(long long micro) {
@@ -3084,9 +3088,18 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
   };
   const auto started = jukebox_lifecycle::StartPlayback(
       audio, "Jukebox::play", lifecycleState, target,
+      [this, firstAudio = target.audio] {
+        if (!scheduleAudioFromCursor(firstAudio)) {
+          return audio::playback::BackendOperationResult{
+              .success = false,
+              .diagnostic = "Unable to stage the complete chart audio schedule",
+          };
+        }
+        return audio::playback::BackendOperationResult{.success = true};
+      },
       [this, startMicros, bgaTimelineMicro] {
         audio.seekClock(startMicros);
-        scheduleAudioFromCursor();
+        audioCursor = audioList.size();
         playOverlappingAudioAt(startMicros);
         if (visualsEnabled.load(std::memory_order_relaxed) &&
             !visualsSuspended.load(std::memory_order_acquire)) {
@@ -3487,10 +3500,19 @@ audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
 
   const auto transitioned = jukebox_lifecycle::ExecuteSeekTransition(
       audio, "Jukebox::seek", lifecycleState, target, bgaTimelineMicro,
+      [this, firstAudio = target.audio] {
+        if (!scheduleAudioFromCursor(firstAudio)) {
+          return audio::playback::BackendOperationResult{
+              .success = false,
+              .diagnostic = "Unable to stage the complete seek audio schedule",
+          };
+        }
+        return audio::playback::BackendOperationResult{.success = true};
+      },
       [this, micro](bool wasPlaying) {
         audio.seekClock(micro);
         if (wasPlaying) {
-          scheduleAudioFromCursor();
+          audioCursor = audioList.size();
           playOverlappingAudioAt(micro);
         }
       },

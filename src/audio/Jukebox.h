@@ -221,7 +221,7 @@ private:
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);
-  void scheduleAudioFromCursor();
+  bool scheduleAudioFromCursor(size_t cursor);
   void playOverlappingAudioAt(long long micro);
   audio::playback::BackendOperationResult
   playWithClockState(long long startMicros, bool paused);

@@ -52,19 +52,9 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 }
 
 bool rejectFutureReplayDatabase(sqlite3 *db) {
-  const char *filename =
-      db != nullptr ? sqlite3_db_filename(db, "main") : nullptr;
-  if (db != nullptr && sqlite3_get_autocommit(db) != 0 && filename != nullptr &&
-      filename[0] != '\0') {
-    std::string error;
-    if (!preflightSqliteUserVersion(filename, kReplayDatabaseSchemaVersion,
-                                    error)
-             .has_value()) {
-      SDL_Log("Refusing replay database schema preflight: %s", error.c_str());
-      return true;
-    }
-    return false;
-  }
+  // Connect() performs the guarded path-level preflight before returning an
+  // owned handle. Schema helpers must inspect that handle directly instead of
+  // snapshotting the same database family again.
   std::string error;
   const auto version = readSqliteUserVersion(db, error);
   if (!version.has_value()) {

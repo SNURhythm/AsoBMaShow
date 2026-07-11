@@ -1108,7 +1108,8 @@ ProfileResult PlayerProfileManager::Initialize() {
     return failure(ProfileError::FutureVersion, bootstrap.message);
   }
   if (bootstrap.status == BootstrapStatus::Loaded) {
-    const ProfileResult validated = validateProfile(bootstrap.id);
+    const ProfileResult validated =
+        validateProfile(bootstrap.id, ValidationDepth::Routine);
     if (validated.ok()) {
       activeProfile_ = validated.profile;
       return validated;
@@ -1138,7 +1139,7 @@ ProfileResult PlayerProfileManager::Initialize() {
     }
   }
 
-  std::vector<PlayerProfile> profiles = listProfiles();
+  std::vector<PlayerProfile> profiles = listProfiles(ValidationDepth::Deep);
   if (!profiles.empty()) {
     const PlayerProfile recovered = profiles.front();
     if (!writeBootstrap(applicationDataRoot_, recovered.id, errorMessage)) {
@@ -1227,6 +1228,11 @@ PlayerProfilePaths PlayerProfileManager::pathsFor(std::string_view id) const {
 }
 
 std::vector<PlayerProfile> PlayerProfileManager::listProfiles() const {
+  return listProfiles(ValidationDepth::Routine);
+}
+
+std::vector<PlayerProfile>
+PlayerProfileManager::listProfiles(ValidationDepth depth) const {
   std::vector<PlayerProfile> profiles;
   std::string safetyError;
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, safetyError)) {
@@ -1243,7 +1249,7 @@ std::vector<PlayerProfile> PlayerProfileManager::listProfiles() const {
     if (!isUuid(id)) {
       continue;
     }
-    const ProfileResult validated = validateProfile(id);
+    const ProfileResult validated = validateProfile(id, depth);
     if (validated.ok() && validated.profile) {
       profiles.push_back(*validated.profile);
     }
@@ -1372,7 +1378,7 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
   if (!validated.ok()) {
     return validated;
   }
-  const auto profiles = listProfiles();
+  const auto profiles = listProfiles(ValidationDepth::Deep);
   if (profiles.size() <= 1) {
     return failure(ProfileError::LastProfileDeletion,
                    "the last profile cannot be deleted");
@@ -1422,6 +1428,12 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
 }
 
 ProfileResult PlayerProfileManager::validateProfile(std::string_view id) const {
+  return validateProfile(id, ValidationDepth::Deep);
+}
+
+ProfileResult
+PlayerProfileManager::validateProfile(std::string_view id,
+                                      ValidationDepth depth) const {
   if (!isUuid(id)) {
     return failure(ProfileError::NotFound, "profile UUID is invalid");
   }
@@ -1500,8 +1512,9 @@ ProfileResult PlayerProfileManager::validateProfile(std::string_view id) const {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
-  if (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
-      !sqliteIntegrityCheck(paths.replaysDb, errorMessage)) {
+  if (depth == ValidationDepth::Deep &&
+      (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
+       !sqliteIntegrityCheck(paths.replaysDb, errorMessage))) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
   }
   return metadata;
@@ -1579,7 +1592,7 @@ ProfileResult PlayerProfileManager::installProfile(
     if (!target.ok()) {
       return target;
     }
-    if (listProfiles().size() <= 1) {
+    if (listProfiles(ValidationDepth::Deep).size() <= 1) {
       return failure(ProfileError::LastProfileDeletion,
                      "the last profile cannot be overwritten");
     }

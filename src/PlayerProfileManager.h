@@ -93,6 +93,13 @@ public:
                                ProfileStagingWriter writeStaging);
 
 private:
+  enum class ValidationDepth { Routine, Deep };
+
+  [[nodiscard]] std::vector<PlayerProfile>
+  listProfiles(ValidationDepth depth) const;
+  [[nodiscard]] ProfileResult validateProfile(std::string_view id,
+                                              ValidationDepth depth) const;
+
   std::filesystem::path applicationDataRoot_;
   PlayerProfileManagerDependencies dependencies_;
   std::optional<PlayerProfile> activeProfile_;

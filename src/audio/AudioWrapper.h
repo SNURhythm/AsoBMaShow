@@ -126,6 +126,8 @@ public:
   bool playSound(const path_t &path, audio::Bus bus,
                  long long startOffsetMicros = 0);
   bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
+  bool stageScheduledSound(const path_t &path, audio::Bus bus,
+                           long long startMicros);
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
   void seekClock(long long micros);

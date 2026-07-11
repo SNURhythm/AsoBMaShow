@@ -4233,7 +4233,7 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
 
 void MainMenuScene::refreshScoreClearRanksIfNeeded() {
   const std::uint64_t revision = ScoreDBHelper::GetInstance().GetRevision();
-  if (scoreClearRanksRevision == 0 || revision == scoreClearRanksRevision) {
+  if (revision == scoreClearRanksRevision) {
     return;
   }
 
