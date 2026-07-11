@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <thread>
 
 // Biquad Implementation
 void Biquad::processStereo(float *buffer, size_t frameCount) {
@@ -308,6 +309,75 @@ long long addMicrosClamped(long long lhs, long long rhs) {
   return lhs + rhs;
 }
 
+struct AudioClockAnchor {
+  long long micros;
+  long long wallMicros;
+  long long endMicros;
+  int ratePercent;
+};
+
+bool acquireAudioClockAnchorWriter(UserData *userData, bool mayWait) {
+  // The render callback passes false: its publication path never waits and
+  // performs only atomic operations.
+  if (!mayWait) {
+    return !userData->audioClockAnchorWriter->test_and_set(
+        std::memory_order_acquire);
+  }
+  while (userData->audioClockAnchorWriter->test_and_set(
+      std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  return true;
+}
+
+void publishAudioClockAnchor(UserData *userData, AudioClockAnchor anchor,
+                             bool mayWait) {
+  if (!acquireAudioClockAnchorWriter(userData, mayWait)) {
+    return;
+  }
+
+  // Odd generations are in flight; even generations are complete. The final
+  // release pairs with the reader's acquire before it accepts the tuple.
+  userData->audioClockAnchorSequence->fetch_add(1, std::memory_order_acq_rel);
+  userData->audioClockAnchorMicros->store(anchor.micros,
+                                          std::memory_order_relaxed);
+  userData->audioClockAnchorWallMicros->store(anchor.wallMicros,
+                                              std::memory_order_relaxed);
+  userData->audioClockAnchorEndMicros->store(anchor.endMicros,
+                                             std::memory_order_relaxed);
+  userData->audioClockAnchorRatePercent->store(anchor.ratePercent,
+                                               std::memory_order_relaxed);
+  userData->audioClockAnchorSequence->fetch_add(1, std::memory_order_release);
+  userData->audioClockAnchorWriter->clear(std::memory_order_release);
+}
+
+AudioClockAnchor readAudioClockAnchor(const UserData &userData) {
+  for (;;) {
+    const std::uint64_t generationBefore =
+        userData.audioClockAnchorSequence->load(std::memory_order_acquire);
+    if ((generationBefore & 1U) != 0) {
+      std::this_thread::yield();
+      continue;
+    }
+
+    const AudioClockAnchor anchor{
+        .micros =
+            userData.audioClockAnchorMicros->load(std::memory_order_relaxed),
+        .wallMicros = userData.audioClockAnchorWallMicros->load(
+            std::memory_order_relaxed),
+        .endMicros =
+            userData.audioClockAnchorEndMicros->load(std::memory_order_relaxed),
+        .ratePercent = userData.audioClockAnchorRatePercent->load(
+            std::memory_order_relaxed),
+    };
+    const std::uint64_t generationAfter =
+        userData.audioClockAnchorSequence->load(std::memory_order_acquire);
+    if (generationBefore == generationAfter) {
+      return anchor;
+    }
+  }
+}
+
 long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
                                 int sampleRate, int playbackRatePercent) {
   const int64_t startFrame = userData->audioClockFrameCursor->fetch_add(
@@ -321,14 +391,12 @@ long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
       baseMicros, framesToChartMicros(startFrame + frameCount, sampleRate,
                                       playbackRatePercent));
 
-  userData->audioClockAnchorEndMicros->store(bufferEndMicros,
-                                             std::memory_order_release);
-  userData->audioClockAnchorWallMicros->store(nowMicros(),
-                                              std::memory_order_release);
-  userData->audioClockAnchorRatePercent->store(playbackRatePercent,
-                                               std::memory_order_release);
-  userData->audioClockAnchorMicros->store(bufferStartMicros,
-                                          std::memory_order_release);
+  publishAudioClockAnchor(userData,
+                          {.micros = bufferStartMicros,
+                           .wallMicros = nowMicros(),
+                           .endMicros = bufferEndMicros,
+                           .ratePercent = playbackRatePercent},
+                          false);
   return bufferStartMicros;
 }
 
@@ -483,6 +551,8 @@ void AudioWrapper::initializeUserData() {
   userData.audioClockAnchorWallMicros = &audioClockAnchorWallMicros;
   userData.audioClockAnchorEndMicros = &audioClockAnchorEndMicros;
   userData.audioClockAnchorRatePercent = &audioClockAnchorRatePercent;
+  userData.audioClockAnchorSequence = &audioClockAnchorSequence;
+  userData.audioClockAnchorWriter = &audioClockAnchorWriter;
   userData.playbackRatePercent = &playbackRatePercent;
   userData.bgmGain = &bgmGain;
   userData.keysoundGain = &keysoundGain;
@@ -571,29 +641,26 @@ AudioWrapper::~AudioWrapper() {
 }
 
 long long AudioWrapper::getTimeMicros() const {
-  const long long anchorMicros =
-      audioClockAnchorMicros.load(std::memory_order_acquire);
-  const long long anchorWallMicros =
-      audioClockAnchorWallMicros.load(std::memory_order_acquire);
-  const long long anchorEndMicros =
-      audioClockAnchorEndMicros.load(std::memory_order_acquire);
-  const int anchorRatePercent =
-      audioClockAnchorRatePercent.load(std::memory_order_acquire);
+  const AudioClockAnchor anchor = readAudioClockAnchor(userData);
 
-  if (anchorWallMicros <= 0 || !stopwatch->isRunning()) {
-    return anchorMicros;
+  if (anchor.wallMicros <= 0 || !stopwatch->isRunning()) {
+    audioClockPublishedMicros.store(anchor.micros, std::memory_order_release);
+    return anchor.micros;
   }
 
-  const audio::PlaybackRate rate{.percent = anchorRatePercent};
-  const long long wallDeltaMicros = nowMicros() - anchorWallMicros;
-  long long interpolatedMicros =
-      addMicrosClamped(anchorMicros, rate.chartMicrosFromReal(wallDeltaMicros));
-  if (anchorEndMicros >= anchorMicros && interpolatedMicros > anchorEndMicros) {
-    interpolatedMicros = anchorEndMicros;
+  const audio::PlaybackRate rate{.percent = anchor.ratePercent};
+  const long long wallDeltaMicros = nowMicros() - anchor.wallMicros;
+  long long interpolatedMicros = addMicrosClamped(
+      anchor.micros, rate.chartMicrosFromReal(wallDeltaMicros));
+  if (anchor.endMicros >= anchor.micros &&
+      interpolatedMicros > anchor.endMicros) {
+    interpolatedMicros = anchor.endMicros;
   }
-  if (interpolatedMicros < anchorMicros) {
-    interpolatedMicros = anchorMicros;
+  if (interpolatedMicros < anchor.micros) {
+    interpolatedMicros = anchor.micros;
   }
+  audioClockPublishedMicros.store(interpolatedMicros,
+                                  std::memory_order_release);
   return interpolatedMicros;
 }
 
@@ -602,12 +669,14 @@ void AudioWrapper::seekClock(long long micros) {
   const long long wallMicros = nowMicros();
   audioClockBaseMicros.store(micros, std::memory_order_release);
   audioClockFrameCursor.store(0, std::memory_order_release);
-  audioClockAnchorEndMicros.store(micros, std::memory_order_release);
-  audioClockAnchorWallMicros.store(wallMicros, std::memory_order_release);
-  audioClockAnchorRatePercent.store(
-      playbackRatePercent.load(std::memory_order_acquire),
-      std::memory_order_release);
-  audioClockAnchorMicros.store(micros, std::memory_order_release);
+  publishAudioClockAnchor(
+      &userData,
+      {.micros = micros,
+       .wallMicros = wallMicros,
+       .endMicros = micros,
+       .ratePercent = playbackRatePercent.load(std::memory_order_acquire)},
+      true);
+  audioClockPublishedMicros.store(micros, std::memory_order_release);
 }
 
 bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
@@ -642,22 +711,21 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
   }
 
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-  const int previousRatePercent =
-      playbackRatePercent.load(std::memory_order_acquire);
-  const std::int64_t previousFrameCursor =
-      audioClockFrameCursor.exchange(0, std::memory_order_acq_rel);
-  const long long rebasedMicros = addMicrosClamped(
-      audioClockBaseMicros.load(std::memory_order_acquire),
-      framesToChartMicros(previousFrameCursor,
-                          currentSampleRate.load(std::memory_order_acquire),
-                          previousRatePercent));
+  const long long rebasedMicros =
+      stopwatch->isRunning()
+          ? getTimeMicros()
+          : audioClockPublishedMicros.load(std::memory_order_acquire);
   const long long wallMicros = nowMicros();
   audioClockBaseMicros.store(rebasedMicros, std::memory_order_release);
-  audioClockAnchorEndMicros.store(rebasedMicros, std::memory_order_release);
-  audioClockAnchorWallMicros.store(wallMicros, std::memory_order_release);
-  audioClockAnchorRatePercent.store(rate.percent, std::memory_order_release);
+  audioClockFrameCursor.store(0, std::memory_order_release);
   playbackRatePercent.store(rate.percent, std::memory_order_release);
-  audioClockAnchorMicros.store(rebasedMicros, std::memory_order_release);
+  publishAudioClockAnchor(&userData,
+                          {.micros = rebasedMicros,
+                           .wallMicros = wallMicros,
+                           .endMicros = rebasedMicros,
+                           .ratePercent = rate.percent},
+                          true);
+  audioClockPublishedMicros.store(rebasedMicros, std::memory_order_release);
   return true;
 }
 
