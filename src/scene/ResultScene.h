@@ -45,6 +45,7 @@ struct ResultCourseOptions {
 
 class TextView;
 class Button;
+class PracticeAnalyticsView;
 
 class ResultScene : public Scene {
 public:
@@ -70,6 +71,7 @@ private:
   void loadPreviousBest();
   void saveScore();
   void saveReplay();
+  void addTimingAnalytics();
   void addRetryButtons();
   void addCourseButtons();
   void buildCourseExitConfirmation();
@@ -109,6 +111,7 @@ private:
   std::optional<int> currentClearRankOverride;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  PracticeAnalyticsView *timingAnalyticsView = nullptr;
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
   TextView *exportPhotoButtonText = nullptr;

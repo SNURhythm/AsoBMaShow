@@ -8,11 +8,13 @@
 #include "../ResultPresentationUtils.h"
 #include "../ScoreDBHelper.h"
 #include "../path.h"
+#include "../practice/PracticeResultModel.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
+#include "PracticeAnalyticsView.h"
 
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -22,11 +24,13 @@
 #include "../skin/SkinTypes.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -464,6 +468,64 @@ void ResultScene::saveReplay() {
   if (!ReplayDBHelper::GetInstance().SaveReplay(*replayToSave).has_value()) {
     SDL_Log("Failed to save replay for chart: %s", meta.Title.c_str());
   }
+}
+
+void ResultScene::addTimingAnalytics() {
+  View *host =
+      rootLayout == nullptr
+          ? nullptr
+          : rootLayout->findViewByName("timingAnalytics");
+  if (rootLayout == nullptr || reusableRetryChart == nullptr ||
+      isCourseStageResult() || isCourseFinalResult()) {
+    if (host != nullptr) {
+      host->setDisplay(YGDisplayNone);
+    }
+    return;
+  }
+
+  std::span<const ReplayData> completedAttempts;
+  std::size_t abandonedAttempts = 0;
+  std::array<ReplayData, 1> singleAttempt;
+  if (practiceOptions.session != nullptr) {
+    completedAttempts = practiceOptions.session->completedAttempts();
+    abandonedAttempts = practiceOptions.session->abandonedAttemptCount();
+  } else if (replayToSave.has_value()) {
+    singleAttempt.front() = *replayToSave;
+    singleAttempt.front().autoPlay =
+        singleAttempt.front().autoPlay || autoPlayResult;
+    completedAttempts = singleAttempt;
+  } else if (retryData.has_value()) {
+    singleAttempt.front() = *retryData;
+    singleAttempt.front().autoPlay =
+        singleAttempt.front().autoPlay || autoPlayResult;
+    completedAttempts = singleAttempt;
+  }
+  if (completedAttempts.empty()) {
+    if (host != nullptr) {
+      host->setDisplay(YGDisplayNone);
+    }
+    return;
+  }
+
+  if (host == nullptr) {
+    host = new View();
+    host->setName("timingAnalytics");
+    host->setWidthPercent(100.0f);
+    host->setHeight(250);
+    host->setFlexShrink(0.0f);
+    host->setFlexDirection(FlexDirection::Column);
+    host->setAlignItems(YGAlignStretch);
+    if (View *actions = rootLayout->findViewByName("resultActions");
+        actions != nullptr) {
+      actions->addView(host);
+    } else {
+      rootLayout->addView(host);
+    }
+  }
+
+  timingAnalyticsView = new PracticeAnalyticsView(practice::ResultModel(
+      *reusableRetryChart, completedAttempts, abandonedAttempts));
+  host->addView(timingAnalyticsView);
 }
 
 void ResultScene::addRetryButtons() {
@@ -1251,6 +1313,7 @@ void ResultScene::init() {
   data.previousBest = previousBest;
   data.pacemaker = pacemakerDataForCurrentResult();
   skin->buildLayout("Result", rootLayout, &data);
+  addTimingAnalytics();
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();
     buildCourseExitConfirmation();
@@ -1306,6 +1369,7 @@ void ResultScene::renderScene() {
 void ResultScene::cleanupScene() {
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
+  timingAnalyticsView = nullptr;
   courseExitConfirmation = nullptr;
   exportPhotoButton = nullptr;
   exportPhotoButtonText = nullptr;

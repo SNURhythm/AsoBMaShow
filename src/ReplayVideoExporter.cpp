@@ -2776,6 +2776,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             previousBest);
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
+    if (auto *analytics = resultRoot->findViewByName("timingAnalytics");
+        analytics != nullptr) {
+      analytics->setDisplay(YGDisplayNone);
+    }
     resultRoot->applyYogaLayout();
   }
   ReplayAsyncFrameEncoder encoder;
@@ -3294,6 +3298,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     data.currentClearRankOverride = clearRank;
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", courseResultRoot.get(), &data);
+    if (auto *analytics = courseResultRoot->findViewByName("timingAnalytics");
+        analytics != nullptr) {
+      analytics->setDisplay(YGDisplayNone);
+    }
     courseResultRoot->applyYogaLayout();
   }
 
@@ -3572,6 +3580,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           chart.Meta, stageReplay);
       DefaultSkin resultSkin;
       resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
+      if (auto *analytics = stageResultRoot->findViewByName("timingAnalytics");
+          analytics != nullptr) {
+        analytics->setDisplay(YGDisplayNone);
+      }
       stageResultRoot->applyYogaLayout();
     }
 

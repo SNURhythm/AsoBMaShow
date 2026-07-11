@@ -844,6 +844,15 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     return;
   }
 
+  auto *timingAnalyticsHost = new View();
+  timingAnalyticsHost->setName("timingAnalytics");
+  timingAnalyticsHost->setWidthPercent(100.0f);
+  timingAnalyticsHost->setHeight(250);
+  timingAnalyticsHost->setFlexShrink(0.0f);
+  timingAnalyticsHost->setFlexDirection(FlexDirection::Column);
+  timingAnalyticsHost->setAlignItems(YGAlignStretch);
+  rootLayout->addView(timingAnalyticsHost);
+
   auto *actionsRow = new View();
   actionsRow->setFlexDirection(FlexDirection::Row);
   actionsRow->setAlignItems(YGAlignCenter);

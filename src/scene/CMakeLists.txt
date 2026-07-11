@@ -5,6 +5,7 @@ target_sources(main PRIVATE
     MainMenuLibrary.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
+    PracticeAnalyticsView.cpp
     ProfileSettingsController.cpp
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp

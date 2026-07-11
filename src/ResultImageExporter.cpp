@@ -550,6 +550,10 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.pacemaker = pacemaker;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
+  if (auto *analytics = resultRoot->findViewByName("timingAnalytics");
+      analytics != nullptr) {
+    analytics->setDisplay(YGDisplayNone);
+  }
   resultRoot->applyYogaLayout();
 
   RenderContext renderContext;
