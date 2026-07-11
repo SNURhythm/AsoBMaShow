@@ -1,6 +1,7 @@
 target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
     ChartViewerScene.cpp
+    PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp

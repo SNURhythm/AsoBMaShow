@@ -3,6 +3,8 @@
 #include "../ChartDBHelper.h"
 #include "../ReplayDBHelper.h"
 #include "../bms_parser.hpp"
+#include "../practice/PracticeConfiguration.h"
+#include "../practice/PracticePresetStore.h"
 #include "Scene.h"
 
 #include <memory>
@@ -15,6 +17,8 @@ class ChartCanvasView;
 class ReplaySummaryListItemView;
 class ReplaySummaryListView;
 class ScrollView;
+class OverlayPortal;
+class PracticePanelView;
 class TextInputBox;
 class TextView;
 class View;
@@ -83,6 +87,13 @@ private:
   TextView *laneAssignStatusText = nullptr;
   View *randomDrawerRoot = nullptr;
   ScrollView *randomDrawerScroll = nullptr;
+  OverlayPortal *overlayPortal = nullptr;
+  PracticePanelView *practicePanel = nullptr;
+  std::unique_ptr<practice::PresetStore> practicePresetStore;
+  practice::Configuration practiceConfiguration;
+  std::vector<practice::NamedPreset> practiceNamedPresets;
+  std::optional<std::string> selectedPracticePresetId;
+  long long practiceChartEndMicros = 0;
 
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
@@ -142,6 +153,15 @@ private:
   bool applyViewerPlayOptions(bms_parser::Chart &target,
                               const char *logContext);
   void onCanvasSelectionChanged(long long timeMicros);
+  void onPracticeRangeChanged(const practice::RangeSelection &range);
+  void onPracticeConfigurationChanged(
+      const practice::Configuration &configuration);
+  void loadPracticeConfiguration();
+  void refreshPracticePanel();
+  void savePracticeAs(std::string name);
+  void renamePracticePreset(std::string name);
+  void updatePracticePreset();
+  void deletePracticePreset();
   void retainLoadedListenResourcesForChartChange();
   void startListeningFromSelection();
   void toggleListenPause();

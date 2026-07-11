@@ -9,6 +9,17 @@
 #include <vector>
 
 namespace practice {
+enum class Marker : std::uint8_t { Start = 0, End = 1 };
+
+struct RangeSelection {
+  long long startMicros = 0;
+  long long endMicros = 0;
+  Marker active = Marker::Start;
+
+  void placeActiveMarker(long long timeMicros, long long chartEndMicros);
+  bool operator==(const RangeSelection &) const = default;
+};
+
 enum class JudgeOverrideKind : std::uint8_t { Scale = 0, Custom = 1 };
 
 struct JudgeOverride {

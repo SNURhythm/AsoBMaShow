@@ -6,18 +6,22 @@
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
 #include "../path.h"
+#include "../practice/PracticeConfiguration.h"
+#include "../practice/PracticePresetStore.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
+#include "../view/OverlayPortal.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "../view/View.h"
+#include "PracticePanelView.h"
 #include "play/GamePlayScene.h"
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -348,23 +352,18 @@ public:
   }
 
   void setChart(bms_parser::Chart *newChart) {
-    const std::optional<long long> previousSelectedTime = selectedTimeMicros;
+    const practice::RangeSelection previousRange = practiceRange;
+    const bool hadPracticeRange = practiceRangeSet;
     chart = newChart;
     markerGlyphTextures.clear();
     playbackActive = false;
     replayGhostEvents.clear();
     rebuildLayout();
-    selectedTimeMicros.reset();
-    selectedBeatPosition.reset();
-    if (chart == nullptr || !previousSelectedTime.has_value()) {
+    practiceRangeSet = false;
+    if (chart == nullptr || !hadPracticeRange) {
       return;
     }
-    const long long clampedTime = std::max(0LL, *previousSelectedTime);
-    if (clampedTime > chart_playback_duration::ChartTimelineEndMicros(*chart)) {
-      return;
-    }
-    selectedTimeMicros = clampedTime;
-    selectedBeatPosition = timeToBeatPosition(clampedTime);
+    setPracticeRange(previousRange);
   }
 
   void setShowInvisibleNotes(bool enabled) { showInvisibleNotes = enabled; }
@@ -389,12 +388,46 @@ public:
     selectionListener = std::move(listener);
   }
 
+  void setPracticeRange(const practice::RangeSelection &range) {
+    practiceRange = range;
+    const long long chartEnd =
+        chart == nullptr
+            ? std::max({0LL, range.startMicros, range.endMicros})
+            : chart_playback_duration::ChartTimelineEndMicros(*chart);
+    practiceRange.startMicros =
+        std::clamp(practiceRange.startMicros, 0LL, std::max(0LL, chartEnd));
+    practiceRange.endMicros =
+        std::clamp(practiceRange.endMicros, 0LL, std::max(0LL, chartEnd));
+    if (practiceRange.startMicros > practiceRange.endMicros) {
+      std::swap(practiceRange.startMicros, practiceRange.endMicros);
+      practiceRange.active = practiceRange.active == practice::Marker::Start
+                                 ? practice::Marker::End
+                                 : practice::Marker::Start;
+    }
+    practiceRangeSet = true;
+  }
+
+  [[nodiscard]] practice::RangeSelection getPracticeRange() const {
+    return practiceRange;
+  }
+
+  void setActivePracticeMarker(practice::Marker marker) {
+    practiceRange.active = marker;
+  }
+
+  void setPracticeRangeListener(
+      std::function<void(const practice::RangeSelection &)> listener) {
+    practiceRangeListener = std::move(listener);
+  }
+
   [[nodiscard]] bool hasSelectedTime() const {
-    return selectedTimeMicros.has_value();
+    return practiceRangeSet;
   }
 
   [[nodiscard]] long long getSelectedTimeMicros() const {
-    return selectedTimeMicros.value_or(0LL);
+    return practiceRange.active == practice::Marker::Start
+               ? practiceRange.startMicros
+               : practiceRange.endMicros;
   }
 
   void setPlaybackTime(long long timeMicros, bool active) {
@@ -438,6 +471,7 @@ protected:
 
     batch.begin();
     drawGrid();
+    drawPracticeRangeSpan();
     drawMarkers();
     drawLongNotes();
     drawNotes();
@@ -714,12 +748,13 @@ private:
   float pinchStartScreenZoom = 1.0f;
   float pinchAnchorContentX = 0.0f;
   float pinchAnchorContentY = 0.0f;
-  std::optional<long long> selectedTimeMicros;
-  std::optional<double> selectedBeatPosition;
+  practice::RangeSelection practiceRange;
+  bool practiceRangeSet = false;
   long long playbackTimeMicros = 0;
   bool playbackActive = false;
   bool showInvisibleNotes = false;
   std::function<void(long long)> selectionListener;
+  std::function<void(const practice::RangeSelection &)> practiceRangeListener;
 
   void rebuildLayout() {
     layoutDirty = false;
@@ -1064,13 +1099,41 @@ private:
   }
 
   void drawCursorBars() {
-    if (selectedTimeMicros.has_value()) {
-      drawCursorBarAtBeat(
-          selectedBeatPosition.value_or(timeToBeatPosition(*selectedTimeMicros)),
-          Color(255, 220, 92, 235), 4.0f);
+    if (practiceRangeSet) {
+      drawCursorBar(practiceRange.startMicros, Color(77, 220, 236, 240),
+                    practiceRange.active == practice::Marker::Start ? 4.5f
+                                                                    : 3.0f);
+      drawCursorBar(practiceRange.endMicros, Color(255, 190, 66, 240),
+                    practiceRange.active == practice::Marker::End ? 4.5f
+                                                                  : 3.0f);
     }
     if (playbackActive) {
       drawCursorBar(playbackTimeMicros, Color(91, 218, 236, 242), 3.0f);
+    }
+  }
+
+  void drawPracticeRangeSpan() {
+    if (!practiceRangeSet ||
+        practiceRange.startMicros >= practiceRange.endMicros) {
+      return;
+    }
+    const double startBeat = timeToBeatPosition(practiceRange.startMicros);
+    const double endBeat = timeToBeatPosition(practiceRange.endMicros);
+    const uint32_t fill = Color(31, 173, 173, 56).toABGR();
+    for (const auto &layout : measureLayouts) {
+      if (layout.scale <= 0.0) {
+        continue;
+      }
+      const double overlapStart = std::max(startBeat, layout.beatStart);
+      const double overlapEnd =
+          std::min(endBeat, layout.beatStart + layout.scale);
+      if (overlapStart >= overlapEnd) {
+        continue;
+      }
+      const auto startPosition = cursorPositionForLayout(layout, overlapStart);
+      const auto endPosition = cursorPositionForLayout(layout, overlapEnd);
+      drawRectClip(layout.x + gutterWidth, endPosition.y, laneAreaWidth,
+                   std::max(0.0f, startPosition.y - endPosition.y), fill);
     }
   }
 
@@ -1162,13 +1225,21 @@ private:
   }
 
   void selectBeatPosition(double beatPosition) {
-    selectedBeatPosition =
+    const double selectedBeatPosition =
         std::clamp(beatPosition, 0.0, std::max(0.0, totalBeatLength));
-    const long long timeMicros = beatToTimeMicros(*selectedBeatPosition);
-    selectedTimeMicros = std::max(0LL, timeMicros);
+    const long long timeMicros = beatToTimeMicros(selectedBeatPosition);
+    const long long chartEnd = chart == nullptr
+                                   ? std::max(0LL, timeMicros)
+                                   : chart_playback_duration::
+                                         ChartTimelineEndMicros(*chart);
+    practiceRange.placeActiveMarker(timeMicros, chartEnd);
+    practiceRangeSet = true;
     playbackActive = false;
     if (selectionListener != nullptr) {
-      selectionListener(*selectedTimeMicros);
+      selectionListener(getSelectedTimeMicros());
+    }
+    if (practiceRangeListener != nullptr) {
+      practiceRangeListener(practiceRange);
     }
   }
 
@@ -2228,6 +2299,11 @@ void ChartViewerScene::update(float dt) {
                                  rendering::window_height);
       optionsDrawerRoot->applyYogaLayout();
     }
+    if (overlayPortal != nullptr) {
+      overlayPortal->setSize(rendering::window_width,
+                             rendering::window_height);
+      overlayPortal->applyYogaLayout();
+    }
   }
 }
 
@@ -2278,6 +2354,12 @@ void ChartViewerScene::cleanupScene() {
   laneAssignStatusText = nullptr;
   randomDrawerRoot = nullptr;
   randomDrawerScroll = nullptr;
+  overlayPortal = nullptr;
+  practicePanel = nullptr;
+  practicePresetStore.reset();
+  practiceNamedPresets.clear();
+  selectedPracticePresetId.reset();
+  practiceChartEndMicros = 0;
 }
 
 void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
@@ -2458,10 +2540,51 @@ void ChartViewerScene::initView() {
   canvasView->setFlex(1);
   canvasView->setSelectionListener(
       [this](long long timeMicros) { onCanvasSelectionChanged(timeMicros); });
+  canvasView->setPracticeRangeListener(
+      [this](const practice::RangeSelection &range) {
+        onPracticeRangeChanged(range);
+      });
+
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                    rendering::window_height);
+  overlayPortal->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal->setPosition(Edge::Left, 0);
+  overlayPortal->setPosition(Edge::Top, 0);
+  overlayPortal->setZIndex(1200);
+
+  practicePanel = new PracticePanelView(
+      0,
+      {
+          .onChanged = [this](const practice::Configuration &configuration) {
+            onPracticeConfigurationChanged(configuration);
+          },
+          .onStart = [this]() { startPracticeFromSelection(false); },
+          .onSaveAs = [this](std::string name) {
+            savePracticeAs(std::move(name));
+          },
+          .onRename = [this](std::string name) {
+            renamePracticePreset(std::move(name));
+          },
+          .onUpdateNamed = [this]() { updatePracticePreset(); },
+          .onDeleteNamed = [this]() { deletePracticePreset(); },
+      },
+      overlayPortal, [this](practice::Marker marker) {
+        if (canvasView != nullptr) {
+          canvasView->setActivePracticeMarker(marker);
+          updateSelectionText();
+        }
+      });
+
+  auto *body = new View();
+  body->setFlex(1.0f);
+  body->setFlexDirection(FlexDirection::Row);
+  body->setAlignItems(YGAlignStretch);
+  body->addView(canvasView);
+  body->addView(practicePanel);
 
   rootLayout->addView(header);
   rootLayout->addView(toolbar);
-  rootLayout->addView(canvasView);
+  rootLayout->addView(body);
 
   updateZoomText();
   updateSelectionText();
@@ -2471,6 +2594,7 @@ void ChartViewerScene::initView() {
   rebuildGhostModal();
   rebuildOptionsDrawer();
   rebuildRandomDrawer();
+  rootLayout->addView(overlayPortal);
   rootLayout->applyYogaLayout();
 }
 
@@ -2772,6 +2896,7 @@ void ChartViewerScene::parseAndRefresh(
   if (canvasView != nullptr) {
     canvasView->setChart(chart.get());
   }
+  loadPracticeConfiguration();
   if (statusText != nullptr) {
     statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
   }
@@ -2885,8 +3010,11 @@ void ChartViewerScene::updateSelectionText() {
     return;
   }
 
-  std::string text =
-      "Cursor " + formatMicrosTime(canvasView->getSelectedTimeMicros());
+  const auto range = canvasView->getPracticeRange();
+  std::string text = "Practice " + formatMicrosTime(range.startMicros) +
+                     " - " + formatMicrosTime(range.endMicros) +
+                     (range.active == practice::Marker::Start ? " / Start"
+                                                              : " / End");
   if (listenActive) {
     text += " / Listening";
   }
@@ -3669,6 +3797,172 @@ void ChartViewerScene::onCanvasSelectionChanged(long long timeMicros) {
   updateSelectionText();
 }
 
+void ChartViewerScene::onPracticeRangeChanged(
+    const practice::RangeSelection &range) {
+  if (chart == nullptr) {
+    return;
+  }
+  practiceConfiguration.startMicros = range.startMicros;
+  practiceConfiguration.endMicros = range.endMicros;
+  practiceConfiguration =
+      practice::sanitize(practiceConfiguration, practiceChartEndMicros)
+          .configuration;
+  if (practicePresetStore != nullptr) {
+    std::string error;
+    if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
+                                           practiceConfiguration, error) &&
+        statusText != nullptr) {
+      statusText->setText("Practice save failed: " + error);
+    }
+  }
+  refreshPracticePanel();
+}
+
+void ChartViewerScene::onPracticeConfigurationChanged(
+    const practice::Configuration &configuration) {
+  if (chart == nullptr) {
+    return;
+  }
+  selectedPracticePresetId =
+      practicePanel == nullptr ? std::nullopt
+                               : practicePanel->selectedPresetId();
+  practiceConfiguration =
+      practice::sanitize(configuration, practiceChartEndMicros).configuration;
+  if (canvasView != nullptr) {
+    auto range = canvasView->getPracticeRange();
+    range.startMicros = practiceConfiguration.startMicros;
+    range.endMicros = practiceConfiguration.endMicros;
+    canvasView->setPracticeRange(range);
+  }
+  if (practicePresetStore != nullptr) {
+    std::string error;
+    if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
+                                           practiceConfiguration, error) &&
+        statusText != nullptr) {
+      statusText->setText("Practice save failed: " + error);
+    }
+  }
+  refreshPracticePanel();
+  updateSelectionText();
+}
+
+void ChartViewerScene::loadPracticeConfiguration() {
+  if (chart == nullptr) {
+    return;
+  }
+  practiceChartEndMicros =
+      chart_playback_duration::ChartTimelineEndMicros(*chart);
+  practicePresetStore = std::make_unique<practice::PresetStore>(
+      context.profileManager.activePaths().practiceDirectory);
+  const std::string chartHash =
+      chart->Meta.SHA256.empty() ? record.meta.SHA256 : chart->Meta.SHA256;
+  auto loaded = practicePresetStore->load(chartHash, practiceChartEndMicros);
+  practiceConfiguration = loaded.data.lastUsed;
+  practiceNamedPresets = std::move(loaded.data.named);
+  selectedPracticePresetId.reset();
+  if (loaded.status == versioned_json::LoadStatus::Missing) {
+    practiceConfiguration.gaugeType =
+        gaugeSelectionFromSettingId(context.settings.selectedGaugeType).type;
+  }
+  if (canvasView != nullptr) {
+    canvasView->setPracticeRange(
+        {.startMicros = practiceConfiguration.startMicros,
+         .endMicros = practiceConfiguration.endMicros,
+         .active = practice::Marker::Start});
+  }
+  refreshPracticePanel();
+}
+
+void ChartViewerScene::refreshPracticePanel() {
+  if (practicePanel == nullptr) {
+    return;
+  }
+  practicePanel->setChartEndMicros(practiceChartEndMicros);
+  const practice::Marker active =
+      canvasView == nullptr ? practice::Marker::Start
+                            : canvasView->getPracticeRange().active;
+  practicePanel->refresh(practiceConfiguration, practiceNamedPresets,
+                         selectedPracticePresetId, active);
+}
+
+void ChartViewerScene::savePracticeAs(std::string name) {
+  if (practicePresetStore == nullptr) {
+    return;
+  }
+  std::string error;
+  const auto id = practicePresetStore->saveNamed(
+      practiceConfiguration.chartSha256, std::move(name),
+      practiceConfiguration, error);
+  if (!id) {
+    if (statusText != nullptr) {
+      statusText->setText("Preset save failed: " + error);
+    }
+    return;
+  }
+  selectedPracticePresetId = *id;
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  practiceNamedPresets = std::move(loaded.data.named);
+  refreshPracticePanel();
+}
+
+void ChartViewerScene::renamePracticePreset(std::string name) {
+  if (practicePresetStore == nullptr || !selectedPracticePresetId) {
+    return;
+  }
+  std::string error;
+  if (!practicePresetStore->renameNamed(practiceConfiguration.chartSha256,
+                                        *selectedPracticePresetId,
+                                        std::move(name), error)) {
+    if (statusText != nullptr) {
+      statusText->setText("Preset rename failed: " + error);
+    }
+    return;
+  }
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  practiceNamedPresets = std::move(loaded.data.named);
+  refreshPracticePanel();
+}
+
+void ChartViewerScene::updatePracticePreset() {
+  if (practicePresetStore == nullptr || !selectedPracticePresetId) {
+    return;
+  }
+  std::string error;
+  if (!practicePresetStore->updateNamed(
+          practiceConfiguration.chartSha256, *selectedPracticePresetId,
+          practiceConfiguration, error)) {
+    if (statusText != nullptr) {
+      statusText->setText("Preset update failed: " + error);
+    }
+    return;
+  }
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  practiceNamedPresets = std::move(loaded.data.named);
+  refreshPracticePanel();
+}
+
+void ChartViewerScene::deletePracticePreset() {
+  if (practicePresetStore == nullptr || !selectedPracticePresetId) {
+    return;
+  }
+  std::string error;
+  if (!practicePresetStore->deleteNamed(practiceConfiguration.chartSha256,
+                                        *selectedPracticePresetId, error)) {
+    if (statusText != nullptr) {
+      statusText->setText("Preset delete failed: " + error);
+    }
+    return;
+  }
+  selectedPracticePresetId.reset();
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  practiceNamedPresets = std::move(loaded.data.named);
+  refreshPracticePanel();
+}
+
 void ChartViewerScene::retainLoadedListenResourcesForChartChange() {
   stopListening();
   if (listenAudioLoaded) {
@@ -3793,7 +4087,21 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
     return;
   }
 
-  const long long selectedTime = canvasView->getSelectedTimeMicros();
+  const auto sanitized =
+      practice::sanitize(practiceConfiguration, practiceChartEndMicros);
+  if (!autoPlay && !sanitized.playable()) {
+    if (statusText != nullptr) {
+      statusText->setText(sanitized.diagnostics.empty()
+                              ? "Practice configuration is not playable"
+                              : sanitized.diagnostics.front());
+    }
+    return;
+  }
+  const practice::Configuration launchConfiguration =
+      autoPlay ? practiceConfiguration : sanitized.configuration;
+  const long long selectedTime =
+      autoPlay ? canvasView->getSelectedTimeMicros()
+               : launchConfiguration.startMicros;
   const auto chartRandomSeed = chart->Meta.RandomSeed;
   const auto chartRandomPrng = chart->Meta.RandomPrng;
   const std::optional<std::vector<int>> chartRandomValues =
@@ -3801,7 +4109,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
           ? std::nullopt
           : std::optional<std::vector<int>>(chart->Meta.RandomValues);
   const GaugeSelection gaugeSelection =
-      gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+      autoPlay ? gaugeSelectionFromSettingId(context.settings.selectedGaugeType)
+               : GaugeSelection{.type = launchConfiguration.gaugeType};
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
   const bool canReuseJukeboxResources =
@@ -3816,7 +4125,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
        gaugeSelection, autoKeySound, assistOption, autoPlay,
-       canReuseJukeboxResources]() {
+       canReuseJukeboxResources, launchConfiguration]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
@@ -3893,6 +4202,14 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .practiceMode = true,
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
+                    .playback = autoPlay ? audio::PlaybackRate{}
+                                         : launchConfiguration.playback,
+                    .judgeWindowScalePercent =
+                        autoPlay ? 100
+                                 : launchConfiguration.judge.scalePercent,
+                    .startingGaugePercent =
+                        autoPlay ? std::nullopt
+                                 : launchConfiguration.startingGaugePercent,
                     .returnScene = this,
                     .touchVisualizationEnabled =
                         autoPlay ? std::optional<bool>(false) : std::nullopt,

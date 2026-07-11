@@ -808,6 +808,7 @@
 				rendering/UniformCache.cpp,
 				scene/ChartFilterSortPanelView.cpp,
 				scene/ChartViewerScene.cpp,
+				scene/PracticePanelView.cpp,
 				scene/MainMenuLibrary.cpp,
 				scene/MainMenuProfileSelections.h,
 				scene/MainMenuScene.cpp,

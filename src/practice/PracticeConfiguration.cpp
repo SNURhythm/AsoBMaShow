@@ -38,6 +38,21 @@ bool validGaugeType(GaugeType value) {
 }
 } // namespace
 
+void RangeSelection::placeActiveMarker(long long timeMicros,
+                                       long long chartEndMicros) {
+  const long long clamped =
+      std::clamp(timeMicros, 0LL, std::max(0LL, chartEndMicros));
+  if (active == Marker::Start) {
+    startMicros = clamped;
+  } else {
+    endMicros = clamped;
+  }
+  if (startMicros > endMicros) {
+    std::swap(startMicros, endMicros);
+    active = active == Marker::Start ? Marker::End : Marker::Start;
+  }
+}
+
 bool SanitizedConfiguration::playable() const noexcept {
   return isSha256(configuration.chartSha256) &&
          configuration.startMicros < configuration.endMicros &&
