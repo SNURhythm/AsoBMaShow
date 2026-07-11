@@ -338,7 +338,7 @@ private:
                      {.x = gravity.x, .y = gravity.y, .z = gravity.z}),
          .sensorTimestampSeconds = motion.timestamp,
          .accuracyGeneration = accuracy.generation,
-         .usableAccuracy = accuracy.usable,
+         .usableAccuracy = true,
          .discontinuity = false},
         now);
   }
