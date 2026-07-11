@@ -37,6 +37,7 @@
 #include <unordered_map>
 
 class Button;
+class DropdownView;
 class ScrollView;
 struct CoursePlaySession;
 struct ResultImageExportResult;
@@ -346,6 +347,7 @@ private:
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;
   TextView *readyPacemakerText = nullptr;
+  TextView *readyPlaybackText = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
   ReplaySummaryListView *replayListView = nullptr;
@@ -543,6 +545,12 @@ private:
     std::string target;
   };
   std::vector<PacemakerTargetButton> pacemakerTargetButtons;
+  Button *playbackRateDecreaseButton = nullptr;
+  Button *playbackRateIncreaseButton = nullptr;
+  TextView *playbackRateText = nullptr;
+  TextView *playbackClearCapText = nullptr;
+  DropdownView *playbackModeDropdown = nullptr;
+  bool playbackModeDropdownOpen = false;
   bool profileSelectionsInitialized = false;
   struct EffectivePlayOptionSelection {
     std::string playOption = "NORMAL";
@@ -656,6 +664,9 @@ private:
   void refreshAssistOptionButtons();
   void setPacemakerTargetSelection(const std::string &target);
   void refreshPacemakerTargetButtons();
+  void setPlaybackRateSelection(int percent);
+  void setPlaybackModeSelection(const std::string &mode);
+  void refreshPlaybackSelectionControls();
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   void refreshSelectedChartActionState();

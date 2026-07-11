@@ -515,6 +515,16 @@ void AppSettings::sanitize() {
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
+  selectedPlaybackRatePercent =
+      ((std::clamp(selectedPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
+  switch (selectedPlaybackMode) {
+  case audio::PlaybackMode::PitchShift:
+    break;
+  case audio::PlaybackMode::TimeStretch:
+  default:
+    selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+    break;
+  }
 }
 
 float AppSettings::playAreaWidthForKeyMode(int keyMode) const {

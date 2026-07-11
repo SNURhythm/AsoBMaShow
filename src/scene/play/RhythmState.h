@@ -1,4 +1,5 @@
 #pragma once
+#include "../../audio/PlaybackRate.h"
 #include "../../bms_parser.hpp"
 #include "Judge.h"
 #include <algorithm>
@@ -35,6 +36,22 @@ inline constexpr int kClearTypeHardClearRank = 400;
 inline constexpr int kClearTypeExHardClearRank = 500;
 inline constexpr int kClearTypeFullComboRank = 600;
 inline constexpr size_t kGaugeTypeCount = 5;
+
+namespace clear_policy {
+[[nodiscard]] inline bool
+assistClearRequired(const audio::PlaybackRate &playback) noexcept {
+  return !playback.neutral();
+}
+
+[[nodiscard]] inline int
+capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
+  if (!assistClearRequired(playback) ||
+      rank < kClearTypeAssistedEasyClearRank) {
+    return rank;
+  }
+  return kClearTypeAssistedEasyClearRank;
+}
+} // namespace clear_policy
 
 struct JudgementFastSlowCount {
   int fast = 0;

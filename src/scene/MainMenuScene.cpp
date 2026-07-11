@@ -32,6 +32,7 @@
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
 #include "../view/ClearLampColors.h"
+#include "../view/DropdownView.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
@@ -2523,6 +2524,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
+  readyPlaybackText = nullptr;
+  playbackRateDecreaseButton = nullptr;
+  playbackRateIncreaseButton = nullptr;
+  playbackRateText = nullptr;
+  playbackClearCapText = nullptr;
+  playbackModeDropdown = nullptr;
+  playbackModeDropdownOpen = false;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -3153,10 +3161,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionText = makeReadyStatusText();
   readyAssistOptionText = makeReadyStatusText();
   readyPacemakerText = makeReadyStatusText();
+  readyPlaybackText = makeReadyStatusText();
   readySettings->addView(readyGaugeRow);
   readySettings->addView(readyPlayOptionText);
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
+  readySettings->addView(readyPlaybackText);
 
   auto *playOptionsButton = new Button(0, 0, 220, 54);
   auto *playOptionsButtonText =
@@ -4817,6 +4827,60 @@ void MainMenuScene::refreshPacemakerTargetButtons() {
   refreshReadySettingsSummary();
 }
 
+void MainMenuScene::setPlaybackRateSelection(int percent) {
+  context.settings.selectedPlaybackRatePercent = percent;
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save playback rate selection");
+  }
+  refreshPlaybackSelectionControls();
+}
+
+void MainMenuScene::setPlaybackModeSelection(const std::string &mode) {
+  if (mode != "pitch-shift") {
+    return;
+  }
+  context.settings.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+  context.settings.sanitize();
+  playbackModeDropdownOpen = false;
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save playback mode selection");
+  }
+  refreshPlaybackSelectionControls();
+}
+
+void MainMenuScene::refreshPlaybackSelectionControls() {
+  const int percent = context.settings.selectedPlaybackRatePercent;
+  if (playbackRateText != nullptr) {
+    playbackRateText->setText(std::to_string(percent) + "%");
+  }
+  if (playbackRateDecreaseButton != nullptr) {
+    playbackRateDecreaseButton->setEnabled(percent > 50);
+  }
+  if (playbackRateIncreaseButton != nullptr) {
+    playbackRateIncreaseButton->setEnabled(percent < 200);
+  }
+  if (playbackClearCapText != nullptr) {
+    const bool assisted = percent != 100;
+    playbackClearCapText->setVisible(assisted);
+    playbackClearCapText->setHeight(assisted ? 26.0f : 0.0f);
+  }
+  if (playbackModeDropdown != nullptr) {
+    playbackModeDropdown->refresh({
+        .label = "Mode",
+        .selectedId = "pitch-shift",
+        .options = {{.id = "pitch-shift", .label = "Pitch Shift"},
+                    {.id = "time-stretch",
+                     .label = "Time Stretch (Unavailable)",
+                     .available = false}},
+        .open = playbackModeDropdownOpen,
+        .enabled = true,
+        .maxVisibleItems = 2,
+    });
+  }
+  refreshReadySettingsSummary();
+}
+
 void MainMenuScene::refreshReadySettingsSummary() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
@@ -4837,6 +4901,14 @@ void MainMenuScene::refreshReadySettingsSummary() {
     readyPacemakerText->setText(
         "Target: " +
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
+  }
+  if (readyPlaybackText != nullptr) {
+    readyPlaybackText->setText(
+        "Rate: " +
+        std::to_string(context.settings.selectedPlaybackRatePercent) + "%" +
+        (context.settings.selectedPlaybackRatePercent == 100
+             ? " / Pitch Shift"
+             : " / Assisted Easy maximum"));
   }
 }
 
@@ -5139,6 +5211,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const std::string assistOption = profileSelections.assistOption;
   const std::string pacemakerTarget =
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+  const audio::PlaybackRate playback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode,
+  };
   const std::string normalizedPlayOption =
       play_options::normalizePlayOption(playOption);
   const bool canReusePreviewForStart =
@@ -5148,9 +5224,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       selectedLongNoteMode, assistOption, pacemakerTarget,
-       canReusePreviewForStart,
-       chartRandomInfo]() {
+       selectedLongNoteMode, assistOption, pacemakerTarget, playback,
+       canReusePreviewForStart, chartRandomInfo]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
           return true;
@@ -5184,6 +5259,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
+                                    .playback = playback,
                                 });
           return finishStart();
         }
@@ -5235,6 +5311,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .longNoteMode = selectedLongNoteMode,
                                       .assistOption = assistOption,
                                       .pacemakerTarget = pacemakerTarget,
+                                      .playback = playback,
                                   });
             return finishStart();
           }
@@ -5256,6 +5333,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .longNoteMode = selectedLongNoteMode,
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
+                                         .playback = playback,
                                      });
         return finishStart();
       },
@@ -7546,6 +7624,53 @@ void MainMenuScene::buildPlayOptionsModal() {
   assistOptionRow->addView(makeAssistOptionButton(assist_options::kDrag));
   optionsContent->addView(assistOptionRow);
 
+  optionsContent->addView(makeModalLabel("Playback Rate"));
+
+  auto *playbackRateRow = makeModalOptionRow(58);
+  TextView *playbackRateDecreaseText = nullptr;
+  playbackRateDecreaseButton =
+      makeModalButton("-5%", 18, &playbackRateDecreaseText);
+  playbackRateDecreaseButton->setFlex(1.0f);
+  playbackRateDecreaseButton->setOnClickListener([this]() {
+    setPlaybackRateSelection(context.settings.selectedPlaybackRatePercent - 5);
+  });
+  playbackRateRow->addView(playbackRateDecreaseButton);
+
+  playbackRateText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  playbackRateText->setAlign(TextView::CENTER);
+  playbackRateText->setVAlign(TextView::MIDDLE);
+  playbackRateText->setThemedColor(ui_theme::textPrimary);
+  playbackRateText->setFlex(1.0f);
+  playbackRateRow->addView(playbackRateText);
+
+  TextView *playbackRateIncreaseText = nullptr;
+  playbackRateIncreaseButton =
+      makeModalButton("+5%", 18, &playbackRateIncreaseText);
+  playbackRateIncreaseButton->setFlex(1.0f);
+  playbackRateIncreaseButton->setOnClickListener([this]() {
+    setPlaybackRateSelection(context.settings.selectedPlaybackRatePercent + 5);
+  });
+  playbackRateRow->addView(playbackRateIncreaseButton);
+  optionsContent->addView(playbackRateRow);
+
+  playbackClearCapText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+  playbackClearCapText->setText("Assisted Easy maximum");
+  playbackClearCapText->setAlign(TextView::CENTER);
+  playbackClearCapText->setThemedColor(ui_theme::textSecondary);
+  optionsContent->addView(playbackClearCapText);
+
+  playbackModeDropdown = new DropdownView({
+      .onOpenChanged =
+          [this](bool open) {
+            playbackModeDropdownOpen = open;
+            refreshPlaybackSelectionControls();
+          },
+      .onOptionSelected =
+          [this](const std::string &mode) { setPlaybackModeSelection(mode); },
+  });
+  playbackModeDropdown->setWidthPercent(100.0f);
+  optionsContent->addView(playbackModeDropdown);
+
   optionsContent->addView(makeModalLabel("Pacemaker"));
 
   auto makePacemakerTargetButton = [this](std::string target) {
@@ -7597,6 +7722,7 @@ void MainMenuScene::buildPlayOptionsModal() {
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
+  refreshPlaybackSelectionControls();
   refreshPacemakerTargetButtons();
   styleThemedActionButton(playOptionsCloseButton, playOptionsCloseButtonText,
                           true, ui_theme::control, ui_theme::controlHover,
@@ -7612,6 +7738,7 @@ void MainMenuScene::showPlayOptionsModal() {
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
+  refreshPlaybackSelectionControls();
   refreshPacemakerTargetButtons();
   playOptionsModalRoot->setSize(rendering::window_width,
                                 rendering::window_height);
@@ -7623,6 +7750,8 @@ void MainMenuScene::hidePlayOptionsModal() {
   if (playOptionsModalRoot == nullptr) {
     return;
   }
+  playbackModeDropdownOpen = false;
+  refreshPlaybackSelectionControls();
   playOptionsModalRoot->setVisible(false);
 }
 
@@ -8952,9 +9081,14 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
   const GaugeType gaugeType = profileSelections.gaugeType;
   const bool gaugeAutoShift = profileSelections.gaugeAutoShift;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const audio::PlaybackRate playback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode,
+  };
 
   defer(
-      [this, record, replayId, gaugeType, gaugeAutoShift, autoKeySound]() {
+      [this, record, replayId, gaugeType, gaugeAutoShift, autoKeySound,
+       playback]() {
         auto failGBattleLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -8994,26 +9128,25 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
             std::make_shared<ReplayData>(std::move(replay.value()));
         context.jukebox.stop();
         hideReplayModal();
-        changeToGameplayScene(chart,
-                              {
-                                  .startPosition = 0,
-                                  .autoKeySound = autoKeySound,
-                                  .autoPlay = false,
-                                  .gaugeType = gaugeType,
-                                  .gaugeAutoShift = gaugeAutoShift,
-                                  .gbattleRecordData = recordData,
-                                  .playOption = recordData->playOption,
-                                  .playOptionSeed = recordData->playOptionSeed,
-                                  .playOption2 = recordData->playOption2,
-                                  .playOption2Seed =
-                                      recordData->playOption2Seed,
-                                  .longNoteMode =
-                                      normalizeChartLongNoteModeValue(
-                                          recordData->chartMeta.LnMode),
-                                  .assistOption = recordData->assistOption,
-                                  .pacemakerTarget = pacemaker::kTargetOff,
-                                  .replayGhostRenderingEnabled = false,
-                              });
+        changeToGameplayScene(
+            chart, {
+                       .startPosition = 0,
+                       .autoKeySound = autoKeySound,
+                       .autoPlay = false,
+                       .gaugeType = gaugeType,
+                       .gaugeAutoShift = gaugeAutoShift,
+                       .gbattleRecordData = recordData,
+                       .playOption = recordData->playOption,
+                       .playOptionSeed = recordData->playOptionSeed,
+                       .playOption2 = recordData->playOption2,
+                       .playOption2Seed = recordData->playOption2Seed,
+                       .longNoteMode = normalizeChartLongNoteModeValue(
+                           recordData->chartMeta.LnMode),
+                       .assistOption = recordData->assistOption,
+                       .pacemakerTarget = pacemaker::kTargetOff,
+                       .playback = playback,
+                       .replayGhostRenderingEnabled = false,
+                   });
         willStart.store(false);
         return true;
       },
@@ -10002,6 +10135,13 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
+  readyPlaybackText = nullptr;
+  playbackRateDecreaseButton = nullptr;
+  playbackRateIncreaseButton = nullptr;
+  playbackRateText = nullptr;
+  playbackClearCapText = nullptr;
+  playbackModeDropdown = nullptr;
+  playbackModeDropdownOpen = false;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;

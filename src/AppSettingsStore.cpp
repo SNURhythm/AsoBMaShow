@@ -163,6 +163,8 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
+      {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
@@ -263,6 +265,10 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "selectedPlaybackRatePercent",
+            settings.selectedPlaybackRatePercent, diagnostics);
+  readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,
+           diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
 

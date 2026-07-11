@@ -399,6 +399,7 @@ void testReplayStartRestoresPracticeProvenance() {
   replay.provenance.startingGaugePercent = 37;
 
   StartOptions options;
+  options.playback = {.percent = 150, .mode = audio::PlaybackMode::PitchShift};
   applyReplayProvenanceToStartOptions(options, replay);
   assert(options.playback == replay.provenance.playback);
   assert(options.judgeWindowScalePercent == 80);

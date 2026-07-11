@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/PlaybackRate.h"
 #include "settings/AudioVideoSettings.h"
 
 #include <filesystem>
@@ -155,6 +156,8 @@ public:
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
+  int selectedPlaybackRatePercent = 100;
+  audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;
 
   void sanitize();

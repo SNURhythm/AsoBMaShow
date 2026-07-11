@@ -784,7 +784,9 @@ void GamePlayScene::reset() {
   const std::string assistOption =
       isReplayPlayback() ? options.replayData->assistOption
                          : options.assistOption;
-  state->setAssistClearMark(assist_options::isEnabled(assistOption));
+  state->setAssistClearMark(
+      assist_options::isEnabled(assistOption) ||
+      clear_policy::assistClearRequired(options.playback));
   initializeStartPositionState();
   configurePacemakerTarget();
   updatePacemakerStatus();
@@ -1238,6 +1240,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.playOption2Seed = playInfo.seed2;
   nextOptions.longNoteMode = options.longNoteMode;
   nextOptions.assistOption = session->assistOption;
+  nextOptions.playback = options.playback;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;
   nextOptions.ownsChart = true;
@@ -1308,6 +1311,8 @@ void GamePlayScene::finishReplayRecording() {
       state->maxCombo >= totalNotes) {
     recordedReplay.clearType = kClearTypeFullComboRank;
   }
+  recordedReplay.clearType = clear_policy::capRankForPlayback(
+      recordedReplay.clearType, options.playback);
 }
 
 void GamePlayScene::publishPracticeGhost() {
