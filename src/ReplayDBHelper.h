@@ -1,12 +1,15 @@
 #pragma once
 
+#include "CourseIdentity.h"
 #include "ReplayData.h"
+#include "ScoreDBHelper.h"
 #include "bms_parser.hpp"
 #include "sqlite3.h"
 
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -47,9 +50,14 @@ struct ReplaySummary {
   ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
 };
 
+struct CourseReplayLookup {
+  std::string courseKey;
+  int legacyCourseId = 0;
+};
+
 class ReplayDBHelper {
 public:
-  static constexpr int kCurrentSchemaVersion = 3;
+  static constexpr int kCurrentSchemaVersion = 4;
 
   ReplayDBHelper() = default;
   explicit ReplayDBHelper(std::filesystem::path databasePath);
@@ -78,10 +86,15 @@ public:
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);
-  std::vector<ReplaySummary> ListCourseReplays(int courseId, int limit = 100);
+  std::vector<ReplaySummary>
+  ListCourseReplays(const CourseReplayLookup &lookup, int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
                                        const bms_parser::ChartMeta &chartMeta);
   std::optional<CourseReplayData> LoadCourseReplay(int replayId);
+  bool RecoverCourseRecords(
+      std::span<const course_identity::Definition> definitions,
+      std::span<const CourseScoreEvidence> scoreEvidence,
+      std::string &errorMessage);
   std::optional<ReplayData>
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
 
@@ -100,14 +113,18 @@ private:
   std::vector<ReplaySummary>
   ListReplaysOnConnection(sqlite3 *db,
                           const bms_parser::ChartMeta &chartMeta, int limit);
-  std::vector<ReplaySummary> ListCourseReplaysOnConnection(sqlite3 *db,
-                                                           int courseId,
-                                                           int limit);
+  std::vector<ReplaySummary>
+  ListCourseReplaysOnConnection(sqlite3 *db,
+                                const CourseReplayLookup &lookup, int limit);
   std::optional<ReplayData>
   LoadReplayOnConnection(sqlite3 *db, int replayId,
                          const bms_parser::ChartMeta &chartMeta);
   std::optional<CourseReplayData> LoadCourseReplayOnConnection(sqlite3 *db,
                                                                int replayId);
+  bool RecoverCourseRecordsOnConnection(
+      sqlite3 *db, std::span<const course_identity::Definition> definitions,
+      std::span<const CourseScoreEvidence> scoreEvidence,
+      std::string &errorMessage);
   std::optional<ReplayData>
   LoadLatestReplayOnConnection(sqlite3 *db,
                                const bms_parser::ChartMeta &chartMeta);

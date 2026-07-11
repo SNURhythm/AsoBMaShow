@@ -10,12 +10,15 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -32,6 +35,105 @@ using asobmshow::bms_metadata::trimCopy;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
 using asobmshow::chart_sql::boundStoredOrLegacyBmsPathMatchCondition;
 using asobmshow::chart_sql::normalizedSqlHash;
+
+bool isCanonicalCourseKey(std::string_view key) {
+  constexpr std::string_view prefix = "course:v1:";
+  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
+    return false;
+  }
+  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
+    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
+  });
+}
+
+bool isHexDigest(std::string_view value, std::size_t expectedLength) {
+  return value.size() == expectedLength &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return std::isxdigit(character) != 0;
+         });
+}
+
+std::optional<course_identity::ChartIdentity>
+strictChartIdentity(std::string sha256, std::string md5) {
+  const bool hadSha256 = !sha256.empty();
+  const bool hadMd5 = !md5.empty();
+  sha256 = normalizedHash(sha256);
+  md5 = normalizedHash(md5);
+  if ((hadSha256 && !isHexDigest(sha256, 64)) ||
+      (hadMd5 && !isHexDigest(md5, 32)) ||
+      (sha256.empty() && md5.empty())) {
+    return std::nullopt;
+  }
+  return course_identity::ChartIdentity{.sha256 = std::move(sha256),
+                                        .md5 = std::move(md5)};
+}
+
+bool hasDurableReplayChartIdentity(const ReplayData &replay) {
+  return strictChartIdentity(replay.chartMeta.SHA256, replay.chartMeta.MD5)
+      .has_value();
+}
+
+std::optional<ScoreProvenance> decodeStoredProvenance(
+    sqlite3_stmt *stmt, int rulesetVersionColumn, int eligibilityColumn,
+    int provenanceJsonColumn, std::string &error);
+
+enum class StrictStageReadResult { Valid, InvalidRow, SqlError };
+
+constexpr const char *kStrictCourseReplayStageIdentityQuery =
+    "SELECT s.stage_index, s.replay_id, r.id, r.chart_md5, r.chart_sha256,"
+    "r.ruleset_version, r.eligibility, r.provenance_json "
+    "FROM course_replay_stages s "
+    "LEFT JOIN replays r ON r.id = s.replay_id "
+    "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
+
+StrictStageReadResult readStrictCourseReplayStageIdentities(
+    sqlite3_stmt *stmt, int courseReplayId, int expectedCount,
+    std::vector<course_identity::ChartIdentity> &charts, std::string &error) {
+  charts.clear();
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  if (sqlite3_bind_int(stmt, 1, courseReplayId) != SQLITE_OK ||
+      sqlite3_bind_int(stmt, 2,
+                       replay_summary_scan::kMaxCourseStagesPerCandidate + 1) !=
+          SQLITE_OK) {
+    error = sqliteDatabaseError(sqlite3_db_handle(stmt));
+    return StrictStageReadResult::SqlError;
+  }
+
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const int expectedIndex = static_cast<int>(charts.size());
+    if (sqlite3_column_int(stmt, 0) != expectedIndex ||
+        charts.size() >= static_cast<std::size_t>(
+                             replay_summary_scan::kMaxCourseStagesPerCandidate) ||
+        sqlite3_column_type(stmt, 2) == SQLITE_NULL ||
+        sqlite3_column_int(stmt, 1) <= 0 ||
+        sqlite3_column_int(stmt, 1) != sqlite3_column_int(stmt, 2)) {
+      error = "course replay has invalid stage links or indexes";
+      return StrictStageReadResult::InvalidRow;
+    }
+    auto identity = strictChartIdentity(sqliteColumnString(stmt, 4),
+                                        sqliteColumnString(stmt, 3));
+    if (!identity.has_value()) {
+      error = "course replay stage has no valid durable hash identity";
+      return StrictStageReadResult::InvalidRow;
+    }
+    if (!decodeStoredProvenance(stmt, 5, 6, 7, error).has_value()) {
+      return StrictStageReadResult::InvalidRow;
+    }
+    charts.push_back(std::move(*identity));
+  }
+  if (rc != SQLITE_DONE) {
+    error = sqliteDatabaseError(sqlite3_db_handle(stmt));
+    return StrictStageReadResult::SqlError;
+  }
+  if (expectedCount <= 0 ||
+      charts.size() != static_cast<std::size_t>(expectedCount)) {
+    error = "course replay stage count does not match completed charts";
+    return StrictStageReadResult::InvalidRow;
+  }
+  return StrictStageReadResult::Valid;
+}
 
 void logSqlErrorText(const char *context, const std::string &error) {
   SDL_Log("SQL error while %s: %s", context, error.c_str());
@@ -128,6 +230,110 @@ bool ensureReplayProvenanceColumns(sqlite3 *db, const char *tableName) {
                            "adding replay provenance JSON column");
 }
 
+bool backfillCompleteCourseReplayKeys(sqlite3 *db) {
+  const char *query =
+      "SELECT id, COALESCE(constraint_json, ''), completed_charts,"
+      "total_charts, ruleset_version, eligibility, provenance_json "
+      "FROM course_replays ORDER BY id";
+  SqliteStatementHandle rowStmt;
+  if (!prepareSqliteStatementLogged(db, query, rowStmt,
+                                    "reading course replays for key backfill",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  SqliteStatementHandle stageStmt;
+  if (!prepareSqliteStatementLogged(
+          db, kStrictCourseReplayStageIdentityQuery, stageStmt,
+          "preparing course replay key backfill stage scan",
+          logSqlErrorText)) {
+    return false;
+  }
+
+  struct Rewrite {
+    sqlite3_int64 id = 0;
+    std::string courseKey;
+  };
+  std::vector<Rewrite> rewrites;
+  std::size_t invalidRows = 0;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(rowStmt.get())) == SQLITE_ROW) {
+    const int completedCharts = sqlite3_column_int(rowStmt.get(), 2);
+    const int totalCharts = sqlite3_column_int(rowStmt.get(), 3);
+    if (totalCharts <= 0 ||
+        totalCharts > replay_summary_scan::kMaxCourseStagesPerCandidate ||
+        completedCharts != totalCharts) {
+      ++invalidRows;
+      continue;
+    }
+
+    std::string provenanceError;
+    if (!decodeStoredProvenance(rowStmt.get(), 4, 5, 6, provenanceError)
+             .has_value()) {
+      ++invalidRows;
+      continue;
+    }
+    const std::string constraintJson = sqliteColumnString(rowStmt.get(), 1);
+    if (course_identity::canonicalConstraintPayload(constraintJson).empty()) {
+      ++invalidRows;
+      continue;
+    }
+
+    std::vector<course_identity::ChartIdentity> charts;
+    std::string stageError;
+    const StrictStageReadResult stageResult =
+        readStrictCourseReplayStageIdentities(
+            stageStmt.get(), sqlite3_column_int(rowStmt.get(), 0), totalCharts,
+            charts, stageError);
+    if (stageResult == StrictStageReadResult::SqlError) {
+      logSqlErrorText("scanning course replay stages for key backfill",
+                      stageError);
+      return false;
+    }
+    if (stageResult == StrictStageReadResult::InvalidRow) {
+      ++invalidRows;
+      continue;
+    }
+    std::string courseKey =
+        course_identity::makeCourseKey(charts, constraintJson);
+    if (courseKey.empty()) {
+      ++invalidRows;
+      continue;
+    }
+    rewrites.push_back({.id = sqlite3_column_int64(rowStmt.get(), 0),
+                        .courseKey = std::move(courseKey)});
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading course replays for key backfill", db);
+    return false;
+  }
+  rowStmt.reset();
+  stageStmt.reset();
+
+  SqliteStatementHandle updateStmt;
+  if (!rewrites.empty() &&
+      !prepareSqliteStatementLogged(
+          db, "UPDATE course_replays SET course_key = ? WHERE id = ?",
+          updateStmt, "preparing course replay key backfill update",
+          logSqlErrorText)) {
+    return false;
+  }
+  for (const auto &rewrite : rewrites) {
+    bindSqliteText(updateStmt.get(), 1, rewrite.courseKey);
+    sqlite3_bind_int64(updateStmt.get(), 2, rewrite.id);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      logSqlError("backfilling course replay key", db);
+      return false;
+    }
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+  }
+  if (invalidRows > 0) {
+    SDL_Log("Course replay key migration: backfilled=%zu unresolved=%zu",
+            rewrites.size(), invalidRows);
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -170,8 +376,23 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
   if (!ensureReplayProvenanceColumns(db, "replays") ||
-      !ensureReplayProvenanceColumns(db, "course_replays") ||
-      !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
+      !ensureReplayProvenanceColumns(db, "course_replays")) {
+    return false;
+  }
+  if (*version < 4 &&
+      (!ensureTableColumn(
+           db, "course_replays", "course_key",
+           "ALTER TABLE course_replays ADD COLUMN course_key TEXT NOT NULL "
+           "DEFAULT ''",
+           "adding course replay content key column") ||
+       !backfillCompleteCourseReplayKeys(db) ||
+       !execSql(db,
+                "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
+                "course_replays(course_key, id)",
+                "creating course replay content key index"))) {
+    return false;
+  }
+  if (!setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
@@ -1154,6 +1375,7 @@ bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
       "CREATE TABLE IF NOT EXISTS course_replays ("
       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
       "course_id INTEGER NOT NULL,"
+      "course_key TEXT NOT NULL DEFAULT '',"
       "course_name TEXT,"
       "course_group_name TEXT,"
       "constraint_json TEXT,"
@@ -1231,7 +1453,10 @@ bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (!migrateReplayDatabaseSchema(db)) {
     return false;
   }
-  return true;
+  return execSql(db,
+                 "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
+                 "course_replays(course_key, id)",
+                 "ensuring course replay content key index");
 }
 
 bool ReplayDBHelper::EnsureSchema() {
@@ -1284,17 +1509,21 @@ std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
 std::optional<int>
 ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
   profile_database_activity::WriteGuard writeGuard;
-  if (replay.stages.empty() ||
-      replay.stages.size() >
-          static_cast<std::size_t>(
-              replay_summary_scan::kMaxCourseStagesPerCandidate)) {
+  if (!isCanonicalCourseKey(replay.courseKey) || replay.totalCharts <= 0 ||
+      replay.totalCharts >
+          replay_summary_scan::kMaxCourseStagesPerCandidate ||
+      replay.completedCharts <= 0 ||
+      replay.completedCharts > replay.totalCharts ||
+      replay.stages.size() !=
+          static_cast<std::size_t>(replay.completedCharts)) {
+    SDL_Log("Refusing to save course replay with invalid key or stage counts");
     return std::nullopt;
   }
   if (std::any_of(replay.stages.begin(), replay.stages.end(),
                   [](const CourseReplayStageData &stage) {
-                    return !hasMatchableReplayChartIdentity(stage.replay);
+                    return !hasDurableReplayChartIdentity(stage.replay);
                   })) {
-    SDL_Log("Refusing to save course replay with an unmatchable stage");
+    SDL_Log("Refusing to save course replay without durable stage hashes");
     return std::nullopt;
   }
 
@@ -1337,13 +1566,13 @@ std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
 
   const char *courseInsert =
       "INSERT INTO course_replays ("
-      "course_id, course_name, course_group_name, constraint_json,"
+      "course_id, course_key, course_name, course_group_name, constraint_json,"
       "gauge_type, gauge_profile, gauge_auto_shift, ln_mode,"
       "requested_play_option, assist_option, final_score, max_combo, "
       "final_gauge,"
       "clear_type, completed_charts, total_charts, ruleset_version,"
       "eligibility, provenance_json"
-      ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
   SqliteStatementHandle courseStmt;
   if (!prepareSqliteStatementLogged(db, courseInsert, courseStmt,
@@ -1354,6 +1583,7 @@ std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
 
   int bindIndex = 1;
   sqlite3_bind_int(courseStmt.get(), bindIndex++, replay.courseId);
+  bindSqliteText(courseStmt.get(), bindIndex++, replay.courseKey);
   bindSqliteText(courseStmt.get(), bindIndex++, replay.courseName);
   bindSqliteText(courseStmt.get(), bindIndex++, replay.courseGroupName);
   bindSqliteText(courseStmt.get(), bindIndex++, replay.constraintJson);
@@ -1570,20 +1800,21 @@ std::vector<ReplaySummary> ReplayDBHelper::ListReplaysOnConnection(
   return replays;
 }
 
-std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
-                                                             int limit) {
+std::vector<ReplaySummary>
+ReplayDBHelper::ListCourseReplays(const CourseReplayLookup &lookup,
+                                  int limit) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   if (!EnsureSessionDatabaseLocked()) {
     return {};
   }
-  return ListCourseReplaysOnConnection(sessionDatabase_, courseId, limit);
+  return ListCourseReplaysOnConnection(sessionDatabase_, lookup, limit);
 }
 
 std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
-    sqlite3 *db, int courseId, int limit) {
+    sqlite3 *db, const CourseReplayLookup &lookup, int limit) {
   std::vector<ReplaySummary> replays;
-  if (courseId <= 0) {
+  if (lookup.courseKey.empty() && lookup.legacyCourseId <= 0) {
     return replays;
   }
 
@@ -1602,7 +1833,9 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
   const char *candidateQuery =
       "SELECT cr.id, cr.ruleset_version, cr.eligibility, cr.provenance_json "
       "FROM course_replays cr "
-      "WHERE cr.course_id = ? AND cr.id < ? "
+      "WHERE (((? <> '' AND cr.course_key = ?) OR "
+      "(cr.course_key = '' AND ? > 0 AND cr.course_id = ?)) "
+      "AND cr.id < ?) "
       "ORDER BY cr.id DESC LIMIT ?";
   SqliteStatementHandle candidateStmt;
   if (!prepareSqliteStatementLogged(db, candidateQuery, candidateStmt,
@@ -1629,9 +1862,12 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
         replay_summary_scan::kChunkSize, candidateBudget - inspected);
     sqlite3_reset(candidateStmt.get());
     sqlite3_clear_bindings(candidateStmt.get());
-    sqlite3_bind_int(candidateStmt.get(), 1, courseId);
-    sqlite3_bind_int64(candidateStmt.get(), 2, beforeId);
-    sqlite3_bind_int(candidateStmt.get(), 3, static_cast<int>(chunkSize));
+    bindSqliteText(candidateStmt.get(), 1, lookup.courseKey);
+    bindSqliteText(candidateStmt.get(), 2, lookup.courseKey);
+    sqlite3_bind_int(candidateStmt.get(), 3, lookup.legacyCourseId);
+    sqlite3_bind_int(candidateStmt.get(), 4, lookup.legacyCourseId);
+    sqlite3_bind_int64(candidateStmt.get(), 5, beforeId);
+    sqlite3_bind_int(candidateStmt.get(), 6, static_cast<int>(chunkSize));
 
     std::size_t rowsInChunk = 0;
     int rc = SQLITE_OK;
@@ -1757,6 +1993,237 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
     return {};
   }
   return replays;
+}
+
+bool ReplayDBHelper::RecoverCourseRecords(
+    std::span<const course_identity::Definition> definitions,
+    std::span<const CourseScoreEvidence> scoreEvidence,
+    std::string &errorMessage) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    errorMessage = "replay database validation failed";
+    return false;
+  }
+  return RecoverCourseRecordsOnConnection(sessionDatabase_, definitions,
+                                          scoreEvidence, errorMessage);
+}
+
+bool ReplayDBHelper::RecoverCourseRecordsOnConnection(
+    sqlite3 *db, std::span<const course_identity::Definition> definitions,
+    std::span<const CourseScoreEvidence> scoreEvidence,
+    std::string &errorMessage) {
+  errorMessage.clear();
+  if (db == nullptr) {
+    errorMessage = "replay database is unavailable";
+    return false;
+  }
+
+  struct ValidDefinition {
+    const course_identity::Definition *definition = nullptr;
+    std::string canonicalConstraints;
+  };
+  std::vector<ValidDefinition> validDefinitions;
+  std::unordered_set<std::string> currentKeys;
+  validDefinitions.reserve(definitions.size());
+  for (const auto &definition : definitions) {
+    const std::string canonicalConstraints =
+        course_identity::canonicalConstraintPayload(definition.constraintJson);
+    if (!isCanonicalCourseKey(definition.courseKey) ||
+        definition.charts.empty() || canonicalConstraints.empty() ||
+        course_identity::makeCourseKey(definition.charts,
+                                       definition.constraintJson)
+            .empty()) {
+      continue;
+    }
+    currentKeys.insert(definition.courseKey);
+    validDefinitions.push_back(
+        {.definition = &definition,
+         .canonicalConstraints = canonicalConstraints});
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery =
+      callerOwnsTransaction ? "SAVEPOINT asobmashow_replay_course_recovery"
+                            : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_replay_course_recovery"
+                            : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_replay_course_recovery; RELEASE "
+            "asobmashow_replay_course_recovery"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    errorMessage = "could not start replay recovery transaction: " +
+                   transactionError;
+    return false;
+  }
+
+  const char *selectQuery =
+      "SELECT id, course_id, course_key, COALESCE(course_name, ''),"
+      "COALESCE(course_group_name, ''), COALESCE(constraint_json, ''),"
+      "completed_charts, total_charts, ruleset_version, eligibility,"
+      "provenance_json FROM course_replays ORDER BY id";
+  SqliteStatementHandle rowStmt;
+  if (!prepareSqliteStatementLogged(
+          db, selectQuery, rowStmt,
+          "reading course replays for identity recovery", logSqlErrorText)) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  SqliteStatementHandle stageStmt;
+  if (!prepareSqliteStatementLogged(
+          db, kStrictCourseReplayStageIdentityQuery, stageStmt,
+          "preparing course replay recovery stage scan", logSqlErrorText)) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+
+  struct Rewrite {
+    sqlite3_int64 id = 0;
+    std::string courseKey;
+  };
+  std::vector<Rewrite> rewrites;
+  std::size_t examined = 0;
+  std::size_t malformed = 0;
+  std::size_t ambiguous = 0;
+  std::size_t evidenceResolved = 0;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(rowStmt.get())) == SQLITE_ROW) {
+    const std::string storedKey = sqliteColumnString(rowStmt.get(), 2);
+    if (!storedKey.empty() && currentKeys.contains(storedKey)) {
+      continue;
+    }
+    ++examined;
+
+    const int completedCharts = sqlite3_column_int(rowStmt.get(), 6);
+    const int totalCharts = sqlite3_column_int(rowStmt.get(), 7);
+    if (completedCharts <= 0 || completedCharts > totalCharts ||
+        totalCharts <= 0 ||
+        totalCharts > replay_summary_scan::kMaxCourseStagesPerCandidate) {
+      ++malformed;
+      continue;
+    }
+    std::string provenanceError;
+    if (!decodeStoredProvenance(rowStmt.get(), 8, 9, 10, provenanceError)
+             .has_value()) {
+      ++malformed;
+      continue;
+    }
+    const std::string constraintJson = sqliteColumnString(rowStmt.get(), 5);
+    const std::string canonicalConstraints =
+        course_identity::canonicalConstraintPayload(constraintJson);
+    if (canonicalConstraints.empty()) {
+      ++malformed;
+      continue;
+    }
+
+    std::vector<course_identity::ChartIdentity> storedCharts;
+    std::string stageError;
+    const StrictStageReadResult stageResult =
+        readStrictCourseReplayStageIdentities(
+            stageStmt.get(), sqlite3_column_int(rowStmt.get(), 0),
+            completedCharts, storedCharts, stageError);
+    if (stageResult == StrictStageReadResult::SqlError) {
+      errorMessage = stageError;
+      return false;
+    }
+    if (stageResult == StrictStageReadResult::InvalidRow) {
+      ++malformed;
+      continue;
+    }
+
+    std::unordered_set<std::string> candidateKeys;
+    for (const auto &candidate : validDefinitions) {
+      if (candidate.canonicalConstraints != canonicalConstraints ||
+          candidate.definition->charts.size() !=
+              static_cast<std::size_t>(totalCharts) ||
+          !course_identity::prefixMatches(storedCharts,
+                                          candidate.definition->charts)) {
+        continue;
+      }
+      candidateKeys.insert(candidate.definition->courseKey);
+    }
+
+    std::optional<std::string> selectedKey;
+    bool usedEvidence = false;
+    if (candidateKeys.size() == 1) {
+      selectedKey = *candidateKeys.begin();
+    } else if (candidateKeys.size() > 1) {
+      const int legacyCourseId = sqlite3_column_int(rowStmt.get(), 1);
+      const std::string courseName = sqliteColumnString(rowStmt.get(), 3);
+      const std::string courseGroupName =
+          sqliteColumnString(rowStmt.get(), 4);
+      std::unordered_set<std::string> evidenceKeys;
+      for (const auto &evidence : scoreEvidence) {
+        if (evidence.legacyCourseId == legacyCourseId &&
+            evidence.totalCharts == totalCharts &&
+            evidence.courseName == courseName &&
+            evidence.courseGroupName == courseGroupName &&
+            evidence.canonicalConstraintPayload == canonicalConstraints &&
+            candidateKeys.contains(evidence.courseKey)) {
+          evidenceKeys.insert(evidence.courseKey);
+        }
+      }
+      if (evidenceKeys.size() == 1) {
+        selectedKey = *evidenceKeys.begin();
+        usedEvidence = true;
+      }
+    }
+
+    if (!selectedKey.has_value()) {
+      if (candidateKeys.size() > 1) {
+        ++ambiguous;
+      }
+      continue;
+    }
+    if (*selectedKey != storedKey) {
+      rewrites.push_back({.id = sqlite3_column_int64(rowStmt.get(), 0),
+                          .courseKey = std::move(*selectedKey)});
+      if (usedEvidence) {
+        ++evidenceResolved;
+      }
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  rowStmt.reset();
+  stageStmt.reset();
+
+  SqliteStatementHandle updateStmt;
+  if (!rewrites.empty() &&
+      !prepareSqliteStatementLogged(
+          db, "UPDATE course_replays SET course_key = ? WHERE id = ?",
+          updateStmt, "preparing course replay recovery update",
+          logSqlErrorText)) {
+    errorMessage = sqliteDatabaseError(db);
+    return false;
+  }
+  for (const auto &rewrite : rewrites) {
+    bindSqliteText(updateStmt.get(), 1, rewrite.courseKey);
+    sqlite3_bind_int64(updateStmt.get(), 2, rewrite.id);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      errorMessage = sqliteDatabaseError(db);
+      return false;
+    }
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+  }
+  if (!transaction.commit(transactionError)) {
+    errorMessage = "could not commit replay recovery transaction: " +
+                   transactionError;
+    return false;
+  }
+  SDL_Log("Course replay recovery: examined=%zu rewritten=%zu malformed=%zu "
+          "ambiguous=%zu evidence_resolved=%zu",
+          examined, rewrites.size(), malformed, ambiguous, evidenceResolved);
+  return true;
 }
 
 static std::optional<ReplayData>
@@ -1993,8 +2460,8 @@ ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
   }
 
   const char *query =
-      "SELECT id, course_id, course_name, course_group_name, constraint_json,"
-      "gauge_type, gauge_profile, gauge_auto_shift, ln_mode,"
+      "SELECT id, course_id, course_key, course_name, course_group_name, "
+      "constraint_json, gauge_type, gauge_profile, gauge_auto_shift, ln_mode,"
       "requested_play_option, assist_option, final_score, final_gauge,"
       "clear_type, completed_charts, total_charts, created_at, max_combo,"
       "ruleset_version, eligibility, provenance_json "
@@ -2014,29 +2481,30 @@ ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
 
   courseReplay.id = sqlite3_column_int(stmt.get(), 0);
   courseReplay.courseId = sqlite3_column_int(stmt.get(), 1);
-  courseReplay.courseName = readText(stmt.get(), 2);
-  courseReplay.courseGroupName = readText(stmt.get(), 3);
-  courseReplay.constraintJson = readText(stmt.get(), 4);
+  courseReplay.courseKey = readText(stmt.get(), 2);
+  courseReplay.courseName = readText(stmt.get(), 3);
+  courseReplay.courseGroupName = readText(stmt.get(), 4);
+  courseReplay.constraintJson = readText(stmt.get(), 5);
   courseReplay.initialGaugeType =
-      gaugeTypeFromInt(sqlite3_column_int(stmt.get(), 5));
+      gaugeTypeFromInt(sqlite3_column_int(stmt.get(), 6));
   courseReplay.gaugeProfile =
-      gaugeProfileFromInt(sqlite3_column_int(stmt.get(), 6));
-  courseReplay.gaugeAutoShift = sqlite3_column_int(stmt.get(), 7) != 0;
+      gaugeProfileFromInt(sqlite3_column_int(stmt.get(), 7));
+  courseReplay.gaugeAutoShift = sqlite3_column_int(stmt.get(), 8) != 0;
   courseReplay.longNoteMode =
-      long_note_mode::normalizeValue(sqlite3_column_int(stmt.get(), 8));
-  courseReplay.requestedPlayOption = readText(stmt.get(), 9);
+      long_note_mode::normalizeValue(sqlite3_column_int(stmt.get(), 9));
+  courseReplay.requestedPlayOption = readText(stmt.get(), 10);
   courseReplay.assistOption =
-      assist_options::normalize(readText(stmt.get(), 10));
-  courseReplay.finalScore = sqlite3_column_int(stmt.get(), 11);
+      assist_options::normalize(readText(stmt.get(), 11));
+  courseReplay.finalScore = sqlite3_column_int(stmt.get(), 12);
   courseReplay.finalGauge =
-      static_cast<float>(sqlite3_column_double(stmt.get(), 12));
-  courseReplay.clearType = sqlite3_column_int(stmt.get(), 13);
-  courseReplay.completedCharts = sqlite3_column_int(stmt.get(), 14);
-  courseReplay.totalCharts = sqlite3_column_int(stmt.get(), 15);
-  courseReplay.createdAt = readText(stmt.get(), 16);
-  courseReplay.maxCombo = sqlite3_column_int(stmt.get(), 17);
+      static_cast<float>(sqlite3_column_double(stmt.get(), 13));
+  courseReplay.clearType = sqlite3_column_int(stmt.get(), 14);
+  courseReplay.completedCharts = sqlite3_column_int(stmt.get(), 15);
+  courseReplay.totalCharts = sqlite3_column_int(stmt.get(), 16);
+  courseReplay.createdAt = readText(stmt.get(), 17);
+  courseReplay.maxCombo = sqlite3_column_int(stmt.get(), 18);
   auto provenance =
-      readStoredProvenance(stmt.get(), 18, 19, 20, "course replay");
+      readStoredProvenance(stmt.get(), 19, 20, 21, "course replay");
   if (!provenance.has_value()) {
     return std::nullopt;
   }

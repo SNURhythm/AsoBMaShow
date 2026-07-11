@@ -1,5 +1,6 @@
 #include "ResultScene.h"
 #include "../CourseConstraintUtils.h"
+#include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
@@ -203,11 +204,16 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   return aggregate;
 }
 
-CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
-                                            const RhythmState &resultState,
-                                            const ScoreProvenance &provenance) {
+std::optional<CourseReplayData>
+courseReplayDataForSession(const CoursePlaySession &session,
+                           const RhythmState &resultState,
+                           const ScoreProvenance &provenance) {
   CourseReplayData replay;
   replay.courseId = session.courseId;
+  replay.courseKey = session.courseKey;
+  if (replay.courseKey.empty()) {
+    replay.courseKey = course_identity::makeCourseKey(session);
+  }
   replay.courseName = session.courseName;
   replay.courseGroupName = session.courseGroupName;
   replay.constraintJson = session.constraintJson;
@@ -224,6 +230,14 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
   replay.completedCharts =
       static_cast<int>(session.completedResults.size());
   replay.totalCharts = static_cast<int>(session.entries.size());
+  if (replay.courseKey.empty() || replay.completedCharts <= 0 ||
+      replay.completedCharts > replay.totalCharts ||
+      replay.totalCharts >
+          replay_summary_scan::kMaxCourseStagesPerCandidate ||
+      session.replayStages.size() <
+          static_cast<std::size_t>(replay.completedCharts)) {
+    return std::nullopt;
+  }
   replay.provenance = provenance;
   const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
   if (result_presentation::isFullComboCourseResult(
@@ -232,18 +246,15 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
     replay.clearType = kClearTypeFullComboRank;
   }
 
-  const size_t stageCount =
-      std::min(session.entries.size(), session.replayStages.size());
-  replay.stages.reserve(stageCount);
-  for (size_t i = 0; i < stageCount; ++i) {
-    CourseReplayStageData stage = session.replayStages[i];
-    if (stage.replay.chartMeta.BmsPath.empty() && i < session.entries.size()) {
-      stage.replay.chartMeta = session.entries[i].meta;
+  replay.stages.reserve(static_cast<std::size_t>(replay.completedCharts));
+  for (std::size_t i = 0;
+       i < static_cast<std::size_t>(replay.completedCharts); ++i) {
+    auto stage = course_replay::prepareStageForSave(session.replayStages[i],
+                                                    session.entries[i].meta);
+    if (!stage.has_value()) {
+      return std::nullopt;
     }
-    if (stage.replay.events.empty()) {
-      continue;
-    }
-    replay.stages.push_back(std::move(stage));
+    replay.stages.push_back(std::move(*stage));
   }
   return replay;
 }
@@ -411,11 +422,15 @@ void ResultScene::saveReplay() {
       return;
     }
 
-    auto courseReplay = std::make_shared<CourseReplayData>(
-        courseReplayDataForSession(*session, resultState, attemptProvenance));
-    if (courseReplay->stages.empty()) {
+    auto pendingCourseReplay = courseReplayDataForSession(
+        *session, resultState, attemptProvenance);
+    if (!pendingCourseReplay.has_value()) {
+      SDL_Log("Refusing incomplete or non-contiguous course replay: %s",
+              session->courseName.c_str());
       return;
     }
+    auto courseReplay = std::make_shared<CourseReplayData>(
+        std::move(*pendingCourseReplay));
 
     auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
     if (!replayId.has_value()) {
@@ -1104,6 +1119,7 @@ void ResultScene::startCourseReplay() {
   auto replayData = std::make_shared<CourseReplayData>(*source);
   auto replaySession = std::make_shared<CoursePlaySession>();
   replaySession->courseId = replayData->courseId;
+  replaySession->courseKey = replayData->courseKey;
   replaySession->courseName = replayData->courseName;
   replaySession->courseGroupName = replayData->courseGroupName;
   replaySession->constraintJson = replayData->constraintJson;

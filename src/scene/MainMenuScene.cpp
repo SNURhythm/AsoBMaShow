@@ -5316,9 +5316,10 @@ void MainMenuScene::reselectCurrentChart() {
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   if (record != nullptr && record->courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
-      activeFolder.courseId > 0) {
-    const auto courseReplays =
-        ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId);
+      (!activeFolder.courseKey.empty() || activeFolder.courseId > 0)) {
+    const auto courseReplays = ReplayDBHelper::GetInstance().ListCourseReplays(
+        {.courseKey = activeFolder.courseKey,
+         .legacyCourseId = activeFolder.courseId});
     setReplayButtonVisible(!courseReplays.empty());
     return;
   }
@@ -8256,11 +8257,12 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   const bool courseReplayList =
       record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
-      activeFolder.courseId > 0;
+      (!activeFolder.courseKey.empty() || activeFolder.courseId > 0);
   if (courseReplayList) {
-    replaySummaries =
-        ReplayDBHelper::GetInstance().ListCourseReplays(activeFolder.courseId,
-                                                        0);
+    replaySummaries = ReplayDBHelper::GetInstance().ListCourseReplays(
+        {.courseKey = activeFolder.courseKey,
+         .legacyCourseId = activeFolder.courseId},
+        0);
   } else {
     replaySummaries = ReplayDBHelper::GetInstance().ListReplays(record.meta, 0);
     replaySummaries.insert(replaySummaries.begin(),
@@ -9026,6 +9028,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
             std::make_shared<CourseReplayData>(std::move(*replay));
         auto session = std::make_shared<CoursePlaySession>();
         session->courseId = replayData->courseId;
+        session->courseKey = replayData->courseKey;
         session->courseName = replayData->courseName;
         session->courseGroupName = replayData->courseGroupName;
         session->constraintJson = replayData->constraintJson;

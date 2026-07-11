@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssistOptionUtils.h"
+#include "CourseIdentity.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
 #include "scene/play/Judge.h"
@@ -82,9 +83,40 @@ struct CourseReplayStageData {
   long long restMicrosAfterStage = 0;
 };
 
+namespace course_replay {
+
+inline std::optional<CourseReplayStageData>
+prepareStageForSave(const CourseReplayStageData &recorded,
+                    const bms_parser::ChartMeta &expectedMeta) {
+  const course_identity::ChartIdentity recordedIdentity{
+      .sha256 = recorded.replay.chartMeta.SHA256,
+      .md5 = recorded.replay.chartMeta.MD5};
+  const course_identity::ChartIdentity expectedIdentity{
+      .sha256 = expectedMeta.SHA256, .md5 = expectedMeta.MD5};
+  if (recorded.replay.events.empty() ||
+      !course_identity::sameChart(recordedIdentity, expectedIdentity)) {
+    return std::nullopt;
+  }
+
+  CourseReplayStageData prepared = recorded;
+  if (prepared.replay.chartMeta.BmsPath.empty()) {
+    prepared.replay.chartMeta.BmsPath = expectedMeta.BmsPath;
+  }
+  if (prepared.replay.chartMeta.Title.empty()) {
+    prepared.replay.chartMeta.Title = expectedMeta.Title;
+  }
+  if (prepared.replay.chartMeta.Artist.empty()) {
+    prepared.replay.chartMeta.Artist = expectedMeta.Artist;
+  }
+  return prepared;
+}
+
+} // namespace course_replay
+
 struct CourseReplayData {
   int id = 0;
   int courseId = 0;
+  std::string courseKey;
   std::string courseName;
   std::string courseGroupName;
   std::string constraintJson;

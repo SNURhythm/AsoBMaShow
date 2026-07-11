@@ -1,4 +1,6 @@
 #include "../src/ReplayDBHelper.h"
+#include "../src/CourseIdentity.h"
+#include "../src/FileChecksum.h"
 #include "../src/ScoreProvenance.h"
 #include "../src/SqliteRAII.h"
 #include "../src/Utils.h"
@@ -85,6 +87,16 @@ bool columnExists(sqlite3 *db, const std::string &table,
   return false;
 }
 
+bool indexExists(sqlite3 *db, const std::string &index) {
+  SqliteStatementHandle stmt;
+  assert(prepareSqliteStatement(
+             db,
+             "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+             stmt) == SQLITE_OK);
+  bindSqliteText(stmt.get(), 1, index);
+  return sqlite3_step(stmt.get()) == SQLITE_ROW;
+}
+
 std::string schemaSnapshot(sqlite3 *db) {
   SqliteStatementHandle stmt;
   assert(prepareSqliteStatement(
@@ -138,11 +150,12 @@ persistentDatabaseSnapshot(const std::filesystem::path &path) {
   return result;
 }
 
-void createFutureSentinelDatabase(const std::filesystem::path &path) {
+void createFutureSentinelDatabase(const std::filesystem::path &path,
+                                  int version = 99) {
   auto db = openDatabase(path);
   execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
   execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
-  execOrAbort(db.get(), "PRAGMA user_version = 99");
+  execOrAbort(db.get(), "PRAGMA user_version = " + std::to_string(version));
 }
 
 struct RawDatabaseFamilySnapshot {
@@ -575,6 +588,84 @@ void createVersion2ReplayFixture(const std::filesystem::path &path) {
   execOrAbort(db.get(), "PRAGMA user_version = 2");
 }
 
+void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
+  createVersion2ReplayFixture(path);
+  auto db = openDatabase(path);
+  for (const std::string table : {"replays", "course_replays"}) {
+    execOrAbort(db.get(), "ALTER TABLE " + table +
+                              " ADD COLUMN ruleset_version INTEGER NOT NULL "
+                              "DEFAULT 0");
+    execOrAbort(db.get(), "ALTER TABLE " + table +
+                              " ADD COLUMN eligibility INTEGER NOT NULL "
+                              "DEFAULT 2");
+    execOrAbort(db.get(), "ALTER TABLE " + table +
+                              " ADD COLUMN provenance_json TEXT NOT NULL "
+                              "DEFAULT '" +
+                              kLegacyProvenanceJson + "'");
+  }
+
+  const std::string completeSha = file_checksum::sha256("v3-complete");
+  const std::string partialSha = file_checksum::sha256("v3-partial");
+  execOrAbort(db.get(), "UPDATE replays SET chart_sha256='" + completeSha +
+                            "', chart_md5='' WHERE id=1");
+  execOrAbort(db.get(), "UPDATE replays SET chart_sha256='" + partialSha +
+                            "', chart_md5='' WHERE id=2");
+  execOrAbort(
+      db.get(),
+      "INSERT INTO course_replays (course_id,course_name,course_group_name,"
+      "constraint_json,gauge_type,gauge_profile,gauge_auto_shift,ln_mode,"
+      "requested_play_option,assist_option,final_score,max_combo,final_gauge,"
+      "clear_type,completed_charts,total_charts) VALUES "
+      "(18,'Complete','Group','{}',0,0,0,0,'NORMAL','OFF',100,1,100.0,300,"
+      "1,1)");
+  const int completeId = static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  execOrAbort(db.get(),
+              "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
+              "replay_id,rest_micros_after_stage) VALUES (" +
+                  std::to_string(completeId) + ",0,1,0)");
+
+  execOrAbort(
+      db.get(),
+      "INSERT INTO replays (chart_path,chart_md5,chart_sha256,chart_title,"
+      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
+      "final_gauge,clear_type,assist_option) VALUES "
+      "('BMS/path-only.bms','','','Path only','Artist',0,0,0,0,0,0.0,0,"
+      "'OFF')");
+  const int pathOnlyReplayId =
+      static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  execOrAbort(
+      db.get(),
+      "INSERT INTO course_replays (course_id,course_name,course_group_name,"
+      "constraint_json,gauge_type,gauge_profile,gauge_auto_shift,ln_mode,"
+      "requested_play_option,assist_option,final_score,max_combo,final_gauge,"
+      "clear_type,completed_charts,total_charts) VALUES "
+      "(19,'Path only','Group','{}',0,0,0,0,'NORMAL','OFF',100,1,100.0,300,"
+      "1,1)");
+  const int pathOnlyId =
+      static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  execOrAbort(db.get(),
+              "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
+              "replay_id,rest_micros_after_stage) VALUES (" +
+                  std::to_string(pathOnlyId) + ",0," +
+                  std::to_string(pathOnlyReplayId) + ",0)");
+
+  execOrAbort(
+      db.get(),
+      "INSERT INTO course_replays (course_id,course_name,course_group_name,"
+      "constraint_json,gauge_type,gauge_profile,gauge_auto_shift,ln_mode,"
+      "requested_play_option,assist_option,final_score,max_combo,final_gauge,"
+      "clear_type,completed_charts,total_charts) VALUES "
+      "(20,'Malformed constraints','Group','{',0,0,0,0,'NORMAL','OFF',100,1,"
+      "100.0,300,1,1)");
+  const int malformedConstraintId =
+      static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  execOrAbort(db.get(),
+              "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
+              "replay_id,rest_micros_after_stage) VALUES (" +
+                  std::to_string(malformedConstraintId) + ",0,1,0)");
+  execOrAbort(db.get(), "PRAGMA user_version = 3");
+}
+
 std::string replayOutcome(sqlite3 *db) {
   return queryText(
       db,
@@ -613,8 +704,7 @@ ReplayData sampleReplay(const std::filesystem::path &root,
                         const std::string &hash) {
   ReplayData replay;
   replay.chartMeta.BmsPath = root / "BMS" / (hash + ".bms");
-  replay.chartMeta.MD5 = "md5-" + hash;
-  replay.chartMeta.SHA256 = "sha-" + hash;
+  replay.chartMeta.SHA256 = file_checksum::sha256(hash);
   replay.chartMeta.Title = "Title " + hash;
   replay.chartMeta.Artist = "Artist";
   replay.chartMeta.TotalNotes = 50;
@@ -640,6 +730,23 @@ ReplayData sampleReplay(const std::filesystem::path &root,
                            .score = 2});
   replay.provenance = sampleProvenance(hash);
   return replay;
+}
+
+void finalizeCourseReplay(CourseReplayData &course) {
+  if (course.completedCharts <= 0) {
+    course.completedCharts = static_cast<int>(course.stages.size());
+  }
+  if (course.totalCharts <= 0) {
+    course.totalCharts = course.completedCharts;
+  }
+  std::vector<course_identity::ChartIdentity> charts;
+  charts.reserve(course.stages.size());
+  for (const auto &stage : course.stages) {
+    charts.push_back({.sha256 = stage.replay.chartMeta.SHA256,
+                      .md5 = stage.replay.chartMeta.MD5});
+  }
+  course.courseKey =
+      course_identity::makeCourseKey(charts, course.constraintJson);
 }
 
 ScoreProvenance readStoredProvenance(sqlite3 *db, const std::string &table,
@@ -668,7 +775,7 @@ void testVersion2MigrationPreservesOutcomesAndRows(
   assert(helper.EnsureSchema());
 
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 3);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") == 4);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM replays") == 2);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_replays") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM replay_events") == 1);
@@ -720,7 +827,7 @@ void testReplayMigrationNestsInsideCallerTransaction(
   execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
   ReplayDBHelper helper(path);
   assert(helper.CreateReplayTables(db.get()));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 3);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 4);
   assert(queryText(db.get(), "SELECT chart_md5 FROM replays WHERE id=1") ==
          "abcdef");
   assert(queryText(db.get(), "SELECT chart_sha256 FROM replays WHERE id=1") ==
@@ -776,6 +883,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   course.provenance = replay.provenance;
   course.stages.push_back(
       {.replay = sampleReplay(root, "stage"), .restMicrosAfterStage = 250000});
+  finalizeCourseReplay(course);
   const auto courseId = first.SaveCourseReplay(course);
   assert(courseId.has_value());
   const auto loadedCourse = first.LoadCourseReplay(*courseId);
@@ -784,13 +892,19 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(loadedCourse->stages.size() == 1);
   assert(loadedCourse->stages.front().replay.provenance ==
          course.stages.front().replay.provenance);
-  const auto courseSummaries = first.ListCourseReplays(course.courseId, 0);
+  const auto courseSummaries = first.ListCourseReplays(
+      {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 0);
   assert(courseSummaries.size() == 1);
   assert(courseSummaries.front().rulesetVersion == 1);
   assert(courseSummaries.front().eligibility == ScoreEligibility::Verified);
 
   assert(second.ListReplays(replay.chartMeta, 0).empty());
-  assert(second.ListCourseReplays(course.courseId, 0).empty());
+  assert(second
+             .ListCourseReplays(
+                 {.courseKey = course.courseKey,
+                  .legacyCourseId = course.courseId},
+                 0)
+             .empty());
   assert(first.GetDatabasePath() == firstPath);
   assert(second.GetDatabasePath() == secondPath);
 
@@ -817,6 +931,7 @@ void testInvalidNewProvenanceFailsLoad(const std::filesystem::path &root) {
   course.courseId = 44;
   course.provenance = replay.provenance;
   course.stages.push_back({.replay = sampleReplay(root, "invalid-stage")});
+  finalizeCourseReplay(course);
   const auto courseId = helper.SaveCourseReplay(course);
   assert(courseId.has_value());
   db = openDatabase(path);
@@ -845,6 +960,7 @@ void testInvalidProvenanceRejectsReplayWrites(
     invalidCourse.provenance = value;
     invalidCourse.stages.push_back(
         {.replay = sampleReplay(root, "valid-stage-" + label)});
+    finalizeCourseReplay(invalidCourse);
     assert(!helper.SaveCourseReplay(invalidCourse).has_value());
 
     CourseReplayData invalidStage;
@@ -853,6 +969,7 @@ void testInvalidProvenanceRejectsReplayWrites(
     invalidStage.provenance = sampleProvenance("valid-course-" + label);
     invalidStage.stages.push_back(
         {.replay = sampleReplay(root, "invalid-stage-" + label)});
+    finalizeCourseReplay(invalidStage);
     invalidStage.stages.front().replay.provenance = value;
     assert(!helper.SaveCourseReplay(invalidStage).has_value());
 
@@ -910,6 +1027,12 @@ void testInvalidReplayWritesDoNotCreateDatabase(
   unmatchableCourse.provenance =
       sampleProvenance("unmatchable-course-no-database");
   unmatchableCourse.stages.push_back({.replay = unmatchable});
+  unmatchableCourse.courseKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{
+          {.sha256 = file_checksum::sha256("unmatchable-course-key")}},
+      "[]");
+  unmatchableCourse.completedCharts = 1;
+  unmatchableCourse.totalCharts = 1;
   assert(!helper.SaveCourseReplay(unmatchableCourse).has_value());
   assertDatabaseMissing();
 
@@ -918,6 +1041,7 @@ void testInvalidReplayWritesDoNotCreateDatabase(
   invalidCourse.provenance = invalidProvenance;
   invalidCourse.stages.push_back(
       {.replay = sampleReplay(root, "valid-course-stage-no-database")});
+  finalizeCourseReplay(invalidCourse);
   assert(!helper.SaveCourseReplay(invalidCourse).has_value());
   assertDatabaseMissing();
 
@@ -927,6 +1051,7 @@ void testInvalidReplayWritesDoNotCreateDatabase(
   invalidStage.stages.push_back(
       {.replay = sampleReplay(root, "invalid-course-stage-no-database")});
   invalidStage.stages.front().replay.provenance = invalidProvenance;
+  finalizeCourseReplay(invalidStage);
   assert(!helper.SaveCourseReplay(invalidStage).has_value());
   assertDatabaseMissing();
 
@@ -938,6 +1063,14 @@ void testInvalidReplayWritesDoNotCreateDatabase(
       replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
       CourseReplayStageData{
           .replay = sampleReplay(root, "oversized-stage-no-database")});
+  oversizedCourse.courseKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{
+          {.sha256 = file_checksum::sha256("oversized-course-key")}},
+      "[]");
+  oversizedCourse.completedCharts =
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1;
+  oversizedCourse.totalCharts =
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1;
   assert(!helper.SaveCourseReplay(oversizedCourse).has_value());
   assertDatabaseMissing();
 }
@@ -968,6 +1101,12 @@ void testUnmatchableAndOversizedReplayWritesLeaveNoRows(
   unmatchableCourse.courseId = 63;
   unmatchableCourse.provenance = sampleProvenance("unmatchable-course");
   unmatchableCourse.stages.push_back({.replay = unmatchableReplay});
+  unmatchableCourse.courseKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{
+          {.sha256 = file_checksum::sha256("unmatchable-row-key")}},
+      "[]");
+  unmatchableCourse.completedCharts = 1;
+  unmatchableCourse.totalCharts = 1;
   assert(!helper.SaveCourseReplay(unmatchableCourse).has_value());
   assertNoReplayRows();
 
@@ -978,6 +1117,14 @@ void testUnmatchableAndOversizedReplayWritesLeaveNoRows(
   oversizedCourse.stages.resize(
       replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
       CourseReplayStageData{.replay = validStage});
+  oversizedCourse.courseKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{
+          {.sha256 = file_checksum::sha256("oversized-row-key")}},
+      "[]");
+  oversizedCourse.completedCharts =
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1;
+  oversizedCourse.totalCharts =
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1;
   assert(!helper.SaveCourseReplay(oversizedCourse).has_value());
   assertNoReplayRows();
 }
@@ -1029,6 +1176,7 @@ void testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(
   course.provenance = sampleProvenance("summary-course");
   course.stages.push_back(
       {.replay = sampleReplay(root, "summary-course-stage")});
+  finalizeCourseReplay(course);
 
   std::vector<int> courseReplayIds;
   for (int i = 0; i < 4; ++i) {
@@ -1046,12 +1194,14 @@ void testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(
                   std::to_string(courseReplayIds[3]));
   db.reset();
 
-  const auto limited = helper.ListCourseReplays(course.courseId, 2);
+  const auto limited = helper.ListCourseReplays(
+      {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 2);
   assert(limited.size() == 2);
   assert(limited[0].id == courseReplayIds[1]);
   assert(limited[1].id == courseReplayIds[0]);
 
-  const auto all = helper.ListCourseReplays(course.courseId, 0);
+  const auto all = helper.ListCourseReplays(
+      {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 0);
   assert(all.size() == 2);
   assert(all[0].id == courseReplayIds[1]);
   assert(all[1].id == courseReplayIds[0]);
@@ -1073,6 +1223,7 @@ void testCourseSummariesOmitInvalidLinkedStages(
       {.replay = sampleReplay(root, "summary-stage-course-a")});
   course.stages.push_back(
       {.replay = sampleReplay(root, "summary-stage-course-b")});
+  finalizeCourseReplay(course);
 
   std::vector<int> courseReplayIds;
   for (int i = 0; i < 12; ++i) {
@@ -1145,10 +1296,12 @@ void testCourseSummariesOmitInvalidLinkedStages(
                             std::to_string(malformedStageId));
   db.reset();
 
-  const auto limited = helper.ListCourseReplays(course.courseId, 1);
+  const auto limited = helper.ListCourseReplays(
+      {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 1);
   assert(limited.size() == 1);
   assert(limited.front().id == courseReplayIds[0]);
-  const auto all = helper.ListCourseReplays(course.courseId, 0);
+  const auto all = helper.ListCourseReplays(
+      {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 0);
   assert(all.size() == 1);
   assert(all.front().id == courseReplayIds[0]);
   for (std::size_t i = 1; i < courseReplayIds.size(); ++i) {
@@ -1177,6 +1330,48 @@ void testFutureVersionRejectsWithoutSchemaMutation(
   assert(!tableExists(after.get(), "course_replays"));
 }
 
+void testExactFutureVersionFiveRejectsEveryCourseEntryPoint(
+    const std::filesystem::path &root) {
+  ReplayData stage = sampleReplay(root, "future-v5-stage");
+  CourseReplayData course;
+  course.courseId = 501;
+  course.courseName = "Future v5";
+  course.provenance = sampleProvenance("future-v5-course");
+  course.stages.push_back({.replay = stage});
+  finalizeCourseReplay(course);
+
+  const auto assertUnchanged = [&](const std::string &label,
+                                   const auto &operation) {
+    const auto path = root / "future-v5" / label / "replay.db";
+    createFutureSentinelDatabase(path, 5);
+    const auto before = persistentDatabaseSnapshot(path);
+    ReplayDBHelper helper(path);
+    operation(helper);
+    helper.Shutdown();
+    assert(persistentDatabaseSnapshot(path) == before);
+  };
+  assertUnchanged("ensure", [](ReplayDBHelper &helper) {
+    assert(!helper.EnsureSchema());
+  });
+  assertUnchanged("save", [&](ReplayDBHelper &helper) {
+    assert(!helper.SaveCourseReplay(course).has_value());
+  });
+  assertUnchanged("list", [&](ReplayDBHelper &helper) {
+    assert(helper
+               .ListCourseReplays({.courseKey = course.courseKey,
+                                   .legacyCourseId = course.courseId})
+               .empty());
+  });
+  assertUnchanged("load", [](ReplayDBHelper &helper) {
+    assert(!helper.LoadCourseReplay(1).has_value());
+  });
+  assertUnchanged("recover", [](ReplayDBHelper &helper) {
+    std::string error;
+    assert(!helper.RecoverCourseRecords({}, {}, error));
+    assert(!error.empty());
+  });
+}
+
 void testFutureReplayWritesPreservePersistentDatabaseState(
     const std::filesystem::path &root) {
   ReplayData replay = sampleReplay(root, "future-persistent-state");
@@ -1186,6 +1381,7 @@ void testFutureReplayWritesPreservePersistentDatabaseState(
   course.provenance = replay.provenance;
   course.stages.push_back(
       {.replay = sampleReplay(root, "future-persistent-state-stage")});
+  finalizeCourseReplay(course);
 
   const auto assertUnchanged = [&](const std::filesystem::path &path,
                                    const auto &operation) {
@@ -1224,6 +1420,7 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
   course.provenance = replay.provenance;
   course.stages.push_back(
       {.replay = sampleReplay(root, "future-raw-preflight-stage")});
+  finalizeCourseReplay(course);
 
   const auto assertRejectedWithoutFamilyMutation =
       [&](FutureDatabaseState databaseState, const std::string &operationName,
@@ -1631,6 +1828,7 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
       {.replay = sampleReplay(root, "interrupted-stage-a")});
   course.stages.push_back(
       {.replay = sampleReplay(root, "interrupted-stage-b")});
+  finalizeCourseReplay(course);
   const auto courseReplayId = helper.SaveCourseReplay(course);
   assert(courseReplayId.has_value());
 
@@ -1638,13 +1836,23 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
   {
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
-    assert(helper.ListCourseReplays(course.courseId, 1).empty());
+    assert(helper
+               .ListCourseReplays(
+                   {.courseKey = course.courseKey,
+                    .legacyCourseId = course.courseId},
+                   1)
+               .empty());
     helper.Shutdown();
   }
   {
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
-    assert(helper.ListCourseReplays(course.courseId, 0).empty());
+    assert(helper
+               .ListCourseReplays(
+                   {.courseKey = course.courseKey,
+                    .legacyCourseId = course.courseId},
+                   0)
+               .empty());
     helper.Shutdown();
   }
   {
@@ -1694,6 +1902,7 @@ void testReplayHydrationStepErrorsFailWholeLoad(
   course.totalCharts = 1;
   course.provenance = sampleProvenance("interrupted-hydration-course");
   course.stages.push_back({.replay = chartReplay});
+  finalizeCourseReplay(course);
   const auto courseReplayId = helper.SaveCourseReplay(course);
   assert(courseReplayId.has_value());
 
@@ -1870,7 +2079,9 @@ void testCourseSummaryValidationAndDetailsShareWalSnapshot(
       std::to_string(stageReplayId) + ",0,0,0,0,0,0,0,0,0.0,0,0,0)";
 
   const auto summaries = withMutationDuringLongWalRead(
-      path, mutation, [&] { return helper.ListCourseReplays(kCourseId, 0); });
+      path, mutation, [&] {
+        return helper.ListCourseReplays({.legacyCourseId = kCourseId}, 0);
+      });
   const auto target =
       std::find_if(summaries.begin(), summaries.end(),
                    [&](const auto &value) { return value.id == targetId; });
@@ -1888,7 +2099,8 @@ void testCourseSummaryValidationAndDetailsShareWalSnapshot(
                                  "id=" +
                                      std::to_string(stageReplayId)) == 99);
   mutated.reset();
-  const auto laterSummaries = helper.ListCourseReplays(kCourseId, 0);
+  const auto laterSummaries =
+      helper.ListCourseReplays({.legacyCourseId = kCourseId}, 0);
   assert(std::none_of(laterSummaries.begin(), laterSummaries.end(),
                       [&](const auto &value) { return value.id == targetId; }));
 #else
@@ -1983,6 +2195,7 @@ void testLimitedSummaryScansHaveFiniteCorruptBudget(
     valid.provenance = sampleProvenance("bounded-course-summary");
     valid.stages.push_back(
         {.replay = sampleReplay(root, "bounded-course-summary-stage")});
+    finalizeCourseReplay(valid);
     assert(helper.SaveCourseReplay(valid).has_value());
     auto db = openDatabase(path);
     insertCorruptCourseSummaryRows(db.get(), valid.courseId, kCorruptPrefix);
@@ -1990,7 +2203,9 @@ void testLimitedSummaryScansHaveFiniteCorruptBudget(
 
     ScopedLogCapture logs;
     const auto summaries =
-        helper.ListCourseReplays(valid.courseId, kRequestedLimit);
+        helper.ListCourseReplays({.courseKey = valid.courseKey,
+                                  .legacyCourseId = valid.courseId},
+                                 kRequestedLimit);
     assert(summaries.empty());
     assert(logs.countContaining("Course replay summary provenance scan") == 1);
     assert(logs.anyContains(inspectedText));
@@ -1998,6 +2213,387 @@ void testLimitedSummaryScansHaveFiniteCorruptBudget(
     assert(logs.countContaining(
                "Failed to load course replay summary provenance") == 0);
   }
+}
+
+void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-v4-migration" / "replay.db";
+  createVersion3CourseKeyFixture(path);
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const std::string expectedKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{
+          {.sha256 = file_checksum::sha256("v3-complete")}},
+      "{}");
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 4);
+  assert(columnExists(db.get(), "course_replays", "course_key"));
+  assert(indexExists(db.get(), "idx_course_replays_key_id"));
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_replays WHERE course_id=18") ==
+         expectedKey);
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_replays WHERE course_id=17")
+             .empty());
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_replays WHERE course_id=19")
+             .empty());
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_replays WHERE course_id=20")
+             .empty());
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 4);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") == 4);
+  const std::string firstSchema = schemaSnapshot(db.get());
+  db.reset();
+  assert(helper.EnsureSchema());
+  db = openDatabase(path);
+  assert(schemaSnapshot(db.get()) == firstSchema);
+
+  const auto rollbackPath = root / "course-key-v4-rollback" / "replay.db";
+  createVersion3CourseKeyFixture(rollbackPath);
+  auto rollbackDb = openDatabase(rollbackPath);
+  execOrAbort(rollbackDb.get(), "BEGIN IMMEDIATE TRANSACTION");
+  ReplayDBHelper rollbackHelper(rollbackPath);
+  assert(rollbackHelper.CreateReplayTables(rollbackDb.get()));
+  assert(queryInt(rollbackDb.get(), "PRAGMA user_version") == 4);
+  assert(columnExists(rollbackDb.get(), "course_replays", "course_key"));
+  assert(indexExists(rollbackDb.get(), "idx_course_replays_key_id"));
+  execOrAbort(rollbackDb.get(), "ROLLBACK");
+  assert(queryInt(rollbackDb.get(), "PRAGMA user_version") == 3);
+  assert(!columnExists(rollbackDb.get(), "course_replays", "course_key"));
+  assert(!indexExists(rollbackDb.get(), "idx_course_replays_key_id"));
+  assert(queryInt(rollbackDb.get(), "SELECT COUNT(*) FROM course_replays") ==
+         4);
+}
+
+void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
+    const std::filesystem::path &root) {
+  const auto path = root / "partial-course-key" / "replay.db";
+  ReplayDBHelper helper(path);
+  const std::vector<course_identity::ChartIdentity> fullCharts = {
+      {.sha256 = file_checksum::sha256("partial-stage-a")},
+      {.sha256 = file_checksum::sha256("partial-stage-b")},
+  };
+  const std::string fullKey =
+      course_identity::makeCourseKey(fullCharts, "[]");
+  const std::string prefixKey = course_identity::makeCourseKey(
+      std::span<const course_identity::ChartIdentity>(fullCharts).first(1),
+      "[]");
+  assert(!fullKey.empty() && fullKey != prefixKey);
+
+  CourseReplayData partial;
+  partial.courseId = 41;
+  partial.courseKey = fullKey;
+  partial.courseName = "Partial";
+  partial.courseGroupName = "Group";
+  partial.constraintJson = "[]";
+  partial.completedCharts = 1;
+  partial.totalCharts = 2;
+  partial.provenance = sampleProvenance("partial-course");
+  ReplayData stage = sampleReplay(root, "partial-stage-a");
+  stage.chartMeta.SHA256 = fullCharts.front().sha256;
+  partial.stages.push_back({.replay = std::move(stage)});
+
+  const auto replayId = helper.SaveCourseReplay(partial);
+  assert(replayId.has_value());
+  const auto loaded = helper.LoadCourseReplay(*replayId);
+  assert(loaded.has_value());
+  assert(loaded->courseKey == fullKey);
+  assert(loaded->courseKey != prefixKey);
+  const auto afterIdChurn = helper.ListCourseReplays(
+      {.courseKey = fullKey, .legacyCourseId = 9999}, 0);
+  assert(afterIdChurn.size() == 1 && afterIdChurn.front().id == *replayId);
+  assert(helper
+             .ListCourseReplays(
+                 {.courseKey = course_identity::makeCourseKey(
+                      std::vector<course_identity::ChartIdentity>{
+                          {.sha256 = file_checksum::sha256("other-course")}},
+                      "[]"),
+                  .legacyCourseId = partial.courseId},
+                 0)
+             .empty());
+
+  const auto invalidPath = root / "invalid-course-v4" / "replay.db";
+  ReplayDBHelper invalidHelper(invalidPath);
+  const auto assertRejectedBeforeCreation = [&](CourseReplayData value) {
+    assert(!invalidHelper.SaveCourseReplay(value).has_value());
+    assert(!std::filesystem::exists(invalidPath));
+  };
+  CourseReplayData invalid = partial;
+  invalid.courseKey.clear();
+  assertRejectedBeforeCreation(invalid);
+  invalid = partial;
+  invalid.courseKey = "course:v1:not-a-digest";
+  assertRejectedBeforeCreation(invalid);
+  invalid = partial;
+  invalid.completedCharts = 2;
+  assertRejectedBeforeCreation(invalid);
+  invalid = partial;
+  invalid.completedCharts = 0;
+  assertRejectedBeforeCreation(invalid);
+  invalid = partial;
+  invalid.totalCharts = 0;
+  assertRejectedBeforeCreation(invalid);
+  invalid = partial;
+  invalid.stages.front().replay.chartMeta.SHA256.clear();
+  invalid.stages.front().replay.chartMeta.MD5.clear();
+  assertRejectedBeforeCreation(invalid);
+}
+
+void testCourseStagePreparationValidatesBeforeMetadataFallback(
+    const std::filesystem::path &root) {
+  bms_parser::ChartMeta expected = sampleReplay(root, "expected-stage").chartMeta;
+  expected.MD5 = "11111111111111111111111111111111";
+
+  CourseReplayStageData recorded{
+      .replay = sampleReplay(root, "recorded-stage")};
+  recorded.replay.chartMeta.BmsPath.clear();
+  recorded.replay.chartMeta.SHA256.clear();
+  recorded.replay.chartMeta.MD5.clear();
+  assert(!course_replay::prepareStageForSave(recorded, expected).has_value());
+
+  recorded.replay.chartMeta.SHA256 = file_checksum::sha256("wrong-stage");
+  assert(!course_replay::prepareStageForSave(recorded, expected).has_value());
+
+  recorded.replay.chartMeta.SHA256.clear();
+  recorded.replay.chartMeta.MD5 = expected.MD5;
+  const auto prepared = course_replay::prepareStageForSave(recorded, expected);
+  assert(prepared.has_value());
+  assert(prepared->replay.chartMeta.BmsPath == expected.BmsPath);
+  assert(prepared->replay.chartMeta.SHA256.empty());
+  assert(prepared->replay.chartMeta.MD5 == expected.MD5);
+}
+
+void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-list" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  const std::vector<course_identity::ChartIdentity> chartsA = {
+      {.sha256 = file_checksum::sha256("list-a")}};
+  const std::vector<course_identity::ChartIdentity> chartsB = {
+      {.sha256 = file_checksum::sha256("list-b")}};
+  const std::string keyA = course_identity::makeCourseKey(chartsA, "[]");
+  const std::string keyB = course_identity::makeCourseKey(chartsB, "[]");
+  CourseReplayData replay;
+  replay.courseName = "List";
+  replay.constraintJson = "[]";
+  replay.completedCharts = 1;
+  replay.totalCharts = 1;
+  replay.provenance = sampleProvenance("list-course");
+  replay.stages.push_back({.replay = sampleReplay(root, "list-stage")});
+
+  const auto save = [&](int courseId, const std::string &key, int score) {
+    replay.courseId = courseId;
+    replay.courseKey = key;
+    replay.finalScore = score;
+    const auto id = helper.SaveCourseReplay(replay);
+    assert(id.has_value());
+    return *id;
+  };
+  const int oldKeyed = save(1, keyA, 1);
+  const int blankCompatible = save(77, keyA, 2);
+  const int nonemptyMismatch = save(77, keyB, 3);
+  const int newKeyed = save(999, keyA, 4);
+  const int blankOtherId = save(88, keyA, 5);
+  const int corruptNewest = save(999, keyA, 6);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE course_replays SET course_key='' WHERE id IN (" +
+                            std::to_string(blankCompatible) + "," +
+                            std::to_string(blankOtherId) + ")");
+  execOrAbort(db.get(), "UPDATE course_replays SET provenance_json='{' WHERE id=" +
+                            std::to_string(corruptNewest));
+  db.reset();
+
+  const CourseReplayLookup lookup{.courseKey = keyA, .legacyCourseId = 77};
+  const auto limited = helper.ListCourseReplays(lookup, 2);
+  assert(limited.size() == 2);
+  assert(limited[0].id == newKeyed);
+  assert(limited[1].id == blankCompatible);
+  const auto all = helper.ListCourseReplays(lookup, 0);
+  assert(all.size() == 3);
+  assert(all[0].id == newKeyed);
+  assert(all[1].id == blankCompatible);
+  assert(all[2].id == oldKeyed);
+  assert(std::none_of(all.begin(), all.end(), [&](const ReplaySummary &value) {
+    return value.id == nonemptyMismatch || value.id == blankOtherId ||
+           value.id == corruptNewest;
+  }));
+}
+
+void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-recovery" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const course_identity::ChartIdentity common{
+      .sha256 = file_checksum::sha256("recovery-common")};
+  const course_identity::ChartIdentity secondA{
+      .sha256 = file_checksum::sha256("recovery-a")};
+  const course_identity::ChartIdentity secondB{
+      .sha256 = file_checksum::sha256("recovery-b")};
+  const course_identity::ChartIdentity unique{
+      .sha256 = file_checksum::sha256("recovery-unique")};
+  const course_identity::ChartIdentity uniqueSecond{
+      .sha256 = file_checksum::sha256("recovery-unique-second")};
+  const std::vector<course_identity::ChartIdentity> chartsA = {common, secondA};
+  const std::vector<course_identity::ChartIdentity> chartsB = {common, secondB};
+  const std::vector<course_identity::ChartIdentity> uniqueCharts = {
+      unique, uniqueSecond};
+  const std::string keyA = course_identity::makeCourseKey(chartsA, "[]");
+  const std::string keyB = course_identity::makeCourseKey(chartsB, "[]");
+  const std::string uniqueKey =
+      course_identity::makeCourseKey(uniqueCharts, "[]");
+  const std::vector<course_identity::Definition> definitions = {
+      {.courseId = 701,
+       .courseKey = keyA,
+       .constraintJson = "[]",
+       .charts = chartsA},
+      {.courseId = 702,
+       .courseKey = keyB,
+       .constraintJson = "[]",
+       .charts = chartsB},
+      {.courseId = 703,
+       .courseKey = uniqueKey,
+       .constraintJson = "[]",
+       .charts = uniqueCharts},
+      {.courseId = 704,
+       .courseKey = uniqueKey,
+       .constraintJson = "[]",
+       .charts = uniqueCharts},
+  };
+
+  const auto savePartial = [&](int legacyId, const std::string &name,
+                               const course_identity::ChartIdentity &first,
+                               const std::string &temporaryKey) {
+    CourseReplayData replay;
+    replay.courseId = legacyId;
+    replay.courseKey = temporaryKey;
+    replay.courseName = name;
+    replay.courseGroupName = "Historical group";
+    replay.constraintJson = "{}";
+    replay.completedCharts = 1;
+    replay.totalCharts = 2;
+    replay.provenance = sampleProvenance("recovery-" + name);
+    ReplayData stage = sampleReplay(root, "recovery-stage-" + name);
+    stage.chartMeta.SHA256 = first.sha256;
+    stage.chartMeta.MD5 = first.md5;
+    replay.stages.push_back({.replay = std::move(stage)});
+    const auto id = helper.SaveCourseReplay(replay);
+    assert(id.has_value());
+    return *id;
+  };
+
+  const int uniqueId = savePartial(90, "Unique", unique, uniqueKey);
+  const int evidenceId = savePartial(91, "Evidence", common, keyA);
+  const int ambiguousId = savePartial(92, "Ambiguous", common, keyA);
+  const int mismatchId = savePartial(93, "Mismatch", common, keyA);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE course_replays SET course_key='' WHERE id IN (" +
+                            std::to_string(uniqueId) + "," +
+                            std::to_string(evidenceId) + "," +
+                            std::to_string(ambiguousId) + "," +
+                            std::to_string(mismatchId) + ")");
+  const std::string historicalTuple = queryText(
+      db.get(),
+      "SELECT course_id || '|' || course_name || '|' || course_group_name || "
+      "'|' || constraint_json || '|' || total_charts FROM course_replays "
+      "WHERE id=" +
+          std::to_string(evidenceId));
+  db.reset();
+
+  const CourseScoreEvidence evidence{
+      .legacyCourseId = 91,
+      .totalCharts = 2,
+      .courseName = "Evidence",
+      .courseGroupName = "Historical group",
+      .canonicalConstraintPayload = "[]",
+      .courseKey = keyB,
+  };
+  std::string error;
+  assert(helper.RecoverCourseRecords(definitions, {&evidence, 1}, error));
+  assert(error.empty());
+  db = openDatabase(path);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(uniqueId)) == uniqueKey);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(evidenceId)) == keyB);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(ambiguousId))
+             .empty());
+  assert(queryText(db.get(),
+                   "SELECT course_id || '|' || course_name || '|' || "
+                   "course_group_name || '|' || constraint_json || '|' || "
+                   "total_charts FROM course_replays WHERE id=" +
+                       std::to_string(evidenceId)) == historicalTuple);
+  db.reset();
+
+  const std::array mismatchedEvidence = {
+      CourseScoreEvidence{.legacyCourseId = 94,
+                          .totalCharts = 2,
+                          .courseName = "Mismatch",
+                          .courseGroupName = "Historical group",
+                          .canonicalConstraintPayload = "[]",
+                          .courseKey = keyA},
+      CourseScoreEvidence{.legacyCourseId = 93,
+                          .totalCharts = 2,
+                          .courseName = "Different",
+                          .courseGroupName = "Historical group",
+                          .canonicalConstraintPayload = "[]",
+                          .courseKey = keyA},
+      CourseScoreEvidence{.legacyCourseId = 93,
+                          .totalCharts = 2,
+                          .courseName = "Mismatch",
+                          .courseGroupName = "Different",
+                          .canonicalConstraintPayload = "[]",
+                          .courseKey = keyA},
+      CourseScoreEvidence{.legacyCourseId = 93,
+                          .totalCharts = 2,
+                          .courseName = "Mismatch",
+                          .courseGroupName = "Historical group",
+                          .canonicalConstraintPayload = "[\"no_speed\"]",
+                          .courseKey = keyA},
+      CourseScoreEvidence{.legacyCourseId = 93,
+                          .totalCharts = 3,
+                          .courseName = "Mismatch",
+                          .courseGroupName = "Historical group",
+                          .canonicalConstraintPayload = "[]",
+                          .courseKey = keyA},
+  };
+  for (const auto &mismatch : mismatchedEvidence) {
+    error.clear();
+    assert(helper.RecoverCourseRecords(definitions, {&mismatch, 1}, error));
+    assert(error.empty());
+    db = openDatabase(path);
+    assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                   std::to_string(mismatchId))
+               .empty());
+    db.reset();
+  }
+
+  const std::array ambiguousEvidence = {
+      CourseScoreEvidence{.legacyCourseId = 92,
+                          .totalCharts = 2,
+                          .courseName = "Ambiguous",
+                          .courseGroupName = "Historical group",
+                          .canonicalConstraintPayload = "[]",
+                          .courseKey = keyA},
+      CourseScoreEvidence{.legacyCourseId = 92,
+                          .totalCharts = 2,
+                          .courseName = "Ambiguous",
+                          .courseGroupName = "Historical group",
+                          .canonicalConstraintPayload = "[]",
+                          .courseKey = keyB},
+  };
+  error.clear();
+  assert(helper.RecoverCourseRecords(definitions, ambiguousEvidence, error));
+  assert(error.empty());
+  db = openDatabase(path);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(ambiguousId))
+             .empty());
 }
 
 void testExistingListLimits(const std::filesystem::path &root) {
@@ -2019,8 +2615,9 @@ void testExistingListLimits(const std::filesystem::path &root) {
   assert(allChart.size() == 105);
   assert(allChart.front().id == 105);
   assert(allChart.back().id == 1);
-  assert(helper.ListCourseReplays(7).size() == 100);
-  const auto allCourse = helper.ListCourseReplays(7, 0);
+  assert(helper.ListCourseReplays({.legacyCourseId = 7}).size() == 100);
+  const auto allCourse =
+      helper.ListCourseReplays({.legacyCourseId = 7}, 0);
   assert(allCourse.size() == 105);
   assert(allCourse.front().id == 105);
   assert(allCourse.back().id == 1);
@@ -2049,6 +2646,7 @@ int main() {
   testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testCourseSummariesOmitInvalidLinkedStages(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
+  testExactFutureVersionFiveRejectsEveryCourseEntryPoint(root);
   testFutureReplayWritesPreservePersistentDatabaseState(root);
   testFutureReplayPreflightPreservesRawDatabaseFamily(root);
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
@@ -2060,8 +2658,13 @@ int main() {
   testLargeWalReplayPreflightPreservesFamily(root);
   testChartSummaryValidationAndDetailsShareWalSnapshot(root);
   testCourseSummaryValidationAndDetailsShareWalSnapshot(root);
-  testExistingListLimits(root);
   testLimitedSummaryScansHaveFiniteCorruptBudget(root);
+  testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(root);
+  testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(root);
+  testCourseStagePreparationValidatesBeforeMetadataFallback(root);
+  testCourseReplayLookupMergesKeyAndBlankLegacyRows(root);
+  testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(root);
+  testExistingListLimits(root);
 
   std::filesystem::remove_all(root);
   std::cout << "replay database helper tests passed\n";
