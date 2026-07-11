@@ -747,6 +747,8 @@
 				input/InputDeviceIdentity.cpp,
 				input/InputDeviceRegistry.cpp,
 				input/InputDefaults.cpp,
+				input/GyroscopeTurntable.cpp,
+				input/GyroscopeTurntable.h,
 				input/InputNormalizer.cpp,
 				input/InputProfile.cpp,
 				input/InputProfileReplacementNotifier.h,

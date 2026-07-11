@@ -6,7 +6,15 @@
 
 namespace input {
 
-enum class DeviceClass { Keyboard, GameController, Joystick, Touch, Midi };
+enum class DeviceClass {
+  Keyboard,
+  GameController,
+  Joystick,
+  Touch,
+  Midi,
+  Gyroscope
+};
+enum class InputDeviceStatus { Ready, Calibrating, Disconnected, Retrying };
 enum class ControlKind {
   Key,
   Button,
@@ -83,6 +91,7 @@ struct InputDeviceSnapshot {
   std::string displayName;
   DeviceClass deviceClass = DeviceClass::Keyboard;
   bool connected = false;
+  InputDeviceStatus status = InputDeviceStatus::Ready;
   int buttons = 0;
   int axes = 0;
   int hats = 0;

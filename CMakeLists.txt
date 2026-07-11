@@ -484,6 +484,15 @@ else()
 endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    add_executable(gyroscope_turntable_tests
+        tests/gyroscope_turntable_tests.cpp
+        src/input/GyroscopeTurntable.cpp
+    )
+    target_include_directories(gyroscope_turntable_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gyroscope_turntable_tests PRIVATE cxx_std_23)
+
     add_executable(prep_metronome_tests
         tests/prep_metronome_tests.cpp
         src/PrepMetronome.cpp
@@ -1131,6 +1140,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         asobmashow_register_test(profile_export_staging_tests foundation_profile_export_staging)
     endif()
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
+    asobmashow_register_test(gyroscope_turntable_tests foundation_input_gyroscope)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)

@@ -12,6 +12,7 @@ target_sources(main PRIVATE
     InputDeviceRegistry.cpp
     SDLInputBackend.cpp
     LogicalGameplayInputAdapter.cpp
+    GyroscopeTurntable.cpp
 )
 
 function(asobmashow_add_midi_backend target_name)
