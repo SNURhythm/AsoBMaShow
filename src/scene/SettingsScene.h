@@ -220,6 +220,7 @@ private:
   TextView *inputMonitorText = nullptr;
   TextView *inputCaptureStateText = nullptr;
   TextView *inputErrorText = nullptr;
+  View *inputConflictOverlayRoot = nullptr;
   std::unique_ptr<InputCaptureController> inputCaptureController;
   InputProfileReplacementNotifier::Registration
       inputProfileReplacementRegistration;
@@ -343,6 +344,8 @@ private:
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
+  void buildInputConflictOverlay(
+      const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);

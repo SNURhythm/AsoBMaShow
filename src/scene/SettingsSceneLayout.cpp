@@ -180,6 +180,7 @@ void SettingsScene::resetViewState() {
   inputMonitorText = nullptr;
   inputCaptureStateText = nullptr;
   inputErrorText = nullptr;
+  inputConflictOverlayRoot = nullptr;
 }
 
 void SettingsScene::ensureLayoutUpToDate() {
@@ -2821,6 +2822,7 @@ void SettingsScene::initView() {
   rootLayout->addView(content);
 
   buildDifficultyTableImportModal(metrics);
+  buildInputConflictOverlay(metrics);
   buildDisplayPreviewOverlay(metrics);
 
   rootLayout->applyYogaLayout();

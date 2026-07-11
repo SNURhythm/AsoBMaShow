@@ -2,6 +2,7 @@
 
 #include "SettingsSceneInputLayout.h"
 #include "../input/InputCaptureController.h"
+#include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 
 #include <SDL2/SDL_mouse.h>
@@ -545,52 +546,6 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       "ignores repeats and axis noise until a fresh activation crossing.",
       monitorBody, metrics.compact ? 210 : 190, metrics.cardsWidth));
 
-  if (inputCaptureController->state() ==
-      InputCaptureController::State::AwaitingConflictConfirmation) {
-    auto *conflictBody = new View();
-    conflictBody->setFlexDirection(FlexDirection::Column);
-    conflictBody->setGap(metrics.compact ? 8.0F : 12.0F);
-    for (const auto &conflict : inputCaptureController->pendingConflicts()) {
-      conflictBody->addView(makeWrappedText(
-          controlLabel(conflict.control) + " is currently assigned to " +
-              actionLabel(conflict.action) + " in this scope.",
-          metrics.bodyTextSize, ui_theme::amber()));
-    }
-    auto *actions = new View();
-    actions->setFlexDirection(FlexDirection::Row);
-    actions->setFlexWrap(YGWrapWrap);
-    actions->setGap(static_cast<float>(layout.selectorGap));
-    auto *replaceButton = makeAccentButton(
-        metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText("Replace", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE),
-        ui_theme::amber());
-    replaceButton->setOnClickListener([this]() {
-      inputCaptureController->confirmReplace();
-      if (inputCaptureController->state() ==
-          InputCaptureController::State::Idle) {
-        inputCaptureAction.reset();
-      }
-      requestInputViewRebuild();
-    });
-    auto *keepButton = makeControlButton(
-        metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText("Keep existing", metrics.bodyTextSize + 2,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-    keepButton->setOnClickListener([this]() {
-      inputCaptureController->rejectReplace();
-      inputCaptureAction.reset();
-      requestInputViewRebuild();
-    });
-    actions->addView(replaceButton);
-    actions->addView(keepButton);
-    conflictBody->addView(actions);
-    cards->addView(makeCard(
-        metrics, "Binding conflict",
-        "The profile is unchanged until Replace is explicitly confirmed.",
-        conflictBody, metrics.compact ? 230 : 200, metrics.cardsWidth));
-  }
-
   auto *bindingsBody = new View();
   bindingsBody->setFlexDirection(FlexDirection::Column);
   bindingsBody->setGap(metrics.compact ? 16.0F : 20.0F);
@@ -766,4 +721,82 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   refreshInputMonitorText();
   inputLastViewSignature = inputViewSignature();
   return cards;
+}
+
+void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
+  if (activeTab != SettingsTab::Input || inputCaptureController == nullptr ||
+      inputCaptureController->state() !=
+          InputCaptureController::State::AwaitingConflictConfirmation) {
+    return;
+  }
+
+  inputConflictOverlayRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  inputConflictOverlayRoot->setPositionType(YGPositionTypeAbsolute);
+  inputConflictOverlayRoot->setPosition(Edge::Left, 0);
+  inputConflictOverlayRoot->setPosition(Edge::Top, 0);
+  inputConflictOverlayRoot->setZIndex(1050);
+  inputConflictOverlayRoot->setFlexDirection(FlexDirection::Column);
+  inputConflictOverlayRoot->setAlignItems(YGAlignCenter);
+  inputConflictOverlayRoot->setJustifyContent(YGJustifyCenter);
+  inputConflictOverlayRoot->setThemedBackgroundColor(ui_theme::scrim);
+
+  auto *panel = new View();
+  panel->setWidth(static_cast<float>(std::min(
+      metrics.compact ? 620 : 760,
+      std::max(280, metrics.contentWidth - 32))));
+  panel->setMinHeight(static_cast<float>(metrics.compact ? 260 : 300));
+  panel->setFlexDirection(FlexDirection::Column);
+  panel->setAlignItems(YGAlignStretch);
+  panel->setGap(metrics.compact ? 14.0F : 18.0F);
+  panel->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
+  panel->setThemedBackgroundColor(ui_theme::panelStrong);
+  panel->setCornerRadius(ui_theme::panelRadius());
+  panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
+  panel->setThemedBorderColor(ui_theme::hairline);
+  panel->setBorderWidth(1);
+  panel->addView(makeWrappedText("Binding conflict", metrics.sectionTitleSize,
+                                 ui_theme::textPrimary()));
+
+  for (const auto &conflict : inputCaptureController->pendingConflicts()) {
+    panel->addView(makeWrappedText(
+        controlLabel(conflict.control) + " is currently assigned to " +
+            actionLabel(conflict.action) + " in this scope.",
+        metrics.bodyTextSize, ui_theme::amber()));
+  }
+  panel->addView(makeWrappedText(
+      "The profile is unchanged until Replace is explicitly confirmed.",
+      metrics.bodyTextSize, ui_theme::textSecondary()));
+
+  auto *actions = new View();
+  actions->setFlexDirection(FlexDirection::Row);
+  actions->setFlexWrap(YGWrapWrap);
+  actions->setGap(metrics.compact ? 10.0F : 14.0F);
+  actions->setJustifyContent(YGJustifyCenter);
+  auto *replaceButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Replace", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::amber());
+  replaceButton->setOnClickListener([this]() {
+    inputCaptureController->confirmReplace();
+    inputCaptureAction.reset();
+    requestInputViewRebuild();
+  });
+  actions->addView(replaceButton);
+
+  auto *keepButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText("Keep existing", metrics.bodyTextSize + 2,
+               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  keepButton->setOnClickListener([this]() {
+    inputCaptureController->rejectReplace();
+    inputCaptureAction.reset();
+    requestInputViewRebuild();
+  });
+  actions->addView(keepButton);
+  panel->addView(actions);
+
+  inputConflictOverlayRoot->addView(panel);
+  rootLayout->addView(inputConflictOverlayRoot);
 }

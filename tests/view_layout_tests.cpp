@@ -1,10 +1,12 @@
+#include "../src/view/BlockingOverlayView.h"
 #include "../src/view/View.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
 
-#include <cassert>
 #include <algorithm>
+#include <array>
+#include <cassert>
 #include <cmath>
 #include <iostream>
 
@@ -27,6 +29,41 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+class EventRecordingView final : public View {
+public:
+  int eventCount = 0;
+
+private:
+  bool handleEventsImpl(SDL_Event &) override {
+    ++eventCount;
+    return true;
+  }
+};
+
+void testBlockingOverlayStopsAllInteractiveEvents() {
+  View root(0, 0, 640, 480);
+  auto *background = new EventRecordingView();
+  auto *overlay = new BlockingOverlayView(0, 0, 640, 480);
+  root.addView(background);
+  root.addView(overlay);
+
+  constexpr std::array eventTypes{
+      SDL_MOUSEBUTTONDOWN, SDL_MOUSEWHEEL, SDL_FINGERDOWN, SDL_KEYDOWN,
+      SDL_TEXTINPUT, SDL_TEXTEDITING};
+  for (const Uint32 eventType : eventTypes) {
+    SDL_Event event{};
+    event.type = eventType;
+    assert(!root.handleEvents(event));
+  }
+  assert(background->eventCount == 0);
+
+  overlay->setVisible(false);
+  SDL_Event event{};
+  event.type = SDL_TEXTINPUT;
+  assert(root.handleEvents(event));
+  assert(background->eventCount == 1);
+}
 
 void expectNear(float actual, float expected, const char *label) {
   if (std::abs(actual - expected) <= 0.5f) {
@@ -302,6 +339,7 @@ void testProfileInlineEditorStaysBoundToItsCard() {
 } // namespace
 
 int main() {
+  testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

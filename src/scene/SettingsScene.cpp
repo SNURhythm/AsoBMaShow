@@ -287,6 +287,10 @@ void SettingsScene::renderScene() {
     difficultyTableImportModalRoot->setSize(rendering::window_width,
                                             rendering::window_height);
   }
+  if (inputConflictOverlayRoot != nullptr) {
+    inputConflictOverlayRoot->setSize(rendering::window_width,
+                                      rendering::window_height);
+  }
   if (previewActive && previewRenderer != nullptr) {
     previewRenderer->setVisibleTimeGreenNumber(
         context.settings.visibleTimeGreenNumber);
@@ -508,6 +512,7 @@ void SettingsScene::cleanupScene() {
   inputMonitorText = nullptr;
   inputCaptureStateText = nullptr;
   inputErrorText = nullptr;
+  inputConflictOverlayRoot = nullptr;
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

@@ -18,6 +18,8 @@ private:
     case SDL_FINGERMOTION:
     case SDL_KEYDOWN:
     case SDL_KEYUP:
+    case SDL_TEXTINPUT:
+    case SDL_TEXTEDITING:
       return false;
     default:
       return true;
