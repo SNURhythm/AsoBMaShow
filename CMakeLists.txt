@@ -478,6 +478,14 @@ install(DIRECTORY assets DESTINATION bin)
 add_subdirectory(bgfx)
 add_subdirectory(src)
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    add_executable(ios_gyroscope_motion_adapter_tests
+        tests/ios_gyroscope_motion_adapter_tests.cpp
+    )
+    target_include_directories(ios_gyroscope_motion_adapter_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ios_gyroscope_motion_adapter_tests PRIVATE cxx_std_23)
+
     add_executable(gyroscope_input_backend_core_tests
         tests/gyroscope_input_backend_core_tests.cpp
         src/input/GyroscopeInputBackendCore.cpp
@@ -1157,6 +1165,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
     asobmashow_register_test(gyroscope_turntable_tests foundation_input_gyroscope)
+    asobmashow_register_test(ios_gyroscope_motion_adapter_tests foundation_input_gyroscope_ios_adapter)
     asobmashow_register_test(gyroscope_input_backend_core_tests foundation_input_gyroscope_backend)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
