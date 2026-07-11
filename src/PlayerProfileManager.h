@@ -87,6 +87,8 @@ public:
   ProfileResult renameProfile(std::string_view id, std::string displayName);
   ProfileResult deleteProfile(std::string_view id);
   [[nodiscard]] ProfileResult validateProfile(std::string_view id) const;
+  [[nodiscard]] ProfileResult
+  validateProfileForActivation(std::string_view id) const;
   ProfileResult commitActiveProfile(std::string_view id);
   ProfileResult installProfile(PlayerProfile sourceProfile,
                                std::optional<std::string> overwriteProfileId,
@@ -94,11 +96,13 @@ public:
 
 private:
   enum class ValidationDepth { Routine, Deep };
+  enum class DatabaseVersionPolicy { CurrentOnly, AllowSupportedOlder };
 
   [[nodiscard]] std::vector<PlayerProfile>
-  listProfiles(ValidationDepth depth) const;
+  listProfiles(ValidationDepth depth, DatabaseVersionPolicy policy) const;
   [[nodiscard]] ProfileResult validateProfile(std::string_view id,
-                                              ValidationDepth depth) const;
+                                              ValidationDepth depth,
+                                              DatabaseVersionPolicy policy) const;
 
   std::filesystem::path applicationDataRoot_;
   PlayerProfileManagerDependencies dependencies_;

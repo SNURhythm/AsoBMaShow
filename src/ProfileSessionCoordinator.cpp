@@ -91,7 +91,7 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
 
   ProfileResult target;
   try {
-    target = manager_.validateProfile(profileId);
+    target = manager_.validateProfileForActivation(profileId);
   } catch (const std::exception &error) {
     return switchFailure(ProfileError::IoFailure,
                          "Unable to validate target profile: " +

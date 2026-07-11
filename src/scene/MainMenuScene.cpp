@@ -13,6 +13,7 @@
 #include "../ReplayVideoExporter.h"
 #include "../ResultImageExporter.h"
 #include "../PlayOptionUtils.h"
+#include "../ProfileDatabaseActivity.h"
 #include "../RAII.h"
 #include "../ScoreCacheQueries.h"
 #include "../SqliteRAII.h"
@@ -4199,6 +4200,31 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
   if (db == nullptr) {
     return "chart database is unavailable";
   }
+
+  profile_database_activity::WriteGuard profileDatabaseOperation;
+  if (const auto error =
+          score_cache_queries::detachScoreDatabaseIfAttached(db)) {
+    SDL_Log("SQL error while releasing score query database: %s",
+            error->c_str());
+    return error;
+  }
+
+  const auto definitions =
+      ChartDBHelper::GetInstance().SelectDifficultyCourseDefinitions(db);
+  const CourseScoreRecoveryResult scoreRecovery =
+      ScoreDBHelper::GetInstance().RecoverCourseRecords(definitions);
+  if (!scoreRecovery.ok()) {
+    SDL_Log("SQL error while recovering course scores: %s",
+            scoreRecovery.errorMessage.c_str());
+  }
+
+  std::string replayRecoveryError;
+  if (!ReplayDBHelper::GetInstance().RecoverCourseRecords(
+          definitions, scoreRecovery.evidence, replayRecoveryError)) {
+    SDL_Log("SQL error while recovering course replays: %s",
+            replayRecoveryError.c_str());
+  }
+
   auto prepared = ScoreDBHelper::GetInstance().PrepareScoreQueryDatabase(db);
   if (const auto &error = prepared.error()) {
     SDL_Log("SQL error while preparing score query database: %s",

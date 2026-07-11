@@ -233,6 +233,18 @@ std::int64_t rowCount(const std::filesystem::path &database,
   return count.value_or(-1);
 }
 
+void setDatabaseVersion(const std::filesystem::path &path, int version,
+                        std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(database.get(),
+                 ("PRAGMA user_version=" + std::to_string(version)).c_str()),
+         std::string(label) + " database version updates");
+}
+
 void testSqliteSnapshotIncludesWalAndValidatesIdentifiers() {
   TempDirectory temp("sqlite-snapshot");
   const auto source = temp.path() / "source.db";
@@ -673,6 +685,70 @@ void testFutureLegacyDatabaseVersionFailsClosedBeforeMigration() {
   }
 }
 
+void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
+  TempDirectory temp("profile-supported-older-active");
+  PlayerProfileManager creator(temp.path(), dependenciesFor());
+  expect(creator.Initialize().ok(), "supported-older fixture initializes");
+  const PlayerProfilePaths paths = creator.activePaths();
+  const std::string profileId = creator.activeProfile().id;
+
+  {
+    Database scores = openDatabase(paths.scoresDb);
+    Database replays = openDatabase(paths.replaysDb);
+    expect(scores != nullptr && replays != nullptr,
+           "supported-older marker databases open");
+    if (!scores || !replays) {
+      return;
+    }
+    expect(execute(scores.get(),
+                   "CREATE TABLE migration_marker(value TEXT);"
+                   "INSERT INTO migration_marker VALUES('score');"
+                   "PRAGMA user_version=5"),
+           "score v5 fixture and marker are written");
+    expect(execute(replays.get(),
+                   "CREATE TABLE migration_marker(value TEXT);"
+                   "INSERT INTO migration_marker VALUES('replay');"
+                   "PRAGMA user_version=3"),
+           "replay v3 fixture and marker are written");
+  }
+
+  std::string versionError;
+  expect(!creator.validateProfile(profileId).ok(),
+         "strict public validation rejects a profile awaiting migration");
+  expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) == 5 &&
+             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,
+         "strict validation does not mutate supported older databases");
+
+  PlayerProfileManager reopened(
+      temp.path(), dependenciesFor("22222222-2222-4222-8222-222222222222"));
+  const ProfileResult initialized = reopened.Initialize();
+  expect(initialized.ok() && reopened.activeProfile().id == profileId,
+         "startup admits the active v5/v3 profile for its schema owners: " +
+             initialized.message);
+  expect(reopened.listProfiles().size() == 1,
+         "profile discovery keeps a supported older profile selectable");
+  expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) == 5 &&
+             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,
+         "profile startup preflight remains read-only");
+
+  ScoreDBHelper score(paths.scoresDb);
+  ReplayDBHelper replay(paths.replaysDb);
+  expect(score.EnsureSchema() && replay.EnsureSchema(),
+         "normal database owners migrate the admitted profile");
+  score.Shutdown();
+  replay.Shutdown();
+  expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) ==
+                 ScoreDBHelper::kCurrentSchemaVersion &&
+             sqliteDatabaseUserVersion(paths.replaysDb, versionError) ==
+                 ReplayDBHelper::kCurrentSchemaVersion,
+         "database owners advance v5/v3 to the current schemas");
+  expect(rowCount(paths.scoresDb, "migration_marker") == 1 &&
+             rowCount(paths.replaysDb, "migration_marker") == 1,
+         "database migrations preserve profile rows");
+  expect(reopened.validateProfile(profileId).ok(),
+         "strict validation succeeds after owned migration");
+}
+
 void testProfileCrudConstraintsAndDataIsolation() {
   TempDirectory temp("profile-crud");
   std::vector<std::string> uuids = {
@@ -797,6 +873,7 @@ int main() {
   testProfilesRootSymlinkNeverEscapesApplicationRoot();
   testPartialTombstoneCleanupNeverRestoresOrExposesProfile();
   testFutureLegacyDatabaseVersionFailsClosedBeforeMigration();
+  testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testProfileCrudConstraintsAndDataIsolation();
   testFutureVersionsFailClosed();
 

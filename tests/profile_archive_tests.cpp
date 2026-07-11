@@ -611,8 +611,10 @@ void testExportIsDeterministicAndStrict() {
     expect(!document.is_discarded() && document.at("formatVersion") == 1 &&
                document.at("profileUuid") == fixture.sourceId &&
                document.at("profileDisplayName") == "Portable Profile" &&
-               document.at("scoreSchemaVersion") == 5 &&
-               document.at("replaySchemaVersion") == 3,
+               document.at("scoreSchemaVersion") ==
+                   ScoreDBHelper::kCurrentSchemaVersion &&
+               document.at("replaySchemaVersion") ==
+                   ReplayDBHelper::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
   }
 }
@@ -1267,8 +1269,10 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
   expect(migratedSettings.at("schemaVersion") == 1 &&
              migratedInput.at("schemaVersion") == InputProfile::kSchemaVersion,
          "older settings and input documents persist at current schemas");
-  expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) == 5 &&
-             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,
+  expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) ==
+                 ScoreDBHelper::kCurrentSchemaVersion &&
+             sqliteDatabaseUserVersion(paths.replaysDb, versionError) ==
+                 ReplayDBHelper::kCurrentSchemaVersion,
          "older score and replay databases migrate to current schemas");
   expect(rowCount(paths.scoresDb, "scores") == 1 &&
              rowCount(paths.replaysDb, "replays") == 1 &&
@@ -1319,7 +1323,10 @@ void testFutureDatabaseAndCorruptionAreRejected() {
   writeFile(temporaryDb, findMember(future, "scores.db")->contents);
   Database database = openDatabase(temporaryDb);
   expect(database != nullptr &&
-             execute(database.get(), "PRAGMA user_version = 6"),
+             execute(database.get(),
+                     "PRAGMA user_version = " +
+                         std::to_string(ScoreDBHelper::kCurrentSchemaVersion +
+                                        1)),
          "future database fixture updates user_version");
   database.reset();
   findMember(future, "scores.db")->contents = readFile(temporaryDb);
