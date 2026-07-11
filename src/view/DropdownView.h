@@ -10,6 +10,7 @@
 #include <vector>
 
 class Button;
+class OverlayPortal;
 class ScrollView;
 class TextView;
 
@@ -39,7 +40,7 @@ public:
     std::function<void(const std::string &)> onOptionSelected;
   };
 
-  explicit DropdownView(Callbacks callbacks);
+  explicit DropdownView(Callbacks callbacks, OverlayPortal *portal = nullptr);
   ~DropdownView() override;
 
   void refresh(const State &state);
@@ -56,6 +57,7 @@ private:
   };
 
   Callbacks callbacks;
+  OverlayPortal *overlayPortal = nullptr;
   State current;
   Button *triggerButton = nullptr;
   View *triggerIndicator = nullptr;
@@ -67,6 +69,7 @@ private:
   std::optional<State> pendingRefresh;
   std::shared_ptr<bool> lifetimeToken = std::make_shared<bool>(true);
   bool placementUpdating = false;
+  bool menuOwnedByPortal = false;
   bool dispatchingOptionCallback = false;
   bool deferredRefreshScheduled = false;
 
@@ -88,4 +91,6 @@ private:
   static bool refreshIndicator(View *indicator,
                                const std::optional<Color> &color);
   bool handleEventsImpl(SDL_Event &event) override;
+  void onMove(int newX, int newY) override;
+  void onThemeChanged() override;
 };

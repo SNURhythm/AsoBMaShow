@@ -1,4 +1,5 @@
 #include "../src/view/BlockingOverlayView.h"
+#include "../src/view/OverlayPortal.h"
 #include "../src/view/View.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
@@ -42,6 +43,42 @@ private:
     return true;
   }
 };
+
+class EventConsumingView final : public View {
+public:
+  int eventCount = 0;
+
+private:
+  bool handleEventsImpl(SDL_Event &) override {
+    ++eventCount;
+    return false;
+  }
+};
+
+void testOverlayPortalDispatchesPresentedViewsAboveContent() {
+  View root(0, 0, 640, 480);
+  auto *background = new EventRecordingView();
+  auto *portal = new OverlayPortal(0, 0, 640, 480);
+  portal->setZIndex(900);
+  EventConsumingView overlay;
+  root.addView(background);
+  root.addView(portal);
+  portal->present(&overlay);
+  portal->present(&overlay);
+  assert(portal->isPresented(&overlay));
+
+  SDL_Event event{};
+  event.type = SDL_MOUSEBUTTONDOWN;
+  assert(!root.handleEvents(event));
+  assert(overlay.eventCount == 1);
+  assert(background->eventCount == 0);
+
+  portal->dismiss(&overlay);
+  assert(!portal->isPresented(&overlay));
+  assert(root.handleEvents(event));
+  assert(overlay.eventCount == 1);
+  assert(background->eventCount == 1);
+}
 
 void testBlockingOverlayStopsAllInteractiveEvents() {
   View root(0, 0, 640, 480);
@@ -412,6 +449,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 } // namespace
 
 int main() {
+  testOverlayPortalDispatchesPresentedViewsAboveContent();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testGyroscopeSettingsLayoutAndPresentation();

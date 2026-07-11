@@ -4,6 +4,7 @@
 #endif
 #define private public
 #include "../src/view/DropdownView.h"
+#include "../src/view/OverlayPortal.h"
 #undef private
 #if defined(__clang__)
 #pragma clang diagnostic pop
@@ -15,7 +16,43 @@
 #include <type_traits>
 #include <vector>
 
+void testOverlayPlacementUsesWindowEdges() {
+  const OverlayAnchor centered{.x = 100, .y = 100, .width = 200, .height = 42};
+  const OverlayPlacement below =
+      placeAnchoredOverlay(centered, 200, 160, 46, 800, 600, 10, 4);
+  if (!below.opensBelow || below.x != 100 || below.y != 146 ||
+      below.width != 200 || below.height != 160) {
+    std::abort();
+  }
+
+  const OverlayAnchor nearBottom{
+      .x = 100, .y = 520, .width = 200, .height = 42};
+  const OverlayPlacement above =
+      placeAnchoredOverlay(nearBottom, 200, 160, 46, 800, 600, 10, 4);
+  if (above.opensBelow || above.x != 100 || above.y != 356 ||
+      above.width != 200 || above.height != 160) {
+    std::abort();
+  }
+
+  const OverlayAnchor nearRight{.x = 750, .y = 100, .width = 40, .height = 42};
+  const OverlayPlacement shifted =
+      placeAnchoredOverlay(nearRight, 200, 100, 46, 800, 600, 10, 4);
+  if (shifted.x != 590 || shifted.width != 200) {
+    std::abort();
+  }
+
+  const OverlayAnchor constrained{.x = 20, .y = 40, .width = 60, .height = 20};
+  const OverlayPlacement clamped =
+      placeAnchoredOverlay(constrained, 200, 120, 46, 100, 100, 10, 4);
+  if (!clamped.opensBelow || clamped.x != 10 || clamped.y != 64 ||
+      clamped.width != 80 || clamped.height != 26) {
+    std::abort();
+  }
+}
+
 static_assert(std::is_base_of_v<View, DropdownView>);
+static_assert(std::is_constructible_v<DropdownView, DropdownView::Callbacks,
+                                      OverlayPortal *>);
 static_assert(std::is_same_v<decltype(DropdownView::State{}.options),
                              std::vector<DropdownView::Option>>);
 static_assert(
@@ -42,8 +79,16 @@ static_assert(std::is_same_v<
               decltype(std::declval<DropdownView &>().optionsMatch(
                   std::declval<const std::vector<DropdownView::Option> &>())),
               bool>);
+static_assert(
+    std::is_same_v<decltype(std::declval<DropdownView &>().overlayPortal),
+                   OverlayPortal *>);
+static_assert(
+    std::is_same_v<decltype(std::declval<DropdownView &>().menuOwnedByPortal),
+                   bool>);
 
 int main() {
+  testOverlayPlacementUsesWindowEdges();
+
   DropdownView::State state{.enabled = true};
   const DropdownView::Option unavailable{
       .id = "missing", .label = "Missing (Unavailable)", .available = false};

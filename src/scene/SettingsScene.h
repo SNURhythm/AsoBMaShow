@@ -25,6 +25,7 @@ class TextInputBox;
 class Button;
 class ScrollView;
 class DropdownView;
+class OverlayPortal;
 class BMSRenderer;
 class RhythmInputHandler;
 class RhythmLaneInputController;
@@ -88,6 +89,7 @@ private:
   };
 
   View *rootLayout = nullptr;
+  OverlayPortal *overlayPortal = nullptr;
   TextInputBox *offsetInput = nullptr;
   TextView *summaryOffsetValueText = nullptr;
   TextInputBox *visualOffsetInput = nullptr;

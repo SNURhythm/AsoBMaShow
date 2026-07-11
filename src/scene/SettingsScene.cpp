@@ -406,6 +406,7 @@ void SettingsScene::cleanupScene() {
   previewCombo = 0;
   previewScore = 0;
   rootLayout = nullptr;
+  overlayPortal = nullptr;
   scrollView = nullptr;
   offsetInput = nullptr;
   summaryOffsetValueText = nullptr;

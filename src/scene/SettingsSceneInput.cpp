@@ -466,64 +466,71 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   selectorBody->setGap(static_cast<float>(layout.selectorGap));
   selectorBody->setAlignItems(YGAlignStretch);
 
-  inputPlayerDropdown = new DropdownView({
-      .onOpenChanged =
-          [this](bool open) {
-            inputPlayerDropdownOpen = open;
-            if (open) {
-              inputKeyModeDropdownOpen = false;
-              inputDeviceDropdownOpen = false;
-            }
-            refreshInputDropdowns();
-          },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            inputCaptureController->cancel();
-            inputCaptureAction.reset();
-            inputSelectedPlayer = std::clamp(std::stoi(id), 1, 2);
-            inputPlayerDropdownOpen = false;
-            requestInputViewRebuild();
-          },
-  });
-  inputKeyModeDropdown = new DropdownView({
-      .onOpenChanged =
-          [this](bool open) {
-            inputKeyModeDropdownOpen = open;
-            if (open) {
-              inputPlayerDropdownOpen = false;
-              inputDeviceDropdownOpen = false;
-            }
-            refreshInputDropdowns();
-          },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            inputCaptureController->cancel();
-            inputCaptureAction.reset();
-            inputSelectedKeyMode = std::stoi(id);
-            inputKeyModeDropdownOpen = false;
-            requestInputViewRebuild();
-          },
-  });
-  inputDeviceDropdown = new DropdownView({
-      .onOpenChanged =
-          [this](bool open) {
-            inputDeviceDropdownOpen = open;
-            if (open) {
-              inputPlayerDropdownOpen = false;
-              inputKeyModeDropdownOpen = false;
-            }
-            refreshInputDropdowns();
-          },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            inputCaptureController->cancel();
-            inputCaptureAction.reset();
-            inputGyroscopeSettingsError.clear();
-            inputSelectedDeviceId = id;
-            inputDeviceDropdownOpen = false;
-            requestInputViewRebuild();
-          },
-  });
+  inputPlayerDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [this](bool open) {
+                                 inputPlayerDropdownOpen = open;
+                                 if (open) {
+                                   inputKeyModeDropdownOpen = false;
+                                   inputDeviceDropdownOpen = false;
+                                 }
+                                 refreshInputDropdowns();
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 inputCaptureController->cancel();
+                                 inputCaptureAction.reset();
+                                 inputSelectedPlayer =
+                                     std::clamp(std::stoi(id), 1, 2);
+                                 inputPlayerDropdownOpen = false;
+                                 requestInputViewRebuild();
+                               },
+                       },
+                       overlayPortal);
+  inputKeyModeDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [this](bool open) {
+                                 inputKeyModeDropdownOpen = open;
+                                 if (open) {
+                                   inputPlayerDropdownOpen = false;
+                                   inputDeviceDropdownOpen = false;
+                                 }
+                                 refreshInputDropdowns();
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 inputCaptureController->cancel();
+                                 inputCaptureAction.reset();
+                                 inputSelectedKeyMode = std::stoi(id);
+                                 inputKeyModeDropdownOpen = false;
+                                 requestInputViewRebuild();
+                               },
+                       },
+                       overlayPortal);
+  inputDeviceDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [this](bool open) {
+                                 inputDeviceDropdownOpen = open;
+                                 if (open) {
+                                   inputPlayerDropdownOpen = false;
+                                   inputKeyModeDropdownOpen = false;
+                                 }
+                                 refreshInputDropdowns();
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 inputCaptureController->cancel();
+                                 inputCaptureAction.reset();
+                                 inputGyroscopeSettingsError.clear();
+                                 inputSelectedDeviceId = id;
+                                 inputDeviceDropdownOpen = false;
+                                 requestInputViewRebuild();
+                               },
+                       },
+                       overlayPortal);
   for (auto *dropdown :
        {inputPlayerDropdown, inputKeyModeDropdown, inputDeviceDropdown}) {
     dropdown->setWidth(static_cast<float>(layout.selectorWidth));

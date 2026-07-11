@@ -244,38 +244,52 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     refreshAudioVideoControls();
   };
 
-  audioDeviceDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherAudioDropdowns](
-                           bool open) { closeOtherAudioDropdowns(0, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            audioDraft.outputDeviceId = id;
-            audioDraft.requestedSampleRate = 0;
-            audioDraft.requestedBufferFrames = 0;
-            audioDeviceDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
-  audioSampleRateDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherAudioDropdowns](
-                           bool open) { closeOtherAudioDropdowns(1, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            audioDraft.requestedSampleRate = parseUnsigned(id);
-            audioSampleRateDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
-  audioBufferDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherAudioDropdowns](
-                           bool open) { closeOtherAudioDropdowns(2, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            audioDraft.requestedBufferFrames = parseUnsigned(id);
-            audioBufferDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
+  audioDeviceDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [closeOtherAudioDropdowns](bool open) {
+                                 closeOtherAudioDropdowns(0, open);
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 audioDraft.outputDeviceId = id;
+                                 audioDraft.requestedSampleRate = 0;
+                                 audioDraft.requestedBufferFrames = 0;
+                                 audioDeviceDropdownOpen = false;
+                                 refreshAudioVideoControls();
+                               },
+                       },
+                       overlayPortal);
+  audioSampleRateDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [closeOtherAudioDropdowns](bool open) {
+                                 closeOtherAudioDropdowns(1, open);
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 audioDraft.requestedSampleRate =
+                                     parseUnsigned(id);
+                                 audioSampleRateDropdownOpen = false;
+                                 refreshAudioVideoControls();
+                               },
+                       },
+                       overlayPortal);
+  audioBufferDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [closeOtherAudioDropdowns](bool open) {
+                                 closeOtherAudioDropdowns(2, open);
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 audioDraft.requestedBufferFrames =
+                                     parseUnsigned(id);
+                                 audioBufferDropdownOpen = false;
+                                 refreshAudioVideoControls();
+                               },
+                       },
+                       overlayPortal);
 
   const float dropdownWidth = static_cast<float>(
       std::max(260, metrics.cardsWidth - metrics.cardPadding * 2));
@@ -418,70 +432,91 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
     refreshAudioVideoControls();
   };
 
-  displayModeDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherDisplayDropdowns](
-                           bool open) { closeOtherDisplayDropdowns(0, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            displayDraft.mode = parseDisplayMode(id);
-            displayModeDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
-  displayIndexDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherDisplayDropdowns](
-                           bool open) { closeOtherDisplayDropdowns(1, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            displayDraft.displayIndex = parseInt(id, displayDraft.displayIndex);
-            if (context.displaySettingsManager != nullptr) {
-              const auto capabilities =
-                  context.displaySettingsManager->capabilities();
-              const auto selected = std::ranges::find_if(
-                  capabilities.displays,
-                  [this](const display::DisplayInfo &entry) {
-                    return entry.index == displayDraft.displayIndex;
-                  });
-              if (selected != capabilities.displays.end() &&
-                  !selected->resolutions.empty()) {
-                displayDraft.width = selected->resolutions.front().width;
-                displayDraft.height = selected->resolutions.front().height;
-              }
-            }
-            displayIndexDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
-  displayResolutionDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherDisplayDropdowns](
-                           bool open) { closeOtherDisplayDropdowns(2, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            parseResolution(id, displayDraft.width, displayDraft.height);
-            displayResolutionDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
-  displayVsyncDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherDisplayDropdowns](
-                           bool open) { closeOtherDisplayDropdowns(3, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            displayDraft.vsync = id == "on";
-            displayVsyncDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
-  displayFrameCapDropdown = new DropdownView({
-      .onOpenChanged = [closeOtherDisplayDropdowns](
-                           bool open) { closeOtherDisplayDropdowns(4, open); },
-      .onOptionSelected =
-          [this](const std::string &id) {
-            displayDraft.frameCap = parseUnsigned(id);
-            displayFrameCapDropdownOpen = false;
-            refreshAudioVideoControls();
-          },
-  });
+  displayModeDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [closeOtherDisplayDropdowns](bool open) {
+                                 closeOtherDisplayDropdowns(0, open);
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 displayDraft.mode = parseDisplayMode(id);
+                                 displayModeDropdownOpen = false;
+                                 refreshAudioVideoControls();
+                               },
+                       },
+                       overlayPortal);
+  displayIndexDropdown = new DropdownView(
+      {
+          .onOpenChanged =
+              [closeOtherDisplayDropdowns](bool open) {
+                closeOtherDisplayDropdowns(1, open);
+              },
+          .onOptionSelected =
+              [this](const std::string &id) {
+                displayDraft.displayIndex =
+                    parseInt(id, displayDraft.displayIndex);
+                if (context.displaySettingsManager != nullptr) {
+                  const auto capabilities =
+                      context.displaySettingsManager->capabilities();
+                  const auto selected = std::ranges::find_if(
+                      capabilities.displays,
+                      [this](const display::DisplayInfo &entry) {
+                        return entry.index == displayDraft.displayIndex;
+                      });
+                  if (selected != capabilities.displays.end() &&
+                      !selected->resolutions.empty()) {
+                    displayDraft.width = selected->resolutions.front().width;
+                    displayDraft.height = selected->resolutions.front().height;
+                  }
+                }
+                displayIndexDropdownOpen = false;
+                refreshAudioVideoControls();
+              },
+      },
+      overlayPortal);
+  displayResolutionDropdown = new DropdownView(
+      {
+          .onOpenChanged =
+              [closeOtherDisplayDropdowns](bool open) {
+                closeOtherDisplayDropdowns(2, open);
+              },
+          .onOptionSelected =
+              [this](const std::string &id) {
+                parseResolution(id, displayDraft.width, displayDraft.height);
+                displayResolutionDropdownOpen = false;
+                refreshAudioVideoControls();
+              },
+      },
+      overlayPortal);
+  displayVsyncDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [closeOtherDisplayDropdowns](bool open) {
+                                 closeOtherDisplayDropdowns(3, open);
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 displayDraft.vsync = id == "on";
+                                 displayVsyncDropdownOpen = false;
+                                 refreshAudioVideoControls();
+                               },
+                       },
+                       overlayPortal);
+  displayFrameCapDropdown =
+      new DropdownView({
+                           .onOpenChanged =
+                               [closeOtherDisplayDropdowns](bool open) {
+                                 closeOtherDisplayDropdowns(4, open);
+                               },
+                           .onOptionSelected =
+                               [this](const std::string &id) {
+                                 displayDraft.frameCap = parseUnsigned(id);
+                                 displayFrameCapDropdownOpen = false;
+                                 refreshAudioVideoControls();
+                               },
+                       },
+                       overlayPortal);
 
   const float dropdownWidth = static_cast<float>(
       std::max(260, metrics.cardsWidth - metrics.cardPadding * 2));

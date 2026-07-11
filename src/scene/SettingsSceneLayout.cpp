@@ -1,6 +1,7 @@
 #include "SettingsSceneShared.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
+#include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
 #if TARGET_OS_ANDROID
@@ -48,6 +49,7 @@ void SettingsScene::resetViewState() {
   }
   views.clear();
   rootLayout = nullptr;
+  overlayPortal = nullptr;
   scrollView = nullptr;
   offsetInput = nullptr;
   summaryOffsetValueText = nullptr;
@@ -2767,6 +2769,13 @@ void SettingsScene::initView() {
   scrollContent->setFlexDirection(FlexDirection::Column);
   scrollContent->setGap(static_cast<float>(metrics.rootGap));
 
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                    rendering::window_height);
+  overlayPortal->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal->setPosition(Edge::Left, 0);
+  overlayPortal->setPosition(Edge::Top, 0);
+  overlayPortal->setZIndex(900);
+
   View *cardsColumn = nullptr;
   switch (activeTab) {
   case SettingsTab::Profile:
@@ -2820,6 +2829,7 @@ void SettingsScene::initView() {
   scrollView->setContentView(scrollContent);
   content->addView(scrollView);
   rootLayout->addView(content);
+  rootLayout->addView(overlayPortal);
 
   buildDifficultyTableImportModal(metrics);
   buildInputConflictOverlay(metrics);
