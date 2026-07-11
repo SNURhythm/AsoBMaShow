@@ -33,6 +33,14 @@ struct ResultPracticeOptions {
   std::function<void(const ReplayData &)> practiceGhostCallback;
 };
 
+[[nodiscard]] inline std::shared_ptr<practice::Session>
+freshPracticeSessionForRetry(
+    const std::shared_ptr<practice::Session> &session) {
+  return session == nullptr
+             ? nullptr
+             : std::make_shared<practice::Session>(session->configuration());
+}
+
 enum class ResultCourseMode {
   None,
   Stage,

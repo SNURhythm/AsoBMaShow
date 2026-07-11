@@ -1031,6 +1031,8 @@ void ResultScene::startRetry(bool samePattern) {
           : std::nullopt;
   const audio::PlaybackRate retryPlayback =
       resultRetryPlayback(attemptProvenance, practiceConfiguration);
+  const auto retryPracticeSession =
+      freshPracticeSessionForRetry(practiceOptions.session);
   ReplayData retrySource;
   if (retryData.has_value()) {
     retrySource = *retryData;
@@ -1055,7 +1057,8 @@ void ResultScene::startRetry(bool samePattern) {
 
   context.jukebox.stop();
   defer(
-      [this, retrySource, samePattern, practiceConfiguration, retryPlayback]() {
+      [this, retrySource, samePattern, practiceConfiguration, retryPlayback,
+       retryPracticeSession]() {
         std::atomic_bool parseCancelled = false;
         const bool reuseCurrentPattern =
             samePattern && reusableRetryChart != nullptr;
@@ -1111,11 +1114,11 @@ void ResultScene::startRetry(bool samePattern) {
         options.playback = retryPlayback;
         options.ownsChart = true;
         if (practiceOptions.enabled) {
-          options.practiceSession = practiceOptions.session;
-          options.practiceMode = practiceOptions.session == nullptr;
+          options.practiceSession = retryPracticeSession;
+          options.practiceMode = retryPracticeSession == nullptr;
           options.practiceLeadInMicros =
-              practiceOptions.session == nullptr ? practiceOptions.leadInMicros
-                                                 : 0;
+              retryPracticeSession == nullptr ? practiceOptions.leadInMicros
+                                              : 0;
           if (practiceConfiguration.has_value()) {
             options.judgeWindowScalePercent =
                 practiceConfiguration->judge.scalePercent;
