@@ -5,6 +5,7 @@
 #include "GamePlayScene.h"
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
+#include "PracticeNoteFinalizer.h"
 #include "../../GBattleMode.h"
 #include "../../PlayOptionUtils.h"
 #include "../../PrepMetronome.h"
@@ -63,6 +64,18 @@ StartOptions resolvePlayStartInputDevices(StartOptions options,
   options.inputDeviceCategories = collectPlayStartInputDeviceCategories(
       resolverDeviceClasses, kPlayStartInputPlatform);
   return options;
+}
+
+std::optional<NoteTimeRange>
+practiceAllowedNoteRange(const StartOptions &options) {
+  if (options.practiceSession == nullptr) {
+    return std::nullopt;
+  }
+  const auto &configuration = options.practiceSession->configuration();
+  return NoteTimeRange{
+      .startMicros = configuration.startMicros,
+      .endMicros = configuration.endMicros,
+  };
 }
 
 long long nowMicros() {
@@ -376,6 +389,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
+  judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
@@ -389,6 +403,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
   this->options.ownsChart = true;
+  judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
@@ -491,7 +506,7 @@ void GamePlayScene::init() {
   ownedLaneInputController =
       std::make_unique<RhythmLaneInputController>(
           chart, renderer, lanePressed, options.courseConstraints.judgement,
-          options.longNoteMode);
+          options.longNoteMode, practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
 
   if constexpr (kShowLaneStateOverlay) {
@@ -1002,6 +1017,11 @@ void GamePlayScene::handleLogicalInputCommand(
 }
 
 void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
+  const long long chartTimeMicros =
+      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  if (!practiceInputAllowed(chartTimeMicros)) {
+    return;
+  }
   if (renderer == nullptr || courseNoSpeed() ||
       !context.settings.floatingLaneCoverEnabled || deltaPercent == 0) {
     return;
@@ -1016,8 +1036,7 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
   context.settings.noteStartPositionPercent = next;
   renderer->applyLaneCoverState(next, true);
   floatingLaneCoverSettingsDirty = true;
-  appendReplayLaneCoverEvent(
-      next, getGameplayTimeMicros(context.jukebox.getTimeMicros()), true);
+  appendReplayLaneCoverEvent(next, chartTimeMicros, true);
   persistFloatingLaneCoverSettings();
 }
 
@@ -1134,6 +1153,25 @@ void GamePlayScene::retryWithNewPattern() {
 
 bool GamePlayScene::isReplayPlayback() const {
   return options.replayData != nullptr;
+}
+
+std::optional<NoteTimeRange> GamePlayScene::practiceNoteRange() const {
+  return practiceAllowedNoteRange(options);
+}
+
+bool GamePlayScene::practiceInputAllowed(long long chartTimeMicros) const {
+  const auto range = practiceNoteRange();
+  return !range.has_value() || range->contains(chartTimeMicros);
+}
+
+bool GamePlayScene::practiceReplayEventAllowed(
+    const ReplayEvent &event) const {
+  const auto range = practiceNoteRange();
+  if (!range.has_value()) {
+    return true;
+  }
+  return range->contains(event.songTimeMicros) &&
+         (event.noteTimeMicros < 0 || range->contains(event.noteTimeMicros));
 }
 
 bool GamePlayScene::isCoursePlayback() const {
@@ -1415,7 +1453,9 @@ void GamePlayScene::beginReplayRecording() {
       static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
   recordedReplay.touchSamples.reserve(1024);
   recordedReplay.laneCoverEvents.reserve(128);
-  appendReplayLaneCoverEvent(effectiveNoteStartPositionPercent(), 0,
+  const auto range = practiceNoteRange();
+  appendReplayLaneCoverEvent(effectiveNoteStartPositionPercent(),
+                             range.has_value() ? range->startMicros : 0,
                              false);
 }
 
@@ -1468,6 +1508,25 @@ void GamePlayScene::completePracticeAttempt() {
   options.practiceSession->completeAttempt(
       recordReplay ? std::move(recordedReplay) : std::move(analyticsReplay));
   publishPracticeGhost();
+}
+
+void GamePlayScene::finalizePracticeRangeMisses() {
+  const auto range = practiceNoteRange();
+  if (!range.has_value() || chart == nullptr || state == nullptr) {
+    return;
+  }
+  const long long finalizationTimeMicros = range->endMicros - 1;
+  for (auto *note : finalizePendingPracticeNotes(
+           *chart, *range, finalizationTimeMicros, options.longNoteMode)) {
+    const long long noteTimeMicros =
+        note != nullptr && note->Timeline != nullptr
+            ? note->Timeline->Timing
+            : finalizationTimeMicros;
+    const JudgeResult miss(Poor, finalizationTimeMicros - noteTimeMicros);
+    onJudge(miss, false);
+    appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
+                      finalizationTimeMicros, finalizationTimeMicros, miss);
+  }
 }
 
 void GamePlayScene::finishPractice() {
@@ -1764,6 +1823,7 @@ void GamePlayScene::update(float dt) {
     processReplayLaneCoverEvents(gameplayTimeMicros);
   }
   const auto completePracticeSection = [this]() {
+    finalizePracticeRangeMisses();
     state->isEnding = true;
     completePracticeAttempt();
     if (options.practiceSession->shouldLoop()) {
@@ -1820,8 +1880,12 @@ void GamePlayScene::renderScene() {
     practiceRestartButton->setPositionNoLayout(rendering::window_width - 260,
                                                38);
   }
-  const long long gameplayTimeMicros =
+  long long gameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  if (const auto range = practiceNoteRange();
+      range.has_value() && gameplayTimeMicros >= range->endMicros) {
+    gameplayTimeMicros = range->endMicros - 1;
+  }
   renderer->render(renderContext, getVisualTimeMicros(gameplayTimeMicros),
                    gameplayTimeMicros);
   renderCoursePauseHoldRing();
@@ -2347,7 +2411,9 @@ void GamePlayScene::buildReplayNoteLookup() {
 
 bms_parser::Note *
 GamePlayScene::findReplayNote(const ReplayEvent &event) const {
-  if (event.noteTimeMicros < 0) {
+  const auto range = practiceNoteRange();
+  if (event.noteTimeMicros < 0 ||
+      (range.has_value() && !range->contains(event.noteTimeMicros))) {
     return nullptr;
   }
   const auto it =
@@ -2368,7 +2434,8 @@ void GamePlayScene::processReplayKeySounds(long long rawSongTimeMicros) {
       break;
     }
 
-    if (event.action == ReplayEventAction::Press) {
+    if (practiceReplayEventAllowed(event) &&
+        event.action == ReplayEventAction::Press) {
       if (auto *note = findReplayNote(event);
           note != nullptr && note->Wav != bms_parser::Parser::NoWav) {
         context.jukebox.playKeySound(note->Wav);
@@ -2387,7 +2454,9 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
   const long long visualNow = nowMicros();
   while (replayEventCursor < events.size() &&
          events[replayEventCursor].songTimeMicros <= gameplayTimeMicros) {
-    applyReplayEvent(events[replayEventCursor], visualNow);
+    if (practiceReplayEventAllowed(events[replayEventCursor])) {
+      applyReplayEvent(events[replayEventCursor], visualNow);
+    }
     replayEventCursor++;
   }
 }
@@ -2401,7 +2470,9 @@ void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
   const auto &events = options.replayData->laneCoverEvents;
   while (replayLaneCoverCursor < events.size() &&
          events[replayLaneCoverCursor].songTimeMicros <= gameplayTimeMicros) {
-    applyReplayLaneCoverEvent(events[replayLaneCoverCursor]);
+    if (practiceInputAllowed(events[replayLaneCoverCursor].songTimeMicros)) {
+      applyReplayLaneCoverEvent(events[replayLaneCoverCursor]);
+    }
     replayLaneCoverCursor++;
   }
 }
@@ -2417,7 +2488,8 @@ void GamePlayScene::applyReplayLaneCoverEvent(
 
 void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
                                      long long visualTimeMicros) {
-  if (state == nullptr || !state->isPlaying || state->isEnding) {
+  if (state == nullptr || !state->isPlaying || state->isEnding ||
+      !practiceReplayEventAllowed(event)) {
     return;
   }
 
@@ -2654,6 +2726,12 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
       state == nullptr) {
     return;
   }
+  const auto range = practiceNoteRange();
+  if (range.has_value() &&
+      (!range->contains(songTimeMicros) ||
+       (note != nullptr && !range->contains(note)))) {
+    return;
+  }
 
   ReplayEvent event;
   event.action = action;
@@ -2683,6 +2761,9 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
   if (!shouldRecordReplay() || state == nullptr) {
     return;
   }
+  if (!practiceInputAllowed(songTimeMicros)) {
+    return;
+  }
 
   ReplayLaneCoverEvent event;
   event.songTimeMicros = std::max(0LL, songTimeMicros);
@@ -2697,6 +2778,11 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
 bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      ReplayTouchAction action,
                                      Vector3 normalizedLocation) {
+  const long long gameplayTimeMicros =
+      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  if (!practiceInputAllowed(gameplayTimeMicros)) {
+    return false;
+  }
   const bool activeFloatingDrag =
       floatingLaneCoverDragActive && fingerIndex == floatingLaneCoverFinger;
   if (state == nullptr || !state->isPlaying || state->isEnding ||
@@ -2713,8 +2799,6 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
     return activeFloatingDrag;
   }
 
-  const long long gameplayTimeMicros =
-      getGameplayTimeMicros(context.jukebox.getTimeMicros());
   if (renderer != nullptr && touchVisualizerLoaded) {
     renderer->setLiveTouchPoint(static_cast<long long>(fingerIndex), action,
                                 normalizedLocation.x, normalizedLocation.y,
@@ -2729,7 +2813,8 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
 bool GamePlayScene::handleFloatingLaneCoverInput(
     SDL_FingerID fingerIndex, ReplayTouchAction action,
     Vector3 normalizedLocation, long long songTimeMicros) {
-  if (renderer == nullptr || !context.settings.floatingLaneCoverEnabled) {
+  if (!practiceInputAllowed(songTimeMicros) || renderer == nullptr ||
+      !context.settings.floatingLaneCoverEnabled) {
     return false;
   }
   if (courseNoSpeed()) {
@@ -2813,7 +2898,8 @@ void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,
                                             Vector3 normalizedLocation,
                                             long long songTimeMicros) {
   if (!shouldRecordReplay() || state == nullptr || !state->isPlaying ||
-      state->isEnding || context.jukebox.isPaused()) {
+      state->isEnding || context.jukebox.isPaused() ||
+      !practiceInputAllowed(songTimeMicros)) {
     return;
   }
 
@@ -2853,6 +2939,9 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
                                      const JudgeResult *precomputedJudge,
                                      long long songTimeMicros,
                                      bool recordEvent) {
+  if (!judge.allowsNote(note)) {
+    return JudgeResult(None, 0);
+  }
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
       !isReplayPlayback()) {
     context.jukebox.playKeySound(note->Wav);
@@ -2898,7 +2987,7 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
                                        const JudgeResult *precomputedJudge,
                                        long long songTimeMicros,
                                        bool recordEvent) {
-  if (!Note->IsLongNote()) {
+  if (!judge.allowsNote(Note) || !Note->IsLongNote()) {
     return JudgeResult(None, 0);
   }
   const auto &LongNote = static_cast<bms_parser::LongNote *>(Note);

@@ -5,6 +5,7 @@
 #include "../../bms_parser.hpp"
 #include "Judge.h"
 
+#include <optional>
 #include <unordered_map>
 
 class BMSRenderer;
@@ -42,7 +43,8 @@ public:
       std::unordered_map<int, bool> &lanePressed,
       CourseJudgementConstraint judgementConstraint =
           CourseJudgementConstraint::None,
-      int longNoteModeOverride = 0);
+      int longNoteModeOverride = 0,
+      std::optional<NoteTimeRange> allowedNoteRange = std::nullopt);
 
   Result pressLane(int lane, const InputContext &context);
   Result pressLane(int mainLane, int compensateLane,
@@ -57,6 +59,7 @@ private:
   std::unordered_map<int, bool> &lanePressed;
   int longNoteModeOverride = 0;
   Judge judge;
+  std::optional<NoteTimeRange> allowedNoteRange;
   long long latePoorTiming = 0;
 
   long long inputTimeMicros(const InputContext &context) const;

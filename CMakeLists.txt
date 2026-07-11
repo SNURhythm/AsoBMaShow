@@ -938,6 +938,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_playback_startup_tests PRIVATE cxx_std_23)
 
+    add_executable(gameplay_practice_input_boundary_tests
+        tests/gameplay_practice_input_boundary_tests.cpp
+        src/bms_parser.cpp
+        src/scene/play/Judge.cpp
+        src/scene/play/RhythmLaneInputController.cpp
+    )
+    target_include_directories(gameplay_practice_input_boundary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_practice_input_boundary_tests PRIVATE
+        cxx_std_23
+    )
+    target_compile_definitions(gameplay_practice_input_boundary_tests PRIVATE
+        BX_CONFIG_DEBUG=1
+    )
+    target_link_libraries(gameplay_practice_input_boundary_tests PRIVATE
+        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+    )
+
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp
         src/ScoreProvenance.cpp
@@ -1327,6 +1346,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(gameplay_practice_boundary_tests)
     asobmashow_register_test(gameplay_playback_startup_tests)
+    asobmashow_register_test(gameplay_practice_input_boundary_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
     asobmashow_register_test(practice_result_flow_tests)

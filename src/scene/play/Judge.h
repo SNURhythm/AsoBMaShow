@@ -1,9 +1,11 @@
 // ReSharper disable StringLiteralTypo
 // ReSharper disable IdentifierTypo
 #pragma once
-#include <string>
-#include <map>
 #include "../../bms_parser.hpp"
+#include "NoteTimeRange.h"
+#include <map>
+#include <optional>
+#include <string>
 enum Judgement { PGreat, Great, Good, Bad, Kpoor, Poor, None, JudgementCount };
 
 enum class CourseJudgementConstraint { None, NoGood, NoGreat };
@@ -75,12 +77,15 @@ private:
               {Good, std::pair<long long, long long>(-150000, 150000)},
               {Bad, std::pair<long long, long long>(-220000, 280000)},
               {Kpoor, std::pair<long long, long long>(-500000, 150000)}}};
+  std::optional<NoteTimeRange> allowedNoteRange;
 
 public:
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
   explicit Judge(int Rank);
   void applyCourseJudgementConstraint(CourseJudgementConstraint constraint);
   void applyWindowScale(int playbackRatePercent, int judgeScalePercent);
+  void setAllowedNoteRange(std::optional<NoteTimeRange> range);
+  [[nodiscard]] bool allowsNote(const bms_parser::Note *note) const;
   static bool checkRange(long long Diff, long long Early, long long Late);
   JudgeResult judgeNow(const bms_parser::Note *Note, long long InputTime);
   static int clampRank(int rank);

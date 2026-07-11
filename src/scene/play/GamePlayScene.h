@@ -8,6 +8,7 @@
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
+#include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "RhythmState.h"
 #include "../Scene.h"
@@ -74,6 +75,7 @@ private:
   void finishPractice();
   void exitPracticeWithoutSummary();
   void completePracticeAttempt();
+  void finalizePracticeRangeMisses();
   void scheduleResultTransition(int delayMillis);
   void updatePracticeHud(long long chartTimeMicros);
   [[nodiscard]] bool isReplayPlayback() const;
@@ -83,6 +85,10 @@ private:
   [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  [[nodiscard]] std::optional<NoteTimeRange> practiceNoteRange() const;
+  [[nodiscard]] bool practiceInputAllowed(long long chartTimeMicros) const;
+  [[nodiscard]] bool practiceReplayEventAllowed(
+      const ReplayEvent &event) const;
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();

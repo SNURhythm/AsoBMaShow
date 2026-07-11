@@ -1,5 +1,6 @@
-#include <algorithm>
 #include "Judge.h"
+#include <algorithm>
+#include <utility>
 
 namespace {
 void collapseJudgementWindow(
@@ -55,6 +56,15 @@ void Judge::applyWindowScale(int playbackRatePercent, int judgeScalePercent) {
   }
 }
 
+void Judge::setAllowedNoteRange(std::optional<NoteTimeRange> range) {
+  allowedNoteRange = std::move(range);
+}
+
+bool Judge::allowsNote(const bms_parser::Note *note) const {
+  return note != nullptr &&
+         (!allowedNoteRange.has_value() || allowedNoteRange->contains(note));
+}
+
 bool Judge::checkRange(const long long Diff, const long long Early,
                        const long long Late) {
   return Early <= Diff && Diff <= Late;
@@ -62,6 +72,9 @@ bool Judge::checkRange(const long long Diff, const long long Early,
 
 JudgeResult Judge::judgeNow(const bms_parser::Note *Note,
                             const long long InputTime) {
+  if (!allowsNote(Note)) {
+    return JudgeResult{None, 0};
+  }
   const auto &timeline = Note->Timeline;
   const long long diff = InputTime - timeline->Timing;
   // check range for each judgement
