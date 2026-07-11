@@ -3,6 +3,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
 #include "../../GBattleMode.h"
 #include "../../PlayOptionUtils.h"
@@ -452,7 +453,9 @@ void GamePlayScene::init() {
   std::string musicStopError;
   context.musicPlayer.Stop(musicStopError);
   context.jukebox.stop();
-  reset();
+  if (!reset()) {
+    return;
+  }
   if (!isReplayPlayback() && !options.autoPlay) {
     const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
     const auto gameplayInputProfile =
@@ -680,7 +683,8 @@ void GamePlayScene::init() {
   }
 }
 
-void GamePlayScene::reset() {
+bool GamePlayScene::reset() {
+  playbackInitializationFailed = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
   state = nullptr;
@@ -716,10 +720,15 @@ void GamePlayScene::reset() {
   std::string playbackRateError;
   const bool playbackRateApplied =
       context.jukebox.setPlaybackRate(options.playback, playbackRateError);
-  if (!playbackRateApplied) {
+  const auto playbackInitialization =
+      gameplay_startup::playbackInitializationResult(playbackRateApplied,
+                                                     playbackRateError);
+  if (!playbackInitialization.mayStartAttempt) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
                  "Gameplay playback rate could not be applied: %s",
-                 playbackRateError.c_str());
+                 playbackInitialization.visibleStatus.c_str());
+    showPlaybackInitializationFailure(playbackInitialization.visibleStatus);
+    return false;
   }
   const long long startPositionMicros = getStartPositionMicros();
   const std::optional<long long> practiceKeySoundCutoff =
@@ -739,14 +748,12 @@ void GamePlayScene::reset() {
     practiceCountInPlan = prep_metronome::buildPlan(
         *chart, prepMetronomeEnabled, false, audioSeekPosition);
   }
-  if (playbackRateApplied) {
-    context.jukebox.schedule(
-        *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,
-        practiceCountInPlan.enabled ? &practiceCountInPlan : nullptr);
-    context.jukebox.play(practiceCountInPlan.enabled
-                             ? practiceCountInPlan.startTimeMicros
-                             : audioSeekPosition);
-  }
+  context.jukebox.schedule(
+      *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,
+      practiceCountInPlan.enabled ? &practiceCountInPlan : nullptr);
+  context.jukebox.play(practiceCountInPlan.enabled
+                           ? practiceCountInPlan.startTimeMicros
+                           : audioSeekPosition);
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
@@ -793,7 +800,7 @@ void GamePlayScene::reset() {
   updatePacemakerStatus();
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
-  state->isPlaying = playbackRateApplied;
+  state->isPlaying = true;
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   renderer->setAutoPlayMarkVisible(
       options.autoPlay ||
@@ -812,14 +819,106 @@ void GamePlayScene::reset() {
     processReplayLaneCoverEvents(initialReplayTime);
   }
   buildReplayNoteLookup();
-  if (playbackRateApplied) {
-    beginReplayRecording();
-    if (options.practiceSession != nullptr) {
-      options.practiceSession->beginAttempt();
-    }
+  beginReplayRecording();
+  if (options.practiceSession != nullptr) {
+    options.practiceSession->beginAttempt();
   }
   updatePracticeHud(context.jukebox.getTimeMicros());
   updateGaugeStatusText();
+  return true;
+}
+
+void GamePlayScene::showPlaybackInitializationFailure(
+    const std::string &message) {
+  playbackInitializationFailed = true;
+  escapeHandledByInputPipeline = true;
+  context.jukebox.stop();
+  if (inputHandler != nullptr) {
+    inputHandler->stopListen();
+  }
+  ownedInputHandler.reset();
+  inputHandler = nullptr;
+  if (pauseLayout != nullptr) {
+    pauseLayout->setVisible(false);
+  }
+  if (pauseButton != nullptr) {
+    pauseButton->setVisible(false);
+  }
+  if (practiceRestartButton != nullptr) {
+    practiceRestartButton->setVisible(false);
+  }
+  if (playbackFailureLayout != nullptr) {
+    return;
+  }
+
+  playbackFailureLayout =
+      new View(0, 0, rendering::window_width, rendering::window_height);
+  addView(playbackFailureLayout);
+  playbackFailureLayout->setFlexDirection(FlexDirection::Column);
+  playbackFailureLayout->setAlignItems(YGAlignCenter);
+  playbackFailureLayout->setJustifyContent(YGJustifyCenter);
+  playbackFailureLayout->setGap(18);
+  playbackFailureLayout->setPadding(Edge::All, 32);
+  playbackFailureLayout->setBackgroundColor(Color(2, 5, 9, 255));
+
+  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 38);
+  title->setText("PLAYBACK UNAVAILABLE");
+  title->setAlign(TextView::CENTER);
+  title->setVAlign(TextView::MIDDLE);
+  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setSize(720, 64);
+  playbackFailureLayout->addView(title);
+
+  auto *detail = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  detail->setText(message);
+  detail->setAlign(TextView::CENTER);
+  detail->setVAlign(TextView::MIDDLE);
+  detail->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  detail->setSize(820, 84);
+  playbackFailureLayout->addView(detail);
+
+  auto *returnButton = new Button();
+  auto *returnText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  returnText->setText("Return");
+  returnText->setAlign(TextView::CENTER);
+  returnText->setVAlign(TextView::MIDDLE);
+  returnText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  returnButton->setContentView(returnText);
+  returnButton->setSize(320, 64);
+  returnButton->setCornerRadius(ui_theme::controlRadius());
+  returnButton->setBackgroundColors(ui_theme::primaryAction(),
+                                    ui_theme::primaryActionHover(),
+                                    ui_theme::primaryActionPressed());
+  returnButton->setBorderColors(ui_theme::accentBorder(),
+                                ui_theme::accentBorderStrong(),
+                                ui_theme::withAlpha(ui_theme::amber(), 210));
+  returnButton->setStyledBorderWidth(1);
+
+  const bool requestedReturnSceneIsLive =
+      options.returnScene != nullptr && context.sceneManager != nullptr &&
+      context.sceneManager->backgroundScenes.contains(options.returnScene);
+  const auto returnTarget =
+      gameplay_startup::failureReturnTarget(requestedReturnSceneIsLive);
+  returnButton->setOnClickListener([this, returnTarget]() {
+    defer(
+        [this, returnTarget]() {
+          if (context.sceneManager == nullptr) {
+            return false;
+          }
+          if (returnTarget ==
+                  gameplay_startup::FailureReturnTarget::RequestedScene &&
+              options.returnScene != nullptr &&
+              context.sceneManager->backgroundScenes.contains(
+                  options.returnScene)) {
+            context.sceneManager->changeScene(options.returnScene, false);
+          } else {
+            context.sceneManager->changeScene("MainMenu", false);
+          }
+          return false;
+        },
+        0, true);
+  });
+  playbackFailureLayout->addView(returnButton);
 }
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
@@ -1709,6 +1808,9 @@ void GamePlayScene::update(float dt) {
 }
 
 void GamePlayScene::renderScene() {
+  if (playbackInitializationFailed) {
+    return;
+  }
   RenderContext renderContext;
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   if (pauseButton != nullptr) {
@@ -1730,7 +1832,8 @@ void GamePlayScene::renderScene() {
 
 bool GamePlayScene::renderViewBeforeScene(const View *view) const {
   return view != pauseLayout && view != pauseButton &&
-         view != practiceRestartButton && view != practiceHudText;
+         view != practiceRestartButton && view != practiceHudText &&
+         view != playbackFailureLayout;
 }
 
 bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
@@ -1967,6 +2070,7 @@ void GamePlayScene::cleanupScene() {
   laneStateText = nullptr;
   ownedChart.reset();
   chart = nullptr;
+  playbackFailureLayout = nullptr;
   SDL_Log("Cleaned up GamePlayScene");
 }
 bms_parser::Note *GamePlayScene::pressLane(int lane, double inputDelay) {
@@ -2829,6 +2933,10 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 }
 
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
+  if (playbackInitializationFailed) {
+    Scene::handleEvents(event);
+    return {};
+  }
   if (handleCoursePauseButtonEvent(event)) {
     return {};
   }

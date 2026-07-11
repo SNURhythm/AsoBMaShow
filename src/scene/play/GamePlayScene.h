@@ -58,7 +58,8 @@ public:
   EventHandleResult handleEvents(SDL_Event &event) override;
 
 private:
-  void reset();
+  bool reset();
+  void showPlaybackInitializationFailure(const std::string &message);
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
   void showPauseMenu(bool pausePlayback);
@@ -116,6 +117,7 @@ private:
   [[nodiscard]] long long getVisualOffsetMicros() const;
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
   View *pauseLayout = nullptr;
+  View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
   Button *practiceRestartButton = nullptr;
   TextView *practiceHudText = nullptr;
@@ -182,6 +184,7 @@ private:
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;
+  bool playbackInitializationFailed = false;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
