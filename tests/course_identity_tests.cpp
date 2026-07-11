@@ -91,6 +91,37 @@ void testMalformedChartIdentityCannotProduceDurableKey() {
          "a malformed secondary hash is rejected");
 }
 
+void testMalformedConstraintJsonCannotProduceDurableIdentity() {
+  using namespace course_identity;
+  const std::vector<ChartIdentity> charts = {shaChart(kShaA)};
+
+  expect(canonicalConstraintPayload("") == "[]",
+         "empty constraint text remains a valid unconstrained payload");
+  expect(canonicalConstraintPayload("{").empty(),
+         "malformed constraint JSON has no canonical payload");
+  expect(makeCourseKey(charts, "{").empty(),
+         "malformed constraint JSON has no course key");
+
+  const Definition malformed{
+      .constraintJson = "{",
+      .charts = charts,
+  };
+  const Definition alsoMalformed{
+      .constraintJson = "not-json",
+      .charts = charts,
+  };
+  const Definition unconstrained{
+      .constraintJson = "[]",
+      .charts = charts,
+  };
+  expect(!sameDefinition(malformed, alsoMalformed),
+         "malformed definitions never match each other");
+  expect(!sameDefinition(malformed, unconstrained),
+         "malformed definition never matches valid unconstrained definition");
+  expect(!sameDefinition(unconstrained, malformed),
+         "valid unconstrained definition never matches malformed definition");
+}
+
 void testSessionAndLegacyKeysShareTheCanonicalDefinition() {
   using namespace course_identity;
   const std::vector<ChartIdentity> charts = {shaChart(kShaA), md5Chart(kMd5B)};
@@ -180,6 +211,7 @@ void testDefinitionMatchingUsesStrongestCommonHashes() {
 int main() {
   testCanonicalKeyUsesOnlyDurableSemanticIdentity();
   testMalformedChartIdentityCannotProduceDurableKey();
+  testMalformedConstraintJsonCannotProduceDurableIdentity();
   testSessionAndLegacyKeysShareTheCanonicalDefinition();
   testDefinitionMatchingUsesStrongestCommonHashes();
 

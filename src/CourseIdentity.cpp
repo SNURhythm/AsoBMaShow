@@ -106,7 +106,7 @@ std::string canonicalConstraintPayload(std::string_view constraintJson) {
   const nlohmann::json parsed =
       nlohmann::json::parse(constraintJson, nullptr, false);
   if (parsed.is_discarded()) {
-    return "[]";
+    return {};
   }
 
   std::vector<std::string> names;
@@ -143,8 +143,13 @@ std::string canonicalConstraintPayload(std::string_view constraintJson) {
 
 std::string makeCourseKey(std::span<const ChartIdentity> charts,
                           std::string_view constraintJson) {
-  const std::string payload = serializeVersionedPayload(
-      charts, canonicalConstraintPayload(constraintJson));
+  const std::string canonicalConstraints =
+      canonicalConstraintPayload(constraintJson);
+  if (canonicalConstraints.empty()) {
+    return {};
+  }
+  const std::string payload =
+      serializeVersionedPayload(charts, canonicalConstraints);
   return payload.empty() ? std::string()
                          : "course:v1:" + file_checksum::sha256(payload);
 }
@@ -225,9 +230,12 @@ bool sameChart(const ChartIdentity &left, const ChartIdentity &right) {
 }
 
 bool sameDefinition(const Definition &left, const Definition &right) {
-  if (left.charts.empty() ||
-      canonicalConstraintPayload(left.constraintJson) !=
-          canonicalConstraintPayload(right.constraintJson) ||
+  const std::string leftConstraints =
+      canonicalConstraintPayload(left.constraintJson);
+  const std::string rightConstraints =
+      canonicalConstraintPayload(right.constraintJson);
+  if (left.charts.empty() || leftConstraints.empty() ||
+      rightConstraints.empty() || leftConstraints != rightConstraints ||
       left.charts.size() != right.charts.size()) {
     return false;
   }
