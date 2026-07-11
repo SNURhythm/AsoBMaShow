@@ -45,6 +45,7 @@ public:
   [[nodiscard]] const std::optional<std::string> &selectedPresetId() const {
     return selectedNamedPresetId;
   }
+  [[nodiscard]] bool isEditingPresetName() const;
 
 private:
   enum class DropDownIndex : int {
@@ -69,6 +70,7 @@ private:
   std::vector<bool> dropdownOpen;
   std::vector<DropdownView *> dropdowns;
   TextView *rangeText = nullptr;
+  TextView *diagnosticText = nullptr;
   TextInputBox *presetNameInput = nullptr;
   Button *startButton = nullptr;
   Button *updateButton = nullptr;

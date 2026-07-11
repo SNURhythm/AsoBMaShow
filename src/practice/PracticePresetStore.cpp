@@ -198,8 +198,11 @@ PresetLoadResult loadData(const std::filesystem::path &directory,
                                        : std::move(parseError));
       return result;
     }
-    result.data.lastUsed =
-        sanitize(std::move(*lastUsed), chartEndMicros).configuration;
+    auto sanitizedLastUsed = sanitize(std::move(*lastUsed), chartEndMicros);
+    result.data.lastUsed = std::move(sanitizedLastUsed.configuration);
+    result.diagnostics.insert(result.diagnostics.end(),
+                              sanitizedLastUsed.diagnostics.begin(),
+                              sanitizedLastUsed.diagnostics.end());
     result.data.named.clear();
     for (const auto &encoded : loaded.document.at("named")) {
       NamedPreset preset;
@@ -216,8 +219,12 @@ PresetLoadResult loadData(const std::filesystem::path &directory,
                                             : std::move(parseError));
         return result;
       }
-      preset.configuration =
-          sanitize(std::move(*configuration), chartEndMicros).configuration;
+      auto sanitizedPreset =
+          sanitize(std::move(*configuration), chartEndMicros);
+      preset.configuration = std::move(sanitizedPreset.configuration);
+      result.diagnostics.insert(result.diagnostics.end(),
+                                sanitizedPreset.diagnostics.begin(),
+                                sanitizedPreset.diagnostics.end());
       result.data.named.push_back(std::move(preset));
     }
   } catch (const Json::exception &exception) {
@@ -293,6 +300,36 @@ std::string generatePresetId(const PresetData &data) {
   }
 }
 } // namespace
+
+bool PresetLoadResult::usable() const noexcept {
+  return status == versioned_json::LoadStatus::Loaded ||
+         status == versioned_json::LoadStatus::Missing;
+}
+
+std::optional<std::string> PresetLoadResult::notice() const {
+  if (status == versioned_json::LoadStatus::Missing) {
+    return std::nullopt;
+  }
+  if (!diagnostics.empty()) {
+    return diagnostics.front();
+  }
+  switch (status) {
+  case versioned_json::LoadStatus::Loaded:
+  case versioned_json::LoadStatus::Missing:
+    return std::nullopt;
+  case versioned_json::LoadStatus::IoError:
+    return "Unable to read practice presets.";
+  case versioned_json::LoadStatus::Malformed:
+    return "Practice preset JSON is malformed.";
+  case versioned_json::LoadStatus::InvalidRoot:
+    return "Practice preset data is invalid.";
+  case versioned_json::LoadStatus::FutureVersion:
+    return "Practice presets were created by a newer version.";
+  case versioned_json::LoadStatus::MigrationFailed:
+    return "Practice preset migration failed.";
+  }
+  return "Unable to load practice presets.";
+}
 
 PresetStore::PresetStore(std::filesystem::path practiceDirectory,
                          const atomic_file::Operations *operations)

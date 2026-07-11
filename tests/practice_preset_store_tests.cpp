@@ -191,6 +191,33 @@ void testFailedAtomicReplacePreservesPreviousFile() {
          "the previously committed file remains readable after replacement "
          "failure");
 }
+
+void testLoadResultUsabilityAndNotices() {
+  practice::PresetLoadResult missing{.status =
+                                         versioned_json::LoadStatus::Missing};
+  expect(missing.usable() && !missing.notice(),
+         "missing preset data is a usable neutral default without an error");
+
+  practice::PresetLoadResult loaded{
+      .status = versioned_json::LoadStatus::Loaded,
+      .diagnostics = {"practice markers were clamped"}};
+  expect(loaded.usable() && loaded.notice() == "practice markers were clamped",
+         "loaded sanitization diagnostics are available to the viewer");
+
+  practice::PresetLoadResult malformed{
+      .status = versioned_json::LoadStatus::Malformed,
+      .diagnostics = {"practice preset JSON is malformed"}};
+  expect(!malformed.usable() &&
+             malformed.notice() == "practice preset JSON is malformed",
+         "failed preset loads are unusable and surface their diagnostic");
+
+  practice::PresetLoadResult future{
+      .status = versioned_json::LoadStatus::FutureVersion};
+  expect(!future.usable() &&
+             future.notice() ==
+                 "Practice presets were created by a newer version.",
+         "failed loads without diagnostics still receive a concise status");
+}
 } // namespace
 
 int main() {
@@ -198,6 +225,7 @@ int main() {
   testHashMismatchIsRejected();
   testMalformedFileReturnsNeutralDefaults();
   testFailedAtomicReplacePreservesPreviousFile();
+  testLoadResultUsabilityAndNotices();
   if (failures == 0) {
     std::cout << "practice preset store tests passed\n";
   }

@@ -25,6 +25,9 @@ struct PresetLoadResult {
   PresetData data;
   versioned_json::LoadStatus status;
   std::vector<std::string> diagnostics;
+
+  [[nodiscard]] bool usable() const noexcept;
+  [[nodiscard]] std::optional<std::string> notice() const;
 };
 
 class PresetStore {

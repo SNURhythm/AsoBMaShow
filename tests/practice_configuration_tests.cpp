@@ -68,12 +68,57 @@ void testEmptyConfigurationIsNotPlayable() {
          "markers clamp to an empty chart");
   expect(!sanitized.playable(), "an empty section cannot start practice");
 }
+
+void testPlayabilityIssuesExplainBlockingConfiguration() {
+  practice::Configuration input{
+      .chartSha256 = "0123456789abcdef0123456789abcdef"
+                     "0123456789abcdef0123456789abcdef",
+      .startMicros = 1'000'000,
+      .endMicros = 5'000'000,
+  };
+  expect(!practice::firstPlayabilityIssue(input, 8'000'000),
+         "a valid practice configuration has no blocking issue");
+
+  const std::string validHash = input.chartSha256;
+  input.chartSha256 = "invalid";
+  expect(practice::firstPlayabilityIssue(input, 8'000'000) ==
+             "Chart SHA-256 is unavailable or invalid.",
+         "an invalid chart hash receives an identity explanation");
+  input.chartSha256 = validHash;
+
+  input.gaugeType = static_cast<GaugeType>(99);
+  expect(practice::firstPlayabilityIssue(input, 8'000'000) ==
+             "Gauge selection is invalid.",
+         "an invalid gauge receives a selection explanation");
+  input.gaugeType = GaugeType::Normal;
+
+  input.endMicros = input.startMicros;
+  expect(practice::firstPlayabilityIssue(input, 8'000'000) ==
+             "Practice range must be non-empty.",
+         "an empty range receives an actionable explanation");
+  input.endMicros = 5'000'000;
+  input.judge.kind = practice::JudgeOverrideKind::Custom;
+  expect(practice::firstPlayabilityIssue(input, 8'000'000) ==
+             "Custom judge windows are not available.",
+         "custom judge windows receive an availability explanation");
+  input.judge.kind = practice::JudgeOverrideKind::Scale;
+  input.playback.mode = audio::PlaybackMode::TimeStretch;
+  expect(practice::firstPlayabilityIssue(input, 8'000'000) ==
+             "Time Stretch is not available.",
+         "time stretch receives an availability explanation");
+  input.playback.mode = audio::PlaybackMode::PitchShift;
+  input.playback.percent = 73;
+  expect(practice::firstPlayabilityIssue(input, 8'000'000) ==
+             "Playback rate must be 50-200% in 5% steps.",
+         "invalid playback rate receives a bounds explanation");
+}
 } // namespace
 
 int main() {
   testPlaybackRateConversions();
   testConfigurationSanitization();
   testEmptyConfigurationIsNotPlayable();
+  testPlayabilityIssuesExplainBlockingConfiguration();
   if (failures == 0) {
     std::cout << "practice configuration tests passed\n";
   }

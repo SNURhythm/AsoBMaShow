@@ -53,6 +53,21 @@ void RangeSelection::placeActiveMarker(long long timeMicros,
   }
 }
 
+std::optional<long long>
+adjacentTimelineMicros(std::span<const long long> timelineMicros,
+                       long long currentMicros, TimelineDirection direction) {
+  if (direction == TimelineDirection::Next) {
+    const auto next = std::ranges::upper_bound(timelineMicros, currentMicros);
+    return next == timelineMicros.end() ? std::nullopt
+                                        : std::optional<long long>(*next);
+  }
+  auto previous = std::ranges::lower_bound(timelineMicros, currentMicros);
+  if (previous == timelineMicros.begin()) {
+    return std::nullopt;
+  }
+  return *--previous;
+}
+
 bool SanitizedConfiguration::playable() const noexcept {
   return isSha256(configuration.chartSha256) &&
          configuration.startMicros < configuration.endMicros &&
@@ -132,5 +147,35 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
 
   result.configuration = std::move(value);
   return result;
+}
+
+std::optional<std::string> firstPlayabilityIssue(const Configuration &value,
+                                                 long long chartEndMicros) {
+  if (!isSha256(value.chartSha256)) {
+    return "Chart SHA-256 is unavailable or invalid.";
+  }
+  const long long chartEnd = std::max(0LL, chartEndMicros);
+  const long long start = std::clamp(value.startMicros, 0LL, chartEnd);
+  const long long end = std::clamp(value.endMicros, 0LL, chartEnd);
+  if (start >= end) {
+    return "Practice range must be non-empty.";
+  }
+  if (!validGaugeType(value.gaugeType)) {
+    return "Gauge selection is invalid.";
+  }
+  if (value.judge.kind != JudgeOverrideKind::Scale) {
+    return "Custom judge windows are not available.";
+  }
+  if (value.playback.percent < 50 || value.playback.percent > 200 ||
+      value.playback.percent % 5 != 0) {
+    return "Playback rate must be 50-200% in 5% steps.";
+  }
+  if (value.playback.mode == audio::PlaybackMode::TimeStretch) {
+    return "Time Stretch is not available.";
+  }
+  if (value.playback.mode != audio::PlaybackMode::PitchShift) {
+    return "Playback mode is invalid.";
+  }
+  return std::nullopt;
 }
 } // namespace practice

@@ -415,6 +415,35 @@ public:
     practiceRange.active = marker;
   }
 
+  bool moveActivePracticeMarker(practice::TimelineDirection direction) {
+    if (chart == nullptr || !practiceRangeSet) {
+      return false;
+    }
+    std::vector<long long> timelineMicros;
+    timelineMicros.reserve(orderedTimelines.size());
+    for (const auto *timeline : orderedTimelines) {
+      if (timeline != nullptr) {
+        timelineMicros.push_back(timeline->Timing);
+      }
+    }
+    std::ranges::sort(timelineMicros);
+    const auto adjacent = practice::adjacentTimelineMicros(
+        timelineMicros, getSelectedTimeMicros(), direction);
+    if (!adjacent) {
+      return false;
+    }
+    practiceRange.placeActiveMarker(
+        *adjacent, chart_playback_duration::ChartTimelineEndMicros(*chart));
+    playbackActive = false;
+    if (selectionListener != nullptr) {
+      selectionListener(getSelectedTimeMicros());
+    }
+    if (practiceRangeListener != nullptr) {
+      practiceRangeListener(practiceRange);
+    }
+    return true;
+  }
+
   void setPracticeRangeListener(
       std::function<void(const practice::RangeSelection &)> listener) {
     practiceRangeListener = std::move(listener);
@@ -2253,6 +2282,46 @@ EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
     goBack();
     return {};
   }
+  const bool editingPresetName =
+      practicePanel != nullptr && practicePanel->isEditingPresetName();
+  if (event.type == SDL_KEYDOWN && !editingPresetName) {
+    switch (event.key.keysym.sym) {
+    case SDLK_1:
+    case SDLK_KP_1:
+      selectActivePracticeMarker(practice::Marker::Start);
+      return {};
+    case SDLK_2:
+    case SDLK_KP_2:
+      selectActivePracticeMarker(practice::Marker::End);
+      return {};
+    case SDLK_LEFT:
+      moveActivePracticeMarker(practice::TimelineDirection::Previous);
+      return {};
+    case SDLK_RIGHT:
+      moveActivePracticeMarker(practice::TimelineDirection::Next);
+      return {};
+    default:
+      break;
+    }
+  }
+  if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+    switch (event.cbutton.button) {
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+      selectActivePracticeMarker(practice::Marker::Start);
+      return {};
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+      selectActivePracticeMarker(practice::Marker::End);
+      return {};
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+      moveActivePracticeMarker(practice::TimelineDirection::Previous);
+      return {};
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+      moveActivePracticeMarker(practice::TimelineDirection::Next);
+      return {};
+    default:
+      break;
+    }
+  }
   return Scene::handleEvents(event);
 }
 
@@ -2896,10 +2965,10 @@ void ChartViewerScene::parseAndRefresh(
   if (canvasView != nullptr) {
     canvasView->setChart(chart.get());
   }
-  loadPracticeConfiguration();
   if (statusText != nullptr) {
     statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
   }
+  loadPracticeConfiguration();
   refreshHeaderText();
   updateSelectionText();
   rebuildRandomDrawer();
@@ -3846,6 +3915,42 @@ void ChartViewerScene::onPracticeConfigurationChanged(
   updateSelectionText();
 }
 
+void ChartViewerScene::selectActivePracticeMarker(practice::Marker marker) {
+  if (canvasView == nullptr) {
+    return;
+  }
+  canvasView->setActivePracticeMarker(marker);
+  refreshPracticePanel();
+  updateSelectionText();
+}
+
+void ChartViewerScene::moveActivePracticeMarker(
+    practice::TimelineDirection direction) {
+  if (canvasView != nullptr) {
+    (void)canvasView->moveActivePracticeMarker(direction);
+  }
+}
+
+bool ChartViewerScene::applyPracticePresetLoad(
+    practice::PresetLoadResult loaded, bool applyLastUsed) {
+  const auto notice = loaded.notice();
+  if (!loaded.usable()) {
+    if (statusText != nullptr) {
+      statusText->setText("Practice presets: " +
+                          notice.value_or("Unable to load saved presets."));
+    }
+    return false;
+  }
+  if (applyLastUsed) {
+    practiceConfiguration = std::move(loaded.data.lastUsed);
+  }
+  practiceNamedPresets = std::move(loaded.data.named);
+  if (notice && statusText != nullptr) {
+    statusText->setText("Practice presets: " + *notice);
+  }
+  return true;
+}
+
 void ChartViewerScene::loadPracticeConfiguration() {
   if (chart == nullptr) {
     return;
@@ -3857,9 +3962,14 @@ void ChartViewerScene::loadPracticeConfiguration() {
   const std::string chartHash =
       chart->Meta.SHA256.empty() ? record.meta.SHA256 : chart->Meta.SHA256;
   auto loaded = practicePresetStore->load(chartHash, practiceChartEndMicros);
-  practiceConfiguration = loaded.data.lastUsed;
-  practiceNamedPresets = std::move(loaded.data.named);
-  selectedPracticePresetId.reset();
+  const bool loadedConfiguration = applyPracticePresetLoad(loaded, true);
+  if (!loadedConfiguration && practiceConfiguration.chartSha256.empty()) {
+    practiceConfiguration = std::move(loaded.data.lastUsed);
+    practiceNamedPresets.clear();
+  }
+  if (loadedConfiguration) {
+    selectedPracticePresetId.reset();
+  }
   if (loaded.status == versioned_json::LoadStatus::Missing) {
     practiceConfiguration.gaugeType =
         gaugeSelectionFromSettingId(context.settings.selectedGaugeType).type;
@@ -3899,10 +4009,11 @@ void ChartViewerScene::savePracticeAs(std::string name) {
     }
     return;
   }
-  selectedPracticePresetId = *id;
   auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
                                           practiceChartEndMicros);
-  practiceNamedPresets = std::move(loaded.data.named);
+  if (applyPracticePresetLoad(std::move(loaded), false)) {
+    selectedPracticePresetId = *id;
+  }
   refreshPracticePanel();
 }
 
@@ -3921,7 +4032,7 @@ void ChartViewerScene::renamePracticePreset(std::string name) {
   }
   auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
                                           practiceChartEndMicros);
-  practiceNamedPresets = std::move(loaded.data.named);
+  (void)applyPracticePresetLoad(std::move(loaded), false);
   refreshPracticePanel();
 }
 
@@ -3940,7 +4051,7 @@ void ChartViewerScene::updatePracticePreset() {
   }
   auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
                                           practiceChartEndMicros);
-  practiceNamedPresets = std::move(loaded.data.named);
+  (void)applyPracticePresetLoad(std::move(loaded), false);
   refreshPracticePanel();
 }
 
@@ -3956,10 +4067,11 @@ void ChartViewerScene::deletePracticePreset() {
     }
     return;
   }
-  selectedPracticePresetId.reset();
   auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
                                           practiceChartEndMicros);
-  practiceNamedPresets = std::move(loaded.data.named);
+  if (applyPracticePresetLoad(std::move(loaded), false)) {
+    selectedPracticePresetId.reset();
+  }
   refreshPracticePanel();
 }
 

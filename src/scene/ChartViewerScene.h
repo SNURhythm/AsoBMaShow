@@ -156,7 +156,11 @@ private:
   void onPracticeRangeChanged(const practice::RangeSelection &range);
   void onPracticeConfigurationChanged(
       const practice::Configuration &configuration);
+  void selectActivePracticeMarker(practice::Marker marker);
+  void moveActivePracticeMarker(practice::TimelineDirection direction);
   void loadPracticeConfiguration();
+  bool applyPracticePresetLoad(practice::PresetLoadResult loaded,
+                               bool applyLastUsed);
   void refreshPracticePanel();
   void savePracticeAs(std::string name);
   void renamePracticePreset(std::string name);

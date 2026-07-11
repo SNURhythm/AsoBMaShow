@@ -5,11 +5,17 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace practice {
 enum class Marker : std::uint8_t { Start = 0, End = 1 };
+enum class TimelineDirection : std::uint8_t { Previous = 0, Next = 1 };
+
+[[nodiscard]] std::optional<long long>
+adjacentTimelineMicros(std::span<const long long> timelineMicros,
+                       long long currentMicros, TimelineDirection direction);
 
 struct RangeSelection {
   long long startMicros = 0;
@@ -48,4 +54,6 @@ struct SanitizedConfiguration {
 };
 
 SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros);
+[[nodiscard]] std::optional<std::string>
+firstPlayabilityIssue(const Configuration &value, long long chartEndMicros);
 } // namespace practice

@@ -133,6 +133,19 @@ void PracticePanelView::build(OverlayPortal *portal) {
   rangeText->setHeight(30);
   content->addView(rangeText);
 
+  diagnosticText = makeText("", 14, ui_theme::textSecondary());
+  diagnosticText->setWrap(true);
+  diagnosticText->setHeight(42);
+  content->addView(diagnosticText);
+
+  auto *shortcutText = makeText(
+      "Shortcuts: 1/2 or LB/RB select marker; Left/Right or D-pad steps "
+      "between chart timelines.",
+      13, ui_theme::textMuted());
+  shortcutText->setWrap(true);
+  shortcutText->setHeight(46);
+  content->addView(shortcutText);
+
   auto *markerRow = new View();
   markerRow->setFlexDirection(FlexDirection::Row);
   markerRow->setGap(8);
@@ -268,8 +281,12 @@ void PracticePanelView::refresh(
   refreshControls();
 }
 
+bool PracticePanelView::isEditingPresetName() const {
+  return presetNameInput != nullptr && presetNameInput->getSelected();
+}
+
 void PracticePanelView::setDropdownOpen(DropDownIndex index, bool open) {
-  std::ranges::fill(dropdownOpen, false);
+  std::fill(dropdownOpen.begin(), dropdownOpen.end(), false);
   dropdownOpen[static_cast<size_t>(index)] = open;
   refreshControls();
 }
@@ -328,7 +345,7 @@ void PracticePanelView::selectDropdownOption(DropDownIndex index,
   case DropDownIndex::Count:
     break;
   }
-  std::ranges::fill(dropdownOpen, false);
+  std::fill(dropdownOpen.begin(), dropdownOpen.end(), false);
   refreshControls();
 }
 
@@ -398,7 +415,11 @@ void PracticePanelView::refreshControls() {
   refresh(DropDownIndex::Rate, "Rate",
           std::to_string(currentConfiguration.playback.percent),
           numericOptions(50, 200, 5, "%"));
-  refresh(DropDownIndex::Mode, "Mode", "pitch",
+  const std::string modeId =
+      currentConfiguration.playback.mode == audio::PlaybackMode::TimeStretch
+          ? "stretch"
+          : "pitch";
+  refresh(DropDownIndex::Mode, "Mode", modeId,
           {{.id = "pitch", .label = "Pitch Shift"},
            {.id = "stretch",
             .label = "Time Stretch (Unavailable)",
@@ -415,7 +436,15 @@ void PracticePanelView::refreshControls() {
     deleteButton->setEnabled(hasNamedPreset);
   }
   if (startButton != nullptr) {
+    const auto issue =
+        practice::firstPlayabilityIssue(currentConfiguration, chartEndMicros);
     startButton->setEnabled(
+        !issue &&
         practice::sanitize(currentConfiguration, chartEndMicros).playable());
+    if (diagnosticText != nullptr) {
+      diagnosticText->setText(issue.value_or("Ready to start practice."));
+      diagnosticText->setColor(
+          ui_theme::sdl(issue ? ui_theme::coral() : ui_theme::cyan()));
+    }
   }
 }
