@@ -735,6 +735,18 @@ void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
                             std::to_string(invalidStageProvenanceReplayId));
   linkStage(insertCourse(26, 1, 1), 0,
             invalidStageProvenanceReplayId);
+
+  const int missingStageId = insertCourse(27, 2, 2);
+  linkStage(missingStageId, 0, 1);
+
+  const int duplicateIndexId = insertCourse(28, 2, 2);
+  linkStage(duplicateIndexId, 0, 1);
+  linkStage(duplicateIndexId, 0, 1);
+
+  const int countMismatchId = insertCourse(29, 2, 2);
+  linkStage(countMismatchId, 0, 1);
+  linkStage(countMismatchId, 1, 1);
+  linkStage(countMismatchId, 2, 1);
   execOrAbort(db.get(), "PRAGMA user_version = 3");
 }
 
@@ -1777,9 +1789,9 @@ void testCourseKeyMigrationStageFailureRollsBack(
   assert(queryInt(db.get(), "PRAGMA user_version") == 3);
   assert(!columnExists(db.get(), "course_replays", "course_key"));
   assert(!indexExists(db.get(), "idx_course_replays_key_id"));
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 10);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 13);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") ==
-         267);
+         273);
 }
 
 void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
@@ -2337,12 +2349,30 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   assert(queryText(db.get(),
                    "SELECT course_key FROM course_replays WHERE course_id=20")
              .empty());
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 10);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 13);
   assert(queryInt(db.get(),
                   "SELECT COUNT(*) FROM course_replays WHERE course_id<>18 "
-                  "AND course_key=''") == 9);
+                  "AND course_key=''") == 12);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replays WHERE course_id IN "
+                  "(27,28,29) AND course_key=''") == 3);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replays WHERE course_id=27 "
+                  "AND completed_charts=2 AND total_charts=2") == 1);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replay_stages s JOIN "
+                  "course_replays cr ON cr.id=s.course_replay_id WHERE "
+                  "cr.course_id=27") == 1);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replay_stages s JOIN "
+                  "course_replays cr ON cr.id=s.course_replay_id WHERE "
+                  "cr.course_id=28 AND s.stage_index=0") == 2);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replay_stages s JOIN "
+                  "course_replays cr ON cr.id=s.course_replay_id WHERE "
+                  "cr.course_id=29") == 3);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") ==
-         267);
+         273);
   const std::string firstSchema = schemaSnapshot(db.get());
   db.reset();
   assert(helper.EnsureSchema());
@@ -2363,9 +2393,9 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   assert(!columnExists(rollbackDb.get(), "course_replays", "course_key"));
   assert(!indexExists(rollbackDb.get(), "idx_course_replays_key_id"));
   assert(queryInt(rollbackDb.get(), "SELECT COUNT(*) FROM course_replays") ==
-         10);
+         13);
   assert(queryInt(rollbackDb.get(),
-                  "SELECT COUNT(*) FROM course_replay_stages") == 267);
+                  "SELECT COUNT(*) FROM course_replay_stages") == 273);
 }
 
 void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
@@ -2577,6 +2607,71 @@ void testCourseReplayLookupInspectsInt64MaxFirstPage(
   const auto summaries = helper.ListCourseReplays(
       {.courseKey = valid.courseKey, .legacyCourseId = valid.courseId}, 0);
   assert(summaries.size() == 1 && summaries.front().id == *validId);
+  assert(logs.anyContains("inspected=2"));
+  assert(logs.anyContains("rejected=1"));
+}
+
+void testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-list-out-of-range-id" / "replay.db";
+  ReplayDBHelper helper(path);
+  CourseReplayData valid;
+  valid.courseId = 79;
+  valid.courseName = "Public ID boundary";
+  valid.constraintJson = "[]";
+  valid.finalScore = 1234;
+  valid.provenance = sampleProvenance("public-id-boundary");
+  valid.stages.push_back(
+      {.replay = sampleReplay(root, "public-id-boundary-stage")});
+  finalizeCourseReplay(valid);
+  const auto validId = helper.SaveCourseReplay(valid);
+  assert(validId.has_value() && *validId == 1);
+  helper.Shutdown();
+
+  constexpr sqlite3_int64 outOfRangeId =
+      static_cast<sqlite3_int64>(1) << 32;
+  constexpr sqlite3_int64 aliasedId = outOfRangeId + 1;
+  auto db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "INSERT INTO course_replays (id,course_id,course_key,course_name,"
+      "course_group_name,constraint_json,gauge_type,gauge_profile,"
+      "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+      "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+      "total_charts,created_at,ruleset_version,eligibility,provenance_json) "
+      "SELECT " +
+          std::to_string(aliasedId) +
+          ",course_id,course_key,'Out of range',course_group_name,"
+          "constraint_json,gauge_type,gauge_profile,gauge_auto_shift,ln_mode,"
+          "requested_play_option,assist_option,987654,max_combo,final_gauge,"
+          "clear_type,completed_charts,total_charts,created_at,ruleset_version,"
+          "eligibility,provenance_json FROM course_replays WHERE id=" +
+          std::to_string(*validId));
+  execOrAbort(
+      db.get(),
+      "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
+      "replay_id,rest_micros_after_stage) SELECT " +
+          std::to_string(aliasedId) +
+          ",stage_index,replay_id,rest_micros_after_stage FROM "
+          "course_replay_stages WHERE course_replay_id=" +
+          std::to_string(*validId));
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replays WHERE id=" +
+                      std::to_string(aliasedId)) == 1);
+  db.reset();
+
+  ScopedLogCapture logs;
+  const CourseReplayLookup lookup{.courseKey = valid.courseKey,
+                                  .legacyCourseId = valid.courseId};
+  const auto limited = helper.ListCourseReplays(lookup, 1);
+  assert(limited.size() == 1);
+  assert(limited.front().id == *validId);
+  assert(limited.front().finalScore == valid.finalScore);
+
+  const auto all = helper.ListCourseReplays(lookup, 0);
+  assert(all.size() == 1);
+  assert(all.front().id == *validId);
+  assert(all.front().finalScore == valid.finalScore);
   assert(logs.anyContains("inspected=2"));
   assert(logs.anyContains("rejected=1"));
 }
@@ -2913,6 +3008,7 @@ int main() {
   testCourseStagePreparationValidatesBeforeMetadataFallback(root);
   testCourseReplayLookupMergesKeyAndBlankLegacyRows(root);
   testCourseReplayLookupInspectsInt64MaxFirstPage(root);
+  testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(root);
   testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(root);
   testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(root);
   testExistingListLimits(root);

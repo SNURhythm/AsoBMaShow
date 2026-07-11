@@ -88,12 +88,12 @@ constexpr const char *kStrictCourseReplayStageIdentityQuery =
     "WHERE s.course_replay_id = ? ORDER BY s.stage_index LIMIT ?";
 
 StrictStageReadResult readStrictCourseReplayStageIdentities(
-    sqlite3_stmt *stmt, int courseReplayId, int expectedCount,
+    sqlite3_stmt *stmt, sqlite3_int64 courseReplayId, int expectedCount,
     std::vector<course_identity::ChartIdentity> &charts, std::string &error) {
   charts.clear();
   sqlite3_reset(stmt);
   sqlite3_clear_bindings(stmt);
-  if (sqlite3_bind_int(stmt, 1, courseReplayId) != SQLITE_OK ||
+  if (sqlite3_bind_int64(stmt, 1, courseReplayId) != SQLITE_OK ||
       sqlite3_bind_int(stmt, 2,
                        replay_summary_scan::kMaxCourseStagesPerCandidate + 1) !=
           SQLITE_OK) {
@@ -108,8 +108,8 @@ StrictStageReadResult readStrictCourseReplayStageIdentities(
         charts.size() >= static_cast<std::size_t>(
                              replay_summary_scan::kMaxCourseStagesPerCandidate) ||
         sqlite3_column_type(stmt, 2) == SQLITE_NULL ||
-        sqlite3_column_int(stmt, 1) <= 0 ||
-        sqlite3_column_int(stmt, 1) != sqlite3_column_int(stmt, 2)) {
+        sqlite3_column_int64(stmt, 1) <= 0 ||
+        sqlite3_column_int64(stmt, 1) != sqlite3_column_int64(stmt, 2)) {
       error = "course replay has invalid stage links or indexes";
       return StrictStageReadResult::InvalidRow;
     }
@@ -283,8 +283,8 @@ bool backfillCompleteCourseReplayKeys(sqlite3 *db) {
     std::string stageError;
     const StrictStageReadResult stageResult =
         readStrictCourseReplayStageIdentities(
-            stageStmt.get(), sqlite3_column_int(rowStmt.get(), 0), totalCharts,
-            charts, stageError);
+            stageStmt.get(), sqlite3_column_int64(rowStmt.get(), 0),
+            totalCharts, charts, stageError);
     if (stageResult == StrictStageReadResult::SqlError) {
       logSqlErrorText("scanning course replay stages for key backfill",
                       stageError);
@@ -1886,7 +1886,15 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
     while ((rc = sqlite3_step(candidateStmt.get())) == SQLITE_ROW) {
       ++rowsInChunk;
       ++inspected;
-      beforeId = sqlite3_column_int64(candidateStmt.get(), 0);
+      const sqlite3_int64 candidateId =
+          sqlite3_column_int64(candidateStmt.get(), 0);
+      beforeId = candidateId;
+      if (candidateId <= 0 ||
+          candidateId > std::numeric_limits<int>::max()) {
+        ++rejected;
+        continue;
+      }
+      const int publicId = static_cast<int>(candidateId);
       std::string provenanceError;
       const bool aggregateValid =
           decodeStoredProvenance(candidateStmt.get(), 1, 2, 3, provenanceError)
@@ -1894,8 +1902,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
       const CourseReplayStageDescriptorReadResult stageResult =
           aggregateValid
               ? courseReplayStageProvenanceStatus(
-                    stageProvenanceStmt.get(),
-                    sqlite3_column_int(candidateStmt.get(), 0), provenanceError)
+                    stageProvenanceStmt.get(), publicId, provenanceError)
               : CourseReplayStageDescriptorReadResult::InvalidRow;
       if (stageResult == CourseReplayStageDescriptorReadResult::SqlError) {
         logSqlErrorText("scanning course replay stage provenance",
@@ -1908,7 +1915,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
         ++rejected;
         continue;
       }
-      validIds.push_back(sqlite3_column_int(candidateStmt.get(), 0));
+      validIds.push_back(publicId);
       if (validIds.size() >= requestedCount) {
         break;
       }
@@ -2238,7 +2245,7 @@ bool ReplayDBHelper::RecoverCourseRecordsOnConnection(
     std::string stageError;
     const StrictStageReadResult stageResult =
         readStrictCourseReplayStageIdentities(
-            stageStmt.get(), sqlite3_column_int(row, 0), completedCharts,
+            stageStmt.get(), sqlite3_column_int64(row, 0), completedCharts,
             storedCharts, stageError);
     if (stageResult == StrictStageReadResult::SqlError) {
       errorMessage = stageError;

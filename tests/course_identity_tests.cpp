@@ -55,6 +55,12 @@ void testCanonicalKeyUsesOnlyDurableSemanticIdentity() {
   expect(makeCourseKey(charts, R"(["gauge_7k"])") !=
              makeCourseKey(charts, R"(["gauge_9k"])"),
          "score-affecting constraints are content identity");
+  expect(makeCourseKey(charts, R"(["no_good"])") !=
+             makeCourseKey(charts, R"(["no_great"])"),
+         "judgement constraints are content identity");
+  expect(makeCourseKey(charts, R"(["ln"])") !=
+             makeCourseKey(charts, R"(["cn"])"),
+         "forced long-note constraints are content identity");
 
   const std::vector<ChartIdentity> normalizedCharts = {
       shaChart(
