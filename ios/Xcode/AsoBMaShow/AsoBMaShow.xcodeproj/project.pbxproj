@@ -740,6 +740,8 @@
 				bms_search/PackageSourceDrivers.cpp,
 				BmsSearchService.cpp,
 				ChartDBHelper.cpp,
+				CourseIdentity.cpp,
+				CourseIdentity.h,
 				FileChecksum.cpp,
 				game/GameObject.cpp,
 				game/GameState.cpp,

@@ -477,6 +477,7 @@ install(DIRECTORY assets DESTINATION bin)
 # Subdirectories
 add_subdirectory(bgfx)
 add_subdirectory(src)
+target_sources(main PRIVATE src/CourseIdentity.cpp)
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ios_gyroscope_motion_adapter_tests
         tests/ios_gyroscope_motion_adapter_tests.cpp
@@ -541,8 +542,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(course_identity_tests
+        tests/course_identity_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+    )
+    target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(course_identity_tests PRIVATE cxx_std_23)
+
     add_executable(replay_db_helper_tests
         tests/replay_db_helper_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ReplayDBHelper.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -561,6 +573,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(score_provenance_db_tests
         tests/score_provenance_db_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ScoreDBHelper.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -878,6 +892,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(player_profile_manager_tests
         tests/player_profile_manager_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/PlayerProfileManager.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
@@ -913,6 +929,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(profile_switch_tests
         tests/profile_switch_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
         src/PlayerProfileManager.cpp
         src/ProfileDatabaseTools.cpp
@@ -957,6 +975,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(profile_archive_tests
         tests/profile_archive_tests.cpp
+        src/CourseIdentity.cpp
         src/ProfileArchive.cpp
         src/FileChecksum.cpp
         src/PlayerProfileManager.cpp
@@ -1140,6 +1159,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         gbattle_tests
         replay_summary_list_tests
         replay_record_filters_tests
+        course_identity_tests
         replay_db_helper_tests
         chart_record_filters_tests
         main_menu_library_tests
