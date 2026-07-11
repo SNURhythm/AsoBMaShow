@@ -1,0 +1,278 @@
+#include "practice/PracticeAnalytics.h"
+
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <span>
+#include <utility>
+#include <vector>
+
+namespace {
+
+void require(bool condition, const char *message) {
+  if (!condition) {
+    std::cerr << message << '\n';
+    std::exit(1);
+  }
+}
+
+void requireNear(double expected, double actual, double tolerance,
+                 const char *message) {
+  if (std::fabs(expected - actual) > tolerance) {
+    std::cerr << message << ": expected " << expected << ", actual " << actual
+              << '\n';
+    std::exit(1);
+  }
+}
+
+bms_parser::TimeLine *addTimeline(bms_parser::Measure &measure,
+                                  long long timingMicros) {
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = timingMicros;
+  measure.TimeLines.push_back(timeline);
+  return timeline;
+}
+
+void addNote(bms_parser::TimeLine &timeline, int lane) {
+  auto *note = new bms_parser::Note(1);
+  note->Lane = lane;
+  note->Timeline = &timeline;
+  timeline.Notes.push_back(note);
+}
+
+void addLongNoteTail(bms_parser::TimeLine &timeline, int lane) {
+  auto *note =
+      new bms_parser::LongNote(1, bms_parser::LongNoteType::ChargeNote);
+  note->Lane = lane;
+  note->Timeline = &timeline;
+  timeline.Notes.push_back(note);
+}
+
+bms_parser::Chart makeChart() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalLength = 3'000'000;
+  chart.Meta.PlayLength = 2'000'000;
+  chart.Meta.SHA256 = std::string(64, 'a');
+  chart.Meta.MD5 = std::string(32, 'b');
+
+  auto *measure0 = new bms_parser::Measure();
+  measure0->Timing = 0;
+  addNote(*addTimeline(*measure0, 0), 3);
+  addNote(*addTimeline(*measure0, 200'000), 1);
+  chart.Measures.push_back(measure0);
+
+  auto *measure1 = new bms_parser::Measure();
+  measure1->Timing = 1'000'000;
+  addLongNoteTail(*addTimeline(*measure1, 1'000'000), 3);
+  addNote(*addTimeline(*measure1, 1'500'000), 2);
+  chart.Measures.push_back(measure1);
+
+  auto *measure2 = new bms_parser::Measure();
+  measure2->Timing = 2'000'000;
+  addNote(*addTimeline(*measure2, 2'000'000), 1);
+  chart.Measures.push_back(measure2);
+  return chart;
+}
+
+std::vector<JudgeWindowProvenance> windows(long long pGreatEarly = -10'000) {
+  return {
+      {PGreat, pGreatEarly, 10'000}, {Great, -30'000, 30'000},
+      {Good, -75'000, 75'000},       {Bad, -330'000, 420'000},
+      {Kpoor, -500'000, 150'000},
+  };
+}
+
+ReplayData makeReplay() {
+  ReplayData replay;
+  replay.provenance.playback = {.percent = 75,
+                                .mode = audio::PlaybackMode::PitchShift};
+  replay.provenance.judgeWindowScalePercent = 80;
+  replay.provenance.stages = {{
+      .chartMd5 = std::string(32, 'b'),
+      .chartSha256 = std::string(64, 'a'),
+      .effectiveJudgeWindows = windows(),
+  }};
+  return replay;
+}
+
+ReplayEvent event(ReplayEventAction action, int lane, long long noteMicros,
+                  Judgement judgement, long long diffMicros) {
+  return {.action = action,
+          .lane = lane,
+          .noteTimeMicros = noteMicros,
+          .judgement = judgement,
+          .diffMicros = diffMicros};
+}
+
+void testTimingAndBreakdowns() {
+  auto chart = makeChart();
+  auto replay = makeReplay();
+  replay.events = {
+      event(ReplayEventAction::Press, 3, 0, Great, -15'000),
+      event(ReplayEventAction::Press, 1, 200'000, PGreat, 3'750),
+      event(ReplayEventAction::Release, 3, 1'000'000, Good, 7'500),
+      event(ReplayEventAction::Press, 2, 1'500'000, Bad, -3'750),
+      event(ReplayEventAction::Miss, 1, 2'000'000, Poor, 400'000),
+      event(ReplayEventAction::Mine, 3, 0, Poor, 50'000),
+      event(ReplayEventAction::Press, 4, -1, Great, 15'000),
+      event(ReplayEventAction::Press, 3, 0, None, 25'000),
+      event(ReplayEventAction::Press, 3, 0, Kpoor, 35'000),
+      event(ReplayEventAction::Press, 7, 900'000, Great, 45'000),
+  };
+
+  const practice::Analysis analysis = practice::analyze(chart, replay);
+  require(analysis.overall.samples == 4, "only judged note events are samples");
+  require(analysis.overall.early == 2 && analysis.overall.late == 2,
+          "signed samples count early and late");
+  require(analysis.overall.misses == 1, "miss actions are counted");
+  require(analysis.overall.meanMillis.has_value(), "mean is present");
+  requireNear(-2.5, *analysis.overall.meanMillis, 0.000001,
+              "signed mean uses real milliseconds");
+  requireNear(std::sqrt(131.25), *analysis.overall.standardDeviationMillis,
+              0.000001, "population standard deviation");
+  requireNear(0.0, *analysis.overall.medianMillis, 0.000001, "median");
+
+  const std::vector<std::pair<int, std::size_t>> expectedBins = {
+      {-20, 1},
+      {-5, 1},
+      {5, 1},
+      {10, 1},
+  };
+  require(analysis.histogram.size() == expectedBins.size(),
+          "histogram reports occupied five millisecond bins");
+  for (std::size_t index = 0; index < expectedBins.size(); ++index) {
+    require(analysis.histogram[index].lowerMillis == expectedBins[index].first,
+            "histogram lower boundary");
+    require(analysis.histogram[index].upperMillis ==
+                expectedBins[index].first + 5,
+            "histogram upper boundary");
+    require(analysis.histogram[index].count == expectedBins[index].second,
+            "histogram count");
+  }
+
+  require(analysis.lanes.size() == 3, "only analyzed lanes are emitted");
+  require(analysis.lanes[0].lane == 1 && analysis.lanes[1].lane == 2 &&
+              analysis.lanes[2].lane == 3,
+          "lanes use deterministic ascending order");
+  requireNear(5.0, *analysis.lanes[0].timing.meanMillis, 0.000001,
+              "lane one timing bias");
+  require(analysis.lanes[0].timing.misses == 1, "lane one miss count");
+  requireNear(-5.0, *analysis.lanes[1].timing.meanMillis, 0.000001,
+              "lane two timing bias");
+  requireNear(-5.0, *analysis.lanes[2].timing.meanMillis, 0.000001,
+              "lane three timing bias");
+
+  require(analysis.sections.size() == 3,
+          "one deterministic section is emitted per measure");
+  require(analysis.sections[0].firstMeasure == 0 &&
+              analysis.sections[0].lastMeasure == 0 &&
+              analysis.sections[0].startMicros == 0 &&
+              analysis.sections[0].endMicros == 1'000'000,
+          "first measure boundaries");
+  require(analysis.sections[1].startMicros == 1'000'000 &&
+              analysis.sections[1].endMicros == 2'000'000 &&
+              analysis.sections[1].timing.samples == 2,
+          "an event on a measure boundary maps to the next measure");
+  requireNear(0.5, analysis.sections[1].badMissRate, 0.000001,
+              "bad and miss rate includes bad judgements");
+  require(analysis.sections[2].startMicros == 2'000'000 &&
+              analysis.sections[2].endMicros == 3'000'000 &&
+              analysis.sections[2].timing.samples == 0 &&
+              analysis.sections[2].timing.misses == 1,
+          "last measure uses chart end and receives boundary miss");
+  requireNear(1.0, analysis.sections[2].badMissRate, 0.000001,
+              "miss-only section has a finite rate");
+}
+
+void testEmptyAnalysisHasNullStatistics() {
+  auto chart = makeChart();
+  const auto analysis = practice::analyze(chart, makeReplay());
+  require(analysis.overall.samples == 0 && analysis.overall.misses == 0,
+          "empty replay has zero counts");
+  require(!analysis.overall.meanMillis.has_value() &&
+              !analysis.overall.standardDeviationMillis.has_value() &&
+              !analysis.overall.medianMillis.has_value(),
+          "empty replay statistics are nullopt");
+  require(analysis.histogram.empty() && analysis.lanes.empty(),
+          "empty replay has no bins or lanes");
+  for (const auto &section : analysis.sections) {
+    require(!section.timing.meanMillis.has_value() &&
+                std::isfinite(section.badMissRate) &&
+                section.badMissRate == 0.0,
+            "empty sections never expose NaN");
+  }
+}
+
+void testHistogramUsesSparseStableBins() {
+  auto chart = makeChart();
+  auto replay = makeReplay();
+  replay.provenance.playback.percent = 100;
+  replay.events = {
+      event(ReplayEventAction::Press, 3, 0, Great, -1'000'000),
+      event(ReplayEventAction::Press, 3, 0, Great, -1),
+      event(ReplayEventAction::Press, 3, 0, Great, 1),
+      event(ReplayEventAction::Press, 3, 0, Great, 1'000'000),
+  };
+
+  const auto analysis = practice::analyze(chart, replay);
+  const std::vector<std::pair<int, std::size_t>> expectedBins = {
+      {-1000, 1}, {-5, 1}, {0, 1}, {1000, 1}};
+  require(analysis.histogram.size() == expectedBins.size(),
+          "histogram storage scales with occupied bins, not timing span");
+  for (std::size_t index = 0; index < expectedBins.size(); ++index) {
+    require(analysis.histogram[index].lowerMillis ==
+                    expectedBins[index].first &&
+                analysis.histogram[index].upperMillis ==
+                    expectedBins[index].first + 5 &&
+                analysis.histogram[index].count == expectedBins[index].second,
+            "wide and sub-millisecond samples use stable floor-aligned bins");
+  }
+}
+
+void testCompatibleAttemptGroups() {
+  auto chart = makeChart();
+  auto first = makeReplay();
+  first.events.push_back(event(ReplayEventAction::Press, 3, 0, Great, -15'000));
+  auto compatible = first;
+  compatible.events.front().diffMicros = 7'500;
+  auto differentRate = first;
+  differentRate.provenance.playback.percent = 100;
+  auto differentScale = first;
+  differentScale.provenance.judgeWindowScalePercent = 100;
+  auto differentWindows = first;
+  differentWindows.provenance.stages.front().effectiveJudgeWindows =
+      windows(-10'001);
+  auto differentMode = first;
+  differentMode.provenance.playback.mode = audio::PlaybackMode::TimeStretch;
+
+  const std::vector<ReplayData> attempts = {
+      first,          compatible,       differentRate,
+      differentScale, differentWindows, differentMode};
+  const auto groups = practice::analyzeCompatibleAttempts(chart, attempts);
+  require(groups.size() == 5,
+          "rate, mode, scale, and exact windows split groups");
+  require(groups[0].attemptIndices == std::vector<std::size_t>({0, 1}) &&
+              groups[1].attemptIndices == std::vector<std::size_t>({2}) &&
+              groups[2].attemptIndices == std::vector<std::size_t>({3}) &&
+              groups[3].attemptIndices == std::vector<std::size_t>({4}) &&
+              groups[4].attemptIndices == std::vector<std::size_t>({5}),
+          "groups and attempt indices retain stable input order");
+  require(groups[0].aggregate.overall.samples == 2,
+          "compatible attempts aggregate their samples");
+  requireNear(-5.0, *groups[0].aggregate.overall.meanMillis, 0.000001,
+              "aggregate converts each chart delta through group playback");
+  require(groups[0].conditions.playback.percent == 75 &&
+              groups[0].conditions.judgeWindowScalePercent == 80 &&
+              groups[0].conditions.effectiveJudgeWindows == windows(),
+          "group reports exact recorded timing conditions");
+}
+
+} // namespace
+
+int main() {
+  testTimingAndBreakdowns();
+  testEmptyAnalysisHasNullStatistics();
+  testHistogramUsesSparseStableBins();
+  testCompatibleAttemptGroups();
+  return 0;
+}

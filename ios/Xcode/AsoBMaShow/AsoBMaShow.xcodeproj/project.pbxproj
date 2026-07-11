@@ -791,6 +791,7 @@
 				PlayerProfileManager.cpp,
 				PlatformDocumentHandoff.cpp,
 				PrepMetronome.cpp,
+				practice/PracticeAnalytics.cpp,
 				practice/PracticeConfiguration.cpp,
 				practice/PracticePresetStore.cpp,
 				practice/PracticeSession.cpp,
