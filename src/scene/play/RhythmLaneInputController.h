@@ -40,9 +40,7 @@ public:
 
   RhythmLaneInputController(
       bms_parser::Chart *chart, BMSRenderer *renderer,
-      std::unordered_map<int, bool> &lanePressed,
-      CourseJudgementConstraint judgementConstraint =
-          CourseJudgementConstraint::None,
+      std::unordered_map<int, bool> &lanePressed, Judge effectiveJudge,
       int longNoteModeOverride = 0,
       std::optional<NoteTimeRange> allowedNoteRange = std::nullopt);
 

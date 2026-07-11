@@ -1,4 +1,5 @@
 #include "scene/play/BMSRenderer.h"
+#include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/NoteTimeRange.h"
 #include "scene/play/PracticeNoteFinalizer.h"
 #include "scene/play/RhythmLaneInputController.h"
@@ -51,6 +52,117 @@ bms_parser::LongNote *addLongNote(bms_parser::Measure &measure,
   return head;
 }
 
+Judgement pressWithJudge(Judge effectiveJudge, long long diffMicros) {
+  constexpr long long noteMicros = 1'000'000;
+  bms_parser::Chart chart;
+  chart.Meta.Rank = 1;
+  auto *measure = new bms_parser::Measure();
+  auto *note = addNote(*measure, noteMicros, 1);
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanePressed{{1, false}};
+  RhythmLaneInputController controller(&chart, nullptr, lanePressed,
+                                       std::move(effectiveJudge));
+  lanePressed[1] = false;
+  const auto result = controller.pressLane(
+      1, {.songTimeMicros = noteMicros + diffMicros,
+          .laneBeamTimeMicros = noteMicros + diffMicros});
+  require(result.note == note, "resolved Judge selects the expected note");
+  return result.judge.judgement;
+}
+
+Judgement releaseWithJudge(Judge effectiveJudge, long long diffMicros) {
+  constexpr long long headMicros = 900'000;
+  constexpr long long tailMicros = 1'000'000;
+  bms_parser::Chart chart;
+  chart.Meta.Rank = 1;
+  auto *measure = new bms_parser::Measure();
+  auto *head = addLongNote(*measure, headMicros, tailMicros, 1,
+                           bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+  head->Press(headMicros);
+  std::unordered_map<int, bool> lanePressed{{1, true}};
+  RhythmLaneInputController controller(&chart, nullptr, lanePressed,
+                                       std::move(effectiveJudge));
+  lanePressed[1] = true;
+  const auto result = controller.releaseLane(
+      1, {.songTimeMicros = tailMicros + diffMicros,
+          .laneBeamTimeMicros = tailMicros + diffMicros});
+  require(result.note == head->Tail,
+          "resolved Judge selects the expected long-note tail");
+  return result.judge.judgement;
+}
+
+void testControllerUsesResolvedEffectiveJudge() {
+  StartOptions identityOptions;
+  require(pressWithJudge(makeEffectiveJudgeAtPlayStart(identityOptions, 1),
+                         20'000) == Great,
+          "100/100 live input preserves rank windows");
+  require(releaseWithJudge(makeEffectiveJudgeAtPlayStart(identityOptions, 1),
+                           20'000) == Great,
+          "100/100 live release preserves rank windows");
+
+  StartOptions halfRate;
+  halfRate.playback.percent = 50;
+  require(pressWithJudge(makeEffectiveJudgeAtPlayStart(halfRate, 1), 20'000) ==
+              Good,
+          "50 percent playback narrows live input windows");
+  require(releaseWithJudge(makeEffectiveJudgeAtPlayStart(halfRate, 1),
+                           20'000) == Good,
+          "50 percent playback narrows live release windows");
+
+  StartOptions doubleRate;
+  doubleRate.playback.percent = 200;
+  require(pressWithJudge(makeEffectiveJudgeAtPlayStart(doubleRate, 1),
+                         50'000) == Great,
+          "200 percent playback widens live input windows");
+
+  StartOptions halfJudgeScale;
+  halfJudgeScale.judgeWindowScalePercent = 50;
+  require(pressWithJudge(makeEffectiveJudgeAtPlayStart(halfJudgeScale, 1),
+                         20'000) == Good,
+          "practice judge scale affects live input");
+
+  StartOptions compensatingScale;
+  compensatingScale.playback.percent = 50;
+  compensatingScale.judgeWindowScalePercent = 200;
+  require(pressWithJudge(makeEffectiveJudgeAtPlayStart(compensatingScale, 1),
+                         20'000) == Great,
+          "50 playback and 200 judge scale compose to identity");
+
+  StartOptions courseConstrained;
+  courseConstrained.courseConstraints.judgement =
+      CourseJudgementConstraint::NoGood;
+  require(pressWithJudge(
+              makeEffectiveJudgeAtPlayStart(courseConstrained, 1), 50'000) ==
+              Bad,
+          "course judgement constraint affects live input");
+
+  bms_parser::ChartMeta replayMeta;
+  replayMeta.Rank = 1;
+  replayMeta.MD5 = "replay-window-md5";
+  replayMeta.SHA256 = std::string(64, 'a');
+  StartOptions replayOptions;
+  replayOptions.replayJudgeOverride = ScoreStageProvenance{
+      .chartMd5 = replayMeta.MD5,
+      .chartSha256 = replayMeta.SHA256,
+      .effectiveJudgeWindows = {
+          {PGreat, -123, 123},
+          {Great, -456, 456},
+          {Good, -789, 789},
+          {Bad, -1'000, 1'000},
+          {Kpoor, -1'200, 1'200},
+      },
+  };
+  const Judge replayJudge =
+      makeEffectiveJudgeAtPlayStart(replayOptions, replayMeta);
+  require(pressWithJudge(replayJudge, 123) == PGreat,
+          "replay exact window includes its boundary");
+  require(pressWithJudge(replayJudge, 124) == Great,
+          "replay exact windows replace rank windows for live input");
+  require(releaseWithJudge(replayJudge, 124) == Great,
+          "replay exact windows apply to live release judgement");
+}
+
 void testActualInputAndJudgeRange() {
   constexpr long long startMicros = 500'000;
   constexpr long long endMicros = 1'000'000;
@@ -62,7 +174,7 @@ void testActualInputAndJudgeRange() {
 
   std::unordered_map<int, bool> lanePressed{{1, false}, {2, false}};
   RhythmLaneInputController controller(
-      &chart, nullptr, lanePressed, CourseJudgementConstraint::None, 0,
+      &chart, nullptr, lanePressed, Judge(chart.Meta.Rank), 0,
       NoteTimeRange{.startMicros = startMicros, .endMicros = endMicros});
   lanePressed[1] = false;
   lanePressed[2] = false;
@@ -106,7 +218,8 @@ void testActualInputAndJudgeRange() {
 
   atEnd->Reset();
   std::unordered_map<int, bool> unrestrictedPressed{{2, false}};
-  RhythmLaneInputController unrestricted(&chart, nullptr, unrestrictedPressed);
+  RhythmLaneInputController unrestricted(
+      &chart, nullptr, unrestrictedPressed, Judge(chart.Meta.Rank));
   unrestrictedPressed[2] = false;
   const auto ordinaryHit = unrestricted.pressLane(
       2, {.songTimeMicros = endMicros, .laneBeamTimeMicros = 5});
@@ -166,6 +279,7 @@ void testExactPendingNoteFinalization() {
 } // namespace
 
 int main() {
+  testControllerUsesResolvedEffectiveJudge();
   testActualInputAndJudgeRange();
   testExactPendingNoteFinalization();
   return 0;

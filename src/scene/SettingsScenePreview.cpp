@@ -166,7 +166,8 @@ void SettingsScene::ensurePreviewInputHandler() {
   }
   if (previewLaneController == nullptr) {
     previewLaneController = std::make_unique<RhythmLaneInputController>(
-        previewChart.get(), previewRenderer.get(), previewLanePressed);
+        previewChart.get(), previewRenderer.get(), previewLanePressed,
+        Judge(previewChart->Meta.Rank));
   }
   if (previewInputHandler == nullptr) {
     previewInputHandler = std::make_unique<RhythmInputHandler>(

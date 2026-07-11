@@ -505,8 +505,8 @@ void GamePlayScene::init() {
 
   ownedLaneInputController =
       std::make_unique<RhythmLaneInputController>(
-          chart, renderer, lanePressed, options.courseConstraints.judgement,
-          options.longNoteMode, practiceNoteRange());
+          chart, renderer, lanePressed, judge, options.longNoteMode,
+          practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
 
   if constexpr (kShowLaneStateOverlay) {

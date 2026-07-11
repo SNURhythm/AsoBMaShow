@@ -110,14 +110,13 @@ void setReplayEvent(RhythmLaneInputController::Result &result,
 
 RhythmLaneInputController::RhythmLaneInputController(
     bms_parser::Chart *chart, BMSRenderer *renderer,
-    std::unordered_map<int, bool> &lanePressed,
-    CourseJudgementConstraint judgementConstraint, int longNoteModeOverride,
+    std::unordered_map<int, bool> &lanePressed, Judge effectiveJudge,
+    int longNoteModeOverride,
     std::optional<NoteTimeRange> allowedNoteRange)
     : chart(chart), renderer(renderer), lanePressed(lanePressed),
       longNoteModeOverride(longNoteModeOverride),
-      judge(chart != nullptr ? chart->Meta.Rank : 3),
+      judge(std::move(effectiveJudge)),
       allowedNoteRange(std::move(allowedNoteRange)) {
-  judge.applyCourseJudgementConstraint(judgementConstraint);
   judge.setAllowedNoteRange(this->allowedNoteRange);
   if (const auto it = judge.timingWindows.find(Bad);
       it != judge.timingWindows.end()) {
