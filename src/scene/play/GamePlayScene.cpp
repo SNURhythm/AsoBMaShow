@@ -49,13 +49,7 @@ StartOptions resolvePlayStartInputDevices(StartOptions options,
                                           int keyMode) {
   if (options.practiceSession != nullptr) {
     const auto &configuration = options.practiceSession->configuration();
-    options.startPosition = static_cast<unsigned long long>(
-        std::max(0LL, configuration.startMicros));
-    options.gaugeType = configuration.gaugeType;
-    options.practiceMode = true;
-    options.playback = configuration.playback;
-    options.judgeWindowScalePercent = configuration.judge.scalePercent;
-    options.startingGaugePercent = configuration.startingGaugePercent;
+    applyPracticeConfigurationToStartOptions(options, configuration);
   }
   if (!options.inputDeviceCategories.empty()) {
     return options;
@@ -377,7 +371,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       chart(options.ownsChart ? ownedChart.get() : chart),
       options(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, chart->Meta.KeyMode)),
-      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta.Rank)),
+      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
   latePoorTiming = judge.timingWindows[Bad].second;
@@ -389,7 +383,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
       options(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, this->chart->Meta.KeyMode)),
-      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta.Rank)),
+      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
   this->options.ownsChart = true;

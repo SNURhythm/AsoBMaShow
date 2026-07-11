@@ -2,6 +2,7 @@
 #include "practice/PracticeConfiguration.h"
 
 #include <iostream>
+#include <ranges>
 #include <string>
 
 namespace {
@@ -69,6 +70,44 @@ void testConfigurationSanitization() {
          "configuration adjustments are reported diagnostically");
 }
 
+void testGaugeAutoShiftDropdownModel() {
+  const auto options = practice::practiceGaugeOptions();
+  const auto gas = std::ranges::find(options, std::string_view("gas"),
+                                     &practice::GaugeOption::id);
+  expect(gas != options.end() && gas->label == "Gauge Auto Shift (GAS)" &&
+             gas->gaugeType == GaugeType::ExHard && gas->gaugeAutoShift,
+         "practice gauge options expose GAS with a safe nonnumeric id");
+
+  practice::Configuration configuration;
+  expect(practice::applyPracticeGaugeOption(configuration, "gas") &&
+             configuration.gaugeType == GaugeType::ExHard &&
+             configuration.gaugeAutoShift &&
+             practice::practiceGaugeOptionId(configuration) == "gas",
+         "selecting GAS uses the Ex-Hard seed and enables auto shift");
+  expect(practice::applyPracticeGaugeOption(configuration, "2") &&
+             configuration.gaugeType == GaugeType::Normal &&
+             !configuration.gaugeAutoShift &&
+             practice::practiceGaugeOptionId(configuration) == "2",
+         "selecting a concrete gauge disables auto shift");
+  expect(!practice::applyPracticeGaugeOption(configuration, "not-a-gauge"),
+         "unknown nonnumeric gauge ids are rejected without parsing");
+}
+
+void testGaugeAutoShiftSanitizationUsesExHardSeed() {
+  practice::Configuration configuration{
+      .chartSha256 = "0123456789abcdef0123456789abcdef"
+                     "0123456789abcdef0123456789abcdef",
+      .startMicros = 0,
+      .endMicros = 1'000'000,
+      .gaugeType = GaugeType::Normal,
+      .gaugeAutoShift = true,
+  };
+  const auto sanitized = practice::sanitize(configuration, 1'000'000);
+  expect(sanitized.configuration.gaugeType == GaugeType::ExHard &&
+             sanitized.configuration.gaugeAutoShift,
+         "sanitization canonicalizes GAS to the Ex-Hard seed");
+}
+
 void testEmptyConfigurationIsNotPlayable() {
   practice::Configuration input{.startMicros = -10, .endMicros = 2'000'000};
   const auto sanitized = practice::sanitize(input, 0);
@@ -127,6 +166,8 @@ int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
   testConfigurationSanitization();
+  testGaugeAutoShiftDropdownModel();
+  testGaugeAutoShiftSanitizationUsesExHardSeed();
   testEmptyConfigurationIsNotPlayable();
   testPlayabilityIssuesExplainBlockingConfiguration();
   if (failures == 0) {

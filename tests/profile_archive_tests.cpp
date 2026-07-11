@@ -650,6 +650,8 @@ void testPresetStoreSidecarRemainsProfilePortable() {
       .startMicros = 1'000'000,
       .endMicros = 9'000'000,
       .loop = true,
+      .gaugeType = GaugeType::ExHard,
+      .gaugeAutoShift = true,
       .playback = {.percent = 90},
   };
   std::string error;
@@ -687,6 +689,13 @@ void testPresetStoreSidecarRemainsProfilePortable() {
                std::vector<std::string>{std::string(kPracticeHash) + ".json"},
            "profile duplication copies the portable primary JSON, not its "
            "rollback sidecar");
+    practice::PresetStore duplicateStore(duplicatePractice);
+    const auto duplicatePreset =
+        duplicateStore.load(kPracticeHash, 10'000'000);
+    expect(duplicatePreset.status == versioned_json::LoadStatus::Loaded &&
+               duplicatePreset.data.lastUsed.gaugeType == GaugeType::ExHard &&
+               duplicatePreset.data.lastUsed.gaugeAutoShift,
+           "profile duplication preserves practice GAS configuration");
   }
 
   const auto archive = exchange.path() / "practice-sidecar.asobprofile";
@@ -696,11 +705,20 @@ void testPresetStoreSidecarRemainsProfilePortable() {
          "profile with PresetStore sidecar exports: " + exported.message);
   if (exported.ok()) {
     auto members = readArchive(archive, error);
-    expect(findMember(members, "practice/" + std::string(kPracticeHash) +
-                                   ".json") != nullptr &&
+    const auto *practiceMember =
+        findMember(members,
+                   "practice/" + std::string(kPracticeHash) + ".json");
+    expect(practiceMember != nullptr &&
                findMember(members, "practice/" + std::string(kPracticeHash) +
                                        ".json.bak") == nullptr,
            "portable archive includes only the primary practice JSON");
+    const Json practiceDocument =
+        practiceMember == nullptr
+            ? Json()
+            : Json::parse(practiceMember->contents, nullptr, false);
+    expect(practiceDocument.is_object() &&
+               practiceDocument.at("lastUsed").at("gaugeAutoShift") == true,
+           "portable archive preserves GAS in practice preset JSON");
   }
 }
 

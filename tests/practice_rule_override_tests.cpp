@@ -69,6 +69,25 @@ void testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot() {
   }
 }
 
+void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
+  practice::Configuration configuration;
+  configuration.startMicros = 2'000'000;
+  configuration.gaugeType = GaugeType::ExHard;
+  configuration.gaugeAutoShift = true;
+  configuration.playback.percent = 75;
+  configuration.judge.scalePercent = 80;
+  configuration.startingGaugePercent = 37;
+
+  StartOptions options;
+  applyPracticeConfigurationToStartOptions(options, configuration);
+  assert(options.startPosition == 2'000'000);
+  assert(options.gaugeType == GaugeType::ExHard);
+  assert(options.gaugeAutoShift);
+  assert(options.playback.percent == 75);
+  assert(options.judgeWindowScalePercent == 80);
+  assert(options.startingGaugePercent == 37);
+}
+
 std::map<Judgement, std::pair<long long, long long>>
 windowsFromStage(const ScoreStageProvenance &stage) {
   std::map<Judgement, std::pair<long long, long long>> windows;
@@ -94,7 +113,7 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   recordedOptions.inputDeviceCategories = {InputDeviceCategory::Keyboard};
 
   const Judge recordedJudge =
-      makeEffectiveJudgeAtPlayStart(recordedOptions, meta.Rank);
+      makeEffectiveJudgeAtPlayStart(recordedOptions, meta);
   const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
       recordedOptions, meta, recordedJudge.timingWindows);
 
@@ -111,7 +130,7 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   applyReplayProvenanceToStartOptions(replayOptions, replay);
 
   const Judge restoredJudge =
-      makeEffectiveJudgeAtPlayStart(replayOptions, meta.Rank);
+      makeEffectiveJudgeAtPlayStart(replayOptions, meta);
   assert(captured.stages.size() == 1);
   assert(windowsFromStage(captured.stages.front()) ==
          recordedJudge.timingWindows);
@@ -132,6 +151,7 @@ int main() {
   testJudgeScaleRoundsSignedWindowEdges();
   testStartingGaugeUpdatesSelectedGaugeAndClamps();
   testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot();
+  testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions();
   testSavedPracticeReplayRestoresGaugeAndExactWindows();
   std::cout << "practice rule override tests passed\n";
   return 0;

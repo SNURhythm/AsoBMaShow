@@ -87,6 +87,7 @@ Json configurationJson(const Configuration &value) {
               {"loop", value.loop},
               {"countInBeats", value.countInBeats},
               {"gaugeType", gaugeTypeName(value.gaugeType)},
+              {"gaugeAutoShift", value.gaugeAutoShift},
               {"judge",
                {{"kind", static_cast<int>(value.judge.kind)},
                 {"scalePercent", value.judge.scalePercent}}},
@@ -121,6 +122,7 @@ std::optional<Configuration> configurationFromJson(const Json &document,
     value.loop = document.at("loop").get<bool>();
     value.countInBeats = document.at("countInBeats").get<int>();
     value.gaugeType = *gauge;
+    value.gaugeAutoShift = document.value("gaugeAutoShift", false);
     if (!document.at("startingGaugePercent").is_null()) {
       value.startingGaugePercent =
           document.at("startingGaugePercent").get<int>();

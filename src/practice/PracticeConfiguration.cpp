@@ -1,11 +1,24 @@
 #include "PracticeConfiguration.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <string_view>
 
 namespace practice {
 namespace {
+constexpr std::array<GaugeOption, 6> kGaugeOptions = {{
+    {.id = "0", .label = "Assisted Easy", .gaugeType = GaugeType::AssistedEasy},
+    {.id = "1", .label = "Easy", .gaugeType = GaugeType::Easy},
+    {.id = "2", .label = "Normal", .gaugeType = GaugeType::Normal},
+    {.id = "3", .label = "Hard", .gaugeType = GaugeType::Hard},
+    {.id = "4", .label = "Ex-Hard", .gaugeType = GaugeType::ExHard},
+    {.id = "gas",
+     .label = "Gauge Auto Shift (GAS)",
+     .gaugeType = GaugeType::ExHard,
+     .gaugeAutoShift = true},
+}};
+
 bool isSha256(std::string_view value) {
   return value.size() == 64 &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -37,6 +50,24 @@ bool validGaugeType(GaugeType value) {
   return false;
 }
 } // namespace
+
+std::span<const GaugeOption> practiceGaugeOptions() { return kGaugeOptions; }
+
+std::string practiceGaugeOptionId(const Configuration &value) {
+  return value.gaugeAutoShift ? "gas"
+                              : std::to_string(gaugeTypeIndex(value.gaugeType));
+}
+
+bool applyPracticeGaugeOption(Configuration &value, std::string_view optionId) {
+  const auto option =
+      std::ranges::find(kGaugeOptions, optionId, &GaugeOption::id);
+  if (option == kGaugeOptions.end()) {
+    return false;
+  }
+  value.gaugeType = option->gaugeType;
+  value.gaugeAutoShift = option->gaugeAutoShift;
+  return true;
+}
 
 int defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept {
   return effectiveBeatsPerMeasure >= 1 && effectiveBeatsPerMeasure <= 16
@@ -128,7 +159,11 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
     diagnoseChange(originalGauge != *value.startingGaugePercent,
                    "starting gauge was clamped to 0 through 100 percent");
   }
-  if (!validGaugeType(value.gaugeType)) {
+  if (value.gaugeAutoShift && value.gaugeType != GaugeType::ExHard) {
+    value.gaugeType = GaugeType::ExHard;
+    result.diagnostics.emplace_back(
+        "gauge auto shift seed was normalized to Ex-Hard");
+  } else if (!validGaugeType(value.gaugeType)) {
     value.gaugeType = GaugeType::Normal;
     result.diagnostics.emplace_back("unknown gauge type was reset to Normal");
   }

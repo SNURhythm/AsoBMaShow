@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include "../yoga/lib/nlohmann/json.hpp"
+
 namespace {
 constexpr std::string_view kHash = "0123456789ABCDEF0123456789ABCDEF"
                                    "0123456789ABCDEF0123456789ABCDEF";
@@ -55,6 +57,8 @@ practice::Configuration configuration(long long start, long long end) {
           .endMicros = end,
           .loop = true,
           .countInBeats = 8,
+          .gaugeType = GaugeType::ExHard,
+          .gaugeAutoShift = true,
           .startingGaugePercent = 60,
           .judge = {.scalePercent = 85},
           .playback = {.percent = 90}};
@@ -99,8 +103,10 @@ void testRoundTripAndMutations() {
          "saved chart data reloads");
   expect(loaded.data.lastUsed.startMicros == 1'000'000 &&
              loaded.data.lastUsed.chartSha256 == kNormalizedHash &&
-             loaded.data.lastUsed.countInBeats == 8,
-         "last-used configuration and explicit count-in round-trip");
+             loaded.data.lastUsed.countInBeats == 8 &&
+             loaded.data.lastUsed.gaugeType == GaugeType::ExHard &&
+             loaded.data.lastUsed.gaugeAutoShift,
+         "last-used configuration, GAS, and explicit count-in round-trip");
   expect(loaded.data.named.size() == 2 &&
              loaded.data.named[0].configuration.chartSha256 == kNormalizedHash,
          "named presets round-trip as chart-scoped configurations");
@@ -130,6 +136,34 @@ void testRoundTripAndMutations() {
   expect(std::filesystem::exists(temp.path() /
                                  (std::string(kNormalizedHash) + ".json")),
          "only the normalized hash is used as the preset filename");
+}
+
+void testLegacyPresetDefaultsGaugeAutoShiftOff() {
+  TempDirectory temp;
+  practice::PresetStore store(temp.path());
+  std::string error;
+  expect(store.saveLastUsed(kHash, configuration(1'000'000, 5'000'000), error),
+         "legacy GAS fixture saves: " + error);
+
+  const auto path = temp.path() / (std::string(kNormalizedHash) + ".json");
+  nlohmann::json document;
+  {
+    std::ifstream input(path);
+    input >> document;
+  }
+  document.at("lastUsed").erase("gaugeAutoShift");
+  for (auto &preset : document.at("named")) {
+    preset.at("configuration").erase("gaugeAutoShift");
+  }
+  {
+    std::ofstream output(path, std::ios::trunc);
+    output << document.dump();
+  }
+
+  const auto loaded = store.load(kHash, 10'000'000);
+  expect(loaded.status == versioned_json::LoadStatus::Loaded &&
+             !loaded.data.lastUsed.gaugeAutoShift,
+         "version-one preset JSON without GAS defaults auto shift off");
 }
 
 void testHashMismatchIsRejected() {
@@ -223,6 +257,7 @@ void testLoadResultUsabilityAndNotices() {
 
 int main() {
   testRoundTripAndMutations();
+  testLegacyPresetDefaultsGaugeAutoShiftOff();
   testHashMismatchIsRejected();
   testMalformedFileReturnsNeutralDefaults();
   testFailedAtomicReplacePreservesPreviousFile();

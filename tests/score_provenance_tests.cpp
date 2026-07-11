@@ -405,6 +405,126 @@ void testReplayStartRestoresPracticeProvenance() {
   assert(options.startingGaugePercent == 37);
 }
 
+std::vector<JudgeWindowProvenance> provenanceWindows(
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  std::vector<JudgeWindowProvenance> result;
+  for (const auto &[judgement, window] : windows) {
+    result.push_back({.judgement = judgement,
+                      .earlyMicros = window.first,
+                      .lateMicros = window.second});
+  }
+  return result;
+}
+
+ScoreStageProvenance replayStage(
+    std::string sha256, std::string md5,
+    const std::map<Judgement, std::pair<long long, long long>> &windows) {
+  return {.chartMd5 = std::move(md5),
+          .chartSha256 = std::move(sha256),
+          .judgeRankSource = JudgeRankSource::Override,
+          .effectiveJudgeWindows = provenanceWindows(windows)};
+}
+
+void testReplayUsesPersistedJudgeWindowsAsAuthority() {
+  const std::string sha(64, 'a');
+  const std::string md5(32, 'b');
+  const std::map<Judgement, std::pair<long long, long long>> persisted = {
+      {PGreat, {-1234, 5678}},  {Great, {-11111, 22222}},
+      {Good, {-33333, 44444}},  {Bad, {-55555, 66666}},
+      {Kpoor, {-77777, 88888}},
+  };
+
+  ReplayData replay;
+  replay.chartMeta.SHA256 = sha;
+  replay.chartMeta.MD5 = md5;
+  replay.chartMeta.Rank = 0;
+  replay.provenance = sampleVerifiedProvenance("replay-authority");
+  replay.provenance.stages = {replayStage(sha, md5, persisted)};
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(
+      serializeScoreProvenance(replay.provenance), error);
+  assert(error.empty());
+  assert(decoded.has_value());
+  replay.provenance = *decoded;
+
+  StartOptions options;
+  applyReplayProvenanceToStartOptions(options, replay);
+  assert(options.replayJudgeOverride.has_value());
+
+  bms_parser::ChartMeta currentMeta = replay.chartMeta;
+  currentMeta.Rank = 3;
+  const Judge restored = makeEffectiveJudgeAtPlayStart(options, currentMeta);
+  assert(restored.timingWindows == persisted);
+  assert(restored.timingWindows != Judge(currentMeta.Rank).timingWindows);
+}
+
+void testReplayJudgeOverrideValidatesChartAndWindows() {
+  const std::string sha(64, 'c');
+  const std::string md5(32, 'd');
+  const auto persisted = sampleWindows();
+  ReplayData replay;
+  replay.chartMeta.SHA256 = sha;
+  replay.chartMeta.MD5 = md5;
+  replay.provenance = sampleVerifiedProvenance("replay-validation");
+  replay.provenance.stages = {replayStage(sha, md5, persisted)};
+
+  StartOptions options;
+  applyReplayProvenanceToStartOptions(options, replay);
+  assert(options.replayJudgeOverride.has_value());
+
+  bms_parser::ChartMeta differentChart = replay.chartMeta;
+  differentChart.SHA256 = std::string(64, 'e');
+  differentChart.MD5 = std::string(32, 'f');
+  differentChart.Rank = 2;
+  const Judge fallback = makeEffectiveJudgeAtPlayStart(options, differentChart);
+  assert(fallback.timingWindows == Judge(differentChart.Rank).timingWindows);
+
+  replay.provenance.stages.front().effectiveJudgeWindows.pop_back();
+  StartOptions incompleteOptions;
+  applyReplayProvenanceToStartOptions(incompleteOptions, replay);
+  assert(!incompleteOptions.replayJudgeOverride.has_value());
+  const Judge incompleteFallback =
+      makeEffectiveJudgeAtPlayStart(incompleteOptions, replay.chartMeta);
+  assert(incompleteFallback.timingWindows ==
+         Judge(replay.chartMeta.Rank).timingWindows);
+
+  replay.provenance = ScoreProvenance::Legacy();
+  StartOptions legacyOptions;
+  applyReplayProvenanceToStartOptions(legacyOptions, replay);
+  assert(!legacyOptions.replayJudgeOverride.has_value());
+}
+
+void testCourseReplaySelectsMatchingStageJudgeWindows() {
+  const std::string firstSha(64, '1');
+  const std::string secondSha(64, '2');
+  const std::string firstMd5(32, '3');
+  const std::string secondMd5(32, '4');
+  const auto firstWindows = sampleWindows();
+  const std::map<Judgement, std::pair<long long, long long>> secondWindows = {
+      {PGreat, {-101, 102}}, {Great, {-201, 202}}, {Good, {-301, 302}},
+      {Bad, {-401, 402}},    {Kpoor, {-501, 502}},
+  };
+
+  auto stageReplay = std::make_shared<ReplayData>();
+  stageReplay->chartMeta.SHA256 = secondSha;
+  stageReplay->chartMeta.MD5 = secondMd5;
+  stageReplay->chartMeta.Rank = 3;
+  stageReplay->provenance = sampleVerifiedProvenance("course-replay-stage");
+  stageReplay->provenance.stages = {
+      replayStage(firstSha, firstMd5, firstWindows),
+      replayStage(secondSha, secondMd5, secondWindows),
+  };
+
+  auto session = std::make_shared<CoursePlaySession>();
+  session->constraints.judgement = CourseJudgementConstraint::NoGood;
+  const StartOptions options =
+      makeCourseReplayStageStartOptions(session, stageReplay);
+  assert(options.replayJudgeOverride.has_value());
+  const Judge restored =
+      makeEffectiveJudgeAtPlayStart(options, stageReplay->chartMeta);
+  assert(restored.timingWindows == secondWindows);
+}
+
 void testMobilePlayStartInputCategoriesPreserveResolverClasses() {
   const std::vector resolverClasses = {
       input::DeviceClass::Joystick, input::DeviceClass::GameController,
@@ -533,6 +653,9 @@ int main() {
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
   testReplayStartRestoresPracticeProvenance();
+  testReplayUsesPersistedJudgeWindowsAsAuthority();
+  testReplayJudgeOverrideValidatesChartAndWindows();
+  testCourseReplaySelectsMatchingStageJudgeWindows();
   testMobilePlayStartInputCategoriesPreserveResolverClasses();
   testPlayStartInputPlatformDefaultsAreIncluded();
   testConstrainedPlayCapturesEffectiveWindowsAsModified();

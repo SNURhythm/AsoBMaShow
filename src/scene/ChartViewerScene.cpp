@@ -3974,8 +3974,10 @@ void ChartViewerScene::loadPracticeConfiguration() {
     selectedPracticePresetId.reset();
   }
   if (loaded.status == versioned_json::LoadStatus::Missing) {
-    practiceConfiguration.gaugeType =
-        gaugeSelectionFromSettingId(context.settings.selectedGaugeType).type;
+    const GaugeSelection gaugeSelection =
+        gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+    practiceConfiguration.gaugeType = gaugeSelection.type;
+    practiceConfiguration.gaugeAutoShift = gaugeSelection.autoShift;
     practiceConfiguration.countInBeats =
         practice::defaultCountInBeatsForChart(
             chart->Meta.GuessedBeatsPerMeasure);
@@ -4228,7 +4230,9 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
           : std::optional<std::vector<int>>(chart->Meta.RandomValues);
   const GaugeSelection gaugeSelection =
       autoPlay ? gaugeSelectionFromSettingId(context.settings.selectedGaugeType)
-               : GaugeSelection{.type = launchConfiguration.gaugeType};
+               : GaugeSelection{
+                     .type = launchConfiguration.gaugeType,
+                     .autoShift = launchConfiguration.gaugeAutoShift};
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
   const bool canReuseJukeboxResources =

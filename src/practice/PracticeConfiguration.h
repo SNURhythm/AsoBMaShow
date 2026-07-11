@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace practice {
@@ -34,6 +35,13 @@ struct JudgeOverride {
   bool operator==(const JudgeOverride &) const = default;
 };
 
+struct GaugeOption {
+  std::string_view id;
+  std::string_view label;
+  GaugeType gaugeType = GaugeType::Normal;
+  bool gaugeAutoShift = false;
+};
+
 struct Configuration {
   std::string chartSha256;
   long long startMicros = 0;
@@ -41,11 +49,16 @@ struct Configuration {
   bool loop = false;
   int countInBeats = 4;
   GaugeType gaugeType = GaugeType::Normal;
+  bool gaugeAutoShift = false;
   std::optional<int> startingGaugePercent;
   JudgeOverride judge;
   audio::PlaybackRate playback;
   bool operator==(const Configuration &) const = default;
 };
+
+[[nodiscard]] std::span<const GaugeOption> practiceGaugeOptions();
+[[nodiscard]] std::string practiceGaugeOptionId(const Configuration &value);
+bool applyPracticeGaugeOption(Configuration &value, std::string_view optionId);
 
 struct SanitizedConfiguration {
   Configuration configuration;

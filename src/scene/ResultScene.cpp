@@ -984,7 +984,10 @@ void ResultScene::startRetry(bool samePattern) {
         options.gaugeType = practiceConfiguration.has_value()
                                 ? practiceConfiguration->gaugeType
                                 : retrySource.initialGaugeType;
-        options.gaugeAutoShift = retrySource.gaugeAutoShift;
+        options.gaugeAutoShift =
+            practiceConfiguration.has_value()
+                ? practiceConfiguration->gaugeAutoShift
+                : retrySource.gaugeAutoShift;
         options.longNoteMode = normalizeChartLongNoteModeValue(
             retrySource.chartMeta.LnMode);
         options.assistOption = retrySource.assistOption;

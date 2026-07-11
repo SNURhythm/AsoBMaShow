@@ -7,12 +7,15 @@
 #include "Pacemaker.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -91,7 +94,93 @@ struct StartOptions {
   std::function<void(const ReplayData &)> practiceGhostCallback;
   std::vector<InputDeviceCategory> inputDeviceCategories;
   std::optional<RulesetDescriptor> rulesetDescriptor;
+  std::optional<ScoreStageProvenance> replayJudgeOverride;
 };
+
+namespace play_start_detail {
+[[nodiscard]] inline std::optional<std::string>
+normalizedHexHash(std::string_view value, std::size_t expectedSize) {
+  if (value.size() != expectedSize ||
+      !std::ranges::all_of(value, [](unsigned char character) {
+        return std::isxdigit(character) != 0;
+      })) {
+    return std::nullopt;
+  }
+  std::string normalized(value);
+  std::ranges::transform(normalized, normalized.begin(),
+                         [](unsigned char character) {
+                           return static_cast<char>(std::tolower(character));
+                         });
+  return normalized;
+}
+
+[[nodiscard]] inline bool
+stageMatchesChart(const ScoreStageProvenance &stage,
+                  const bms_parser::ChartMeta &chartMeta) {
+  const auto stageSha = normalizedHexHash(stage.chartSha256, 64);
+  const auto chartSha = normalizedHexHash(chartMeta.SHA256, 64);
+  if (stageSha.has_value() && chartSha.has_value()) {
+    return stageSha == chartSha;
+  }
+  const auto stageMd5 = normalizedHexHash(stage.chartMd5, 32);
+  const auto chartMd5 = normalizedHexHash(chartMeta.MD5, 32);
+  return stageMd5.has_value() && chartMd5.has_value() && stageMd5 == chartMd5;
+}
+
+[[nodiscard]] inline std::optional<
+    std::map<Judgement, std::pair<long long, long long>>>
+validatedJudgeWindows(const ScoreStageProvenance &stage) {
+  constexpr std::array expected = {PGreat, Great, Good, Bad, Kpoor};
+  std::map<Judgement, std::pair<long long, long long>> result;
+  for (const auto &window : stage.effectiveJudgeWindows) {
+    if (!std::ranges::contains(expected, window.judgement) ||
+        window.earlyMicros > 0 || window.lateMicros < 0 ||
+        window.earlyMicros > window.lateMicros ||
+        !result
+             .emplace(window.judgement,
+                      std::pair<long long, long long>(window.earlyMicros,
+                                                      window.lateMicros))
+             .second) {
+      return std::nullopt;
+    }
+  }
+  if (result.size() != expected.size()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+[[nodiscard]] inline std::optional<ScoreStageProvenance>
+replayJudgeOverrideForChart(const ScoreProvenance &provenance,
+                            const bms_parser::ChartMeta &chartMeta) {
+  const ScoreStageProvenance *matching = nullptr;
+  for (const auto &stage : provenance.stages) {
+    if (!stageMatchesChart(stage, chartMeta)) {
+      continue;
+    }
+    if (matching != nullptr) {
+      return std::nullopt;
+    }
+    matching = &stage;
+  }
+  if (matching == nullptr || !validatedJudgeWindows(*matching).has_value()) {
+    return std::nullopt;
+  }
+  return *matching;
+}
+} // namespace play_start_detail
+
+inline void applyPracticeConfigurationToStartOptions(
+    StartOptions &options, const practice::Configuration &configuration) {
+  options.startPosition =
+      static_cast<unsigned long long>(std::max(0LL, configuration.startMicros));
+  options.gaugeType = configuration.gaugeType;
+  options.gaugeAutoShift = configuration.gaugeAutoShift;
+  options.practiceMode = true;
+  options.playback = configuration.playback;
+  options.judgeWindowScalePercent = configuration.judge.scalePercent;
+  options.startingGaugePercent = configuration.startingGaugePercent;
+}
 
 [[nodiscard]] inline Judge
 makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
@@ -102,11 +191,28 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
   return judge;
 }
 
+[[nodiscard]] inline Judge
+makeEffectiveJudgeAtPlayStart(const StartOptions &options,
+                              const bms_parser::ChartMeta &chartMeta) {
+  Judge judge = makeEffectiveJudgeAtPlayStart(options, chartMeta.Rank);
+  if (options.replayJudgeOverride.has_value() &&
+      play_start_detail::stageMatchesChart(*options.replayJudgeOverride,
+                                           chartMeta)) {
+    if (const auto windows = play_start_detail::validatedJudgeWindows(
+            *options.replayJudgeOverride)) {
+      judge.timingWindows = *windows;
+    }
+  }
+  return judge;
+}
+
 inline void applyReplayProvenanceToStartOptions(StartOptions &options,
                                                 const ReplayData &replay) {
   options.playback = replay.provenance.playback;
   options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
   options.startingGaugePercent = replay.provenance.startingGaugePercent;
+  options.replayJudgeOverride = play_start_detail::replayJudgeOverrideForChart(
+      replay.provenance, replay.chartMeta);
 }
 
 [[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(

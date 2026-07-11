@@ -319,8 +319,9 @@ void PracticePanelView::selectDropdownOption(DropDownIndex index,
     publishConfiguration();
     break;
   case DropDownIndex::Gauge:
-    currentConfiguration.gaugeType = gaugeTypeAtIndex(std::stoi(id));
-    publishConfiguration();
+    if (practice::applyPracticeGaugeOption(currentConfiguration, id)) {
+      publishConfiguration();
+    }
     break;
   case DropDownIndex::StartingGauge:
     currentConfiguration.startingGaugePercent =
@@ -394,13 +395,14 @@ void PracticePanelView::refreshControls() {
   refresh(DropDownIndex::CountIn, "Beats",
           std::to_string(currentConfiguration.countInBeats),
           numericOptions(0, 16, 1));
+  std::vector<DropdownView::Option> practiceGaugeOptions;
+  for (const auto &option : practice::practiceGaugeOptions()) {
+    practiceGaugeOptions.push_back(
+        {.id = std::string(option.id), .label = std::string(option.label)});
+  }
   refresh(DropDownIndex::Gauge, "Gauge",
-          std::to_string(gaugeTypeIndex(currentConfiguration.gaugeType)),
-          {{.id = "0", .label = "Assisted Easy"},
-           {.id = "1", .label = "Easy"},
-           {.id = "2", .label = "Normal"},
-           {.id = "3", .label = "Hard"},
-           {.id = "4", .label = "Ex-Hard"}});
+          practice::practiceGaugeOptionId(currentConfiguration),
+          std::move(practiceGaugeOptions));
   auto gaugeOptions = numericOptions(0, 100, 1, "%");
   gaugeOptions.insert(gaugeOptions.begin(),
                       {.id = "default", .label = "Default"});
