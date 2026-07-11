@@ -813,6 +813,78 @@ void testProfileCrudConstraintsAndDataIsolation() {
          "the last profile cannot be deleted");
 }
 
+void testPracticeDirectoryLifecycleAndValidation() {
+  constexpr std::string_view hash = "0123456789abcdef0123456789abcdef"
+                                    "0123456789abcdef0123456789abcdef";
+  TempDirectory temp("profile-practice");
+  std::vector<std::string> uuids = {
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+  };
+  std::size_t uuidIndex = 0;
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "practice-directory fixture initializes");
+  const std::string sourceId = manager.activeProfile().id;
+  const PlayerProfilePaths source = manager.activePaths();
+  expect(source.practiceDirectory == source.root / "practice" &&
+             std::filesystem::is_directory(source.practiceDirectory),
+         "profile creation owns an empty practice directory");
+
+  const auto presetPath =
+      source.practiceDirectory / (std::string(hash) + ".json");
+  writeFile(presetPath, "{\"schemaVersion\":1}\n");
+  expect(manager.validateProfile(sourceId).ok(),
+         "routine validation admits bounded hash-named JSON without parsing");
+
+  const auto duplicate = manager.duplicateProfile(sourceId, "Practice Copy");
+  expect(duplicate.ok() && duplicate.profile,
+         "profile with practice data duplicates");
+  if (duplicate.profile) {
+    const auto copied =
+        manager.pathsFor(duplicate.profile->id).practiceDirectory /
+        presetPath.filename();
+    expect(readFile(copied) == readFile(presetPath),
+           "duplication copies validated practice JSON bytes");
+  }
+
+  std::filesystem::remove(presetPath);
+  std::filesystem::remove(source.practiceDirectory);
+  expect(manager.validateProfile(sourceId).ok(),
+         "legacy profile without a practice directory remains valid");
+
+  std::filesystem::create_directory(source.practiceDirectory);
+  writeFile(source.practiceDirectory / "not-a-hash.json", "{}\n");
+  expect(!manager.validateProfile(sourceId).ok(),
+         "practice validation rejects non-hash filenames");
+  std::filesystem::remove_all(source.practiceDirectory);
+
+  std::filesystem::create_directory(source.practiceDirectory);
+  std::filesystem::create_directory(source.practiceDirectory /
+                                    (std::string(hash) + ".json"));
+  expect(!manager.validateProfile(sourceId).ok(),
+         "practice validation rejects non-regular entries");
+  std::filesystem::remove_all(source.practiceDirectory);
+
+  std::filesystem::create_directory(source.practiceDirectory);
+  writeFile(source.practiceDirectory / (std::string(hash) + ".json"),
+            std::string((1U * 1024U * 1024U) + 1U, 'x'));
+  expect(!manager.validateProfile(sourceId).ok(),
+         "practice validation rejects files larger than one MiB");
+  std::filesystem::remove_all(source.practiceDirectory);
+
+  TempDirectory external("profile-practice-external");
+  std::error_code linkError;
+  std::filesystem::create_directory_symlink(
+      external.path(), source.practiceDirectory, linkError);
+  expect(!linkError, "practice-directory symlink fixture creates");
+  if (!linkError) {
+    expect(!manager.validateProfile(sourceId).ok(),
+           "practice validation rejects a linked directory");
+  }
+}
+
 void testFutureVersionsFailClosed() {
   TempDirectory temp("profile-future");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -875,6 +947,7 @@ int main() {
   testFutureLegacyDatabaseVersionFailsClosedBeforeMigration();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testProfileCrudConstraintsAndDataIsolation();
+  testPracticeDirectoryLifecycleAndValidation();
   testFutureVersionsFailClosed();
 
   if (failures != 0) {

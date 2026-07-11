@@ -29,6 +29,7 @@
 
 namespace {
 using Json = nlohmann::json;
+constexpr std::uintmax_t kMaximumPracticeFileBytes = 1U * 1024U * 1024U;
 
 enum class BuildMode { Migration, Create, Duplicate };
 
@@ -385,7 +386,120 @@ PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   paths.inputJson = paths.root / "input.json";
   paths.scoresDb = paths.root / "scores.db";
   paths.replaysDb = paths.root / "replays.db";
+  paths.practiceDirectory = paths.root / "practice";
   return paths;
+}
+
+bool isPracticeFilename(std::string_view filename) {
+  constexpr std::string_view suffix = ".json";
+  if (filename.size() != 64 + suffix.size() || !filename.ends_with(suffix)) {
+    return false;
+  }
+  for (const unsigned char character : filename.substr(0, 64)) {
+    if (!std::isdigit(character) && !(character >= 'a' && character <= 'f')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
+                               const PlayerProfilePaths &paths,
+                               std::vector<std::filesystem::path> *files,
+                               std::string &errorMessage) {
+  if (!ensureContainedPath(applicationRoot, paths.practiceDirectory,
+                           errorMessage)) {
+    return false;
+  }
+  std::error_code error;
+  const auto status =
+      std::filesystem::symlink_status(paths.practiceDirectory, error);
+  if (error) {
+    if (error == std::errc::no_such_file_or_directory) {
+      return true;
+    }
+    errorMessage =
+        "unable to inspect profile practice directory: " + error.message();
+    return false;
+  }
+  if (status.type() == std::filesystem::file_type::not_found) {
+    return true;
+  }
+  if (!std::filesystem::is_directory(status) ||
+      hasUnsafeLink(paths.practiceDirectory, status, errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "profile practice path is not a safe directory";
+    }
+    return false;
+  }
+
+  std::filesystem::directory_iterator iterator(paths.practiceDirectory, error);
+  if (error) {
+    errorMessage =
+        "unable to enumerate profile practice directory: " + error.message();
+    return false;
+  }
+  for (const auto &entry : iterator) {
+    if (!ensureContainedPath(applicationRoot, entry.path(), errorMessage)) {
+      return false;
+    }
+    error.clear();
+    const auto entryStatus =
+        std::filesystem::symlink_status(entry.path(), error);
+    if (error || !std::filesystem::is_regular_file(entryStatus) ||
+        hasUnsafeLink(entry.path(), entryStatus, errorMessage) ||
+        !isPracticeFilename(entry.path().filename().string())) {
+      if (errorMessage.empty()) {
+        errorMessage =
+            "profile practice directory contains an unsafe or invalid entry";
+      }
+      return false;
+    }
+    const auto size = std::filesystem::file_size(entry.path(), error);
+    if (error || size > kMaximumPracticeFileBytes) {
+      errorMessage = error ? "unable to inspect profile practice file size: " +
+                                 error.message()
+                           : "profile practice file exceeds the 1 MiB limit";
+      return false;
+    }
+    if (files) {
+      files->push_back(entry.path());
+    }
+  }
+  if (files) {
+    std::ranges::sort(*files);
+  }
+  return true;
+}
+
+bool copyPracticeDirectory(const std::filesystem::path &applicationRoot,
+                           const PlayerProfilePaths &source,
+                           const PlayerProfilePaths &destination,
+                           std::string &errorMessage) {
+  std::vector<std::filesystem::path> files;
+  if (!validatePracticeDirectory(applicationRoot, source, &files,
+                                 errorMessage)) {
+    return false;
+  }
+  std::error_code error;
+  if (!std::filesystem::create_directory(destination.practiceDirectory,
+                                         error) &&
+      (error ||
+       !std::filesystem::is_directory(destination.practiceDirectory))) {
+    errorMessage = "unable to create duplicate practice directory: " +
+                   (error ? error.message() : "path already exists");
+    return false;
+  }
+  for (const auto &sourceFile : files) {
+    std::filesystem::copy_file(
+        sourceFile, destination.practiceDirectory / sourceFile.filename(),
+        std::filesystem::copy_options::none, error);
+    if (error) {
+      errorMessage = "unable to copy practice preset: " + error.message();
+      return false;
+    }
+  }
+  return true;
 }
 
 PlayerProfilePaths makePaths(const std::filesystem::path &applicationRoot,
@@ -611,6 +725,10 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
                          file.filename().string());
     }
   }
+  if (!validatePracticeDirectory(applicationRoot, paths, nullptr,
+                                 safetyError)) {
+    return failure(ProfileError::IntegrityFailure, safetyError);
+  }
 
   ProfileResult metadata = loadProfileMetadata(paths.profileJson, expectedId);
   if (!metadata.ok()) {
@@ -745,6 +863,23 @@ BuildProfileResult buildProfile(
                 "unable to create profile staging directory: " +
                     (filesystemError ? filesystemError.message()
                                      : "path already exists"));
+  }
+
+  if (mode == BuildMode::Duplicate) {
+    if (!copyPracticeDirectory(applicationRoot, *duplicateSource, staging,
+                               errorMessage)) {
+      return fail(ProfileError::IoFailure,
+                  "unable to duplicate practice data: " + errorMessage);
+    }
+  } else {
+    filesystemError.clear();
+    if (!std::filesystem::create_directory(staging.practiceDirectory,
+                                           filesystemError) ||
+        filesystemError) {
+      return fail(ProfileError::IoFailure,
+                  "unable to create profile practice directory: " +
+                      filesystemError.message());
+    }
   }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteSettings)) {
@@ -918,6 +1053,23 @@ BuildProfileResult buildProfile(
                                                : ProfileError::IoFailure,
                   "unable to make staged profile durable: " + errorMessage);
     }
+  }
+  std::vector<std::filesystem::path> practiceFiles;
+  if (!validatePracticeDirectory(applicationRoot, staging, &practiceFiles,
+                                 errorMessage)) {
+    return fail(ProfileError::IntegrityFailure, errorMessage);
+  }
+  for (const auto &file : practiceFiles) {
+    if (!dependencies.filesystem.syncFile(file, errorMessage)) {
+      return fail(ProfileError::IoFailure,
+                  "unable to make staged practice data durable: " +
+                      errorMessage);
+    }
+  }
+  if (!dependencies.filesystem.syncDirectory(staging.practiceDirectory,
+                                             errorMessage)) {
+    return fail(ProfileError::IoFailure,
+                "unable to sync staged practice directory: " + errorMessage);
   }
   if (!dependencies.filesystem.syncDirectory(staging.root, errorMessage)) {
     return fail(mode == BuildMode::Migration ? ProfileError::MigrationFailure
@@ -1496,6 +1648,11 @@ PlayerProfileManager::validateProfile(std::string_view id,
     }
   }
 
+  if (!validatePracticeDirectory(applicationDataRoot_, paths, nullptr,
+                                 safetyError)) {
+    return failure(ProfileError::IntegrityFailure, safetyError);
+  }
+
   const auto settings = AppSettingsStore::Load(paths.settingsJson);
   if (settings.status == AppSettingsLoadStatus::FutureVersion) {
     return failure(ProfileError::FutureVersion,
@@ -1712,6 +1869,22 @@ ProfileResult PlayerProfileManager::installProfile(
                                "unable to stage imported profile: " +
                                    errorMessage);
   }
+  bool practiceDirectoryExists = false;
+  if (!pathExists(staging.practiceDirectory, practiceDirectoryExists,
+                  errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IoFailure, errorMessage);
+  }
+  if (!practiceDirectoryExists) {
+    filesystemError.clear();
+    if (!std::filesystem::create_directory(staging.practiceDirectory,
+                                           filesystemError) ||
+        filesystemError) {
+      return cleanStagingAndFail(
+          ProfileError::IoFailure,
+          "unable to create imported practice directory: " +
+              filesystemError.message());
+    }
+  }
   if (!writeProfileMetadata(staging.profileJson, sourceProfile, errorMessage)) {
     return cleanStagingAndFail(ProfileError::IoFailure,
                                "unable to write imported profile metadata: " +
@@ -1777,6 +1950,25 @@ ProfileResult PlayerProfileManager::installProfile(
                                  "unable to make imported profile durable: " +
                                      errorMessage);
     }
+  }
+  std::vector<std::filesystem::path> importedPracticeFiles;
+  if (!validatePracticeDirectory(applicationDataRoot_, staging,
+                                 &importedPracticeFiles, errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IntegrityFailure, errorMessage);
+  }
+  for (const auto &file : importedPracticeFiles) {
+    if (!dependencies_.filesystem.syncFile(file, errorMessage)) {
+      return cleanStagingAndFail(ProfileError::IoFailure,
+                                 "unable to make imported practice data "
+                                 "durable: " +
+                                     errorMessage);
+    }
+  }
+  if (!dependencies_.filesystem.syncDirectory(staging.practiceDirectory,
+                                              errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IoFailure,
+                               "unable to sync imported practice directory: " +
+                                   errorMessage);
   }
   if (!dependencies_.filesystem.syncDirectory(staging.root, errorMessage)) {
     return cleanStagingAndFail(ProfileError::IoFailure,

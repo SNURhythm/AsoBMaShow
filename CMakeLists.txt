@@ -886,6 +886,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
+
+    add_executable(practice_configuration_tests
+        tests/practice_configuration_tests.cpp
+        src/practice/PracticeConfiguration.cpp
+    )
+    target_include_directories(practice_configuration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_configuration_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_preset_store_tests
+        tests/practice_preset_store_tests.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticePresetStore.cpp
+    )
+    target_include_directories(practice_preset_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_preset_store_tests PRIVATE cxx_std_23)
     if(WIN32)
         target_link_libraries(app_settings_store_tests PRIVATE shell32 ole32)
     endif()
@@ -1190,6 +1211,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(practice_configuration_tests)
+    asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive)

@@ -23,6 +23,7 @@ struct PlayerProfilePaths {
   std::filesystem::path inputJson;
   std::filesystem::path scoresDb;
   std::filesystem::path replaysDb;
+  std::filesystem::path practiceDirectory;
 
   bool operator==(const PlayerProfilePaths &) const = default;
 };

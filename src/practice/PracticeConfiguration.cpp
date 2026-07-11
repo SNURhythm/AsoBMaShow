@@ -1,0 +1,121 @@
+#include "PracticeConfiguration.h"
+
+#include <algorithm>
+#include <cctype>
+#include <string_view>
+
+namespace practice {
+namespace {
+bool isSha256(std::string_view value) {
+  return value.size() == 64 &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return std::isxdigit(character) != 0;
+         });
+}
+
+void normalizeSha256(std::string &value) {
+  std::ranges::transform(value, value.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+}
+
+int nearestStep(int value, int minimum, int maximum, int step) {
+  value = std::clamp(value, minimum, maximum);
+  const int offset = value - minimum;
+  return minimum + ((offset + step / 2) / step) * step;
+}
+
+bool validGaugeType(GaugeType value) {
+  switch (value) {
+  case GaugeType::AssistedEasy:
+  case GaugeType::Easy:
+  case GaugeType::Normal:
+  case GaugeType::Hard:
+  case GaugeType::ExHard:
+    return true;
+  }
+  return false;
+}
+} // namespace
+
+bool SanitizedConfiguration::playable() const noexcept {
+  return isSha256(configuration.chartSha256) &&
+         configuration.startMicros < configuration.endMicros &&
+         configuration.judge.kind == JudgeOverrideKind::Scale &&
+         configuration.playback.valid() &&
+         configuration.playback.mode == audio::PlaybackMode::PitchShift &&
+         validGaugeType(configuration.gaugeType);
+}
+
+SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
+  SanitizedConfiguration result;
+  auto diagnoseChange = [&](bool changed, std::string message) {
+    if (changed) {
+      result.diagnostics.push_back(std::move(message));
+    }
+  };
+
+  if (isSha256(value.chartSha256)) {
+    const std::string original = value.chartSha256;
+    normalizeSha256(value.chartSha256);
+    diagnoseChange(original != value.chartSha256,
+                   "chart SHA-256 was normalized to lowercase");
+  } else {
+    result.diagnostics.emplace_back("chart SHA-256 must contain 64 hex digits");
+  }
+
+  const long long playableEnd = std::max(0LL, chartEndMicros);
+  const long long originalStart = value.startMicros;
+  const long long originalEnd = value.endMicros;
+  value.startMicros = std::clamp(value.startMicros, 0LL, playableEnd);
+  value.endMicros = std::clamp(value.endMicros, 0LL, playableEnd);
+  diagnoseChange(originalStart != value.startMicros ||
+                     originalEnd != value.endMicros,
+                 "practice markers were clamped to the chart range");
+  if (value.startMicros > value.endMicros) {
+    std::swap(value.startMicros, value.endMicros);
+    result.diagnostics.emplace_back("crossed practice markers were ordered");
+  }
+  if (value.startMicros == value.endMicros) {
+    result.diagnostics.emplace_back("practice range must be non-empty");
+  }
+
+  const int originalCountIn = value.countInBeats;
+  value.countInBeats = std::clamp(value.countInBeats, 0, 16);
+  diagnoseChange(originalCountIn != value.countInBeats,
+                 "count-in beats were clamped to 0 through 16");
+
+  if (value.startingGaugePercent) {
+    const int originalGauge = *value.startingGaugePercent;
+    *value.startingGaugePercent =
+        std::clamp(*value.startingGaugePercent, 0, 100);
+    diagnoseChange(originalGauge != *value.startingGaugePercent,
+                   "starting gauge was clamped to 0 through 100 percent");
+  }
+  if (!validGaugeType(value.gaugeType)) {
+    value.gaugeType = GaugeType::Normal;
+    result.diagnostics.emplace_back("unknown gauge type was reset to Normal");
+  }
+
+  const int originalJudgeScale = value.judge.scalePercent;
+  value.judge.scalePercent = nearestStep(value.judge.scalePercent, 25, 200, 5);
+  diagnoseChange(originalJudgeScale != value.judge.scalePercent,
+                 "judge scale was clamped to a supported five-percent step");
+  if (value.judge.kind != JudgeOverrideKind::Scale) {
+    result.diagnostics.emplace_back(
+        "custom judge windows are recognized but not yet playable");
+  }
+
+  const int originalPlaybackPercent = value.playback.percent;
+  value.playback.percent = nearestStep(value.playback.percent, 50, 200, 5);
+  diagnoseChange(originalPlaybackPercent != value.playback.percent,
+                 "playback rate was clamped to a supported five-percent step");
+  if (value.playback.mode != audio::PlaybackMode::PitchShift) {
+    result.diagnostics.emplace_back(
+        "time-stretch playback is recognized but not yet available");
+  }
+
+  result.configuration = std::move(value);
+  return result;
+}
+} // namespace practice
