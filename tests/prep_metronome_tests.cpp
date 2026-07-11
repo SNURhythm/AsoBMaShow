@@ -113,23 +113,26 @@ int main() {
   practiceChart.Meta.Bpm = 120.0;
   practiceChart.Meta.GuessedBeatBpm = 180.0;
   practiceChart.Meta.GuessedBeatsPerMeasure = 4;
-  auto *practiceMeasure = new bms_parser::Measure();
-  auto *practiceStartTimeline = new bms_parser::TimeLine(1, false);
-  practiceStartTimeline->Timing = 0;
-  practiceStartTimeline->BpmChange = false;
-  practiceStartTimeline->Bpm = 120.0;
-  practiceMeasure->TimeLines.push_back(practiceStartTimeline);
+  const long long practiceMeasureStarts[] = {
+      0, 2000000, 4000000, 6000000, 7600000, 9200000, 10800000, 12400000};
+  for (const auto measureStart : practiceMeasureStarts) {
+    auto *practiceMeasure = new bms_parser::Measure();
+    practiceMeasure->Timing = measureStart;
+    practiceMeasure->Scale = 1.0;
+    practiceChart.Measures.push_back(practiceMeasure);
+  }
   auto *practiceTempoChange = new bms_parser::TimeLine(1, false);
   practiceTempoChange->Timing = 6000000;
+  practiceTempoChange->BeatPosition = 3.0;
   practiceTempoChange->BpmChange = true;
   practiceTempoChange->Bpm = 150.0;
-  practiceMeasure->TimeLines.push_back(practiceTempoChange);
+  practiceChart.Measures[3]->TimeLines.push_back(practiceTempoChange);
   auto *practiceLaterTempoChange = new bms_parser::TimeLine(1, false);
-  practiceLaterTempoChange->Timing = 12000000;
+  practiceLaterTempoChange->Timing = 12400000;
+  practiceLaterTempoChange->BeatPosition = 7.0;
   practiceLaterTempoChange->BpmChange = true;
   practiceLaterTempoChange->Bpm = 90.0;
-  practiceMeasure->TimeLines.push_back(practiceLaterTempoChange);
-  practiceChart.Measures.push_back(practiceMeasure);
+  practiceChart.Measures[7]->TimeLines.push_back(practiceLaterTempoChange);
 
   const audio::PlaybackRate slowPlayback{.percent = 75};
   plan = prep_metronome::buildPracticeCountInPlan(
@@ -161,32 +164,95 @@ int main() {
   }
 
   plan = prep_metronome::buildPracticeCountInPlan(
-      phaseChart, 11000000, 8, slowPlayback);
-  ASSERT_EQ(8U, plan.clicks.size(), "mid-measure practice click count");
-  ASSERT_EQ(7000000LL, plan.clicks[0].timeMicros,
-            "mid-measure count-in starts between barlines");
+      phaseChart, 11250000, 4, slowPlayback);
+  ASSERT_EQ(4U, plan.clicks.size(), "mid-beat practice click count");
+  ASSERT_EQ(9500000LL, plan.clicks[0].timeMicros,
+            "mid-beat marker starts on the preceding real beat grid");
+  ASSERT_EQ(11000000LL, plan.clicks[3].timeMicros,
+            "mid-beat marker keeps its partial final-beat gap");
   ASSERT_TRUE(!plan.clicks[0].accent,
-              "mid-measure first click is not accented");
-  ASSERT_TRUE(plan.clicks[2].accent, "next real barline is accented");
-  ASSERT_TRUE(plan.clicks[6].accent, "following real barline is accented");
+              "mid-beat first click is not accented away from a barline");
+  ASSERT_TRUE(plan.clicks[1].accent, "real barline in count-in is accented");
 
   plan = prep_metronome::buildPracticeCountInPlan(
-      phaseChart, 12000000, 8, slowPlayback);
-  ASSERT_EQ(8000000LL, plan.clicks[0].timeMicros,
-            "measure-aligned count-in starts on barline");
+      phaseChart, 11000000, 4, slowPlayback);
+  ASSERT_EQ(9000000LL, plan.clicks[0].timeMicros,
+            "exact-beat marker uses four strictly preceding beats");
+  ASSERT_EQ(10500000LL, plan.clicks[3].timeMicros,
+            "exact-beat marker itself is not emitted as a click");
+  ASSERT_TRUE(plan.clicks[2].accent,
+              "exact-beat count-in preserves barline phase");
+
+  plan = prep_metronome::buildPracticeCountInPlan(
+      phaseChart, 12250000, 8, slowPlayback);
+  ASSERT_EQ(8500000LL, plan.clicks[0].timeMicros,
+            "barline phase is inherited from the chart grid");
+  ASSERT_TRUE(!plan.clicks[0].accent,
+              "first click is not accented unless it is a real barline");
+  ASSERT_TRUE(plan.clicks[3].accent,
+              "first real barline in the span is accented");
+  ASSERT_TRUE(plan.clicks[7].accent,
+              "last real barline in the span is accented");
+
+  bms_parser::Chart tripleMeterChart;
+  tripleMeterChart.Meta.Bpm = 120.0;
+  tripleMeterChart.Meta.GuessedBeatsPerMeasure = 3;
+  for (long long barline = 0; barline <= 4500000; barline += 1500000) {
+    auto *tripleMeasure = new bms_parser::Measure();
+    tripleMeasure->Timing = barline;
+    tripleMeasure->Scale = 0.75;
+    tripleMeterChart.Measures.push_back(tripleMeasure);
+  }
+  plan = prep_metronome::buildPracticeCountInPlan(
+      tripleMeterChart, 3250000, 4, slowPlayback);
+  ASSERT_EQ(1500000LL, plan.clicks[0].timeMicros,
+            "three-beat measure count-in derives from measure scale");
   ASSERT_TRUE(plan.clicks[0].accent,
-              "measure-aligned first click is accented");
-  ASSERT_TRUE(plan.clicks[4].accent,
-              "next measure-aligned barline is accented");
+              "three-beat measure starts remain accented");
+  ASSERT_EQ(3000000LL, plan.clicks[3].timeMicros,
+            "next three-beat barline lands after exactly three clicks");
+  ASSERT_TRUE(plan.clicks[3].accent,
+              "next three-beat measure start is accented");
+
+  bms_parser::Chart tempoGridChart;
+  tempoGridChart.Meta.Bpm = 120.0;
+  tempoGridChart.Meta.GuessedBeatsPerMeasure = 4;
+  auto *tempoMeasure = new bms_parser::Measure();
+  tempoMeasure->Timing = 0;
+  tempoMeasure->Scale = 1.0;
+  auto *tempoStart = new bms_parser::TimeLine(1, false);
+  tempoStart->Timing = 0;
+  tempoStart->BeatPosition = 0.0;
+  tempoStart->Bpm = 120.0;
+  tempoMeasure->TimeLines.push_back(tempoStart);
+  auto *tempoGridChange = new bms_parser::TimeLine(1, false);
+  tempoGridChange->Timing = 1000000;
+  tempoGridChange->BeatPosition = 0.5;
+  tempoGridChange->BpmChange = true;
+  tempoGridChange->Bpm = 60.0;
+  tempoMeasure->TimeLines.push_back(tempoGridChange);
+  tempoGridChart.Measures.push_back(tempoMeasure);
+  auto *tempoSecondMeasure = new bms_parser::Measure();
+  tempoSecondMeasure->Timing = 3000000;
+  tempoSecondMeasure->Scale = 1.0;
+  tempoGridChart.Measures.push_back(tempoSecondMeasure);
+
+  plan = prep_metronome::buildPracticeCountInPlan(
+      tempoGridChart, 3500000, 4, slowPlayback);
+  ASSERT_EQ(60.0, plan.bpm, "marker-active BPM is reported");
+  ASSERT_EQ(500000LL, plan.clicks[0].timeMicros,
+            "count-in walks the real beat grid across a BPM change");
+  ASSERT_EQ(3000000LL, plan.clicks[3].timeMicros,
+            "count-in reaches the next parsed measure start after BPM change");
+  ASSERT_TRUE(plan.clicks[3].accent,
+              "parsed measure start after BPM change is accented");
 
   practiceTempoChange->Bpm = 480.0;
   plan = prep_metronome::buildPracticeCountInPlan(
       practiceChart, 10000000, 4, slowPlayback);
   ASSERT_EQ(480.0, plan.bpm, "marker bpm above heuristic sanity range");
-  ASSERT_EQ(9500000LL, plan.clicks[0].timeMicros,
-            "fast marker first click");
-  ASSERT_EQ(9875000LL, plan.clicks[3].timeMicros,
-            "fast marker last click");
+  ASSERT_EQ(125000LL, plan.beatIntervalMicros,
+            "fast marker beat interval remains unbounded by prep heuristics");
 
   ASSERT_EQ(-2000000LL,
             gameplay_timing::visualTimeMicros(-2000000LL, 0LL),

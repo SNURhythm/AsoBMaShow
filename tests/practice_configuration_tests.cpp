@@ -1,5 +1,6 @@
 #include "audio/PlaybackRate.h"
 #include "practice/PracticeConfiguration.h"
+#include "scene/ChartListenStart.h"
 
 #include <iostream>
 #include <ranges>
@@ -38,6 +39,20 @@ void testFreshCountInUsesChartMeasureSize() {
          "fresh 4/4 practice defaults to four count-in beats");
   expect(practice::defaultCountInBeatsForChart(0) == 4,
          "invalid chart measure size falls back to four beats");
+}
+
+void testListenUsesPracticeStartInsteadOfCursorOrEndMarker() {
+  practice::Configuration configuration{
+      .startMicros = 2'250'000,
+      .endMicros = 9'500'000,
+  };
+
+  expect(chart_viewer_listen::resolveStartMicros(
+             configuration, 9'500'000, practice::Marker::End) == 2'250'000,
+         "Listen resolves the configured practice start when the end marker "
+         "is active and the cursor is elsewhere");
+  expect(configuration.startMicros == 2'250'000,
+         "Listen start resolution preserves the exact visible start marker");
 }
 
 void testConfigurationSanitization() {
@@ -165,6 +180,7 @@ void testPlayabilityIssuesExplainBlockingConfiguration() {
 int main() {
   testPlaybackRateConversions();
   testFreshCountInUsesChartMeasureSize();
+  testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();
   testGaugeAutoShiftSanitizationUsesExHardSeed();

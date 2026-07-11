@@ -1,5 +1,6 @@
 #include "PrepMetronome.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -12,14 +13,17 @@ constexpr int kMaxBeatsPerMeasure = 16;
 constexpr double kMinSaneBpm = 30.0;
 constexpr double kMaxSaneBpm = 400.0;
 constexpr double kMicrosPerMinute = 60000000.0;
-constexpr long long kBarlineToleranceMicros = 32;
+constexpr double kMicrosPerBmsMeasure = 240000000.0;
+constexpr double kBeatPositionStep = 0.25;
+constexpr double kBeatPositionTolerance = 0.000001;
 
-bool isMeasureStart(const bms_parser::Chart &chart, long long timeMicros) {
-  return std::ranges::any_of(chart.Measures, [timeMicros](const auto *measure) {
-    return measure != nullptr &&
-           std::abs(measure->Timing - timeMicros) <=
-               kBarlineToleranceMicros;
-  });
+struct ChartBeat {
+  long long timeMicros = 0;
+  bool accent = false;
+};
+
+bool isPositiveBpm(double bpm) {
+  return std::isfinite(bpm) && bpm > 0.0;
 }
 } // namespace
 
@@ -95,6 +99,92 @@ double bpmAtChartTime(const bms_parser::Chart &chart, long long timeMicros) {
   return bpm;
 }
 
+namespace {
+long long beatTimeInMeasure(const bms_parser::Chart &chart,
+                            const bms_parser::Measure &measure,
+                            double measureBeatPosition,
+                            double localBeatPosition) {
+  const double targetBeatPosition = measureBeatPosition + localBeatPosition;
+  double bpm = bpmAtChartTime(chart, measure.Timing);
+  long long cursorTimeMicros = measure.Timing;
+  double cursorBeatPosition = measureBeatPosition;
+
+  for (const auto *timeline : measure.TimeLines) {
+    if (timeline == nullptr ||
+        timeline->BeatPosition + kBeatPositionTolerance <
+            cursorBeatPosition ||
+        timeline->BeatPosition >
+            measureBeatPosition + measure.Scale + kBeatPositionTolerance) {
+      continue;
+    }
+    if (targetBeatPosition <=
+        timeline->BeatPosition + kBeatPositionTolerance) {
+      if (std::abs(targetBeatPosition - timeline->BeatPosition) <=
+          kBeatPositionTolerance) {
+        return timeline->Timing;
+      }
+      break;
+    }
+
+    cursorTimeMicros =
+        timeline->Timing +
+        std::max(0LL, static_cast<long long>(timeline->GetStopDuration()));
+    cursorBeatPosition = timeline->BeatPosition;
+    if (isPositiveBpm(timeline->Bpm)) {
+      bpm = timeline->Bpm;
+    }
+  }
+
+  if (!isPositiveBpm(bpm)) {
+    bpm = kDefaultBpm;
+  }
+  const double beatDistance = targetBeatPosition - cursorBeatPosition;
+  return cursorTimeMicros + static_cast<long long>(std::llround(
+                                kMicrosPerBmsMeasure * beatDistance / bpm));
+}
+
+std::vector<ChartBeat> chartBeatsBefore(const bms_parser::Chart &chart,
+                                        long long startMicros) {
+  std::vector<ChartBeat> beats;
+  double measureBeatPosition = 0.0;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr || !std::isfinite(measure->Scale) ||
+        measure->Scale <= 0.0) {
+      continue;
+    }
+
+    for (double localBeatPosition = 0.0;
+         localBeatPosition < measure->Scale - kBeatPositionTolerance;
+         localBeatPosition += kBeatPositionStep) {
+      const long long timeMicros =
+          localBeatPosition <= kBeatPositionTolerance
+              ? measure->Timing
+              : beatTimeInMeasure(chart, *measure, measureBeatPosition,
+                                  localBeatPosition);
+      if (timeMicros < startMicros) {
+        beats.push_back({.timeMicros = timeMicros,
+                         .accent = localBeatPosition <=
+                                   kBeatPositionTolerance});
+      }
+    }
+    measureBeatPosition += measure->Scale;
+  }
+
+  std::ranges::sort(beats, {}, &ChartBeat::timeMicros);
+  std::vector<ChartBeat> uniqueBeats;
+  uniqueBeats.reserve(beats.size());
+  for (const auto &beat : beats) {
+    if (!uniqueBeats.empty() &&
+        uniqueBeats.back().timeMicros == beat.timeMicros) {
+      uniqueBeats.back().accent = uniqueBeats.back().accent || beat.accent;
+    } else {
+      uniqueBeats.push_back(beat);
+    }
+  }
+  return uniqueBeats;
+}
+} // namespace
+
 int effectiveBeatsPerMeasure(const bms_parser::ChartMeta &meta) {
   if (meta.GuessedBeatsPerMeasure >= kMinBeatsPerMeasure &&
       meta.GuessedBeatsPerMeasure <= kMaxBeatsPerMeasure) {
@@ -158,18 +248,31 @@ PrepMetronomePlan buildPracticeCountInPlan(
   plan.bpm = bpmAtChartTime(chart, startMicros);
   plan.beatsPerMeasure = effectiveBeatsPerMeasure(chart.Meta);
   plan.beatIntervalMicros = beatIntervalMicrosForBpm(plan.bpm);
-  plan.leadInMicros =
-      plan.beatIntervalMicros * static_cast<long long>(countInBeats);
-  plan.startTimeMicros = startMicros - plan.leadInMicros;
-  plan.clicks.reserve(static_cast<std::size_t>(countInBeats));
-  for (int beat = 0; beat < countInBeats; ++beat) {
-    plan.clicks.push_back(
-        {.timeMicros = plan.startTimeMicros +
-                       plan.beatIntervalMicros * static_cast<long long>(beat),
-         .accent = isMeasureStart(
-             chart, plan.startTimeMicros +
-                        plan.beatIntervalMicros * static_cast<long long>(beat))});
+  auto beats = chartBeatsBefore(chart, startMicros);
+  if (beats.empty()) {
+    beats.reserve(static_cast<std::size_t>(countInBeats));
+    for (int beat = countInBeats; beat > 0; --beat) {
+      beats.push_back(
+          {.timeMicros = startMicros -
+                         plan.beatIntervalMicros * static_cast<long long>(beat),
+           .accent = false});
+    }
   }
+  while (beats.size() < static_cast<std::size_t>(countInBeats)) {
+    beats.insert(beats.begin(),
+                 {.timeMicros = beats.front().timeMicros -
+                                plan.beatIntervalMicros,
+                  .accent = false});
+  }
+
+  const auto firstBeat = beats.end() - countInBeats;
+  plan.clicks.reserve(static_cast<std::size_t>(countInBeats));
+  for (auto beat = firstBeat; beat != beats.end(); ++beat) {
+    plan.clicks.push_back(
+        {.timeMicros = beat->timeMicros, .accent = beat->accent});
+  }
+  plan.startTimeMicros = plan.clicks.front().timeMicros;
+  plan.leadInMicros = startMicros - plan.startTimeMicros;
 
   // Clicks stay on the chart timeline. The rate-scaled audio clock converts
   // their chart-time spacing to real-time spacing during playback.

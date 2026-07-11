@@ -1,4 +1,5 @@
 #include "ChartViewerScene.h"
+#include "ChartListenStart.h"
 
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
@@ -4107,7 +4108,10 @@ void ChartViewerScene::startListeningFromSelection() {
     return;
   }
 
-  const long long selectedTime = canvasView->getSelectedTimeMicros();
+  const auto practiceRange = canvasView->getPracticeRange();
+  const long long selectedTime = chart_viewer_listen::resolveStartMicros(
+      practiceConfiguration, canvasView->getSelectedTimeMicros(),
+      practiceRange.active);
   if (statusText != nullptr) {
     statusText->setText(
         listenAudioLoaded
