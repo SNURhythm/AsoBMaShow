@@ -3520,9 +3520,10 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     folders.push_back(coursesRootItem);
     if (coursesRootItem.expanded) {
       const auto makeCourseItem =
-          [](int courseId, int tableId, const std::string &groupName,
-             const std::string &level, const std::string &name,
-             const std::string &constraintJson, int depth) {
+          [](int courseId, const std::string &courseKey, int tableId,
+             const std::string &groupName, const std::string &level,
+             const std::string &name, const std::string &constraintJson,
+             int depth) {
         const std::string courseLabel = level.empty() ? name : level;
         return LibraryFolderItem{
             .key = folderKeyForCourse(courseId),
@@ -3531,6 +3532,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
             .depth = depth,
             .count = -1,
             .courseId = courseId,
+            .courseKey = courseKey,
             .courseTableId = tableId,
             .courseGroupName = groupName,
             .courseConstraintJson = constraintJson,
@@ -3538,9 +3540,9 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       };
       const auto makeCourseInfoItem = [&](const DifficultyCourseInfo &course,
                                           int depth) {
-        return makeCourseItem(course.id, course.tableId, course.groupName,
-                              course.level, course.name, course.constraintJson,
-                              depth);
+        return makeCourseItem(course.id, course.courseKey, course.tableId,
+                              course.groupName, course.level, course.name,
+                              course.constraintJson, depth);
       };
 
       for (const auto &table : courseTables) {
@@ -3580,8 +3582,9 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
                group.singletonCourseLevel == label);
           if (duplicateSingletonGroup) {
             folders.push_back(makeCourseItem(
-                group.singletonCourseId, group.tableId, group.groupName,
-                group.singletonCourseLevel, group.singletonCourseName,
+                group.singletonCourseId, group.singletonCourseKey,
+                group.tableId, group.groupName, group.singletonCourseLevel,
+                group.singletonCourseName,
                 group.singletonCourseConstraintJson, 2));
             continue;
           }
@@ -4929,6 +4932,7 @@ void MainMenuScene::startSelectedCourse() {
 
   auto session = std::make_shared<CoursePlaySession>();
   session->courseId = activeFolder.courseId;
+  session->courseKey = activeFolder.courseKey;
   session->courseName =
       activeFolder.courseGroupName.empty()
           ? activeFolder.label

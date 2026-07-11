@@ -183,6 +183,7 @@ private:
     int tableId = 0;
     std::string tableLevel;
     int courseId = 0;
+    std::string courseKey;
     int courseTableId = 0;
     std::string courseGroupName;
     std::string courseConstraintJson;

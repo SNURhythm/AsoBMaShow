@@ -1,5 +1,6 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/ChartDBHelper.h"
+#include "../src/CoursePlaySession.h"
 #include "../src/ProfileDatabaseActivity.h"
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileSessionCoordinator.h"
@@ -10,6 +11,7 @@
 #include "../src/scene/MainMenuProfileSelections.h"
 #include "../src/sqlite3.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -115,6 +117,19 @@ int queryInt(sqlite3 *database, const std::string &sql) {
   const int value = sqlite3_step(statement) == SQLITE_ROW
                         ? sqlite3_column_int(statement, 0)
                         : 0;
+  sqlite3_finalize(statement);
+  return value;
+}
+
+std::string queryString(sqlite3 *database, const std::string &sql) {
+  sqlite3_stmt *statement = nullptr;
+  if (sqlite3_prepare_v2(database, sql.c_str(), -1, &statement, nullptr) !=
+      SQLITE_OK) {
+    return {};
+  }
+  const std::string value = sqlite3_step(statement) == SQLITE_ROW
+                                ? sqliteColumnString(statement, 0)
+                                : std::string();
   sqlite3_finalize(statement);
   return value;
 }
@@ -1285,6 +1300,255 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
          "B");
   activeScore.SetDatabasePath(previousScorePath);
 }
+
+void testDifficultyCourseKeysTrackCanonicalDefinitions() {
+  Database chartDatabase = openDatabase(":memory:");
+  expect(chartDatabase != nullptr, "difficulty course key database opens");
+  if (!chartDatabase) {
+    return;
+  }
+
+  constexpr std::string_view md5A = "11111111111111111111111111111111";
+  constexpr std::string_view md5B = "22222222222222222222222222222222";
+  constexpr std::string_view shaA =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  constexpr std::string_view shaB =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  constexpr const char *sourceUrl = "https://example.test/table.json";
+  const std::vector<course_identity::ChartIdentity> md5Definition = {
+      {.md5 = std::string(md5A)}, {.md5 = std::string(md5B)}};
+  const std::vector<course_identity::ChartIdentity> enrichedDefinition = {
+      {.sha256 = std::string(shaA), .md5 = std::string(md5A)},
+      {.sha256 = std::string(shaB), .md5 = std::string(md5B)}};
+  const std::string enrichedUnconstrainedKey =
+      course_identity::makeCourseKey(enrichedDefinition, "[]");
+
+  const auto makeChartJson = [](std::string_view md5, std::string_view sha,
+                                std::string_view level,
+                                std::string_view displayToken,
+                                bool includeSha) {
+    std::string result = "{\"md5\":\"" + std::string(md5) + "\"";
+    if (includeSha) {
+      result += ",\"sha256\":\"" + std::string(sha) + "\"";
+    }
+    result += ",\"level\":\"" + std::string(level) +
+              "\",\"title\":\"Chart " + std::string(displayToken) +
+              "\",\"artist\":\"Artist " + std::string(displayToken) +
+              "\",\"url\":\"https://example.test/" +
+              std::string(displayToken) + ".zip\"}";
+    return result;
+  };
+  const auto makeHeader = [&](std::string_view tableName,
+                              std::string_view courseName,
+                              std::string_view constraintJson,
+                              std::string_view displayToken, bool includeSha,
+                              bool reverseCharts = false) {
+    const std::string first =
+        makeChartJson(md5A, shaA, "1", displayToken, includeSha);
+    const std::string second =
+        makeChartJson(md5B, shaB, "2", displayToken, includeSha);
+    const std::string charts =
+        reverseCharts ? second + "," + first : first + "," + second;
+    return "{\"name\":\"" + std::string(tableName) +
+           "\",\"symbol\":\"L\",\"data_url\":\"data.json\","
+           "\"course\":[{\"name\":\"" +
+           std::string(courseName) + "\",\"constraint\":" +
+           std::string(constraintJson) + ",\"charts\":[" + charts + "]}]}";
+  };
+  const auto makeData = [&](std::string_view displayToken, bool includeSha) {
+    return "[" + makeChartJson(md5A, shaA, "1", displayToken, includeSha) +
+           "," + makeChartJson(md5B, shaB, "2", displayToken, includeSha) +
+           "]";
+  };
+
+  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
+  expect(chartDb.ImportDifficultyTable(
+             chartDatabase.get(),
+             makeHeader("Original Table", "Original Group L1", "[]",
+                        "initial", false),
+             makeData("initial", false), sourceUrl),
+         "initial difficulty table import succeeds");
+  const int initialCourseId = queryInt(
+      chartDatabase.get(), "SELECT id FROM difficulty_courses LIMIT 1");
+  expect(initialCourseId > 0, "initial difficulty course receives an id");
+  const std::string initialCourseKey = queryString(
+      chartDatabase.get(), "SELECT course_key FROM difficulty_courses LIMIT 1");
+  expect(initialCourseKey ==
+             course_identity::makeCourseKey(md5Definition, "[]"),
+         "initial difficulty course receives its ordered stored content key");
+
+  expect(chartDb.CreateChartMetaTable(chartDatabase.get()),
+         "course definition local chart schema opens");
+  expect(execute(chartDatabase.get(),
+                 "INSERT INTO chart_meta(path,md5,sha256) VALUES "
+                 "('local-a.bms','" +
+                     std::string(md5A) + "','" + std::string(shaA) +
+                     "'),('local-b.bms','" + std::string(md5B) + "','" +
+                     std::string(shaB) + "')"),
+         "local chart metadata supplies stronger course hash evidence");
+  const auto initialDefinitions =
+      chartDb.SelectDifficultyCourseDefinitions(chartDatabase.get());
+  const auto initialDefinition =
+      std::find_if(initialDefinitions.begin(), initialDefinitions.end(),
+                   [initialCourseId](const auto &definition) {
+                     return definition.courseId == initialCourseId;
+                   });
+  expect(initialDefinition != initialDefinitions.end(),
+         "stored course definition is publicly selectable");
+  if (initialDefinition != initialDefinitions.end()) {
+    expect(initialDefinition->courseKey == initialCourseKey,
+           "selected course definition exposes its stored key");
+    expect(initialDefinition->charts.size() == 2,
+           "selected course definition preserves chart order");
+    if (initialDefinition->charts.size() == 2) {
+      expect(initialDefinition->charts[0].md5 == md5A &&
+                 initialDefinition->charts[0].sha256 == shaA &&
+                 initialDefinition->charts[1].md5 == md5B &&
+                 initialDefinition->charts[1].sha256 == shaB,
+             "selected definitions combine stored and resolved local hashes");
+    }
+  }
+
+  for (const std::string gradeConstraint :
+       {"grade", "grade_mirror", "grade_random"}) {
+    const std::string displayToken = "renamed-" + gradeConstraint;
+    expect(chartDb.ImportDifficultyTable(
+               chartDatabase.get(),
+               makeHeader("Renamed " + gradeConstraint,
+                          "Renamed " + gradeConstraint + " L9",
+                          "[\"" + gradeConstraint + "\"]", displayToken,
+                          true),
+               makeData(displayToken, true), sourceUrl),
+           gradeConstraint + " difficulty course refresh succeeds");
+    expect(queryInt(chartDatabase.get(),
+                    "SELECT id FROM difficulty_courses LIMIT 1") ==
+               initialCourseId,
+           gradeConstraint +
+               " and display metadata preserve the numeric course id");
+    expect(queryString(chartDatabase.get(),
+                       "SELECT course_key FROM difficulty_courses LIMIT 1") ==
+               initialCourseKey,
+           gradeConstraint +
+               " and display metadata preserve the stored course key");
+  }
+
+  const int tableId = queryInt(
+      chartDatabase.get(), "SELECT table_id FROM difficulty_courses LIMIT 1");
+  const auto selectedCourses = chartDb.SelectDifficultyCourses(
+      chartDatabase.get(), tableId, "Renamed grade_random");
+  expect(selectedCourses.size() == 1 &&
+             selectedCourses.front().courseKey == initialCourseKey,
+         "difficulty course metadata exposes the canonical key");
+  const auto selectedGroups =
+      chartDb.SelectDifficultyCourseGroups(chartDatabase.get(), tableId);
+  const auto singletonGroup =
+      std::find_if(selectedGroups.begin(), selectedGroups.end(),
+                   [](const auto &group) { return group.courseCount == 1; });
+  expect(singletonGroup != selectedGroups.end() &&
+             singletonGroup->singletonCourseKey == initialCourseKey,
+         "singleton course group metadata exposes the canonical key");
+
+  CoursePlaySession selectedSession;
+  selectedSession.courseId = initialCourseId + 1000;
+  selectedSession.courseKey = initialCourseKey;
+  expect(selectedSession.courseId != initialCourseId &&
+             selectedSession.courseKey == initialCourseKey,
+         "course play session carries a selected key independently of id");
+
+  expect(chartDb.ImportDifficultyTable(
+             chartDatabase.get(),
+             makeHeader("Order Change", "Order Change L1",
+                        "[\"grade_random\"]", "order", true, true),
+             makeData("order", true), sourceUrl),
+         "reordered difficulty course import succeeds");
+  std::vector<course_identity::ChartIdentity> reversedDefinition =
+      enrichedDefinition;
+  std::ranges::reverse(reversedDefinition);
+  const std::string reorderedCourseKey = queryString(
+      chartDatabase.get(), "SELECT course_key FROM difficulty_courses LIMIT 1");
+  expect(reorderedCourseKey == course_identity::makeCourseKey(
+                                    reversedDefinition,
+                                    "[\"grade_random\"]") &&
+             reorderedCourseKey != enrichedUnconstrainedKey,
+         "changed chart order receives a new course key");
+
+  const std::vector<std::pair<std::string, std::string>> identityConstraints = {
+      {"gauge", "[\"gauge_7k\"]"},
+      {"no-speed", "[\"no_speed\"]"},
+      {"judgement", "[\"no_good\"]"},
+      {"forced-LN", "[\"ln\"]"},
+  };
+  for (const auto &[label, constraintJson] : identityConstraints) {
+    expect(chartDb.ImportDifficultyTable(
+               chartDatabase.get(),
+               makeHeader("Constraint " + label, "Constraint " + label +
+                                                     " L1",
+                          constraintJson, label, true),
+               makeData(label, true), sourceUrl),
+           label + " constrained difficulty course import succeeds");
+    const std::string constrainedCourseKey = queryString(
+        chartDatabase.get(),
+        "SELECT course_key FROM difficulty_courses LIMIT 1");
+    expect(constrainedCourseKey == course_identity::makeCourseKey(
+                                       enrichedDefinition, constraintJson) &&
+               constrainedCourseKey != enrichedUnconstrainedKey,
+           label + " constraint receives a new course key");
+  }
+}
+
+void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
+  Database chartDatabase = openDatabase(":memory:");
+  expect(chartDatabase != nullptr, "legacy difficulty course database opens");
+  if (!chartDatabase) {
+    return;
+  }
+
+  expect(execute(chartDatabase.get(),
+                 "CREATE TABLE difficulty_courses("
+                 "id INTEGER PRIMARY KEY AUTOINCREMENT,table_id INTEGER NOT "
+                 "NULL,name TEXT NOT NULL,group_name TEXT NOT NULL DEFAULT '',"
+                 "level TEXT NOT NULL DEFAULT '',constraint_json TEXT NOT NULL "
+                 "DEFAULT '[]',sort_order INTEGER NOT NULL DEFAULT 0);"
+                 "CREATE TABLE difficulty_course_entries("
+                 "id INTEGER PRIMARY KEY AUTOINCREMENT,course_id INTEGER NOT "
+                 "NULL,level TEXT NOT NULL DEFAULT '',md5 TEXT NOT NULL DEFAULT "
+                 "'',sha256 TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT "
+                 "NULL DEFAULT 0);"
+                 "INSERT INTO difficulty_courses(id,table_id,name,"
+                 "constraint_json,sort_order) VALUES(42,7,'Legacy','[]',0);"
+                 "INSERT INTO difficulty_course_entries(course_id,md5,"
+                 "sort_order) VALUES(42,'11111111111111111111111111111111',0),"
+                 "(42,'22222222222222222222222222222222',1);"),
+         "legacy difficulty course schema is prepared");
+
+  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
+  expect(chartDb.CreateDifficultyTableTables(chartDatabase.get()),
+         "legacy difficulty course schema migrates");
+  expect(queryInt(chartDatabase.get(),
+                  "SELECT COUNT(*) FROM difficulty_courses") == 1 &&
+             queryInt(chartDatabase.get(),
+                      "SELECT id FROM difficulty_courses LIMIT 1") == 42,
+         "course key migration does not delete legacy course rows");
+  expect(!queryString(chartDatabase.get(),
+                      "SELECT course_key FROM difficulty_courses WHERE id=42")
+              .empty(),
+         "course key migration backfills blank legacy keys");
+  expect(queryInt(chartDatabase.get(),
+                  "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND "
+                  "name='idx_difficulty_courses_key'") == 1,
+         "course key migration creates the lookup index");
+
+  expect(execute(chartDatabase.get(),
+                 "UPDATE difficulty_courses SET course_key='retained-key' "
+                 "WHERE id=42"),
+         "legacy nonempty key is installed");
+  expect(chartDb.CreateDifficultyTableTables(chartDatabase.get()),
+         "difficulty course schema migration is safely repeatable");
+  expect(queryString(chartDatabase.get(),
+                     "SELECT course_key FROM difficulty_courses WHERE id=42") ==
+             "retained-key",
+         "blank-key backfill preserves an existing nonempty key");
+}
 } // namespace
 
 int main() {
@@ -1302,6 +1566,8 @@ int main() {
   testScoreAttachmentPreparationOwnsActivePathSnapshot();
   testPreparedScoreQueryGuardLivesThroughDependentQuery();
   testRealChartDbScoreQueryRetainsPreparedAttachmentGuard();
+  testDifficultyCourseKeysTrackCanonicalDefinitions();
+  testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows();
 
   if (failures != 0) {
     std::cerr << failures << " profile switch test(s) failed.\n";

@@ -267,6 +267,7 @@ struct CoursePlayChartResult {
 
 struct CoursePlaySession {
   int courseId = 0;
+  std::string courseKey;
   std::string courseName;
   std::string courseGroupName;
   std::string constraintJson;
