@@ -247,6 +247,58 @@ int main() {
   ASSERT_TRUE(plan.clicks[3].accent,
               "parsed measure start after BPM change is accented");
 
+  bms_parser::Chart earlyTempoChangeChart;
+  earlyTempoChangeChart.Meta.Bpm = 120.0;
+  earlyTempoChangeChart.Meta.GuessedBeatsPerMeasure = 4;
+  auto *earlyTempoMeasure = new bms_parser::Measure();
+  earlyTempoMeasure->Timing = 0;
+  earlyTempoMeasure->Scale = 1.0;
+  auto *earlyTempoChange = new bms_parser::TimeLine(1, false);
+  earlyTempoChange->Timing = 500000;
+  earlyTempoChange->BeatPosition = 0.25;
+  earlyTempoChange->BpmChange = true;
+  earlyTempoChange->Bpm = 240.0;
+  earlyTempoMeasure->TimeLines.push_back(earlyTempoChange);
+  earlyTempoChangeChart.Measures.push_back(earlyTempoMeasure);
+
+  plan = prep_metronome::buildPracticeCountInPlan(
+      earlyTempoChangeChart, 700000, 4, slowPlayback);
+  ASSERT_EQ(240.0, plan.bpm,
+            "early change remains the BPM active at the marker");
+  ASSERT_EQ(-1000000LL, plan.clicks[0].timeMicros,
+            "pre-chart count-in continues the initial tempo grid");
+  ASSERT_EQ(-500000LL, plan.clicks[1].timeMicros,
+            "pre-chart spacing uses the timing segment before chart zero");
+  ASSERT_EQ(0LL, plan.clicks[2].timeMicros,
+            "pre-chart extrapolation joins the first parsed beat");
+  ASSERT_EQ(500000LL, plan.clicks[3].timeMicros,
+            "early BPM change beat remains strictly before the marker");
+
+  bms_parser::Chart stopGridChart;
+  stopGridChart.Meta.Bpm = 120.0;
+  stopGridChart.Meta.GuessedBeatsPerMeasure = 4;
+  auto *stopMeasure = new bms_parser::Measure();
+  stopMeasure->Timing = 0;
+  stopMeasure->Scale = 1.0;
+  auto *stopTimeline = new bms_parser::TimeLine(1, false);
+  stopTimeline->Timing = 500000;
+  stopTimeline->BeatPosition = 0.25;
+  stopTimeline->Bpm = 120.0;
+  stopTimeline->StopLength = 48.0;
+  stopMeasure->TimeLines.push_back(stopTimeline);
+  stopGridChart.Measures.push_back(stopMeasure);
+
+  plan = prep_metronome::buildPracticeCountInPlan(
+      stopGridChart, 2250000, 4, slowPlayback);
+  ASSERT_EQ(0LL, plan.clicks[0].timeMicros,
+            "stop count-in retains the measure-start beat");
+  ASSERT_EQ(500000LL, plan.clicks[1].timeMicros,
+            "stop begins after its grid click");
+  ASSERT_EQ(1500000LL, plan.clicks[2].timeMicros,
+            "next grid click includes the parsed stop duration");
+  ASSERT_EQ(2000000LL, plan.clicks[3].timeMicros,
+            "following grid click resumes the active BPM spacing");
+
   practiceTempoChange->Bpm = 480.0;
   plan = prep_metronome::buildPracticeCountInPlan(
       practiceChart, 10000000, 4, slowPlayback);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <limits>
 
 namespace prep_metronome {
@@ -77,111 +78,151 @@ long long beatIntervalMicrosForBpm(double bpm) {
   return std::max(1LL, static_cast<long long>(std::llround(interval)));
 }
 
-double bpmAtChartTime(const bms_parser::Chart &chart, long long timeMicros) {
-  double bpm = std::isfinite(chart.Meta.Bpm) && chart.Meta.Bpm > 0.0
-                   ? chart.Meta.Bpm
-                   : effectiveBpm(chart.Meta,
-                                  firstMeasureBpmCandidate(chart));
-  for (const auto *measure : chart.Measures) {
-    if (measure == nullptr) {
-      continue;
-    }
-    for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr || timeline->Timing > timeMicros) {
-        continue;
-      }
-      if (timeline->BpmChange && std::isfinite(timeline->Bpm) &&
-          timeline->Bpm > 0.0) {
-        bpm = timeline->Bpm;
-      }
-    }
-  }
-  return bpm;
-}
-
 namespace {
-long long beatTimeInMeasure(const bms_parser::Chart &chart,
-                            const bms_parser::Measure &measure,
-                            double measureBeatPosition,
-                            double localBeatPosition) {
-  const double targetBeatPosition = measureBeatPosition + localBeatPosition;
-  double bpm = bpmAtChartTime(chart, measure.Timing);
-  long long cursorTimeMicros = measure.Timing;
-  double cursorBeatPosition = measureBeatPosition;
+struct ChartBeatWalk {
+  std::deque<ChartBeat> beats;
+  double markerBpm = kDefaultBpm;
+  double initialGridBpm = kDefaultBpm;
+  std::optional<long long> firstGridTimeMicros;
+};
 
-  for (const auto *timeline : measure.TimeLines) {
-    if (timeline == nullptr ||
-        timeline->BeatPosition + kBeatPositionTolerance <
-            cursorBeatPosition ||
-        timeline->BeatPosition >
-            measureBeatPosition + measure.Scale + kBeatPositionTolerance) {
-      continue;
-    }
-    if (targetBeatPosition <=
-        timeline->BeatPosition + kBeatPositionTolerance) {
-      if (std::abs(targetBeatPosition - timeline->BeatPosition) <=
-          kBeatPositionTolerance) {
-        return timeline->Timing;
-      }
-      break;
-    }
-
-    cursorTimeMicros =
-        timeline->Timing +
-        std::max(0LL, static_cast<long long>(timeline->GetStopDuration()));
-    cursorBeatPosition = timeline->BeatPosition;
-    if (isPositiveBpm(timeline->Bpm)) {
-      bpm = timeline->Bpm;
-    }
-  }
-
-  if (!isPositiveBpm(bpm)) {
-    bpm = kDefaultBpm;
-  }
-  const double beatDistance = targetBeatPosition - cursorBeatPosition;
-  return cursorTimeMicros + static_cast<long long>(std::llround(
-                                kMicrosPerBmsMeasure * beatDistance / bpm));
+double initialChartBpm(const bms_parser::Chart &chart) {
+  return isPositiveBpm(chart.Meta.Bpm)
+             ? chart.Meta.Bpm
+             : effectiveBpm(chart.Meta, firstMeasureBpmCandidate(chart));
 }
 
-std::vector<ChartBeat> chartBeatsBefore(const bms_parser::Chart &chart,
-                                        long long startMicros) {
-  std::vector<ChartBeat> beats;
+ChartBeatWalk walkChartBeatsBefore(const bms_parser::Chart &chart,
+                                   long long startMicros,
+                                   std::size_t beatLimit) {
+  ChartBeatWalk result;
+  double activeBpm = initialChartBpm(chart);
+  result.markerBpm = activeBpm;
+  result.initialGridBpm = activeBpm;
   double measureBeatPosition = 0.0;
+
+  const auto appendBeat = [&result, beatLimit](ChartBeat beat) {
+    if (!result.beats.empty() &&
+        result.beats.back().timeMicros == beat.timeMicros) {
+      result.beats.back().accent = result.beats.back().accent || beat.accent;
+      return;
+    }
+    result.beats.push_back(beat);
+    if (result.beats.size() > beatLimit) {
+      result.beats.pop_front();
+    }
+  };
+
   for (const auto *measure : chart.Measures) {
     if (measure == nullptr || !std::isfinite(measure->Scale) ||
         measure->Scale <= 0.0) {
       continue;
     }
 
+    long long timingCursorMicros = measure->Timing;
+    double timingCursorBeatPosition = measureBeatPosition;
+    std::size_t timelineIndex = 0;
+    const auto processTimeline = [&](const bms_parser::TimeLine &timeline) {
+      timingCursorMicros =
+          timeline.Timing +
+          std::max(0LL, static_cast<long long>(timeline.GetStopDuration()));
+      timingCursorBeatPosition = timeline.BeatPosition;
+      if (timeline.BpmChange && isPositiveBpm(timeline.Bpm)) {
+        activeBpm = timeline.Bpm;
+      }
+    };
+
     for (double localBeatPosition = 0.0;
          localBeatPosition < measure->Scale - kBeatPositionTolerance;
          localBeatPosition += kBeatPositionStep) {
-      const long long timeMicros =
-          localBeatPosition <= kBeatPositionTolerance
-              ? measure->Timing
-              : beatTimeInMeasure(chart, *measure, measureBeatPosition,
-                                  localBeatPosition);
-      if (timeMicros < startMicros) {
-        beats.push_back({.timeMicros = timeMicros,
-                         .accent = localBeatPosition <=
-                                   kBeatPositionTolerance});
+      const double targetBeatPosition =
+          measureBeatPosition + localBeatPosition;
+      while (timelineIndex < measure->TimeLines.size()) {
+        const auto *timeline = measure->TimeLines[timelineIndex];
+        if (timeline == nullptr ||
+            timeline->BeatPosition + kBeatPositionTolerance <
+                timingCursorBeatPosition) {
+          ++timelineIndex;
+          continue;
+        }
+        if (timeline->BeatPosition + kBeatPositionTolerance >=
+            targetBeatPosition) {
+          break;
+        }
+        if (timeline->Timing > startMicros) {
+          result.markerBpm = activeBpm;
+          return result;
+        }
+        processTimeline(*timeline);
+        ++timelineIndex;
       }
+
+      if (!isPositiveBpm(activeBpm)) {
+        activeBpm = kDefaultBpm;
+      }
+      long long timeMicros = measure->Timing;
+      if (localBeatPosition > kBeatPositionTolerance) {
+        const double beatDistance =
+            targetBeatPosition - timingCursorBeatPosition;
+        timeMicros = timingCursorMicros +
+                     static_cast<long long>(std::llround(
+                         kMicrosPerBmsMeasure * beatDistance / activeBpm));
+      }
+
+      const bool firstGridBeat = !result.firstGridTimeMicros.has_value();
+      if (firstGridBeat) {
+        result.firstGridTimeMicros = timeMicros;
+      }
+
+      while (timelineIndex < measure->TimeLines.size()) {
+        const auto *timeline = measure->TimeLines[timelineIndex];
+        if (timeline == nullptr ||
+            timeline->BeatPosition + kBeatPositionTolerance <
+                targetBeatPosition) {
+          ++timelineIndex;
+          continue;
+        }
+        if (std::abs(timeline->BeatPosition - targetBeatPosition) >
+            kBeatPositionTolerance) {
+          break;
+        }
+        if (timeline->Timing <= startMicros) {
+          timeMicros = timeline->Timing;
+          processTimeline(*timeline);
+        }
+        ++timelineIndex;
+      }
+
+      if (firstGridBeat) {
+        result.firstGridTimeMicros = timeMicros;
+        result.initialGridBpm = activeBpm;
+      }
+      if (timeMicros < startMicros) {
+        appendBeat({.timeMicros = timeMicros,
+                    .accent = localBeatPosition <=
+                              kBeatPositionTolerance});
+      } else {
+        result.markerBpm = activeBpm;
+        return result;
+      }
+    }
+
+    while (timelineIndex < measure->TimeLines.size()) {
+      const auto *timeline = measure->TimeLines[timelineIndex++];
+      if (timeline == nullptr) {
+        continue;
+      }
+      if (timeline->Timing > startMicros) {
+        result.markerBpm = activeBpm;
+        return result;
+      }
+      processTimeline(*timeline);
     }
     measureBeatPosition += measure->Scale;
   }
 
-  std::ranges::sort(beats, {}, &ChartBeat::timeMicros);
-  std::vector<ChartBeat> uniqueBeats;
-  uniqueBeats.reserve(beats.size());
-  for (const auto &beat : beats) {
-    if (!uniqueBeats.empty() &&
-        uniqueBeats.back().timeMicros == beat.timeMicros) {
-      uniqueBeats.back().accent = uniqueBeats.back().accent || beat.accent;
-    } else {
-      uniqueBeats.push_back(beat);
-    }
-  }
-  return uniqueBeats;
+  result.markerBpm = activeBpm;
+  return result;
 }
 } // namespace
 
@@ -245,31 +286,37 @@ PrepMetronomePlan buildPracticeCountInPlan(
   }
 
   plan.enabled = true;
-  plan.bpm = bpmAtChartTime(chart, startMicros);
+  auto beatWalk = walkChartBeatsBefore(
+      chart, startMicros, static_cast<std::size_t>(countInBeats));
+  plan.bpm = beatWalk.markerBpm;
   plan.beatsPerMeasure = effectiveBeatsPerMeasure(chart.Meta);
   plan.beatIntervalMicros = beatIntervalMicrosForBpm(plan.bpm);
-  auto beats = chartBeatsBefore(chart, startMicros);
+  auto &beats = beatWalk.beats;
+  const long long initialBeatIntervalMicros =
+      beatIntervalMicrosForBpm(beatWalk.initialGridBpm);
   if (beats.empty()) {
-    beats.reserve(static_cast<std::size_t>(countInBeats));
-    for (int beat = countInBeats; beat > 0; --beat) {
-      beats.push_back(
-          {.timeMicros = startMicros -
-                         plan.beatIntervalMicros * static_cast<long long>(beat),
-           .accent = false});
+    const long long gridAnchorMicros =
+        beatWalk.firstGridTimeMicros.value_or(startMicros);
+    long long precedingBeat = gridAnchorMicros - initialBeatIntervalMicros;
+    while (precedingBeat >= startMicros) {
+      precedingBeat -= initialBeatIntervalMicros;
+    }
+    for (int beat = countInBeats - 1; beat >= 0; --beat) {
+      beats.push_back({.timeMicros =
+                           precedingBeat - initialBeatIntervalMicros * beat,
+                       .accent = false});
     }
   }
   while (beats.size() < static_cast<std::size_t>(countInBeats)) {
-    beats.insert(beats.begin(),
-                 {.timeMicros = beats.front().timeMicros -
-                                plan.beatIntervalMicros,
-                  .accent = false});
+    beats.push_front({.timeMicros = beats.front().timeMicros -
+                                    initialBeatIntervalMicros,
+                      .accent = false});
   }
 
-  const auto firstBeat = beats.end() - countInBeats;
   plan.clicks.reserve(static_cast<std::size_t>(countInBeats));
-  for (auto beat = firstBeat; beat != beats.end(); ++beat) {
+  for (const auto &beat : beats) {
     plan.clicks.push_back(
-        {.timeMicros = beat->timeMicros, .accent = beat->accent});
+        {.timeMicros = beat.timeMicros, .accent = beat.accent});
   }
   plan.startTimeMicros = plan.clicks.front().timeMicros;
   plan.leadInMicros = startMicros - plan.startTimeMicros;
