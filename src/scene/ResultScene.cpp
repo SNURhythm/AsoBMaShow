@@ -526,18 +526,20 @@ void ResultScene::addTimingAnalytics() {
     host->setFlexShrink(1.0f);
     host->setFlexDirection(FlexDirection::Column);
     host->setAlignItems(YGAlignStretch);
-    std::size_t insertionIndex = rootLayout->getChildren().size();
-    for (std::size_t index = 0; index < rootLayout->getChildren().size();
-         ++index) {
-      View *child = rootLayout->getChildren()[index];
+    View *actionSibling = nullptr;
+    for (View *child : rootLayout->getChildren()) {
       if (child != nullptr &&
           (child->getName() == "resultActions" ||
            child->findViewByName("resultActions") != nullptr)) {
-        insertionIndex = index;
+        actionSibling = child;
         break;
       }
     }
-    rootLayout->insertView(host, insertionIndex);
+    if (actionSibling != nullptr) {
+      rootLayout->insertViewBefore(host, actionSibling);
+    } else {
+      rootLayout->addView(host);
+    }
   }
 
   timingAnalyticsView = new PracticeAnalyticsView(practice::ResultModel(

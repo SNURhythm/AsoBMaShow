@@ -55,6 +55,24 @@ private:
   }
 };
 
+class OrderedView final : public View {
+public:
+  OrderedView(int id, std::vector<int> &renderOrder,
+              std::vector<int> &eventOrder)
+      : id(id), renderOrder(renderOrder), eventOrder(eventOrder) {}
+
+private:
+  void renderImpl(RenderContext &) override { renderOrder.push_back(id); }
+  bool handleEventsImpl(SDL_Event &) override {
+    eventOrder.push_back(id);
+    return true;
+  }
+
+  int id;
+  std::vector<int> &renderOrder;
+  std::vector<int> &eventOrder;
+};
+
 void testOverlayPortalDispatchesPresentedViewsAboveContent() {
   View root(0, 0, 640, 480);
   auto *background = new EventRecordingView();
@@ -306,35 +324,75 @@ void testWrappedGridRowsKeepColumnMeasurements() {
   assertRowsAligned(row1, row3);
 }
 
-void testIndexedInsertionPreservesLayoutOrderAndFullWidth() {
+void testSiblingInsertionPreservesLayoutAndZOrders() {
   View root(0, 0, 500, 300);
   root.setFlexDirection(FlexDirection::Column);
 
-  auto *content = new View();
+  std::vector<int> renderOrder;
+  std::vector<int> eventOrder;
+
+  auto *content = new OrderedView(1, renderOrder, eventOrder);
   content->setName("content");
   content->setHeight(40);
-  auto *actions = new View();
+  content->setZIndex(10);
+  auto *actions = new OrderedView(2, renderOrder, eventOrder);
   actions->setName("resultActions");
   actions->setHeight(50);
+  actions->setZIndex(-5);
   root.addView(content);
   root.addView(actions);
-
-  auto *analytics = new View();
-  analytics->setName("timingAnalytics");
-  analytics->setWidthPercent(100.0f);
-  analytics->setHeight(80);
-  root.insertView(analytics, 1);
 
   SDL_Event sortEvent{};
   sortEvent.type = SDL_USEREVENT;
   root.handleEvents(sortEvent);
-  const auto &children = root.getChildren();
-  assert(children.size() == 3 && children[0] == content &&
-         children[1] == analytics && children[2] == actions);
+  assert(root.getChildren()[0] == actions && root.getChildren()[1] == content);
+  eventOrder.clear();
+
+  auto *analytics = new OrderedView(3, renderOrder, eventOrder);
+  analytics->setName("timingAnalytics");
+  analytics->setWidthPercent(100.0f);
+  analytics->setHeight(80);
+  analytics->setZIndex(0);
+  root.insertViewBefore(analytics, actions);
+
+  assert(YGNodeGetChildCount(root.getNode()) == 3);
+  assert(YGNodeGetChild(root.getNode(), 0) == content->getNode());
+  assert(YGNodeGetChild(root.getNode(), 1) == analytics->getNode());
+  assert(YGNodeGetChild(root.getNode(), 2) == actions->getNode());
   assert(analytics->getX() == root.getContentX());
   assert(analytics->getWidth() == root.getContentWidth());
   assert(analytics->getY() == content->getY() + content->getHeight());
   assert(actions->getY() == analytics->getY() + analytics->getHeight());
+
+  RenderContext renderContext;
+  root.render(renderContext);
+  assert(renderOrder == std::vector<int>({2, 3, 1}));
+  root.handleEvents(sortEvent);
+  assert(eventOrder == std::vector<int>({1, 3, 2}));
+
+  renderOrder.clear();
+  eventOrder.clear();
+  actions->setZIndex(20);
+  root.render(renderContext);
+  assert(renderOrder == std::vector<int>({3, 1, 2}));
+  root.handleEvents(sortEvent);
+  assert(eventOrder == std::vector<int>({2, 1, 3}));
+  assert(content->getY() == 0 && analytics->getY() == 40 &&
+         actions->getY() == 120);
+
+  renderOrder.clear();
+  eventOrder.clear();
+  content->setZIndex(0);
+  analytics->setZIndex(0);
+  actions->setZIndex(0);
+  root.render(renderContext);
+  assert(renderOrder == std::vector<int>({1, 3, 2}));
+  root.handleEvents(sortEvent);
+  assert(eventOrder == std::vector<int>({2, 3, 1}));
+
+  root.clearChildren();
+  assert(root.getChildren().empty() &&
+         YGNodeGetChildCount(root.getNode()) == 0);
 }
 
 void testInputSettingsLayoutPolicy() {
@@ -524,7 +582,7 @@ int main() {
   assert(second->getX() == 80);
 
   testWrappedGridRowsKeepColumnMeasurements();
-  testIndexedInsertionPreservesLayoutOrderAndFullWidth();
+  testSiblingInsertionPreservesLayoutAndZOrders();
 
   return 0;
 }

@@ -592,25 +592,48 @@ View *View::setBorderWidth(int width) {
 }
 
 View *View::addView(View *view) {
-  return insertView(view, children.size());
+  return insertViewAtLayoutIndex(view, YGNodeGetChildCount(node));
 }
 
-View *View::insertView(View *view, std::size_t index) {
+View *View::insertViewBefore(View *view, const View *sibling) {
+  if (sibling == nullptr || sibling->parent != this) {
+    return this;
+  }
+  const std::size_t childCount = YGNodeGetChildCount(node);
+  for (std::size_t index = 0; index < childCount; ++index) {
+    if (YGNodeGetChild(node, index) == sibling->getNode()) {
+      return insertViewAtLayoutIndex(view, index);
+    }
+  }
+  return this;
+}
+
+View *View::insertViewAtLayoutIndex(View *view, std::size_t layoutIndex) {
   if (view == nullptr || view->parent != nullptr) {
     return this;
   }
   std::unique_ptr<View> pending(view);
-  index = std::min(index, children.size());
-  children.insert(children.begin() + static_cast<std::ptrdiff_t>(index), view);
+  layoutIndex = std::min(layoutIndex,
+                         static_cast<std::size_t>(YGNodeGetChildCount(node)));
+  children.push_back(view);
   pending.release();
-  YGNodeInsertChild(node, view->getNode(), index);
+  YGNodeInsertChild(node, view->getNode(), layoutIndex);
   view->parent = this;
-  for (auto *child : children) {
-    child->insertionOrder = nextInsertionOrder++;
-  }
+  refreshInsertionOrderFromLayout();
   childrenOrderDirty = true;
   applyYogaLayout();
   return this;
+}
+
+void View::refreshInsertionOrderFromLayout() {
+  const std::size_t childCount = YGNodeGetChildCount(node);
+  for (std::size_t index = 0; index < childCount; ++index) {
+    auto *child = static_cast<View *>(
+        YGNodeGetContext(YGNodeGetChild(node, index)));
+    if (child != nullptr) {
+      child->insertionOrder = nextInsertionOrder++;
+    }
+  }
 }
 
 View *View::clearChildren() {
