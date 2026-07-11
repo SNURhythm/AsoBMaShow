@@ -36,6 +36,32 @@ constexpr long long kHellChargeGaugeTickMicros = 200000LL;
 constexpr long long kCoursePauseHoldMicros = 650000LL;
 constexpr long long kCoursePauseRewindMicros = 260000LL;
 constexpr float kPi = 3.14159265358979323846f;
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
+constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Mobile;
+#else
+constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Desktop;
+#endif
+
+Judge makeEffectiveJudge(int rank, CourseJudgementConstraint constraint) {
+  Judge judge(rank);
+  judge.applyCourseJudgementConstraint(constraint);
+  return judge;
+}
+
+StartOptions resolvePlayStartInputDevices(StartOptions options,
+                                          const InputProfile &profile,
+                                          int keyMode) {
+  if (!options.inputDeviceCategories.empty()) {
+    return options;
+  }
+  InputBindingResolver resolver(profile, makeGameplayInputScopes(keyMode), {});
+  const auto activeDeviceClasses = resolver.activeDeviceClasses();
+  const std::vector<input::DeviceClass> resolverDeviceClasses(
+      activeDeviceClasses.begin(), activeDeviceClasses.end());
+  options.inputDeviceCategories = collectPlayStartInputDeviceCategories(
+      resolverDeviceClasses, kPlayStartInputPlatform);
+  return options;
+}
 
 long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -332,25 +358,38 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              bms_parser::Chart *chart, StartOptions options)
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
-      judge(chart->Meta.Rank), options(std::move(options)) {
-  judge.applyCourseJudgementConstraint(this->options.courseConstraints.judgement);
+      judge(makeEffectiveJudge(chart->Meta.Rank,
+                               options.courseConstraints.judgement)),
+      options(resolvePlayStartInputDevices(
+          std::move(options), context.inputProfile, chart->Meta.KeyMode)),
+      attemptProvenance(captureScoreProvenanceAtPlayStart(
+          this->options, this->chart->Meta, judge.timingWindows)) {
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
 GamePlayScene::GamePlayScene(ApplicationContext &context,
                              std::unique_ptr<bms_parser::Chart> chart,
                              StartOptions options)
-    : Scene(context), ownedChart(std::move(chart)),
-      chart(ownedChart.get()), judge(this->chart->Meta.Rank),
-      options(std::move(options)) {
+    : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
+      judge(makeEffectiveJudge(this->chart->Meta.Rank,
+                               options.courseConstraints.judgement)),
+      options(resolvePlayStartInputDevices(
+          std::move(options), context.inputProfile, this->chart->Meta.KeyMode)),
+      attemptProvenance(captureScoreProvenanceAtPlayStart(
+          this->options, this->chart->Meta, judge.timingWindows)) {
   this->options.ownsChart = true;
-  judge.applyCourseJudgementConstraint(this->options.courseConstraints.judgement);
   latePoorTiming = judge.timingWindows[Bad].second;
 }
 
-GamePlayScene::~GamePlayScene() = default;
+GamePlayScene::~GamePlayScene() {
+  if (profileGameplayBlockerActive) {
+    context.profileGameplayActive.store(false, std::memory_order_release);
+  }
+}
 
 void GamePlayScene::init() {
+  context.profileGameplayActive.store(true, std::memory_order_release);
+  profileGameplayBlockerActive = true;
   if (chart != nullptr) {
     const int replayLongNoteMode =
         options.replayData != nullptr ? options.replayData->chartMeta.LnMode
@@ -404,8 +443,17 @@ void GamePlayScene::init() {
   context.jukebox.stop();
   reset();
   if (!isReplayPlayback() && !options.autoPlay) {
+    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto gameplayInputProfile =
+        makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
+                                                   activeInputScopes);
+    escapeHandledByInputPipeline = true;
     ownedInputHandler = std::make_unique<RhythmInputHandler>(
-        this, chart->Meta,
+        this, chart->Meta, context.inputDeviceRegistry, gameplayInputProfile,
+        activeInputScopes,
+        [this](const input::LogicalInputTransition &transition) {
+          handleLogicalInputCommand(transition);
+        },
         context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode));
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
@@ -574,6 +622,7 @@ void GamePlayScene::init() {
 }
 
 void GamePlayScene::reset() {
+  context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
   state = nullptr;
   renderer->reset();
@@ -714,6 +763,71 @@ void GamePlayScene::closePauseMenu() {
   resetCoursePauseHold();
 }
 
+void GamePlayScene::togglePauseMenuFromInput() {
+  if (isCoursePlayback()) {
+    if (pauseLayout != nullptr && pauseLayout->getVisible()) {
+      closePauseMenu();
+    } else {
+      showPauseMenu(false);
+    }
+  } else if (context.jukebox.isPaused()) {
+    closePauseMenu();
+  } else {
+    showPauseMenu(true);
+  }
+}
+
+void GamePlayScene::handleLogicalInputCommand(
+    const input::LogicalInputTransition &transition) {
+  if (!transition.pressed) {
+    return;
+  }
+  switch (transition.action.kind) {
+  case input::LogicalActionKind::Pause:
+    togglePauseMenuFromInput();
+    break;
+  case input::LogicalActionKind::Retry:
+    if (isCoursePlayback()) {
+      (void)restartCourseFromBeginning();
+    } else {
+      restartCurrentPattern();
+    }
+    break;
+  case input::LogicalActionKind::LaneCoverIncrease:
+    adjustLaneCoverFromInput(1);
+    break;
+  case input::LogicalActionKind::LaneCoverDecrease:
+    adjustLaneCoverFromInput(-1);
+    break;
+  case input::LogicalActionKind::Start:
+  case input::LogicalActionKind::Select:
+  case input::LogicalActionKind::Lane:
+  case input::LogicalActionKind::ScratchClockwise:
+  case input::LogicalActionKind::ScratchCounterClockwise:
+    break;
+  }
+}
+
+void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
+  if (renderer == nullptr || courseNoSpeed() ||
+      !context.settings.floatingLaneCoverEnabled || deltaPercent == 0) {
+    return;
+  }
+  const int previous = context.settings.noteStartPositionPercent;
+  const int next = std::clamp(previous + deltaPercent,
+                              AppSettings::kMinNoteStartPositionPercent,
+                              AppSettings::kMaxNoteStartPositionPercent);
+  if (next == previous) {
+    return;
+  }
+  context.settings.noteStartPositionPercent = next;
+  renderer->applyLaneCoverState(next, true);
+  floatingLaneCoverSettingsDirty = true;
+  appendReplayLaneCoverEvent(
+      next, getGameplayTimeMicros(context.jukebox.getTimeMicros()), true);
+  persistFloatingLaneCoverSettings();
+}
+
 void GamePlayScene::restartCurrentPattern() {
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
@@ -749,6 +863,7 @@ bool GamePlayScene::restartCourseFromBeginning() {
   session->completedResults.clear();
   if (!session->courseReplayPlayback) {
     session->replayStages.clear();
+    session->stageProvenance.clear();
   }
   session->carriedGauge.reset();
   session->carriedCombo = 0;
@@ -1065,6 +1180,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.playOption2 = options.playOption2;
   recordedReplay.playOption2Seed = options.playOption2Seed;
   recordedReplay.assistOption = assist_options::normalize(options.assistOption);
+  recordedReplay.provenance = attemptProvenance;
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
   recordedReplay.finalScore = 0;
@@ -1258,6 +1374,10 @@ void GamePlayScene::update(float dt) {
     options.courseSession->maxCombo =
         std::max(options.courseSession->maxCombo, state->maxCombo);
     options.courseSession->recordResult(chart->Meta, *state);
+    if (!options.courseSession->courseReplayPlayback) {
+      options.courseSession->recordStageProvenance(
+          options.courseSession->currentIndex, attemptProvenance);
+    }
     if (shouldRecordReplay()) {
       options.courseSession->recordReplayStage(recordedReplay);
     }
@@ -1325,13 +1445,12 @@ void GamePlayScene::update(float dt) {
         }
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
-                context, resultMeta, *state, replayToSave,
+                context, resultMeta, *state, attemptProvenance, replayToSave,
                 !options.autoPlay && !options.practiceMode &&
                     !isReplayPlayback() && !isCoursePlayback(),
                 retrySource, practiceResultOptions,
-                options.autoPlay ||
-                    (options.replayData != nullptr &&
-                     options.replayData->autoPlay),
+                options.autoPlay || (options.replayData != nullptr &&
+                                     options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
                 std::move(ownedReusableRetryChart), reusableRetryChart,
                 gbattleResultPacemaker),
@@ -1563,6 +1682,8 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 
 void GamePlayScene::cleanupScene() {
   SDL_Log("Cleaning up GamePlayScene");
+  context.profileGameplayActive.store(false, std::memory_order_release);
+  profileGameplayBlockerActive = false;
   context.jukebox.removeOnTick();
   SDL_Log("Stopping input handler");
   if (inputHandler != nullptr) {
@@ -2301,7 +2422,7 @@ void GamePlayScene::persistFloatingLaneCoverSettings() {
   }
   floatingLaneCoverSettingsDirty = false;
   context.settings.sanitize();
-  if (!context.settings.save()) {
+  if (!context.saveSettings()) {
     SDL_Log("Failed to save floating lane cover settings");
   }
 }
@@ -2437,18 +2558,9 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
 
   Scene::handleEvents(event);
   if (event.type == SDL_KEYDOWN) {
-    if (event.key.keysym.sym == SDLK_ESCAPE) {
-      if (isCoursePlayback()) {
-        if (pauseLayout != nullptr && pauseLayout->getVisible()) {
-          closePauseMenu();
-        } else {
-          showPauseMenu(false);
-        }
-      } else if (context.jukebox.isPaused()) {
-        closePauseMenu();
-      } else {
-        showPauseMenu(true);
-      }
+    if (event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE &&
+        !escapeHandledByInputPipeline) {
+      togglePauseMenuFromInput();
     }
   }
   return {};

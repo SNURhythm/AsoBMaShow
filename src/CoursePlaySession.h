@@ -267,12 +267,15 @@ struct CoursePlayChartResult {
 
 struct CoursePlaySession {
   int courseId = 0;
+  std::string courseKey;
   std::string courseName;
   std::string courseGroupName;
   std::string constraintJson;
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<CourseReplayStageData> replayStages;
+  RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
+  std::vector<std::optional<ScoreProvenance>> stageProvenance;
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
@@ -376,6 +379,33 @@ struct CoursePlaySession {
 
   void recordReplayStage(const ReplayData &replay) {
     ensureReplayStage(currentIndex).replay = replay;
+  }
+
+  void recordStageProvenance(std::size_t index,
+                             const ScoreProvenance &provenance) {
+    if (stageProvenance.size() <= index) {
+      stageProvenance.resize(index + 1);
+    }
+    stageProvenance[index] = provenance;
+  }
+
+  [[nodiscard]] ScoreProvenance aggregateProvenance() const {
+    std::vector<ScoreProvenance> recordedStages;
+    recordedStages.reserve(stageProvenance.size());
+    bool hasMissingStage = false;
+    for (const auto &stage : stageProvenance) {
+      if (stage.has_value()) {
+        recordedStages.push_back(*stage);
+      } else {
+        hasMissingStage = true;
+      }
+    }
+    ScoreProvenance aggregate = mergeCourseProvenance(recordedStages);
+    if (hasMissingStage) {
+      aggregate.ruleset = RulesetDescriptor::Legacy();
+      aggregate.eligibility = ScoreEligibility::LegacyUnverified;
+    }
+    return aggregate;
   }
 
   void recordRestMicrosAfterCurrentStage(long long restMicros) {

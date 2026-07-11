@@ -1,51 +1,17 @@
 #pragma once
 
+#include "AssistOptionUtils.h"
+#include "CourseIdentity.h"
+#include "ScoreProvenance.h"
 #include "bms_parser.hpp"
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
 
-#include <algorithm>
-#include <cctype>
 #include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
-
-namespace assist_options {
-inline constexpr const char *kOff = "OFF";
-inline constexpr const char *kDrag = "DRAG";
-
-inline std::string normalize(std::string option) {
-  option.erase(option.begin(),
-               std::find_if_not(option.begin(), option.end(),
-                                [](unsigned char ch) {
-                                  return std::isspace(ch) != 0;
-                                }));
-  option.erase(std::find_if_not(option.rbegin(), option.rend(),
-                                [](unsigned char ch) {
-                                  return std::isspace(ch) != 0;
-                                }).base(),
-               option.end());
-  std::transform(option.begin(), option.end(), option.begin(),
-                 [](unsigned char ch) {
-                   if (ch == '_' || ch == ' ') {
-                     return '-';
-                   }
-                   return static_cast<char>(std::toupper(ch));
-                 });
-  if (option == "DRAG" || option == "DRAG-MODE") {
-    return kDrag;
-  }
-  return kOff;
-}
-
-inline bool isEnabled(const std::string &option) {
-  return normalize(option) != kOff;
-}
-
-inline bool isDragMode(const std::string &option) {
-  return normalize(option) == kDrag;
-}
-} // namespace assist_options
 
 enum class ReplayEventAction {
   Press = 0,
@@ -111,6 +77,7 @@ struct ReplayData {
   std::vector<ReplayEvent> events;
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
 };
 
 struct CourseReplayStageData {
@@ -118,9 +85,63 @@ struct CourseReplayStageData {
   long long restMicrosAfterStage = 0;
 };
 
+namespace course_replay {
+
+inline std::optional<CourseReplayStageData>
+prepareStageForSave(const CourseReplayStageData &recorded,
+                    const bms_parser::ChartMeta &expectedMeta) {
+  const course_identity::ChartIdentity recordedIdentity{
+      .sha256 = recorded.replay.chartMeta.SHA256,
+      .md5 = recorded.replay.chartMeta.MD5};
+  const course_identity::ChartIdentity expectedIdentity{
+      .sha256 = expectedMeta.SHA256, .md5 = expectedMeta.MD5};
+  if (recorded.replay.events.empty() ||
+      !course_identity::sameChart(recordedIdentity, expectedIdentity)) {
+    return std::nullopt;
+  }
+
+  CourseReplayStageData prepared = recorded;
+  if (prepared.replay.chartMeta.BmsPath.empty()) {
+    prepared.replay.chartMeta.BmsPath = expectedMeta.BmsPath;
+  }
+  if (prepared.replay.chartMeta.Title.empty()) {
+    prepared.replay.chartMeta.Title = expectedMeta.Title;
+  }
+  if (prepared.replay.chartMeta.Artist.empty()) {
+    prepared.replay.chartMeta.Artist = expectedMeta.Artist;
+  }
+  return prepared;
+}
+
+inline std::optional<std::vector<CourseReplayStageData>>
+prepareCompletedPrefixForSave(
+    std::span<const CourseReplayStageData> recordedStages,
+    std::span<const bms_parser::ChartMeta> expectedMetas,
+    std::size_t completedCharts) {
+  if (completedCharts == 0 || completedCharts > recordedStages.size() ||
+      completedCharts > expectedMetas.size()) {
+    return std::nullopt;
+  }
+
+  std::vector<CourseReplayStageData> prepared;
+  prepared.reserve(completedCharts);
+  for (std::size_t index = 0; index < completedCharts; ++index) {
+    auto stage = prepareStageForSave(recordedStages[index],
+                                     expectedMetas[index]);
+    if (!stage.has_value()) {
+      return std::nullopt;
+    }
+    prepared.push_back(std::move(*stage));
+  }
+  return prepared;
+}
+
+} // namespace course_replay
+
 struct CourseReplayData {
   int id = 0;
   int courseId = 0;
+  std::string courseKey;
   std::string courseName;
   std::string courseGroupName;
   std::string constraintJson;
@@ -138,4 +159,5 @@ struct CourseReplayData {
   int totalCharts = 0;
   std::string createdAt;
   std::vector<CourseReplayStageData> stages;
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
 };

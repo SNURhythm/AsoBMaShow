@@ -1,9 +1,16 @@
+#include "../src/view/BlockingOverlayView.h"
 #include "../src/view/View.h"
+#include "scene/SettingsSceneInputLayout.h"
+#include "scene/SettingsSceneInputRebuild.h"
+#include "scene/SettingsSceneProfileEditorState.h"
 
-#include <cassert>
 #include <algorithm>
+#include <array>
+#include <cassert>
 #include <cmath>
 #include <iostream>
+#include <optional>
+#include <string_view>
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -24,6 +31,41 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+class EventRecordingView final : public View {
+public:
+  int eventCount = 0;
+
+private:
+  bool handleEventsImpl(SDL_Event &) override {
+    ++eventCount;
+    return true;
+  }
+};
+
+void testBlockingOverlayStopsAllInteractiveEvents() {
+  View root(0, 0, 640, 480);
+  auto *background = new EventRecordingView();
+  auto *overlay = new BlockingOverlayView(0, 0, 640, 480);
+  root.addView(background);
+  root.addView(overlay);
+
+  constexpr std::array eventTypes{
+      SDL_MOUSEBUTTONDOWN, SDL_MOUSEWHEEL, SDL_FINGERDOWN, SDL_KEYDOWN,
+      SDL_TEXTINPUT, SDL_TEXTEDITING, SDL_TEXTEDITING_EXT};
+  for (const Uint32 eventType : eventTypes) {
+    SDL_Event event{};
+    event.type = eventType;
+    assert(!root.handleEvents(event));
+  }
+  assert(background->eventCount == 0);
+
+  overlay->setVisible(false);
+  SDL_Event event{};
+  event.type = SDL_TEXTINPUT;
+  assert(root.handleEvents(event));
+  assert(background->eventCount == 1);
+}
 
 void expectNear(float actual, float expected, const char *label) {
   if (std::abs(actual - expected) <= 0.5f) {
@@ -227,9 +269,155 @@ void testWrappedGridRowsKeepColumnMeasurements() {
   assertRowsAligned(row1, row3);
 }
 
+void testInputSettingsLayoutPolicy() {
+  const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
+  assert(!wide.stackSelectors);
+  assert(!wide.stackBindingEditor);
+  assert(wide.selectorWidth > 0 &&
+         wide.selectorWidth * 3 + wide.selectorGap * 2 <= 1200);
+
+  const auto compact = settings_scene::resolveInputSettingsLayout(520, true);
+  assert(compact.stackSelectors);
+  assert(compact.stackBindingEditor);
+  assert(compact.selectorWidth == 520);
+  assert(compact.numericControlWidth > 0 && compact.numericControlWidth <= 520);
+
+  const auto narrow = settings_scene::resolveInputSettingsLayout(640, false);
+  assert(narrow.stackSelectors);
+  assert(narrow.stackBindingEditor);
+  assert(narrow.selectorWidth == 640);
+
+  const auto empty = settings_scene::resolveInputSettingsLayout(-50, true);
+  assert(empty.selectorWidth == 0);
+  assert(empty.numericControlWidth == 0);
+}
+
+void testGyroscopeSettingsLayoutAndPresentation() {
+  const auto wide = settings_scene::resolveGyroscopeSettingsLayout(900, false);
+  assert(!wide.stackEditors);
+  assert(wide.editorWidth > 0 && wide.editorWidth * 2 <= 900);
+
+  const auto compact =
+      settings_scene::resolveGyroscopeSettingsLayout(480, true);
+  assert(compact.stackEditors);
+  assert(compact.editorWidth == 480);
+
+  const auto narrow =
+      settings_scene::resolveGyroscopeSettingsLayout(540, false);
+  assert(narrow.stackEditors);
+  assert(narrow.editorWidth == 540);
+
+  const auto empty = settings_scene::resolveGyroscopeSettingsLayout(-20, true);
+  assert(empty.stackEditors);
+  assert(empty.editorWidth == 0);
+
+  assert(settings_scene::deviceClassLabel(input::DeviceClass::Gyroscope) ==
+         "Gyroscope");
+  assert(settings_scene::axisControlLabel(input::DeviceClass::Gyroscope, 0,
+                                          input::ControlDirection::Positive) ==
+         "Turntable +");
+  assert(settings_scene::axisControlLabel(input::DeviceClass::Gyroscope, 0,
+                                          input::ControlDirection::Negative) ==
+         "Turntable -");
+  assert(settings_scene::axisControlLabel(input::DeviceClass::Joystick, 2,
+                                          input::ControlDirection::Any) ==
+         "Axis 2");
+
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Ready) == "Ready");
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Calibrating) == "Calibrating");
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Disconnected) == "Disconnected");
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Retrying) == "Retrying");
+
+  assert(settings_scene::parseGyroscopeSettingInteger("3") ==
+         std::optional<int>{3});
+  assert(settings_scene::parseGyroscopeSettingInteger("-20") ==
+         std::optional<int>{-20});
+  assert(!settings_scene::parseGyroscopeSettingInteger("").has_value());
+  assert(!settings_scene::parseGyroscopeSettingInteger("3.0").has_value());
+  assert(
+      !settings_scene::parseGyroscopeSettingInteger("3 degrees").has_value());
+  assert(!settings_scene::parseGyroscopeSettingInteger("999999999999999999")
+              .has_value());
+
+  assert(settings_scene::shouldShowGyroscopeSettingsCard(
+      "builtin:gyroscope-turntable"));
+  assert(!settings_scene::shouldShowGyroscopeSettingsCard("keyboard"));
+  assert(settings_scene::kGyroscopeStepAngleLabel == "Step angle (°)");
+  assert(settings_scene::kGyroscopeReleaseDelayLabel == "Release delay (ms)");
+  assert(settings_scene::gyroscopeSettingsErrorLabel("").empty());
+  assert(settings_scene::gyroscopeSettingsErrorLabel("disk full") ==
+         "Not saved: disk full");
+}
+
+void testInputSettingsRebuildWaitsForPointerTransaction() {
+  settings_scene::InputSettingsRebuildGate gate;
+  assert(gate.request());
+  assert(!gate.request());
+  gate.markEventComplete();
+  assert(!gate.consume(true));
+  assert(!gate.request());
+  assert(gate.consume(false));
+  assert(!gate.consume(false));
+
+  assert(gate.request());
+  gate.markEventComplete();
+  gate.noticeStateChange();
+  assert(gate.consume(false));
+
+  gate.reset();
+  gate.prepareForProfileReplacement();
+  assert(!gate.consume(true));
+  assert(gate.consume(false));
+}
+
+void testProfileInlineEditorStaysBoundToItsCard() {
+  settings_scene::ProfileInlineEditorState editor;
+  editor.beginRename("alpha", "Alpha");
+  editor.updateDraft("Renamed Alpha");
+
+  assert(!editor.requestFor("bravo").has_value());
+  const auto rename = editor.requestFor("alpha");
+  assert(rename.has_value());
+  assert(rename->action == settings_scene::ProfileInlineEditAction::Rename);
+  assert(rename->profileId == "alpha");
+  assert(rename->name == "Renamed Alpha");
+
+  editor.beginDuplicate("bravo", "Bravo");
+  const auto duplicate = editor.requestFor("bravo");
+  assert(duplicate.has_value());
+  assert(duplicate->action ==
+         settings_scene::ProfileInlineEditAction::Duplicate);
+  assert(duplicate->name == "Bravo Copy");
+}
+
+void testProfileInlineEditorClearsWhenUnavailable() {
+  settings_scene::ProfileInlineEditorState editor;
+  editor.beginRename("alpha", "Alpha");
+
+  editor.clearIfUnavailable(true, true);
+  assert(editor.activeFor("alpha"));
+
+  editor.clearIfUnavailable(true, false);
+  assert(!editor.active());
+
+  editor.beginDuplicate("bravo", "Bravo");
+  editor.clearIfUnavailable(false, true);
+  assert(!editor.active());
+}
+
 } // namespace
 
 int main() {
+  testBlockingOverlayStopsAllInteractiveEvents();
+  testInputSettingsLayoutPolicy();
+  testGyroscopeSettingsLayoutAndPresentation();
+  testInputSettingsRebuildWaitsForPointerTransaction();
+  testProfileInlineEditorStaysBoundToItsCard();
+  testProfileInlineEditorClearsWhenUnavailable();
   bool deferredRan = false;
   View::deferAfterEvent([&]() { deferredRan = true; });
   assert(!deferredRan);

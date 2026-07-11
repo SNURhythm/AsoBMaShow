@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"
 #include "play/BMSRenderer.h"
@@ -88,7 +89,11 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
 
 SettingsScene::SettingsScene(ApplicationContext &context) : Scene(context) {}
 
-SettingsScene::~SettingsScene() = default;
+SettingsScene::~SettingsScene() {
+  context.profileSwitchBlockers.scene = nullptr;
+  stopProfileArchiveWork();
+  inputProfileReplacementRegistration.reset();
+}
 
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
@@ -165,9 +170,14 @@ void SettingsScene::ensurePreviewInputHandler() {
   }
   if (previewInputHandler == nullptr) {
     previewInputHandler = std::make_unique<RhythmInputHandler>(
-        this, previewChart->Meta,
-        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode));
+        this, previewChart->Meta, context.inputDeviceRegistry,
+        context.inputProfile,
+        makeGameplayInputScopes(previewChart->Meta.KeyMode),
+        LogicalGameplayInputAdapter::CommandCallback{},
+        context.settings.playAreaWidthForKeyMode(previewChart->Meta.KeyMode),
+        LogicalGameplayRegistryPolicy{.acceptKeyboardFromRegistry = false});
     previewInputHandler->discardPendingTouchEvents();
+    previewInputHandler->startListenSDL();
   }
 }
 

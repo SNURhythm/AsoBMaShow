@@ -262,19 +262,22 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
       }
     }
   }
-  for (const auto &[courseIdText, clearRank] : scoreRanks.rankByCourseId) {
-    if (clearRank < kClearTypeAssistedEasyClearRank) {
-      continue;
-    }
-    try {
-      const std::string folderKey = folderKeyForCourse(std::stoi(courseIdText));
-      for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
-        data.clearRanks[static_cast<size_t>(selectedLongNoteMode)]
-                       [folderKey] = clearRank;
-      }
-    } catch (const std::exception &) {
-    }
-  }
+  runQuery(
+      "SELECT id, COALESCE(course_key, '') FROM difficulty_courses",
+      [&](sqlite3_stmt *row) {
+        const int courseId = sqlite3_column_int(row, 0);
+        const std::string_view courseKey = columnText(row, 1);
+        const std::string folderKey = folderKeyForCourse(courseId);
+        for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
+          const int clearRank = scoreRanks.bestCourseRankFor(
+              courseKey, courseId, selectedLongNoteMode);
+          if (clearRank < kClearTypeAssistedEasyClearRank) {
+            continue;
+          }
+          data.clearRanks[static_cast<size_t>(selectedLongNoteMode)]
+                         [folderKey] = clearRank;
+        }
+      });
 
   return data;
 }

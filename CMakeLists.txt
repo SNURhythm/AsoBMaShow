@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
 project(AsoBMaShow VERSION 1.0 LANGUAGES C CXX)
+include(CTest)
+option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Set C++ standard
@@ -291,6 +293,11 @@ endif()
 # Targets
 # ------------------------------------------------------------------------------
 
+# Prefer the selected toolchain/vcpkg headers over stale host-wide installs.
+# This is portable CMake behavior and avoids architecture-mismatched SDL
+# headers on Apple Silicon without injecting compiler-specific -I flags.
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
@@ -383,7 +390,7 @@ if (PLATFORM_MACOS)
 endif()
 
 if (WIN32)
-    target_link_libraries(main PRIVATE shell32 ole32)
+    target_link_libraries(main PRIVATE shell32 ole32 advapi32)
 endif()
 
 # Platform specific system libs for macOS
@@ -470,10 +477,41 @@ install(DIRECTORY assets DESTINATION bin)
 # Subdirectories
 add_subdirectory(bgfx)
 add_subdirectory(src)
-add_subdirectory(yoga)
+target_sources(main PRIVATE src/CourseIdentity.cpp)
+if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    add_executable(ios_gyroscope_motion_adapter_tests
+        tests/ios_gyroscope_motion_adapter_tests.cpp
+    )
+    target_include_directories(ios_gyroscope_motion_adapter_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ios_gyroscope_motion_adapter_tests PRIVATE cxx_std_23)
 
-option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
-if (ASOBMASHOW_BUILD_TESTS)
+    add_executable(gyroscope_input_backend_core_tests
+        tests/gyroscope_input_backend_core_tests.cpp
+        src/input/GyroscopeInputBackendCore.cpp
+        src/input/GyroscopeTurntable.cpp
+    )
+    target_include_directories(gyroscope_input_backend_core_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gyroscope_input_backend_core_tests PRIVATE cxx_std_23)
+
+    add_subdirectory(yoga/yoga)
+else()
+    add_subdirectory(yoga/yoga)
+endif()
+
+if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    add_executable(gyroscope_turntable_tests
+        tests/gyroscope_turntable_tests.cpp
+        src/input/GyroscopeTurntable.cpp
+    )
+    target_include_directories(gyroscope_turntable_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gyroscope_turntable_tests PRIVATE cxx_std_23)
+
     add_executable(prep_metronome_tests
         tests/prep_metronome_tests.cpp
         src/PrepMetronome.cpp
@@ -485,6 +523,7 @@ if (ASOBMASHOW_BUILD_TESTS)
     add_executable(gbattle_tests
         tests/gbattle_tests.cpp
         src/bms_parser.cpp
+        src/ScoreProvenance.cpp
     )
     target_include_directories(gbattle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(gbattle_tests PRIVATE cxx_std_23)
@@ -503,9 +542,21 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(course_identity_tests
+        tests/course_identity_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+    )
+    target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(course_identity_tests PRIVATE cxx_std_23)
+
     add_executable(replay_db_helper_tests
         tests/replay_db_helper_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ReplayDBHelper.cpp
+        src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -518,6 +569,26 @@ if (ASOBMASHOW_BUILD_TESTS)
         target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
         target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(score_provenance_db_tests
+        tests/score_provenance_db_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ScoreDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(score_provenance_db_tests PRIVATE SDL2)
     endif()
 
     add_executable(chart_record_filters_tests
@@ -563,6 +634,105 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(app_database_initializer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(app_database_initializer_tests PRIVATE cxx_std_23)
 
+    add_executable(audio_video_settings_tests
+        tests/audio_video_settings_tests.cpp
+        src/AppSettings.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/settings/AudioVideoSettings.cpp
+    )
+    target_include_directories(audio_video_settings_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(audio_video_settings_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(audio_video_settings_tests PRIVATE SDL2)
+    endif()
+    if(WIN32)
+        target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(audio_mix_tests
+        tests/audio_mix_tests.cpp
+        src/audio/AudioMix.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(audio_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_mix_tests PRIVATE cxx_std_23)
+
+    add_executable(audio_wrapper_lifecycle_tests
+        tests/audio_wrapper_lifecycle_tests.cpp
+        src/audio/AudioBackend.cpp
+        src/audio/AudioMix.cpp
+        src/audio/AudioWrapper.cpp
+        src/path.cpp
+        src/utils/Stopwatch.cpp
+    )
+    target_include_directories(audio_wrapper_lifecycle_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(audio_wrapper_lifecycle_tests PRIVATE cxx_std_23)
+    target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
+
+    add_executable(jukebox_restore_tests
+        tests/jukebox_restore_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/Utils.cpp
+        src/audio/AudioBackend.cpp
+        src/audio/AudioDeviceManager.cpp
+        src/audio/AudioMix.cpp
+        src/audio/AudioWrapper.cpp
+        src/audio/Jukebox.cpp
+        src/audio/decoder.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/utils/Stopwatch.cpp
+        src/video/VideoPlayer.cpp
+    )
+    target_include_directories(jukebox_restore_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(jukebox_restore_tests PRIVATE cxx_std_23)
+    target_compile_definitions(jukebox_restore_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(jukebox_restore_tests PRIVATE ${COMMON_LIBS} bgfx)
+    if(APPLE)
+        target_link_libraries(jukebox_restore_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(jukebox_restore_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(audio_device_manager_tests
+        tests/audio_device_manager_tests.cpp
+        src/audio/AudioDeviceManager.cpp
+    )
+    target_include_directories(audio_device_manager_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(audio_device_manager_tests PRIVATE cxx_std_23)
+
+    add_executable(settings_audio_video_model_tests
+        tests/settings_audio_video_model_tests.cpp
+        src/scene/SettingsAudioVideoModel.cpp
+        src/audio/AudioDeviceManager.cpp
+        src/settings/AudioVideoSettings.cpp
+        src/video/DisplaySettingsManager.cpp
+        src/video/FramePacer.cpp
+    )
+    target_include_directories(settings_audio_video_model_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(settings_audio_video_model_tests PRIVATE cxx_std_23)
+
     add_executable(chart_filter_sort_panel_view_tests
         tests/chart_filter_sort_panel_view_tests.cpp
         src/bms_parser.cpp
@@ -586,4 +756,455 @@ if (ASOBMASHOW_BUILD_TESTS)
     target_include_directories(view_layout_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
+    add_executable(button_enabled_tests
+        tests/button_enabled_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(button_enabled_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
+    target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
+    add_executable(score_provenance_tests
+        tests/score_provenance_tests.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(score_provenance_tests PRIVATE cxx_std_23)
+
+    add_executable(input_profile_tests
+        tests/input_profile_tests.cpp
+        src/input/GyroscopeTurntable.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+    )
+    target_include_directories(input_profile_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(input_profile_tests PRIVATE cxx_std_23)
+    target_compile_definitions(input_profile_tests PRIVATE INPUT_PROFILE_STORE_TESTING)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_profile_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_profile_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_profile_tests PRIVATE SDL2)
+    endif()
+
+    if (NOT IOS AND NOT PLATFORM_ANDROID)
+        add_executable(platform_document_handoff_tests
+            tests/platform_document_handoff_tests.cpp
+            src/PlatformDocumentHandoff.cpp
+        )
+        target_include_directories(platform_document_handoff_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(platform_document_handoff_tests PRIVATE cxx_std_23)
+        target_link_libraries(platform_document_handoff_tests PRIVATE TinyFileDialogs)
+        if (WIN32)
+            target_link_libraries(platform_document_handoff_tests PRIVATE advapi32)
+        endif()
+
+        add_executable(profile_export_staging_tests
+            tests/profile_export_staging_tests.cpp
+            src/ProfileExportStaging.cpp
+            src/PlatformDocumentHandoff.cpp
+        )
+        target_include_directories(profile_export_staging_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(profile_export_staging_tests PRIVATE cxx_std_23)
+        target_link_libraries(profile_export_staging_tests PRIVATE TinyFileDialogs)
+        if (WIN32)
+            target_link_libraries(profile_export_staging_tests PRIVATE advapi32)
+        endif()
+    endif()
+
+    add_executable(input_binding_resolver_tests
+        tests/input_binding_resolver_tests.cpp
+        src/input/InputBindingResolver.cpp
+    )
+    target_include_directories(input_binding_resolver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(input_binding_resolver_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_binding_resolver_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(input_capture_controller_tests
+        tests/input_capture_controller_tests.cpp
+        src/input/InputCaptureController.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputDeviceIdentity.cpp
+        src/input/InputDeviceRegistry.cpp
+        src/input/InputProfile.cpp
+        src/input/SDLInputBackend.cpp
+    )
+    target_include_directories(input_capture_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(input_capture_controller_tests PRIVATE cxx_std_23)
+    asobmashow_add_midi_backend(input_capture_controller_tests)
+    asobmashow_add_gyroscope_backend(input_capture_controller_tests)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_capture_controller_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(app_settings_store_tests
+        tests/app_settings_store_tests.cpp
+        src/AppSettingsStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/AppSettings.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/settings/AudioVideoSettings.cpp
+    )
+    target_include_directories(app_settings_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(app_settings_store_tests PRIVATE cxx_std_23)
+    target_compile_definitions(app_settings_store_tests PRIVATE
+        APP_SETTINGS_STORE_TESTING
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(app_settings_store_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(app_settings_store_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(app_settings_store_tests PRIVATE SDL2)
+    endif()
+    if(WIN32)
+        target_link_libraries(app_settings_store_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(player_profile_manager_tests
+        tests/player_profile_manager_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/PlayerProfileManager.cpp
+        src/ProfileDatabaseTools.cpp
+        src/AppSettingsStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/AppSettings.cpp
+        src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+        src/ScoreDBHelper.cpp
+        src/ReplayDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(player_profile_manager_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(player_profile_manager_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(player_profile_manager_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(player_profile_manager_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(player_profile_manager_tests PRIVATE SDL2)
+    endif()
+    if(WIN32)
+        target_link_libraries(player_profile_manager_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(profile_switch_tests
+        tests/profile_switch_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ProfileSessionCoordinator.cpp
+        src/PlayerProfileManager.cpp
+        src/ProfileDatabaseTools.cpp
+        src/AppSettingsStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/AppSettings.cpp
+        src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/ChartDBHelper.cpp
+        src/ScoreDBHelper.cpp
+        src/ReplayDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(profile_switch_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_switch_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(profile_switch_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(profile_switch_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(profile_switch_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(profile_switch_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(profile_switch_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(profile_switch_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(profile_archive_tests
+        tests/profile_archive_tests.cpp
+        src/CourseIdentity.cpp
+        src/ProfileArchive.cpp
+        src/FileChecksum.cpp
+        src/PlayerProfileManager.cpp
+        src/ProfileDatabaseTools.cpp
+        src/AppSettingsStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/AppSettings.cpp
+        src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
+        src/input/InputProfile.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputProfileStore.cpp
+        src/ScoreDBHelper.cpp
+        src/ReplayDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(profile_archive_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_archive_tests PRIVATE cxx_std_23)
+    target_link_libraries(profile_archive_tests PRIVATE ${COMMON_LIBS})
+    if(WIN32)
+        target_link_libraries(profile_archive_tests PRIVATE shell32 ole32 advapi32)
+    endif()
+
+    add_executable(profile_settings_controller_tests
+        tests/profile_settings_controller_tests.cpp
+        src/scene/ProfileSettingsController.cpp
+        src/scene/ProfileRuntimeReapply.cpp
+    )
+    target_include_directories(profile_settings_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_settings_controller_tests PRIVATE cxx_std_23)
+
+    add_executable(profile_runtime_reapply_tests
+        tests/profile_runtime_reapply_tests.cpp
+        src/scene/ProfileRuntimeReapply.cpp
+    )
+    target_include_directories(profile_runtime_reapply_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(profile_runtime_reapply_tests PRIVATE cxx_std_23)
+
+    add_executable(input_device_registry_tests
+        tests/input_device_registry_tests.cpp
+        src/input/InputDeviceIdentity.cpp
+        src/input/InputDeviceRegistry.cpp
+        src/input/SDLInputBackend.cpp
+    )
+    target_include_directories(input_device_registry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(input_device_registry_tests PRIVATE cxx_std_23)
+    asobmashow_add_midi_backend(input_device_registry_tests)
+    asobmashow_add_gyroscope_backend(input_device_registry_tests)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(input_device_registry_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(logical_gameplay_input_tests
+        tests/logical_gameplay_input_tests.cpp
+        src/input/LogicalGameplayInputAdapter.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputNormalizer.cpp
+    )
+    target_include_directories(logical_gameplay_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(logical_gameplay_input_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(display_settings_manager_tests
+        tests/display_settings_manager_tests.cpp
+        src/video/DisplaySettingsManager.cpp
+        src/video/FramePacer.cpp
+    )
+    target_include_directories(display_settings_manager_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(display_settings_manager_tests PRIVATE cxx_std_23)
+
+    add_executable(frame_pacer_tests
+        tests/frame_pacer_tests.cpp
+        src/video/FramePacer.cpp
+    )
+    target_include_directories(frame_pacer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(frame_pacer_tests PRIVATE cxx_std_23)
+
+    add_executable(sdl_display_backend_tests
+        tests/sdl_display_backend_tests.cpp
+        src/video/DisplaySettingsManager.cpp
+        src/video/FramePacer.cpp
+        src/video/RendererAccessCoordinator.cpp
+        src/video/SDLDisplayBackend.cpp
+    )
+    target_include_directories(sdl_display_backend_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(sdl_display_backend_tests PRIVATE cxx_std_23)
+    target_link_libraries(sdl_display_backend_tests PRIVATE bgfx)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(sdl_display_backend_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(midi_input_tests
+        tests/midi_input_tests.cpp
+        src/input/LiveMidiDeviceIdAllocator.cpp
+        src/input/MidiMessageParser.cpp
+        src/input/NativeCallbackLifetime.cpp
+        src/input/QueuedMidiInputBackend.cpp
+        src/input/Utf16ToUtf8.cpp
+    )
+    target_include_directories(midi_input_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(midi_input_tests PRIVATE cxx_std_23)
+
+    function(asobmashow_register_test target_name)
+        set(test_name ${target_name})
+        if(ARGC GREATER 1)
+            set(test_name ${ARGV1})
+        endif()
+        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}>)
+        set_tests_properties(${test_name} PROPERTIES
+            WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
+        )
+    endfunction()
+
+    add_test(NAME foundation_av_settings
+        COMMAND $<TARGET_FILE:audio_video_settings_tests>)
+    set_tests_properties(foundation_av_settings PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_video_settings_tests>
+    )
+
+    add_test(NAME foundation_av_audio_mix
+        COMMAND $<TARGET_FILE:audio_mix_tests>)
+    set_tests_properties(foundation_av_audio_mix PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_mix_tests>
+    )
+
+    add_test(NAME foundation_av_audio_wrapper_lifecycle
+        COMMAND $<TARGET_FILE:audio_wrapper_lifecycle_tests>)
+    set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_wrapper_lifecycle_tests>
+        TIMEOUT 15
+    )
+
+    add_test(NAME foundation_av_audio_device
+        COMMAND $<TARGET_FILE:audio_device_manager_tests>)
+    set_tests_properties(foundation_av_audio_device PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:audio_device_manager_tests>
+    )
+
+    add_test(NAME foundation_av_jukebox_restore
+        COMMAND $<TARGET_FILE:jukebox_restore_tests>)
+    set_tests_properties(foundation_av_jukebox_restore PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:jukebox_restore_tests>
+        TIMEOUT 30
+    )
+
+    foreach(test_target IN ITEMS
+        prep_metronome_tests
+        gbattle_tests
+        replay_summary_list_tests
+        replay_record_filters_tests
+        course_identity_tests
+        replay_db_helper_tests
+        chart_record_filters_tests
+        main_menu_library_tests
+        chart_meta_index_order_tests
+        score_cache_query_tests
+        app_database_initializer_tests
+        chart_filter_sort_panel_view_tests
+        dropdown_view_tests
+        view_layout_tests
+        button_enabled_tests
+    )
+        asobmashow_register_test(${test_target})
+    endforeach()
+    add_test(NAME foundation_provenance_contract
+        COMMAND $<TARGET_FILE:score_provenance_tests>)
+    set_tests_properties(foundation_provenance_contract PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
+    )
+    asobmashow_register_test(input_profile_tests foundation_input_profile)
+    if (NOT IOS AND NOT PLATFORM_ANDROID)
+        asobmashow_register_test(platform_document_handoff_tests foundation_platform_document_handoff)
+        asobmashow_register_test(profile_export_staging_tests foundation_profile_export_staging)
+    endif()
+    asobmashow_register_test(input_binding_resolver_tests foundation_input_resolver)
+    asobmashow_register_test(gyroscope_turntable_tests foundation_input_gyroscope)
+    asobmashow_register_test(ios_gyroscope_motion_adapter_tests foundation_input_gyroscope_ios_adapter)
+    asobmashow_register_test(gyroscope_input_backend_core_tests foundation_input_gyroscope_backend)
+    asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
+    set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
+    asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
+    asobmashow_register_test(profile_switch_tests foundation_profile_switch)
+    asobmashow_register_test(profile_archive_tests foundation_profile_archive)
+    asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
+    asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
+    asobmashow_register_test(input_device_registry_tests foundation_input_registry)
+    asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
+    asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
+    asobmashow_register_test(display_settings_manager_tests foundation_av_display)
+    asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
+    add_test(NAME foundation_provenance_db
+        COMMAND $<TARGET_FILE:score_provenance_db_tests>)
+    set_tests_properties(foundation_provenance_db PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_db_tests>
+    )
+    asobmashow_register_test(midi_input_tests foundation_input_midi)
 endif()

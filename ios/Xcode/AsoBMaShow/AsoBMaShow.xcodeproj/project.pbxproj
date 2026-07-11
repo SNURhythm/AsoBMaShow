@@ -50,6 +50,9 @@
 		B7FA8B0D2C7D06D800B7EAAF /* GLKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FA8B0C2C7D06D700B7EAAF /* GLKit.framework */; };
 		B7FA8B0F2C7D06F200B7EAAF /* OpenGLES.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FA8B0E2C7D06F200B7EAAF /* OpenGLES.framework */; };
 		B7E010012F54000100A50B01 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E010002F54000100A50B01 /* MediaPlayer.framework */; };
+		B7E020012F62000100A50B01 /* CoreMIDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E020002F62000100A50B01 /* CoreMIDI.framework */; };
+		B7E030012F70000100A50B01 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E030002F70000100A50B01 /* UniformTypeIdentifiers.framework */; };
+		B7E040012F71000100A50B01 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7E040002F71000100A50B01 /* CoreMotion.framework */; };
 		B7FFC2C32BF7D834000C838E /* SDL2.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0DE92BF7BCDA00945F27 /* SDL2.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B7FFC39F2BFAAFA7000C838E /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B77B0E222BF7C48700945F27 /* CoreFoundation.framework */; };
 		B7FFC3A82BFAAFF3000C838E /* libbimg_encode.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B7FFC3192BFAAF67000C838E /* libbimg_encode.a */; };
@@ -673,6 +676,9 @@
 		B7D27AEC2C7CD4D700189ED7 /* CoreVideo.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreVideo.framework; path = System/Library/Frameworks/CoreVideo.framework; sourceTree = SDKROOT; };
 		B7D27AEE2C7CD4EC00189ED7 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		B7E010002F54000100A50B01 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
+		B7E020002F62000100A50B01 /* CoreMIDI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMIDI.framework; path = System/Library/Frameworks/CoreMIDI.framework; sourceTree = SDKROOT; };
+		B7E030002F70000100A50B01 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		B7E040002F71000100A50B01 /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = System/Library/Frameworks/CoreMotion.framework; sourceTree = SDKROOT; };
 		B7D27AF02C7CE2F900189ED7 /* libvlc.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvlc.a; path = lib/libvlc.a; sourceTree = "<group>"; };
 		B7D27AF12C7CE2FA00189ED7 /* libcompat.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libcompat.a; path = lib/libcompat.a; sourceTree = "<group>"; };
 		B7D27AF22C7CE2FA00189ED7 /* libvlccore.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libvlccore.a; path = lib/libvlccore.a; sourceTree = "<group>"; };
@@ -705,7 +711,12 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppSettings.cpp,
+				AppSettingsStore.cpp,
 				ArchiveFile.cpp,
+				AtomicFile.cpp,
+				audio/AudioBackend.cpp,
+				audio/AudioDeviceManager.cpp,
+				audio/AudioMix.cpp,
 				audio/AudioWrapper.cpp,
 				audio/ChartAudioRenderer.cpp,
 				audio/ChartMusicCache.cpp,
@@ -729,11 +740,45 @@
 				bms_search/PackageSourceDrivers.cpp,
 				BmsSearchService.cpp,
 				ChartDBHelper.cpp,
+				CourseIdentity.cpp,
+				CourseIdentity.h,
+				FileChecksum.cpp,
 				game/GameObject.cpp,
 				game/GameState.cpp,
 				game/SpriteObject.cpp,
+				input/InputBindingResolver.cpp,
+				input/InputCaptureController.cpp,
+				input/InputDeviceIdentity.cpp,
+				input/InputDeviceRegistry.cpp,
+				input/InputDefaults.cpp,
+				input/GyroscopeTurntable.cpp,
+				input/GyroscopeTurntable.h,
 				input/InputNormalizer.cpp,
+				input/InputProfile.cpp,
+				input/InputProfileReplacementNotifier.h,
+				input/InputProfileStore.cpp,
+				input/LogicalGameplayInputAdapter.cpp,
+				input/AndroidMidiInputBackend.cpp,
+				input/AndroidGyroscopeInputBackend.cpp,
+				input/CoreMidiInputBackend.mm,
+				input/GyroscopeInputBackendCore.cpp,
+				input/GyroscopeInputBackendCore.h,
+				input/GyroscopeInputBackendFactory.cpp,
+				input/GyroscopeInputBackendFactory.h,
+				input/GyroscopePlatformBackends.h,
+				input/IOSGyroscopeInputBackend.mm,
+				input/IOSGyroscopeMotionAdapter.h,
+				input/LiveMidiDeviceIdAllocator.cpp,
+				input/MidiInputBackendFactory.cpp,
+				input/MidiMessageParser.cpp,
+				input/NativeCallbackLifetime.cpp,
+				input/QueuedMidiInputBackend.cpp,
+				input/UnsupportedMidiInputBackend.cpp,
+				input/UnsupportedGyroscopeInputBackend.cpp,
+				input/Utf16ToUtf8.cpp,
+				input/WinMidiInputBackend.cpp,
 				input/RhythmInputHandler.cpp,
+				input/SDLInputBackend.cpp,
 				input/SDLInputSource.cpp,
 				input/SDLTouchInputSource.cpp,
 				iOSNatives.mm,
@@ -743,7 +788,13 @@
 				math/Quaternion.cpp,
 				math/Vector3.cpp,
 				path.cpp,
+				PlayerProfileManager.cpp,
+				PlatformDocumentHandoff.cpp,
 				PrepMetronome.cpp,
+				ProfileArchive.cpp,
+				ProfileExportStaging.cpp,
+				ProfileDatabaseTools.cpp,
+				ProfileSessionCoordinator.cpp,
 				rendering/BlurPass.cpp,
 				rendering/Camera.cpp,
 				rendering/Color.cpp,
@@ -756,13 +807,22 @@
 				scene/ChartFilterSortPanelView.cpp,
 				scene/ChartViewerScene.cpp,
 				scene/MainMenuLibrary.cpp,
+				scene/MainMenuProfileSelections.h,
 				scene/MainMenuScene.cpp,
 				scene/MusicPlayerScene.cpp,
+				scene/ProfileSettingsController.cpp,
+				scene/ProfileSettingsControllerContext.cpp,
+				scene/ProfileRuntimeReapply.cpp,
 				scene/ResultScene.cpp,
+				scene/SettingsAudioVideoModel.cpp,
 				scene/SettingsScene.cpp,
+				scene/SettingsSceneAudioVideo.cpp,
 				scene/SettingsSceneControls.cpp,
+				scene/SettingsSceneInput.cpp,
 				scene/SettingsSceneLayout.cpp,
 				scene/SettingsScenePreview.cpp,
+				scene/SettingsSceneProfileEditorState.h,
+				scene/SettingsSceneProfiles.cpp,
 				scene/SettingsSceneTables.cpp,
 				scene/play/BMSRenderer.cpp,
 				scene/play/GamePlayScene.cpp,
@@ -776,12 +836,19 @@
 				ReplayVideoExporter.cpp,
 				ResultImageExporter.cpp,
 				ScoreDBHelper.cpp,
+				ScoreProvenance.cpp,
+				settings/AudioVideoSettings.cpp,
 				skin/DefaultSkin.cpp,
 				sqlite3.c,
 				tinyfiledialogs.c,
 				Utils.cpp,
 				utils/SpriteLoader.cpp,
 				utils/Stopwatch.cpp,
+				VersionedJson.cpp,
+				video/DisplaySettingsManager.cpp,
+				video/FramePacer.cpp,
+				video/RendererAccessCoordinator.cpp,
+				video/SDLDisplayBackend.cpp,
 				video/VideoPlayer.cpp,
 				view/Button.cpp,
 				view/ChartListItemView.cpp,
@@ -816,6 +883,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B7E040012F71000100A50B01 /* CoreMotion.framework in Frameworks */,
+				B7E030012F70000100A50B01 /* UniformTypeIdentifiers.framework in Frameworks */,
+				B7E020012F62000100A50B01 /* CoreMIDI.framework in Frameworks */,
 				B7FA8B0F2C7D06F200B7EAAF /* OpenGLES.framework in Frameworks */,
 				B7FA8B0D2C7D06D800B7EAAF /* GLKit.framework in Frameworks */,
 				B7FA8B092C7D06B400B7EAAF /* CoreText.framework in Frameworks */,
@@ -900,6 +970,9 @@
 		B72522F62BF7AD7100C6C414 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				B7E040002F71000100A50B01 /* CoreMotion.framework */,
+				B7E030002F70000100A50B01 /* UniformTypeIdentifiers.framework */,
+				B7E020002F62000100A50B01 /* CoreMIDI.framework */,
 				B7CA782F2F290E9D0016BA21 /* libluajit.xcframework */,
 				B7CA78332F3020010016BA21 /* lib7zip.xcframework */,
 				B7CA78322F3010010016BA21 /* libarchive.xcframework */,

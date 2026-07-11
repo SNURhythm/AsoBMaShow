@@ -1,7 +1,11 @@
 #pragma once
 
 #include "../ChartDBHelper.h"
+#include "../PlatformDocumentHandoff.h"
 #include "../ThreadCompat.h"
+#include "ProfileSettingsController.h"
+#include "SettingsAudioVideoModel.h"
+#include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "play/Judge.h"
 #include <atomic>
@@ -9,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -19,13 +24,29 @@ class TextView;
 class TextInputBox;
 class Button;
 class ScrollView;
+class DropdownView;
 class BMSRenderer;
 class RhythmInputHandler;
 class RhythmLaneInputController;
+class DropdownView;
+class InputCaptureController;
 
 namespace settings_scene {
 struct LayoutMetrics;
 }
+
+struct SettingsProfileArchiveCompletion {
+  ProfileArchiveTaskKind kind = ProfileArchiveTaskKind::Export;
+  std::uint64_t generation = 0;
+  ProfileArchiveResult result;
+};
+
+struct SettingsProfileArchiveMailbox {
+  std::mutex mutex;
+  std::optional<SettingsProfileArchiveCompletion> completion;
+};
+
+enum class SettingsProfileDocumentHandoffKind { None, Import, Export };
 
 namespace bms_parser {
 class Chart;
@@ -33,6 +54,8 @@ class Note;
 } // namespace bms_parser
 
 #include "../input/IRhythmControl.h"
+#include "../input/InputTypes.h"
+#include "SettingsSceneInputRebuild.h"
 
 class SettingsScene : public Scene, public IRhythmControl {
 public:
@@ -52,10 +75,14 @@ public:
 
 private:
   enum class SettingsTab {
+    Profile,
     Timing,
     Visual,
     Lane,
+    Input,
     Misc,
+    Audio,
+    Display,
     DifficultyTables,
     BmsLibrary,
   };
@@ -109,6 +136,10 @@ private:
   TextView *uiThemeModeText = nullptr;
   TextView *archiveCacheCleanupButtonText = nullptr;
   TextView *archiveCacheCleanupStatusText = nullptr;
+  TextView *profileTabText = nullptr;
+  TextView *profileStatusText = nullptr;
+  TextView *profileDeleteReasonText = nullptr;
+  TextInputBox *profileCreateNameInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -129,16 +160,23 @@ private:
   Button *bgaDisplayModeButton = nullptr;
   Button *uiThemeModeButton = nullptr;
   Button *archiveCacheCleanupButton = nullptr;
+  Button *profileTabButton = nullptr;
   Button *timingTabButton = nullptr;
   Button *visualTabButton = nullptr;
   Button *laneTabButton = nullptr;
+  Button *inputTabButton = nullptr;
   Button *miscTabButton = nullptr;
+  Button *audioTabButton = nullptr;
+  Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
   TextView *laneTabText = nullptr;
+  TextView *inputTabText = nullptr;
   TextView *miscTabText = nullptr;
+  TextView *audioTabText = nullptr;
+  TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
@@ -157,7 +195,46 @@ private:
   TextView *difficultyTableImportTableText = nullptr;
   TextView *difficultyTableImportProgressText = nullptr;
   Button *difficultyTableImportCloseButton = nullptr;
+  DropdownView *audioDeviceDropdown = nullptr;
+  DropdownView *audioSampleRateDropdown = nullptr;
+  DropdownView *audioBufferDropdown = nullptr;
+  DropdownView *displayModeDropdown = nullptr;
+  DropdownView *displayIndexDropdown = nullptr;
+  DropdownView *displayResolutionDropdown = nullptr;
+  DropdownView *displayVsyncDropdown = nullptr;
+  DropdownView *displayFrameCapDropdown = nullptr;
+  TextInputBox *masterVolumeInput = nullptr;
+  TextInputBox *bgmVolumeInput = nullptr;
+  TextInputBox *keysoundVolumeInput = nullptr;
+  TextView *audioEffectiveText = nullptr;
+  TextView *audioStatusText = nullptr;
+  TextView *displayStatusText = nullptr;
+  View *displayPreviewOverlayRoot = nullptr;
+  TextView *displayPreviewCountdownText = nullptr;
+  TextView *displayPreviewStatusText = nullptr;
+  Button *displayPreviewKeepButton = nullptr;
   ScrollView *scrollView = nullptr;
+  DropdownView *inputPlayerDropdown = nullptr;
+  DropdownView *inputKeyModeDropdown = nullptr;
+  DropdownView *inputDeviceDropdown = nullptr;
+  TextView *inputMonitorText = nullptr;
+  TextView *inputCaptureStateText = nullptr;
+  TextView *inputErrorText = nullptr;
+  View *inputConflictOverlayRoot = nullptr;
+  std::unique_ptr<InputCaptureController> inputCaptureController;
+  InputProfileReplacementNotifier::Registration
+      inputProfileReplacementRegistration;
+  int inputSelectedPlayer = 1;
+  int inputSelectedKeyMode = 7;
+  std::string inputSelectedDeviceId;
+  bool inputPlayerDropdownOpen = false;
+  bool inputKeyModeDropdownOpen = false;
+  bool inputDeviceDropdownOpen = false;
+  std::optional<input::LogicalAction> inputCaptureAction;
+  float inputGyroscopeAxisValue = 0.0F;
+  std::string inputGyroscopeSettingsError;
+  settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
+  std::string inputLastViewSignature;
   bool previewActive = false;
   bool previewPanelFolded = false;
   int previewPanelPage = 0;
@@ -171,12 +248,27 @@ private:
   int previewScore = 0;
   int previewComboBreak = 0;
   std::map<Judgement, int> previewJudgeCount;
-  SettingsTab activeTab = SettingsTab::Timing;
+  SettingsTab activeTab = SettingsTab::Profile;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
   std::jthread difficultyTableJobThread;
   std::jthread archiveCacheCleanupThread;
   std::jthread archiveCacheMeasureThread;
+  std::jthread profileArchiveThread;
+  std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
+  std::unique_ptr<ProfileSettingsController> profileController;
+  platform_document_handoff::PlatformDocumentHandoffOperation
+      profileDocumentHandoff;
+  SettingsProfileDocumentHandoffKind profileDocumentHandoffKind =
+      SettingsProfileDocumentHandoffKind::None;
+  ProfileImportOptions pendingProfileImportOptions;
+  std::optional<ProfileArchiveResult> preparedProfileExportResult;
+  std::shared_ptr<void> profileExportSourceLifetime;
+  std::filesystem::path profileExportStagingFile;
+  std::uint64_t profileArchiveGeneration = 0;
+  bool profileExportStagingSwept = false;
+  std::string profileCreateNameText;
+  settings_scene::ProfileInlineEditorState profileInlineEditor;
   std::atomic_bool difficultyTableJobRunning = false;
   std::atomic_bool archiveCacheCleanupRunning = false;
   std::atomic_bool archiveCacheMeasureRunning = false;
@@ -224,8 +316,23 @@ private:
   int lastSafeLeft = -1;
   int lastSafeBottom = -1;
   int lastSafeRight = -1;
-  SettingsTab lastLaidOutTab = SettingsTab::Timing;
+  SettingsTab lastLaidOutTab = SettingsTab::Profile;
   std::uint64_t observedLibraryRevision = 0;
+  std::unique_ptr<SettingsAudioVideoSession> audioVideoSession;
+  player_settings::AudioSettings audioDraft;
+  player_settings::VideoSettings displayDraft;
+  std::string audioStatusMessage;
+  std::string displayStatusMessage;
+  SDL_Color audioStatusColor{157, 177, 200, 255};
+  SDL_Color displayStatusColor{157, 177, 200, 255};
+  bool audioDeviceDropdownOpen = false;
+  bool audioSampleRateDropdownOpen = false;
+  bool audioBufferDropdownOpen = false;
+  bool displayModeDropdownOpen = false;
+  bool displayIndexDropdownOpen = false;
+  bool displayResolutionDropdownOpen = false;
+  bool displayVsyncDropdownOpen = false;
+  bool displayFrameCapDropdownOpen = false;
 
   void initView();
   void resetViewState();
@@ -235,20 +342,33 @@ private:
                                  bool compactAdjustments);
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
   View *buildVisualTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
+  void buildInputConflictOverlay(
+      const settings_scene::LayoutMetrics &metrics);
   View *buildMiscTab(const settings_scene::LayoutMetrics &metrics);
-  View *
-  buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
+  void buildDisplayPreviewOverlay(const settings_scene::LayoutMetrics &metrics);
   void startLanePreview();
   void stopLanePreview();
   void ensurePreviewRenderer();
   void destroyPreviewRenderer();
   void ensurePreviewInputHandler();
   void destroyPreviewInputHandler();
+  void ensureInputCaptureController();
+  void updateInputSettingsState();
+  void refreshInputMonitorText();
+  void refreshInputDropdowns();
+  void requestInputViewRebuild();
+  void commitGyroscopeTurntableSetting(bool stepAngle, std::string_view text);
+  std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();
   void resetPreviewHudSample();
@@ -259,8 +379,7 @@ private:
   void requestDifficultyTableStatus(const std::string &text,
                                     const SDL_Color &color,
                                     bool reloadTables = false);
-  void requestChartFolderStatus(const std::string &text,
-                                const SDL_Color &color,
+  void requestChartFolderStatus(const std::string &text, const SDL_Color &color,
                                 bool reloadTables = false);
   void requestDifficultyTableImportProgress(int current, int total,
                                             const std::string &tableName,
@@ -284,7 +403,33 @@ private:
   void measureTemporaryArchiveCache();
   void cleanupTemporaryArchiveCache();
   void refreshSettingsText();
+  void ensureProfileController();
+  void applyPendingProfileArchiveCompletion();
+  void applyPendingProfileDocumentHandoff();
+  bool startProfileArchiveTask(ProfileArchiveTask task,
+                               std::optional<PlatformDocumentHandoffResult>
+                                   temporaryDocument = std::nullopt);
+  void startProfileImportDocumentPicker(const ProfileImportOptions &options,
+                                        bool confirmedOverwrite = false);
+  void startProfileExportPreparation(std::string_view profileId);
+  void stopProfileArchiveWork();
+  void activateProfile(std::string_view profileId);
+  void invalidateProfileLayout();
   void persistSettings();
+  void ensureAudioVideoSession();
+  void refreshAudioVideoControls();
+  void updateDisplayPreviewUi();
+  void applyAudioStreamDraft();
+  void applyDisplayDraft();
+  void keepDisplayPreview();
+  void revertDisplayPreview();
+  void cancelDisplayPreviewForTabExit();
+  void setAudioStatus(const std::string &message, const SDL_Color &color);
+  void setDisplayStatus(const std::string &message, const SDL_Color &color);
+  void syncVolumeInputText(bool force = false);
+  void commitVolumeInput(TextInputBox *input, int busIndex);
+  void adjustVolume(int busIndex, int deltaPercent);
+  bool playSettingsTestSound();
   void syncOffsetInputText(bool force = false);
   void syncVisualOffsetInputText(bool force = false);
   void syncVisibleTimeInputText(bool force = false);

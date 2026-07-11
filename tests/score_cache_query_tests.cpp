@@ -79,6 +79,75 @@ int queryInt(sqlite3 *db, const std::string &sql) {
   return value;
 }
 
+std::filesystem::path attachedDatabasePath(sqlite3 *db,
+                                           const std::string &schema) {
+  sqlite3_stmt *stmt = nullptr;
+  if (sqlite3_prepare_v2(db, "PRAGMA database_list", -1, &stmt, nullptr) !=
+      SQLITE_OK) {
+    std::cerr << "database_list prepare failed: " << sqlite3_errmsg(db)
+              << std::endl;
+    std::abort();
+  }
+  std::filesystem::path result;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const unsigned char *name = sqlite3_column_text(stmt, 1);
+    const unsigned char *file = sqlite3_column_text(stmt, 2);
+    if (name != nullptr && reinterpret_cast<const char *>(name) == schema) {
+      result = file != nullptr ? reinterpret_cast<const char *>(file) : "";
+      break;
+    }
+  }
+  sqlite3_finalize(stmt);
+  return result;
+}
+
+struct DenyNextAttach {
+  bool pending = true;
+};
+
+int denyNextAttach(void *rawState, int action, const char *, const char *,
+                   const char *, const char *) {
+  auto &state = *static_cast<DenyNextAttach *>(rawState);
+  if (action == SQLITE_ATTACH && state.pending) {
+    state.pending = false;
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+bool createScoreDatabase(const std::filesystem::path &path,
+                         const std::string &sha256, int score) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open(path.string().c_str(), &database) != SQLITE_OK) {
+    if (database != nullptr) {
+      sqlite3_close(database);
+    }
+    return false;
+  }
+  const bool created =
+      execSucceeds(database,
+                   "CREATE TABLE scores ("
+                   "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                   "chart_sha256 TEXT NOT NULL,"
+                   "ln_mode INTEGER NOT NULL DEFAULT 0,"
+                   "score INTEGER NOT NULL,"
+                   "max_score INTEGER NOT NULL,"
+                   "max_combo INTEGER NOT NULL,"
+                   "combo_break INTEGER NOT NULL,"
+                   "final_gauge REAL NOT NULL DEFAULT 0,"
+                   "clear_type INTEGER NOT NULL,"
+                   "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                   ")") &&
+      execSucceeds(database, "INSERT INTO scores(chart_sha256, ln_mode, score, "
+                             "max_score, max_combo, combo_break, clear_type, "
+                             "created_at) VALUES('" +
+                                 sha256 + "', 0, " + std::to_string(score) +
+                                 ", 200, 50, 1, 300, "
+                                 "'2026-01-04 00:00:00')");
+  sqlite3_close(database);
+  return created;
+}
+
 void insertScore(sqlite3 *db, const std::string &sha256,
                  const std::string &md5, const std::string &path, int lnMode,
                  int score, int maxScore, int maxCombo, int comboBreak,
@@ -231,30 +300,15 @@ int main() {
       std::filesystem::temp_directory_path() /
       "asobmashow_score_cache_query_test.sqlite";
   std::filesystem::remove(scoreDbPath);
-  sqlite3 *scoreDb = nullptr;
-  if (sqlite3_open(scoreDbPath.string().c_str(), &scoreDb) != SQLITE_OK) {
-    std::cerr << "open score db failed" << std::endl;
-    return 1;
-  }
-  execOrAbort(scoreDb,
-              "CREATE TABLE scores ("
-              "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-              "chart_sha256 TEXT NOT NULL,"
-              "ln_mode INTEGER NOT NULL DEFAULT 0,"
-              "score INTEGER NOT NULL,"
-              "max_score INTEGER NOT NULL,"
-              "max_combo INTEGER NOT NULL,"
-              "combo_break INTEGER NOT NULL,"
-              "final_gauge REAL NOT NULL DEFAULT 0,"
-              "clear_type INTEGER NOT NULL,"
-              "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-              ")");
-  execOrAbort(scoreDb,
-              "INSERT INTO scores(chart_sha256, ln_mode, score, max_score, "
-              "max_combo, combo_break, clear_type, created_at) "
-              "VALUES('prepared-sha', 0, 123, 200, 50, 1, 300, "
-              "'2026-01-04 00:00:00')");
-  sqlite3_close(scoreDb);
+  ASSERT_TRUE(createScoreDatabase(scoreDbPath, "prepared-sha", 123),
+              "create first persistent score database");
+
+  const std::filesystem::path secondScoreDbPath =
+      std::filesystem::temp_directory_path() /
+      "asobmashow_score_cache_query_test_second.sqlite";
+  std::filesystem::remove(secondScoreDbPath);
+  ASSERT_TRUE(createScoreDatabase(secondScoreDbPath, "prepared-sha", 187),
+              "create second persistent score database");
 
   sqlite3 *chartDb = nullptr;
   if (sqlite3_open(":memory:", &chartDb) != SQLITE_OK) {
@@ -270,8 +324,51 @@ int main() {
                          score_cache_queries::scoreBestLookupExpr(
                              "'prepared-sha'", "0", "score")),
             "prepared score query database backfills summaries");
+
+  const std::filesystem::path nonCanonicalSecondPath =
+      secondScoreDbPath.parent_path() / "." / secondScoreDbPath.filename();
+  const auto secondPrepareError =
+      score_cache_queries::prepareScoreQueryDatabase(chartDb,
+                                                     nonCanonicalSecondPath);
+  ASSERT_FALSE(secondPrepareError.has_value(),
+               "persistent connection reattaches second score database");
+  ASSERT_EQ(
+      std::filesystem::canonical(secondScoreDbPath),
+      std::filesystem::canonical(attachedDatabasePath(chartDb, "score_db")),
+      "persistent connection exposes canonical second score path");
+  ASSERT_EQ(
+      187,
+      queryInt(chartDb, "SELECT " + score_cache_queries::scoreBestLookupExpr(
+                                        "'prepared-sha'", "0", "score")),
+      "persistent connection reads second profile score data");
+
+  const auto restoreFirstError =
+      score_cache_queries::prepareScoreQueryDatabase(chartDb, scoreDbPath);
+  ASSERT_FALSE(restoreFirstError.has_value(),
+               "persistent connection restores first score database");
+  DenyNextAttach denyState;
+  ASSERT_EQ(SQLITE_OK,
+            sqlite3_set_authorizer(chartDb, denyNextAttach, &denyState),
+            "install one-shot attach failure");
+  const auto deniedPrepareError =
+      score_cache_queries::prepareScoreQueryDatabase(chartDb,
+                                                     secondScoreDbPath);
+  ASSERT_TRUE(deniedPrepareError.has_value(),
+              "persistent reattach reports target attach failure");
+  ASSERT_EQ(SQLITE_OK, sqlite3_set_authorizer(chartDb, nullptr, nullptr),
+            "remove one-shot attach failure");
+  const auto rollbackPrepareError =
+      score_cache_queries::prepareScoreQueryDatabase(chartDb, scoreDbPath);
+  ASSERT_FALSE(rollbackPrepareError.has_value(),
+               "source score database reattaches after target failure");
+  ASSERT_EQ(
+      123,
+      queryInt(chartDb, "SELECT " + score_cache_queries::scoreBestLookupExpr(
+                                        "'prepared-sha'", "0", "score")),
+      "source score data is restored after target attach failure");
   sqlite3_close(chartDb);
   std::filesystem::remove(scoreDbPath);
+  std::filesystem::remove(secondScoreDbPath);
 
   const std::filesystem::path missingScoreDbPath =
       std::filesystem::temp_directory_path() /

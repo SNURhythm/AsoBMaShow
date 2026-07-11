@@ -34,6 +34,15 @@ int folderRankForLn(const main_menu_library::FolderClearDataByLongNoteMode &data
   return it == ranks.end() ? kNoClearTypeRank : it->second;
 }
 
+int folderRankForMode(
+    const main_menu_library::FolderClearDataByLongNoteMode &data,
+    const std::string &folderKey, int longNoteMode) {
+  const auto &ranks =
+      data.clearRanks[long_note_mode::normalizeValue(longNoteMode)];
+  const auto it = ranks.find(folderKey);
+  return it == ranks.end() ? kNoClearTypeRank : it->second;
+}
+
 int folderClearCountForLn(
     const main_menu_library::FolderClearDataByLongNoteMode &data,
     const std::string &folderKey, int clearRank) {
@@ -61,6 +70,26 @@ int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
   }
   const int mode = long_note_mode::normalizeValue(longNoteMode);
   return it->second.ranks[static_cast<std::size_t>(mode)];
+}
+
+int CourseScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
+  const int mode = long_note_mode::normalizeValue(lnMode);
+  return std::max(ranks[static_cast<std::size_t>(mode)], wildcardRank);
+}
+
+int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
+                                           int legacyCourseId,
+                                           int lnMode) const {
+  int rank = kNoClearTypeRank;
+  const auto keyIt = rankByCourseKey.find(courseKey);
+  if (keyIt != rankByCourseKey.end()) {
+    rank = keyIt->second.bestRankForMode(lnMode);
+  }
+  const auto idIt = rankByLegacyCourseId.find(legacyCourseId);
+  if (idIt != rankByLegacyCourseId.end()) {
+    rank = std::max(rank, idIt->second.bestRankForMode(lnMode));
+  }
+  return rank;
 }
 
 int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
@@ -105,6 +134,8 @@ int main() {
   execOrAbort(db,
               "CREATE TABLE difficulty_courses ("
               "id INTEGER PRIMARY KEY,"
+              "course_key TEXT NOT NULL,"
+              "name TEXT NOT NULL,"
               "table_id INTEGER NOT NULL,"
               "group_name TEXT NOT NULL"
               ")");
@@ -123,14 +154,34 @@ int main() {
               "INSERT INTO difficulty_table_entries(table_id, level, sha256, "
               "md5) VALUES(1, '12', '', 'md5-local')");
   execOrAbort(db,
-              "INSERT INTO difficulty_courses(id, table_id, group_name) "
-              "VALUES(10, 1, 'Courses')");
+              "INSERT INTO difficulty_courses(id, course_key, name, table_id, "
+              "group_name) VALUES(10, "
+              "'course:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              "aaaaaaaaaaaaaa', 'Current renamed course', 1, 'Courses'),"
+              "(20, 'course:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              "bbbbbbbbbbbbbbbbbb', 'Blank fallback course', 1, 'Courses'),"
+              "(30, 'course:v1:cccccccccccccccccccccccccccccccccccccccccccccc"
+              "cccccccccccccccccc', 'Mismatching key course', 1, 'Courses')");
   execOrAbort(db,
               "INSERT INTO difficulty_course_entries(course_id, sha256, md5, "
-              "sort_order) VALUES(10, '', 'md5-local', 1)");
+              "sort_order) VALUES(10, '', 'md5-local', 1),"
+              "(20, '', 'md5-local', 1),(30, '', 'md5-local', 1)");
 
   ScoreClearRankCache scoreRanks;
   scoreRanks.rankBySha256["sha-local"].ranks[0] = kClearTypeHardClearRank;
+  auto &courseRanks = scoreRanks.rankByCourseKey[
+      "course:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaa"];
+  courseRanks.ranks[long_note_mode::kCnValue] = kClearTypeExHardClearRank;
+  courseRanks.wildcardRank = kClearTypeNormalClearRank;
+  scoreRanks.rankByLegacyCourseId[20]
+      .ranks[long_note_mode::kLnValue] = kClearTypeFullComboRank;
+  // This keyed record historically used ID 30. Its nonempty key differs from
+  // the current course key, so it must not enter the legacy ID fallback map.
+  scoreRanks
+      .rankByCourseKey["course:v1:ddddddddddddddddddddddddddddddddddddddddddddd"
+                       "ddddddddddddddddddd"]
+      .ranks[long_note_mode::kLnValue] = kClearTypeFullComboRank;
 
   const auto data =
       main_menu_library::LoadFolderClearDataByLongNoteMode(db, scoreRanks);
@@ -160,9 +211,34 @@ int main() {
             folderRankForLn(
                 data, main_menu_library::folderKeyForCourseGroup(1, "Courses")),
             "course group folder uses matched chart sha");
-  ASSERT_EQ(kClearTypeHardClearRank,
+  ASSERT_EQ(kClearTypeNormalClearRank,
             folderRankForLn(data, main_menu_library::folderKeyForCourse(10)),
-            "course folder uses matched chart sha");
+            "course folder uses canonical-key wildcard score lamp");
+  ASSERT_EQ(kClearTypeNormalClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(10),
+                              long_note_mode::kLnValue),
+            "renamed and renumbered course keeps canonical-key wildcard lamp");
+  ASSERT_EQ(kClearTypeExHardClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(10),
+                              long_note_mode::kCnValue),
+            "course canonical-key lamp separates exact CN mode");
+  ASSERT_EQ(kClearTypeNormalClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(10),
+                              long_note_mode::kHcnValue),
+            "course wildcard lamp contributes to HCN mode");
+  ASSERT_EQ(kClearTypeFullComboRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(20),
+                              long_note_mode::kLnValue),
+            "blank-key score uses same-ID course folder fallback");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(30),
+                              long_note_mode::kLnValue),
+            "same-ID nonempty mismatching key cannot override course folder");
 
   sqlite3_close(db);
   return 0;

@@ -6,11 +6,13 @@
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
+#include "GamePlayStartOptions.h"
 #include "Pacemaker.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
+#include "../../input/InputTypes.h"
 #include "../../view/TextView.h"
 #include <atomic>
 #include <functional>
@@ -20,63 +22,6 @@
 #include <unordered_map>
 class Button;
 class RhythmLaneInputController;
-struct StartOptions {
-  unsigned long long startPosition = 0;
-  bool autoKeySound = false;
-  bool autoPlay = false;
-  GaugeType gaugeType = GaugeType::Normal;
-  GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
-  std::shared_ptr<ReplayData> replayData = nullptr;
-  std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
-  std::optional<std::string> playOption;
-  std::optional<long long> playOptionSeed;
-  std::optional<std::string> playOption2;
-  std::optional<long long> playOption2Seed;
-  int longNoteMode = 0;
-  std::string assistOption = assist_options::kOff;
-  std::string pacemakerTarget = pacemaker::kTargetBest;
-  std::shared_ptr<CoursePlaySession> courseSession = nullptr;
-  CourseConstraintRules courseConstraints;
-  bool ownsChart = false;
-  bool practiceMode = false;
-  unsigned long long practiceLeadInMicros = 0;
-  Scene *returnScene = nullptr;
-  std::optional<bool> touchVisualizationEnabled;
-  std::optional<bool> replayGhostRenderingEnabled;
-  std::function<void(const ReplayData &)> practiceGhostCallback;
-};
-
-inline StartOptions makeCourseReplayStageStartOptions(
-    const std::shared_ptr<CoursePlaySession> &session,
-    const std::shared_ptr<ReplayData> &stageReplay) {
-  StartOptions options;
-  options.startPosition = 0;
-  options.autoKeySound = false;
-  options.autoPlay = false;
-  options.ownsChart = true;
-  if (session != nullptr) {
-    options.gaugeType = session->gaugeType;
-    options.gaugeProfile = session->gaugeProfile;
-    options.gaugeAutoShift = session->gaugeAutoShift;
-    options.courseSession = session;
-    options.courseConstraints = session->constraints;
-    options.touchVisualizationEnabled = session->replayTouchVisualizationEnabled;
-    options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;
-  }
-  if (stageReplay != nullptr) {
-    options.replayData = stageReplay;
-    options.playOption = stageReplay->playOption;
-    options.playOptionSeed = stageReplay->playOptionSeed;
-    options.playOption2 = stageReplay->playOption2;
-    options.playOption2Seed = stageReplay->playOption2Seed;
-    options.longNoteMode =
-        normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
-    options.assistOption = stageReplay->assistOption;
-  }
-  return options;
-}
-
 class RhythmInputHandler;
 class BMSRenderer;
 class GamePlayScene : public Scene, public IRhythmControl {
@@ -84,6 +29,8 @@ private:
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
   bool isGamePaused = false;
+  bool escapeHandledByInputPipeline = false;
+  bool profileGameplayBlockerActive = false;
   std::atomic_bool isCancelled = false;
   long long latePoorTiming;
 
@@ -115,6 +62,10 @@ private:
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
   void showPauseMenu(bool pausePlayback);
   void closePauseMenu();
+  void togglePauseMenuFromInput();
+  void
+  handleLogicalInputCommand(const input::LogicalInputTransition &transition);
+  void adjustLaneCoverFromInput(int deltaPercent);
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
   void retryWithNewPattern();
@@ -170,6 +121,7 @@ private:
   float coursePauseHoldRewindStartProgress = 0.0f;
   Judge judge;
   StartOptions options;
+  const ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
   void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,
                         long long judgeTimeMicros);

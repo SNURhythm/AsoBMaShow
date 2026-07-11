@@ -94,9 +94,7 @@ ensureExportDirectoryError(const std::filesystem::path &path,
 class ScopedResultImageBgfxAccess {
 public:
   explicit ScopedResultImageBgfxAccess(ApplicationContext &context)
-      : context(context), lock(context.bgfxRenderMutex, std::defer_lock) {
-    context.replayVideoExportActive.store(true, std::memory_order_release);
-    lock.lock();
+      : context(context), access(context.rendererAccess.acquireExport()) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     originalResetFlags = context.bgfxResetFlags.load(std::memory_order_relaxed);
     if ((originalResetFlags & BGFX_RESET_VSYNC) != 0) {
@@ -122,16 +120,13 @@ public:
     restorePrimaryRenderViews(context);
     context.replayVideoExportUiFrameRequested.store(false,
                                                     std::memory_order_release);
-    context.replayVideoExportActive.store(false, std::memory_order_release);
-    if (lock.owns_lock()) {
-      lock.unlock();
-    }
+    access.release();
     released = true;
   }
 
 private:
   ApplicationContext &context;
-  std::unique_lock<std::mutex> lock;
+  display::RendererAccessCoordinator::ExportReservation access;
   uint32_t originalResetFlags = 0;
   bool restoreResetFlags = false;
   bool released = false;

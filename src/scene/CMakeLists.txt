@@ -4,12 +4,19 @@ target_sources(main PRIVATE
     MainMenuLibrary.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
+    ProfileSettingsController.cpp
+    ProfileSettingsControllerContext.cpp
+    ProfileRuntimeReapply.cpp
     SceneManager.cpp
     ResultScene.cpp
     SettingsScene.cpp
+    SettingsAudioVideoModel.cpp
+    SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
+    SettingsSceneInput.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
+    SettingsSceneProfiles.cpp
     SettingsSceneTables.cpp
 )
 add_subdirectory(play)

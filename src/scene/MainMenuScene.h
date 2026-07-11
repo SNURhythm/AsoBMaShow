@@ -25,6 +25,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include "MainMenuProfileSelections.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -182,6 +183,7 @@ private:
     int tableId = 0;
     std::string tableLevel;
     int courseId = 0;
+    std::string courseKey;
     int courseTableId = 0;
     std::string courseGroupName;
     std::string courseConstraintJson;
@@ -516,36 +518,32 @@ private:
     bool autoShift = false;
   };
   std::vector<GaugeSelectionButton> gaugeSelectionButtons;
-  GaugeType selectedGaugeType = GaugeType::Normal;
-  bool selectedGaugeAutoShift = false;
+  main_menu_profile::Selections profileSelections;
   struct PlayOptionButton {
     Button *button = nullptr;
     TextView *text = nullptr;
     std::string option;
   };
   std::vector<PlayOptionButton> playOptionButtons;
-  std::string selectedPlayOption = "NORMAL";
   struct LongNoteModeButton {
     Button *button = nullptr;
     TextView *text = nullptr;
     std::string mode;
   };
   std::vector<LongNoteModeButton> longNoteModeButtons;
-  std::string selectedLnMode = AppSettings::kDefaultLnMode;
   struct AssistOptionButton {
     Button *button = nullptr;
     TextView *text = nullptr;
     std::string option;
   };
   std::vector<AssistOptionButton> assistOptionButtons;
-  std::string selectedAssistOption = assist_options::kOff;
   struct PacemakerTargetButton {
     Button *button = nullptr;
     TextView *text = nullptr;
     std::string target;
   };
   std::vector<PacemakerTargetButton> pacemakerTargetButtons;
-  std::string selectedPacemakerTarget = AppSettings::kDefaultPacemakerTarget;
+  bool profileSelectionsInitialized = false;
   struct EffectivePlayOptionSelection {
     std::string playOption = "NORMAL";
     std::string longNoteMode = AppSettings::kDefaultLnMode;
@@ -565,6 +563,7 @@ private:
 
   void initView(ApplicationContext &context);
   void applyThemeChange();
+  void reloadProfileSelectionsFromSettings();
   void reloadFolderItems(bool preserveViewState = false);
   void refreshFavoriteFolderCount();
   ChartMetaQuery chartQueryForActiveFolder() const;
@@ -587,9 +586,9 @@ private:
   void setChartDifficultyDropdownOpen(bool minLevel, bool open);
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
   void reloadChartList(bool preserveViewState = false);
-  void reloadScoreClearRanks();
-  void prepareScoreQueryDatabase();
-  void refreshScoreClearRankViews();
+  std::optional<std::string> reloadScoreClearRanks();
+  std::optional<std::string> prepareScoreQueryDatabase();
+  std::optional<std::string> refreshScoreClearRankViews();
   void refreshLongNoteModeClearRankViews();
   void refreshScoreClearRanksIfNeeded();
   void refreshLibraryIfNeeded();

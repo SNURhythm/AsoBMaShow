@@ -1,5 +1,6 @@
 #include "ResultScene.h"
 #include "../CourseConstraintUtils.h"
+#include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
@@ -21,6 +22,7 @@
 #include "../skin/SkinTypes.h"
 
 #include <algorithm>
+#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -202,10 +204,37 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   return aggregate;
 }
 
-CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
-                                            const RhythmState &resultState) {
+std::optional<CourseReplayData>
+courseReplayDataForSession(const CoursePlaySession &session,
+                           const RhythmState &resultState,
+                           const ScoreProvenance &provenance) {
+  const std::size_t completedCharts = session.completedResults.size();
+  const std::size_t totalCharts = session.entries.size();
+  if (completedCharts == 0 || completedCharts > totalCharts ||
+      totalCharts > static_cast<std::size_t>(
+                        replay_summary_scan::kMaxCourseStagesPerCandidate)) {
+    return std::nullopt;
+  }
+  std::vector<bms_parser::ChartMeta> expectedMetas;
+  expectedMetas.reserve(completedCharts);
+  for (std::size_t index = 0; index < completedCharts; ++index) {
+    expectedMetas.push_back(session.entries[index].meta);
+  }
+  auto preparedStages = course_replay::prepareCompletedPrefixForSave(
+      session.replayStages, expectedMetas, completedCharts);
+  if (!preparedStages.has_value()) {
+    return std::nullopt;
+  }
+
   CourseReplayData replay;
   replay.courseId = session.courseId;
+  replay.courseKey = session.courseKey;
+  if (replay.courseKey.empty()) {
+    replay.courseKey = course_identity::makeCourseKey(session);
+  }
+  if (replay.courseKey.empty()) {
+    return std::nullopt;
+  }
   replay.courseName = session.courseName;
   replay.courseGroupName = session.courseGroupName;
   replay.constraintJson = session.constraintJson;
@@ -219,9 +248,9 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
   replay.maxCombo = session.maxCombo;
   replay.finalGauge = resultState.currentGauge;
   replay.clearType = resultState.getClearTypeRank();
-  replay.completedCharts =
-      static_cast<int>(session.completedResults.size());
-  replay.totalCharts = static_cast<int>(session.entries.size());
+  replay.completedCharts = static_cast<int>(completedCharts);
+  replay.totalCharts = static_cast<int>(totalCharts);
+  replay.provenance = provenance;
   const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
   if (result_presentation::isFullComboCourseResult(
           replay.completedCharts, replay.totalCharts, session.entries.size(),
@@ -229,35 +258,23 @@ CourseReplayData courseReplayDataForSession(const CoursePlaySession &session,
     replay.clearType = kClearTypeFullComboRank;
   }
 
-  const size_t stageCount =
-      std::min(session.entries.size(), session.replayStages.size());
-  replay.stages.reserve(stageCount);
-  for (size_t i = 0; i < stageCount; ++i) {
-    CourseReplayStageData stage = session.replayStages[i];
-    if (stage.replay.chartMeta.BmsPath.empty() && i < session.entries.size()) {
-      stage.replay.chartMeta = session.entries[i].meta;
-    }
-    if (stage.replay.events.empty()) {
-      continue;
-    }
-    replay.stages.push_back(std::move(stage));
-  }
+  replay.stages = std::move(*preparedStages);
   return replay;
 }
 } // namespace
 
-ResultScene::ResultScene(ApplicationContext &context,
-                         const bms_parser::ChartMeta &meta,
-                         const RhythmState &state, const ReplayData *replay,
-                         bool shouldSaveScore, const ReplayData *retrySource,
-                         ResultPracticeOptions practiceOptions,
-                         bool autoPlayResult,
-                         ResultCourseOptions courseOptions,
-                         std::string pacemakerTarget,
-                         std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
-                         bms_parser::Chart *reusableRetryChart,
-                         std::optional<ResultPacemakerData> pacemakerOverride)
+ResultScene::ResultScene(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const ScoreProvenance &attemptProvenance,
+    const ReplayData *replay, bool shouldSaveScore,
+    const ReplayData *retrySource, ResultPracticeOptions practiceOptions,
+    bool autoPlayResult, ResultCourseOptions courseOptions,
+    std::string pacemakerTarget,
+    std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
+    bms_parser::Chart *reusableRetryChart,
+    std::optional<ResultPacemakerData> pacemakerOverride)
     : Scene(context), meta(meta), resultState(state),
+      attemptProvenance(attemptProvenance),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
                                      : std::nullopt),
       retryData(retrySource != nullptr
@@ -349,8 +366,8 @@ void ResultScene::saveScore() {
       const int totalCharts =
           static_cast<int>(courseOptions.session->entries.size());
       if (ScoreDBHelper::GetInstance().SaveCourseScore(
-              *courseOptions.session, resultState, completedCharts,
-              totalCharts)) {
+              *courseOptions.session, resultState, completedCharts, totalCharts,
+              attemptProvenance)) {
         courseOptions.session->courseScoreSaved = true;
       } else {
         SDL_Log("Failed to save course score: %s",
@@ -364,7 +381,8 @@ void ResultScene::saveScore() {
     return;
   }
 
-  if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState)) {
+  if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState,
+                                              attemptProvenance)) {
     SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
   }
 }
@@ -403,16 +421,19 @@ void ResultScene::saveReplay() {
   if (isCourseFinalResult()) {
     auto session = courseOptions.session;
     if (session == nullptr || session->courseReplayPlayback ||
-        session->courseReplaySaved || session->replayStages.empty()) {
+        session->courseReplaySaved) {
       return;
     }
 
-    auto courseReplay =
-        std::make_shared<CourseReplayData>(
-            courseReplayDataForSession(*session, resultState));
-    if (courseReplay->stages.empty()) {
+    auto pendingCourseReplay = courseReplayDataForSession(
+        *session, resultState, attemptProvenance);
+    if (!pendingCourseReplay.has_value()) {
+      SDL_Log("Refusing incomplete or non-contiguous course replay: %s",
+              session->courseName.c_str());
       return;
     }
+    auto courseReplay = std::make_shared<CourseReplayData>(
+        std::move(*pendingCourseReplay));
 
     auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
     if (!replayId.has_value()) {
@@ -433,6 +454,9 @@ void ResultScene::saveReplay() {
     return;
   }
   replaySaved = true;
+
+  assert(replayToSave->provenance == attemptProvenance);
+  replayToSave->provenance = attemptProvenance;
 
   if (!ReplayDBHelper::GetInstance().SaveReplay(*replayToSave).has_value()) {
     SDL_Log("Failed to save replay for chart: %s", meta.Title.c_str());
@@ -882,8 +906,8 @@ void ResultScene::showCourseResult() {
   RhythmState courseState = courseResultStateForSession(*session);
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
-          context, courseMeta, courseState, nullptr, false, nullptr,
-          ResultPracticeOptions{}, false,
+          context, courseMeta, courseState, session->aggregateProvenance(),
+          nullptr, false, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
                               .session = session}),
       false);
@@ -1098,6 +1122,7 @@ void ResultScene::startCourseReplay() {
   auto replayData = std::make_shared<CourseReplayData>(*source);
   auto replaySession = std::make_shared<CoursePlaySession>();
   replaySession->courseId = replayData->courseId;
+  replaySession->courseKey = replayData->courseKey;
   replaySession->courseName = replayData->courseName;
   replaySession->courseGroupName = replayData->courseGroupName;
   replaySession->constraintJson = replayData->constraintJson;

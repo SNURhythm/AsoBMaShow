@@ -418,3 +418,14 @@ SDL_Keycode InputNormalizer::normalize(int keyCode, KeySource keySource) {
 
   return keyCode;
 }
+
+SDL_Scancode InputNormalizer::normalizeScancode(int keyCode,
+                                                KeySource keySource) {
+  if (keySource == ScanCode) {
+    if (keyCode < SDL_SCANCODE_UNKNOWN || keyCode >= SDL_NUM_SCANCODES) {
+      return SDL_SCANCODE_UNKNOWN;
+    }
+    return static_cast<SDL_Scancode>(keyCode);
+  }
+  return SDL_GetScancodeFromKey(normalize(keyCode, keySource));
+}

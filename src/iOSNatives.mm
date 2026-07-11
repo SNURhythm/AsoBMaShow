@@ -12,17 +12,28 @@
 #include <Photos/Photos.h>
 #include <QuartzCore/CAMetalLayer.h>
 #include <UIKit/UIKit.h>
+#include <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dispatch/dispatch.h>
 #include <algorithm>
+#include <atomic>
+#include <array>
+#include <cerrno>
 #include <chrono>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 @interface IOSNativeMusicDelegate : NSObject <AVAudioPlayerDelegate>
 @end
@@ -1669,6 +1680,454 @@ void RestoreIOSViewportAfterKeyboardFocus() {
 }
 @end
 
+@class AsoDocumentHandoffDelegate;
+
+class IOSExclusiveOutputFile {
+public:
+  enum class OpenResult { Opened, AlreadyExists, Cancelled, Failed };
+
+  IOSExclusiveOutputFile() = default;
+  IOSExclusiveOutputFile(const IOSExclusiveOutputFile &) = delete;
+  IOSExclusiveOutputFile &operator=(const IOSExclusiveOutputFile &) = delete;
+  ~IOSExclusiveOutputFile() { abort(); }
+
+  OpenResult open(NSString *path, NSString **errorMessage) {
+    std::lock_guard lock(mutex_);
+    if (cancelled_) {
+      return OpenResult::Cancelled;
+    }
+    if (descriptor_ >= 0 || ownsPath_ || path.length == 0) {
+      setError(errorMessage, @"Invalid private document destination.");
+      return OpenResult::Failed;
+    }
+
+    const char *pathBytes = path.fileSystemRepresentation;
+    if (pathBytes == nullptr) {
+      setError(errorMessage, @"The private document path is invalid.");
+      return OpenResult::Failed;
+    }
+    const int descriptor =
+        ::open(pathBytes,
+               O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (descriptor < 0) {
+      const int openError = errno;
+      if (openError == EEXIST || openError == ELOOP) {
+        return OpenResult::AlreadyExists;
+      }
+      setPOSIXError(errorMessage, openError,
+                    @"Could not create the private document copy.");
+      return OpenResult::Failed;
+    }
+
+    struct stat status {};
+    if (::fstat(descriptor, &status) != 0) {
+      const int statusError = errno;
+      ::close(descriptor);
+      setPOSIXError(errorMessage, statusError,
+                    @"Could not inspect the private document copy.");
+      return OpenResult::Failed;
+    }
+    const dev_t device = status.st_dev;
+    const ino_t inode = status.st_ino;
+    int securityError = 0;
+    if (::fchmod(descriptor, 0600) != 0) {
+      securityError = errno;
+    } else if (::fstat(descriptor, &status) != 0) {
+      securityError = errno;
+    } else if (!S_ISREG(status.st_mode) || status.st_uid != geteuid() ||
+               (status.st_mode & 0777) != 0600) {
+      securityError = EACCES;
+    }
+    if (securityError != 0) {
+      ::close(descriptor);
+      removePathIfIdentityMatches(path, device, inode);
+      setPOSIXError(errorMessage, securityError,
+                    @"Could not secure the private document copy.");
+      return OpenResult::Failed;
+    }
+
+    descriptor_ = descriptor;
+    path_ = [path copy];
+    device_ = device;
+    inode_ = inode;
+    ownsPath_ = true;
+    return OpenResult::Opened;
+  }
+
+  bool write(const std::uint8_t *data, std::size_t size,
+             NSString **errorMessage) {
+    std::lock_guard lock(mutex_);
+    if (cancelled_) {
+      return false;
+    }
+    if (descriptor_ < 0) {
+      setError(errorMessage, @"The private document copy is not open.");
+      return false;
+    }
+    std::size_t offset = 0;
+    while (offset < size) {
+      const ssize_t count =
+          ::write(descriptor_, data + offset, size - offset);
+      if (count < 0 && errno == EINTR) {
+        continue;
+      }
+      if (count <= 0) {
+        setPOSIXError(errorMessage, count < 0 ? errno : EIO,
+                      @"Writing the private document copy failed.");
+        return false;
+      }
+      offset += static_cast<std::size_t>(count);
+    }
+    return true;
+  }
+
+  bool finish(NSString **errorMessage) {
+    std::lock_guard lock(mutex_);
+    if (cancelled_) {
+      return false;
+    }
+    if (descriptor_ < 0) {
+      setError(errorMessage, @"The private document copy is not open.");
+      return false;
+    }
+
+    int syncResult = -1;
+    do {
+      syncResult = ::fsync(descriptor_);
+    } while (syncResult < 0 && errno == EINTR);
+    if (syncResult < 0) {
+      setPOSIXError(errorMessage, errno,
+                    @"Could not finish the private document copy.");
+      closeLocked();
+      return false;
+    }
+    if (!descriptorAndPathStillMatchLocked()) {
+      setError(errorMessage,
+               @"The private document destination changed during copying.");
+      closeLocked();
+      return false;
+    }
+    const int descriptor = descriptor_;
+    descriptor_ = -1;
+    if (::close(descriptor) != 0) {
+      setPOSIXError(errorMessage, errno,
+                    @"Could not close the private document copy safely.");
+      return false;
+    }
+    return true;
+  }
+
+  void releaseOwnership() noexcept {
+    std::lock_guard lock(mutex_);
+    ownsPath_ = false;
+    path_ = nil;
+  }
+
+  void cancel() noexcept {
+    std::lock_guard lock(mutex_);
+    cancelled_ = true;
+    closeLocked();
+    removeOwnedPathLocked();
+  }
+
+  void abort() noexcept {
+    std::lock_guard lock(mutex_);
+    closeLocked();
+    removeOwnedPathLocked();
+  }
+
+  [[nodiscard]] bool cancelled() const noexcept {
+    std::lock_guard lock(mutex_);
+    return cancelled_;
+  }
+
+private:
+  static void setError(NSString **errorMessage, NSString *message) {
+    if (errorMessage != nullptr) {
+      *errorMessage = message ?: @"Private document I/O failed.";
+    }
+  }
+
+  static void setPOSIXError(NSString **errorMessage, int code,
+                            NSString *fallback) {
+    if (errorMessage == nullptr) {
+      return;
+    }
+    NSError *error = [NSError errorWithDomain:NSPOSIXErrorDomain
+                                         code:code
+                                     userInfo:nil];
+    *errorMessage = error.localizedDescription ?: fallback;
+  }
+
+  static void removePathIfIdentityMatches(NSString *path, dev_t device,
+                                          ino_t inode) noexcept {
+    const char *pathBytes = path.fileSystemRepresentation;
+    struct stat status {};
+    if (pathBytes != nullptr && ::lstat(pathBytes, &status) == 0 &&
+        S_ISREG(status.st_mode) && status.st_dev == device &&
+        status.st_ino == inode) {
+      ::unlink(pathBytes);
+    }
+  }
+
+  bool descriptorAndPathStillMatchLocked() const noexcept {
+    if (descriptor_ < 0 || !ownsPath_ || path_.length == 0) {
+      return false;
+    }
+    struct stat descriptorStatus {};
+    struct stat pathStatus {};
+    const char *pathBytes = path_.fileSystemRepresentation;
+    return pathBytes != nullptr &&
+           ::fstat(descriptor_, &descriptorStatus) == 0 &&
+           ::lstat(pathBytes, &pathStatus) == 0 &&
+           S_ISREG(descriptorStatus.st_mode) && S_ISREG(pathStatus.st_mode) &&
+           descriptorStatus.st_dev == device_ &&
+           descriptorStatus.st_ino == inode_ && pathStatus.st_dev == device_ &&
+           pathStatus.st_ino == inode_ &&
+           descriptorStatus.st_uid == geteuid() &&
+           pathStatus.st_uid == geteuid() &&
+           (descriptorStatus.st_mode & 0777) == 0600 &&
+           (pathStatus.st_mode & 0777) == 0600;
+  }
+
+  void closeLocked() noexcept {
+    if (descriptor_ >= 0) {
+      const int descriptor = descriptor_;
+      descriptor_ = -1;
+      ::close(descriptor);
+    }
+  }
+
+  void removeOwnedPathLocked() noexcept {
+    if (ownsPath_) {
+      removePathIfIdentityMatches(path_, device_, inode_);
+    }
+    ownsPath_ = false;
+    path_ = nil;
+  }
+
+  mutable std::mutex mutex_;
+  int descriptor_ = -1;
+  NSString *path_ = nil;
+  dev_t device_ = 0;
+  ino_t inode_ = 0;
+  bool ownsPath_ = false;
+  bool cancelled_ = false;
+};
+
+static AsoDocumentHandoffDelegate *gActiveIOSDocumentHandoffDelegate = nil;
+static std::mutex gIOSDocumentIOMutex;
+static unsigned long long gIOSDocumentIOToken = 0;
+static bool gIOSDocumentIOCancellationRequested = false;
+static NSFileCoordinator *gIOSDocumentCoordinator = nil;
+static NSInputStream *gIOSDocumentInput = nil;
+static std::shared_ptr<IOSExclusiveOutputFile> gIOSDocumentOutput;
+
+static void RegisterIOSDocumentCoordinator(
+    unsigned long long operationToken, NSFileCoordinator *coordinator) {
+  std::lock_guard lock(gIOSDocumentIOMutex);
+  gIOSDocumentIOToken = operationToken;
+  gIOSDocumentIOCancellationRequested = false;
+  gIOSDocumentCoordinator = coordinator;
+  gIOSDocumentInput = nil;
+  gIOSDocumentOutput.reset();
+}
+
+static bool RegisterIOSDocumentStreams(unsigned long long operationToken,
+                                       NSInputStream *input,
+                                       const std::shared_ptr<
+                                           IOSExclusiveOutputFile> &output) {
+  std::lock_guard lock(gIOSDocumentIOMutex);
+  if (gIOSDocumentIOToken != operationToken ||
+      gIOSDocumentIOCancellationRequested) {
+    return false;
+  }
+  gIOSDocumentInput = input;
+  gIOSDocumentOutput = output;
+  return true;
+}
+
+static void UnregisterIOSDocumentIO(unsigned long long operationToken) {
+  std::lock_guard lock(gIOSDocumentIOMutex);
+  if (gIOSDocumentIOToken != operationToken) {
+    return;
+  }
+  gIOSDocumentIOToken = 0;
+  gIOSDocumentIOCancellationRequested = false;
+  gIOSDocumentCoordinator = nil;
+  gIOSDocumentInput = nil;
+  gIOSDocumentOutput.reset();
+}
+
+static void CancelIOSDocumentIO(unsigned long long operationToken) {
+  NSFileCoordinator *coordinator = nil;
+  NSInputStream *input = nil;
+  std::shared_ptr<IOSExclusiveOutputFile> output;
+  {
+    std::lock_guard lock(gIOSDocumentIOMutex);
+    if (gIOSDocumentIOToken != operationToken) {
+      return;
+    }
+    gIOSDocumentIOCancellationRequested = true;
+    coordinator = gIOSDocumentCoordinator;
+    input = gIOSDocumentInput;
+    output = gIOSDocumentOutput;
+  }
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    [coordinator cancel];
+    [input close];
+    if (output != nullptr) {
+      output->cancel();
+    }
+  });
+}
+
+@interface AsoDocumentHandoffDelegate
+    : NSObject <UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate> {
+@private
+  dispatch_semaphore_t _semaphore;
+  BOOL _finished;
+}
+@property(nonatomic, strong) NSURL *selectedURL;
+@property(nonatomic, strong) UIDocumentPickerViewController *picker;
+@property(nonatomic, copy) NSString *errorMessage;
+@property(nonatomic, assign) BOOL cancelled;
+@property(nonatomic, assign) unsigned long long operationToken;
+@property(nonatomic, assign) BOOL programmaticCancellationPending;
+@property(nonatomic, assign) BOOL dismissalOutcomePending;
+@property(nonatomic, strong) NSURL *pendingURL;
+@property(nonatomic, copy) NSString *pendingErrorMessage;
+@property(nonatomic, assign) BOOL pendingCancelled;
+@property(nonatomic, copy) BOOL (^commitHandler)(void);
+- (instancetype)initWithSemaphore:(dispatch_semaphore_t)semaphore
+                    operationToken:(unsigned long long)operationToken;
+- (void)finishWithURL:(NSURL *)url
+                error:(NSString *)errorMessage
+            cancelled:(BOOL)cancelled;
+- (void)finishAfterDismissingPicker:(UIDocumentPickerViewController *)picker
+                                URL:(NSURL *)url
+                              error:(NSString *)errorMessage
+                          cancelled:(BOOL)cancelled;
+@end
+
+@implementation AsoDocumentHandoffDelegate
+- (instancetype)initWithSemaphore:(dispatch_semaphore_t)semaphore
+                    operationToken:(unsigned long long)operationToken {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+  _semaphore = semaphore;
+  _finished = NO;
+  _selectedURL = nil;
+  _picker = nil;
+  _errorMessage = @"";
+  _cancelled = NO;
+  _operationToken = operationToken;
+  _programmaticCancellationPending = NO;
+  _dismissalOutcomePending = NO;
+  _pendingURL = nil;
+  _pendingErrorMessage = @"";
+  _pendingCancelled = NO;
+  _commitHandler = nil;
+  return self;
+}
+
+- (void)finishAfterDismissingPicker:(UIDocumentPickerViewController *)picker
+                                URL:(NSURL *)url
+                              error:(NSString *)errorMessage
+                          cancelled:(BOOL)cancelled {
+  self.dismissalOutcomePending = YES;
+  self.pendingURL = url;
+  self.pendingErrorMessage = errorMessage ?: @"";
+  self.pendingCancelled = cancelled;
+  UIViewController *presenting = picker.presentingViewController;
+  if (presenting == nil) {
+    [self finishWithURL:url error:errorMessage cancelled:cancelled];
+    return;
+  }
+  [presenting dismissViewControllerAnimated:YES
+                                  completion:^{
+    [self finishWithURL:self.pendingURL
+                  error:self.pendingErrorMessage
+              cancelled:self.pendingCancelled];
+  }];
+}
+
+- (void)finishWithURL:(NSURL *)url
+                error:(NSString *)errorMessage
+            cancelled:(BOOL)cancelled {
+  @synchronized(self) {
+    if (_finished) {
+      return;
+    }
+    _finished = YES;
+    self.selectedURL = url;
+    self.errorMessage = errorMessage ?: @"";
+    self.cancelled = cancelled;
+    if (gActiveIOSDocumentHandoffDelegate == self) {
+      gActiveIOSDocumentHandoffDelegate = nil;
+    }
+    if (_semaphore != nullptr) {
+      dispatch_semaphore_signal(_semaphore);
+    }
+  }
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+  if (self.dismissalOutcomePending) {
+    return;
+  }
+  NSURL *url = urls.firstObject;
+  if (url == nil) {
+    [self finishAfterDismissingPicker:controller
+                                  URL:nil
+                                error:@"The document picker returned no document."
+                            cancelled:NO];
+    return;
+  }
+  if (self.commitHandler != nil && !self.commitHandler()) {
+    self.commitHandler = nil;
+    // The system picker may already have replaced a user-selected destination.
+    // Never delete provider-owned content here; cancellation only controls the
+    // app result once the irreversible picker callback has arrived.
+    [self finishAfterDismissingPicker:controller
+                                  URL:nil
+                                error:@""
+                            cancelled:YES];
+    return;
+  }
+  self.commitHandler = nil;
+  [self finishAfterDismissingPicker:controller
+                                URL:url
+                              error:@""
+                          cancelled:NO];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+  if (self.programmaticCancellationPending || self.dismissalOutcomePending) {
+    return;
+  }
+  [self finishAfterDismissingPicker:controller
+                                URL:nil
+                              error:@""
+                          cancelled:YES];
+}
+
+- (void)presentationControllerDidDismiss:
+    (UIPresentationController *)presentationController {
+  (void)presentationController;
+  if (self.dismissalOutcomePending) {
+    [self finishWithURL:self.pendingURL
+                  error:self.pendingErrorMessage
+              cancelled:self.pendingCancelled];
+  } else {
+    [self finishWithURL:nil error:@"" cancelled:YES];
+  }
+}
+@end
+
 @interface AsoSecurityScopedResource : NSObject
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, assign) BOOL accessing;
@@ -1811,6 +2270,659 @@ bool PickIOSFolder(std::string &path, std::string &bookmark,
   errorMessage = NSStringToString(delegate.errorMessage);
   delegate = nil;
   return picked;
+}
+
+namespace {
+constexpr std::string_view kIOSDocumentCancelled = "__CANCELLED__";
+constexpr std::string_view kIOSDocumentErrorPrefix = "__ERROR__:";
+constexpr std::string_view kIOSDocumentSuccess = "__OK__";
+
+bool IOSDocumentCancellationRequested(
+    const std::atomic_bool *cancellationRequested) {
+  return cancellationRequested != nullptr &&
+         cancellationRequested->load(std::memory_order_acquire);
+}
+
+std::string IOSPathToUtf8(const std::filesystem::path &path) {
+  const auto value = path.u8string();
+  return {reinterpret_cast<const char *>(value.data()), value.size()};
+}
+
+bool IOSPathWithin(const std::filesystem::path &path,
+                   const std::filesystem::path &directory,
+                   bool allowEqual) {
+  auto pathPart = path.begin();
+  for (auto directoryPart = directory.begin();
+       directoryPart != directory.end(); ++directoryPart, ++pathPart) {
+    if (pathPart == path.end() || *pathPart != *directoryPart) {
+      return false;
+    }
+  }
+  return allowEqual || pathPart != path.end();
+}
+
+bool IOSIssuedImportPath(const std::filesystem::path &candidate,
+                         const std::filesystem::path &base) {
+  if (candidate.parent_path() != base) {
+    return false;
+  }
+  const std::string name = candidate.filename().string();
+  if (name.size() != 40 || !name.ends_with(".zip")) {
+    return false;
+  }
+  for (std::size_t index = 0; index < 36; ++index) {
+    const unsigned char value = static_cast<unsigned char>(name[index]);
+    const bool hyphen = index == 8 || index == 13 || index == 18 || index == 23;
+    if (hyphen ? value != static_cast<unsigned char>('-')
+               : std::isxdigit(value) == 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+NSString *IOSDocumentHandoffBaseDirectory(NSString **errorMessage) {
+  NSFileManager *fileManager = NSFileManager.defaultManager;
+  NSURL *cacheURL =
+      [fileManager URLsForDirectory:NSCachesDirectory
+                         inDomains:NSUserDomainMask].firstObject;
+  if (cacheURL == nil) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Application cache storage is unavailable.";
+    }
+    return nil;
+  }
+  NSString *directory =
+      [cacheURL.path stringByAppendingPathComponent:@"document-handoff"];
+  std::error_code pathError;
+  const auto cachePath =
+      std::filesystem::path(NSStringToString(cacheURL.path)).lexically_normal();
+  const auto directoryPath =
+      std::filesystem::path(NSStringToString(directory)).lexically_normal();
+  auto directoryStatus =
+      std::filesystem::symlink_status(directoryPath, pathError);
+  const bool directoryMissing =
+      pathError == std::errc::no_such_file_or_directory ||
+      (!pathError && directoryStatus.type() ==
+                         std::filesystem::file_type::not_found);
+  if (!directoryMissing &&
+      (pathError || std::filesystem::is_symlink(directoryStatus) ||
+       !std::filesystem::is_directory(directoryStatus))) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Private document storage is not trustworthy.";
+    }
+    return nil;
+  }
+  NSError *createError = nil;
+  NSDictionary *attributes = @{NSFilePosixPermissions : @0700};
+  if (directoryMissing &&
+      ![fileManager createDirectoryAtPath:directory
+              withIntermediateDirectories:NO
+                               attributes:attributes
+                                    error:&createError]) {
+    if (errorMessage != nullptr) {
+      *errorMessage = createError.localizedDescription ?:
+          @"Could not create private document storage.";
+    }
+    return nil;
+  }
+  pathError.clear();
+  directoryStatus = std::filesystem::symlink_status(directoryPath, pathError);
+  const auto canonicalCache = std::filesystem::canonical(cachePath, pathError);
+  const auto canonicalParent =
+      std::filesystem::canonical(directoryPath.parent_path(), pathError);
+  if (pathError || std::filesystem::is_symlink(directoryStatus) ||
+      !std::filesystem::is_directory(directoryStatus) ||
+      canonicalParent != canonicalCache) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Private document storage escaped application caches.";
+    }
+    return nil;
+  }
+  NSError *attributeError = nil;
+  [fileManager setAttributes:attributes
+                ofItemAtPath:directory
+                       error:&attributeError];
+  if (attributeError != nil) {
+    if (errorMessage != nullptr) {
+      *errorMessage = attributeError.localizedDescription ?:
+          @"Could not secure private document storage.";
+    }
+    return nil;
+  }
+  struct stat privateStatus {};
+  if (::lstat(directoryPath.c_str(), &privateStatus) != 0 ||
+      !S_ISDIR(privateStatus.st_mode) || privateStatus.st_uid != geteuid() ||
+      (privateStatus.st_mode & 0777) != 0700) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Private document storage permissions are unsafe.";
+    }
+    return nil;
+  }
+  return directory;
+}
+
+bool ValidateIOSTemporaryDocumentPath(
+    const std::filesystem::path &localPath, bool allowMissing,
+    bool allowFinalSymlink,
+    std::string &errorMessage) {
+  errorMessage.clear();
+  NSString *storageError = nil;
+  NSString *baseText = IOSDocumentHandoffBaseDirectory(&storageError);
+  if (baseText == nil) {
+    errorMessage = NSStringToString(storageError);
+    return false;
+  }
+
+  std::error_code error;
+  const auto base = std::filesystem::path(NSStringToString(baseText));
+  const auto candidate = localPath.lexically_normal();
+  if (!candidate.is_absolute() ||
+      !IOSPathWithin(candidate, base.lexically_normal(), false)) {
+    errorMessage = "Temporary document is outside private iOS storage.";
+    return false;
+  }
+  if (!IOSIssuedImportPath(candidate, base.lexically_normal())) {
+    errorMessage = "Temporary document does not match an issued iOS path.";
+    return false;
+  }
+  const auto baseStatus = std::filesystem::symlink_status(base, error);
+  if (error || std::filesystem::is_symlink(baseStatus)) {
+    errorMessage = "Private iOS document storage is not trustworthy.";
+    return false;
+  }
+  for (auto ancestor = candidate.parent_path(); ancestor != base;
+       ancestor = ancestor.parent_path()) {
+    if (ancestor.empty()) {
+      errorMessage = "Temporary document ancestry is invalid.";
+      return false;
+    }
+    const auto status = std::filesystem::symlink_status(ancestor, error);
+    if (error || std::filesystem::is_symlink(status)) {
+      errorMessage = "Temporary document has a symbolic-link ancestor.";
+      return false;
+    }
+  }
+
+  const auto canonicalBase = std::filesystem::canonical(base, error);
+  if (error) {
+    errorMessage = "Private iOS document storage cannot be resolved.";
+    return false;
+  }
+  const auto canonicalParent =
+      std::filesystem::canonical(candidate.parent_path(), error);
+  if (error || !IOSPathWithin(canonicalParent, canonicalBase, true)) {
+    errorMessage = "Temporary document escaped private iOS storage.";
+    return false;
+  }
+
+  const auto candidateStatus =
+      std::filesystem::symlink_status(candidate, error);
+  if (allowMissing &&
+      (error == std::errc::no_such_file_or_directory ||
+       (!error && candidateStatus.type() ==
+                      std::filesystem::file_type::not_found))) {
+    return true;
+  }
+  if (error || (!std::filesystem::is_regular_file(candidateStatus) &&
+                !(allowFinalSymlink &&
+                  std::filesystem::is_symlink(candidateStatus)))) {
+    errorMessage = "Temporary iOS document is not a regular file.";
+    return false;
+  }
+  if (!std::filesystem::is_symlink(candidateStatus)) {
+    struct stat privateStatus {};
+    if (::lstat(candidate.c_str(), &privateStatus) != 0 ||
+        !S_ISREG(privateStatus.st_mode) ||
+        privateStatus.st_uid != geteuid() ||
+        (privateStatus.st_mode & 0777) != 0600) {
+      errorMessage = "Temporary iOS document permissions are unsafe.";
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CopyIOSDocumentURLBounded(NSURL *sourceURL, NSString *destinationPath,
+                               std::uint64_t operationToken,
+                               std::uint64_t maxBytes,
+                               const std::atomic_bool *cancellationRequested,
+                               bool &cancelled,
+                               NSString **errorMessage) {
+  cancelled = false;
+  if (sourceURL == nil || destinationPath.length == 0 || maxBytes == 0) {
+    if (errorMessage != nullptr) {
+      *errorMessage = @"Invalid private document copy request.";
+    }
+    return false;
+  }
+  if (IOSDocumentCancellationRequested(cancellationRequested)) {
+    cancelled = true;
+    return false;
+  }
+
+  __block BOOL copied = NO;
+  __block BOOL copyCancelled = NO;
+  __block NSString *copyErrorMessage = @"";
+  auto output = std::make_shared<IOSExclusiveOutputFile>();
+  NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+  RegisterIOSDocumentCoordinator(operationToken, coordinator);
+  if (IOSDocumentCancellationRequested(cancellationRequested)) {
+    [coordinator cancel];
+    UnregisterIOSDocumentIO(operationToken);
+    cancelled = true;
+    return false;
+  }
+  NSError *coordinationError = nil;
+  [coordinator coordinateReadingItemAtURL:sourceURL
+                                  options:0
+                                    error:&coordinationError
+                               byAccessor:^(NSURL *coordinatedURL) {
+    if (IOSDocumentCancellationRequested(cancellationRequested)) {
+      copyCancelled = YES;
+      return;
+    }
+    NSNumber *declaredSize = nil;
+    NSError *sizeError = nil;
+    [coordinatedURL getResourceValue:&declaredSize
+                              forKey:NSURLFileSizeKey
+                               error:&sizeError];
+    if (declaredSize != nil && declaredSize.unsignedLongLongValue > maxBytes) {
+      copyErrorMessage = @"The selected document exceeds the maximum size.";
+      return;
+    }
+
+    NSInputStream *input = [NSInputStream inputStreamWithURL:coordinatedURL];
+    if (!RegisterIOSDocumentStreams(operationToken, input, output)) {
+      copyCancelled = YES;
+      return;
+    }
+    [input open];
+    NSString *openErrorMessage = nil;
+    const auto openResult = output->open(destinationPath, &openErrorMessage);
+    if (openResult == IOSExclusiveOutputFile::OpenResult::Cancelled) {
+      copyCancelled = YES;
+      [input close];
+      return;
+    }
+    if (openResult == IOSExclusiveOutputFile::OpenResult::AlreadyExists) {
+      copyErrorMessage = @"The private document destination already exists.";
+      [input close];
+      return;
+    }
+    if (openResult != IOSExclusiveOutputFile::OpenResult::Opened) {
+      copyErrorMessage = openErrorMessage ?:
+          @"Could not create the private document copy.";
+      [input close];
+      return;
+    }
+    std::uint64_t total = 0;
+    std::array<std::uint8_t, 64 * 1024> buffer{};
+    while (true) {
+      if (IOSDocumentCancellationRequested(cancellationRequested)) {
+        copyCancelled = YES;
+        break;
+      }
+      const NSInteger count = [input read:buffer.data()
+                                  maxLength:buffer.size()];
+      if (count < 0) {
+        copyErrorMessage = input.streamError.localizedDescription ?:
+            @"Reading the selected document failed.";
+        break;
+      }
+      if (count == 0) {
+        copied = YES;
+        break;
+      }
+      const auto unsignedCount = static_cast<std::uint64_t>(count);
+      if (unsignedCount > maxBytes - total) {
+        copyErrorMessage = @"The selected document exceeds the maximum size.";
+        break;
+      }
+      NSInteger written = 0;
+      while (written < count) {
+        if (IOSDocumentCancellationRequested(cancellationRequested)) {
+          copyCancelled = YES;
+          break;
+        }
+        NSString *writeErrorMessage = nil;
+        const auto remaining = static_cast<std::size_t>(count - written);
+        if (!output->write(buffer.data() + written, remaining,
+                           &writeErrorMessage)) {
+          if (output->cancelled() ||
+              IOSDocumentCancellationRequested(cancellationRequested)) {
+            copyCancelled = YES;
+          }
+          copyErrorMessage = writeErrorMessage ?:
+              @"Writing the private document copy failed.";
+          break;
+        }
+        written = count;
+      }
+      if (written != count) {
+        break;
+      }
+      total += unsignedCount;
+    }
+    [input close];
+    if (copied) {
+      NSString *finishErrorMessage = nil;
+      if (!output->finish(&finishErrorMessage)) {
+        copied = NO;
+        if (output->cancelled() ||
+            IOSDocumentCancellationRequested(cancellationRequested)) {
+          copyCancelled = YES;
+        } else {
+          copyErrorMessage = finishErrorMessage ?:
+              @"Could not finish the private document copy.";
+        }
+      }
+    }
+  }];
+  UnregisterIOSDocumentIO(operationToken);
+
+  if (IOSDocumentCancellationRequested(cancellationRequested)) {
+    copyCancelled = YES;
+    copied = NO;
+  }
+
+  if (!copied) {
+    output->abort();
+    if (copyCancelled ||
+        IOSDocumentCancellationRequested(cancellationRequested)) {
+      cancelled = true;
+      return false;
+    }
+    if (copyErrorMessage.length == 0 && coordinationError != nil) {
+      copyErrorMessage = coordinationError.localizedDescription;
+    }
+    if (copyErrorMessage.length == 0) {
+      copyErrorMessage = @"Could not copy the selected document.";
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage = copyErrorMessage;
+    }
+    return false;
+  }
+  output->releaseOwnership();
+  return true;
+}
+
+bool WaitForIOSDocumentPicker(std::uint64_t operationToken,
+                              NSString *mimeType, NSURL *exportURL,
+                              BOOL (^commitHandler)(void),
+                              NSURL *__strong *selectedURL,
+                              bool &cancelled, std::string &errorMessage,
+                              const std::atomic_bool *cancellationRequested) {
+  if ([NSThread isMainThread]) {
+    errorMessage = "Document handoff must run off the main thread.";
+    return false;
+  }
+  cancelled = false;
+  errorMessage.clear();
+  if (selectedURL != nullptr) {
+    *selectedURL = nil;
+  }
+  if (IOSDocumentCancellationRequested(cancellationRequested)) {
+    cancelled = true;
+    return false;
+  }
+
+  dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+  __block AsoDocumentHandoffDelegate *delegate =
+      [[AsoDocumentHandoffDelegate alloc]
+          initWithSemaphore:semaphore
+             operationToken:operationToken];
+  delegate.commitHandler = commitHandler;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
+      if (IOSDocumentCancellationRequested(cancellationRequested)) {
+        [delegate finishWithURL:nil error:@"" cancelled:YES];
+        return;
+      }
+      gActiveIOSDocumentHandoffDelegate = delegate;
+      UIWindow *window = FindActiveWindow();
+      UIViewController *presenting =
+          window != nil ? TopViewController(window.rootViewController) : nil;
+      if (presenting == nil) {
+        [delegate finishWithURL:nil
+                          error:@"No active view controller is available."
+                      cancelled:NO];
+        return;
+      }
+
+      @try {
+        UIDocumentPickerViewController *picker = nil;
+        if (exportURL != nil) {
+          picker = [[UIDocumentPickerViewController alloc]
+              initForExportingURLs:@[ exportURL ]
+                            asCopy:YES];
+        } else {
+          UTType *contentType = [UTType typeWithMIMEType:mimeType];
+          if (contentType == nil) {
+            [delegate finishWithURL:nil
+                              error:@"The requested document type is unsupported."
+                          cancelled:NO];
+            return;
+          }
+          picker = [[UIDocumentPickerViewController alloc]
+              initForOpeningContentTypes:@[ contentType ]
+                                  asCopy:NO];
+        }
+        picker.delegate = delegate;
+        delegate.picker = picker;
+        picker.allowsMultipleSelection = NO;
+        picker.modalPresentationStyle = UIModalPresentationFormSheet;
+        picker.presentationController.delegate = delegate;
+        if (IOSDocumentCancellationRequested(cancellationRequested)) {
+          [delegate finishWithURL:nil error:@"" cancelled:YES];
+          return;
+        }
+        [presenting presentViewController:picker animated:YES completion:nil];
+      } @catch (NSException *exception) {
+        [delegate finishWithURL:nil
+                          error:exception.reason ?:
+                              @"Could not present the document picker."
+                      cancelled:NO];
+      }
+    }
+  });
+
+  dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+  cancelled = delegate.cancelled == YES;
+  errorMessage = NSStringToString(delegate.errorMessage);
+  if (selectedURL != nullptr) {
+    *selectedURL = delegate.selectedURL;
+  }
+  delegate = nil;
+  return !cancelled && errorMessage.empty();
+}
+
+std::string IOSErrorResult(NSString *message, std::string_view fallback) {
+  std::string value = NSStringToString(message);
+  if (value.empty()) {
+    value = std::string(fallback);
+  }
+  return std::string(kIOSDocumentErrorPrefix) + value;
+}
+} // namespace
+
+void CancelIOSDocument(std::uint64_t operationToken) {
+  CancelIOSDocumentIO(operationToken);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    AsoDocumentHandoffDelegate *delegate =
+        gActiveIOSDocumentHandoffDelegate;
+    if (delegate == nil || delegate.operationToken != operationToken) {
+      return;
+    }
+    if (delegate.dismissalOutcomePending) {
+      return;
+    }
+    UIDocumentPickerViewController *picker = delegate.picker;
+    delegate.programmaticCancellationPending = YES;
+    [delegate finishAfterDismissingPicker:picker
+                                      URL:nil
+                                    error:@""
+                                cancelled:YES];
+  });
+}
+
+bool ValidateIOSTemporaryDocument(const std::filesystem::path &localPath,
+                                  std::string &errorMessage) {
+  @autoreleasepool {
+    return ValidateIOSTemporaryDocumentPath(localPath, false, false,
+                                            errorMessage);
+  }
+}
+
+bool CleanupIOSTemporaryDocument(const std::filesystem::path &localPath,
+                                 std::string &errorMessage) {
+  @autoreleasepool {
+    if (!ValidateIOSTemporaryDocumentPath(localPath, true, true,
+                                          errorMessage)) {
+      return false;
+    }
+    std::error_code error;
+    if (!std::filesystem::remove(localPath, error) &&
+        error != std::errc::no_such_file_or_directory) {
+      errorMessage = "Temporary iOS document cleanup failed: " +
+                     error.message();
+      return false;
+    }
+    errorMessage.clear();
+    return true;
+  }
+}
+
+std::string ImportIOSDocument(std::uint64_t operationToken,
+                              const std::string &mimeType,
+                              std::uint64_t maxBytes,
+                              const std::atomic_bool *cancellationRequested) {
+  @autoreleasepool {
+    if (mimeType.empty() || maxBytes == 0) {
+      return std::string(kIOSDocumentErrorPrefix) +
+             "Invalid document import request.";
+    }
+    if (IOSDocumentCancellationRequested(cancellationRequested)) {
+      return std::string(kIOSDocumentCancelled);
+    }
+
+    NSURL *selectedURL = nil;
+    bool cancelled = false;
+    std::string pickerError;
+    if (!WaitForIOSDocumentPicker(operationToken, NSStringFromUtf8(mimeType),
+                                  nil, nil, &selectedURL, cancelled,
+                                  pickerError, cancellationRequested)) {
+      if (cancelled) {
+        return std::string(kIOSDocumentCancelled);
+      }
+      return std::string(kIOSDocumentErrorPrefix) + pickerError;
+    }
+
+    BOOL accessing = [selectedURL startAccessingSecurityScopedResource];
+    NSString *storageError = nil;
+    NSString *baseDirectory = IOSDocumentHandoffBaseDirectory(&storageError);
+    if (baseDirectory == nil) {
+      if (accessing) {
+        [selectedURL stopAccessingSecurityScopedResource];
+      }
+      return IOSErrorResult(storageError, "Private document storage failed.");
+    }
+    NSString *fileName = [NSString
+        stringWithFormat:@"%@.zip", NSUUID.UUID.UUIDString];
+    NSString *destination =
+        [baseDirectory stringByAppendingPathComponent:fileName];
+    NSString *copyError = nil;
+    bool copyCancelled = false;
+    const bool copied = CopyIOSDocumentURLBounded(
+        selectedURL, destination, operationToken, maxBytes, cancellationRequested,
+        copyCancelled, &copyError);
+    if (accessing) {
+      [selectedURL stopAccessingSecurityScopedResource];
+    }
+    if (!copied) {
+      if (copyCancelled) {
+        return std::string(kIOSDocumentCancelled);
+      }
+      return IOSErrorResult(copyError, "Private document copy failed.");
+    }
+    return NSStringToString(destination);
+  }
+}
+
+std::string ExportIOSDocument(std::uint64_t operationToken,
+                              const std::filesystem::path &localPath,
+                              const std::string &mimeType,
+                              const std::string &suggestedName,
+                              std::uint64_t maxBytes,
+                              const std::atomic_bool *cancellationRequested,
+                              std::function<bool()> commitHandler) {
+  @autoreleasepool {
+    if (localPath.empty() || mimeType.empty() || suggestedName.empty() ||
+        suggestedName == "." || suggestedName == ".." ||
+        suggestedName.find('/') != std::string::npos ||
+        suggestedName.find('\\') != std::string::npos || maxBytes == 0) {
+      return std::string(kIOSDocumentErrorPrefix) +
+             "Invalid document export request.";
+    }
+    if (IOSDocumentCancellationRequested(cancellationRequested)) {
+      return std::string(kIOSDocumentCancelled);
+    }
+
+    NSString *storageError = nil;
+    NSString *baseDirectory = IOSDocumentHandoffBaseDirectory(&storageError);
+    if (baseDirectory == nil) {
+      return IOSErrorResult(storageError, "Private document storage failed.");
+    }
+    NSString *exportDirectory = [baseDirectory
+        stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    NSError *directoryError = nil;
+    if (![NSFileManager.defaultManager
+            createDirectoryAtPath:exportDirectory
+      withIntermediateDirectories:NO
+                       attributes:@{NSFilePosixPermissions : @0700}
+                            error:&directoryError]) {
+      return IOSErrorResult(directoryError.localizedDescription,
+                            "Private export staging failed.");
+    }
+    NSString *stagedPath = [exportDirectory
+        stringByAppendingPathComponent:NSStringFromUtf8(suggestedName)];
+    NSURL *sourceURL =
+        [NSURL fileURLWithPath:NSStringFromUtf8(IOSPathToUtf8(localPath))];
+    NSString *copyError = nil;
+    bool copyCancelled = false;
+    if (!CopyIOSDocumentURLBounded(sourceURL, stagedPath, operationToken, maxBytes,
+                                   cancellationRequested, copyCancelled,
+                                   &copyError)) {
+      [NSFileManager.defaultManager removeItemAtPath:exportDirectory error:nil];
+      if (copyCancelled) {
+        return std::string(kIOSDocumentCancelled);
+      }
+      return IOSErrorResult(copyError, "Private export staging failed.");
+    }
+
+    bool cancelled = false;
+    std::string pickerError;
+    BOOL (^nativeCommitHandler)(void) = ^BOOL {
+      try {
+        return commitHandler && commitHandler() ? YES : NO;
+      } catch (...) {
+        return NO;
+      }
+    };
+    const bool picked = WaitForIOSDocumentPicker(
+        operationToken, NSStringFromUtf8(mimeType),
+        [NSURL fileURLWithPath:stagedPath], nativeCommitHandler,
+        nullptr, cancelled, pickerError, cancellationRequested);
+    [NSFileManager.defaultManager removeItemAtPath:exportDirectory error:nil];
+    if (!picked) {
+      if (cancelled) {
+        return std::string(kIOSDocumentCancelled);
+      }
+      return std::string(kIOSDocumentErrorPrefix) + pickerError;
+    }
+    return std::string(kIOSDocumentSuccess);
+  }
 }
 
 void *StartIOSSecurityScopedResource(const std::string &path,

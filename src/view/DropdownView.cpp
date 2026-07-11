@@ -241,7 +241,12 @@ void DropdownView::rebuildOptions() {
     content->addView(text);
     button->setContentView(content);
     button->setOnClickListener([this, id = option.id]() {
-      if (!current.enabled) {
+      const auto option =
+          std::ranges::find_if(current.options, [&](const Option &candidate) {
+            return candidate.id == id;
+          });
+      if (option == current.options.end() ||
+          !optionSelectable(current, *option)) {
         return;
       }
       ScopedBoolFlag dispatching(dispatchingOptionCallback);
@@ -257,6 +262,7 @@ void DropdownView::rebuildOptions() {
         .indicator = indicator,
         .text = text,
         .id = option.id,
+        .available = option.available,
         .leadingColor = option.leadingColor,
     });
     menuContent->addView(button);
@@ -285,14 +291,15 @@ void DropdownView::refreshVisualState() {
     triggerIcon->setText(ui_icons::textForCodepoint(
         menuVisible ? kIconCaretUp : kIconCaretDown));
     triggerIcon->setThemedColor(
-        !current.enabled ? ui_theme::textMuted
-                         : (menuVisible ? ui_theme::textPrimary
-                                        : ui_theme::textSecondary));
+        !current.enabled
+            ? ui_theme::textMuted
+            : (menuVisible ? ui_theme::textPrimary : ui_theme::textSecondary));
   }
 
   styleButton(triggerButton, triggerText, menuVisible, current.enabled);
   for (const auto &item : optionButtons) {
-    styleButton(item.button, item.text, item.id == current.selectedId, true);
+    styleButton(item.button, item.text, item.id == current.selectedId,
+                item.available);
     refreshIndicator(item.indicator, item.leadingColor);
   }
 }
@@ -399,6 +406,7 @@ bool DropdownView::optionsMatch(const std::vector<Option> &options) const {
     const auto &nextOption = options[i];
     if (currentOption.id != nextOption.id ||
         currentOption.label != nextOption.label ||
+        currentOption.available != nextOption.available ||
         !colorsEqual(currentOption.leadingColor, nextOption.leadingColor)) {
       return false;
     }

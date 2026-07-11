@@ -9,6 +9,8 @@
 #include "../bms_parser.hpp"
 #include "IRhythmControl.h"
 #include "IInputSource.h"
+#include "InputDeviceRegistry.h"
+#include "LogicalGameplayInputAdapter.h"
 #include <functional>
 #include <memory>
 #include <map>
@@ -24,8 +26,11 @@ struct FlickState {
 };
 class RhythmInputHandler : public IInputHandler {
 private:
-  std::unique_ptr<IInputSource> sdlInputSource;
   std::unique_ptr<IInputSource> touchInputSource;
+  InputDeviceRegistry *inputDeviceRegistry = nullptr;
+  std::unique_ptr<LogicalGameplayInputPipeline> logicalInputPipeline;
+  std::uint64_t inputSubscriptionToken = 0;
+  std::uint64_t deviceSubscriptionToken = 0;
   int totalLaneCount;
   int scratchLaneCount;
   float playAreaWidth = 8.0f;
@@ -56,9 +61,14 @@ private:
 
 public:
   IRhythmControl *control;
-  RhythmInputHandler(IRhythmControl *control,
-                     const bms_parser::ChartMeta &meta,
-                     float playAreaWidth = 8.0f);
+  RhythmInputHandler(
+      IRhythmControl *control, const bms_parser::ChartMeta &meta,
+      InputDeviceRegistry &registry, const InputProfile &profile,
+      std::vector<input::InputScope> activeScopes,
+      LogicalGameplayInputAdapter::CommandCallback commandCallback = {},
+      float playAreaWidth = 8.0f,
+      LogicalGameplayRegistryPolicy registryPolicy = {});
+  ~RhythmInputHandler() override;
   void onKeyDown(int keyCode, KeySource keySource) override;
   void onKeyUp(int KeyCode, KeySource Source) override;
   void onFingerDown(SDL_FingerID fingerIndex,
@@ -76,5 +86,4 @@ public:
   void setDragModeEnabled(bool enabled);
   void setTouchEventCallback(
       std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
-  std::map<SDL_Keycode, int> keyMap;
 };

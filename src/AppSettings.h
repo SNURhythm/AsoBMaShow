@@ -1,7 +1,13 @@
 #pragma once
 
+#include "settings/AudioVideoSettings.h"
+
 #include <filesystem>
+#include <iosfwd>
 #include <string>
+#include <vector>
+
+class AppSettingsStore;
 
 class AppSettings {
 public:
@@ -97,12 +103,13 @@ public:
   static constexpr const char *kDefaultAssistOption = "OFF";
   static constexpr const char *kDefaultPacemakerTarget = "BEST";
 
+  player_settings::AudioVideoSettings audioVideo =
+      player_settings::defaultAudioVideoSettingsForPlatform();
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
   int visibleTimeGreenNumber = 400;
   bool visibleTimeUseMilliseconds = false;
-  VisibleTimeBpmStrategy visibleTimeBpmStrategy =
-      VisibleTimeBpmStrategy::Chart;
+  VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
   bool showInvisibleNotes = false;
@@ -153,9 +160,13 @@ public:
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;
   void setPlayAreaWidthForKeyMode(int keyMode, float width);
-  bool save() const;
-  static AppSettings load();
+  bool operator==(const AppSettings &) const = default;
 
 private:
-  static std::filesystem::path configPath();
+  friend class AppSettingsStore;
+  static bool parseLegacyCfg(std::istream &input, AppSettings &settings,
+                             std::vector<std::string> *diagnostics = nullptr);
+  static bool loadLegacyCfg(const std::filesystem::path &path,
+                            AppSettings &settings,
+                            std::vector<std::string> *diagnostics = nullptr);
 };

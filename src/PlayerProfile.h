@@ -1,0 +1,28 @@
+#pragma once
+
+#include <filesystem>
+#include <string>
+
+inline constexpr int kPlayerProfileSchemaVersion = 1;
+inline constexpr int kActiveProfileSchemaVersion = 1;
+
+struct PlayerProfile {
+  int schemaVersion = kPlayerProfileSchemaVersion;
+  std::string id;
+  std::string displayName;
+  std::string createdAt;
+  std::string lastUsedAt;
+
+  bool operator==(const PlayerProfile &) const = default;
+};
+
+struct PlayerProfilePaths {
+  std::filesystem::path root;
+  std::filesystem::path profileJson;
+  std::filesystem::path settingsJson;
+  std::filesystem::path inputJson;
+  std::filesystem::path scoresDb;
+  std::filesystem::path replaysDb;
+
+  bool operator==(const PlayerProfilePaths &) const = default;
+};

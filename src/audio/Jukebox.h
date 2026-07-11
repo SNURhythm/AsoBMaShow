@@ -31,7 +31,57 @@ struct ImageData {
 
 using ChartResourceTable = std::unordered_map<int, std::string>;
 
-class Jukebox {
+struct ScheduledAudioEvent {
+  long long timeMicros = 0;
+  int wav = bms_parser::Parser::NoWav;
+  audio::Bus bus = audio::Bus::Bgm;
+};
+
+enum class JukeboxAudioSource : std::uint8_t {
+  BackgroundNote,
+  ChartNote,
+  DirectKeysound,
+  ReplayKeysound,
+  PrepMetronome,
+  SettingsTestTone,
+};
+
+constexpr audio::Bus
+audioBusForJukeboxSource(JukeboxAudioSource source) noexcept {
+  return source == JukeboxAudioSource::BackgroundNote ? audio::Bus::Bgm
+                                                      : audio::Bus::Keysound;
+}
+
+constexpr ScheduledAudioEvent
+makeScheduledAudioEvent(long long timeMicros, int wav,
+                        JukeboxAudioSource source) noexcept {
+  return {.timeMicros = timeMicros,
+          .wav = wav,
+          .bus = audioBusForJukeboxSource(source)};
+}
+
+struct OverlappingAudioRequest {
+  int wav = bms_parser::Parser::NoWav;
+  long long offsetMicros = 0;
+  audio::Bus bus = audio::Bus::Bgm;
+};
+
+inline std::optional<OverlappingAudioRequest>
+makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
+                            long long seekMicros,
+                            long long durationMicros) noexcept {
+  if (seekMicros < event.timeMicros || durationMicros <= 0) {
+    return std::nullopt;
+  }
+  const long long offsetMicros = seekMicros - event.timeMicros;
+  if (offsetMicros >= durationMicros) {
+    return std::nullopt;
+  }
+  return OverlappingAudioRequest{
+      .wav = event.wav, .offsetMicros = offsetMicros, .bus = event.bus};
+}
+
+class Jukebox : public audio::IPlaybackSession {
 public:
   struct PerformanceAnalytics {
     static const int BUFFER_SIZE = 10000;
@@ -46,15 +96,19 @@ public:
   PerformanceAnalytics performanceAnalytics;
 
   Jukebox(Stopwatch *stopwatch);
+  Jukebox(Stopwatch *stopwatch,
+          std::unique_ptr<audio::IBackendFactory> backendFactory);
   ~Jukebox();
 
   // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
   double getAvgDeltaTime();
 
-  void loadChart(bms_parser::Chart &chart, bool scheduleNotes,
-                 std::atomic_bool &isCancelled);
-  void reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
-                            std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  loadChart(bms_parser::Chart &chart, bool scheduleNotes,
+            std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
+                       std::atomic_bool &isCancelled);
   bool hasLoadedResources() const;
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
@@ -67,8 +121,8 @@ public:
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
-  void play(long long startMicros = 0);
-  void stop();
+  audio::playback::BackendOperationResult play(long long startMicros = 0);
+  audio::playback::BackendOperationResult stop();
   void render();
   bool hasActiveVisuals() const;
   long long getScheduledAudioEndMicros();
@@ -82,7 +136,7 @@ public:
   void setBgaDisplayMode(AppSettings::BgaDisplayMode mode);
 
   long long getTimeMicros();
-  void seek(long long micro);
+  audio::playback::BackendOperationResult seek(long long micro);
   std::function<void(long long)> onTickCb;
   void onTick(const std::function<void(long long)> &cb) {
     assert(!isPlaying && "onTick callback should be set before playing");
@@ -92,6 +146,11 @@ public:
   void pause();
   void resume();
   bool isPaused();
+  [[nodiscard]] AudioWrapper &audioRuntime() { return audio; }
+  audio::PlaybackSnapshot suspendAndDrain() override;
+  bool restorePlayback(const audio::PlaybackSnapshot &snapshot,
+                       std::string &errorMessage) override;
+  void leavePlaybackStopped() override;
 
 private:
   bgfx::UniformHandle s_texColor;
@@ -107,11 +166,11 @@ private:
   bool loadArchivedSounds(bms_parser::Chart &chart,
                           const ChartResourceTable &wavTable,
                           std::atomic_bool &isCancelled);
-  bool loadArchivedChartAssets(bms_parser::Chart &chart,
-                               const ChartResourceTable &wavTable,
-                               const ChartResourceTable &bmpTable,
-                               bool loadVisualAssets,
-                               std::atomic_bool &isCancelled);
+  bool loadArchivedChartAssets(
+      bms_parser::Chart &chart, const ChartResourceTable &wavTable,
+      const ChartResourceTable &bmpTable, bool loadVisualAssets,
+      std::atomic_bool &isCancelled,
+      audio::playback::BackendOperationResult &lifecycleResult);
   void loadBMPs(bms_parser::Chart &chart,
                 const ChartResourceTable &bmpTable,
                 std::atomic_bool &isCancelled);
@@ -151,19 +210,21 @@ private:
   resolveVisualAssets(bms_parser::Chart &chart,
                       const ChartResourceTable &bmpTable,
                       std::atomic_bool &isCancelled);
-  void loadResolvedChartResources(bms_parser::Chart &chart,
-                                  const ChartResourceTable &wavTable,
-                                  const ChartResourceTable &bmpTable,
-                                  bool loadVisualAssets,
-                                  std::atomic_bool &isCancelled);
-  void reconcileSoundResources(
-      bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> &assets,
+  audio::playback::BackendOperationResult loadResolvedChartResources(
+      bms_parser::Chart &chart, const ChartResourceTable &wavTable,
+      const ChartResourceTable &bmpTable, bool loadVisualAssets,
       std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  reconcileSoundResources(bms_parser::Chart &chart,
+                          const std::vector<ResolvedSoundAsset> &assets,
+                          std::atomic_bool &isCancelled);
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);
-  void scheduleAudioFromCursor();
+  bool scheduleAudioFromCursor(size_t cursor);
   void playOverlappingAudioAt(long long micro);
+  audio::playback::BackendOperationResult
+  playWithClockState(long long startMicros, bool paused);
   void ensurePrepMetronomeSoundsLoaded();
   void wakeScheduler();
   void syncVisualClockToAudio();
@@ -174,6 +235,7 @@ private:
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   bool activateVisualAt(int visualId, bgfx::ViewId viewId,
                         long long elapsedMicros);
+  void restoreVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
   void renderImage(ImageData &image, int viewId);
   struct BgaRect {
@@ -184,10 +246,11 @@ private:
   };
   BgaRect calculateBgaRect(int sourceWidth, int sourceHeight) const;
   std::atomic_bool isPlaying = false;
+  std::atomic_bool schedulerActive = false;
   std::thread playThread;
   Stopwatch *stopwatch;
   AudioWrapper audio;
-  std::vector<std::pair<long long, int>> audioList;
+  std::vector<ScheduledAudioEvent> audioList;
   size_t audioCursor = 0;
   std::vector<std::pair<long long, int>> bmpList;
   std::vector<std::pair<long long, int>> bmpLayerList;

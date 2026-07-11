@@ -1,7 +1,5 @@
 #define MINIAUDIO_IMPLEMENTATION
-#include "../targets.h"
 #include "AudioWrapper.h"
-#include "../RAII.h"
 #include <stdexcept>
 #include <SDL2/SDL.h>
 #include "decoder.h"
@@ -11,24 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#if TARGET_OS_DESKTOP
-#include <portaudio.h>
-#endif
-
-// Define IAudioBackend interface here
-struct AudioWrapper::IAudioBackend {
-  virtual ~IAudioBackend() = default;
-  virtual void start() = 0;
-  virtual void stop() = 0;
-  virtual bool isStarted() const = 0;
-  virtual int getSampleRate() const = 0;
-};
-
-AudioCallbackState::AudioCallbackState()
-    : playingSounds(std::make_unique<PlayingSound[]>(kMaxActiveSounds)),
-      scheduledSounds(
-          std::make_unique<ScheduledSound[]>(kMaxScheduledSounds)),
-      commandQueue(std::make_unique<AudioCommand[]>(kAudioCommandQueueSize)) {}
+#include <limits>
 
 // Biquad Implementation
 void Biquad::processStereo(float *buffer, size_t frameCount) {
@@ -303,33 +284,10 @@ long long framesToMicros(int64_t frames, int sampleRate) {
   return static_cast<long long>((frames * 1000000LL) / sampleRate);
 }
 
-ma_uint32 outputOffsetForStartMicros(long long startMicros,
-                                     long long bufferStartMicros,
-                                     int sampleRate,
-                                     ma_uint32 frameCount,
-                                     bool &isDue) {
-  isDue = true;
-  if (startMicros <= bufferStartMicros) {
-    return 0;
-  }
-
-  const long long deltaMicros = startMicros - bufferStartMicros;
-  const uint64_t roundedFrame =
-      (static_cast<uint64_t>(deltaMicros) * static_cast<uint64_t>(sampleRate) +
-       500000ULL) /
-      1000000ULL;
-  if (roundedFrame >= frameCount) {
-    isDue = false;
-    return 0;
-  }
-  return static_cast<ma_uint32>(roundedFrame);
-}
-
 long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
                                 int sampleRate) {
-  const int64_t startFrame =
-      userData->audioClockFrameCursor->fetch_add(frameCount,
-                                                 std::memory_order_acq_rel);
+  const int64_t startFrame = userData->audioClockFrameCursor->fetch_add(
+      frameCount, std::memory_order_acq_rel);
   const long long baseMicros =
       userData->audioClockBaseMicros->load(std::memory_order_acquire);
   const long long bufferStartMicros =
@@ -346,216 +304,8 @@ long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
   return bufferStartMicros;
 }
 
-bool scheduledSoundLess(const ScheduledSound &lhs,
-                        const ScheduledSound &rhs) {
-  if (lhs.startMicros != rhs.startMicros) {
-    return lhs.startMicros < rhs.startMicros;
-  }
-  return lhs.sequence < rhs.sequence;
-}
-
 void fillSilence(void *pOutput, ma_uint32 frameCount, int outputChannels) {
   std::fill_n((ma_int16 *)pOutput, frameCount * outputChannels, 0);
-}
-
-void removeActiveSoundAt(AudioCallbackState &state, size_t index) {
-  SoundData *soundData = state.playingSounds[index].soundData;
-  if (soundData) {
-    soundData->playing = false;
-  }
-  --state.playingSoundCount;
-  if (index < state.playingSoundCount) {
-    state.playingSounds[index] = state.playingSounds[state.playingSoundCount];
-  }
-}
-
-bool appendActiveSound(AudioCallbackState &state, SoundData *soundData,
-                       ma_uint32 outputOffsetFrames, size_t startFrame = 0) {
-  if (soundData == nullptr || startFrame >= soundData->resampledFrameCount ||
-      state.playingSoundCount >= kMaxActiveSounds) {
-    return false;
-  }
-  soundData->playing = true;
-  state.playingSounds[state.playingSoundCount++] = {
-      .soundData = soundData,
-      .currentFrame = startFrame,
-      .outputOffsetFrames = outputOffsetFrames,
-  };
-  return true;
-}
-
-bool insertScheduledSound(AudioCallbackState &state,
-                          const ScheduledSound &scheduledSound) {
-  if (scheduledSound.soundData == nullptr ||
-      state.scheduledSoundCount >= kMaxScheduledSounds) {
-    return false;
-  }
-
-  if (state.scheduledSoundCount == 0 ||
-      !scheduledSoundLess(
-          scheduledSound,
-          state.scheduledSounds[state.scheduledSoundCount - 1])) {
-    state.scheduledSounds[state.scheduledSoundCount++] = scheduledSound;
-    return true;
-  }
-
-  size_t insertIndex = 0;
-  while (insertIndex < state.scheduledSoundCount &&
-         !scheduledSoundLess(scheduledSound,
-                             state.scheduledSounds[insertIndex])) {
-    ++insertIndex;
-  }
-
-  for (size_t i = state.scheduledSoundCount; i > insertIndex; --i) {
-    state.scheduledSounds[i] = state.scheduledSounds[i - 1];
-  }
-  state.scheduledSounds[insertIndex] = scheduledSound;
-  ++state.scheduledSoundCount;
-  return true;
-}
-
-void clearCallbackSounds(AudioCallbackState &state) {
-  for (size_t i = 0; i < state.playingSoundCount; ++i) {
-    if (state.playingSounds[i].soundData) {
-      state.playingSounds[i].soundData->playing = false;
-    }
-  }
-  state.playingSoundCount = 0;
-  state.scheduledSoundCount = 0;
-}
-
-void drainAudioCommands(AudioCallbackState &state) {
-  uint32_t readCursor =
-      state.commandReadCursor.load(std::memory_order_relaxed);
-  const uint32_t writeCursor =
-      state.commandWriteCursor.load(std::memory_order_acquire);
-
-  while (readCursor != writeCursor) {
-    const AudioCommand &command =
-        state.commandQueue[readCursor % kAudioCommandQueueSize];
-    switch (command.type) {
-    case AudioCommandType::PlayNow:
-      appendActiveSound(state, command.soundData, 0, command.startFrame);
-      break;
-    case AudioCommandType::Schedule:
-      insertScheduledSound(state, {.soundData = command.soundData,
-                                   .startMicros = command.startMicros,
-                                   .sequence = command.sequence,
-                                   .startFrame = command.startFrame});
-      break;
-    case AudioCommandType::StopAll:
-      clearCallbackSounds(state);
-      break;
-    }
-    ++readCursor;
-  }
-
-  state.commandReadCursor.store(readCursor, std::memory_order_release);
-}
-
-bool enqueueCallbackCommand(AudioCallbackState &state,
-                            const AudioCommand &command) {
-  const uint32_t readCursor =
-      state.commandReadCursor.load(std::memory_order_acquire);
-  const uint32_t writeCursor =
-      state.commandWriteCursor.load(std::memory_order_relaxed);
-  if (writeCursor - readCursor >= kAudioCommandQueueSize) {
-    return false;
-  }
-
-  state.commandQueue[writeCursor % kAudioCommandQueueSize] = command;
-  state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
-  return true;
-}
-
-void activateScheduledSounds(AudioCallbackState &state,
-                             long long bufferStartMicros, int sampleRate,
-                             ma_uint32 frameCount) {
-  size_t scheduledSoundsToRemove = 0;
-  for (; scheduledSoundsToRemove < state.scheduledSoundCount;
-       ++scheduledSoundsToRemove) {
-    const ScheduledSound &scheduledSound =
-        state.scheduledSounds[scheduledSoundsToRemove];
-    bool isDue = false;
-    const ma_uint32 outputOffsetFrames = outputOffsetForStartMicros(
-        scheduledSound.startMicros, bufferStartMicros, sampleRate, frameCount,
-        isDue);
-    if (!isDue) {
-      break;
-    }
-    appendActiveSound(state, scheduledSound.soundData, outputOffsetFrames,
-                      scheduledSound.startFrame);
-  }
-
-  if (scheduledSoundsToRemove == 0) {
-    return;
-  }
-
-  const size_t remainingSounds =
-      state.scheduledSoundCount - scheduledSoundsToRemove;
-  for (size_t i = 0; i < remainingSounds; ++i) {
-    state.scheduledSounds[i] =
-        state.scheduledSounds[i + scheduledSoundsToRemove];
-  }
-  state.scheduledSoundCount = remainingSounds;
-}
-
-void mixActiveSounds(AudioCallbackState &state, float *mixBuffer,
-                     ma_uint32 frameCount, int outputChannels) {
-  constexpr float gain = 0.9f;
-  size_t soundIndex = 0;
-  while (soundIndex < state.playingSoundCount) {
-    PlayingSound &playingSound = state.playingSounds[soundIndex];
-    SoundData *soundData = playingSound.soundData;
-    if (soundData == nullptr ||
-        playingSound.currentFrame >= soundData->resampledFrameCount) {
-      removeActiveSoundAt(state, soundIndex);
-      continue;
-    }
-
-    const ma_uint32 outputOffsetFrames =
-        std::min(playingSound.outputOffsetFrames, frameCount);
-    ma_uint32 framesToRead = frameCount - outputOffsetFrames;
-    ma_uint32 framesAvailable =
-        soundData->resampledFrameCount - playingSound.currentFrame;
-    if (framesToRead > framesAvailable) {
-      framesToRead = framesAvailable;
-    }
-
-    const short *src = soundData->resampledData.data();
-    const size_t currentFrame = playingSound.currentFrame;
-    const int channels = soundData->channels;
-
-    for (ma_uint32 frame = 0; frame < framesToRead; ++frame) {
-      const size_t sourceFrameOffset = (currentFrame + frame) * channels;
-      const size_t outputFrameOffset =
-          (outputOffsetFrames + frame) * outputChannels;
-
-      if (channels == 1) {
-        const float sample = src[sourceFrameOffset] / 32768.0f;
-        for (int outputChannel = 0; outputChannel < outputChannels;
-             ++outputChannel) {
-          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
-        }
-        continue;
-      }
-
-      for (int channel = 0; channel < channels; ++channel) {
-        const int outputChannel = channel % outputChannels;
-        const float sample = src[sourceFrameOffset + channel] / 32768.0f;
-
-        mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
-      }
-    }
-
-    playingSound.currentFrame += framesToRead;
-    playingSound.outputOffsetFrames = 0;
-    if (playingSound.currentFrame >= soundData->resampledFrameCount) {
-      removeActiveSoundAt(state, soundIndex);
-      continue;
-    }
-    ++soundIndex;
-  }
 }
 
 // Mixing logic extracted to be backend-agnostic
@@ -566,7 +316,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   }
 
   AudioCallbackState &state = *userData->callbackState;
-  drainAudioCommands(state);
+  audio::playback::DrainCommands(state);
 
   if (!userData->stopwatch->isRunning()) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -580,7 +330,8 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
 
   const long long bufferStartMicros =
       beginAudioClockBuffer(userData, frameCount, sampleRate);
-  activateScheduledSounds(state, bufferStartMicros, sampleRate, frameCount);
+  audio::playback::ActivateScheduledSounds(state, bufferStartMicros, sampleRate,
+                                           frameCount);
 
   if (state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -598,7 +349,16 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
             userData->mixBuffer->begin() + requiredSamples, 0.0f);
   float *mixBuffer = userData->mixBuffer->data();
 
-  mixActiveSounds(state, mixBuffer, frameCount, outputChannels);
+  const float bgmGain = userData->bgmGain
+                            ? userData->bgmGain->load(std::memory_order_acquire)
+                            : 1.0f;
+  const float keysoundGain =
+      userData->keysoundGain
+          ? userData->keysoundGain->load(std::memory_order_acquire)
+          : 1.0f;
+  audio::playback::MixActiveSounds(
+      state, std::span<float>(mixBuffer, requiredSamples), frameCount,
+      outputChannels, bgmGain, keysoundGain);
 
   // Apply Effects
   if (userData->bassFilter) {
@@ -631,181 +391,58 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   }
 }
 
-ma_result initMiniaudioDevice(const ma_device_config *deviceConfig,
-                              ma_device *device) {
-#if TARGET_OS_IPHONE
-  ma_context_config contextConfig = ma_context_config_init();
-  contextConfig.coreaudio.sessionCategory = ma_ios_session_category_ambient;
-  contextConfig.coreaudio.sessionCategoryOptions =
-      ma_ios_session_category_option_mix_with_others;
-  return ma_device_init_ex(nullptr, 0, &contextConfig, deviceConfig, device);
-#else
-  return ma_device_init(nullptr, deviceConfig, device);
-#endif
-}
 } // namespace
 
-// Miniaudio Backend Implementation
-class MiniaudioBackend : public AudioWrapper::IAudioBackend {
+class ConfigurableBackendLifecycle final
+    : public audio::playback::IBackendLifecycle {
 public:
-  MiniaudioBackend(UserData *userData) {
-    ma_device_config deviceConfig =
-        ma_device_config_init(ma_device_type_playback);
-    deviceConfig.playback.format = ma_format_s16;
-    deviceConfig.playback.channels = 2;
-    deviceConfig.sampleRate = 0; // Use native sample rate
-    deviceConfig.dataCallback = dataCallback;
-    deviceConfig.pUserData = userData;
+  explicit ConfigurableBackendLifecycle(std::unique_ptr<audio::IBackend> backend)
+      : backend_(std::move(backend)) {}
 
-    if (initMiniaudioDevice(&deviceConfig, &device) != MA_SUCCESS) {
-      throw std::runtime_error(
-          "Failed to initialize miniaudio playback device.");
+  audio::playback::BackendStateObservation observeState() const override {
+    if (!backend_) {
+      return {.state = audio::playback::BackendRunState::Unknown,
+              .diagnostic = "Audio stream is unavailable"};
     }
-    SDL_Log("[Miniaudio] Initialized with sample rate: %d", device.sampleRate);
+    return backend_->observeState();
   }
 
-  ~MiniaudioBackend() override { ma_device_uninit(&device); }
-
-  void start() override {
-    if (!ma_device_is_started(&device)) {
-      ma_device_start(&device);
-      SDL_Log("[Miniaudio] Started playback device.");
-    }
+  int outputSampleRate() const override {
+    return backend_ == nullptr
+               ? 0
+               : static_cast<int>(backend_->runtimeState().effectiveSampleRate);
   }
 
-  void stop() override {
-    if (ma_device_is_started(&device)) {
-      ma_device_stop(&device);
-      SDL_Log("[Miniaudio] Stopped playback device.");
-    }
+  audio::playback::BackendOperationResult stopAndDrain() override {
+    std::string error;
+    return {.success = backend_ != nullptr && backend_->stop(error),
+            .diagnostic = std::move(error)};
   }
 
-  bool isStarted() const override { return ma_device_is_started(&device); }
+  audio::playback::BackendOperationResult start() override {
+    std::string error;
+    return {.success = backend_ != nullptr && backend_->start(error),
+            .diagnostic = std::move(error)};
+  }
 
-  int getSampleRate() const override { return device.sampleRate; }
+  [[nodiscard]] audio::RuntimeState runtimeState() const {
+    return backend_ == nullptr ? audio::RuntimeState{}
+                               : backend_->runtimeState();
+  }
 
 private:
-  ma_device device;
-
-  static void dataCallback(ma_device *pDevice, void *pOutput,
-                           const void *pInput, ma_uint32 frameCount) {
-    auto *userData = (UserData *)pDevice->pUserData;
-    // Miniaudio output matches the logic expected by mixAudio (int16 buffer)
-    mixAudio(pOutput, frameCount, pDevice->playback.channels, userData);
-  }
+  std::unique_ptr<audio::IBackend> backend_;
 };
 
-// PortAudio Backend Implementation
-#if TARGET_OS_DESKTOP
-class PortAudioBackend : public AudioWrapper::IAudioBackend {
-public:
-  PortAudioBackend(UserData *userData)
-      : userData(userData), stream(nullptr), sampleRate(44100) {
-    PaError err = Pa_Initialize();
-    if (err != paNoError) {
-      SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "[PortAudio] init error: %s",
-                   Pa_GetErrorText(err));
-      throw std::runtime_error("Failed to initialize PortAudio");
-    }
-    auto terminateOnFailure = makeScopeExit([]() { Pa_Terminate(); });
-
-    PaStreamParameters outputParameters;
-    outputParameters.device = Pa_GetDefaultOutputDevice(); // Default
-
-// Try to find ASIO device on Windows
-#ifdef TARGET_OS_WINDOWS
-    int numDevices = Pa_GetDeviceCount();
-    for (int i = 0; i < numDevices; ++i) {
-      const PaDeviceInfo *info = Pa_GetDeviceInfo(i);
-      const PaHostApiInfo *hostApi = Pa_GetHostApiInfo(info->hostApi);
-      if (hostApi && hostApi->type == paASIO) {
-        outputParameters.device = i;
-        SDL_Log("Found ASIO device: %s", info->name);
-        break;
-      }
-    }
-#endif
-
-    if (outputParameters.device == paNoDevice) {
-      throw std::runtime_error("No default output device.");
-    }
-
-    const PaDeviceInfo *deviceInfo = Pa_GetDeviceInfo(outputParameters.device);
-    sampleRate = (int)deviceInfo->defaultSampleRate;
-
-    outputParameters.channelCount = 2; // Stereo
-    outputParameters.sampleFormat = paInt16;
-    outputParameters.suggestedLatency = deviceInfo->defaultLowOutputLatency;
-    outputParameters.hostApiSpecificStreamInfo = nullptr;
-
-    err = Pa_OpenStream(&stream,
-                        nullptr, // No input
-                        &outputParameters, (double)sampleRate,
-                        paFramesPerBufferUnspecified,
-                        paClipOff, // We clamp manually
-                        paCallback, this);
-
-    if (err != paNoError) {
-      if (stream != nullptr) {
-        Pa_CloseStream(stream);
-        stream = nullptr;
-      }
-      SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "[PortAudio] OpenStream error: %s",
-                   Pa_GetErrorText(err));
-      throw std::runtime_error("Failed to open audio stream");
-    }
-    SDL_Log("[PortAudio] Output device: %s", deviceInfo->name);
-    SDL_Log("[PortAudio] Initialized with sample rate: %d", sampleRate);
-    terminateOnFailure.dismiss();
-  }
-
-  ~PortAudioBackend() override {
-    if (stream) {
-      Pa_CloseStream(stream);
-    }
-    Pa_Terminate();
-  }
-
-  void start() override {
-    if (stream && Pa_IsStreamStopped(stream)) {
-      Pa_StartStream(stream);
-      SDL_Log("[PortAudio] Started playback stream.");
-    }
-  }
-
-  void stop() override {
-    if (stream && !Pa_IsStreamStopped(stream)) {
-      Pa_StopStream(stream);
-      SDL_Log("[PortAudio] Stopped playback stream.");
-    }
-  }
-
-  bool isStarted() const override {
-    return stream && !Pa_IsStreamStopped(stream);
-  }
-
-  int getSampleRate() const override { return sampleRate; }
-
-private:
-  UserData *userData;
-  PaStream *stream;
-  int sampleRate;
-
-  static int paCallback(const void *inputBuffer, void *outputBuffer,
-                        unsigned long framesPerBuffer,
-                        const PaStreamCallbackTimeInfo *timeInfo,
-                        PaStreamCallbackFlags statusFlags, void *userData) {
-    auto *backend = (PortAudioBackend *)userData;
-    // PortAudio requesting paInt16, so outputBuffer is int16*
-    mixAudio(outputBuffer, (ma_uint32)framesPerBuffer, 2, backend->userData);
-    return paContinue;
-  }
-};
-#endif
+void configurableBackendRender(void *output, std::uint32_t frameCount,
+                               int outputChannels, void *userData) {
+  mixAudio(output, static_cast<ma_uint32>(frameCount), outputChannels,
+           static_cast<UserData *>(userData));
+}
 
 // AudioWrapper Implementation
 
-AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
+void AudioWrapper::initializeUserData() {
   userData.callbackState = &callbackState;
   userData.sampleRate = &currentSampleRate;
   userData.audioClockBaseMicros = &audioClockBaseMicros;
@@ -813,33 +450,48 @@ AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
   userData.audioClockAnchorMicros = &audioClockAnchorMicros;
   userData.audioClockAnchorWallMicros = &audioClockAnchorWallMicros;
   userData.audioClockAnchorEndMicros = &audioClockAnchorEndMicros;
+  userData.bgmGain = &bgmGain;
+  userData.keysoundGain = &keysoundGain;
   userData.stopwatch = stopwatch;
   userData.mixBuffer = &mixBuffer;
   userData.bassFilter = &bassFilter;
   userData.trebleFilter = &trebleFilter;
   userData.reverb = &reverb;
   userData.compressor = &compressor;
+}
 
-#if TARGET_OS_DESKTOP
-  // Default to PortAudio on Desktop
-  try {
-    backend = std::make_unique<PortAudioBackend>(&userData);
-    SDL_Log("Initialized PortAudio backend.");
-  } catch (const std::exception &e) {
-    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
-                 "Failed to initialize PortAudio backend: %s. Falling back to "
-                 "Miniaudio.",
-                 e.what());
-    backend = std::make_unique<MiniaudioBackend>(&userData);
+void AudioWrapper::startBackendAfterConstruction() {
+  const auto started = startDevice();
+  if (!started.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio startup failed: %s",
+                 started.diagnostic.c_str());
   }
-#else
-  // Default to Miniaudio on other platforms
-  backend = std::make_unique<MiniaudioBackend>(&userData);
-  SDL_Log("Initialized Miniaudio backend.");
-#endif
+}
 
-  updateCurrentSampleRate();
-  startDevice();
+AudioWrapper::AudioWrapper(Stopwatch *stopwatch)
+    : AudioWrapper(stopwatch, audio::CreatePlatformBackendFactory()) {}
+
+AudioWrapper::AudioWrapper(
+    Stopwatch *stopwatch,
+    std::unique_ptr<audio::IBackendFactory> injectedFactory)
+    : backendFactory(std::move(injectedFactory)), stopwatch(stopwatch) {
+  initializeUserData();
+
+  std::string openError;
+  auto opened = backendFactory != nullptr
+                    ? backendFactory->open({}, configurableBackendRender,
+                                           &userData, openError)
+                    : nullptr;
+  if (!opened) {
+    throw std::runtime_error(openError.empty()
+                                 ? "Failed to initialize audio backend"
+                                 : std::move(openError));
+  }
+  runtimeState_ = opened->runtimeState();
+  backend =
+      std::make_unique<ConfigurableBackendLifecycle>(std::move(opened));
+
+  startBackendAfterConstruction();
 
   // //
   // setBassBoost(3.0f);   // Warmth
@@ -855,21 +507,33 @@ AudioWrapper::AudioWrapper(Stopwatch *stopwatch) : stopwatch(stopwatch) {
   // compressor.setParams(-8.0f, 2.5f, 0.03f, 0.15f);
 }
 
-AudioWrapper::~AudioWrapper() {
-  unloadSounds();
-  // Backend destroyed via unique_ptr
+AudioWrapper::AudioWrapper(
+    Stopwatch *stopwatch,
+    std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend)
+    : backend(std::move(injectedBackend)), stopwatch(stopwatch) {
+  initializeUserData();
+  startBackendAfterConstruction();
+  runtimeState_.request = {};
+  runtimeState_.effectiveSampleRate = static_cast<std::uint32_t>(
+      std::max(0, backend != nullptr ? backend->outputSampleRate() : 0));
 }
 
-int AudioWrapper::IAudioBackend::getSampleRate() const {
-  return 44100;
-} // Default if virtual fails
-
-void AudioWrapper::updateCurrentSampleRate() {
-  int rate = backend ? backend->getSampleRate() : 44100;
-  if (rate <= 0) {
-    rate = 44100;
+AudioWrapper::~AudioWrapper() {
+  const auto unloaded = unloadSounds();
+  if (!unloaded.success) {
+    SDL_LogCritical(SDL_LOG_CATEGORY_AUDIO,
+                    "Audio shutdown could not confirm callback drain: %s",
+                    unloaded.diagnostic.c_str());
+    std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+    std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    backend.reset();
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+    clearCallbackState();
+    soundDataList.clear();
+    soundDataIndexMap.clear();
   }
-  currentSampleRate.store(rate, std::memory_order_release);
 }
 
 long long AudioWrapper::getTimeMicros() const {
@@ -885,8 +549,7 @@ long long AudioWrapper::getTimeMicros() const {
   }
 
   long long interpolatedMicros = anchorMicros + nowMicros() - anchorWallMicros;
-  if (anchorEndMicros >= anchorMicros &&
-      interpolatedMicros > anchorEndMicros) {
+  if (anchorEndMicros >= anchorMicros && interpolatedMicros > anchorEndMicros) {
     interpolatedMicros = anchorEndMicros;
   }
   if (interpolatedMicros < anchorMicros) {
@@ -925,9 +588,9 @@ bool AudioWrapper::loadSound(const path_t &path,
                           sfInfo.samplerate, isCancelled);
 }
 
-bool AudioWrapper::loadSoundFromMemory(
-    const path_t &path, const std::vector<unsigned char> &bytes,
-    std::atomic<bool> &isCancelled) {
+bool AudioWrapper::loadSoundFromMemory(const path_t &path,
+                                       const std::vector<unsigned char> &bytes,
+                                       std::atomic<bool> &isCancelled) {
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
     if (soundDataIndexMap.contains(path)) {
@@ -937,8 +600,8 @@ bool AudioWrapper::loadSoundFromMemory(
 
   std::vector<short> pcmData;
   SF_INFO sfInfo;
-  bool result = decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo,
-                                      isCancelled);
+  bool result =
+      decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo, isCancelled);
   if (!result) {
     SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
@@ -948,8 +611,8 @@ bool AudioWrapper::loadSoundFromMemory(
 }
 
 bool AudioWrapper::loadGeneratedSound(const path_t &path,
-                                      std::vector<short> pcmData,
-                                      int channels, int sampleRate) {
+                                      std::vector<short> pcmData, int channels,
+                                      int sampleRate) {
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
     if (soundDataIndexMap.contains(path)) {
@@ -969,72 +632,42 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
   if (isCancelled) {
     return false;
   }
+  if (channels <= 0 || sampleRate <= 0 ||
+      pcmData.size() % static_cast<size_t>(channels) != 0) {
+    SDL_Log("Invalid decoded PCM format for %s", path_t_to_utf8(path).c_str());
+    return false;
+  }
 
   auto soundData = std::make_shared<SoundData>();
 
   soundData->currentFrame = 0;
   soundData->channels = channels;
-  soundData->originalSampleRate = sampleRate;
+  soundData->sourceSampleRate = sampleRate;
   soundData->playing = false;
+  soundData->sourceData = std::move(pcmData);
+  soundData->sourceFrameCount =
+      soundData->sourceData.size() / static_cast<size_t>(channels);
 
-  updateCurrentSampleRate();
-  int targetSampleRate = currentSampleRate.load(std::memory_order_acquire);
+  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  if (soundDataIndexMap.contains(path)) {
+    return true;
+  }
+  const int targetSampleRate =
+      currentSampleRate.load(std::memory_order_acquire);
   SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
                  "Target sample rate: %d, File sample rate: %d",
                  targetSampleRate, sampleRate);
 
-  if (targetSampleRate == sampleRate) {
-    // Optimization: Skip resampling
-    soundData->isResampled = false;
-    soundData->resampledData = std::move(pcmData);
-    soundData->resampledFrameCount =
-        soundData->resampledData.size() / soundData->channels;
-    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
-                   "Loaded sound without resampling (Rate: %d)",
-                   targetSampleRate);
-  } else {
-    // Initialize the resampler
-    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
-                   "Resampling audio data from %d Hz to %d Hz", sampleRate,
-                   targetSampleRate);
-    ma_resampler_config resamplerConfig = ma_resampler_config_init(
-        ma_format_s16, channels, sampleRate, targetSampleRate,
-        ma_resample_algorithm_linear);
-    if (ma_resampler_init(&resamplerConfig, nullptr, &soundData->resampler) !=
-        MA_SUCCESS) {
-      SDL_Log("Failed to initialize resampler.");
-      return false;
-    }
-    soundData->resamplerInitialized = true;
-    soundData->isResampled = true;
-    if (isCancelled)
-      return false;
-
-    // Resample the audio data to target rate
-
-    ma_uint64 resampledFrameCount =
-        (ma_uint64)((double)pcmData.size() / channels * targetSampleRate /
-                    sampleRate);
-    soundData->resampledData.resize(resampledFrameCount * channels);
-    ma_uint64 size = (ma_uint64)pcmData.size();
-    if (isCancelled)
-      return false;
-    ma_resampler_process_pcm_frames(&soundData->resampler, pcmData.data(),
-                                    &size, soundData->resampledData.data(),
-                                    &resampledFrameCount);
-    if (isCancelled)
-      return false;
-    soundData->resampledFrameCount = resampledFrameCount;
+  soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
+                                             sampleRate, targetSampleRate);
+  if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
+      isCancelled) {
+    return false;
   }
-
-  {
-    std::lock_guard<std::mutex> lock(soundDataListMutex);
-    if (soundDataIndexMap.contains(path)) {
-      return true;
-    }
-    soundDataIndexMap[path] = soundDataList.size();
-    soundDataList.push_back(soundData);
-  }
+  soundData->outputFrameCount =
+      soundData->outputData.size() / static_cast<size_t>(channels);
+  soundDataIndexMap[path] = soundDataList.size();
+  soundDataList.push_back(soundData);
   return true;
 }
 
@@ -1045,24 +678,16 @@ void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
   }
 }
 
-bool AudioWrapper::appendScheduledSound(SoundData *soundData,
-                                        long long startMicros,
-                                        uint64_t sequence,
-                                        size_t startFrame) {
-  return insertScheduledSound(callbackState, {.soundData = soundData,
-                                              .startMicros = startMicros,
-                                              .sequence = sequence,
-                                              .startFrame = startFrame});
-}
-
 void AudioWrapper::clearCallbackState() {
-  clearCallbackSounds(callbackState);
+  audio::playback::ClearCallbackSounds(callbackState);
   callbackState.commandReadCursor.store(0, std::memory_order_release);
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
 }
 
-bool AudioWrapper::playSound(const path_t &path, long long startOffsetMicros) {
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
+bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
+                             long long startOffsetMicros) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
 
   const auto indexIt = soundDataIndexMap.find(path);
   if (indexIt == soundDataIndexMap.end()) {
@@ -1071,42 +696,35 @@ bool AudioWrapper::playSound(const path_t &path, long long startOffsetMicros) {
   }
 
   auto &soundData = soundDataList[indexIt->second];
+  const auto started = startDeviceWithLifecycleAndSoundLocked();
+  if (!started.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio start failed for %s: %s",
+                 path_t_to_utf8(path).c_str(), started.diagnostic.c_str());
+    return false;
+  }
   const long long clampedOffsetMicros = std::max(0LL, startOffsetMicros);
   const size_t startFrame = static_cast<size_t>(
-      std::min<long long>(
-          static_cast<long long>(soundData->resampledFrameCount),
-          clampedOffsetMicros *
-              static_cast<long long>(
-                  currentSampleRate.load(std::memory_order_acquire)) /
-              1000000LL));
-  if (startFrame >= soundData->resampledFrameCount) {
+      std::min<long long>(static_cast<long long>(soundData->outputFrameCount),
+                          clampedOffsetMicros *
+                              static_cast<long long>(currentSampleRate.load(
+                                  std::memory_order_acquire)) /
+                              1000000LL));
+  if (startFrame >= soundData->outputFrameCount) {
     return false;
   }
 
-  bool shouldStartBackend = false;
   {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-    if (backend && !backend->isStarted()) {
-      if (!appendActiveSound(callbackState, soundData.get(), 0, startFrame)) {
-        SDL_Log("Too many active sounds; dropping %s",
-                path_t_to_utf8(path).c_str());
-        return false;
-      }
-      shouldStartBackend = true;
-    } else if (!enqueueCallbackCommand(
-                   callbackState, {.type = AudioCommandType::PlayNow,
-                                   .soundData = soundData.get(),
-                                   .startFrame = startFrame})) {
+    if (!audio::playback::EnqueueCommand(callbackState,
+                                         {.type = AudioCommandType::PlayNow,
+                                          .soundData = soundData.get(),
+                                          .bus = bus,
+                                          .startFrame = startFrame})) {
       SDL_Log("Audio command queue full; dropping %s",
               path_t_to_utf8(path).c_str());
       return false;
     }
   }
-
-  if (shouldStartBackend) {
-    backend->start();
-  }
-
   return true;
 }
 
@@ -1125,12 +743,14 @@ AudioWrapper::getSoundDurationMicros(const path_t &path) const {
     return std::nullopt;
   }
   return static_cast<long long>(
-      static_cast<double>(soundData->resampledFrameCount) * 1000000.0 /
+      static_cast<double>(soundData->outputFrameCount) * 1000000.0 /
       static_cast<double>(sampleRate));
 }
 
-bool AudioWrapper::scheduleSound(const path_t &path, long long startMicros) {
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
+bool AudioWrapper::scheduleSound(const path_t &path, audio::Bus bus,
+                                 long long startMicros) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
 
   const auto indexIt = soundDataIndexMap.find(path);
   if (indexIt == soundDataIndexMap.end()) {
@@ -1139,22 +759,24 @@ bool AudioWrapper::scheduleSound(const path_t &path, long long startMicros) {
   }
 
   auto &soundData = soundDataList[indexIt->second];
+  const auto started = startDeviceWithLifecycleAndSoundLocked();
+  if (!started.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Audio start failed for scheduled %s: %s",
+                 path_t_to_utf8(path).c_str(), started.diagnostic.c_str());
+    return false;
+  }
   const uint64_t sequence =
       scheduledSoundSequence.fetch_add(1, std::memory_order_acq_rel);
 
   {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-    if (backend && !backend->isStarted()) {
-      if (!appendScheduledSound(soundData.get(), startMicros, sequence)) {
-        SDL_Log("Too many scheduled sounds; dropping %s",
-                path_t_to_utf8(path).c_str());
-        return false;
-      }
-    } else if (!enqueueCallbackCommand(
-                   callbackState, {.type = AudioCommandType::Schedule,
-                                   .soundData = soundData.get(),
-                                   .startMicros = startMicros,
-                                   .sequence = sequence})) {
+    if (!audio::playback::EnqueueCommand(callbackState,
+                                         {.type = AudioCommandType::Schedule,
+                                          .soundData = soundData.get(),
+                                          .bus = bus,
+                                          .startMicros = startMicros,
+                                          .sequence = sequence})) {
       SDL_Log("Audio command queue full; dropping scheduled %s",
               path_t_to_utf8(path).c_str());
       return false;
@@ -1164,62 +786,302 @@ bool AudioWrapper::scheduleSound(const path_t &path, long long startMicros) {
   return true;
 }
 
-void AudioWrapper::startDevice() {
-  if (backend) {
-    updateCurrentSampleRate();
-    std::lock_guard<std::mutex> lock(audioCommandMutex);
-    backend->start();
+bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
+                                       long long startMicros) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end()) {
+    SDL_Log("Sound not found: %s", path_t_to_utf8(path).c_str());
+    return false;
   }
-}
 
-void AudioWrapper::stopSounds() {
-  if (backend) {
-    backend->stop();
+  if (!backend) {
+    backendState.store(audio::playback::BackendRunState::Unknown,
+                       std::memory_order_release);
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Audio backend is unavailable for scheduled %s",
+                 path_t_to_utf8(path).c_str());
+    return false;
   }
-  std::lock_guard<std::mutex> lock(audioCommandMutex);
-  clearCallbackState();
-}
-
-void AudioWrapper::unloadSound(const path_t &path) {
-  stopSounds();
-
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
-  if (const auto indexIt = soundDataIndexMap.find(path);
-      indexIt != soundDataIndexMap.end()) {
-    const size_t index = indexIt->second;
-    auto &soundData = soundDataList[index];
-
-    soundData->releaseResampler();
-
-    soundDataList.erase(soundDataList.begin() + index);
-    soundDataIndexMap.erase(indexIt);
-
-    // Update indices in the map
-    for (auto &entry : soundDataIndexMap) {
-      if (entry.second > index) {
-        entry.second--;
-      }
-    }
+  const auto observed = backend->observeState();
+  backendState.store(observed.state, std::memory_order_release);
+  if (!audio::playback::CanMutateCallbackStateDirectly(observed.state)) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Audio backend is not stopped for staged %s: %s",
+                 path_t_to_utf8(path).c_str(), observed.diagnostic.c_str());
+    return false;
   }
-}
 
-void AudioWrapper::unloadSounds() {
-  stopSounds();
+  auto &soundData = soundDataList[indexIt->second];
+  const uint64_t sequence =
+      scheduledSoundSequence.fetch_add(1, std::memory_order_acq_rel);
+
   {
-    std::lock_guard<std::mutex> lock(soundDataListMutex);
-    for (auto &soundData : soundDataList) {
-      soundData->releaseResampler();
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    if (!audio::playback::InsertScheduledSound(
+            callbackState, {.soundData = soundData.get(),
+                            .bus = bus,
+                            .startMicros = startMicros,
+                            .sequence = sequence})) {
+      SDL_Log("Audio scheduling capacity exhausted; dropping scheduled %s",
+              path_t_to_utf8(path).c_str());
+      return false;
     }
-    soundDataList.clear();
-    soundDataIndexMap.clear();
   }
+
+  return true;
+}
+
+audio::playback::BackendOperationResult AudioWrapper::startDevice() {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  return startDeviceWithLifecycleAndSoundLocked();
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
+  if (!backend) {
+    backendState.store(audio::playback::BackendRunState::Unknown,
+                       std::memory_order_release);
+    return {.success = false, .diagnostic = "Audio backend is unavailable"};
+  }
+
+  int targetSampleRate = backend->outputSampleRate();
+  if (targetSampleRate <= 0) {
+    targetSampleRate = 44100;
+  }
+  const auto observed = backend->observeState();
+  backendState.store(observed.state, std::memory_order_release);
+  if (observed.state == audio::playback::BackendRunState::Running &&
+      currentSampleRate.load(std::memory_order_acquire) == targetSampleRate) {
+    return {.success = true};
+  }
+
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  std::vector<SoundData *> sounds;
+  sounds.reserve(soundDataList.size());
+  for (const auto &soundData : soundDataList) {
+    if (soundData != nullptr) {
+      sounds.push_back(soundData.get());
+    }
+  }
+
+  auto result = audio::playback::EnsureBackendStartedAtOutputRate(
+      *backend, sounds, callbackState, targetSampleRate, currentSampleRate,
+      audioClockFrameCursor, backendState);
+  if (result.success) {
+    if (const auto *configurable =
+            dynamic_cast<const ConfigurableBackendLifecycle *>(backend.get())) {
+      runtimeState_ = configurable->runtimeState();
+    } else {
+      runtimeState_.effectiveSampleRate =
+          static_cast<std::uint32_t>(std::max(0, targetSampleRate));
+    }
+  }
+  return result;
+}
+
+audio::playback::BackendOperationResult AudioWrapper::stopSounds() {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  return stopSoundsWithLifecycleAndCommandLocked();
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::stopSoundsWithLifecycleAndCommandLocked() {
+  if (!backend) {
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+    clearCallbackState();
+    return {.success = true};
+  }
+  const auto stopped = audio::playback::StopBackendAndClearCallbackState(
+      *backend, callbackState, backendState);
+  if (!stopped.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Audio stop failed: %s",
+                 stopped.diagnostic.c_str());
+  }
+  return stopped;
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::unloadSound(const path_t &path) {
+  return pruneSounds({path});
+}
+
+audio::playback::BackendOperationResult
+AudioWrapper::pruneSounds(const std::vector<path_t> &paths) {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  std::vector<size_t> removedIndices;
+  removedIndices.reserve(paths.size());
+  for (const path_t &path : paths) {
+    if (const auto indexIt = soundDataIndexMap.find(path);
+        indexIt != soundDataIndexMap.end()) {
+      removedIndices.push_back(indexIt->second);
+    }
+  }
+  std::sort(removedIndices.begin(), removedIndices.end());
+  removedIndices.erase(
+      std::unique(removedIndices.begin(), removedIndices.end()),
+      removedIndices.end());
+  if (removedIndices.empty()) {
+    return {.success = true};
+  }
+
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
+  if (!stopped.success) {
+    return stopped;
+  }
+
+  for (auto indexIt = removedIndices.rbegin(); indexIt != removedIndices.rend();
+       ++indexIt) {
+    soundDataList.erase(soundDataList.begin() + *indexIt);
+  }
+  for (auto mapIt = soundDataIndexMap.begin();
+       mapIt != soundDataIndexMap.end();) {
+    const size_t oldIndex = mapIt->second;
+    if (std::binary_search(removedIndices.begin(), removedIndices.end(),
+                           oldIndex)) {
+      mapIt = soundDataIndexMap.erase(mapIt);
+      continue;
+    }
+    mapIt->second -= static_cast<size_t>(
+        std::distance(removedIndices.begin(),
+                      std::lower_bound(removedIndices.begin(),
+                                       removedIndices.end(), oldIndex)));
+    ++mapIt;
+  }
+  return {.success = true};
+}
+
+audio::playback::BackendOperationResult AudioWrapper::unloadSounds() {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
+  if (!stopped.success) {
+    return stopped;
+  }
+  soundDataList.clear();
+  soundDataIndexMap.clear();
+  return {.success = true};
+}
+
+audio::Capabilities AudioWrapper::capabilities() const {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  return backendFactory != nullptr ? backendFactory->capabilities()
+                                   : audio::Capabilities{};
+}
+
+audio::RuntimeState AudioWrapper::runtimeState() const {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  return runtimeState_;
+}
+
+bool AudioWrapper::restart(const audio::StreamRequest &request,
+                           std::string &errorMessage) {
+  errorMessage.clear();
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  if (backendFactory == nullptr) {
+    errorMessage = "Injected audio backend does not support reconfiguration";
+    return false;
+  }
+  if (backend != nullptr) {
+    if (backend->observeState().state !=
+        audio::playback::BackendRunState::Stopped) {
+      errorMessage = "Audio playback must be suspended before reconfiguration";
+      return false;
+    }
+    backend.reset();
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+  }
+
+  auto candidate = backendFactory->open(request, configurableBackendRender,
+                                        &userData, errorMessage);
+  if (!candidate) {
+    if (errorMessage.empty()) {
+      errorMessage = "Audio backend could not open the requested stream";
+    }
+    return false;
+  }
+  const audio::RuntimeState candidateState = candidate->runtimeState();
+  const int targetSampleRate =
+      candidateState.effectiveSampleRate == 0
+          ? 44100
+          : static_cast<int>(candidateState.effectiveSampleRate);
+
+  std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  std::vector<SoundData *> sounds;
+  sounds.reserve(soundDataList.size());
+  for (const auto &soundData : soundDataList) {
+    if (soundData != nullptr) {
+      sounds.push_back(soundData.get());
+    }
+  }
+  const int previousSampleRate =
+      currentSampleRate.load(std::memory_order_acquire);
+  std::optional<audio::playback::OutputRateTransition> transition;
+  if (previousSampleRate != targetSampleRate) {
+    transition = audio::playback::PrepareOutputRateTransition(
+        sounds, previousSampleRate, targetSampleRate);
+    if (!transition.has_value()) {
+      errorMessage = "Unable to prepare PCM for requested output sample rate";
+      return false;
+    }
+  }
+
+  if (!candidate->start(errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Audio backend could not start the requested stream";
+    }
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+    return false;
+  }
+
+  if (transition.has_value()) {
+    audio::playback::CommitOutputRateTransition(std::move(*transition),
+                                                callbackState);
+    const auto previousClockFrame =
+        audioClockFrameCursor.load(std::memory_order_acquire);
+    if (previousClockFrame > 0) {
+      const std::size_t remapped = audio::playback::RemapFramePosition(
+          static_cast<std::size_t>(previousClockFrame), previousSampleRate,
+          targetSampleRate);
+      audioClockFrameCursor.store(
+          static_cast<std::int64_t>(std::min<std::size_t>(
+              remapped,
+              static_cast<std::size_t>(
+                  std::numeric_limits<std::int64_t>::max()))),
+          std::memory_order_release);
+    }
+    currentSampleRate.store(targetSampleRate, std::memory_order_release);
+  }
+
+  runtimeState_ = candidate->runtimeState();
+  backend =
+      std::make_unique<ConfigurableBackendLifecycle>(std::move(candidate));
+  backendState.store(audio::playback::BackendRunState::Running,
+                     std::memory_order_release);
+  return true;
+}
+
+bool AudioWrapper::restore(const audio::RuntimeState &previous,
+                           std::string &errorMessage) {
+  return restart(previous.request, errorMessage);
 }
 
 void AudioWrapper::setBassBoost(float db) {
   std::lock_guard<std::mutex> lock(soundDataListMutex); // Protect filter coeffs
 
   // Get current sample rate from backend or default
-  int rate = backend ? backend->getSampleRate() : 44100;
+  int rate = backend ? backend->outputSampleRate() : 44100;
   if (rate == 0)
     rate = 44100;
 
@@ -1231,7 +1093,7 @@ void AudioWrapper::setTrebleBoost(float db) {
   std::lock_guard<std::mutex> lock(soundDataListMutex); // Protect filter coeffs
 
   // Get current sample rate
-  int rate = backend ? backend->getSampleRate() : 44100;
+  int rate = backend ? backend->outputSampleRate() : 44100;
   if (rate == 0)
     rate = 44100;
 
@@ -1243,7 +1105,7 @@ void AudioWrapper::setTrebleBoost(float db) {
 void AudioWrapper::setReverbMix(float mix) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
-  int rate = backend ? backend->getSampleRate() : 44100;
+  int rate = backend ? backend->outputSampleRate() : 44100;
   if (rate == 0)
     rate = 44100;
 
@@ -1256,7 +1118,7 @@ void AudioWrapper::setReverbMix(float mix) {
 void AudioWrapper::setCompressor(float threshold, float ratio) {
   std::lock_guard<std::mutex> lock(soundDataListMutex);
 
-  int rate = backend ? backend->getSampleRate() : 44100;
+  int rate = backend ? backend->outputSampleRate() : 44100;
   if (rate == 0)
     rate = 44100;
 
@@ -1270,4 +1132,15 @@ void AudioWrapper::setCompressor(float threshold, float ratio) {
     compressor.setParams(threshold, ratio, 0.01f,
                          0.1f); // Default attack/release
   }
+}
+
+void AudioWrapper::setVolumes(const audio::Volumes &volumes) {
+  bgmGain.store(audio::EffectiveGain(audio::Bus::Bgm, volumes),
+                std::memory_order_release);
+  keysoundGain.store(audio::EffectiveGain(audio::Bus::Keysound, volumes),
+                     std::memory_order_release);
+}
+
+void AudioWrapper::setVolumes(const player_settings::AudioSettings &settings) {
+  setVolumes(audio::VolumesFromSettings(settings));
 }

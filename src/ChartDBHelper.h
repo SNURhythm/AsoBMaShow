@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "CourseIdentity.h"
 #include "ThreadCompat.h"
 #include "bms_parser.hpp"
 #include "path.h"
@@ -110,6 +111,7 @@ struct DifficultyCourseGroupInfo {
   std::string groupName;
   int courseCount = 0;
   int singletonCourseId = 0;
+  std::string singletonCourseKey;
   std::string singletonCourseLevel;
   std::string singletonCourseName;
   std::string singletonCourseConstraintJson;
@@ -123,6 +125,7 @@ struct DifficultyCourseTableInfo {
 
 struct DifficultyCourseInfo {
   int id = 0;
+  std::string courseKey;
   int tableId = 0;
   std::string tableName;
   std::string groupName;
@@ -253,6 +256,8 @@ public:
   std::vector<DifficultyCourseInfo>
   SelectDifficultyCourses(sqlite3 *db, int tableId,
                           const std::string &groupName);
+  std::vector<course_identity::Definition>
+  SelectDifficultyCourseDefinitions(sqlite3 *db);
   std::string DifficultyTableLabelsForChart(
       const bms_parser::ChartMeta &meta);
   std::string DifficultyTableLabelsForChart(

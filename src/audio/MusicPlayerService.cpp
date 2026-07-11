@@ -160,17 +160,47 @@ MusicPlayerService::~MusicPlayerService() {
   StopPlaybackWorker();
   StopAdjacentPreloadWorker();
   StopNativeControlEventPump();
+  std::lock_guard<std::mutex> lock(stateMutex);
+  CloseDatabaseLocked();
+}
+
+sqlite3 *MusicPlayerService::DatabaseLocked(std::string &errorMessage) {
+  if (playlistDatabase != nullptr) {
+    if (sqlite3_get_autocommit(playlistDatabase) != 0) {
+      return playlistDatabase;
+    }
+    std::cerr << "Discarding music playlist database with an unfinished "
+                 "transaction.\n";
+    CloseDatabaseLocked();
+  }
+
+  playlistDatabase = playlistDb.Connect();
+  if (playlistDatabase == nullptr) {
+    errorMessage = "Could not open music playlist database.";
+    return nullptr;
+  }
+  if (!playlistDb.CreateTables(playlistDatabase)) {
+    CloseDatabaseLocked();
+    errorMessage = "Could not initialize music playlist database.";
+    return nullptr;
+  }
+  return playlistDatabase;
+}
+
+void MusicPlayerService::CloseDatabaseLocked() {
+  if (playlistDatabase == nullptr) {
+    return;
+  }
+  playlistDb.Close(playlistDatabase);
+  playlistDatabase = nullptr;
 }
 
 bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -187,11 +217,8 @@ bool MusicPlayerService::ReloadLibraryAndPlaylists(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -231,6 +258,7 @@ bool MusicPlayerService::LoadLibraryGroupTracks(
     const music_playlist::MusicTrack &groupTrack,
     std::vector<music_playlist::MusicTrack> &tracks,
     std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
   tracks.clear();
 
@@ -239,11 +267,8 @@ bool MusicPlayerService::LoadLibraryGroupTracks(
     return false;
   }
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -358,10 +383,16 @@ void MusicPlayerService::PersistQueueTracksLocked(
     const std::vector<music_playlist::MusicTrack> &tracks,
     bool preserveCursor) {
   const auto snapshot = queue.Snapshot();
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  std::string databaseError;
+  sqlite3 *db = DatabaseLocked(databaseError);
   if (db == nullptr) {
+    SyncNativeQueueLocked();
+    return;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
     SyncNativeQueueLocked();
     return;
   }
@@ -389,7 +420,9 @@ void MusicPlayerService::PersistQueueTracksLocked(
   const bool savedTracks = playlistDb.ReplaceNowPlayingTracks(db, chartMetas);
   const bool savedState =
       savedTracks && playlistDb.SavePlayerState(db, nextState);
-  if (savedTracks && savedState) {
+  const bool committed = savedTracks && savedState &&
+                         transaction.commit(transactionError);
+  if (committed) {
     persistedState = std::move(nextState);
   }
   SyncNativeQueueLocked();
@@ -397,9 +430,8 @@ void MusicPlayerService::PersistQueueTracksLocked(
 
 void MusicPlayerService::PersistQueueCursorLocked() {
   const auto snapshot = queue.Snapshot();
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  std::string databaseError;
+  sqlite3 *db = DatabaseLocked(databaseError);
   if (db == nullptr) {
     SyncNativeQueueLocked();
     return;
@@ -436,11 +468,8 @@ bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -479,11 +508,8 @@ int MusicPlayerService::CreatePlaylist(const std::string &name,
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return 0;
   }
 
@@ -511,16 +537,13 @@ int MusicPlayerService::CreatePlaylistFromTracks(
     return 0;
   }
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return 0;
   }
 
   std::string transactionError;
-  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
   if (!transaction.active()) {
     std::cerr << "SQL error while beginning music playlist save: "
               << transactionError << "\n";
@@ -571,11 +594,8 @@ bool MusicPlayerService::RenameSelectedPlaylist(const std::string &name,
     return false;
   }
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -599,11 +619,8 @@ bool MusicPlayerService::SelectPlaylist(int playlistId,
     return false;
   }
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -624,11 +641,8 @@ bool MusicPlayerService::AddChartToPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -655,11 +669,8 @@ bool MusicPlayerService::RemoveChartFromSelectedPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -682,11 +693,8 @@ bool MusicPlayerService::MoveChartInSelectedPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -708,11 +716,8 @@ bool MusicPlayerService::ClearSelectedPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -732,11 +737,8 @@ bool MusicPlayerService::DeleteSelectedPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -770,11 +772,8 @@ bool MusicPlayerService::SavePlaylistCursor(int playlistId, int cursorIndex,
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -810,11 +809,8 @@ bool MusicPlayerService::AddChartToDefaultPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -838,11 +834,8 @@ bool MusicPlayerService::RemoveChartFromDefaultPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -865,11 +858,8 @@ bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  MusicPlaylistDB playlistDb;
-  SqliteConnectionHandle dbHandle(playlistDb.Connect());
-  sqlite3 *db = dbHandle.get();
+  sqlite3 *db = DatabaseLocked(errorMessage);
   if (db == nullptr) {
-    errorMessage = "Could not open chart database.";
     return false;
   }
 
@@ -907,17 +897,11 @@ bool MusicPlayerService::StartSelectedPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  {
-    MusicPlaylistDB playlistDb;
-    SqliteConnectionHandle dbHandle(playlistDb.Connect());
-    sqlite3 *db = dbHandle.get();
-    if (db == nullptr) {
-      errorMessage = "Could not open chart database.";
-      return false;
-    }
-
-    RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  sqlite3 *db = DatabaseLocked(errorMessage);
+  if (db == nullptr) {
+    return false;
   }
+  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
 
   if (selectedPlaylistTracks.empty()) {
     setEmptyPlaylistError(errorMessage);
@@ -937,18 +921,12 @@ bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
   errorMessage.clear();
 
   bool hasDefaultPlaylist = false;
-  {
-    MusicPlaylistDB playlistDb;
-    SqliteConnectionHandle dbHandle(playlistDb.Connect());
-    sqlite3 *db = dbHandle.get();
-    if (db == nullptr) {
-      errorMessage = "Could not open chart database.";
-      return false;
-    }
-
-    RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
-    hasDefaultPlaylist = defaultPlaylistId > 0;
+  sqlite3 *db = DatabaseLocked(errorMessage);
+  if (db == nullptr) {
+    return false;
   }
+  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  hasDefaultPlaylist = defaultPlaylistId > 0;
 
   if (!hasDefaultPlaylist) {
     errorMessage = "Could not create music playlist.";

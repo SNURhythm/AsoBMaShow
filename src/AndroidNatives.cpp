@@ -28,6 +28,7 @@ namespace {
 
 constexpr const char *kAndroidTreeSentinel = "@androidtree@";
 constexpr const char *kErrorPrefix = "__ERROR__:";
+constexpr const char *kSuccessResult = "__OK__";
 constexpr const char *kPendingImportResult = "__PENDING_ARCHIVE_IMPORT__";
 
 std::mutex gAndroidTreeMutex;
@@ -37,6 +38,14 @@ std::condition_variable gExternalActivityPauseCv;
 bool gExternalActivityPauseRequested = false;
 bool gExternalActivityPauseAcknowledged = false;
 constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
+std::mutex gAndroidDocumentCommitMutex;
+std::unordered_map<std::string, std::function<bool()>>
+    gAndroidDocumentCommitHandlers;
+
+std::string pathToUtf8(const std::filesystem::path &path) {
+  const auto value = path.u8string();
+  return {reinterpret_cast<const char *>(value.data()), value.size()};
+}
 
 struct AndroidDownloadProgressBridge {
   std::atomic_bool *cancelled = nullptr;
@@ -127,17 +136,108 @@ std::optional<std::string> treeUriForId(const std::string &treeId) {
   return it->second;
 }
 
+void appendUtf8(std::string &output, std::uint32_t codePoint) {
+  if (codePoint <= 0x7f) {
+    output.push_back(static_cast<char>(codePoint));
+  } else if (codePoint <= 0x7ff) {
+    output.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+  } else if (codePoint <= 0xffff) {
+    output.push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+  } else {
+    output.push_back(static_cast<char>(0xf0 | (codePoint >> 18)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3f)));
+    output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+    output.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+  }
+}
+
 std::string jstringToUtf8(JNIEnv *env, jstring value) {
   if (env == nullptr || value == nullptr) {
     return {};
   }
-  const char *chars = env->GetStringUTFChars(value, nullptr);
+  const jsize length = env->GetStringLength(value);
+  const jchar *chars = env->GetStringChars(value, nullptr);
   if (chars == nullptr) {
     return {};
   }
-  std::string result(chars);
-  env->ReleaseStringUTFChars(value, chars);
+  std::string result;
+  result.reserve(static_cast<std::size_t>(length) * 3);
+  for (jsize index = 0; index < length; ++index) {
+    std::uint32_t codePoint = chars[index];
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
+      if (index + 1 < length && chars[index + 1] >= 0xdc00 &&
+          chars[index + 1] <= 0xdfff) {
+        codePoint =
+            0x10000 + ((codePoint - 0xd800) << 10) + (chars[++index] - 0xdc00);
+      } else {
+        codePoint = 0xfffd;
+      }
+    } else if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
+      codePoint = 0xfffd;
+    }
+    appendUtf8(result, codePoint);
+  }
+  env->ReleaseStringChars(value, chars);
   return result;
+}
+
+jstring utf8ToJString(JNIEnv *env, const char *value) {
+  if (env == nullptr) {
+    return nullptr;
+  }
+  const auto *bytes =
+      reinterpret_cast<const unsigned char *>(value != nullptr ? value : "");
+  const std::size_t length =
+      std::char_traits<char>::length(value != nullptr ? value : "");
+  std::vector<jchar> utf16;
+  utf16.reserve(length);
+  for (std::size_t index = 0; index < length;) {
+    std::uint32_t codePoint = 0xfffd;
+    std::size_t count = 1;
+    const unsigned char first = bytes[index];
+    if (first <= 0x7f) {
+      codePoint = first;
+    } else if (first >= 0xc2 && first <= 0xdf && index + 1 < length &&
+               (bytes[index + 1] & 0xc0) == 0x80) {
+      codePoint = ((first & 0x1f) << 6) | (bytes[index + 1] & 0x3f);
+      count = 2;
+    } else if (first >= 0xe0 && first <= 0xef && index + 2 < length &&
+               (bytes[index + 1] & 0xc0) == 0x80 &&
+               (bytes[index + 2] & 0xc0) == 0x80) {
+      const std::uint32_t candidate = ((first & 0x0f) << 12) |
+                                      ((bytes[index + 1] & 0x3f) << 6) |
+                                      (bytes[index + 2] & 0x3f);
+      if (candidate >= 0x800 && !(candidate >= 0xd800 && candidate <= 0xdfff)) {
+        codePoint = candidate;
+        count = 3;
+      }
+    } else if (first >= 0xf0 && first <= 0xf4 && index + 3 < length &&
+               (bytes[index + 1] & 0xc0) == 0x80 &&
+               (bytes[index + 2] & 0xc0) == 0x80 &&
+               (bytes[index + 3] & 0xc0) == 0x80) {
+      const std::uint32_t candidate =
+          ((first & 0x07) << 18) | ((bytes[index + 1] & 0x3f) << 12) |
+          ((bytes[index + 2] & 0x3f) << 6) | (bytes[index + 3] & 0x3f);
+      if (candidate >= 0x10000 && candidate <= 0x10ffff) {
+        codePoint = candidate;
+        count = 4;
+      }
+    }
+    index += count;
+    if (codePoint <= 0xffff) {
+      utf16.push_back(static_cast<jchar>(codePoint));
+    } else {
+      codePoint -= 0x10000;
+      utf16.push_back(static_cast<jchar>(0xd800 + (codePoint >> 10)));
+      utf16.push_back(static_cast<jchar>(0xdc00 + (codePoint & 0x3ff)));
+    }
+  }
+  static constexpr jchar empty = 0;
+  return env->NewString(utf16.empty() ? &empty : utf16.data(),
+                        static_cast<jsize>(utf16.size()));
 }
 
 bool clearPendingJavaException(JNIEnv *env, std::string &errorMessage) {
@@ -203,7 +303,7 @@ std::string callActivityStringMethod(const char *methodName,
   jstring javaArgument = nullptr;
   jobject javaResult = nullptr;
   if (argument != nullptr) {
-    javaArgument = env->NewStringUTF(argument);
+    javaArgument = utf8ToJString(env, argument);
     javaResult = env->CallObjectMethod(activity, method, javaArgument);
   } else {
     javaResult = env->CallObjectMethod(activity, method);
@@ -259,8 +359,10 @@ std::string callActivityStringMethod2(const char *methodName,
     return {};
   }
 
-  jstring javaArgument1 = env->NewStringUTF(argument1 != nullptr ? argument1 : "");
-  jstring javaArgument2 = env->NewStringUTF(argument2 != nullptr ? argument2 : "");
+  jstring javaArgument1 =
+      utf8ToJString(env, argument1 != nullptr ? argument1 : "");
+  jstring javaArgument2 =
+      utf8ToJString(env, argument2 != nullptr ? argument2 : "");
   jobject javaResult =
       env->CallObjectMethod(activity, method, javaArgument1, javaArgument2);
 
@@ -314,9 +416,9 @@ std::string callActivityStringMethod2Long(const char *methodName,
   }
 
   jstring javaArgument1 =
-      env->NewStringUTF(argument1 != nullptr ? argument1 : "");
+      utf8ToJString(env, argument1 != nullptr ? argument1 : "");
   jstring javaArgument2 =
-      env->NewStringUTF(argument2 != nullptr ? argument2 : "");
+      utf8ToJString(env, argument2 != nullptr ? argument2 : "");
   jobject javaResult = env->CallObjectMethod(
       activity, method, javaArgument1, javaArgument2, argument3);
 
@@ -368,7 +470,8 @@ std::string callActivityStringMethodLong(const char *methodName,
     return {};
   }
 
-  jstring javaArgument = env->NewStringUTF(argument != nullptr ? argument : "");
+  jstring javaArgument =
+      utf8ToJString(env, argument != nullptr ? argument : "");
   jobject javaResult =
       env->CallObjectMethod(activity, method, javaArgument, longArgument);
 
@@ -384,6 +487,61 @@ std::string callActivityStringMethodLong(const char *methodName,
     env->DeleteLocalRef(javaResult);
   }
   env->DeleteLocalRef(javaArgument);
+  env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  return result;
+}
+
+std::string
+callActivityStringMethod4Long(const char *methodName, const char *signature,
+                              const char *argument1, const char *argument2,
+                              const char *argument3, const char *argument4,
+                              jlong argument5, std::string &errorMessage) {
+  errorMessage.clear();
+  auto *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
+  auto activity = static_cast<jobject>(SDL_AndroidGetActivity());
+  if (env == nullptr || activity == nullptr) {
+    errorMessage = "Android activity is not available.";
+    return {};
+  }
+
+  jclass activityClass = env->GetObjectClass(activity);
+  if (activityClass == nullptr) {
+    errorMessage = "Android activity class is not available.";
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+  jmethodID method = env->GetMethodID(activityClass, methodName, signature);
+  if (method == nullptr) {
+    errorMessage =
+        std::string("Android activity method missing: ") + methodName;
+    env->DeleteLocalRef(activityClass);
+    env->DeleteLocalRef(activity);
+    return {};
+  }
+
+  jstring javaArguments[] = {
+      utf8ToJString(env, argument1 != nullptr ? argument1 : ""),
+      utf8ToJString(env, argument2 != nullptr ? argument2 : ""),
+      utf8ToJString(env, argument3 != nullptr ? argument3 : ""),
+      utf8ToJString(env, argument4 != nullptr ? argument4 : ""),
+  };
+  jobject javaResult = env->CallObjectMethod(activity, method, javaArguments[0],
+                                             javaArguments[1], javaArguments[2],
+                                             javaArguments[3], argument5);
+  const bool exception = clearPendingJavaException(env, errorMessage);
+  std::string result;
+  if (!exception) {
+    result = jstringToUtf8(env, static_cast<jstring>(javaResult));
+  }
+  if (javaResult != nullptr) {
+    env->DeleteLocalRef(javaResult);
+  }
+  for (jstring argument : javaArguments) {
+    if (argument != nullptr) {
+      env->DeleteLocalRef(argument);
+    }
+  }
   env->DeleteLocalRef(activityClass);
   env->DeleteLocalRef(activity);
   return result;
@@ -418,8 +576,10 @@ std::optional<int> callActivityIntMethod2(const char *methodName,
     return std::nullopt;
   }
 
-  jstring javaArgument1 = env->NewStringUTF(argument1 != nullptr ? argument1 : "");
-  jstring javaArgument2 = env->NewStringUTF(argument2 != nullptr ? argument2 : "");
+  jstring javaArgument1 =
+      utf8ToJString(env, argument1 != nullptr ? argument1 : "");
+  jstring javaArgument2 =
+      utf8ToJString(env, argument2 != nullptr ? argument2 : "");
   const jint javaResult =
       env->CallIntMethod(activity, method, javaArgument1, javaArgument2);
 
@@ -553,6 +713,26 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeMusicControlEvent(
   }
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeCommitDocumentHandoff(
+    JNIEnv *env, jclass, jstring operationToken) {
+  const std::string token = jstringToUtf8(env, operationToken);
+  std::function<bool()> commitHandler;
+  {
+    std::lock_guard lock(gAndroidDocumentCommitMutex);
+    const auto found = gAndroidDocumentCommitHandlers.find(token);
+    if (found == gAndroidDocumentCommitHandlers.end()) {
+      return JNI_FALSE;
+    }
+    commitHandler = found->second;
+  }
+  try {
+    return commitHandler && commitHandler() ? JNI_TRUE : JNI_FALSE;
+  } catch (...) {
+    return JNI_FALSE;
+  }
+}
+
 std::string GetAndroidExternalFilesDir() {
   if (const char *external = SDL_AndroidGetExternalStoragePath();
       external != nullptr && external[0] != '\0') {
@@ -579,6 +759,17 @@ std::string GetAndroidInternalFilesDir() {
     return result;
   }
   return GetAndroidExternalFilesDir();
+}
+
+std::string GetAndroidCacheDir() {
+  std::string callError;
+  const std::string result = callActivityStringMethod(
+      "getCacheDirPath", "()Ljava/lang/String;", nullptr, callError);
+  if (callError.empty() && !result.empty() &&
+      result.rfind(kErrorPrefix, 0) != 0) {
+    return result;
+  }
+  return {};
 }
 
 bool AndroidBuildHasManageExternalStorage() {
@@ -724,6 +915,149 @@ ConsumePendingAndroidArchiveImport(std::string &errorMessage) {
     return std::nullopt;
   }
   return std::filesystem::path(result).lexically_normal();
+}
+
+bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
+                                    std::string &errorMessage) {
+  const auto tokenText = std::to_string(operationToken);
+  const std::string result = callActivityStringMethod(
+      "registerDocumentHandoff", "(Ljava/lang/String;)Ljava/lang/String;",
+      tokenText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android could not register the document handoff.";
+  return false;
+}
+
+void RetireAndroidDocumentHandoff(std::uint64_t operationToken) {
+  const auto tokenText = std::to_string(operationToken);
+  std::string ignoredError;
+  (void)callActivityStringMethod("retireDocumentHandoff",
+                                 "(Ljava/lang/String;)Ljava/lang/String;",
+                                 tokenText.c_str(), ignoredError);
+}
+
+bool RegisterAndroidDocumentCommit(std::uint64_t operationToken,
+                                   std::function<bool()> commitHandler) {
+  if (!commitHandler) {
+    return false;
+  }
+  std::lock_guard lock(gAndroidDocumentCommitMutex);
+  return gAndroidDocumentCommitHandlers
+      .emplace(std::to_string(operationToken), std::move(commitHandler))
+      .second;
+}
+
+void UnregisterAndroidDocumentCommit(std::uint64_t operationToken) {
+  std::lock_guard lock(gAndroidDocumentCommitMutex);
+  gAndroidDocumentCommitHandlers.erase(std::to_string(operationToken));
+}
+
+std::string ImportAndroidDocument(std::uint64_t operationToken,
+                                  const std::string &mimeType,
+                                  std::uint64_t maxBytes) {
+  RequestAndroidExternalActivityRenderPause();
+  struct ExternalActivityPauseReset {
+    ~ExternalActivityPauseReset() {
+      FinishAndroidExternalActivityRenderPause();
+    }
+  } externalActivityPauseReset;
+
+  std::string callError;
+  const auto tokenText = std::to_string(operationToken);
+  const std::string result = callActivityStringMethod2Long(
+      "importDocument",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+      tokenText.c_str(), mimeType.c_str(), static_cast<jlong>(maxBytes),
+      callError);
+  if (!callError.empty()) {
+    return std::string(kErrorPrefix) + callError;
+  }
+  return result.empty() ? std::string(kErrorPrefix) +
+                              "Android document import returned no result."
+                        : result;
+}
+
+std::string ExportAndroidDocument(std::uint64_t operationToken,
+                                  const std::filesystem::path &localPath,
+                                  const std::string &mimeType,
+                                  const std::string &suggestedName,
+                                  std::uint64_t maxBytes) {
+  RequestAndroidExternalActivityRenderPause();
+  struct ExternalActivityPauseReset {
+    ~ExternalActivityPauseReset() {
+      FinishAndroidExternalActivityRenderPause();
+    }
+  } externalActivityPauseReset;
+
+  std::string callError;
+  const auto tokenText = std::to_string(operationToken);
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod4Long(
+      "exportDocument",
+      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+      "Ljava/lang/String;J)Ljava/lang/String;",
+      tokenText.c_str(), pathText.c_str(), mimeType.c_str(),
+      suggestedName.c_str(), static_cast<jlong>(maxBytes), callError);
+  if (!callError.empty()) {
+    return std::string(kErrorPrefix) + callError;
+  }
+  return result.empty() ? std::string(kErrorPrefix) +
+                              "Android document export returned no result."
+                        : result;
+}
+
+void CancelAndroidDocument(std::uint64_t operationToken) {
+  const auto tokenText = std::to_string(operationToken);
+  std::string ignoredError;
+  (void)callActivityStringMethod("cancelDocumentHandoff",
+                                 "(Ljava/lang/String;)Ljava/lang/String;",
+                                 tokenText.c_str(), ignoredError);
+}
+
+bool ValidateAndroidTemporaryDocument(const std::filesystem::path &localPath,
+                                      std::string &errorMessage) {
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod(
+      "validateDocumentHandoffImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      pathText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android rejected temporary document ownership.";
+  return false;
+}
+
+bool CleanupAndroidTemporaryDocument(const std::filesystem::path &localPath,
+                                     std::string &errorMessage) {
+  const std::string pathText = pathToUtf8(localPath);
+  const std::string result = callActivityStringMethod(
+      "cleanupDocumentHandoffImport", "(Ljava/lang/String;)Ljava/lang/String;",
+      pathText.c_str(), errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  if (result == kSuccessResult) {
+    return true;
+  }
+  errorMessage =
+      result.rfind(kErrorPrefix, 0) == 0
+          ? result.substr(std::char_traits<char>::length(kErrorPrefix))
+          : "Android could not clean up the temporary document.";
+  return false;
 }
 
 void RegisterAndroidChartFolder(const std::filesystem::path &rootPath,
@@ -978,7 +1312,7 @@ bool DownloadURLToFileAndroid(const std::string &url,
   } cleanup{progressToken};
 
   std::string callError;
-  const std::string pathText = path.string();
+  const std::string pathText = pathToUtf8(path);
   const std::string result = callActivityStringMethod2Long(
       "downloadUrlToFile",
       "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;", url.c_str(),

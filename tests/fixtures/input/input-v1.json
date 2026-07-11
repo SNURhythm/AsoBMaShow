@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "bindings": [
+    {
+      "id": "fixture-midi-note",
+      "scope": {
+        "player": 1,
+        "keyMode": 7
+      },
+      "action": {
+        "kind": "start",
+        "lane": 0
+      },
+      "control": {
+        "deviceClass": "midi",
+        "kind": "midiNote",
+        "index": 316,
+        "direction": "any"
+      },
+      "deadZone": 0.0,
+      "activationThreshold": 0.6,
+      "releaseThreshold": 0.4,
+      "inverted": false
+    }
+  ]
+}

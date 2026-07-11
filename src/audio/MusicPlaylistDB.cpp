@@ -165,31 +165,54 @@ bool attachChartDatabase(sqlite3 *db, const std::filesystem::path &path) {
           "AND name = 'chart_meta' LIMIT 1",
           stmt) != SQLITE_OK ||
       sqlite3_step(stmt) != SQLITE_ROW) {
-    return true;
+    logSqlErrorText("checking attached chart database",
+                    sqliteDatabaseError(db));
+    return false;
+  }
+  return true;
+}
+
+bool validateChartDatabase(const std::filesystem::path &path,
+                           std::string &errorMessage) {
+  std::error_code filesystemError;
+  if (!std::filesystem::exists(path, filesystemError)) {
+    errorMessage = filesystemError
+                       ? "could not inspect chart database: " +
+                             filesystemError.message()
+                       : "chart database does not exist";
+    return false;
+  }
+  if (!std::filesystem::is_regular_file(path, filesystemError) ||
+      filesystemError) {
+    errorMessage = filesystemError
+                       ? "could not inspect chart database: " +
+                             filesystemError.message()
+                       : "chart database is not a regular file";
+    return false;
   }
 
-  const char *indexes[] = {
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_path "
-      "ON chart_meta(path)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder "
-      "ON chart_meta(folder)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_folder_source "
-      "ON chart_meta(folder, source_priority, source_archive_size, path)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_title_path "
-      "ON chart_meta(title, path)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_sha256 "
-      "ON chart_meta(sha256)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_md5 "
-      "ON chart_meta(md5)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_sha256_source "
-      "ON chart_meta(sha256, source_priority, source_archive_size, path)",
-      "CREATE INDEX IF NOT EXISTS chart_library.idx_chart_meta_md5_source "
-      "ON chart_meta(md5, source_priority, source_archive_size, path)",
-  };
-  for (const char *query : indexes) {
-    if (!execSql(db, query, "creating attached chart index")) {
-      return false;
-    }
+  sqlite3 *rawDatabase = nullptr;
+  const std::string pathText = fspath_to_utf8(path);
+  const int openResult = sqlite3_open_v2(
+      pathText.c_str(), &rawDatabase,
+      SQLITE_OPEN_READONLY | SQLITE_OPEN_PRIVATECACHE, nullptr);
+  SqliteConnectionHandle database(rawDatabase);
+  if (openResult != SQLITE_OK || !database) {
+    errorMessage = rawDatabase != nullptr ? sqlite3_errmsg(rawDatabase)
+                                          : "could not open chart database";
+    return false;
+  }
+  sqlite3_busy_timeout(database.get(), 1000);
+
+  bool chartMetaExists = false;
+  if (const auto queryError =
+          querySqliteTableExists(database.get(), "chart_meta", chartMetaExists)) {
+    errorMessage = *queryError;
+    return false;
+  }
+  if (!chartMetaExists) {
+    errorMessage = "chart database does not contain chart_meta";
+    return false;
   }
   return true;
 }
@@ -851,6 +874,17 @@ void readStoredMusicTrackRows(sqlite3_stmt *stmt,
 
 sqlite3 *MusicPlaylistDB::Connect() {
   std::filesystem::path directory = Utils::GetDocumentsPath("db");
+  const std::filesystem::path playlistPath =
+      directory / kPlaylistDatabaseFileName;
+  const std::filesystem::path chartPath = directory / kChartDatabaseFileName;
+
+  std::string chartValidationError;
+  if (!validateChartDatabase(chartPath, chartValidationError)) {
+    std::cerr << "Can't use chart database for music playlists: "
+              << chartValidationError << "\n";
+    return nullptr;
+  }
+
   std::error_code directoryError;
   if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
     std::cerr << "Can't create music playlist database directory "
@@ -858,32 +892,65 @@ sqlite3 *MusicPlaylistDB::Connect() {
               << "\n";
     return nullptr;
   }
-  const std::filesystem::path playlistPath =
-      directory / kPlaylistDatabaseFileName;
-  const std::filesystem::path chartPath = directory / kChartDatabaseFileName;
 
   std::string openError;
-  sqlite3 *db = openSqliteDatabase(playlistPath, openError);
+  sqlite3 *db = openValidatedSqliteDatabase(
+      playlistPath, kMusicPlaylistDatabaseSchemaVersion, true, openError);
   if (db == nullptr) {
     std::cerr << "Can't open music playlist database: " << openError << "\n";
     return nullptr;
   }
 
-  if (const auto pragmaError = applySqlitePragmas(
-          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
+  if (const auto pragmaError =
+          applySqlitePragmas(db, {"PRAGMA synchronous=NORMAL"})) {
     std::cerr << "Could not configure music playlist database: "
               << *pragmaError << "\n";
+    closeSqliteDatabase(db);
+    return nullptr;
   }
   registerMusicPlaylistSqliteFunctions(db);
-  attachChartDatabase(db, chartPath);
+  if (!attachChartDatabase(db, chartPath)) {
+    closeSqliteDatabase(db);
+    return nullptr;
+  }
   return db;
 }
 
 void MusicPlaylistDB::Close(sqlite3 *db) {
+  if (schemaDatabase == db) {
+    schemaDatabase = nullptr;
+  }
   closeSqliteDatabase(db);
 }
 
 bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
+  if (db == nullptr) {
+    return false;
+  }
+  if (schemaDatabase == db) {
+    return true;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_music_schema"
+                               : "BEGIN";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_music_schema"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_music_schema; RELEASE "
+            "asobmashow_music_schema"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("beginning music playlist schema setup", transactionError);
+    return false;
+  }
+
   struct SchemaStatement {
     const char *query;
     const char *context;
@@ -968,6 +1035,13 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
   }
   if (!migrateMusicPlaylistDatabaseSchema(db)) {
     return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing music playlist schema setup", transactionError);
+    return false;
+  }
+  if (!callerOwnsTransaction) {
+    schemaDatabase = db;
   }
   return true;
 }
@@ -1371,6 +1445,26 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
     return false;
   }
 
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_music_state"
+                               : "BEGIN";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_music_state"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_music_state; RELEASE "
+            "asobmashow_music_state"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("beginning music player state save", transactionError);
+    return false;
+  }
+
   const char *query =
       "INSERT INTO music_player_state (key, value, updated_at) "
       "VALUES (?1, ?2, CURRENT_TIMESTAMP) "
@@ -1396,14 +1490,23 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
     return true;
   };
 
-  return saveValue("selected_playlist_id",
-                   std::to_string(state.selectedPlaylistId)) &&
-         saveValue("playlist_cursor_index",
-                   std::to_string(state.playlistCursorIndex)) &&
-         saveValue("queue_cursor_index",
-                   std::to_string(state.queueCursorIndex)) &&
-         saveValue("queue_repeat_mode", std::to_string(state.repeatMode)) &&
-         saveValue("queue_display_name", state.queueDisplayName);
+  const bool saved =
+      saveValue("selected_playlist_id",
+                std::to_string(state.selectedPlaylistId)) &&
+      saveValue("playlist_cursor_index",
+                std::to_string(state.playlistCursorIndex)) &&
+      saveValue("queue_cursor_index",
+                std::to_string(state.queueCursorIndex)) &&
+      saveValue("queue_repeat_mode", std::to_string(state.repeatMode)) &&
+      saveValue("queue_display_name", state.queueDisplayName);
+  if (!saved) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing music player state save", transactionError);
+    return false;
+  }
+  return true;
 }
 
 bool MusicPlaylistDB::ReplaceNowPlayingTracks(
@@ -1412,8 +1515,21 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
     return false;
   }
 
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_now_playing"
+                               : "BEGIN";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_now_playing"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_now_playing; RELEASE "
+            "asobmashow_now_playing"
+          : "ROLLBACK";
   std::string transactionError;
-  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
   if (!transaction.active()) {
     logSqlErrorText("beginning now playing save", transactionError);
     return false;

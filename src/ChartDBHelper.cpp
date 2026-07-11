@@ -7,6 +7,7 @@
 #include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"
 #include "LongNoteModeUtils.h"
+#include "ScoreDBHelper.h"
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "Utils.h"
@@ -979,6 +980,107 @@ struct TableChartItem {
   std::string urlDiff;
 };
 
+struct UnambiguousHashEvidence {
+  std::string value;
+  bool conflicting = false;
+
+  void observe(const std::string &candidate) {
+    const std::string normalized = normalizedHash(candidate);
+    if (normalized.empty()) {
+      return;
+    }
+    if (value.empty()) {
+      value = normalized;
+    } else if (value != normalized) {
+      conflicting = true;
+    }
+  }
+
+  void merge(const UnambiguousHashEvidence &other) {
+    observe(other.value);
+    conflicting = conflicting || other.conflicting;
+  }
+
+  [[nodiscard]] std::string resolved() const {
+    return conflicting ? std::string() : value;
+  }
+};
+
+struct ChartHashEvidence {
+  UnambiguousHashEvidence sha256;
+  UnambiguousHashEvidence md5;
+
+  void observeMatchingCandidate(
+      const course_identity::ChartIdentity &stored,
+      const course_identity::ChartIdentity &candidate) {
+    const course_identity::ChartIdentity normalizedStored{
+        .sha256 = normalizedHash(stored.sha256),
+        .md5 = normalizedHash(stored.md5),
+    };
+    const course_identity::ChartIdentity normalizedCandidate{
+        .sha256 = normalizedHash(candidate.sha256),
+        .md5 = normalizedHash(candidate.md5),
+    };
+    if (normalizedStored.sha256.empty() &&
+        !normalizedStored.md5.empty() &&
+        normalizedCandidate.md5 == normalizedStored.md5) {
+      sha256.observe(normalizedCandidate.sha256);
+    }
+    if (normalizedStored.md5.empty() &&
+        !normalizedStored.sha256.empty() &&
+        normalizedCandidate.sha256 == normalizedStored.sha256) {
+      md5.observe(normalizedCandidate.md5);
+    }
+  }
+
+  void enrichMissing(course_identity::ChartIdentity &stored) const {
+    if (stored.sha256.empty()) {
+      stored.sha256 = sha256.resolved();
+    }
+    if (stored.md5.empty()) {
+      stored.md5 = md5.resolved();
+    }
+  }
+
+  void merge(const ChartHashEvidence &other) {
+    sha256.merge(other.sha256);
+    md5.merge(other.md5);
+  }
+};
+
+course_identity::ChartIdentity chartIdentity(const TableChartItem &chart) {
+  return {.sha256 = chart.sha256, .md5 = chart.md5};
+}
+
+using RetainedDifficultyCourses =
+    std::vector<course_identity::Definition>;
+
+std::vector<course_identity::ChartIdentity>
+courseChartIdentities(const std::vector<TableChartItem> &charts) {
+  std::vector<course_identity::ChartIdentity> identities;
+  identities.reserve(charts.size());
+  for (const auto &chart : charts) {
+    identities.push_back(chartIdentity(chart));
+  }
+  return identities;
+}
+
+std::optional<course_identity::Definition> takeRetainedDifficultyCourse(
+    RetainedDifficultyCourses &retainedCourses,
+    const course_identity::Definition &definition) {
+  const auto retained = std::find_if(
+      retainedCourses.begin(), retainedCourses.end(),
+      [&](const course_identity::Definition &candidate) {
+        return course_identity::sameDefinition(candidate, definition);
+      });
+  if (retained == retainedCourses.end()) {
+    return std::nullopt;
+  }
+  course_identity::Definition retainedDefinition = std::move(*retained);
+  retainedCourses.erase(retained);
+  return retainedDefinition;
+}
+
 TableChartItem readChartItem(const json &item,
                              const std::string &defaultLevel) {
   TableChartItem chart;
@@ -998,9 +1100,25 @@ TableChartItem readChartItem(const json &item,
 }
 
 using TableChartItemLookup = std::unordered_map<std::string, TableChartItem>;
+using ChartHashEvidenceLookup =
+    std::unordered_map<std::string, ChartHashEvidence>;
 
 std::string chartLookupKey(const std::string &kind, const std::string &hash) {
   return hash.empty() ? "" : kind + ":" + hash;
+}
+
+std::string missingCounterpartEvidenceKey(
+    const course_identity::ChartIdentity &stored,
+    const std::string &keyPrefix = "") {
+  const std::string sha256 = normalizedHash(stored.sha256);
+  const std::string md5 = normalizedHash(stored.md5);
+  if (sha256.empty() && !md5.empty()) {
+    return keyPrefix + chartLookupKey("md5", md5);
+  }
+  if (md5.empty() && !sha256.empty()) {
+    return keyPrefix + chartLookupKey("sha256", sha256);
+  }
+  return {};
 }
 
 void addToChartItemLookup(TableChartItemLookup &lookup,
@@ -1012,6 +1130,21 @@ void addToChartItemLookup(TableChartItemLookup &lookup,
   const std::string md5Key = chartLookupKey("md5", chart.md5);
   if (!md5Key.empty()) {
     lookup.emplace(md5Key, chart);
+  }
+}
+
+void addToChartHashEvidenceLookup(ChartHashEvidenceLookup &lookup,
+                                  const TableChartItem &chart) {
+  const course_identity::ChartIdentity candidate = chartIdentity(chart);
+  if (!chart.md5.empty()) {
+    lookup[chartLookupKey("md5", chart.md5)].observeMatchingCandidate(
+        course_identity::ChartIdentity{.md5 = chart.md5}, candidate);
+  }
+  if (!chart.sha256.empty()) {
+    lookup[chartLookupKey("sha256", chart.sha256)]
+        .observeMatchingCandidate(
+            course_identity::ChartIdentity{.sha256 = chart.sha256},
+            candidate);
   }
 }
 
@@ -1035,17 +1168,33 @@ findChartItemInLookup(const TableChartItemLookup &lookup,
   return nullptr;
 }
 
+void fillUnambiguousCourseChartHash(
+    TableChartItem &courseChart,
+    const ChartHashEvidenceLookup &evidenceByHash) {
+  const std::string lookupKey =
+      missingCounterpartEvidenceKey(chartIdentity(courseChart));
+  if (lookupKey.empty()) {
+    return;
+  }
+  const auto evidence = evidenceByHash.find(lookupKey);
+  if (evidence == evidenceByHash.end()) {
+    return;
+  }
+  course_identity::ChartIdentity identity = chartIdentity(courseChart);
+  evidence->second.enrichMissing(identity);
+  if (courseChart.sha256.empty()) {
+    courseChart.sha256 = std::move(identity.sha256);
+  }
+  if (courseChart.md5.empty()) {
+    courseChart.md5 = std::move(identity.md5);
+  }
+}
+
 void fillMissingCourseChartMetadata(TableChartItem &courseChart,
                                     const TableChartItem &tableChart) {
   if ((courseChart.level.empty() || courseChart.level == "0") &&
       !tableChart.level.empty()) {
     courseChart.level = tableChart.level;
-  }
-  if (courseChart.md5.empty()) {
-    courseChart.md5 = tableChart.md5;
-  }
-  if (courseChart.sha256.empty()) {
-    courseChart.sha256 = tableChart.sha256;
   }
   if (courseChart.title.empty()) {
     courseChart.title = tableChart.title;
@@ -1596,14 +1745,14 @@ bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
          chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
 }
 
-bool ensureScoreQueryDatabase(sqlite3 *db, const ChartMetaQuery &chartQuery) {
+bool ensureScoreQueryDatabase(
+    sqlite3 *db, const ChartMetaQuery &chartQuery,
+    std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> &prepared) {
   if (!chartMetaQueryNeedsScoreCache(chartQuery)) {
     return true;
   }
-  const std::filesystem::path scoreDbPath =
-      Utils::GetDocumentsPath("db") / "score.db";
-  if (const auto error =
-          score_cache_queries::prepareScoreQueryDatabase(db, scoreDbPath)) {
+  prepared.emplace(ScoreDBHelper::GetInstance(), db);
+  if (const auto &error = prepared->error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
     return false;
@@ -3037,14 +3186,67 @@ bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
   return rc == SQLITE_DONE;
 }
 
+bool readRetainedDifficultyCourses(sqlite3 *db, int tableId,
+                                   RetainedDifficultyCourses &courses) {
+  const char *query =
+      "SELECT dc.id, dc.course_key, dc.name, dc.group_name, "
+      "dc.constraint_json, dce.id, dce.md5, dce.sha256 "
+      "FROM difficulty_courses dc "
+      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "WHERE dc.table_id = @table_id "
+      "ORDER BY dc.sort_order, dc.id, dce.sort_order, dce.id";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "reading difficulty course identities",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  sqlite3_bind_int(stmt.get(), 1, tableId);
+
+  course_identity::Definition current;
+  const auto retainCurrentCourse = [&]() {
+    if (current.courseId <= 0) {
+      return;
+    }
+    courses.push_back(std::move(current));
+    current = {};
+  };
+
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    const int courseId = sqlite3_column_int(stmt.get(), 0);
+    if (courseId != current.courseId) {
+      retainCurrentCourse();
+      current.courseId = courseId;
+      current.courseKey = columnString(stmt.get(), 1);
+      current.name = columnString(stmt.get(), 2);
+      current.groupName = columnString(stmt.get(), 3);
+      current.constraintJson = columnString(stmt.get(), 4);
+    }
+    if (sqlite3_column_type(stmt.get(), 5) != SQLITE_NULL) {
+      current.charts.push_back({.sha256 = columnString(stmt.get(), 7),
+                                .md5 = columnString(stmt.get(), 6)});
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    return false;
+  }
+  retainCurrentCourse();
+  return true;
+}
+
 int upsertDifficultyTable(sqlite3 *db, const std::string &name,
                           const std::string &symbol, const std::string &dataUrl,
-                          const std::string &sourceUrl) {
+                          const std::string &sourceUrl,
+                          RetainedDifficultyCourses &retainedCourses) {
   int tableId = findDifficultyTableBySourceUrl(db, sourceUrl);
   if (tableId <= 0) {
     tableId = findDifficultyTable(db, name, symbol, sourceUrl);
   }
   if (tableId > 0) {
+    if (!readRetainedDifficultyCourses(db, tableId, retainedCourses)) {
+      return 0;
+    }
     auto updateQuery =
         "UPDATE difficulty_tables SET name = @name, symbol = @symbol, "
         "data_url = @data_url, updated_at = CURRENT_TIMESTAMP WHERE id = @id";
@@ -3116,28 +3318,42 @@ bool insertDifficultyTableEntry(sqlite3 *db, int tableId,
 int insertDifficultyCourse(sqlite3 *db, int tableId, const std::string &name,
                            const std::string &groupName,
                            const std::string &level,
-                           const std::string &constraintJson, int sortOrder) {
-  auto query =
-      "INSERT INTO difficulty_courses "
-      "(table_id, name, group_name, level, constraint_json, sort_order) "
-      "VALUES (@table_id, @name, @group_name, @level, @constraint_json, "
-      "@sort_order)";
+                           const std::string &constraintJson,
+                           const std::string &courseKey, int sortOrder,
+                           int retainedCourseId) {
+  const bool retainId = retainedCourseId > 0;
+  const char *query =
+      retainId
+          ? "INSERT INTO difficulty_courses "
+            "(id, table_id, name, group_name, level, constraint_json, "
+            "course_key, sort_order) VALUES (@id, @table_id, @name, "
+            "@group_name, @level, @constraint_json, @course_key, @sort_order)"
+          : "INSERT INTO difficulty_courses "
+            "(table_id, name, group_name, level, constraint_json, course_key, "
+            "sort_order) VALUES (@table_id, @name, @group_name, @level, "
+            "@constraint_json, @course_key, @sort_order)";
   SqliteStatementHandle stmt;
   int rc = prepareSqliteStatement(db, query, stmt);
   if (rc != SQLITE_OK) {
     return 0;
   }
-  sqlite3_bind_int(stmt.get(), 1, tableId);
-  bindSqliteText(stmt.get(), 2, name);
-  bindSqliteText(stmt.get(), 3, groupName);
-  bindSqliteText(stmt.get(), 4, level);
-  bindSqliteText(stmt.get(), 5, constraintJson);
-  sqlite3_bind_int(stmt.get(), 6, sortOrder);
+  int parameter = 1;
+  if (retainId) {
+    sqlite3_bind_int(stmt.get(), parameter++, retainedCourseId);
+  }
+  sqlite3_bind_int(stmt.get(), parameter++, tableId);
+  bindSqliteText(stmt.get(), parameter++, name);
+  bindSqliteText(stmt.get(), parameter++, groupName);
+  bindSqliteText(stmt.get(), parameter++, level);
+  bindSqliteText(stmt.get(), parameter++, constraintJson);
+  bindSqliteText(stmt.get(), parameter++, courseKey);
+  sqlite3_bind_int(stmt.get(), parameter, sortOrder);
   rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     return 0;
   }
-  return static_cast<int>(sqlite3_last_insert_rowid(db));
+  return retainId ? retainedCourseId
+                  : static_cast<int>(sqlite3_last_insert_rowid(db));
 }
 
 bool insertDifficultyCourseEntry(sqlite3 *db, int courseId,
@@ -3764,6 +3980,7 @@ int ChartDBHelper::CountSolidArchives(sqlite3 *db) {
 void ChartDBHelper::QueryChartMeta(
     sqlite3 *db, const ChartMetaQuery &chartQuery,
     std::vector<ChartMetaRecord> &chartMetas) {
+  std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (!CreateFavoritesTable(db)) {
     return;
   }
@@ -3771,7 +3988,7 @@ void ChartDBHelper::QueryChartMeta(
       !CreateDifficultyTableTables(db)) {
     return;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return;
   }
   if (chartQuery.solidArchivesOnly) {
@@ -3934,6 +4151,7 @@ void ChartDBHelper::QueryChartMeta(
 
 int ChartDBHelper::CountChartMeta(sqlite3 *db,
                                   const ChartMetaQuery &chartQuery) {
+  std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (!CreateFavoritesTable(db)) {
     return 0;
   }
@@ -3941,7 +4159,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
       !CreateDifficultyTableTables(db)) {
     return 0;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return 0;
   }
   if (chartQuery.solidArchivesOnly) {
@@ -4048,6 +4266,7 @@ int ChartDBHelper::CountChartMeta(sqlite3 *db,
 int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
                                       const ChartMetaQuery &chartQuery,
                                       const std::filesystem::path &path) {
+  std::optional<ScoreDBHelper::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (db == nullptr || path.empty() || !CreateFavoritesTable(db)) {
     return -1;
   }
@@ -4055,7 +4274,7 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
       !CreateDifficultyTableTables(db)) {
     return -1;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery)) {
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return -1;
   }
 
@@ -6650,6 +6869,74 @@ int ChartDBHelper::ScanChartRoots(
   return changedCount;
 }
 
+static bool backfillDifficultyCourseKeys(sqlite3 *db) {
+  const char *query =
+      "SELECT dc.id, dc.constraint_json, dce.id, dce.sha256, dce.md5 "
+      "FROM difficulty_courses dc "
+      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "WHERE COALESCE(TRIM(dc.course_key), '') = '' "
+      "ORDER BY dc.table_id, dc.sort_order, dc.id, dce.sort_order, dce.id";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "reading blank difficulty course keys",
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  std::vector<course_identity::Definition> definitions;
+  course_identity::Definition current;
+  const auto retainCurrentCourse = [&]() {
+    if (current.courseId <= 0) {
+      return;
+    }
+    definitions.push_back(std::move(current));
+    current = {};
+  };
+
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    const int courseId = columnInt(stmt.get(), 0);
+    if (courseId != current.courseId) {
+      retainCurrentCourse();
+      current.courseId = courseId;
+      current.constraintJson = columnString(stmt.get(), 1);
+    }
+    if (sqlite3_column_type(stmt.get(), 2) != SQLITE_NULL) {
+      current.charts.push_back({.sha256 = columnString(stmt.get(), 3),
+                                .md5 = columnString(stmt.get(), 4)});
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    return false;
+  }
+  retainCurrentCourse();
+
+  const char *updateQuery =
+      "UPDATE difficulty_courses SET course_key = @course_key "
+      "WHERE id = @course_id AND COALESCE(TRIM(course_key), '') = ''";
+  SqliteStatementHandle updateStmt;
+  if (!prepareSqliteStatementLogged(db, updateQuery, updateStmt,
+                                    "backfilling difficulty course keys",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  for (const auto &definition : definitions) {
+    const std::string courseKey = course_identity::makeCourseKey(
+        definition.charts, definition.constraintJson);
+    if (courseKey.empty()) {
+      continue;
+    }
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+    bindSqliteText(updateStmt.get(), 1, courseKey);
+    sqlite3_bind_int(updateStmt.get(), 2, definition.courseId);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
   const char *createTables[] = {
       "CREATE TABLE IF NOT EXISTS difficulty_tables ("
@@ -6682,6 +6969,7 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
       "group_name TEXT NOT NULL DEFAULT '',"
       "level TEXT NOT NULL DEFAULT '',"
       "constraint_json TEXT NOT NULL DEFAULT '[]',"
+      "course_key TEXT NOT NULL DEFAULT '',"
       "sort_order INTEGER NOT NULL DEFAULT 0"
       ")",
       "CREATE TABLE IF NOT EXISTS difficulty_course_entries ("
@@ -6751,7 +7039,20 @@ bool ChartDBHelper::CreateDifficultyTableTables(sqlite3 *db) {
       return false;
     }
   }
-  return true;
+  if (!execSqlAllowDuplicateColumn(
+          db,
+          "ALTER TABLE difficulty_courses "
+          "ADD COLUMN course_key TEXT NOT NULL DEFAULT ''",
+          "migrating difficulty course key schema")) {
+    return false;
+  }
+  if (!execSql(db,
+               "CREATE INDEX IF NOT EXISTS idx_difficulty_courses_key "
+               "ON difficulty_courses(course_key)",
+               "creating difficulty course key index")) {
+    return false;
+  }
+  return backfillDifficultyCourseKeys(db);
 }
 
 bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
@@ -6790,8 +7091,9 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
             transactionError.c_str());
     return false;
   }
-  const int tableId =
-      upsertDifficultyTable(db, name, symbol, dataUrl, sourceUrl);
+  RetainedDifficultyCourses retainedCourses;
+  const int tableId = upsertDifficultyTable(db, name, symbol, dataUrl,
+                                            sourceUrl, retainedCourses);
   if (tableId <= 0) {
     return false;
   }
@@ -6832,12 +7134,17 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
 
   int sortOrder = 0;
   for (const auto &chart : chartItems) {
-    insertDifficultyTableEntry(db, tableId, chart, sortOrder++);
+    if (!insertDifficultyTableEntry(db, tableId, chart, sortOrder++)) {
+      return false;
+    }
   }
   TableChartItemLookup chartLookup;
   chartLookup.reserve(chartItems.size() * 2);
+  ChartHashEvidenceLookup chartHashEvidence;
+  chartHashEvidence.reserve(chartItems.size() * 2);
   for (const auto &chart : chartItems) {
     addToChartItemLookup(chartLookup, chart);
+    addToChartHashEvidenceLookup(chartHashEvidence, chart);
   }
 
   std::vector<const json *> courses;
@@ -6861,15 +7168,9 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
       constraintJson = constraintIt->dump();
     }
 
-    const int courseId =
-        insertDifficultyCourse(db, tableId, courseName, groupName, level,
-                               constraintJson, courseSortOrder++);
-    if (courseId <= 0) {
-      continue;
-    }
-
     auto courseCharts = readCourseCharts(*course);
-    int chartSortOrder = 0;
+    std::vector<TableChartItem> storedCourseCharts;
+    storedCourseCharts.reserve(courseCharts.size());
     for (auto &chart : courseCharts) {
       if (chart.md5.empty() && chart.sha256.empty()) {
         continue;
@@ -6877,7 +7178,38 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
       if (const auto *tableChart = findChartItemInLookup(chartLookup, chart)) {
         fillMissingCourseChartMetadata(chart, *tableChart);
       }
-      insertDifficultyCourseEntry(db, courseId, chart, chartSortOrder++);
+      fillUnambiguousCourseChartHash(chart, chartHashEvidence);
+      storedCourseCharts.push_back(std::move(chart));
+    }
+
+    course_identity::Definition importedDefinition{
+        .name = courseName,
+        .groupName = groupName,
+        .constraintJson = constraintJson,
+        .charts = courseChartIdentities(storedCourseCharts),
+    };
+    const auto retainedCourse =
+        takeRetainedDifficultyCourse(retainedCourses, importedDefinition);
+    const int retainedCourseId =
+        retainedCourse.has_value() ? retainedCourse->courseId : 0;
+    std::string courseKey = course_identity::makeCourseKey(
+        importedDefinition.charts, importedDefinition.constraintJson);
+    if (retainedCourse.has_value() && !retainedCourse->courseKey.empty()) {
+      courseKey = retainedCourse->courseKey;
+    }
+
+    const int courseId = insertDifficultyCourse(
+        db, tableId, courseName, groupName, level, constraintJson,
+        courseKey, courseSortOrder++, retainedCourseId);
+    if (courseId <= 0) {
+      return false;
+    }
+
+    int chartSortOrder = 0;
+    for (const auto &chart : storedCourseCharts) {
+      if (!insertDifficultyCourseEntry(db, courseId, chart, chartSortOrder++)) {
+        return false;
+      }
     }
   }
 
@@ -7385,8 +7717,8 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db, int tableId) {
   }
   std::string query =
       "SELECT dc.table_id, dt.name, dc.group_name, "
-      "COUNT(dc.id), MIN(dc.id), MIN(dc.level), MIN(dc.name), "
-      "MIN(dc.constraint_json) "
+      "COUNT(dc.id), MIN(dc.id), MIN(dc.course_key), MIN(dc.level), "
+      "MIN(dc.name), MIN(dc.constraint_json) "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "WHERE dc.table_id = @table_id "
@@ -7410,12 +7742,14 @@ ChartDBHelper::SelectDifficultyCourseGroups(sqlite3 *db, int tableId) {
     group.courseCount = columnInt(stmt.get(), 3);
     group.singletonCourseId = group.courseCount == 1 ? columnInt(stmt.get(), 4)
                                                      : 0;
-    group.singletonCourseLevel =
+    group.singletonCourseKey =
         group.courseCount == 1 ? columnString(stmt.get(), 5) : "";
-    group.singletonCourseName =
+    group.singletonCourseLevel =
         group.courseCount == 1 ? columnString(stmt.get(), 6) : "";
-    group.singletonCourseConstraintJson =
+    group.singletonCourseName =
         group.courseCount == 1 ? columnString(stmt.get(), 7) : "";
+    group.singletonCourseConstraintJson =
+        group.courseCount == 1 ? columnString(stmt.get(), 8) : "";
     groups.push_back(std::move(group));
   }
   return groups;
@@ -7428,8 +7762,8 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
     return {};
   }
   std::string query =
-      "SELECT dc.id, dc.table_id, dt.name, dc.group_name, dc.level, dc.name, "
-      "dc.constraint_json "
+      "SELECT dc.id, dc.course_key, dc.table_id, dt.name, dc.group_name, "
+      "dc.level, dc.name, dc.constraint_json "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
@@ -7448,15 +7782,208 @@ ChartDBHelper::SelectDifficultyCourses(sqlite3 *db, int tableId,
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     DifficultyCourseInfo course;
     course.id = columnInt(stmt.get(), 0);
-    course.tableId = columnInt(stmt.get(), 1);
-    course.tableName = columnString(stmt.get(), 2);
-    course.groupName = columnString(stmt.get(), 3);
-    course.level = columnString(stmt.get(), 4);
-    course.name = columnString(stmt.get(), 5);
-    course.constraintJson = columnString(stmt.get(), 6);
+    course.courseKey = columnString(stmt.get(), 1);
+    course.tableId = columnInt(stmt.get(), 2);
+    course.tableName = columnString(stmt.get(), 3);
+    course.groupName = columnString(stmt.get(), 4);
+    course.level = columnString(stmt.get(), 5);
+    course.name = columnString(stmt.get(), 6);
+    course.constraintJson = columnString(stmt.get(), 7);
     courses.push_back(std::move(course));
   }
   return courses;
+}
+
+std::vector<course_identity::Definition>
+ChartDBHelper::SelectDifficultyCourseDefinitions(sqlite3 *db) {
+  if (!CreateDifficultyTableTables(db)) {
+    return {};
+  }
+
+  bool chartMetaExists = false;
+  if (!sqliteTableExists(db, "chart_meta", chartMetaExists,
+                         "checking chart metadata for course definitions")) {
+    return {};
+  }
+
+  const char *query =
+      "SELECT dc.id, dc.course_key, dc.name, dc.group_name, "
+      "dc.constraint_json, dce.id, dce.sha256, dce.md5, dc.table_id "
+      "FROM difficulty_courses dc "
+      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "ORDER BY dc.table_id, dc.sort_order, dc.id, dce.sort_order, dce.id";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "selecting difficulty course definitions",
+                                    logSqlErrorText)) {
+    return {};
+  }
+
+  struct EntryEvidenceLocation {
+    std::size_t definitionIndex = 0;
+    std::size_t chartIndex = 0;
+    std::string tableEvidenceKey;
+    std::string localEvidenceKey;
+  };
+  struct HashEvidenceRequest {
+    int tableId = 0;
+    bool matchSha256 = false;
+    std::string hash;
+  };
+  std::vector<course_identity::Definition> definitions;
+  std::vector<EntryEvidenceLocation> evidenceLocations;
+  std::unordered_map<std::string, HashEvidenceRequest> tableEvidenceRequests;
+  std::unordered_map<std::string, HashEvidenceRequest> localEvidenceRequests;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    const int courseId = columnInt(stmt.get(), 0);
+    if (definitions.empty() || definitions.back().courseId != courseId) {
+      definitions.push_back({
+          .courseId = courseId,
+          .courseKey = columnString(stmt.get(), 1),
+          .name = columnString(stmt.get(), 2),
+          .groupName = columnString(stmt.get(), 3),
+          .constraintJson = columnString(stmt.get(), 4),
+      });
+    }
+    if (sqlite3_column_type(stmt.get(), 5) != SQLITE_NULL) {
+      auto &definition = definitions.back();
+      definition.charts.push_back(
+          {.sha256 = normalizedHash(columnString(stmt.get(), 6)),
+           .md5 = normalizedHash(columnString(stmt.get(), 7))});
+      const auto &stored = definition.charts.back();
+      const int tableId = columnInt(stmt.get(), 8);
+      const std::string tablePrefix =
+          std::to_string(tableId) + ":";
+      const std::string tableEvidenceKey =
+          missingCounterpartEvidenceKey(stored, tablePrefix);
+      const std::string localEvidenceKey =
+          missingCounterpartEvidenceKey(stored, "local:");
+      if (!tableEvidenceKey.empty()) {
+        const bool matchSha256 = !stored.sha256.empty();
+        const std::string &hash =
+            matchSha256 ? stored.sha256 : stored.md5;
+        tableEvidenceRequests.try_emplace(
+            tableEvidenceKey,
+            HashEvidenceRequest{.tableId = tableId,
+                                .matchSha256 = matchSha256,
+                                .hash = hash});
+        localEvidenceRequests.try_emplace(
+            localEvidenceKey,
+            HashEvidenceRequest{.matchSha256 = matchSha256, .hash = hash});
+        evidenceLocations.push_back({
+            .definitionIndex = definitions.size() - 1,
+            .chartIndex = definition.charts.size() - 1,
+            .tableEvidenceKey = tableEvidenceKey,
+            .localEvidenceKey = localEvidenceKey,
+        });
+      }
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    return {};
+  }
+
+  ChartHashEvidenceLookup evidenceByHash;
+  if (!tableEvidenceRequests.empty()) {
+    SqliteStatementHandle tableMd5Stmt;
+    SqliteStatementHandle tableSha256Stmt;
+    const char *tableMd5Query =
+        "SELECT sha256, md5 FROM difficulty_table_entries "
+        "WHERE table_id = @table_id AND md5 = @hash "
+        "ORDER BY sort_order, id";
+    const char *tableSha256Query =
+        "SELECT sha256, md5 FROM difficulty_table_entries "
+        "WHERE table_id = @table_id AND sha256 = @hash "
+        "ORDER BY sort_order, id";
+    if (!prepareSqliteStatementLogged(
+            db, tableMd5Query, tableMd5Stmt,
+            "preparing difficulty table MD5 evidence lookup",
+            logSqlErrorText) ||
+        !prepareSqliteStatementLogged(
+            db, tableSha256Query, tableSha256Stmt,
+            "preparing difficulty table SHA-256 evidence lookup",
+            logSqlErrorText)) {
+      return {};
+    }
+    for (const auto &[evidenceKey, request] : tableEvidenceRequests) {
+      sqlite3_stmt *lookupStmt = request.matchSha256
+                                     ? tableSha256Stmt.get()
+                                     : tableMd5Stmt.get();
+      sqlite3_reset(lookupStmt);
+      sqlite3_clear_bindings(lookupStmt);
+      sqlite3_bind_int(lookupStmt, 1, request.tableId);
+      bindSqliteText(lookupStmt, 2, request.hash);
+      const course_identity::ChartIdentity stored =
+          request.matchSha256
+              ? course_identity::ChartIdentity{.sha256 = request.hash}
+              : course_identity::ChartIdentity{.md5 = request.hash};
+      while ((rc = sqlite3_step(lookupStmt)) == SQLITE_ROW) {
+        evidenceByHash[evidenceKey].observeMatchingCandidate(
+            stored,
+            {.sha256 = normalizedHash(columnString(lookupStmt, 0)),
+             .md5 = normalizedHash(columnString(lookupStmt, 1))});
+      }
+      if (rc != SQLITE_DONE) {
+        return {};
+      }
+    }
+  }
+
+  if (chartMetaExists && !localEvidenceRequests.empty()) {
+    SqliteStatementHandle localMd5Stmt;
+    SqliteStatementHandle localSha256Stmt;
+    const char *localMd5Query =
+        "SELECT sha256, md5 FROM chart_meta WHERE md5 = @hash ORDER BY path";
+    const char *localSha256Query =
+        "SELECT sha256, md5 FROM chart_meta WHERE sha256 = @hash ORDER BY path";
+    if (!prepareSqliteStatementLogged(db, localMd5Query, localMd5Stmt,
+                                      "preparing local MD5 evidence lookup",
+                                      logSqlErrorText) ||
+        !prepareSqliteStatementLogged(
+            db, localSha256Query, localSha256Stmt,
+            "preparing local SHA-256 evidence lookup", logSqlErrorText)) {
+      return {};
+    }
+    for (const auto &[evidenceKey, request] : localEvidenceRequests) {
+      sqlite3_stmt *lookupStmt = request.matchSha256
+                                     ? localSha256Stmt.get()
+                                     : localMd5Stmt.get();
+      sqlite3_reset(lookupStmt);
+      sqlite3_clear_bindings(lookupStmt);
+      bindSqliteText(lookupStmt, 1, request.hash);
+      const course_identity::ChartIdentity stored =
+          request.matchSha256
+              ? course_identity::ChartIdentity{.sha256 = request.hash}
+              : course_identity::ChartIdentity{.md5 = request.hash};
+      while ((rc = sqlite3_step(lookupStmt)) == SQLITE_ROW) {
+        evidenceByHash[evidenceKey].observeMatchingCandidate(
+            stored,
+            {.sha256 = normalizedHash(columnString(lookupStmt, 0)),
+             .md5 = normalizedHash(columnString(lookupStmt, 1))});
+      }
+      if (rc != SQLITE_DONE) {
+        return {};
+      }
+    }
+  }
+
+  for (const auto &location : evidenceLocations) {
+    ChartHashEvidence combined;
+    if (const auto tableEvidence =
+            evidenceByHash.find(location.tableEvidenceKey);
+        tableEvidence != evidenceByHash.end()) {
+      combined.merge(tableEvidence->second);
+    }
+    if (const auto localEvidence =
+            evidenceByHash.find(location.localEvidenceKey);
+        localEvidence != evidenceByHash.end()) {
+      combined.merge(localEvidence->second);
+    }
+    combined.enrichMissing(definitions[location.definitionIndex]
+                               .charts[location.chartIndex]);
+  }
+  return definitions;
 }
 
 ChartDBHelper::ChartDBHelper() {

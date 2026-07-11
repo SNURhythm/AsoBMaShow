@@ -490,9 +490,7 @@ void configureReplayExportRenderViews(int width, int height,
 class ScopedReplayVideoBgfxAccess {
 public:
   explicit ScopedReplayVideoBgfxAccess(ApplicationContext &context)
-      : context(context), lock(context.bgfxRenderMutex, std::defer_lock) {
-    context.replayVideoExportActive.store(true, std::memory_order_release);
-    lock.lock();
+      : context(context), access(context.rendererAccess.acquireExport()) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     originalResetFlags = context.bgfxResetFlags.load(std::memory_order_relaxed);
     if ((originalResetFlags & BGFX_RESET_VSYNC) != 0) {
@@ -518,10 +516,7 @@ public:
 #endif
     context.replayVideoExportUiFrameRequested.store(false,
                                                     std::memory_order_release);
-    context.replayVideoExportActive.store(false, std::memory_order_release);
-    if (lock.owns_lock()) {
-      lock.unlock();
-    }
+    access.release();
     released = true;
   }
 
@@ -535,7 +530,7 @@ public:
         context.replayVideoExportUiFrameSerial.load(std::memory_order_acquire);
     context.replayVideoExportUiFrameRequested.store(true,
                                                     std::memory_order_release);
-    lock.unlock();
+    access.unlockForUiFrame();
 
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(16);
@@ -546,7 +541,7 @@ public:
       SDL_Delay(1);
     }
 
-    lock.lock();
+    access.relockAfterUiFrame();
     context.replayVideoExportUiFrameRequested.store(false,
                                                     std::memory_order_release);
     restoreExportViews();
@@ -558,7 +553,7 @@ public:
 
 private:
   ApplicationContext &context;
-  std::unique_lock<std::mutex> lock;
+  display::RendererAccessCoordinator::ExportReservation access;
   uint32_t originalResetFlags = 0;
   bool restoreResetFlags = false;
   bool released = false;

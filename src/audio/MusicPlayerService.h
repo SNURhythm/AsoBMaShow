@@ -126,6 +126,8 @@ public:
 private:
   enum class PlaybackRequest { Current, Next, Previous };
 
+  sqlite3 *DatabaseLocked(std::string &errorMessage);
+  void CloseDatabaseLocked();
   bool PlayCurrentLocked(std::string &errorMessage);
   bool PlayNextLocked(std::string &errorMessage);
   bool PlayPreviousLocked(std::string &errorMessage);
@@ -168,6 +170,8 @@ private:
   void PublishNativeControlStatus(const std::string &statusMessage);
 
   mutable std::mutex stateMutex;
+  MusicPlaylistDB playlistDb;
+  sqlite3 *playlistDatabase = nullptr;
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;
