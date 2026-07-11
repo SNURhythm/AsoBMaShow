@@ -42,6 +42,9 @@ struct SectionAnalysis {
 struct Analysis {
   TimingStatistics overall;
   std::vector<HistogramBin> histogram;
+  // Samples whose 5 ms bin bounds cannot fit HistogramBin's int endpoints.
+  std::size_t histogramLowerOverflow = 0;
+  std::size_t histogramUpperOverflow = 0;
   std::vector<LaneAnalysis> lanes;
   std::vector<SectionAnalysis> sections;
 };

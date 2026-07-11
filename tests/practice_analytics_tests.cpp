@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -82,6 +83,16 @@ std::vector<JudgeWindowProvenance> windows(long long pGreatEarly = -10'000) {
   };
 }
 
+ScoreStageProvenance
+provenanceStage(std::string sha256, std::string md5,
+                std::vector<JudgeWindowProvenance> effectiveWindows) {
+  return {
+      .chartMd5 = std::move(md5),
+      .chartSha256 = std::move(sha256),
+      .effectiveJudgeWindows = std::move(effectiveWindows),
+  };
+}
+
 ReplayData makeReplay() {
   ReplayData replay;
   replay.provenance.playback = {.percent = 75,
@@ -118,6 +129,9 @@ void testTimingAndBreakdowns() {
       event(ReplayEventAction::Press, 3, 0, None, 25'000),
       event(ReplayEventAction::Press, 3, 0, Kpoor, 35'000),
       event(ReplayEventAction::Press, 7, 900'000, Great, 45'000),
+      event(ReplayEventAction::Miss, 3, 0, None, 400'000),
+      event(ReplayEventAction::Miss, 2, 1'500'000, Kpoor, 400'000),
+      event(ReplayEventAction::Miss, 3, 1'000'000, Great, 400'000),
   };
 
   const practice::Analysis analysis = practice::analyze(chart, replay);
@@ -161,6 +175,9 @@ void testTimingAndBreakdowns() {
               "lane two timing bias");
   requireNear(-5.0, *analysis.lanes[2].timing.meanMillis, 0.000001,
               "lane three timing bias");
+  require(analysis.lanes[1].timing.misses == 0 &&
+              analysis.lanes[2].timing.misses == 0,
+          "invalid miss judgements do not affect lane miss counts");
 
   require(analysis.sections.size() == 3,
           "one deterministic section is emitted per measure");
@@ -175,6 +192,9 @@ void testTimingAndBreakdowns() {
           "an event on a measure boundary maps to the next measure");
   requireNear(0.5, analysis.sections[1].badMissRate, 0.000001,
               "bad and miss rate includes bad judgements");
+  require(analysis.sections[0].timing.misses == 0 &&
+              analysis.sections[1].timing.misses == 0,
+          "invalid miss judgements do not affect section miss counts");
   require(analysis.sections[2].startMicros == 2'000'000 &&
               analysis.sections[2].endMicros == 3'000'000 &&
               analysis.sections[2].timing.samples == 0 &&
@@ -229,6 +249,42 @@ void testHistogramUsesSparseStableBins() {
   }
 }
 
+void testHistogramSeparatesOverflowFromFiniteEndpointBins() {
+  constexpr int lowestFiniteLower =
+      std::numeric_limits<int>::min() - std::numeric_limits<int>::min() % 5;
+  constexpr int highestFiniteLower =
+      (std::numeric_limits<int>::max() - 5) / 5 * 5;
+
+  auto chart = makeChart();
+  auto replay = makeReplay();
+  replay.provenance.playback.percent = 100;
+  replay.events = {
+      event(ReplayEventAction::Press, 3, 0, Great,
+            std::numeric_limits<long long>::min()),
+      event(ReplayEventAction::Press, 3, 0, Great,
+            static_cast<long long>(lowestFiniteLower) * 1'000),
+      event(ReplayEventAction::Press, 3, 0, Great,
+            static_cast<long long>(highestFiniteLower) * 1'000),
+      event(ReplayEventAction::Press, 3, 0, Great,
+            std::numeric_limits<long long>::max()),
+  };
+
+  const auto analysis = practice::analyze(chart, replay);
+  require(analysis.histogramLowerOverflow == 1 &&
+              analysis.histogramUpperOverflow == 1,
+          "unrepresentable timing bins use explicit overflow counts");
+  require(analysis.histogram.size() == 2,
+          "overflow samples cannot collide with finite endpoint bins");
+  require(analysis.histogram[0].lowerMillis == lowestFiniteLower &&
+              analysis.histogram[0].upperMillis == lowestFiniteLower + 5 &&
+              analysis.histogram[0].count == 1,
+          "lowest representable finite bin remains distinct");
+  require(analysis.histogram[1].lowerMillis == highestFiniteLower &&
+              analysis.histogram[1].upperMillis == highestFiniteLower + 5 &&
+              analysis.histogram[1].count == 1,
+          "highest representable finite bin remains distinct");
+}
+
 void testCompatibleAttemptGroups() {
   auto chart = makeChart();
   auto first = makeReplay();
@@ -267,12 +323,72 @@ void testCompatibleAttemptGroups() {
           "group reports exact recorded timing conditions");
 }
 
+void testTimingConditionsUseStrictDurableStageIdentity() {
+  auto chart = makeChart();
+  auto caseVariant = makeReplay();
+  caseVariant.provenance.stages = {
+      provenanceStage(std::string(64, 'A'), std::string(32, 'B'),
+                      windows(-11'000)),
+      provenanceStage(std::string(64, 'c'), std::string(32, 'd'),
+                      windows(-12'000)),
+  };
+  const std::vector<ReplayData> caseAttempts = {caseVariant};
+  const auto caseGroups =
+      practice::analyzeCompatibleAttempts(chart, caseAttempts);
+  require(caseGroups.size() == 1 &&
+              caseGroups.front().conditions.effectiveJudgeWindows ==
+                  windows(-11'000),
+          "durable stage hashes match case-insensitively");
+
+  auto conflictingSha = makeReplay();
+  conflictingSha.provenance.stages = {
+      provenanceStage(std::string(64, 'c'), std::string(32, 'b'),
+                      windows(-13'000)),
+      provenanceStage(std::string(64, 'd'), std::string(32, 'e'),
+                      windows(-14'000)),
+  };
+  const std::vector<ReplayData> conflictAttempts = {conflictingSha};
+  const auto conflictGroups =
+      practice::analyzeCompatibleAttempts(chart, conflictAttempts);
+  require(conflictGroups.front().conditions.effectiveJudgeWindows.empty(),
+          "matching MD5 cannot override a conflicting durable SHA-256");
+
+  auto md5Chart = makeChart();
+  md5Chart.Meta.SHA256.clear();
+  auto md5Fallback = makeReplay();
+  md5Fallback.provenance.stages = {
+      provenanceStage({}, std::string(32, 'B'), windows(-15'000)),
+      provenanceStage({}, std::string(32, 'c'), windows(-16'000)),
+  };
+  const std::vector<ReplayData> md5Attempts = {md5Fallback};
+  const auto md5Groups =
+      practice::analyzeCompatibleAttempts(md5Chart, md5Attempts);
+  require(md5Groups.front().conditions.effectiveJudgeWindows ==
+              windows(-15'000),
+          "MD5 is used when durable SHA-256 is unavailable");
+
+  auto ambiguous = makeReplay();
+  ambiguous.provenance.stages = {
+      provenanceStage(std::string(64, 'a'), std::string(32, 'b'),
+                      windows(-17'000)),
+      provenanceStage(std::string(64, 'A'), std::string(32, 'B'),
+                      windows(-18'000)),
+  };
+  const std::vector<ReplayData> ambiguousAttempts = {ambiguous};
+  const auto ambiguousGroups =
+      practice::analyzeCompatibleAttempts(chart, ambiguousAttempts);
+  require(ambiguousGroups.front().conditions.effectiveJudgeWindows.empty(),
+          "ambiguous durable stage identity selects no conditions");
+}
+
 } // namespace
 
 int main() {
   testTimingAndBreakdowns();
   testEmptyAnalysisHasNullStatistics();
   testHistogramUsesSparseStableBins();
+  testHistogramSeparatesOverflowFromFiniteEndpointBins();
   testCompatibleAttemptGroups();
+  testTimingConditionsUseStrictDurableStageIdentity();
   return 0;
 }

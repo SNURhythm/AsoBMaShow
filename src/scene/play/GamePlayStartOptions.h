@@ -8,14 +8,12 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -98,35 +96,6 @@ struct StartOptions {
 };
 
 namespace play_start_detail {
-[[nodiscard]] inline std::optional<std::string>
-normalizedHexHash(std::string_view value, std::size_t expectedSize) {
-  if (value.size() != expectedSize ||
-      !std::ranges::all_of(value, [](unsigned char character) {
-        return std::isxdigit(character) != 0;
-      })) {
-    return std::nullopt;
-  }
-  std::string normalized(value);
-  std::ranges::transform(normalized, normalized.begin(),
-                         [](unsigned char character) {
-                           return static_cast<char>(std::tolower(character));
-                         });
-  return normalized;
-}
-
-[[nodiscard]] inline bool
-stageMatchesChart(const ScoreStageProvenance &stage,
-                  const bms_parser::ChartMeta &chartMeta) {
-  const auto stageSha = normalizedHexHash(stage.chartSha256, 64);
-  const auto chartSha = normalizedHexHash(chartMeta.SHA256, 64);
-  if (stageSha.has_value() && chartSha.has_value()) {
-    return stageSha == chartSha;
-  }
-  const auto stageMd5 = normalizedHexHash(stage.chartMd5, 32);
-  const auto chartMd5 = normalizedHexHash(chartMeta.MD5, 32);
-  return stageMd5.has_value() && chartMd5.has_value() && stageMd5 == chartMd5;
-}
-
 [[nodiscard]] inline std::optional<
     std::map<Judgement, std::pair<long long, long long>>>
 validatedJudgeWindows(const ScoreStageProvenance &stage) {
@@ -153,16 +122,8 @@ validatedJudgeWindows(const ScoreStageProvenance &stage) {
 [[nodiscard]] inline std::optional<ScoreStageProvenance>
 replayJudgeOverrideForChart(const ScoreProvenance &provenance,
                             const bms_parser::ChartMeta &chartMeta) {
-  const ScoreStageProvenance *matching = nullptr;
-  for (const auto &stage : provenance.stages) {
-    if (!stageMatchesChart(stage, chartMeta)) {
-      continue;
-    }
-    if (matching != nullptr) {
-      return std::nullopt;
-    }
-    matching = &stage;
-  }
+  const ScoreStageProvenance *matching =
+      score_provenance::uniqueStageForChart(provenance, chartMeta);
   if (matching == nullptr || !validatedJudgeWindows(*matching).has_value()) {
     return std::nullopt;
   }
@@ -203,8 +164,8 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options,
                               const bms_parser::ChartMeta &chartMeta) {
   Judge judge = makeEffectiveJudgeAtPlayStart(options, chartMeta.Rank);
   if (options.replayJudgeOverride.has_value() &&
-      play_start_detail::stageMatchesChart(*options.replayJudgeOverride,
-                                           chartMeta)) {
+      score_provenance::stageMatchesChart(*options.replayJudgeOverride,
+                                          chartMeta)) {
     if (const auto windows = play_start_detail::validatedJudgeWindows(
             *options.replayJudgeOverride)) {
       judge.timingWindows = *windows;

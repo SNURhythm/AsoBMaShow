@@ -1,14 +1,28 @@
 #include "ScoreProvenance.h"
 
+#include "BmsMetadataText.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <string>
 
 namespace {
 
 using Json = nlohmann::ordered_json;
+
+std::optional<std::string> normalizedHexHash(const std::string &value,
+                                             std::size_t expectedSize) {
+  std::string normalized = asobmshow::bms_metadata::normalizedHash(value);
+  if (normalized.size() != expectedSize ||
+      !std::ranges::all_of(normalized, [](unsigned char character) {
+        return std::isxdigit(character) != 0;
+      })) {
+    return std::nullopt;
+  }
+  return normalized;
+}
 
 template <typename Enum> int enumValue(Enum value) {
   return static_cast<int>(value);
@@ -475,6 +489,38 @@ bool buildIsModified(const ScoreProvenanceBuildInput &input) {
 }
 
 } // namespace
+
+namespace score_provenance {
+
+bool stageMatchesChart(const ScoreStageProvenance &stage,
+                       const bms_parser::ChartMeta &chartMeta) {
+  const auto stageSha = normalizedHexHash(stage.chartSha256, 64);
+  const auto chartSha = normalizedHexHash(chartMeta.SHA256, 64);
+  if (stageSha.has_value() && chartSha.has_value()) {
+    return stageSha == chartSha;
+  }
+  const auto stageMd5 = normalizedHexHash(stage.chartMd5, 32);
+  const auto chartMd5 = normalizedHexHash(chartMeta.MD5, 32);
+  return stageMd5.has_value() && chartMd5.has_value() && stageMd5 == chartMd5;
+}
+
+const ScoreStageProvenance *
+uniqueStageForChart(const ScoreProvenance &provenance,
+                    const bms_parser::ChartMeta &chartMeta) {
+  const ScoreStageProvenance *matching = nullptr;
+  for (const auto &stage : provenance.stages) {
+    if (!stageMatchesChart(stage, chartMeta)) {
+      continue;
+    }
+    if (matching != nullptr) {
+      return nullptr;
+    }
+    matching = &stage;
+  }
+  return matching;
+}
+
+} // namespace score_provenance
 
 RulesetDescriptor RulesetDescriptor::Current() { return {}; }
 

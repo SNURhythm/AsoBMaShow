@@ -12,6 +12,10 @@ namespace practice {
 namespace {
 
 constexpr long long kHistogramBinMicros = 5'000;
+constexpr int kLowestFiniteHistogramLower =
+    std::numeric_limits<int>::min() - std::numeric_limits<int>::min() % 5;
+constexpr int kHighestFiniteHistogramLower =
+    (std::numeric_limits<int>::max() - 5) / 5 * 5;
 
 struct NoteIdentity {
   int lane;
@@ -43,13 +47,6 @@ long long floorDivide(long long value, long long divisor) {
   const long long quotient = value / divisor;
   const long long remainder = value % divisor;
   return remainder < 0 ? quotient - 1 : quotient;
-}
-
-int binLowerMillis(long long realMicros) {
-  const long long lower = floorDivide(realMicros, kHistogramBinMicros) * 5;
-  return static_cast<int>(
-      std::clamp(lower, static_cast<long long>(std::numeric_limits<int>::min()),
-                 static_cast<long long>(std::numeric_limits<int>::max() - 5)));
 }
 
 TimingStatistics summarize(const Accumulator &accumulator) {
@@ -175,24 +172,8 @@ std::optional<std::size_t> sectionForEvent(const ChartLayout &layout,
 
 std::vector<JudgeWindowProvenance>
 effectiveWindows(const bms_parser::Chart &chart, const ReplayData &replay) {
-  if (replay.provenance.stages.size() == 1) {
-    return replay.provenance.stages.front().effectiveJudgeWindows;
-  }
-
-  const ScoreStageProvenance *matching = nullptr;
-  for (const auto &stage : replay.provenance.stages) {
-    const bool shaMatches =
-        !chart.Meta.SHA256.empty() && stage.chartSha256 == chart.Meta.SHA256;
-    const bool md5Matches =
-        !chart.Meta.MD5.empty() && stage.chartMd5 == chart.Meta.MD5;
-    if (!shaMatches && !md5Matches) {
-      continue;
-    }
-    if (matching != nullptr) {
-      return {};
-    }
-    matching = &stage;
-  }
+  const ScoreStageProvenance *matching =
+      score_provenance::uniqueStageForChart(replay.provenance, chart.Meta);
   return matching == nullptr ? std::vector<JudgeWindowProvenance>{}
                              : matching->effectiveJudgeWindows;
 }
@@ -223,7 +204,7 @@ Analysis analyzeAttempts(const bms_parser::Chart &chart,
       if (!section.has_value()) {
         continue;
       }
-      if (event.action == ReplayEventAction::Miss) {
+      if (event.action == ReplayEventAction::Miss && event.judgement == Poor) {
         ++overall.misses;
         ++lanes[event.lane].misses;
         ++sections[*section].misses;
@@ -253,7 +234,15 @@ Analysis analyzeAttempts(const bms_parser::Chart &chart,
   if (!overall.samples.empty()) {
     std::map<int, std::size_t> binCounts;
     for (const auto &sample : overall.samples) {
-      ++binCounts[binLowerMillis(sample.realMicros)];
+      const long long lower =
+          floorDivide(sample.realMicros, kHistogramBinMicros) * 5;
+      if (lower < kLowestFiniteHistogramLower) {
+        ++result.histogramLowerOverflow;
+      } else if (lower > kHighestFiniteHistogramLower) {
+        ++result.histogramUpperOverflow;
+      } else {
+        ++binCounts[static_cast<int>(lower)];
+      }
     }
     result.histogram.reserve(binCounts.size());
     for (const auto &[lower, count] : binCounts) {

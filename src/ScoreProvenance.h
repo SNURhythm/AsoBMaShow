@@ -106,6 +106,17 @@ struct ScoreProvenance {
   static ScoreProvenance Legacy();
 };
 
+namespace score_provenance {
+
+[[nodiscard]] bool stageMatchesChart(const ScoreStageProvenance &stage,
+                                     const bms_parser::ChartMeta &chartMeta);
+
+[[nodiscard]] const ScoreStageProvenance *
+uniqueStageForChart(const ScoreProvenance &provenance,
+                    const bms_parser::ChartMeta &chartMeta);
+
+} // namespace score_provenance
+
 struct ScoreProvenanceBuildInput {
   bms_parser::ChartMeta chartMeta;
   int longNoteMode = 0;
