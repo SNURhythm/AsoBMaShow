@@ -156,6 +156,9 @@ public:
       return;
     }
 
+    inputDeviceRegistry.configureGyroscopeTurntable(
+        inputProfile.gyroscopeTurntable);
+
     const PlayerProfilePaths activePaths = profileManager.activePaths();
     ScoreDBHelper::GetInstance().SetDatabasePath(activePaths.scoresDb);
     ReplayDBHelper::GetInstance().SetDatabasePath(activePaths.replaysDb);
@@ -167,8 +170,16 @@ public:
                     : profileInitializationResult.message;
         return false;
       }
-      return InputProfileStore::saveAtomic(
-          profileManager.activePaths().inputJson, candidate, error);
+      return input_profile_runtime::saveThenApplyGyroscopeConfig(
+          inputProfile, candidate,
+          [this](const InputProfile &value, std::string &saveError) {
+            return InputProfileStore::saveAtomic(
+                profileManager.activePaths().inputJson, value, saveError);
+          },
+          [this](input::GyroscopeTurntableConfig config) {
+            inputDeviceRegistry.configureGyroscopeTurntable(config);
+          },
+          error);
     };
     profileSessionCoordinator = std::make_unique<ProfileSessionCoordinator>(
         profileManager, ScoreDBHelper::GetInstance(),
@@ -193,6 +204,8 @@ public:
             return false;
           }
           inputProfile = loaded.profile;
+          inputDeviceRegistry.configureGyroscopeTurntable(
+              inputProfile.gyroscopeTurntable);
           return true;
         },
         [this](const std::filesystem::path &path) {
@@ -204,6 +217,8 @@ public:
                     "Unable to restore the previous input profile."));
           }
           inputProfile = loaded.profile;
+          inputDeviceRegistry.configureGyroscopeTurntable(
+              inputProfile.gyroscopeTurntable);
         },
         [this]() {
           profileCacheRevision.fetch_add(1, std::memory_order_acq_rel);

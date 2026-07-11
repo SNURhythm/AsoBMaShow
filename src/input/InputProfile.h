@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 struct InputProfile {
@@ -28,3 +29,20 @@ struct InputProfile {
 };
 
 InputProfile makeDefaultInputProfile();
+
+namespace input_profile_runtime {
+
+template <typename Save, typename Apply>
+bool saveThenApplyGyroscopeConfig(const InputProfile &current,
+                                  const InputProfile &candidate, Save &&save,
+                                  Apply &&apply, std::string &error) {
+  if (!std::forward<Save>(save)(candidate, error)) {
+    return false;
+  }
+  if (candidate.gyroscopeTurntable != current.gyroscopeTurntable) {
+    std::forward<Apply>(apply)(candidate.gyroscopeTurntable);
+  }
+  return true;
+}
+
+} // namespace input_profile_runtime

@@ -877,6 +877,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/VersionedJson.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
@@ -912,6 +913,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/VersionedJson.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
@@ -956,6 +958,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/VersionedJson.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
+        src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp

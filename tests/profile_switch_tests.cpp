@@ -299,9 +299,11 @@ struct SwitchFixture {
   ProfileSwitchBlockers operationBlockers;
   int refreshCount = 0;
   std::vector<std::string> inputReplacementEvents;
+  std::vector<input::GyroscopeTurntableConfig> runtimeGyroscopeApplications;
   std::function<void()> refreshAction;
   std::filesystem::path appliedInputPath;
   InputProfile currentInput = makeDefaultInputProfile();
+  input::GyroscopeTurntableConfig runtimeGyroscopeConfig;
   PlayerProfileManager manager;
   std::string firstId;
   std::string secondId;
@@ -371,6 +373,10 @@ struct SwitchFixture {
 
     InputProfile firstInput = makeDefaultInputProfile();
     InputProfile secondInput = makeDefaultInputProfile();
+    firstInput.gyroscopeTurntable = {.stepAngleDegrees = 4,
+                                     .releaseDelayMs = 250};
+    secondInput.gyroscopeTurntable = {.stepAngleDegrees = 8,
+                                      .releaseDelayMs = 500};
     if (!firstInput.bindings.empty()) {
       firstInput.bindings.front().id = "first-profile-binding";
     }
@@ -397,6 +403,7 @@ struct SwitchFixture {
 
     currentSettings = firstSettings;
     currentInput = firstInput;
+    runtimeGyroscopeConfig = firstInput.gyroscopeTurntable;
     appliedInputPath = firstPaths.inputJson;
     score.SetDatabasePath(firstPaths.scoresDb);
     replay.SetDatabasePath(firstPaths.replaysDb);
@@ -469,6 +476,8 @@ struct SwitchFixture {
     }
     currentInput = loaded.profile;
     appliedInputPath = path;
+    runtimeGyroscopeConfig = currentInput.gyroscopeTurntable;
+    runtimeGyroscopeApplications.push_back(runtimeGyroscopeConfig);
     if (failInputApply) {
       error = "injected input apply failure";
       return false;
@@ -482,6 +491,8 @@ struct SwitchFixture {
     if (loaded.status == InputProfileLoadStatus::Loaded) {
       currentInput = loaded.profile;
       appliedInputPath = path;
+      runtimeGyroscopeConfig = currentInput.gyroscopeTurntable;
+      runtimeGyroscopeApplications.push_back(runtimeGyroscopeConfig);
     }
   }
 
@@ -525,7 +536,10 @@ void expectFirstProfileState(SwitchFixture &fixture,
              fixture.currentSettings.selectedPlayOption == "MIRROR",
          std::string(label) + " restores current settings");
   expect(fixture.appliedInputPath == fixture.firstPaths.inputJson &&
-             firstBindingId(fixture.currentInput) == "first-profile-binding",
+             firstBindingId(fixture.currentInput) == "first-profile-binding" &&
+             fixture.runtimeGyroscopeConfig ==
+                 input::GyroscopeTurntableConfig{.stepAngleDegrees = 4,
+                                                 .releaseDelayMs = 250},
          std::string(label) + " restores current input profile");
   expect(readFile(fixture.temp.path() / "active-profile.json") ==
              bootstrapBefore,
@@ -566,7 +580,13 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
              fixture.currentSettings.selectedPlayOption == "R-RANDOM",
          "successful switch installs target settings");
   expect(firstBindingId(fixture.currentInput) == "second-profile-binding" &&
-             fixture.appliedInputPath == fixture.secondPaths.inputJson,
+             fixture.appliedInputPath == fixture.secondPaths.inputJson &&
+             fixture.runtimeGyroscopeConfig ==
+                 input::GyroscopeTurntableConfig{.stepAngleDegrees = 8,
+                                                 .releaseDelayMs = 500} &&
+             fixture.runtimeGyroscopeApplications ==
+                 std::vector<input::GyroscopeTurntableConfig>{
+                     {.stepAngleDegrees = 8, .releaseDelayMs = 500}},
          "successful switch applies target input profile");
   expect(fixture.currentClearRank() == kClearTypeHardClearRank,
          "score query results change to target profile");
@@ -772,6 +792,30 @@ void testInvalidTargetFailsBeforeSavingOrBinding() {
   expect(fixture.refreshCount == 0,
          "invalid target does not refresh or mutate caches");
   expectFirstProfileState(fixture, bootstrapBefore, "invalid target");
+
+  SwitchFixture invalidInput;
+  if (invalidInput.firstId.empty()) {
+    return;
+  }
+  const std::string inputBootstrapBefore =
+      readFile(invalidInput.temp.path() / "active-profile.json");
+  {
+    std::ofstream output(invalidInput.secondPaths.inputJson,
+                         std::ios::binary | std::ios::trunc);
+    output << "{\"schemaVersion\":99}\n";
+  }
+  const std::string oldInputBefore =
+      readFile(invalidInput.firstPaths.inputJson);
+  const ProfileSwitchResult inputResult = invalidInput.coordinator.switchTo(
+      invalidInput.secondId, invalidInput.currentSettings);
+  expect(inputResult.error == ProfileError::FutureVersion,
+         "future target input fails closed before transaction");
+  expect(readFile(invalidInput.firstPaths.inputJson) == oldInputBefore &&
+             invalidInput.runtimeGyroscopeApplications.empty(),
+         "invalid target input neither saves the source nor changes runtime "
+         "gyroscope configuration");
+  expectFirstProfileState(invalidInput, inputBootstrapBefore,
+                          "invalid input target");
 }
 
 void testInputReplacementNotificationPrecedesApplyAndRollback() {
@@ -799,6 +843,15 @@ void testInputReplacementNotificationPrecedesApplyAndRollback() {
              std::vector<std::string>{"before", "apply", "before",
                                       "restore"},
          "rollback cancels pending input work before restoring A");
+  expect(rolledBack.runtimeGyroscopeApplications ==
+                 std::vector<input::GyroscopeTurntableConfig>{
+                     {.stepAngleDegrees = 8, .releaseDelayMs = 500},
+                     {.stepAngleDegrees = 4, .releaseDelayMs = 250}} &&
+             rolledBack.runtimeGyroscopeConfig ==
+                 input::GyroscopeTurntableConfig{.stepAngleDegrees = 4,
+                                                 .releaseDelayMs = 250},
+         "rollback restores the source gyroscope configuration after the "
+         "target attempt");
 }
 
 void testPersistentScoreAttachmentFailureRollsBackToSource() {

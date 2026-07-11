@@ -109,6 +109,7 @@ bool sameBinding(const input::InputBinding &left,
 
 bool sameProfile(const InputProfile &left, const InputProfile &right) {
   if (left.schemaVersion != right.schemaVersion ||
+      left.gyroscopeTurntable != right.gyroscopeTurntable ||
       left.bindings.size() != right.bindings.size()) {
     return false;
   }
@@ -160,6 +161,116 @@ struct RegistryHarness {
     registry.pump();
   }
 };
+
+void testGyroscopeConfigUpdateIsSanitizedAndTransactional() {
+  RegistryHarness harness;
+  InputProfile profile;
+  int saves = 0;
+  int runtimeApplications = 0;
+  bool allowSave = true;
+  input::GyroscopeTurntableConfig runtimeConfig = profile.gyroscopeTurntable;
+  std::vector<InputProfile> candidates;
+  InputCaptureController controller(
+      harness.registry, profile,
+      [&](const InputProfile &candidate, std::string &error) {
+        ++saves;
+        candidates.push_back(candidate);
+        if (allowSave) {
+          runtimeConfig = candidate.gyroscopeTurntable;
+          ++runtimeApplications;
+          return true;
+        }
+        error = "injected gyroscope save failure";
+        return false;
+      });
+
+  require(controller.updateGyroscopeTurntableConfig(
+              {.stepAngleDegrees = 999, .releaseDelayMs = -1}),
+          "a valid gyroscope configuration edit is committed");
+  require(saves == 1 && candidates.size() == 1 &&
+              profile.gyroscopeTurntable.stepAngleDegrees == 45 &&
+              profile.gyroscopeTurntable.releaseDelayMs == 50 &&
+              candidates.front().gyroscopeTurntable ==
+                  profile.gyroscopeTurntable &&
+              runtimeConfig == profile.gyroscopeTurntable &&
+              runtimeApplications == 1,
+          "gyroscope configuration is sanitized and applied after successful "
+          "persistence");
+
+  require(controller.updateGyroscopeTurntableConfig(
+              {.stepAngleDegrees = 1000, .releaseDelayMs = 0}) &&
+              saves == 1 && runtimeApplications == 1,
+          "an edit with the same sanitized configuration is a successful "
+          "no-op");
+
+  const InputProfile beforeFailure = profile;
+  allowSave = false;
+  require(!controller.updateGyroscopeTurntableConfig(
+              {.stepAngleDegrees = 6, .releaseDelayMs = 400}),
+          "a failed gyroscope configuration save reports failure");
+  require(saves == 2 && sameProfile(profile, beforeFailure) &&
+              runtimeConfig == beforeFailure.gyroscopeTurntable &&
+              runtimeApplications == 1 &&
+              controller.lastError() == "injected gyroscope save failure",
+          "a failed gyroscope configuration save leaves the live profile and "
+          "runtime unchanged");
+}
+
+void testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess() {
+  InputProfile current = makeDefaultInputProfile();
+  InputProfile bindingOnly = current;
+  bindingOnly.bindings.push_back(
+      binding("runtime-guard", {1, 7}, lane(0), keyControl(12)));
+  int saves = 0;
+  int applications = 0;
+  input::GyroscopeTurntableConfig runtimeConfig = current.gyroscopeTurntable;
+  std::string error;
+
+  require(input_profile_runtime::saveThenApplyGyroscopeConfig(
+              current, bindingOnly,
+              [&](const InputProfile &, std::string &) {
+                ++saves;
+                return true;
+              },
+              [&](input::GyroscopeTurntableConfig config) {
+                ++applications;
+                runtimeConfig = config;
+              },
+              error) &&
+              saves == 1 && applications == 0 &&
+              runtimeConfig == current.gyroscopeTurntable,
+          "a binding-only save does not reset the gyroscope runtime");
+
+  InputProfile changed = current;
+  changed.gyroscopeTurntable =
+      {.stepAngleDegrees = 7, .releaseDelayMs = 350};
+  require(!input_profile_runtime::saveThenApplyGyroscopeConfig(
+              current, changed,
+              [&](const InputProfile &, std::string &saveError) {
+                ++saves;
+                saveError = "injected runtime save failure";
+                return false;
+              },
+              [&](input::GyroscopeTurntableConfig) { ++applications; },
+              error) &&
+              saves == 2 && applications == 0,
+          "a failed save never applies changed gyroscope configuration");
+
+  require(input_profile_runtime::saveThenApplyGyroscopeConfig(
+              current, changed,
+              [&](const InputProfile &, std::string &) {
+                ++saves;
+                return true;
+              },
+              [&](input::GyroscopeTurntableConfig config) {
+                ++applications;
+                runtimeConfig = config;
+              },
+              error) &&
+              saves == 3 && applications == 1 &&
+              runtimeConfig == changed.gyroscopeTurntable,
+          "a changed gyroscope configuration applies once after its save");
+}
 
 void testMonitoringNoiseActivationRepeatsAndDuplicateIgnore() {
   RegistryHarness harness;
@@ -715,6 +826,8 @@ void testReplacementNotifierIsReentrantAndResetIsALifetimeBarrier() {
 int main() {
   try {
     testMonitoringNoiseActivationRepeatsAndDuplicateIgnore();
+    testGyroscopeConfigUpdateIsSanitizedAndTransactional();
+    testRuntimeSaveAppliesOnlyChangedGyroscopeConfigAfterSuccess();
     testAxisCaptureUsesSensitiveHysteresis();
     testConflictConfirmationIsTransactionalAndScopeLimited();
     testSaveFailureNeverCommitsProfileMutation();

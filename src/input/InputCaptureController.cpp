@@ -194,6 +194,20 @@ void InputCaptureController::resetScopeToDefaults(input::InputScope scope) {
   persist(std::move(next));
 }
 
+bool InputCaptureController::updateGyroscopeTurntableConfig(
+    input::GyroscopeTurntableConfig config) {
+  lastError_.clear();
+  std::vector<std::string> ignoredDiagnostics;
+  config.sanitize(ignoredDiagnostics);
+  if (config == profile_.gyroscopeTurntable) {
+    return true;
+  }
+
+  InputProfile next = profile_;
+  next.gyroscopeTurntable = config;
+  return persist(std::move(next));
+}
+
 InputCaptureController::State InputCaptureController::state() const {
   return state_;
 }

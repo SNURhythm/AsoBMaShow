@@ -1265,7 +1265,7 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
   const Json migratedInput = Json::parse(readFile(paths.inputJson));
   std::string versionError;
   expect(migratedSettings.at("schemaVersion") == 1 &&
-             migratedInput.at("schemaVersion") == 1,
+             migratedInput.at("schemaVersion") == InputProfile::kSchemaVersion,
          "older settings and input documents persist at current schemas");
   expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) == 5 &&
              sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,

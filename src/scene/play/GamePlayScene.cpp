@@ -622,6 +622,7 @@ void GamePlayScene::init() {
 }
 
 void GamePlayScene::reset() {
+  context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
   state = nullptr;
   renderer->reset();

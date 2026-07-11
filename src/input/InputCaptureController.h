@@ -38,6 +38,7 @@ public:
   void updateBinding(std::string_view bindingId, const BindingEdit &edit);
   void toggleBindingInversion(std::string_view bindingId);
   void resetScopeToDefaults(input::InputScope);
+  bool updateGyroscopeTurntableConfig(input::GyroscopeTurntableConfig config);
 
   [[nodiscard]] State state() const;
   [[nodiscard]] std::optional<input::PhysicalInputEvent> monitorSample() const;
