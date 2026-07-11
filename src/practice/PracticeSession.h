@@ -30,7 +30,8 @@ private:
 };
 
 [[nodiscard]] const ReplayData *
-completedAttemptForGhost(const Session &session,
+completedAttemptForGhost(const Session *session,
+                         const ReplayData &sessionlessAttempt,
                          bool attemptCompleted) noexcept;
 
 } // namespace practice

@@ -151,6 +151,18 @@ int main() {
                                              plan.clicks[0].timeMicros),
             "practice click real spacing follows playback rate");
 
+  plan = prep_metronome::buildPracticeCountInPlan(
+      practiceChart, 10000000, 8, slowPlayback);
+  ASSERT_EQ(4, plan.beatsPerMeasure,
+            "practice count-in retains chart measure size");
+  ASSERT_EQ(8U, plan.clicks.size(), "two-measure practice click count");
+  ASSERT_EQ(6800000LL, plan.clicks[0].timeMicros,
+            "two-measure count-in starts before nonzero marker");
+  ASSERT_TRUE(plan.clicks[0].accent, "first measure start accented");
+  ASSERT_TRUE(!plan.clicks[1].accent, "inside first measure not accented");
+  ASSERT_TRUE(plan.clicks[4].accent, "second measure start accented");
+  ASSERT_TRUE(!plan.clicks[7].accent, "inside second measure not accented");
+
   practiceTempoChange->Bpm = 480.0;
   plan = prep_metronome::buildPracticeCountInPlan(
       practiceChart, 10000000, 4, slowPlayback);

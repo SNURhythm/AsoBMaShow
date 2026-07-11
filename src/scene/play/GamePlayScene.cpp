@@ -1315,12 +1315,9 @@ void GamePlayScene::publishPracticeGhost() {
     return;
   }
 
-  const ReplayData *completedReplay =
-      recordedAttemptCompleted ? &recordedReplay : nullptr;
-  if (options.practiceSession != nullptr) {
-    completedReplay = practice::completedAttemptForGhost(
-        *options.practiceSession, recordedAttemptCompleted);
-  }
+  const ReplayData *completedReplay = practice::completedAttemptForGhost(
+      options.practiceSession.get(), recordedReplay,
+      recordedAttemptCompleted);
   if (completedReplay == nullptr) {
     return;
   }

@@ -147,7 +147,7 @@ PrepMetronomePlan buildPracticeCountInPlan(
 
   plan.enabled = true;
   plan.bpm = bpmAtChartTime(chart, startMicros);
-  plan.beatsPerMeasure = countInBeats;
+  plan.beatsPerMeasure = effectiveBeatsPerMeasure(chart.Meta);
   plan.beatIntervalMicros = beatIntervalMicrosForBpm(plan.bpm);
   plan.leadInMicros =
       plan.beatIntervalMicros * static_cast<long long>(countInBeats);
@@ -157,7 +157,7 @@ PrepMetronomePlan buildPracticeCountInPlan(
     plan.clicks.push_back(
         {.timeMicros = plan.startTimeMicros +
                        plan.beatIntervalMicros * static_cast<long long>(beat),
-         .accent = beat == 0});
+         .accent = beat % plan.beatsPerMeasure == 0});
   }
 
   // Clicks stay on the chart timeline. The rate-scaled audio clock converts
