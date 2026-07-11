@@ -567,13 +567,7 @@ int main(int argv, char **args) {
   using std::cerr;
   using std::endl;
 
-  Uint32 sdlInitFlags = SDL_INIT_EVERYTHING;
-#if TARGET_OS_IPHONE
-  // The iOS gyroscope backend owns the app's sole CMMotionManager. Initializing
-  // SDL's unused sensor subsystem would create a second manager first.
-  sdlInitFlags &= ~SDL_INIT_SENSOR;
-#endif
-  if (SDL_Init(sdlInitFlags) != 0) {
+  if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
     cerr << "SDL_Init Error: " << SDL_GetError() << endl;
     return EXIT_FAILURE;
   }
