@@ -1,5 +1,6 @@
 #include "audio/AudioMix.h"
 #include "audio/AudioWrapper.h"
+#include "audio/ChartAudioRenderer.h"
 #include "audio/Jukebox.h"
 
 #include <array>
@@ -853,6 +854,16 @@ int main() {
             "same-rate conversion rejects partial interleaved PCM");
     require(audio::ResamplePcm(partialStereoFrame, 2, 44100, 48000).empty(),
             "rate conversion rejects partial interleaved PCM");
+
+    const audio::PlaybackRate doubleSpeed{.percent = 200};
+    require(chart_audio::outputTimeMicros(2'000'000, doubleSpeed) ==
+                1'000'000,
+            "offline chart audio compresses event time at double speed");
+    requireNear(static_cast<float>(chart_audio::sourceFramesPerOutputFrame(
+                    44100, doubleSpeed)),
+                2.0f,
+                "offline chart audio advances two source frames at double "
+                "speed");
 
     const ScheduledAudioEvent defaultEvent;
     require(defaultEvent.wav == bms_parser::Parser::NoWav &&

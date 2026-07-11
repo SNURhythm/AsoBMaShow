@@ -15,6 +15,23 @@ namespace chart_audio {
 inline constexpr int kOutputSampleRate = 44100;
 inline constexpr int kOutputChannels = 2;
 
+inline long long outputTimeMicros(long long chartTimeMicros,
+                                  audio::PlaybackRate playback) {
+  return playback.realMicrosFromChart(chartTimeMicros);
+}
+
+inline long double
+sourceFramesPerOutputFrame(int sourceSampleRate,
+                           audio::PlaybackRate playback,
+                           int outputSampleRate = kOutputSampleRate) {
+  if (sourceSampleRate <= 0 || outputSampleRate <= 0) {
+    return 0.0L;
+  }
+  return static_cast<long double>(sourceSampleRate) /
+         static_cast<long double>(outputSampleRate) *
+         static_cast<long double>(playback.percent) / 100.0L;
+}
+
 struct AudioEvent {
   long long timeMicros = 0;
   int wav = bms_parser::Parser::NoWav;
@@ -31,6 +48,7 @@ using LogCallback = std::function<void(const std::string &)>;
 struct RenderOptions {
   KeySoundMode keySoundMode = KeySoundMode::ChartTiming;
   const ReplayData *replay = nullptr;
+  audio::PlaybackRate playback;
   long long keySoundOffsetMicros = 0;
   std::atomic_bool *isCancelled = nullptr;
   LogCallback log;

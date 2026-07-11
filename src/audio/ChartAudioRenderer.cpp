@@ -430,14 +430,15 @@ float sampleDecodedChannel(const DecodedSound &sound, std::size_t frame,
 }
 
 void mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
-                long long timeMicros) {
-  const long long clampedTime = std::max(0LL, timeMicros);
+                long long timeMicros, audio::PlaybackRate playback) {
+  const long long clampedTime =
+      std::max(0LL, outputTimeMicros(timeMicros, playback));
   const std::size_t startFrame = static_cast<std::size_t>(
       (static_cast<long double>(clampedTime) * kOutputSampleRate) /
       1000000.0L);
   const std::size_t sourceFrames = static_cast<std::size_t>(sound.info.frames);
-  const double sourceToTarget =
-      static_cast<double>(sound.info.samplerate) / kOutputSampleRate;
+  const double sourceToTarget = static_cast<double>(
+      sourceFramesPerOutputFrame(sound.info.samplerate, playback));
   const std::size_t targetFrames = static_cast<std::size_t>(
       std::ceil(static_cast<double>(sourceFrames) / sourceToTarget));
 
@@ -519,10 +520,14 @@ long long baseDurationMicros(const bms_parser::Chart &chart,
                              const RenderOptions &options) {
   if (options.keySoundMode == KeySoundMode::ReplayTiming &&
       options.replay != nullptr) {
-    return chart_playback_duration::ReplayTimelineEndMicros(chart,
-                                                            *options.replay);
+    return outputTimeMicros(
+        chart_playback_duration::ReplayTimelineEndMicros(chart,
+                                                         *options.replay),
+        options.playback);
   }
-  return chart_playback_duration::ChartTimelineEndMicros(chart);
+  return outputTimeMicros(
+      chart_playback_duration::ChartTimelineEndMicros(chart),
+      options.playback);
 }
 
 } // namespace
@@ -626,6 +631,13 @@ CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
 RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
                                    const std::filesystem::path &path,
                                    const RenderOptions &options) {
+  if (!options.playback.valid() ||
+      options.playback.mode != audio::PlaybackMode::PitchShift) {
+    return {.success = false,
+            .outputPath = path,
+            .message = "Chart audio export requires a supported PitchShift "
+                       "playback rate"};
+  }
   if (options.keySoundMode == KeySoundMode::ReplayTiming &&
       options.replay == nullptr) {
     return {.success = false,
@@ -659,7 +671,7 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     if (sound == nullptr) {
       continue;
     }
-    mixSoundAt(mix, *sound, event.timeMicros);
+    mixSoundAt(mix, *sound, event.timeMicros, options.playback);
   }
   if (mix.empty()) {
     ensureMixFrames(mix, 1);

@@ -78,6 +78,7 @@ inline ReplaySummary BuildSummary(
 
 inline ReplayData BuildReplayData(
     bms_parser::Chart &chart, GaugeType gaugeType, bool gaugeAutoShift,
+    audio::PlaybackRate playback = {},
     const std::optional<std::string> &playOption = std::nullopt,
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
@@ -97,6 +98,8 @@ inline ReplayData BuildReplayData(
   replay.assistOption = assist_options::normalize(assistOption);
   replay.initialGaugeType = gaugeType;
   replay.gaugeAutoShift = gaugeAutoShift;
+  replay.provenance.playback = playback;
+  replay.provenance.autoPlay = true;
   replay.createdAt = kLabel;
   replay.events.reserve(static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) *
                         2U);

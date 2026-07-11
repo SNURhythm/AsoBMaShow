@@ -1,5 +1,6 @@
 #include "../src/ReplaySummaryFormatting.h"
 #include "../src/ReplayResultStateBuilder.h"
+#include "../src/ReplayAutoPlay.h"
 
 #include <iostream>
 
@@ -83,6 +84,14 @@ int main() {
       replay_result::BuildResultState(chart, neutralReplay);
   if (neutralState.getClearTypeRank() != kClearTypeHardClearRank) {
     std::cerr << "legacy neutral export result state remains unassisted"
+              << std::endl;
+    return 1;
+  }
+
+  const ReplayData autoExport = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Normal, false, {.percent = 200});
+  if (autoExport.provenance.playback.percent != 200) {
+    std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
     return 1;
   }

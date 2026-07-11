@@ -9636,6 +9636,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
   const bool autoPlayGaugeAutoShift = profileSelections.gaugeAutoShift;
   const std::string autoPlayAssistOption = profileSelections.assistOption;
   const std::string autoPlayOption = profileSelections.playOption;
+  const audio::PlaybackRate autoPlayPlayback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode,
+  };
   const int autoPlayLongNoteMode =
       long_note_mode::valueFromId(profileSelections.longNoteMode);
   const SelectedChartRandomInfo autoPlayRandomInfo =
@@ -9643,7 +9647,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
   auto runExport = [this, record, replayId, options, complete,
                     autoPlayGaugeType, autoPlayGaugeAutoShift,
-                    autoPlayAssistOption, autoPlayOption,
+                    autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
                     autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
     try {
@@ -9704,8 +9708,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         applyEffectiveLongNoteModeToChart(*chart, autoPlayLongNoteMode);
         ReplayData replay = replay_autoplay::BuildReplayData(
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
-            playInfo.option, playInfo.seed, playInfo.option2, playInfo.seed2,
-            autoPlayAssistOption);
+            autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
+            playInfo.seed2, autoPlayAssistOption);
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;
