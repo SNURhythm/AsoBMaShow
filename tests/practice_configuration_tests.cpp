@@ -30,6 +30,15 @@ void testPlaybackRateConversions() {
          "unknown playback modes are invalid");
 }
 
+void testFreshCountInUsesChartMeasureSize() {
+  expect(practice::defaultCountInBeatsForChart(3) == 3,
+         "fresh 3/4 practice defaults to three count-in beats");
+  expect(practice::defaultCountInBeatsForChart(4) == 4,
+         "fresh 4/4 practice defaults to four count-in beats");
+  expect(practice::defaultCountInBeatsForChart(0) == 4,
+         "invalid chart measure size falls back to four beats");
+}
+
 void testConfigurationSanitization() {
   practice::Configuration input{
       .chartSha256 = "0123456789abcdef0123456789abcdef"
@@ -116,6 +125,7 @@ void testPlayabilityIssuesExplainBlockingConfiguration() {
 
 int main() {
   testPlaybackRateConversions();
+  testFreshCountInUsesChartMeasureSize();
   testConfigurationSanitization();
   testEmptyConfigurationIsNotPlayable();
   testPlayabilityIssuesExplainBlockingConfiguration();

@@ -98,8 +98,9 @@ void testRoundTripAndMutations() {
   expect(loaded.status == versioned_json::LoadStatus::Loaded,
          "saved chart data reloads");
   expect(loaded.data.lastUsed.startMicros == 1'000'000 &&
-             loaded.data.lastUsed.chartSha256 == kNormalizedHash,
-         "last-used configuration round-trips and normalizes its hash");
+             loaded.data.lastUsed.chartSha256 == kNormalizedHash &&
+             loaded.data.lastUsed.countInBeats == 8,
+         "last-used configuration and explicit count-in round-trip");
   expect(loaded.data.named.size() == 2 &&
              loaded.data.named[0].configuration.chartSha256 == kNormalizedHash,
          "named presets round-trip as chart-scoped configurations");

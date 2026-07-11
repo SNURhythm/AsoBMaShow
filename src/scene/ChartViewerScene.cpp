@@ -3976,6 +3976,9 @@ void ChartViewerScene::loadPracticeConfiguration() {
   if (loaded.status == versioned_json::LoadStatus::Missing) {
     practiceConfiguration.gaugeType =
         gaugeSelectionFromSettingId(context.settings.selectedGaugeType).type;
+    practiceConfiguration.countInBeats =
+        practice::defaultCountInBeatsForChart(
+            chart->Meta.GuessedBeatsPerMeasure);
   }
   if (canvasView != nullptr) {
     canvasView->setPracticeRange(

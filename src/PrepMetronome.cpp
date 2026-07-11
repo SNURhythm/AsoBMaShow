@@ -12,6 +12,15 @@ constexpr int kMaxBeatsPerMeasure = 16;
 constexpr double kMinSaneBpm = 30.0;
 constexpr double kMaxSaneBpm = 400.0;
 constexpr double kMicrosPerMinute = 60000000.0;
+constexpr long long kBarlineToleranceMicros = 32;
+
+bool isMeasureStart(const bms_parser::Chart &chart, long long timeMicros) {
+  return std::ranges::any_of(chart.Measures, [timeMicros](const auto *measure) {
+    return measure != nullptr &&
+           std::abs(measure->Timing - timeMicros) <=
+               kBarlineToleranceMicros;
+  });
+}
 } // namespace
 
 bool isSaneBpm(double bpm) {
@@ -157,7 +166,9 @@ PrepMetronomePlan buildPracticeCountInPlan(
     plan.clicks.push_back(
         {.timeMicros = plan.startTimeMicros +
                        plan.beatIntervalMicros * static_cast<long long>(beat),
-         .accent = beat % plan.beatsPerMeasure == 0});
+         .accent = isMeasureStart(
+             chart, plan.startTimeMicros +
+                        plan.beatIntervalMicros * static_cast<long long>(beat))});
   }
 
   // Clicks stay on the chart timeline. The rate-scaled audio clock converts

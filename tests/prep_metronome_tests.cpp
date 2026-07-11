@@ -151,17 +151,33 @@ int main() {
                                              plan.clicks[0].timeMicros),
             "practice click real spacing follows playback rate");
 
+  bms_parser::Chart phaseChart;
+  phaseChart.Meta.Bpm = 120.0;
+  phaseChart.Meta.GuessedBeatsPerMeasure = 4;
+  for (long long barline = 0; barline <= 12000000; barline += 2000000) {
+    auto *barMeasure = new bms_parser::Measure();
+    barMeasure->Timing = barline;
+    phaseChart.Measures.push_back(barMeasure);
+  }
+
   plan = prep_metronome::buildPracticeCountInPlan(
-      practiceChart, 10000000, 8, slowPlayback);
-  ASSERT_EQ(4, plan.beatsPerMeasure,
-            "practice count-in retains chart measure size");
-  ASSERT_EQ(8U, plan.clicks.size(), "two-measure practice click count");
-  ASSERT_EQ(6800000LL, plan.clicks[0].timeMicros,
-            "two-measure count-in starts before nonzero marker");
-  ASSERT_TRUE(plan.clicks[0].accent, "first measure start accented");
-  ASSERT_TRUE(!plan.clicks[1].accent, "inside first measure not accented");
-  ASSERT_TRUE(plan.clicks[4].accent, "second measure start accented");
-  ASSERT_TRUE(!plan.clicks[7].accent, "inside second measure not accented");
+      phaseChart, 11000000, 8, slowPlayback);
+  ASSERT_EQ(8U, plan.clicks.size(), "mid-measure practice click count");
+  ASSERT_EQ(7000000LL, plan.clicks[0].timeMicros,
+            "mid-measure count-in starts between barlines");
+  ASSERT_TRUE(!plan.clicks[0].accent,
+              "mid-measure first click is not accented");
+  ASSERT_TRUE(plan.clicks[2].accent, "next real barline is accented");
+  ASSERT_TRUE(plan.clicks[6].accent, "following real barline is accented");
+
+  plan = prep_metronome::buildPracticeCountInPlan(
+      phaseChart, 12000000, 8, slowPlayback);
+  ASSERT_EQ(8000000LL, plan.clicks[0].timeMicros,
+            "measure-aligned count-in starts on barline");
+  ASSERT_TRUE(plan.clicks[0].accent,
+              "measure-aligned first click is accented");
+  ASSERT_TRUE(plan.clicks[4].accent,
+              "next measure-aligned barline is accented");
 
   practiceTempoChange->Bpm = 480.0;
   plan = prep_metronome::buildPracticeCountInPlan(

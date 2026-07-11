@@ -53,6 +53,8 @@ struct SanitizedConfiguration {
   [[nodiscard]] bool playable() const noexcept;
 };
 
+[[nodiscard]] int
+defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept;
 SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros);
 [[nodiscard]] std::optional<std::string>
 firstPlayabilityIssue(const Configuration &value, long long chartEndMicros);

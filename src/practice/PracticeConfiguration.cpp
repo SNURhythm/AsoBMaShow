@@ -38,6 +38,12 @@ bool validGaugeType(GaugeType value) {
 }
 } // namespace
 
+int defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept {
+  return effectiveBeatsPerMeasure >= 1 && effectiveBeatsPerMeasure <= 16
+             ? effectiveBeatsPerMeasure
+             : 4;
+}
+
 void RangeSelection::placeActiveMarker(long long timeMicros,
                                        long long chartEndMicros) {
   const long long clamped =
