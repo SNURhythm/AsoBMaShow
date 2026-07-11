@@ -8,6 +8,7 @@
 #include "../audio/NativeMusicPlayer.h"
 #include "../view/ScrollView.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -66,13 +67,6 @@ Button *makeProfileActionButton(const LayoutMetrics &metrics,
     text->setThemedColor(ui_theme::textMuted);
   }
   return button;
-}
-
-bool archivePipelinePhase(ProfileSettingsPhase phase) {
-  return phase == ProfileSettingsPhase::PickingImport ||
-         phase == ProfileSettingsPhase::Importing ||
-         phase == ProfileSettingsPhase::PreparingExport ||
-         phase == ProfileSettingsPhase::PickingExport;
 }
 
 constexpr std::string_view kProfileArchiveMimeType = "application/zip";
@@ -661,16 +655,30 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   const bool idle = profileController->actionsEnabled();
   const auto phase = profileController->phase();
 
+  const bool editorTargetAvailable =
+      !profileInlineEditor.active() ||
+      std::ranges::any_of(profileController->profiles(), [&](const auto &item) {
+        return profileInlineEditor.activeFor(item.id);
+      });
+  profileInlineEditor.clearIfTargetUnavailable(editorTargetAvailable);
+
+  const auto &status = profileController->status();
+  profileStatusText =
+      makeWrappedText(status.message.empty() ? "Ready." : status.message,
+                      metrics.bodyTextSize, ui_theme::textSecondary());
+  profileStatusText->setColor(statusColor(status.kind));
+  cardsColumn->addView(profileStatusText);
+
   auto *manageBody = new View();
   manageBody->setFlexDirection(FlexDirection::Column);
   manageBody->setGap(metrics.compact ? 10.0f : 14.0f);
 
-  profileNameInput =
+  profileCreateNameInput =
       makeTextInput(metrics, std::max(260, metrics.cardsWidth / 2));
-  profileNameInput->setEditingText(profileNameText);
-  profileNameInput->onTextChanged(
-      [this](const std::string &text) { profileNameText = text; });
-  manageBody->addView(profileNameInput);
+  profileCreateNameInput->setEditingText(profileCreateNameText);
+  profileCreateNameInput->onTextChanged(
+      [this](const std::string &text) { profileCreateNameText = text; });
+  manageBody->addView(profileCreateNameInput);
 
   auto *manageActions = new View();
   manageActions->setFlexDirection(FlexDirection::Row);
@@ -678,15 +686,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   manageActions->setGap(metrics.compact ? 8.0f : 10.0f);
   manageActions->addView(
       makeProfileActionButton(metrics, "Create", idle, [this]() {
-        profileController->create(profileNameText);
-        invalidateProfileLayout();
-      }));
-  manageActions->addView(makeProfileActionButton(
-      metrics, "Cancel Confirmation",
-      phase == ProfileSettingsPhase::ConfirmDelete ||
-          phase == ProfileSettingsPhase::ConfirmOverwrite,
-      [this]() {
-        profileController->cancelConfirmation();
+        profileController->create(profileCreateNameText);
         invalidateProfileLayout();
       }));
   manageBody->addView(manageActions);
@@ -715,12 +715,6 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       }));
   archiveBody->addView(archiveActions);
 
-  const auto &status = profileController->status();
-  profileStatusText =
-      makeWrappedText(status.message.empty() ? "Ready." : status.message,
-                      metrics.bodyTextSize, ui_theme::textSecondary());
-  profileStatusText->setColor(statusColor(status.kind));
-  archiveBody->addView(profileStatusText);
   cardsColumn->addView(makeCard(
       metrics, "Portable Archive",
       "Export or import the six-file allowlisted profile archive. Chart "
@@ -756,8 +750,8 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     actions->setFlexWrap(YGWrapWrap);
     actions->setGap(metrics.compact ? 8.0f : 10.0f);
     actions->addView(makeProfileActionButton(
-        metrics, selected ? "Selected" : "Select",
-        !selected && !archivePipelinePhase(phase), [this, id = profile.id]() {
+        metrics, selected ? "Selected" : "Select", idle && !selected,
+        [this, id = profile.id]() {
           profileController->select(id);
           invalidateProfileLayout();
         }));
@@ -765,13 +759,15 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
         metrics, active ? "Active" : "Activate", idle && !active,
         [this, id = profile.id]() { activateProfile(id); }));
     actions->addView(makeProfileActionButton(
-        metrics, "Rename", idle, [this, id = profile.id]() {
-          profileController->rename(id, profileNameText);
+        metrics, "Rename", idle,
+        [this, id = profile.id, name = profile.displayName]() {
+          profileInlineEditor.beginRename(id, name);
           invalidateProfileLayout();
         }));
     actions->addView(makeProfileActionButton(
-        metrics, "Duplicate", idle, [this, id = profile.id]() {
-          profileController->duplicate(id, profileNameText);
+        metrics, "Duplicate", idle,
+        [this, id = profile.id, name = profile.displayName]() {
+          profileInlineEditor.beginDuplicate(id, name);
           invalidateProfileLayout();
         }));
     actions->addView(makeProfileActionButton(
@@ -802,7 +798,62 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
               {.mode = ProfileImportMode::Overwrite, .overwriteProfileId = id},
               true);
         }));
+
+    if (confirmingDelete || confirmingOverwrite) {
+      body->addView(makeWrappedText(
+          confirmingDelete
+              ? "Delete this profile permanently?"
+              : "Replace this profile from the selected archive?",
+          metrics.bodyTextSize, ui_theme::amber()));
+      actions->addView(makeProfileActionButton(
+          metrics, "Cancel", true, [this]() {
+            profileController->cancelConfirmation();
+            invalidateProfileLayout();
+          }));
+    }
     body->addView(actions);
+
+    if (profileInlineEditor.activeFor(profile.id)) {
+      auto *editorInput =
+          makeTextInput(metrics, std::max(260, metrics.cardsWidth / 2));
+      editorInput->setEditingText(std::string(profileInlineEditor.draft()));
+      editorInput->onTextChanged(
+          [this, id = profile.id](const std::string &text) {
+            if (profileInlineEditor.activeFor(id)) {
+              profileInlineEditor.updateDraft(text);
+            }
+          });
+      body->addView(editorInput);
+
+      auto *editorActions = new View();
+      editorActions->setFlexDirection(FlexDirection::Row);
+      editorActions->setFlexWrap(YGWrapWrap);
+      editorActions->setGap(metrics.compact ? 8.0F : 10.0F);
+      editorActions->addView(makeProfileActionButton(
+          metrics, "Apply", true, [this, id = profile.id]() {
+            const auto request = profileInlineEditor.requestFor(id);
+            if (!request) {
+              return;
+            }
+            const ProfileResult result =
+                request->action ==
+                        settings_scene::ProfileInlineEditAction::Rename
+                    ? profileController->rename(request->profileId,
+                                                request->name)
+                    : profileController->duplicate(request->profileId,
+                                                   request->name);
+            if (result.ok()) {
+              profileInlineEditor.clear();
+            }
+            invalidateProfileLayout();
+          }));
+      editorActions->addView(makeProfileActionButton(
+          metrics, "Cancel", true, [this]() {
+            profileInlineEditor.clear();
+            invalidateProfileLayout();
+          }));
+      body->addView(editorActions);
+    }
 
     std::string disabledReason;
     if (!deleteEligibility.enabled && !confirmingDelete) {

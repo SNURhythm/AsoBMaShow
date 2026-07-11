@@ -393,6 +393,7 @@ void SettingsScene::cleanupScene() {
   inputCaptureAction.reset();
   inputViewRebuildGate.reset();
   inputLastViewSignature.clear();
+  profileInlineEditor.clear();
   previewLanePressed.clear();
   previewCombo = 0;
   previewScore = 0;
@@ -434,7 +435,7 @@ void SettingsScene::cleanupScene() {
   profileTabText = nullptr;
   profileStatusText = nullptr;
   profileDeleteReasonText = nullptr;
-  profileNameInput = nullptr;
+  profileCreateNameInput = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;

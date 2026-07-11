@@ -1,6 +1,7 @@
 #include "../src/view/View.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
+#include "scene/SettingsSceneProfileEditorState.h"
 
 #include <cassert>
 #include <algorithm>
@@ -273,11 +274,37 @@ void testInputSettingsRebuildWaitsForPointerTransaction() {
   assert(gate.consume(false));
 }
 
+void testProfileInlineEditorStaysBoundToItsCard() {
+  settings_scene::ProfileInlineEditorState editor;
+  editor.beginRename("alpha", "Alpha");
+  editor.updateDraft("Renamed Alpha");
+
+  assert(!editor.requestFor("bravo").has_value());
+  const auto rename = editor.requestFor("alpha");
+  assert(rename.has_value());
+  assert(rename->action == settings_scene::ProfileInlineEditAction::Rename);
+  assert(rename->profileId == "alpha");
+  assert(rename->name == "Renamed Alpha");
+
+  editor.beginDuplicate("bravo", "Bravo");
+  const auto duplicate = editor.requestFor("bravo");
+  assert(duplicate.has_value());
+  assert(duplicate->action ==
+         settings_scene::ProfileInlineEditAction::Duplicate);
+  assert(duplicate->name == "Bravo Copy");
+
+  editor.clearIfTargetUnavailable(true);
+  assert(editor.activeFor("bravo"));
+  editor.clearIfTargetUnavailable(false);
+  assert(!editor.active());
+}
+
 } // namespace
 
 int main() {
   testInputSettingsLayoutPolicy();
   testInputSettingsRebuildWaitsForPointerTransaction();
+  testProfileInlineEditorStaysBoundToItsCard();
   bool deferredRan = false;
   View::deferAfterEvent([&]() { deferredRan = true; });
   assert(!deferredRan);

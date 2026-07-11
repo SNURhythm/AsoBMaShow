@@ -100,7 +100,7 @@ void SettingsScene::resetViewState() {
   profileTabText = nullptr;
   profileStatusText = nullptr;
   profileDeleteReasonText = nullptr;
-  profileNameInput = nullptr;
+  profileCreateNameInput = nullptr;
   visibleTimeModeButton = nullptr;
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
@@ -2716,6 +2716,7 @@ void SettingsScene::initView() {
             phase == ProfileSettingsPhase::PickingExport) {
           return;
         }
+        profileInlineEditor.clear();
         profileController->cancelConfirmation();
       }
       activeTab = tab;

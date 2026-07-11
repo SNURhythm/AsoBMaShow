@@ -806,6 +806,7 @@
 				scene/SettingsSceneInput.cpp,
 				scene/SettingsSceneLayout.cpp,
 				scene/SettingsScenePreview.cpp,
+				scene/SettingsSceneProfileEditorState.h,
 				scene/SettingsSceneProfiles.cpp,
 				scene/SettingsSceneTables.cpp,
 				scene/play/BMSRenderer.cpp,

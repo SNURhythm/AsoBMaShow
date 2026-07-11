@@ -5,6 +5,7 @@
 #include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
 #include "SettingsAudioVideoModel.h"
+#include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "play/Judge.h"
 #include <atomic>
@@ -138,7 +139,7 @@ private:
   TextView *profileTabText = nullptr;
   TextView *profileStatusText = nullptr;
   TextView *profileDeleteReasonText = nullptr;
-  TextInputBox *profileNameInput = nullptr;
+  TextInputBox *profileCreateNameInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *visibleTimeBpmStrategyButton = nullptr;
   Button *keysoundModeButton = nullptr;
@@ -263,7 +264,8 @@ private:
   std::filesystem::path profileExportStagingFile;
   std::uint64_t profileArchiveGeneration = 0;
   bool profileExportStagingSwept = false;
-  std::string profileNameText;
+  std::string profileCreateNameText;
+  settings_scene::ProfileInlineEditorState profileInlineEditor;
   std::atomic_bool difficultyTableJobRunning = false;
   std::atomic_bool archiveCacheCleanupRunning = false;
   std::atomic_bool archiveCacheMeasureRunning = false;
