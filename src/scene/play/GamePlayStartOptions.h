@@ -133,7 +133,7 @@ validatedJudgeWindows(const ScoreStageProvenance &stage) {
   constexpr std::array expected = {PGreat, Great, Good, Bad, Kpoor};
   std::map<Judgement, std::pair<long long, long long>> result;
   for (const auto &window : stage.effectiveJudgeWindows) {
-    if (!std::ranges::contains(expected, window.judgement) ||
+    if (std::ranges::find(expected, window.judgement) == expected.end() ||
         window.earlyMicros > 0 || window.lateMicros < 0 ||
         window.earlyMicros > window.lateMicros ||
         !result
