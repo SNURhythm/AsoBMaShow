@@ -49,7 +49,7 @@ struct SoundData {
 struct PlayingSound {
   SoundData *soundData = nullptr;
   audio::Bus bus = audio::Bus::Bgm;
-  size_t currentFrame = 0;
+  std::uint64_t sourceFrameQ32 = 0;
   std::uint32_t outputOffsetFrames = 0;
 };
 
@@ -154,9 +154,10 @@ bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command);
 void DrainCommands(AudioCallbackState &state);
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
-                             std::uint32_t frameCount);
+                             std::uint32_t frameCount, int playbackRatePercent);
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
-                     float bgmGain, float keysoundGain);
+                     float bgmGain, float keysoundGain,
+                     int playbackRatePercent);
 
 } // namespace audio::playback

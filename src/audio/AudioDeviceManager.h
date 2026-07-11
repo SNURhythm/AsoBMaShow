@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioBackend.h"
+#include "PlaybackRate.h"
 #include "../settings/AudioVideoSettings.h"
 
 #include <string>
@@ -12,6 +13,7 @@ struct PlaybackSnapshot {
   bool active = false;
   bool paused = false;
   long long positionMicros = 0;
+  PlaybackRate rate;
   bool operator==(const PlaybackSnapshot &) const = default;
 };
 

@@ -25,23 +25,69 @@ std::uint32_t outputOffsetForStartMicros(long long startMicros,
                                          long long bufferStartMicros,
                                          int sampleRate,
                                          std::uint32_t frameCount,
-                                         bool &isDue) {
+                                         int playbackRatePercent, bool &isDue) {
   isDue = true;
   if (startMicros <= bufferStartMicros) {
     return 0;
   }
 
-  const long long deltaMicros = startMicros - bufferStartMicros;
-  const std::uint64_t roundedFrame =
-      (static_cast<std::uint64_t>(deltaMicros) *
-           static_cast<std::uint64_t>(sampleRate) +
-       500000ULL) /
-      1000000ULL;
+  const int ratePercent = playbackRatePercent > 0 ? playbackRatePercent : 100;
+#if defined(__SIZEOF_INT128__)
+  const __int128 deltaMicros = static_cast<__int128>(startMicros) -
+                               static_cast<__int128>(bufferStartMicros);
+  const __int128 denominator = static_cast<__int128>(1000000) * ratePercent;
+  const __int128 roundedFrame =
+      (deltaMicros * sampleRate * 100 + denominator / 2) / denominator;
+#else
+  const long double deltaMicros = static_cast<long double>(startMicros) -
+                                  static_cast<long double>(bufferStartMicros);
+  const long double roundedFrame = std::floor(
+      deltaMicros * sampleRate * 100.0L / (1000000.0L * ratePercent) + 0.5L);
+#endif
   if (roundedFrame >= frameCount) {
     isDue = false;
     return 0;
   }
   return static_cast<std::uint32_t>(roundedFrame);
+}
+
+constexpr std::uint64_t kQ32One = std::uint64_t{1} << 32;
+constexpr std::uint64_t kQ32FractionMask = kQ32One - 1;
+constexpr size_t kQ32MaximumWholeFrame =
+    static_cast<size_t>(std::numeric_limits<std::uint64_t>::max() >> 32);
+
+std::uint64_t frameToQ32(size_t frame) {
+  return static_cast<std::uint64_t>(frame) << 32;
+}
+
+std::uint64_t remapQ32(std::uint64_t position, int previousSampleRate,
+                       int targetSampleRate) {
+  if (position == 0 || previousSampleRate <= 0 || targetSampleRate <= 0 ||
+      previousSampleRate == targetSampleRate) {
+    return position;
+  }
+#if defined(__SIZEOF_INT128__)
+  const __int128 remapped =
+      (static_cast<__int128>(position) * targetSampleRate +
+       previousSampleRate / 2) /
+      previousSampleRate;
+  return static_cast<std::uint64_t>(std::min(
+      remapped,
+      static_cast<__int128>(std::numeric_limits<std::uint64_t>::max())));
+#else
+  const long double remapped = static_cast<long double>(position) *
+                               targetSampleRate / previousSampleRate;
+  if (remapped >=
+      static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
+    return std::numeric_limits<std::uint64_t>::max();
+  }
+  return static_cast<std::uint64_t>(std::floor(remapped + 0.5L));
+#endif
+}
+
+std::uint64_t rateIncrementQ32(int playbackRatePercent) {
+  const int ratePercent = playbackRatePercent > 0 ? playbackRatePercent : 100;
+  return (static_cast<std::uint64_t>(ratePercent) * kQ32One + 50ULL) / 100ULL;
 }
 
 bool scheduledSoundLess(const ScheduledSound &lhs, const ScheduledSound &rhs) {
@@ -364,11 +410,9 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 
   for (size_t index = 0; index < state.playingSoundCount; ++index) {
     auto &playingSound = state.playingSounds[index];
-    playingSound.currentFrame =
-        clampFrameToSound(RemapFramePosition(playingSound.currentFrame,
-                                             transition.previousSampleRate,
-                                             transition.targetSampleRate),
-                          playingSound.soundData);
+    playingSound.sourceFrameQ32 =
+        remapQ32(playingSound.sourceFrameQ32, transition.previousSampleRate,
+                 transition.targetSampleRate);
     const size_t remappedOutputOffset = RemapFramePosition(
         playingSound.outputOffsetFrames, transition.previousSampleRate,
         transition.targetSampleRate);
@@ -402,6 +446,7 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        std::uint32_t outputOffsetFrames, size_t startFrame) {
   if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
+      startFrame > kQ32MaximumWholeFrame ||
       state.playingSoundCount >= kMaxActiveSounds) {
     return false;
   }
@@ -409,7 +454,7 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
   state.playingSounds[state.playingSoundCount++] = {
       .soundData = soundData,
       .bus = bus,
-      .currentFrame = startFrame,
+      .sourceFrameQ32 = frameToQ32(startFrame),
       .outputOffsetFrames = outputOffsetFrames,
   };
   return true;
@@ -501,7 +546,8 @@ void DrainCommands(AudioCallbackState &state) {
 
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
-                             std::uint32_t frameCount) {
+                             std::uint32_t frameCount,
+                             int playbackRatePercent) {
   size_t scheduledSoundsToRemove = 0;
   for (; scheduledSoundsToRemove < state.scheduledSoundCount;
        ++scheduledSoundsToRemove) {
@@ -510,7 +556,7 @@ void ActivateScheduledSounds(AudioCallbackState &state,
     bool isDue = false;
     const std::uint32_t outputOffsetFrames = outputOffsetForStartMicros(
         scheduledSound.startMicros, bufferStartMicros, sampleRate, frameCount,
-        isDue);
+        playbackRatePercent, isDue);
     if (!isDue) {
       break;
     }
@@ -532,61 +578,91 @@ void ActivateScheduledSounds(AudioCallbackState &state,
 
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
-                     float bgmGain, float keysoundGain) {
+                     float bgmGain, float keysoundGain,
+                     int playbackRatePercent) {
   constexpr float kMixHeadroom = 0.9f;
   if (outputChannels <= 0 ||
       mixBuffer.size() < static_cast<size_t>(frameCount) * outputChannels) {
     return;
   }
 
+  const std::uint64_t rateIncrement = rateIncrementQ32(playbackRatePercent);
   size_t soundIndex = 0;
   while (soundIndex < state.playingSoundCount) {
     PlayingSound &playingSound = state.playingSounds[soundIndex];
     SoundData *soundData = playingSound.soundData;
+    const size_t sourceFrame =
+        static_cast<size_t>(playingSound.sourceFrameQ32 >> 32);
     if (soundData == nullptr || soundData->channels <= 0 ||
-        playingSound.currentFrame >= soundData->outputFrameCount) {
+        sourceFrame >= soundData->outputFrameCount) {
       removeActiveSoundAt(state, soundIndex);
       continue;
     }
 
     const std::uint32_t outputOffsetFrames =
         std::min(playingSound.outputOffsetFrames, frameCount);
-    size_t framesToRead = frameCount - outputOffsetFrames;
-    const size_t framesAvailable =
-        soundData->outputFrameCount - playingSound.currentFrame;
-    framesToRead = std::min(framesToRead, framesAvailable);
-
     const short *source = soundData->outputData.data();
-    const size_t currentFrame = playingSound.currentFrame;
     const int channels = soundData->channels;
     const float gain =
         kMixHeadroom * (playingSound.bus == Bus::Bgm ? bgmGain : keysoundGain);
 
-    for (size_t frame = 0; frame < framesToRead; ++frame) {
-      const size_t sourceFrameOffset =
-          (currentFrame + frame) * static_cast<size_t>(channels);
+    std::uint64_t positionQ32 = playingSound.sourceFrameQ32;
+    bool finished = false;
+    for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+      const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
+      if (leftFrame >= soundData->outputFrameCount) {
+        finished = true;
+        break;
+      }
+      const size_t rightFrame = leftFrame + 1 < soundData->outputFrameCount
+                                    ? leftFrame + 1
+                                    : leftFrame;
+      const float fraction =
+          static_cast<float>(positionQ32 & kQ32FractionMask) /
+          static_cast<float>(kQ32One);
+      const size_t leftFrameOffset = leftFrame * static_cast<size_t>(channels);
+      const size_t rightFrameOffset =
+          rightFrame * static_cast<size_t>(channels);
       const size_t outputFrameOffset =
           (outputOffsetFrames + frame) * static_cast<size_t>(outputChannels);
 
       if (channels == 1) {
-        const float sample = source[sourceFrameOffset] / 32768.0f;
+        const float left = static_cast<float>(source[leftFrameOffset]);
+        const float right = static_cast<float>(source[rightFrameOffset]);
+        const float sample = (left + (right - left) * fraction) / 32768.0f;
         for (int outputChannel = 0; outputChannel < outputChannels;
              ++outputChannel) {
           mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
         }
-        continue;
+      } else {
+        for (int channel = 0; channel < channels; ++channel) {
+          const int outputChannel = channel % outputChannels;
+          const float left =
+              static_cast<float>(source[leftFrameOffset + channel]);
+          const float right =
+              static_cast<float>(source[rightFrameOffset + channel]);
+          const float sample = (left + (right - left) * fraction) / 32768.0f;
+          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+        }
       }
 
-      for (int channel = 0; channel < channels; ++channel) {
-        const int outputChannel = channel % outputChannels;
-        const float sample = source[sourceFrameOffset + channel] / 32768.0f;
-        mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+      if (positionQ32 >
+          std::numeric_limits<std::uint64_t>::max() - rateIncrement) {
+        positionQ32 = std::numeric_limits<std::uint64_t>::max();
+        finished = true;
+        break;
+      }
+      positionQ32 += rateIncrement;
+      if (static_cast<size_t>(positionQ32 >> 32) >=
+          soundData->outputFrameCount) {
+        finished = true;
+        break;
       }
     }
 
-    playingSound.currentFrame += framesToRead;
+    playingSound.sourceFrameQ32 = positionQ32;
     playingSound.outputOffsetFrames = 0;
-    if (playingSound.currentFrame >= soundData->outputFrameCount) {
+    if (finished) {
       removeActiveSoundAt(state, soundIndex);
       continue;
     }

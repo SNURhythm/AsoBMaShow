@@ -711,6 +711,14 @@ void GamePlayScene::reset() {
     }
   }
   context.jukebox.stop();
+  std::string playbackRateError;
+  const bool playbackRateApplied =
+      context.jukebox.setPlaybackRate(options.playback, playbackRateError);
+  if (!playbackRateApplied) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Gameplay playback rate could not be applied: %s",
+                 playbackRateError.c_str());
+  }
   const long long startPositionMicros = getStartPositionMicros();
   const std::optional<long long> practiceKeySoundCutoff =
       options.practiceSession != nullptr || options.practiceLeadInMicros > 0
@@ -729,13 +737,14 @@ void GamePlayScene::reset() {
     practiceCountInPlan = prep_metronome::buildPlan(
         *chart, prepMetronomeEnabled, false, audioSeekPosition);
   }
-  context.jukebox.schedule(*chart, options.autoKeySound, isCancelled,
-                           practiceKeySoundCutoff,
-                           practiceCountInPlan.enabled ? &practiceCountInPlan
-                                                       : nullptr);
-  context.jukebox.play(practiceCountInPlan.enabled
-                           ? practiceCountInPlan.startTimeMicros
-                           : audioSeekPosition);
+  if (playbackRateApplied) {
+    context.jukebox.schedule(
+        *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,
+        practiceCountInPlan.enabled ? &practiceCountInPlan : nullptr);
+    context.jukebox.play(practiceCountInPlan.enabled
+                             ? practiceCountInPlan.startTimeMicros
+                             : audioSeekPosition);
+  }
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
@@ -780,7 +789,7 @@ void GamePlayScene::reset() {
   updatePacemakerStatus();
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
-  state->isPlaying = true;
+  state->isPlaying = playbackRateApplied;
   renderer->setJudgementCounters(state->judgeCount, state->comboBreak);
   renderer->setAutoPlayMarkVisible(
       options.autoPlay ||
@@ -799,9 +808,11 @@ void GamePlayScene::reset() {
     processReplayLaneCoverEvents(initialReplayTime);
   }
   buildReplayNoteLookup();
-  beginReplayRecording();
-  if (options.practiceSession != nullptr) {
-    options.practiceSession->beginAttempt();
+  if (playbackRateApplied) {
+    beginReplayRecording();
+    if (options.practiceSession != nullptr) {
+      options.practiceSession->beginAttempt();
+    }
   }
   updatePracticeHud(context.jukebox.getTimeMicros());
   updateGaugeStatusText();
@@ -1875,6 +1886,18 @@ void GamePlayScene::cleanupScene() {
   context.profileGameplayActive.store(false, std::memory_order_release);
   profileGameplayBlockerActive = false;
   context.jukebox.removeOnTick();
+  const auto stopped = context.jukebox.stop();
+  if (!stopped.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Gameplay cleanup could not stop audio: %s",
+                 stopped.diagnostic.c_str());
+  }
+  std::string playbackRateError;
+  if (!context.jukebox.setPlaybackRate({}, playbackRateError)) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                 "Gameplay cleanup could not restore normal playback rate: %s",
+                 playbackRateError.c_str());
+  }
   SDL_Log("Stopping input handler");
   if (inputHandler != nullptr) {
     inputHandler->stopListen();

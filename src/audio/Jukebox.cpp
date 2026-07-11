@@ -2590,6 +2590,11 @@ Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
     return stopped;
   }
+  std::string playbackRateError;
+  if (!setPlaybackRate({}, playbackRateError)) {
+    return {.success = false,
+            .diagnostic = "Jukebox::loadChart: " + playbackRateError};
+  }
   if (playThread.joinable()) {
     SDL_Log("Joining playThread");
     playThread.join();
@@ -2688,6 +2693,12 @@ Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
   if (!stopped.success) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
     return stopped;
+  }
+  std::string playbackRateError;
+  if (!setPlaybackRate({}, playbackRateError)) {
+    return {.success = false,
+            .diagnostic =
+                "Jukebox::reloadChartResources: " + playbackRateError};
   }
   if (playThread.joinable()) {
     SDL_Log("Joining playThread");
@@ -3370,12 +3381,22 @@ void Jukebox::resume() {
 }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
 
+bool Jukebox::setPlaybackRate(audio::PlaybackRate rate,
+                              std::string &errorMessage) {
+  return audio.setPlaybackRate(rate, errorMessage);
+}
+
+audio::PlaybackRate Jukebox::playbackRate() const {
+  return audio.playbackRate();
+}
+
 audio::PlaybackSnapshot Jukebox::suspendAndDrain() {
   audio::PlaybackSnapshot snapshot{
       .valid = true,
       .active = isPlaying.load(std::memory_order_acquire),
       .paused = !stopwatch->isRunning(),
       .positionMicros = getTimeMicros(),
+      .rate = playbackRate(),
   };
   const auto stopped = stop();
   if (!stopped.success) {
@@ -3389,6 +3410,16 @@ bool Jukebox::restorePlayback(const audio::PlaybackSnapshot &snapshot,
   errorMessage.clear();
   if (!snapshot.valid) {
     errorMessage = "Invalid playback snapshot";
+    return false;
+  }
+  const auto stopped = audio.stopSounds();
+  if (!stopped.success) {
+    errorMessage = stopped.diagnostic.empty()
+                       ? "Audio playback could not drain before rate restore"
+                       : stopped.diagnostic;
+    return false;
+  }
+  if (!setPlaybackRate(snapshot.rate, errorMessage)) {
     return false;
   }
   if (!snapshot.active) {

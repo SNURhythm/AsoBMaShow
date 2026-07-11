@@ -146,6 +146,8 @@ public:
   void pause();
   void resume();
   bool isPaused();
+  bool setPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
+  [[nodiscard]] audio::PlaybackRate playbackRate() const;
   [[nodiscard]] AudioWrapper &audioRuntime() { return audio; }
   audio::PlaybackSnapshot suspendAndDrain() override;
   bool restorePlayback(const audio::PlaybackSnapshot &snapshot,

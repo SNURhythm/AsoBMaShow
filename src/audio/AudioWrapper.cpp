@@ -277,23 +277,49 @@ long long nowMicros() {
       .count();
 }
 
-long long framesToMicros(int64_t frames, int sampleRate) {
+long long framesToChartMicros(int64_t frames, int sampleRate,
+                              int playbackRatePercent) {
   if (sampleRate <= 0) {
     sampleRate = 44100;
   }
-  return static_cast<long long>((frames * 1000000LL) / sampleRate);
+  const int ratePercent = playbackRatePercent > 0 ? playbackRatePercent : 100;
+#if defined(__SIZEOF_INT128__)
+  const __int128 result =
+      static_cast<__int128>(frames) * 1000000 * ratePercent / sampleRate / 100;
+  return static_cast<long long>(std::clamp(
+      result, static_cast<__int128>(std::numeric_limits<long long>::min()),
+      static_cast<__int128>(std::numeric_limits<long long>::max())));
+#else
+  const long double result = static_cast<long double>(frames) * 1000000.0L *
+                             ratePercent / sampleRate / 100.0L;
+  return static_cast<long long>(std::clamp(
+      result, static_cast<long double>(std::numeric_limits<long long>::min()),
+      static_cast<long double>(std::numeric_limits<long long>::max())));
+#endif
+}
+
+long long addMicrosClamped(long long lhs, long long rhs) {
+  if (rhs > 0 && lhs > std::numeric_limits<long long>::max() - rhs) {
+    return std::numeric_limits<long long>::max();
+  }
+  if (rhs < 0 && lhs < std::numeric_limits<long long>::min() - rhs) {
+    return std::numeric_limits<long long>::min();
+  }
+  return lhs + rhs;
 }
 
 long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
-                                int sampleRate) {
+                                int sampleRate, int playbackRatePercent) {
   const int64_t startFrame = userData->audioClockFrameCursor->fetch_add(
       frameCount, std::memory_order_acq_rel);
   const long long baseMicros =
       userData->audioClockBaseMicros->load(std::memory_order_acquire);
   const long long bufferStartMicros =
-      baseMicros + framesToMicros(startFrame, sampleRate);
-  const long long bufferEndMicros =
-      baseMicros + framesToMicros(startFrame + frameCount, sampleRate);
+      addMicrosClamped(baseMicros, framesToChartMicros(startFrame, sampleRate,
+                                                       playbackRatePercent));
+  const long long bufferEndMicros = addMicrosClamped(
+      baseMicros, framesToChartMicros(startFrame + frameCount, sampleRate,
+                                      playbackRatePercent));
 
   userData->audioClockAnchorMicros->store(bufferStartMicros,
                                           std::memory_order_release);
@@ -327,11 +353,15 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   if (sampleRate <= 0) {
     sampleRate = 44100;
   }
+  const int playbackRatePercent =
+      userData->playbackRatePercent
+          ? userData->playbackRatePercent->load(std::memory_order_acquire)
+          : 100;
 
-  const long long bufferStartMicros =
-      beginAudioClockBuffer(userData, frameCount, sampleRate);
+  const long long bufferStartMicros = beginAudioClockBuffer(
+      userData, frameCount, sampleRate, playbackRatePercent);
   audio::playback::ActivateScheduledSounds(state, bufferStartMicros, sampleRate,
-                                           frameCount);
+                                           frameCount, playbackRatePercent);
 
   if (state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -358,7 +388,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           : 1.0f;
   audio::playback::MixActiveSounds(
       state, std::span<float>(mixBuffer, requiredSamples), frameCount,
-      outputChannels, bgmGain, keysoundGain);
+      outputChannels, bgmGain, keysoundGain, playbackRatePercent);
 
   // Apply Effects
   if (userData->bassFilter) {
@@ -450,6 +480,7 @@ void AudioWrapper::initializeUserData() {
   userData.audioClockAnchorMicros = &audioClockAnchorMicros;
   userData.audioClockAnchorWallMicros = &audioClockAnchorWallMicros;
   userData.audioClockAnchorEndMicros = &audioClockAnchorEndMicros;
+  userData.playbackRatePercent = &playbackRatePercent;
   userData.bgmGain = &bgmGain;
   userData.keysoundGain = &keysoundGain;
   userData.stopwatch = stopwatch;
@@ -548,7 +579,10 @@ long long AudioWrapper::getTimeMicros() const {
     return anchorMicros;
   }
 
-  long long interpolatedMicros = anchorMicros + nowMicros() - anchorWallMicros;
+  const audio::PlaybackRate rate = playbackRate();
+  const long long wallDeltaMicros = nowMicros() - anchorWallMicros;
+  long long interpolatedMicros =
+      addMicrosClamped(anchorMicros, rate.chartMicrosFromReal(wallDeltaMicros));
   if (anchorEndMicros >= anchorMicros && interpolatedMicros > anchorEndMicros) {
     interpolatedMicros = anchorEndMicros;
   }
@@ -566,6 +600,46 @@ void AudioWrapper::seekClock(long long micros) {
   audioClockAnchorMicros.store(micros, std::memory_order_release);
   audioClockAnchorEndMicros.store(micros, std::memory_order_release);
   audioClockAnchorWallMicros.store(wallMicros, std::memory_order_release);
+}
+
+bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
+                                   std::string &errorMessage) {
+  errorMessage.clear();
+  if (rate.mode == audio::PlaybackMode::TimeStretch) {
+    errorMessage = "TimeStretch playback mode is not supported";
+    return false;
+  }
+  if (!rate.valid()) {
+    errorMessage =
+        "Playback rate must be 50%-200% in five-percent PitchShift steps";
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  if (backend == nullptr) {
+    backendState.store(audio::playback::BackendRunState::Unknown,
+                       std::memory_order_release);
+    errorMessage = "Audio backend is unavailable for playback-rate mutation";
+    return false;
+  }
+  const auto observed = backend->observeState();
+  backendState.store(observed.state, std::memory_order_release);
+  if (!audio::playback::CanMutateCallbackStateDirectly(observed.state)) {
+    errorMessage = "Audio playback must be stopped before changing playback "
+                   "rate";
+    if (!observed.diagnostic.empty()) {
+      errorMessage += ": " + observed.diagnostic;
+    }
+    return false;
+  }
+
+  playbackRatePercent.store(rate.percent, std::memory_order_release);
+  return true;
+}
+
+audio::PlaybackRate AudioWrapper::playbackRate() const {
+  return {.percent = playbackRatePercent.load(std::memory_order_acquire),
+          .mode = audio::PlaybackMode::PitchShift};
 }
 
 bool AudioWrapper::loadSound(const path_t &path,

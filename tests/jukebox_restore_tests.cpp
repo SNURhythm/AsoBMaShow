@@ -46,6 +46,8 @@ void require(bool condition, std::string_view message) {
 
 struct BackendControl {
   std::deque<bool> startResults;
+  audio::RenderCallback renderCallback = nullptr;
+  void *renderUserData = nullptr;
 };
 
 class TestStream final : public audio::IBackend {
@@ -116,8 +118,11 @@ public:
   }
 
   std::unique_ptr<audio::IBackend> open(const audio::StreamRequest &request,
-                                        audio::RenderCallback, void *,
+                                        audio::RenderCallback renderCallback,
+                                        void *renderUserData,
                                         std::string &) override {
+    control_->renderCallback = renderCallback;
+    control_->renderUserData = renderUserData;
     return std::make_unique<TestStream>(control_, request);
   }
 
@@ -152,13 +157,13 @@ public:
 
 void populateVisualChart(bms_parser::Chart &chart, bool layer,
                          const std::filesystem::path &folder,
-                         std::string resource) {
+                         std::string resource, long long timingMicros = 0) {
   chart.Meta.Folder = folder;
   chart.ReferencedBmpTable.emplace(1, std::move(resource));
 
   auto *measure = new bms_parser::Measure();
   auto *timeline = new bms_parser::TimeLine(1, false);
-  timeline->Timing = 0;
+  timeline->Timing = timingMicros;
   if (layer) {
     timeline->BgaLayer = 1;
   } else {
@@ -182,6 +187,11 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
   require(!expectVideo || jukebox.activeMaterializedVideoPaths().size() == 1,
           "production Jukebox loads the video restoration fixture");
 
+  require(jukebox.stop().success,
+          "production Jukebox drains before selecting a playback rate");
+  std::string rateError;
+  require(jukebox.setPlaybackRate({.percent = 50}, rateError),
+          "visual restore fixture selects a stopped pitch-shift rate");
   require(jukebox.play(snapshotMicros).success,
           "production Jukebox starts the visual restoration fixture");
   if (paused) {
@@ -212,6 +222,8 @@ void runManagerVisualRestoreCase(bool layer, bool paused, bool candidateStarts,
           "visual restoration preserves the snapshot clock mode");
   require(jukebox.getTimeMicros() == snapshotMicros,
           "visual restoration preserves the exact song position");
+  require(jukebox.playbackRate() == audio::PlaybackRate{.percent = 50},
+          "visual restoration preserves the playback rate");
 }
 
 void testManagerRestartAndRollbackRestoreProductionJukeboxVisuals() {
@@ -235,6 +247,54 @@ void testManagerRestartAndRollbackRestoreProductionJukeboxVisuals() {
   }
 }
 
+void testRateScaledSnapshotRestoresBgaTimeline() {
+  const std::filesystem::path imageFolder =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "SDL" / "test";
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  bms_parser::Chart chart;
+  populateVisualChart(chart, false, imageFolder, "sample.bmp", 750'000);
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  require(jukebox.stop().success,
+          "scaled BGA fixture drains before rate mutation");
+
+  std::string error;
+  require(jukebox.setPlaybackRate({.percent = 200}, error),
+          "scaled BGA fixture selects 200 percent pitch shift");
+  require(jukebox.play(0).success,
+          "scaled BGA fixture starts from chart time zero");
+  require(!jukebox.hasActiveVisuals(),
+          "the future BGA is inactive at chart time zero");
+  require(control->renderCallback != nullptr &&
+              control->renderUserData != nullptr,
+          "Jukebox backend exposes the production render callback");
+
+  std::vector<std::int16_t> output(22'050 * 2);
+  control->renderCallback(output.data(), 22'050, 2, control->renderUserData);
+  std::array<std::int16_t, 1> emptyOutput{};
+  control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
+  jukebox.pause();
+  require(jukebox.getTimeMicros() == 1'000'000,
+          "half a real second publishes one chart second at 200 percent");
+
+  const audio::PlaybackSnapshot snapshot = jukebox.suspendAndDrain();
+  require(snapshot.rate == audio::PlaybackRate{.percent = 200} &&
+              snapshot.positionMicros == 1'000'000 && snapshot.paused,
+          "snapshot retains scaled chart position, rate, and paused state");
+  jukebox.seekVisualsToSongTime(0);
+  require(!jukebox.hasActiveVisuals(),
+          "test reset clears the future BGA before restoration");
+  require(jukebox.restorePlayback(snapshot, error),
+          "scaled snapshot restores through the production Jukebox");
+  require(jukebox.hasActiveVisuals(),
+          "restoration applies the scaled chart position to the BGA timeline");
+  require(jukebox.playbackRate() == audio::PlaybackRate{.percent = 200} &&
+              jukebox.getTimeMicros() == 1'000'000 && jukebox.isPaused(),
+          "restoration retains rate, exact position, and paused state");
+}
+
 } // namespace
 
 int main() {
@@ -246,6 +306,7 @@ int main() {
 
   try {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
+    testRateScaledSnapshotRestoresBgaTimeline();
     rendering::UniformCache::getInstance().destroyAll();
     bgfx::shutdown();
     return 0;

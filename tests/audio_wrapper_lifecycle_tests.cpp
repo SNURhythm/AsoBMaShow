@@ -167,6 +167,8 @@ struct FactoryControl {
   bool rejectConcurrentStreams = false;
   int liveStreams = 0;
   std::optional<audio::playback::BackendRunState> authoritativeState;
+  audio::RenderCallback renderCallback = nullptr;
+  void *renderUserData = nullptr;
 };
 
 class FakeConfigurableStream final : public audio::IBackend {
@@ -240,9 +242,12 @@ public:
     return control_->capabilities;
   }
 
-  std::unique_ptr<audio::IBackend>
-  open(const audio::StreamRequest &request, audio::RenderCallback, void *,
-       std::string &errorMessage) override {
+  std::unique_ptr<audio::IBackend> open(const audio::StreamRequest &request,
+                                        audio::RenderCallback renderCallback,
+                                        void *renderUserData,
+                                        std::string &errorMessage) override {
+    control_->renderCallback = renderCallback;
+    control_->renderUserData = renderUserData;
     control_->opens.push_back(request);
     if (control_->rejectConcurrentStreams && control_->liveStreams != 0) {
       errorMessage = "fake factory permits only one live stream";
@@ -1278,6 +1283,54 @@ void testConfigurableWrapperRestartsAndRestoresRetainedPcm() {
           "factory receives successful and failed transaction requests in order");
 }
 
+void testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock() {
+  for (const auto [percent, expectedMicros] :
+       std::array<std::pair<int, long long>, 2>{std::pair{50, 500'000LL},
+                                                std::pair{200, 2'000'000LL}}) {
+    Stopwatch stopwatch;
+    auto control = std::make_shared<FactoryControl>();
+    AudioWrapper wrapper(&stopwatch,
+                         std::make_unique<FakeConfigurableFactory>(control));
+    std::string error;
+
+    require(!wrapper.setPlaybackRate({.percent = percent}, error) &&
+                error.find("stopped") != std::string::npos,
+            "playback-rate mutation rejects a running backend");
+    require(wrapper.stopSounds().success,
+            "clock fixture drains before selecting 48 kHz");
+    require(wrapper.restart({.sampleRate = 48000}, error),
+            "clock fixture starts a 48 kHz stream");
+    require(wrapper.stopSounds().success,
+            "clock fixture drains before rate mutation");
+    require(!wrapper.setPlaybackRate(
+                {.percent = percent, .mode = audio::PlaybackMode::TimeStretch},
+                error) &&
+                error.find("TimeStretch") != std::string::npos,
+            "time-stretch mode fails with an explicit unsupported error");
+    require(wrapper.setPlaybackRate({.percent = percent}, error) &&
+                wrapper.playbackRate() ==
+                    audio::PlaybackRate{.percent = percent},
+            "stopped pitch-shift rate mutation is retained");
+
+    require(control->renderCallback != nullptr &&
+                control->renderUserData != nullptr,
+            "configurable backend exposes the production render callback");
+    stopwatch.start();
+    std::vector<std::int16_t> output(48'000 * 2);
+    control->renderCallback(output.data(), 48'000, 2, control->renderUserData);
+    std::array<std::int16_t, 1> emptyOutput{};
+    control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
+    stopwatch.pause();
+
+    require(
+        wrapper.getTimeMicros() == expectedMicros,
+        percent == 50
+            ? "48,000 frames advance 500,000 chart microseconds at 50 percent"
+            : "48,000 frames advance 2,000,000 chart microseconds at 200 "
+              "percent");
+  }
+}
+
 void testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -1414,6 +1467,7 @@ int main() {
     testSeekTransitionSerializesConcurrentPlayAndStopEntry();
     testJukeboxProductionStateTransitionsFailClosed();
     testPlaybackSnapshotClockModesRestoreWithoutPrematureEligibility();
+    testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock();
     testConfigurableWrapperRestartsAndRestoresRetainedPcm();
     testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
     testBufferCapabilityProbePublishesOnlyVerifiedCandidates();
