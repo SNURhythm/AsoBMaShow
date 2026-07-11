@@ -50,6 +50,12 @@ struct PresetLoadResult {
   [[nodiscard]] std::optional<std::string> notice() const;
 };
 
+[[nodiscard]] bool
+installPresetLoadState(PresetLoadResult loaded, bool applyLastUsed,
+                       Configuration &configuration,
+                       std::vector<NamedPreset> &namedPresets,
+                       std::optional<std::string> &selectedPresetId);
+
 class PresetStore {
 public:
   explicit PresetStore(std::filesystem::path practiceDirectory,

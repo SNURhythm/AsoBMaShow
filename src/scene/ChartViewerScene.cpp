@@ -3397,9 +3397,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
   canvasView->setGhostReplay(replayData);
   loadedGhostReplayId = loadedReplayId;
 
-  if (statusText != nullptr) {
-    statusText->setText(successText);
-  }
+  loadPracticeConfiguration(false, successText);
   hideGhostModal();
   updatePracticeGhostReplayButton();
   updateGhostControls();
@@ -3948,43 +3946,33 @@ void ChartViewerScene::moveActivePracticeMarker(
 bool ChartViewerScene::applyPracticePresetLoad(
     practice::PresetLoadResult loaded, bool applyLastUsed) {
   const auto notice = loaded.notice();
-  if (!loaded.usable()) {
-    if (statusText != nullptr) {
-      statusText->setText("Practice presets: " +
-                          notice.value_or("Unable to load saved presets."));
-    }
-    return false;
-  }
-  if (applyLastUsed) {
-    practiceConfiguration = std::move(loaded.data.lastUsed);
-  }
-  practiceNamedPresets = std::move(loaded.data.named);
+  const bool usable = practice::installPresetLoadState(
+      std::move(loaded), applyLastUsed, practiceConfiguration,
+      practiceNamedPresets, selectedPracticePresetId);
   if (notice && statusText != nullptr) {
     statusText->setText("Practice presets: " + *notice);
   }
-  return true;
+  return usable;
 }
 
-void ChartViewerScene::loadPracticeConfiguration() {
+void ChartViewerScene::loadPracticeConfiguration(
+    bool applyPendingLaunch,
+    std::optional<std::string> chartReplacementSuccessText) {
   if (chart == nullptr) {
     return;
   }
-  practiceChartEndMicros =
+  const long long newChartEndMicros =
       chart_playback_duration::ChartTimelineEndMicros(*chart);
   practicePresetStore = std::make_unique<practice::PresetStore>(
       context.profileManager.activePaths().practiceDirectory);
   const std::string chartHash =
       chart->Meta.SHA256.empty() ? record.meta.SHA256 : chart->Meta.SHA256;
-  auto loaded = practicePresetStore->load(chartHash, practiceChartEndMicros);
-  const bool loadedConfiguration = applyPracticePresetLoad(loaded, true);
-  if (!loadedConfiguration && practiceConfiguration.chartSha256.empty()) {
-    practiceConfiguration = std::move(loaded.data.lastUsed);
-    practiceNamedPresets.clear();
-  }
-  if (loadedConfiguration) {
-    selectedPracticePresetId.reset();
-  }
-  if (loaded.status == versioned_json::LoadStatus::Missing) {
+  auto loaded = practicePresetStore->load(chartHash, newChartEndMicros);
+  const auto loadStatus = loaded.status;
+  const auto applyMissingDefaults = [this, loadStatus]() {
+    if (loadStatus != versioned_json::LoadStatus::Missing) {
+      return;
+    }
     const GaugeSelection gaugeSelection =
         gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
     practiceConfiguration.gaugeType = gaugeSelection.type;
@@ -3992,15 +3980,61 @@ void ChartViewerScene::loadPracticeConfiguration() {
     practiceConfiguration.countInBeats =
         practice::defaultCountInBeatsForChart(
             chart->Meta.GuessedBeatsPerMeasure);
+  };
+  const auto refreshInstalledState = [this, &applyMissingDefaults]() {
+    applyMissingDefaults();
+    if (canvasView != nullptr) {
+      canvasView->setPracticeRange(
+          {.startMicros = practiceConfiguration.startMicros,
+           .endMicros = practiceConfiguration.endMicros,
+           .active = practice::Marker::Start});
+    }
+    refreshPracticePanel();
+  };
+  if (chartReplacementSuccessText.has_value()) {
+    chart_viewer_practice::GhostRefreshState state{
+        .chartEndMicros = practiceChartEndMicros,
+        .configuration = std::move(practiceConfiguration),
+        .namedPresets = std::move(practiceNamedPresets),
+        .selectedPresetId = std::move(selectedPracticePresetId),
+        .pendingLaunchRequest = std::move(pendingPracticeLaunchRequest),
+        .ghostReplay = std::move(practiceGhostReplay),
+        .loadedGhostReplayId = loadedGhostReplayId,
+        .playOption = std::move(viewerPlayOption),
+        .playOptionSeed = std::move(viewerPlayOptionSeed),
+        .playOption2 = std::move(viewerPlayOption2),
+        .playOption2Seed = std::move(viewerPlayOption2Seed)};
+    (void)chart_viewer_practice::installGhostRefreshState(
+        std::move(state), newChartEndMicros, std::move(loaded),
+        *chartReplacementSuccessText,
+        [this, &refreshInstalledState](
+            chart_viewer_practice::GhostRefreshState installed) {
+          practiceChartEndMicros = installed.chartEndMicros;
+          practiceConfiguration = std::move(installed.configuration);
+          practiceNamedPresets = std::move(installed.namedPresets);
+          selectedPracticePresetId = std::move(installed.selectedPresetId);
+          pendingPracticeLaunchRequest =
+              std::move(installed.pendingLaunchRequest);
+          practiceGhostReplay = std::move(installed.ghostReplay);
+          loadedGhostReplayId = installed.loadedGhostReplayId;
+          viewerPlayOption = std::move(installed.playOption);
+          viewerPlayOptionSeed = std::move(installed.playOptionSeed);
+          viewerPlayOption2 = std::move(installed.playOption2);
+          viewerPlayOption2Seed = std::move(installed.playOption2Seed);
+          refreshInstalledState();
+          if (statusText != nullptr) {
+            statusText->setText(installed.visibleStatus);
+          }
+        });
+    return;
   }
-  if (canvasView != nullptr) {
-    canvasView->setPracticeRange(
-        {.startMicros = practiceConfiguration.startMicros,
-         .endMicros = practiceConfiguration.endMicros,
-         .active = practice::Marker::Start});
+
+  practiceChartEndMicros = newChartEndMicros;
+  (void)applyPracticePresetLoad(std::move(loaded), true);
+  refreshInstalledState();
+  if (applyPendingLaunch) {
+    applyPendingPracticeLaunchRequest();
   }
-  applyPendingPracticeLaunchRequest();
-  refreshPracticePanel();
 }
 
 void ChartViewerScene::applyPendingPracticeLaunchRequest() {

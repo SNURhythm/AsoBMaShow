@@ -357,9 +357,13 @@ bool configurationMatchesHash(const Configuration &configuration,
 
 bool loadForMutation(const std::filesystem::path &directory,
                      const std::string &hash, PresetData &data,
-                     std::string &error) {
+                     std::string &error,
+                     const Configuration *missingLastUsed = nullptr) {
   auto loaded =
-      loadData(directory, hash, std::numeric_limits<long long>::max());
+      loadData(directory, hash,
+               missingLastUsed == nullptr
+                   ? std::numeric_limits<long long>::max()
+                   : missingLastUsed->endMicros);
   if (loaded.status != versioned_json::LoadStatus::Loaded &&
       loaded.status != versioned_json::LoadStatus::Missing) {
     error = loaded.diagnostics.empty() ? "unable to load practice preset file"
@@ -367,6 +371,11 @@ bool loadForMutation(const std::filesystem::path &directory,
     return false;
   }
   data = std::move(loaded.data);
+  if (loaded.status == versioned_json::LoadStatus::Missing &&
+      missingLastUsed != nullptr) {
+    data.lastUsed = *missingLastUsed;
+    data.lastUsed.chartSha256 = hash;
+  }
   return true;
 }
 
@@ -557,6 +566,24 @@ PresetLoadResult PresetStore::load(std::string_view chartSha256,
   return loadData(practiceDirectory_, chartSha256, chartEndMicros);
 }
 
+bool installPresetLoadState(PresetLoadResult loaded, bool applyLastUsed,
+                            Configuration &configuration,
+                            std::vector<NamedPreset> &namedPresets,
+                            std::optional<std::string> &selectedPresetId) {
+  if (!loaded.usable()) {
+    configuration = std::move(loaded.data.lastUsed);
+    namedPresets.clear();
+    selectedPresetId.reset();
+    return false;
+  }
+  if (applyLastUsed) {
+    configuration = std::move(loaded.data.lastUsed);
+    selectedPresetId.reset();
+  }
+  namedPresets = std::move(loaded.data.named);
+  return true;
+}
+
 bool PresetStore::saveLastUsed(std::string_view chartSha256,
                                const Configuration &configuration,
                                std::string &error) {
@@ -593,7 +620,8 @@ PresetStore::saveNamed(std::string_view chartSha256, std::string name,
     return std::nullopt;
   }
   PresetData data;
-  if (!loadForMutation(practiceDirectory_, *hash, data, error)) {
+  if (!loadForMutation(practiceDirectory_, *hash, data, error,
+                       &configuration)) {
     return std::nullopt;
   }
   NamedPreset preset{.id = generatePresetId(data),

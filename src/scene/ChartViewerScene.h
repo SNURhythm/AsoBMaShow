@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class Button;
@@ -23,6 +24,38 @@ class PracticePanelView;
 class TextInputBox;
 class TextView;
 class View;
+
+namespace chart_viewer_practice {
+struct GhostRefreshState {
+  long long chartEndMicros = 0;
+  practice::Configuration configuration;
+  std::vector<practice::NamedPreset> namedPresets;
+  std::optional<std::string> selectedPresetId;
+  std::optional<practice::LaunchRequest> pendingLaunchRequest;
+  std::optional<ReplayData> ghostReplay;
+  int loadedGhostReplayId = -1;
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
+  std::string visibleStatus;
+};
+
+template <typename Commit>
+[[nodiscard]] bool installGhostRefreshState(
+    GhostRefreshState state, long long newChartEndMicros,
+    practice::PresetLoadResult loaded, const std::string &successText,
+    Commit &&commit) {
+  state.chartEndMicros = newChartEndMicros;
+  const auto notice = loaded.notice();
+  const bool usable = practice::installPresetLoadState(
+      std::move(loaded), true, state.configuration, state.namedPresets,
+      state.selectedPresetId);
+  state.visibleStatus = notice ? "Practice presets: " + *notice : successText;
+  std::forward<Commit>(commit)(std::move(state));
+  return usable;
+}
+} // namespace chart_viewer_practice
 
 class ChartViewerScene : public Scene {
 public:
@@ -163,7 +196,9 @@ private:
       const practice::Configuration &configuration);
   void selectActivePracticeMarker(practice::Marker marker);
   void moveActivePracticeMarker(practice::TimelineDirection direction);
-  void loadPracticeConfiguration();
+  void loadPracticeConfiguration(
+      bool applyPendingLaunch = true,
+      std::optional<std::string> chartReplacementSuccessText = std::nullopt);
   void applyPendingPracticeLaunchRequest();
   bool applyPracticePresetLoad(practice::PresetLoadResult loaded,
                                bool applyLastUsed);

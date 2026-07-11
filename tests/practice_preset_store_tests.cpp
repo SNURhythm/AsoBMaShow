@@ -1,5 +1,6 @@
 #include "AtomicFile.h"
 #include "practice/PracticePresetStore.h"
+#include "scene/ChartViewerScene.h"
 
 #include <algorithm>
 #include <atomic>
@@ -7,8 +8,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -350,6 +353,146 @@ void testMalformedFileReturnsNeutralDefaults() {
          "malformed chart data returns neutral defaults with diagnostics");
 }
 
+void testFailedLoadsReplacePriorChartStateWithNeutralCurrentChartState() {
+  for (const auto status : {versioned_json::LoadStatus::Malformed,
+                            versioned_json::LoadStatus::FutureVersion}) {
+    TempDirectory temp;
+    practice::PresetStore store(temp.path());
+    std::string error;
+    expect(store
+               .saveNamed(kHash, "Opening",
+                          configuration(1'000'000, 3'000'000), error)
+               .has_value(),
+           "failed-load fixture saves a named preset: " + error);
+
+    const auto path = temp.path() / (std::string(kNormalizedHash) + ".json");
+    if (status == versioned_json::LoadStatus::Malformed) {
+      std::ofstream output(path, std::ios::trunc);
+      output << "{not-json";
+    } else {
+      nlohmann::json document;
+      {
+        std::ifstream input(path);
+        input >> document;
+      }
+      document["schemaVersion"] = practice::kPresetSchemaVersion + 1;
+      std::ofstream output(path, std::ios::trunc);
+      output << document.dump();
+    }
+
+    std::ifstream beforeInput(path, std::ios::binary);
+    const std::string before((std::istreambuf_iterator<char>(beforeInput)),
+                             std::istreambuf_iterator<char>());
+    auto loaded = store.load(kHash, 7'000'000);
+    expect(loaded.status == status,
+           "failed-load fixture produces the intended load status");
+    const auto diagnostic = loaded.notice();
+    auto priorConfiguration = configuration(2'000'000, 6'000'000);
+    priorConfiguration.chartSha256 = std::string(kOtherHash);
+    std::vector<practice::NamedPreset> priorNamed = {
+        {.id = "12345678-1234-1234-1234-123456789abc",
+         .name = "Prior chart",
+         .configuration = priorConfiguration}};
+    std::optional<std::string> selected = priorNamed.front().id;
+
+    const bool usable = practice::installPresetLoadState(
+        std::move(loaded), false, priorConfiguration, priorNamed, selected);
+
+    expect(!usable && priorConfiguration.chartSha256 == kNormalizedHash &&
+               priorConfiguration.startMicros == 0 &&
+               priorConfiguration.endMicros == 7'000'000 &&
+               priorNamed.empty() && !selected.has_value(),
+           "failed preset loads replace prior-chart configuration, named "
+           "data, and selection with neutral current-chart state");
+    expect(diagnostic.has_value(),
+           "failed preset state replacement preserves load diagnostics");
+    std::ifstream afterInput(path, std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(afterInput)),
+                            std::istreambuf_iterator<char>());
+    expect(after == before,
+           "failed preset state replacement never rewrites malformed or "
+           "future named files");
+  }
+}
+
+void testReplacementChartReloadUsesNewEndBeforeStateIsConsumed() {
+  TempDirectory temp;
+  practice::PresetStore store(temp.path());
+  std::string error;
+  expect(store.saveLastUsed(kHash, configuration(1'000'000, 9'000'000), error),
+         "replacement-chart fixture saves last used: " + error);
+  expect(store
+             .saveNamed(kHash, "Middle",
+                        configuration(2'000'000, 8'000'000), error)
+             .has_value(),
+         "replacement-chart fixture saves a named preset: " + error);
+
+  auto loaded = store.load(kHash, 4'000'000);
+  const auto diagnostic = loaded.notice();
+  auto current = configuration(1'000'000, 9'000'000);
+  std::vector<practice::NamedPreset> named;
+  std::optional<std::string> selected = "prior-selection";
+  chart_viewer_practice::GhostRefreshState state{
+      .chartEndMicros = 9'000'000,
+      .configuration = current,
+      .namedPresets = named,
+      .selectedPresetId = selected,
+      .pendingLaunchRequest = practice::LaunchRequest{},
+      .ghostReplay = ReplayData{.provenance = ScoreProvenance{}},
+      .loadedGhostReplayId = 42,
+      .playOption = "RANDOM",
+      .playOptionSeed = 1234,
+      .playOption2 = "MIRROR",
+      .playOption2Seed = 5678};
+  std::optional<chart_viewer_practice::GhostRefreshState> committed;
+  bool panelRefreshObserved = false;
+  const bool usable = chart_viewer_practice::installGhostRefreshState(
+      std::move(state), 4'000'000, std::move(loaded), "Ghost loaded",
+      [&](chart_viewer_practice::GhostRefreshState installed) {
+        panelRefreshObserved = true;
+        expect(installed.chartEndMicros == 4'000'000 &&
+                   installed.configuration.endMicros == 4'000'000 &&
+                   installed.namedPresets.size() == 1 &&
+                   installed.namedPresets.front().configuration.endMicros ==
+                       4'000'000,
+               "replacement-chart state is installed before panel refresh");
+        committed = std::move(installed);
+      });
+
+  expect(usable && panelRefreshObserved && committed.has_value() &&
+             !committed->selectedPresetId.has_value(),
+         "replacement-chart reload installs ranges sanitized against the new "
+         "chart end before panel, save, or launch state is consumed");
+  expect(diagnostic.has_value() &&
+             committed->visibleStatus == "Practice presets: " + *diagnostic,
+         "replacement-chart sanitization diagnostic remains visible instead "
+         "of the ghost success text");
+  expect(committed->pendingLaunchRequest.has_value() &&
+             committed->ghostReplay.has_value() &&
+             committed->loadedGhostReplayId == 42 &&
+             committed->playOption == "RANDOM" &&
+             committed->playOptionSeed == 1234 &&
+             committed->playOption2 == "MIRROR" &&
+             committed->playOption2Seed == 5678,
+         "ghost refresh preserves pending launch, ghost, and play options");
+}
+
+void testFirstSaveAsSeedsLastUsedFromSuppliedConfiguration() {
+  TempDirectory temp;
+  practice::PresetStore store(temp.path());
+  const auto supplied = configuration(1'000'000, 3'000'000);
+  std::string error;
+  const auto id = store.saveNamed(kHash, "Opening", supplied, error);
+  expect(id.has_value(), "first Save As creates its named preset: " + error);
+
+  const auto loaded = store.load(kHash, 12'000'000);
+  auto expected = supplied;
+  expected.chartSha256 = std::string(kNormalizedHash);
+  expect(loaded.status == versioned_json::LoadStatus::Loaded &&
+             loaded.data.lastUsed == expected,
+         "first Save As seeds last used from the supplied configuration");
+}
+
 void testFailedAtomicReplacePreservesPreviousFile() {
   TempDirectory temp;
   practice::PresetStore store(temp.path());
@@ -417,6 +560,9 @@ int main() {
   testPortableFileValidationRejectsInvalidData();
   testPortableFileValidationRejectsUndeclaredFieldsAndInvalidIds();
   testMalformedFileReturnsNeutralDefaults();
+  testFailedLoadsReplacePriorChartStateWithNeutralCurrentChartState();
+  testReplacementChartReloadUsesNewEndBeforeStateIsConsumed();
+  testFirstSaveAsSeedsLastUsedFromSuppliedConfiguration();
   testFailedAtomicReplacePreservesPreviousFile();
   testLoadResultUsabilityAndNotices();
   if (failures == 0) {
