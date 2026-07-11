@@ -47,8 +47,8 @@ public:
     return ProfileInlineEditRequest{*action_, profileId_, draft_};
   }
 
-  void clearIfTargetUnavailable(bool targetAvailable) {
-    if (active() && !targetAvailable) {
+  void clearIfUnavailable(bool targetAvailable, bool actionsAvailable) {
+    if (active() && (!targetAvailable || !actionsAvailable)) {
       clear();
     }
   }

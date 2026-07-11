@@ -329,10 +329,20 @@ void testProfileInlineEditorStaysBoundToItsCard() {
   assert(duplicate->action ==
          settings_scene::ProfileInlineEditAction::Duplicate);
   assert(duplicate->name == "Bravo Copy");
+}
 
-  editor.clearIfTargetUnavailable(true);
-  assert(editor.activeFor("bravo"));
-  editor.clearIfTargetUnavailable(false);
+void testProfileInlineEditorClearsWhenUnavailable() {
+  settings_scene::ProfileInlineEditorState editor;
+  editor.beginRename("alpha", "Alpha");
+
+  editor.clearIfUnavailable(true, true);
+  assert(editor.activeFor("alpha"));
+
+  editor.clearIfUnavailable(true, false);
+  assert(!editor.active());
+
+  editor.beginDuplicate("bravo", "Bravo");
+  editor.clearIfUnavailable(false, true);
   assert(!editor.active());
 }
 
@@ -343,6 +353,7 @@ int main() {
   testInputSettingsLayoutPolicy();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();
+  testProfileInlineEditorClearsWhenUnavailable();
   bool deferredRan = false;
   View::deferAfterEvent([&]() { deferredRan = true; });
   assert(!deferredRan);

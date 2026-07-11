@@ -660,7 +660,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       std::ranges::any_of(profileController->profiles(), [&](const auto &item) {
         return profileInlineEditor.activeFor(item.id);
       });
-  profileInlineEditor.clearIfTargetUnavailable(editorTargetAvailable);
+  profileInlineEditor.clearIfUnavailable(editorTargetAvailable, idle);
 
   const auto &status = profileController->status();
   profileStatusText =
@@ -830,7 +830,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       editorActions->setFlexWrap(YGWrapWrap);
       editorActions->setGap(metrics.compact ? 8.0F : 10.0F);
       editorActions->addView(makeProfileActionButton(
-          metrics, "Apply", true, [this, id = profile.id]() {
+          metrics, "Apply", idle, [this, id = profile.id]() {
             const auto request = profileInlineEditor.requestFor(id);
             if (!request) {
               return;

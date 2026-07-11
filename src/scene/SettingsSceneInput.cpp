@@ -780,7 +780,10 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
       ui_theme::amber());
   replaceButton->setOnClickListener([this]() {
     inputCaptureController->confirmReplace();
-    inputCaptureAction.reset();
+    if (inputCaptureController->state() ==
+        InputCaptureController::State::Idle) {
+      inputCaptureAction.reset();
+    }
     requestInputViewRebuild();
   });
   actions->addView(replaceButton);
