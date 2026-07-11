@@ -3,6 +3,7 @@
 
 #include <SDL2/SDL_scancode.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -154,6 +155,9 @@ int main() {
     }
     require(defaults.schemaVersion == InputProfile::kSchemaVersion,
             "defaults use the current schema");
+    require(defaults.gyroscopeTurntable ==
+                input::GyroscopeTurntableConfig{},
+            "defaults use the canonical gyroscope turntable settings");
     verifyCurrentKeyboardDefaults(defaults);
 
     input::InputBinding invalid = defaults.bindings.front();
@@ -179,6 +183,17 @@ int main() {
                 invalidProfile.bindings.front().releaseThreshold == 0.10F,
             "non-finite thresholds recover to the canonical defaults");
     require(!diagnostics.empty(), "sanitization describes repairs");
+
+    InputProfile oldSchemaProfile = defaults;
+    oldSchemaProfile.schemaVersion = 1;
+    diagnostics.clear();
+    oldSchemaProfile.sanitize(diagnostics);
+    require(oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
+                std::ranges::find(
+                    diagnostics,
+                    "Reset unsupported input schema version to 2.") !=
+                    diagnostics.end(),
+            "schema repair diagnostics report the real current version");
 
     input::InputBinding invalidOrder = defaults.bindings.front();
     invalidOrder.deadZone = 0.0F;
@@ -264,6 +279,9 @@ int main() {
         fixtureResult.profile.bindings.front().activationThreshold == 0.60F &&
             fixtureResult.profile.bindings.front().releaseThreshold == 0.40F,
         "valid explicit thresholds remain unchanged");
+    require(fixtureResult.profile.gyroscopeTurntable ==
+                input::GyroscopeTurntableConfig{},
+            "version-one profiles migrate with default gyroscope settings");
 
     const auto testRoot = std::filesystem::temp_directory_path() /
                           "asobmashow_input_profile_tests";
@@ -318,6 +336,147 @@ int main() {
     require(!std::filesystem::exists(missingPath),
             "loading a missing file does not create it");
 
+    const auto gyroscopeV2Path = testRoot / "gyroscope-v2.json";
+    writeFile(gyroscopeV2Path, R"json({
+  "schemaVersion": 2,
+  "gyroscopeTurntable": {
+    "stepAngleDegrees": 7,
+    "releaseDelayMs": 350
+  },
+  "bindings": [
+    {
+      "id": "gyro-clockwise",
+      "scope": {"player": 1, "keyMode": 7},
+      "action": {"kind": "scratchClockwise", "lane": 0},
+      "control": {
+        "deviceId": "builtin:gyroscope-turntable",
+        "deviceClass": "gyroscope",
+        "kind": "axis",
+        "index": 0,
+        "direction": "positive"
+      }
+    }
+  ]
+})json");
+    const auto gyroscopeV2Result = InputProfileStore::load(gyroscopeV2Path);
+    require(gyroscopeV2Result.status == InputProfileLoadStatus::Loaded,
+            "version-two gyroscope profile loads");
+    require(gyroscopeV2Result.profile.schemaVersion == 2 &&
+                gyroscopeV2Result.profile.gyroscopeTurntable.stepAngleDegrees ==
+                    7 &&
+                gyroscopeV2Result.profile.gyroscopeTurntable.releaseDelayMs ==
+                    350,
+            "version-two gyroscope settings persist");
+    require(gyroscopeV2Result.profile.bindings.size() == 1 &&
+                gyroscopeV2Result.profile.bindings.front()
+                        .control.deviceClass == input::DeviceClass::Gyroscope,
+            "gyroscope device class persists on an axis binding");
+
+    const auto missingConfigFieldPath = testRoot / "missing-config-field.json";
+    writeFile(missingConfigFieldPath, R"json({
+  "schemaVersion": 2,
+  "gyroscopeTurntable": {"stepAngleDegrees": 9},
+  "bindings": []
+})json");
+    const auto missingConfigFieldResult =
+        InputProfileStore::load(missingConfigFieldPath);
+    require(missingConfigFieldResult.status == InputProfileLoadStatus::Loaded &&
+                missingConfigFieldResult.profile.gyroscopeTurntable
+                        .stepAngleDegrees == 9 &&
+                missingConfigFieldResult.profile.gyroscopeTurntable
+                        .releaseDelayMs ==
+                    input::GyroscopeTurntableConfig::kDefaultReleaseDelayMs,
+            "a missing config member resets only that member");
+    require(!missingConfigFieldResult.diagnostics.empty(),
+            "a missing config member produces a diagnostic");
+
+    const auto wrongConfigTypePath = testRoot / "wrong-config-type.json";
+    writeFile(wrongConfigTypePath, R"json({
+  "schemaVersion": 2,
+  "gyroscopeTurntable": {
+    "stepAngleDegrees": "three",
+    "releaseDelayMs": 425
+  },
+  "bindings": []
+})json");
+    const auto wrongConfigTypeResult =
+        InputProfileStore::load(wrongConfigTypePath);
+    require(wrongConfigTypeResult.status == InputProfileLoadStatus::Loaded &&
+                wrongConfigTypeResult.profile.gyroscopeTurntable
+                        .stepAngleDegrees ==
+                    input::GyroscopeTurntableConfig::kDefaultStepAngleDegrees &&
+                wrongConfigTypeResult.profile.gyroscopeTurntable
+                        .releaseDelayMs == 425,
+            "a wrong-type config member resets without discarding its sibling");
+    require(!wrongConfigTypeResult.diagnostics.empty(),
+            "a wrong-type config member produces a diagnostic");
+
+    const auto missingConfigObjectPath = testRoot / "missing-config-object.json";
+    writeFile(missingConfigObjectPath, R"json({
+  "schemaVersion": 2,
+  "bindings": [
+    {
+      "id": "surviving-binding",
+      "scope": {"player": 1, "keyMode": 7},
+      "action": {"kind": "lane", "lane": 1},
+      "control": {
+        "deviceId": "keyboard",
+        "deviceClass": "keyboard",
+        "kind": "key",
+        "index": 7,
+        "direction": "any"
+      }
+    }
+  ]
+})json");
+    const auto missingConfigObjectResult =
+        InputProfileStore::load(missingConfigObjectPath);
+    require(missingConfigObjectResult.status == InputProfileLoadStatus::Loaded &&
+                missingConfigObjectResult.profile.gyroscopeTurntable ==
+                    input::GyroscopeTurntableConfig{} &&
+                missingConfigObjectResult.profile.bindings.size() == 1 &&
+                missingConfigObjectResult.profile.bindings.front().id ==
+                    "surviving-binding",
+            "a missing config object recovers defaults without losing bindings");
+    require(!missingConfigObjectResult.diagnostics.empty(),
+            "a missing config object produces a diagnostic");
+
+    const auto invalidConfigObjectPath = testRoot / "invalid-config-object.json";
+    writeFile(invalidConfigObjectPath, R"json({
+  "schemaVersion": 2,
+  "gyroscopeTurntable": [3, 200],
+  "bindings": []
+})json");
+    const auto invalidConfigObjectResult =
+        InputProfileStore::load(invalidConfigObjectPath);
+    require(invalidConfigObjectResult.status == InputProfileLoadStatus::Loaded &&
+                invalidConfigObjectResult.profile.gyroscopeTurntable ==
+                    input::GyroscopeTurntableConfig{},
+            "a non-object config recovers both default settings");
+    require(!invalidConfigObjectResult.diagnostics.empty(),
+            "a non-object config produces a diagnostic");
+
+    const auto clampedConfigPath = testRoot / "clamped-config.json";
+    writeFile(clampedConfigPath, R"json({
+  "schemaVersion": 2,
+  "gyroscopeTurntable": {
+    "stepAngleDegrees": 0,
+    "releaseDelayMs": 5000
+  },
+  "bindings": []
+})json");
+    const auto clampedConfigResult = InputProfileStore::load(clampedConfigPath);
+    require(clampedConfigResult.status == InputProfileLoadStatus::Loaded &&
+                clampedConfigResult.profile.gyroscopeTurntable
+                        .stepAngleDegrees ==
+                    input::GyroscopeTurntableConfig::kMinStepAngleDegrees &&
+                clampedConfigResult.profile.gyroscopeTurntable
+                        .releaseDelayMs ==
+                    input::GyroscopeTurntableConfig::kMaxReleaseDelayMs,
+            "typed gyroscope settings clamp independently to their ranges");
+    require(clampedConfigResult.diagnostics.size() >= 2,
+            "each clamped config member produces a diagnostic");
+
     const auto versionZeroPath = testRoot / "input-v0.json";
     std::string versionZero = readFile(fixturePath("input-v1.json"));
     const std::string currentVersion = "\"schemaVersion\": 1";
@@ -342,7 +501,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 1") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 2") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -364,6 +523,34 @@ int main() {
                 sameBinding(roundTripResult.profile.bindings.front(),
                             fixtureResult.profile.bindings.front()),
             "JSON round trip preserves a missing device ID and binding fields");
+
+    const auto gyroscopeRoundTripPath = testRoot / "gyroscope-round-trip.json";
+    errorMessage.clear();
+    require(InputProfileStore::saveAtomic(
+                gyroscopeRoundTripPath, gyroscopeV2Result.profile,
+                errorMessage),
+            "gyroscope profile saves atomically");
+    const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
+    require(gyroscopeRoundTripJson.find("\"schemaVersion\": 2") !=
+                    std::string::npos &&
+                gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
+                    std::string::npos &&
+                gyroscopeRoundTripJson.find("\"stepAngleDegrees\": 7") !=
+                    std::string::npos &&
+                gyroscopeRoundTripJson.find("\"releaseDelayMs\": 350") !=
+                    std::string::npos &&
+                gyroscopeRoundTripJson.find("\"deviceClass\": \"gyroscope\"") !=
+                    std::string::npos,
+            "current schema serialization includes config and device vocabulary");
+    const auto gyroscopeRoundTripResult =
+        InputProfileStore::load(gyroscopeRoundTripPath);
+    require(gyroscopeRoundTripResult.status == InputProfileLoadStatus::Loaded &&
+                gyroscopeRoundTripResult.profile.gyroscopeTurntable ==
+                    gyroscopeV2Result.profile.gyroscopeTurntable &&
+                gyroscopeRoundTripResult.profile.bindings.size() == 1 &&
+                sameBinding(gyroscopeRoundTripResult.profile.bindings.front(),
+                            gyroscopeV2Result.profile.bindings.front()),
+            "version-two gyroscope profile round trips without loss");
 
     const auto malformedPath = testRoot / "malformed.json";
     writeFile(malformedPath, "{ not valid json");

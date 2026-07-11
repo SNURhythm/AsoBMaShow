@@ -63,6 +63,40 @@ void testRulesetContract() {
   assert(legacy.version == 0);
 }
 
+void testSchemaAndInputDeviceVocabularyContract() {
+  assert(ScoreProvenance::kSchemaVersion == 2);
+  assert(static_cast<int>(InputDeviceCategory::Keyboard) == 0);
+  assert(static_cast<int>(InputDeviceCategory::GameController) == 1);
+  assert(static_cast<int>(InputDeviceCategory::Joystick) == 2);
+  assert(static_cast<int>(InputDeviceCategory::Touch) == 3);
+  assert(static_cast<int>(InputDeviceCategory::Midi) == 4);
+  assert(static_cast<int>(InputDeviceCategory::Unknown) == 5);
+  assert(static_cast<int>(InputDeviceCategory::Gyroscope) == 6);
+
+  auto input = sampleInput();
+  input.inputDevices = {InputDeviceCategory::Gyroscope,
+                        InputDeviceCategory::Keyboard,
+                        InputDeviceCategory::Gyroscope};
+  const ScoreProvenance value = makeScoreProvenance(input);
+  assert((value.inputDevices == std::vector{InputDeviceCategory::Keyboard,
+                                            InputDeviceCategory::Gyroscope}));
+  const std::string json = serializeScoreProvenance(value);
+  assert(json.find("\"inputDevices\":[\"keyboard\",\"gyroscope\"]") !=
+         std::string::npos);
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(json, error);
+  assert(error.empty());
+  assert(decoded == value);
+
+  assert(playStartInputDeviceCategory(input::DeviceClass::Gyroscope) ==
+         InputDeviceCategory::Gyroscope);
+  const std::vector resolverClasses = {input::DeviceClass::Gyroscope};
+  assert(collectPlayStartInputDeviceCategories(
+             resolverClasses, PlayStartInputPlatform::Mobile) ==
+         std::vector({InputDeviceCategory::Touch,
+                      InputDeviceCategory::Gyroscope}));
+}
+
 void testDeterministicRoundTrip() {
   const ScoreProvenance value = sampleVerifiedProvenance();
   const std::string first = serializeScoreProvenance(value);
@@ -131,14 +165,39 @@ void testSignedWindowsAndCanonicalDevices() {
 
 void testFutureSchemaIsRejected() {
   std::string json = serializeScoreProvenance(sampleVerifiedProvenance());
-  const std::string current = "\"schemaVersion\":1";
+  const std::string current =
+      "\"schemaVersion\":" +
+      std::to_string(ScoreProvenance::kSchemaVersion);
   const auto position = json.find(current);
   assert(position != std::string::npos);
-  json.replace(position, current.size(), "\"schemaVersion\":2");
+  json.replace(position, current.size(), "\"schemaVersion\":3");
 
   std::string error;
   assert(!deserializeScoreProvenance(json, error).has_value());
   assert(error.find("future") != std::string::npos);
+}
+
+void testVersionOneMigratesToCurrentSchema() {
+  const ScoreProvenance currentValue = sampleVerifiedProvenance();
+  std::string json = serializeScoreProvenance(currentValue);
+  const std::string current = "\"schemaVersion\":2";
+  const auto position = json.find(current);
+  assert(position != std::string::npos);
+  json.replace(position, current.size(), "\"schemaVersion\":1");
+
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(json, error);
+  assert(error.empty());
+  assert(decoded.has_value());
+  assert(decoded->schemaVersion == ScoreProvenance::kSchemaVersion);
+  assert(decoded == currentValue);
+
+  json.replace(json.find("\"schemaVersion\":1"),
+               std::string("\"schemaVersion\":1").size(),
+               "\"schemaVersion\":0");
+  assert(!deserializeScoreProvenance(json, error).has_value());
+  assert(error.find("unsupported") != std::string::npos ||
+         error.find("Unsupported") != std::string::npos);
 }
 
 void testCourseMergePreservesStagesAndWorstEligibility() {
@@ -329,10 +388,12 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
 
 int main() {
   testRulesetContract();
+  testSchemaAndInputDeviceVocabularyContract();
   testDeterministicRoundTrip();
   testEligibilityClassification();
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
+  testVersionOneMigratesToCurrentSchema();
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
   testMobilePlayStartInputCategoriesPreserveResolverClasses();

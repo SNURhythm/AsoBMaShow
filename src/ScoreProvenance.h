@@ -34,6 +34,7 @@ enum class InputDeviceCategory : int {
   Touch = 3,
   Midi = 4,
   Unknown = 5,
+  Gyroscope = 6,
 };
 
 struct RulesetDescriptor {
@@ -80,7 +81,7 @@ struct ScoreStageProvenance {
 };
 
 struct ScoreProvenance {
-  static constexpr int kSchemaVersion = 1;
+  static constexpr int kSchemaVersion = 2;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;

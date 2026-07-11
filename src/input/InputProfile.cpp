@@ -40,8 +40,11 @@ bool hasValidThresholdOrder(const input::InputBinding &binding) {
 void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
   if (schemaVersion != kSchemaVersion) {
     schemaVersion = kSchemaVersion;
-    diagnostics.emplace_back("Reset unsupported input schema version to 1.");
+    diagnostics.emplace_back("Reset unsupported input schema version to " +
+                             std::to_string(kSchemaVersion) + ".");
   }
+
+  gyroscopeTurntable.sanitize(diagnostics);
 
   for (auto &binding : bindings) {
     if (binding.scope.player != 1 && binding.scope.player != 2) {

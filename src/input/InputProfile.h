@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GyroscopeTurntable.h"
 #include "InputTypes.h"
 
 #include <functional>
@@ -8,9 +9,10 @@
 #include <vector>
 
 struct InputProfile {
-  static constexpr int kSchemaVersion = 1;
+  static constexpr int kSchemaVersion = 2;
 
   int schemaVersion = kSchemaVersion;
+  input::GyroscopeTurntableConfig gyroscopeTurntable;
   std::vector<input::InputBinding> bindings;
 
   void sanitize(std::vector<std::string> &diagnostics);

@@ -28,6 +28,8 @@ std::string_view toString(input::DeviceClass value) {
     return "touch";
   case input::DeviceClass::Midi:
     return "midi";
+  case input::DeviceClass::Gyroscope:
+    return "gyroscope";
   }
   throw std::invalid_argument("Unknown input device class.");
 }
@@ -107,8 +109,50 @@ input::DeviceClass parseDeviceClass(std::string_view value) {
     return input::DeviceClass::Touch;
   if (value == "midi")
     return input::DeviceClass::Midi;
+  if (value == "gyroscope")
+    return input::DeviceClass::Gyroscope;
   throw std::invalid_argument("Unknown input device class: " +
                               std::string(value));
+}
+
+void parseGyroscopeConfigMember(const Json &config, const char *name,
+                                int defaultValue, int &destination,
+                                std::vector<std::string> &diagnostics) {
+  const auto member = config.find(name);
+  if (member == config.end() || !member->is_number_integer()) {
+    destination = defaultValue;
+    diagnostics.emplace_back("Reset missing or invalid gyroscope turntable " +
+                             std::string(name) + ".");
+    return;
+  }
+
+  try {
+    destination = member->get<int>();
+  } catch (const std::exception &) {
+    destination = defaultValue;
+    diagnostics.emplace_back("Reset invalid gyroscope turntable " +
+                             std::string(name) + ".");
+  }
+}
+
+void parseGyroscopeConfig(const Json &document, InputProfile &profile,
+                          std::vector<std::string> &diagnostics) {
+  const auto config = document.find("gyroscopeTurntable");
+  if (config == document.end() || !config->is_object()) {
+    profile.gyroscopeTurntable = {};
+    diagnostics.emplace_back(
+        "Reset missing or invalid gyroscope turntable settings.");
+    return;
+  }
+
+  parseGyroscopeConfigMember(
+      *config, "stepAngleDegrees",
+      input::GyroscopeTurntableConfig::kDefaultStepAngleDegrees,
+      profile.gyroscopeTurntable.stepAngleDegrees, diagnostics);
+  parseGyroscopeConfigMember(
+      *config, "releaseDelayMs",
+      input::GyroscopeTurntableConfig::kDefaultReleaseDelayMs,
+      profile.gyroscopeTurntable.releaseDelayMs, diagnostics);
 }
 
 input::ControlKind parseControlKind(std::string_view value) {
@@ -298,6 +342,9 @@ InputProfileStore::load(const std::filesystem::path &path) {
     InputProfileLoadResult result;
     result.status = InputProfileLoadStatus::Loaded;
     result.profile.schemaVersion = InputProfile::kSchemaVersion;
+    if (schemaVersion == InputProfile::kSchemaVersion) {
+      parseGyroscopeConfig(document, result.profile, result.diagnostics);
+    }
     result.profile.bindings.reserve(bindings.size());
     for (const auto &binding : bindings) {
       result.profile.bindings.push_back(parseBinding(binding));
@@ -352,8 +399,13 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
     std::vector<std::string> ignoredDiagnostics;
     sanitized.sanitize(ignoredDiagnostics);
 
-    Json document = {{"schemaVersion", InputProfile::kSchemaVersion},
-                     {"bindings", Json::array()}};
+    Json document = {
+        {"schemaVersion", InputProfile::kSchemaVersion},
+        {"gyroscopeTurntable",
+         {{"stepAngleDegrees",
+           sanitized.gyroscopeTurntable.stepAngleDegrees},
+          {"releaseDelayMs", sanitized.gyroscopeTurntable.releaseDelayMs}}},
+        {"bindings", Json::array()}};
     for (const auto &binding : sanitized.bindings) {
       document["bindings"].push_back(serializeBinding(binding));
     }

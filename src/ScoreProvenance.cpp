@@ -100,6 +100,8 @@ const char *inputDeviceName(InputDeviceCategory value) {
     return "midi";
   case InputDeviceCategory::Unknown:
     return "unknown";
+  case InputDeviceCategory::Gyroscope:
+    return "gyroscope";
   }
   throw std::invalid_argument("Unknown input-device category value.");
 }
@@ -122,6 +124,9 @@ std::optional<InputDeviceCategory> inputDeviceFromName(std::string_view value) {
   }
   if (value == "unknown") {
     return InputDeviceCategory::Unknown;
+  }
+  if (value == "gyroscope") {
+    return InputDeviceCategory::Gyroscope;
   }
   return std::nullopt;
 }
@@ -469,12 +474,12 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
       throw std::runtime_error("Cannot read future score provenance schema " +
                                std::to_string(schemaVersion) + ".");
     }
-    if (schemaVersion != ScoreProvenance::kSchemaVersion) {
+    if (schemaVersion < 1) {
       throw std::runtime_error("Unsupported score provenance schema version.");
     }
 
     ScoreProvenance result = ScoreProvenance::Legacy();
-    result.schemaVersion = schemaVersion;
+    result.schemaVersion = ScoreProvenance::kSchemaVersion;
     if (const auto ruleset = root.find("ruleset"); ruleset != root.end()) {
       result.ruleset = rulesetFromJson(*ruleset);
     }

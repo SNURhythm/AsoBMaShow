@@ -747,6 +747,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(input_profile_tests
         tests/input_profile_tests.cpp
+        src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp

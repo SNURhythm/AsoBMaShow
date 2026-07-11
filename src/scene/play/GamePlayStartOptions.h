@@ -32,6 +32,8 @@ playStartInputDeviceCategory(input::DeviceClass deviceClass) {
     return InputDeviceCategory::Touch;
   case input::DeviceClass::Midi:
     return InputDeviceCategory::Midi;
+  case input::DeviceClass::Gyroscope:
+    return InputDeviceCategory::Gyroscope;
   }
   return InputDeviceCategory::Unknown;
 }
