@@ -21,6 +21,9 @@
 
 namespace {
 
+constexpr std::uint64_t kNativeRetryDelayMicros = 500000;
+constexpr std::uint64_t kFirstSampleTimeoutMicros = 2000000;
+
 mach_timebase_info_data_t machTimebase() {
   mach_timebase_info_data_t value{};
   if (mach_timebase_info(&value) != KERN_SUCCESS || value.denom == 0) {
@@ -201,6 +204,10 @@ public:
     }
     const std::uint64_t now = nowMicros();
     pollLatestMotion(now);
+    if (nativeRetryAtMicros_.has_value() &&
+        now >= *nativeRetryAtMicros_) {
+      startNativeSensor(now);
+    }
     core_.pump(now);
     drainCommands(now);
   }
@@ -254,7 +261,7 @@ private:
     if (motionManager_ == nil ||
         referenceFrameChoice_ ==
             input::ios_gyroscope::ReferenceFrameChoice::Unsupported) {
-      core_.sensorStartFailed(now);
+      nativeRetryAtMicros_ = now + kNativeRetryDelayMicros;
       return;
     }
 
@@ -267,7 +274,7 @@ private:
                     "active after start.");
         loggedInactiveStart_ = true;
       }
-      core_.sensorStartFailed(now);
+      nativeRetryAtMicros_ = now + kNativeRetryDelayMicros;
       return;
     }
     loggedInactiveStart_ = false;
@@ -281,13 +288,16 @@ private:
                   "(referenceFrame=0x%lx).",
                   activeReferenceFrame);
     }
-    core_.sensorStartSucceeded(now);
+    awaitingFirstSample_ = true;
+    nativeRetryAtMicros_ = now + kFirstSampleTimeoutMicros;
   }
 
   void stopNativeSensor() {
     if (motionManager_ != nil && motionManager_.deviceMotionActive) {
       [motionManager_ stopDeviceMotionUpdates];
     }
+    nativeRetryAtMicros_.reset();
+    awaitingFirstSample_ = false;
     lastPolledTimestampSeconds_.reset();
     accuracyTracker_.reset();
   }
@@ -303,6 +313,13 @@ private:
       return;
     }
     lastPolledTimestampSeconds_ = motion.timestamp;
+    if (awaitingFirstSample_) {
+      awaitingFirstSample_ = false;
+      nativeRetryAtMicros_.reset();
+      core_.sensorStartSucceeded(now);
+      SDL_LogInfo(SDL_LOG_CATEGORY_INPUT,
+                  "iOS gyroscope received its first device-motion sample.");
+    }
 
     const auto accuracy = accuracyTracker_.observe(
         nativeAccuracy(motion.magneticField.accuracy));
@@ -330,11 +347,13 @@ private:
   CMMotionManager *__strong motionManager_ = nil;
   input::ios_gyroscope::AccuracyGenerationTracker accuracyTracker_;
   std::optional<double> lastPolledTimestampSeconds_;
+  std::optional<std::uint64_t> nativeRetryAtMicros_;
   std::optional<unsigned long> lastLoggedReferenceFrameMask_;
   std::optional<unsigned long> lastLoggedActiveReferenceFrame_;
   input::ios_gyroscope::ReferenceFrameChoice referenceFrameChoice_ =
       input::ios_gyroscope::ReferenceFrameChoice::Unsupported;
   bool loggedInactiveStart_ = false;
+  bool awaitingFirstSample_ = false;
   bool started_ = false;
 };
 
