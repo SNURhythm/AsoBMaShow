@@ -80,22 +80,6 @@ std::vector<ActionDefinition> actionsForScope(input::InputScope scope) {
   return result;
 }
 
-std::string deviceClassLabel(input::DeviceClass deviceClass) {
-  switch (deviceClass) {
-  case input::DeviceClass::Keyboard:
-    return "Keyboard";
-  case input::DeviceClass::GameController:
-    return "Controller";
-  case input::DeviceClass::Joystick:
-    return "Joystick";
-  case input::DeviceClass::Touch:
-    return "Touch";
-  case input::DeviceClass::Midi:
-    return "MIDI";
-  }
-  return "Input";
-}
-
 std::string directionLabel(input::ControlDirection direction) {
   switch (direction) {
   case input::ControlDirection::Any:
@@ -131,8 +115,8 @@ std::string controlLabel(const input::PhysicalControl &control) {
     controlName = "Button " + std::to_string(control.index);
     break;
   case input::ControlKind::Axis:
-    controlName = "Axis " + std::to_string(control.index);
-    break;
+    return axisControlLabel(control.deviceClass, control.index,
+                            control.direction);
   case input::ControlKind::Hat:
     controlName = "Hat " + std::to_string(control.index);
     break;
@@ -246,6 +230,35 @@ void SettingsScene::requestInputViewRebuild() {
   View::deferAfterEvent([this]() { inputViewRebuildGate.markEventComplete(); });
 }
 
+void SettingsScene::commitGyroscopeTurntableSetting(bool stepAngle,
+                                                    std::string_view text) {
+  const auto value = parseGyroscopeSettingInteger(text);
+  if (!value.has_value()) {
+    inputGyroscopeSettingsError = stepAngle
+                                      ? "Step angle must be a whole number."
+                                      : "Release delay must be a whole number.";
+    requestInputViewRebuild();
+    return;
+  }
+
+  input::GyroscopeTurntableConfig config =
+      context.inputProfile.gyroscopeTurntable;
+  if (stepAngle) {
+    config.stepAngleDegrees = *value;
+  } else {
+    config.releaseDelayMs = *value;
+  }
+  if (inputCaptureController->updateGyroscopeTurntableConfig(config)) {
+    inputGyroscopeSettingsError.clear();
+  } else {
+    inputGyroscopeSettingsError =
+        inputCaptureController->lastError().empty()
+            ? "Failed to save input profile."
+            : std::string(inputCaptureController->lastError());
+  }
+  requestInputViewRebuild();
+}
+
 std::string SettingsScene::inputViewSignature() const {
   if (inputCaptureController == nullptr) {
     return {};
@@ -254,7 +267,10 @@ std::string SettingsScene::inputViewSignature() const {
   output << inputSelectedPlayer << ':' << inputSelectedKeyMode << ':'
          << inputSelectedDeviceId << ':'
          << static_cast<int>(inputCaptureController->state()) << ':'
-         << inputCaptureController->lastError() << ':';
+         << inputCaptureController->lastError() << ':'
+         << inputGyroscopeSettingsError << ':'
+         << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
+         << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':';
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
            << inputCaptureAction->lane;
@@ -277,7 +293,7 @@ std::string SettingsScene::inputViewSignature() const {
   }
   for (const auto &device : context.inputDeviceRegistry.snapshot()) {
     output << "|device:" << device.stableId << ':' << device.displayName << ':'
-           << device.connected;
+           << device.connected << ':' << static_cast<int>(device.status);
   }
   return output.str();
 }
@@ -305,9 +321,30 @@ void SettingsScene::refreshInputMonitorText() {
   if (inputCaptureController == nullptr) {
     return;
   }
+  const auto sample = inputCaptureController->monitorSample();
+  if (sample.has_value() &&
+      sample->control.deviceId == input::kGyroscopeTurntableStableId &&
+      sample->control.deviceClass == input::DeviceClass::Gyroscope &&
+      sample->control.kind == input::ControlKind::Axis &&
+      sample->control.index == input::kGyroscopeTurntableAxis &&
+      std::isfinite(sample->normalizedValue)) {
+    inputGyroscopeAxisValue = sample->normalizedValue;
+  }
+  for (const auto &device : context.inputDeviceRegistry.snapshot()) {
+    if (device.stableId == input::kGyroscopeTurntableStableId &&
+        (!device.connected ||
+         device.status != input::InputDeviceStatus::Ready)) {
+      inputGyroscopeAxisValue = 0.0F;
+      break;
+    }
+  }
   if (inputMonitorText != nullptr) {
-    const auto sample = inputCaptureController->monitorSample();
-    if (!sample.has_value()) {
+    if (shouldShowGyroscopeSettingsCard(inputSelectedDeviceId)) {
+      std::ostringstream text;
+      text << "Turntable · " << std::fixed << std::setprecision(3)
+           << inputGyroscopeAxisValue;
+      inputMonitorText->setText(text.str());
+    } else if (!sample.has_value()) {
       inputMonitorText->setText("Move or press an input to monitor it.");
     } else {
       std::ostringstream text;
@@ -337,8 +374,12 @@ void SettingsScene::refreshInputMonitorText() {
   }
   if (inputErrorText != nullptr) {
     const std::string_view error = inputCaptureController->lastError();
-    inputErrorText->setText(error.empty() ? std::string()
-                                          : "Not saved: " + std::string(error));
+    inputErrorText->setText(
+        error.empty() ||
+                (shouldShowGyroscopeSettingsCard(inputSelectedDeviceId) &&
+                 !inputGyroscopeSettingsError.empty())
+            ? std::string()
+            : "Not saved: " + std::string(error));
   }
 }
 
@@ -477,6 +518,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           [this](const std::string &id) {
             inputCaptureController->cancel();
             inputCaptureAction.reset();
+            inputGyroscopeSettingsError.clear();
             inputSelectedDeviceId = id;
             inputDeviceDropdownOpen = false;
             requestInputViewRebuild();
@@ -515,18 +557,102 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       "filters this editor without deleting hidden bindings.",
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
 
+  const bool showGyroscopeSettings =
+      shouldShowGyroscopeSettingsCard(inputSelectedDeviceId);
+  if (showGyroscopeSettings) {
+    input::InputDeviceStatus status = input::InputDeviceStatus::Disconnected;
+    for (const auto &device : context.inputDeviceRegistry.snapshot()) {
+      if (device.stableId != input::kGyroscopeTurntableStableId) {
+        continue;
+      }
+      status =
+          !device.connected && device.status == input::InputDeviceStatus::Ready
+              ? input::InputDeviceStatus::Disconnected
+              : device.status;
+      break;
+    }
+
+    auto *gyroscopeBody = new View();
+    gyroscopeBody->setFlexDirection(FlexDirection::Column);
+    gyroscopeBody->setGap(metrics.compact ? 10.0F : 12.0F);
+    gyroscopeBody->addView(makeWrappedText(
+        "Status · " + std::string(inputDeviceStatusLabel(status)),
+        metrics.bodyTextSize, ui_theme::textPrimary()));
+    inputMonitorText = makeWrappedText(
+        "Turntable · 0.000", metrics.bodyTextSize, ui_theme::textSecondary());
+    gyroscopeBody->addView(inputMonitorText);
+
+    const GyroscopeSettingsLayout gyroscopeLayout =
+        resolveGyroscopeSettingsLayout(bodyWidth, metrics.compact);
+    auto *editors = new View();
+    editors->setFlexDirection(gyroscopeLayout.stackEditors
+                                  ? FlexDirection::Column
+                                  : FlexDirection::Row);
+    editors->setGap(static_cast<float>(layout.selectorGap));
+    editors->setAlignItems(YGAlignStretch);
+
+    auto makeIntegerEditor = [&](std::string_view label, int value,
+                                 bool stepAngle) {
+      auto *field = new View();
+      field->setFlexDirection(FlexDirection::Column);
+      field->setGap(4.0F);
+      field->setWidth(static_cast<float>(gyroscopeLayout.editorWidth));
+      field->setFlexGrow(gyroscopeLayout.stackEditors ? 0.0F : 1.0F);
+      field->addView(makeText(std::string(label), metrics.smallTextSize,
+                              ui_theme::textMuted()));
+      auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
+      input->setEditingText(std::to_string(value));
+      input->setSize(gyroscopeLayout.editorWidth, metrics.actionButtonHeight);
+      input->setThemedBackgroundColor(ui_theme::control);
+      input->setThemedBorderColor(ui_theme::hairline);
+      input->setBorderWidth(1);
+      input->setCornerRadius(ui_theme::controlRadius());
+      input->setAlign(TextView::CENTER);
+      input->setVAlign(TextView::MIDDLE);
+      input->setThemedColor(ui_theme::textPrimary);
+      input->onEditingFinished([this, stepAngle](const std::string &text) {
+        commitGyroscopeTurntableSetting(stepAngle, text);
+      });
+      field->addView(input);
+      return field;
+    };
+
+    const auto &config = context.inputProfile.gyroscopeTurntable;
+    editors->addView(makeIntegerEditor(kGyroscopeStepAngleLabel,
+                                       config.stepAngleDegrees, true));
+    editors->addView(makeIntegerEditor(kGyroscopeReleaseDelayLabel,
+                                       config.releaseDelayMs, false));
+    gyroscopeBody->addView(editors);
+    gyroscopeBody->addView(makeWrappedText(
+        gyroscopeSettingsErrorLabel(inputGyroscopeSettingsError),
+        metrics.smallTextSize, ui_theme::coral()));
+    cards->addView(makeCard(
+        metrics, "Gyroscope Turntable",
+        "Rotate this phone or tablet as a turntable. Changes save with the "
+        "active player's input profile.",
+        gyroscopeBody, metrics.compact ? 300 : 240, metrics.cardsWidth));
+  }
+
   auto *monitorBody = new View();
   monitorBody->setFlexDirection(FlexDirection::Column);
   monitorBody->setGap(metrics.compact ? 8.0F : 12.0F);
   inputCaptureStateText = makeWrappedText("Capture idle", metrics.bodyTextSize,
                                           ui_theme::textPrimary());
-  inputMonitorText =
-      makeWrappedText("Move or press an input to monitor it.",
-                      metrics.smallTextSize, ui_theme::textSecondary());
+  if (!showGyroscopeSettings) {
+    inputMonitorText =
+        makeWrappedText("Move or press an input to monitor it.",
+                        metrics.smallTextSize, ui_theme::textSecondary());
+  }
   inputErrorText =
       makeWrappedText("", metrics.smallTextSize, ui_theme::coral());
   monitorBody->addView(inputCaptureStateText);
-  monitorBody->addView(inputMonitorText);
+  if (!showGyroscopeSettings) {
+    monitorBody->addView(inputMonitorText);
+  } else {
+    monitorBody->addView(
+        makeWrappedText("The gyroscope's live Turntable axis is shown above.",
+                        metrics.smallTextSize, ui_theme::textSecondary()));
+  }
   monitorBody->addView(inputErrorText);
   if (inputCaptureController->state() != InputCaptureController::State::Idle) {
     auto *cancelButton = makeControlButton(
@@ -636,7 +762,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         deviceLabel = "Missing: " + deviceLabel;
       }
       bindingRow->addView(makeWrappedText(
-          deviceClassLabel(binding.control.deviceClass) + " · " +
+          std::string(deviceClassLabel(binding.control.deviceClass)) + " · " +
               controlLabel(binding.control) + " · " + deviceLabel,
           metrics.smallTextSize,
           missing ? ui_theme::amber() : ui_theme::textSecondary()));

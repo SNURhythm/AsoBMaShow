@@ -234,6 +234,8 @@ void SettingsScene::init() {
           inputCaptureController->cancel();
         }
         inputCaptureAction.reset();
+        inputGyroscopeAxisValue = 0.0F;
+        inputGyroscopeSettingsError.clear();
         inputViewRebuildGate.prepareForProfileReplacement();
       });
   observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
@@ -395,6 +397,8 @@ void SettingsScene::cleanupScene() {
   inputProfileReplacementRegistration.reset();
   inputCaptureController.reset();
   inputCaptureAction.reset();
+  inputGyroscopeAxisValue = 0.0F;
+  inputGyroscopeSettingsError.clear();
   inputViewRebuildGate.reset();
   inputLastViewSignature.clear();
   profileInlineEditor.clear();

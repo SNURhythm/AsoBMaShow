@@ -9,6 +9,8 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <optional>
+#include <string_view>
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -290,6 +292,67 @@ void testInputSettingsLayoutPolicy() {
   assert(empty.numericControlWidth == 0);
 }
 
+void testGyroscopeSettingsLayoutAndPresentation() {
+  const auto wide = settings_scene::resolveGyroscopeSettingsLayout(900, false);
+  assert(!wide.stackEditors);
+  assert(wide.editorWidth > 0 && wide.editorWidth * 2 <= 900);
+
+  const auto compact =
+      settings_scene::resolveGyroscopeSettingsLayout(480, true);
+  assert(compact.stackEditors);
+  assert(compact.editorWidth == 480);
+
+  const auto narrow =
+      settings_scene::resolveGyroscopeSettingsLayout(540, false);
+  assert(narrow.stackEditors);
+  assert(narrow.editorWidth == 540);
+
+  const auto empty = settings_scene::resolveGyroscopeSettingsLayout(-20, true);
+  assert(empty.stackEditors);
+  assert(empty.editorWidth == 0);
+
+  assert(settings_scene::deviceClassLabel(input::DeviceClass::Gyroscope) ==
+         "Gyroscope");
+  assert(settings_scene::axisControlLabel(input::DeviceClass::Gyroscope, 0,
+                                          input::ControlDirection::Positive) ==
+         "Turntable +");
+  assert(settings_scene::axisControlLabel(input::DeviceClass::Gyroscope, 0,
+                                          input::ControlDirection::Negative) ==
+         "Turntable -");
+  assert(settings_scene::axisControlLabel(input::DeviceClass::Joystick, 2,
+                                          input::ControlDirection::Any) ==
+         "Axis 2");
+
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Ready) == "Ready");
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Calibrating) == "Calibrating");
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Disconnected) == "Disconnected");
+  assert(settings_scene::inputDeviceStatusLabel(
+             input::InputDeviceStatus::Retrying) == "Retrying");
+
+  assert(settings_scene::parseGyroscopeSettingInteger("3") ==
+         std::optional<int>{3});
+  assert(settings_scene::parseGyroscopeSettingInteger("-20") ==
+         std::optional<int>{-20});
+  assert(!settings_scene::parseGyroscopeSettingInteger("").has_value());
+  assert(!settings_scene::parseGyroscopeSettingInteger("3.0").has_value());
+  assert(
+      !settings_scene::parseGyroscopeSettingInteger("3 degrees").has_value());
+  assert(!settings_scene::parseGyroscopeSettingInteger("999999999999999999")
+              .has_value());
+
+  assert(settings_scene::shouldShowGyroscopeSettingsCard(
+      "builtin:gyroscope-turntable"));
+  assert(!settings_scene::shouldShowGyroscopeSettingsCard("keyboard"));
+  assert(settings_scene::kGyroscopeStepAngleLabel == "Step angle (°)");
+  assert(settings_scene::kGyroscopeReleaseDelayLabel == "Release delay (ms)");
+  assert(settings_scene::gyroscopeSettingsErrorLabel("").empty());
+  assert(settings_scene::gyroscopeSettingsErrorLabel("disk full") ==
+         "Not saved: disk full");
+}
+
 void testInputSettingsRebuildWaitsForPointerTransaction() {
   settings_scene::InputSettingsRebuildGate gate;
   assert(gate.request());
@@ -351,6 +414,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 int main() {
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
+  testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();
   testProfileInlineEditorClearsWhenUnavailable();

@@ -231,6 +231,8 @@ private:
   bool inputKeyModeDropdownOpen = false;
   bool inputDeviceDropdownOpen = false;
   std::optional<input::LogicalAction> inputCaptureAction;
+  float inputGyroscopeAxisValue = 0.0F;
+  std::string inputGyroscopeSettingsError;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   bool previewActive = false;
@@ -365,6 +367,7 @@ private:
   void refreshInputMonitorText();
   void refreshInputDropdowns();
   void requestInputViewRebuild();
+  void commitGyroscopeTurntableSetting(bool stepAngle, std::string_view text);
   std::string inputViewSignature() const;
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputPlayAreaWidth();
