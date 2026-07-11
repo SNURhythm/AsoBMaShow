@@ -1310,20 +1310,18 @@ void GamePlayScene::finishReplayRecording() {
 }
 
 void GamePlayScene::publishPracticeGhost() {
-  if (!options.practiceMode || !recordedAttemptCompleted ||
-      practiceGhostPublished || !options.practiceGhostCallback) {
+  if (!options.practiceMode || practiceGhostPublished ||
+      !options.practiceGhostCallback) {
     return;
   }
 
-  const ReplayData *completedReplay = &recordedReplay;
+  const ReplayData *completedReplay =
+      recordedAttemptCompleted ? &recordedReplay : nullptr;
   if (options.practiceSession != nullptr) {
-    const auto &attempts = options.practiceSession->completedAttempts();
-    if (attempts.empty()) {
-      return;
-    }
-    completedReplay = &attempts.back();
+    completedReplay = practice::completedAttemptForGhost(
+        *options.practiceSession, recordedAttemptCompleted);
   }
-  if (completedReplay->events.empty()) {
+  if (completedReplay == nullptr) {
     return;
   }
   practiceGhostPublished = true;

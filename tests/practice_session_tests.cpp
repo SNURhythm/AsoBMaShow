@@ -58,5 +58,57 @@ int main() {
     return 1;
   }
 
+  practice::Session ghostSession(configuration);
+  std::vector<std::size_t> publishedEventCounts;
+  std::optional<std::size_t> visibleGhostEventCount;
+  auto applyGhostUpdate = [&](const ReplayData *completedAttempt) {
+    if (completedAttempt != nullptr) {
+      publishedEventCounts.push_back(completedAttempt->events.size());
+      if (completedAttempt->events.empty()) {
+        visibleGhostEventCount.reset();
+      } else {
+        visibleGhostEventCount = completedAttempt->events.size();
+      }
+    }
+  };
+
+  ghostSession.beginAttempt();
+  ReplayData nonEmptyGhost;
+  nonEmptyGhost.events.push_back({.action = ReplayEventAction::Press,
+                                  .lane = 2,
+                                  .noteTimeMicros = 2'000'000});
+  ghostSession.completeAttempt(std::move(nonEmptyGhost));
+  applyGhostUpdate(
+      practice::completedAttemptForGhost(ghostSession, true));
+  if (!expect(visibleGhostEventCount == 1,
+              "non-empty completion installs visible ghost")) {
+    return 1;
+  }
+
+  ghostSession.beginAttempt();
+  ghostSession.completeAttempt(ReplayData{});
+  applyGhostUpdate(
+      practice::completedAttemptForGhost(ghostSession, true));
+  if (!expect(!visibleGhostEventCount.has_value(),
+              "empty completion clears visible ghost")) {
+    return 1;
+  }
+
+  ghostSession.beginAttempt();
+  ghostSession.abandonAttempt();
+  applyGhostUpdate(
+      practice::completedAttemptForGhost(ghostSession, false));
+
+  if (!expect(publishedEventCounts.size() == 2,
+              "abandoned attempt publishes no ghost update") ||
+      !expect(publishedEventCounts[0] == 1,
+              "non-empty completed attempt replaces ghost") ||
+      !expect(publishedEventCounts[1] == 0,
+              "empty completed attempt clears ghost") ||
+      !expect(!visibleGhostEventCount.has_value(),
+              "abandoned attempt leaves cleared ghost unchanged")) {
+    return 1;
+  }
+
   return 0;
 }

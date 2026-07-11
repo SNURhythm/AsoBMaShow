@@ -2434,6 +2434,8 @@ void ChartViewerScene::cleanupScene() {
 
 void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
   if (replayData.events.empty()) {
+    practiceGhostReplay.reset();
+    clearGhostReplay();
     return;
   }
 

@@ -65,7 +65,10 @@ long long beatIntervalMicrosForBpm(double bpm) {
 }
 
 double bpmAtChartTime(const bms_parser::Chart &chart, long long timeMicros) {
-  double bpm = effectiveBpm(chart.Meta, firstMeasureBpmCandidate(chart));
+  double bpm = std::isfinite(chart.Meta.Bpm) && chart.Meta.Bpm > 0.0
+                   ? chart.Meta.Bpm
+                   : effectiveBpm(chart.Meta,
+                                  firstMeasureBpmCandidate(chart));
   for (const auto *measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
@@ -74,7 +77,8 @@ double bpmAtChartTime(const bms_parser::Chart &chart, long long timeMicros) {
       if (timeline == nullptr || timeline->Timing > timeMicros) {
         continue;
       }
-      if (timeline->BpmChange && isSaneBpm(timeline->Bpm)) {
+      if (timeline->BpmChange && std::isfinite(timeline->Bpm) &&
+          timeline->Bpm > 0.0) {
         bpm = timeline->Bpm;
       }
     }

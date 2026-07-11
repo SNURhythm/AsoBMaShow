@@ -41,4 +41,12 @@ std::size_t Session::abandonedAttemptCount() const {
 
 const Configuration &Session::configuration() const { return configuration_; }
 
+const ReplayData *completedAttemptForGhost(const Session &session,
+                                           bool attemptCompleted) noexcept {
+  if (!attemptCompleted || session.completedAttempts().empty()) {
+    return nullptr;
+  }
+  return &session.completedAttempts().back();
+}
+
 } // namespace practice

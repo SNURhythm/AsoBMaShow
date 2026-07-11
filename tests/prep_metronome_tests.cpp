@@ -111,11 +111,12 @@ int main() {
 
   bms_parser::Chart practiceChart;
   practiceChart.Meta.Bpm = 120.0;
+  practiceChart.Meta.GuessedBeatBpm = 180.0;
   practiceChart.Meta.GuessedBeatsPerMeasure = 4;
   auto *practiceMeasure = new bms_parser::Measure();
   auto *practiceStartTimeline = new bms_parser::TimeLine(1, false);
   practiceStartTimeline->Timing = 0;
-  practiceStartTimeline->BpmChange = true;
+  practiceStartTimeline->BpmChange = false;
   practiceStartTimeline->Bpm = 120.0;
   practiceMeasure->TimeLines.push_back(practiceStartTimeline);
   auto *practiceTempoChange = new bms_parser::TimeLine(1, false);
@@ -132,6 +133,11 @@ int main() {
 
   const audio::PlaybackRate slowPlayback{.percent = 75};
   plan = prep_metronome::buildPracticeCountInPlan(
+      practiceChart, 5000000, 4, slowPlayback);
+  ASSERT_EQ(120.0, plan.bpm,
+            "actual chart bpm seeds practice marker tempo");
+
+  plan = prep_metronome::buildPracticeCountInPlan(
       practiceChart, 10000000, 4, slowPlayback);
   ASSERT_TRUE(plan.enabled, "practice count-in enabled");
   ASSERT_EQ(150.0, plan.bpm, "tempo active at marker");
@@ -144,6 +150,15 @@ int main() {
             slowPlayback.realMicrosFromChart(plan.clicks[1].timeMicros -
                                              plan.clicks[0].timeMicros),
             "practice click real spacing follows playback rate");
+
+  practiceTempoChange->Bpm = 480.0;
+  plan = prep_metronome::buildPracticeCountInPlan(
+      practiceChart, 10000000, 4, slowPlayback);
+  ASSERT_EQ(480.0, plan.bpm, "marker bpm above heuristic sanity range");
+  ASSERT_EQ(9500000LL, plan.clicks[0].timeMicros,
+            "fast marker first click");
+  ASSERT_EQ(9875000LL, plan.clicks[3].timeMicros,
+            "fast marker last click");
 
   ASSERT_EQ(-2000000LL,
             gameplay_timing::visualTimeMicros(-2000000LL, 0LL),

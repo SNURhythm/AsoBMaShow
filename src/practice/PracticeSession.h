@@ -29,4 +29,8 @@ private:
   bool attemptActive_ = false;
 };
 
+[[nodiscard]] const ReplayData *
+completedAttemptForGhost(const Session &session,
+                         bool attemptCompleted) noexcept;
+
 } // namespace practice
