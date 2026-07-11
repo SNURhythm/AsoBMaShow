@@ -29,6 +29,11 @@ inline long long visualTimeMicros(long long songTimeMicros,
   return songTimeMicros - visualOffsetMicros;
 }
 
+inline long long realJudgementDiffMicros(long long chartDiffMicros,
+                                         audio::PlaybackRate playback) {
+  return playback.realMicrosFromChart(chartDiffMicros);
+}
+
 inline double leadInBeatDistance(long long targetTimeMicros,
                                  long long renderTimeMicros, double bpm) {
   if (renderTimeMicros >= targetTimeMicros || !std::isfinite(bpm) ||

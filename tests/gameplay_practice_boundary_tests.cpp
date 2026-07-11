@@ -40,6 +40,12 @@ bool expectBoundary(long long rawSongTimeMicros, long long audioOffsetMicros,
 } // namespace
 
 int main() {
+  if (!expect(gameplay_timing::realJudgementDiffMicros(
+                  20'000, {.percent = 200}) == 10'000,
+              "200 percent HUD timing stays in real milliseconds")) {
+    return 1;
+  }
+
   if (!expectBoundary(900'000, 100'000, true) ||
       !expectBoundary(1'100'000, -100'000, true)) {
     return 1;

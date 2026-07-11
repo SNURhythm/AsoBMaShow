@@ -2526,8 +2526,10 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
       static_cast<Judgement>(pendingJudge.load(std::memory_order_relaxed));
   const int score = pendingScore.load(std::memory_order_relaxed);
   const int combo = pendingCombo.load(std::memory_order_relaxed);
-  const long long diffMicros =
+  const long long chartDiffMicros =
       pendingJudgeDiffMicros.load(std::memory_order_relaxed);
+  const long long diffMicros = gameplay_timing::realJudgementDiffMicros(
+      chartDiffMicros, playbackRate);
   const long long displayTimeMicros =
       pendingJudgeDisplayMicros.load(std::memory_order_relaxed);
   renderedHudRevision = revision;
