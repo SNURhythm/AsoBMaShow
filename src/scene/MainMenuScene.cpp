@@ -1251,7 +1251,16 @@ void MainMenuScene::init() {
   enqueueLibraryRefreshTask("Refresh Library");
 }
 
-void MainMenuScene::onPause() {}
+void MainMenuScene::onPause() {
+  if (db == nullptr) {
+    return;
+  }
+  if (const auto error =
+          score_cache_queries::detachScoreDatabaseIfAttached(db)) {
+    SDL_Log("SQL error while releasing score query database: %s",
+            error->c_str());
+  }
+}
 
 void MainMenuScene::onResume() {
   context.profileSwitchBlockers.scene =

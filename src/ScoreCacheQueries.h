@@ -235,6 +235,24 @@ attachScoreDatabaseIfNeeded(sqlite3 *db, const std::filesystem::path &path) {
 }
 
 inline std::optional<std::string>
+detachScoreDatabaseIfAttached(sqlite3 *db) {
+  profile_database_activity::WriteGuard operation;
+  bool attached = false;
+  std::filesystem::path attachedPath;
+  if (const auto error =
+          inspectScoreDatabaseAttachment(db, attached, attachedPath)) {
+    return error;
+  }
+  if (!attached) {
+    return std::nullopt;
+  }
+
+  const std::string detachSql =
+      std::string("DETACH DATABASE ") + kScoreDatabaseSchema;
+  return executeSqlite(db, detachSql.c_str());
+}
+
+inline std::optional<std::string>
 ensureScoreSummarySchema(sqlite3 *db, std::string_view schema = {});
 
 inline std::optional<std::string>
