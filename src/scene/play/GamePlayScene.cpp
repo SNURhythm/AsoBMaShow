@@ -1306,13 +1306,10 @@ void GamePlayScene::finishReplayRecording() {
   recordedReplay.clearType = state->getClearTypeRank();
   const int totalNotes = chart != nullptr ? std::max(0, chart->Meta.TotalNotes)
                                           : 0;
-  if (recordedReplay.clearType >= kClearTypeAssistedEasyClearRank &&
-      totalNotes > 0 && state->comboBreak == 0 &&
-      state->maxCombo >= totalNotes) {
-    recordedReplay.clearType = kClearTypeFullComboRank;
-  }
-  recordedReplay.clearType = clear_policy::capRankForPlayback(
-      recordedReplay.clearType, options.playback);
+  const bool fullCombo =
+      totalNotes > 0 && state->comboBreak == 0 && state->maxCombo >= totalNotes;
+  recordedReplay.clearType = clear_policy::fullComboRankForPlayback(
+      recordedReplay.clearType, fullCombo, options.playback);
 }
 
 void GamePlayScene::publishPracticeGhost() {

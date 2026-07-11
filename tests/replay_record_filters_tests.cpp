@@ -48,6 +48,27 @@ int main() {
   ASSERT_EQ(1U, filtered.size(), "effective full combo filter size");
   ASSERT_EQ(4, filtered[0].id, "effective full combo filter id");
 
+  ReplaySummary assistedFullCombo =
+      makeSummary(6, kClearTypeNormalClearRank, 700, 1000, 500);
+  assistedFullCombo.playback = {.percent = 75,
+                                .mode = audio::PlaybackMode::PitchShift};
+  ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+            replay_clear_mark::effectiveClearRank(assistedFullCombo),
+            "rate-assisted effective full combo cap");
+  filters = {};
+  filters.clearMarkRank = kClearTypeFullComboRank;
+  filtered = replay_record_filters::apply({assistedFullCombo}, filters);
+  ASSERT_EQ(0U, filtered.size(), "assisted replay excluded from full combo");
+  filters.clearMarkRank = kClearTypeAssistedEasyClearRank;
+  filtered = replay_record_filters::apply({assistedFullCombo}, filters);
+  ASSERT_EQ(1U, filtered.size(), "assisted replay included in assisted clear");
+
+  ReplaySummary legacyNeutral =
+      makeSummary(7, kClearTypeNormalClearRank, 700, 1000, 500);
+  ASSERT_EQ(kClearTypeFullComboRank,
+            replay_clear_mark::effectiveClearRank(legacyNeutral),
+            "legacy neutral summary retains effective full combo");
+
   filters = {};
   filters.playOption = "RANDOM";
   filtered = replay_record_filters::apply(summaries, filters);

@@ -182,6 +182,13 @@ inline void applyPracticeConfigurationToStartOptions(
   options.startingGaugePercent = configuration.startingGaugePercent;
 }
 
+[[nodiscard]] inline audio::PlaybackRate resultRetryPlayback(
+    const ScoreProvenance &attemptProvenance,
+    const std::optional<practice::Configuration> &practiceConfiguration) {
+  return practiceConfiguration.has_value() ? practiceConfiguration->playback
+                                           : attemptProvenance.playback;
+}
+
 [[nodiscard]] inline Judge
 makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
   Judge judge(rank);

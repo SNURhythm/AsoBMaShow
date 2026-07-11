@@ -252,11 +252,11 @@ courseReplayDataForSession(const CoursePlaySession &session,
   replay.totalCharts = static_cast<int>(totalCharts);
   replay.provenance = provenance;
   const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
-  if (result_presentation::isFullComboCourseResult(
-          replay.completedCharts, replay.totalCharts, session.entries.size(),
-          resultState, courseMeta)) {
-    replay.clearType = kClearTypeFullComboRank;
-  }
+  const bool fullCombo = result_presentation::isFullComboCourseResult(
+      replay.completedCharts, replay.totalCharts, session.entries.size(),
+      resultState, courseMeta);
+  replay.clearType = clear_policy::fullComboRankForPlayback(
+      replay.clearType, fullCombo, provenance.playback);
 
   replay.stages = std::move(*preparedStages);
   return replay;
@@ -317,12 +317,15 @@ ResultScene::ResultScene(
     headerDifficultyLabelOverride = "COURSE";
     const auto &session = *this->courseOptions.session;
     const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
-    if (result_presentation::isFullComboCourseResult(
-            static_cast<int>(session.completedResults.size()),
-            static_cast<int>(session.entries.size()), session.entries.size(),
-            resultState, courseMeta)) {
-      currentClearLabelOverride = "FULL COMBO";
-      currentClearRankOverride = kClearTypeFullComboRank;
+    const bool fullCombo = result_presentation::isFullComboCourseResult(
+        static_cast<int>(session.completedResults.size()),
+        static_cast<int>(session.entries.size()), session.entries.size(),
+        resultState, courseMeta);
+    if (fullCombo) {
+      const int clearRank = clear_policy::fullComboRankForPlayback(
+          resultState.getClearTypeRank(), true, attemptProvenance.playback);
+      currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+      currentClearRankOverride = clearRank;
     }
   }
   skin = std::make_unique<DefaultSkin>();
@@ -919,6 +922,8 @@ void ResultScene::startRetry(bool samePattern) {
           ? std::optional<practice::Configuration>(
                 practiceOptions.session->configuration())
           : std::nullopt;
+  const audio::PlaybackRate retryPlayback =
+      resultRetryPlayback(attemptProvenance, practiceConfiguration);
   ReplayData retrySource;
   if (retryData.has_value()) {
     retrySource = *retryData;
@@ -943,7 +948,7 @@ void ResultScene::startRetry(bool samePattern) {
 
   context.jukebox.stop();
   defer(
-      [this, retrySource, samePattern, practiceConfiguration]() {
+      [this, retrySource, samePattern, practiceConfiguration, retryPlayback]() {
         std::atomic_bool parseCancelled = false;
         const bool reuseCurrentPattern =
             samePattern && reusableRetryChart != nullptr;
@@ -996,6 +1001,7 @@ void ResultScene::startRetry(bool samePattern) {
                 ? pacemaker::kTargetOff
                 : pacemaker::normalizeTargetId(
                       context.settings.selectedPacemakerTarget);
+        options.playback = retryPlayback;
         options.ownsChart = true;
         if (practiceOptions.enabled) {
           options.practiceSession = practiceOptions.session;
@@ -1004,7 +1010,6 @@ void ResultScene::startRetry(bool samePattern) {
               practiceOptions.session == nullptr ? practiceOptions.leadInMicros
                                                  : 0;
           if (practiceConfiguration.has_value()) {
-            options.playback = practiceConfiguration->playback;
             options.judgeWindowScalePercent =
                 practiceConfiguration->judge.scalePercent;
             options.startingGaugePercent =

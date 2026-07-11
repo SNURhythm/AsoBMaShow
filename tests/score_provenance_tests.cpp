@@ -406,6 +406,24 @@ void testReplayStartRestoresPracticeProvenance() {
   assert(options.startingGaugePercent == 37);
 }
 
+void testResultRetryPlaybackAuthority() {
+  ScoreProvenance attempt = sampleVerifiedProvenance("result-retry");
+  attempt.playback = {.percent = 75, .mode = audio::PlaybackMode::PitchShift};
+
+  const audio::PlaybackRate samePattern =
+      resultRetryPlayback(attempt, std::nullopt);
+  const audio::PlaybackRate newPattern =
+      resultRetryPlayback(attempt, std::nullopt);
+  assert(samePattern == attempt.playback);
+  assert(newPattern == attempt.playback);
+
+  practice::Configuration practiceConfiguration;
+  practiceConfiguration.playback = {.percent = 125,
+                                    .mode = audio::PlaybackMode::PitchShift};
+  assert(resultRetryPlayback(attempt, practiceConfiguration) ==
+         practiceConfiguration.playback);
+}
+
 std::vector<JudgeWindowProvenance> provenanceWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   std::vector<JudgeWindowProvenance> result;
@@ -654,6 +672,7 @@ int main() {
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
   testReplayStartRestoresPracticeProvenance();
+  testResultRetryPlaybackAuthority();
   testReplayUsesPersistedJudgeWindowsAsAuthority();
   testReplayJudgeOverrideValidatesChartAndWindows();
   testCourseReplaySelectsMatchingStageJudgeWindows();

@@ -745,10 +745,9 @@ void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
   }
 }
 
-std::string bestClearMarkRankExpr() {
-  return "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
-         std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
-         std::to_string(kClearTypeFullComboRank) + " ELSE clear_type END)";
+std::string bestClearMarkRankExpr(std::string_view alias) {
+  return "MAX(" + score_cache_queries::detail::fullComboClearRankExpr(alias) +
+         ")";
 }
 
 std::string qualifiedScoreTable(std::string_view schema,
@@ -809,9 +808,9 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
                          std::string_view schema = {}) {
   const std::string query =
       "SELECT COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode, " +
-      bestClearMarkRankExpr() + " FROM " +
+      bestClearMarkRankExpr("c") + " FROM " +
       qualifiedScoreTable(schema, "course_scores") +
-      " GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
+      " c GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading course score clear ranks",
@@ -1766,11 +1765,11 @@ bool ScoreDBHelper::InsertCourseScoreOnConnection(
   sqlite3_bind_int(stmt.get(), bindIndex++, state.slowCount);
   sqlite3_bind_double(stmt.get(), bindIndex++, state.currentGauge);
   int clearRank = state.getClearTypeRank();
-  if (completedCharts == totalCharts && totalCharts > 0 &&
-      state.currentGauge > 0.0f && state.comboBreak == 0 &&
-      state.maxCombo >= courseTotalNotes) {
-    clearRank = kClearTypeFullComboRank;
-  }
+  const bool fullCombo = completedCharts == totalCharts && totalCharts > 0 &&
+                         state.currentGauge > 0.0f && state.comboBreak == 0 &&
+                         state.maxCombo >= courseTotalNotes;
+  clearRank = clear_policy::fullComboRankForPlayback(clearRank, fullCombo,
+                                                     provenance.playback);
   sqlite3_bind_int(stmt.get(), bindIndex++, clearRank);
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,

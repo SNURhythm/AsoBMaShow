@@ -51,6 +51,15 @@ capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
   }
   return kClearTypeAssistedEasyClearRank;
 }
+
+[[nodiscard]] inline int
+fullComboRankForPlayback(int rank, bool fullComboAchieved,
+                         const audio::PlaybackRate &playback) noexcept {
+  if (fullComboAchieved && rank >= kClearTypeAssistedEasyClearRank) {
+    rank = std::max(rank, kClearTypeFullComboRank);
+  }
+  return capRankForPlayback(rank, playback);
+}
 } // namespace clear_policy
 
 struct JudgementFastSlowCount {

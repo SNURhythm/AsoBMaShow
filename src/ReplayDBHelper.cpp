@@ -1771,7 +1771,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListReplaysOnConnection(
       "r.play_option2_seed, r.assist_option, r.max_combo,"
       "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
       "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id),"
-      "r.ruleset_version, r.eligibility "
+      "r.ruleset_version, r.eligibility, r.provenance_json "
       "FROM replays r WHERE r.id = ?";
   SqliteStatementHandle detailStmt;
   if (!prepareSqliteStatementLogged(db, detailQuery, detailStmt,
@@ -1794,6 +1794,12 @@ std::vector<ReplaySummary> ReplayDBHelper::ListReplaysOnConnection(
     }
     ReplaySummary summary =
         readReplaySummary(detailStmt.get(), 17, 18, 19, 20, 21);
+    const auto provenance =
+        readStoredProvenance(detailStmt.get(), 20, 21, 22, "replay summary");
+    if (!provenance.has_value()) {
+      continue;
+    }
+    summary.playback = provenance->playback;
     summary.maxScore = maxScore;
     summary.chartMeta = chartMeta;
     replays.push_back(std::move(summary));
@@ -1961,7 +1967,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
       "(SELECT COUNT(*) FROM replay_touch_samples t "
       "JOIN course_replay_stages s ON s.replay_id = t.replay_id "
       "WHERE s.course_replay_id = cr.id),"
-      "cr.ruleset_version, cr.eligibility "
+      "cr.ruleset_version, cr.eligibility, cr.provenance_json "
       "FROM course_replays cr "
       "WHERE cr.id = ?";
 
@@ -2015,6 +2021,12 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
         eligibility <= static_cast<int>(ScoreEligibility::LegacyUnverified)) {
       summary.eligibility = static_cast<ScoreEligibility>(eligibility);
     }
+    const auto provenance = readStoredProvenance(detailStmt.get(), 15, 16, 17,
+                                                 "course replay summary");
+    if (!provenance.has_value()) {
+      continue;
+    }
+    summary.playback = provenance->playback;
     replays.push_back(std::move(summary));
   }
   detailStmt.reset();

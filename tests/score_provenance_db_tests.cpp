@@ -1224,6 +1224,48 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(retargetable.GetRevision() > revisionBefore);
 }
 
+void testAssistedPlaybackCapsScoreAndCourseClearRanks(
+    const std::filesystem::path &root) {
+  const auto path = root / "assisted-clear-cap" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto meta = sampleMeta(root, "assisted-clear-cap");
+  RhythmState state = sampleState(meta.TotalNotes, 0);
+  state.comboBreak = 0;
+  state.maxCombo = meta.TotalNotes;
+  state.currentGauge = 100.0f;
+  state.setAssistClearMark(true);
+
+  ScoreProvenance provenance = sampleProvenance("assisted-clear-cap");
+  provenance.playback = {.percent = 75,
+                         .mode = audio::PlaybackMode::PitchShift};
+  provenance.eligibility = ScoreEligibility::Modified;
+  assert(helper.SaveScore(meta, state, provenance));
+
+  CoursePlaySession session;
+  session.courseId = 91;
+  session.courseName = "Assisted Course";
+  session.constraintJson = "{}";
+  session.longNoteMode = meta.LnMode;
+  session.entries.push_back({.meta = meta});
+  session.courseKey = course_identity::makeCourseKey(session);
+  assert(helper.SaveCourseScore(session, state, 1, 1, provenance));
+
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT clear_type FROM scores") ==
+         kClearTypeAssistedEasyClearRank);
+  assert(queryInt(db.get(), "SELECT clear_type FROM course_scores") ==
+         kClearTypeAssistedEasyClearRank);
+  db.reset();
+
+  const ScoreClearRankCache cache = helper.LoadBestClearRanks();
+  assert(cache.bestRankFor(meta) == kClearTypeAssistedEasyClearRank);
+  assert(cache.bestCourseRankFor(session.courseKey, session.courseId,
+                                 meta.LnMode) ==
+         kClearTypeAssistedEasyClearRank);
+}
+
 void testFutureVersionRejectsWithoutSchemaMutation(
     const std::filesystem::path &root) {
   const auto path = root / "future" / "score.db";
@@ -1884,6 +1926,7 @@ int main() {
   testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
   testExactFutureVersionSevenRejectsScoreRecovery(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
+  testAssistedPlaybackCapsScoreAndCourseClearRanks(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
   testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(root);
   testFutureVersionRejectsDirectScoreWrites(root);

@@ -775,6 +775,17 @@ void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   require(clear_policy::capRankForPlayback(
               kClearTypeFailedRank, assistedRate) == kClearTypeFailedRank,
           "the assisted clear cap never promotes a failed attempt");
+  require(clear_policy::fullComboRankForPlayback(kClearTypeHardClearRank, true,
+                                                 assistedRate) ==
+              kClearTypeAssistedEasyClearRank,
+          "rate-assisted full-combo derivation stays capped");
+  require(clear_policy::fullComboRankForPlayback(kClearTypeHardClearRank, true,
+                                                 audio::PlaybackRate{100}) ==
+              kClearTypeFullComboRank,
+          "neutral full-combo derivation remains unchanged");
+  require(clear_policy::fullComboRankForPlayback(
+              kClearTypeFailedRank, true, assistedRate) == kClearTypeFailedRank,
+          "full-combo derivation never promotes a failed attempt");
 }
 
 } // namespace

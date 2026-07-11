@@ -530,6 +530,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_summary_list_tests
         tests/replay_summary_list_tests.cpp
+        src/ReplayResultStateBuilder.cpp
+        src/ScoreProvenance.cpp
         src/bms_parser.cpp
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

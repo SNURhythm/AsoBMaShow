@@ -3285,15 +3285,13 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     data.laneOrderLabel = display.laneOrder;
     data.difficultyLabel = "Course";
     data.headerDifficultyLabelOverride = "COURSE";
-    if (result_presentation::isFullComboCourseResult(
-            replay.completedCharts, replay.totalCharts, stages.size(),
-            courseState, courseMeta)) {
-      data.currentClearLabelOverride = "FULL COMBO";
-      data.currentClearRankOverride = kClearTypeFullComboRank;
-    } else {
-      data.currentClearLabelOverride = clearTypeRankToLabel(replay.clearType);
-      data.currentClearRankOverride = replay.clearType;
-    }
+    const bool fullCombo = result_presentation::isFullComboCourseResult(
+        replay.completedCharts, replay.totalCharts, stages.size(), courseState,
+        courseMeta);
+    const int clearRank = clear_policy::fullComboRankForPlayback(
+        replay.clearType, fullCombo, replay.provenance.playback);
+    data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+    data.currentClearRankOverride = clearRank;
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", courseResultRoot.get(), &data);
     courseResultRoot->applyYogaLayout();

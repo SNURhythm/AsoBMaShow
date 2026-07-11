@@ -150,8 +150,9 @@ inline ReplayData BuildReplayData(
   replay.finalScore = state.getScore();
   replay.maxCombo = state.maxCombo;
   replay.finalGauge = state.currentGauge;
-  replay.clearType =
-      state.comboBreak == 0 ? kClearTypeFullComboRank : state.getClearTypeRank();
+  replay.clearType = clear_policy::fullComboRankForPlayback(
+      state.getClearTypeRank(), state.comboBreak == 0,
+      replay.provenance.playback);
   return replay;
 }
 } // namespace replay_autoplay

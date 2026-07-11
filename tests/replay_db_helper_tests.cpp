@@ -1,4 +1,5 @@
 #include "../src/ReplayDBHelper.h"
+#include "../src/ReplayClearMarkUtils.h"
 #include "../src/CourseIdentity.h"
 #include "../src/FileChecksum.h"
 #include "../src/ScoreProvenance.h"
@@ -948,6 +949,8 @@ void testChartAndCourseRoundTripAndPathIsolation(
   replay.provenance.judgeWindowScalePercent = 80;
   replay.provenance.startingGaugePercent = 37;
   replay.provenance.eligibility = ScoreEligibility::Modified;
+  replay.maxCombo = replay.chartMeta.TotalNotes;
+  replay.clearType = kClearTypeFullComboRank;
   const auto replayId = first.SaveReplay(replay);
   assert(replayId.has_value());
   const auto loaded = first.LoadReplay(*replayId, replay.chartMeta);
@@ -979,6 +982,9 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(summaries.size() == 1);
   assert(summaries.front().rulesetVersion == 1);
   assert(summaries.front().eligibility == ScoreEligibility::Modified);
+  assert(summaries.front().playback == replay.provenance.playback);
+  assert(replay_clear_mark::effectiveClearRank(summaries.front()) ==
+         kClearTypeAssistedEasyClearRank);
 
   CourseReplayData course;
   course.courseId = 31;
@@ -988,7 +994,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   course.finalScore = replay.finalScore;
   course.maxCombo = replay.maxCombo;
   course.finalGauge = replay.finalGauge;
-  course.clearType = replay.clearType;
+  course.clearType = kClearTypeFullComboRank;
   course.completedCharts = 1;
   course.totalCharts = 1;
   course.provenance = replay.provenance;
@@ -1008,6 +1014,9 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(courseSummaries.size() == 1);
   assert(courseSummaries.front().rulesetVersion == 1);
   assert(courseSummaries.front().eligibility == ScoreEligibility::Modified);
+  assert(courseSummaries.front().playback == course.provenance.playback);
+  assert(replay_clear_mark::effectiveClearRank(courseSummaries.front()) ==
+         kClearTypeAssistedEasyClearRank);
 
   assert(second.ListReplays(replay.chartMeta, 0).empty());
   assert(second

@@ -743,15 +743,13 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
           : play_options::formatPlayModeDisplayLabel(replay.stages.back().replay);
   std::optional<std::string> clearLabelOverride;
   std::optional<int> clearRankOverride;
-  if (result_presentation::isFullComboCourseResult(
-          replay.completedCharts, replay.totalCharts, replay.stages.size(),
-          courseState, courseMeta)) {
-    clearLabelOverride = "FULL COMBO";
-    clearRankOverride = kClearTypeFullComboRank;
-  } else {
-    clearLabelOverride = clearTypeRankToLabel(replay.clearType);
-    clearRankOverride = replay.clearType;
-  }
+  const bool fullCombo = result_presentation::isFullComboCourseResult(
+      replay.completedCharts, replay.totalCharts, replay.stages.size(),
+      courseState, courseMeta);
+  const int clearRank = clear_policy::fullComboRankForPlayback(
+      replay.clearType, fullCombo, replay.provenance.playback);
+  clearLabelOverride = clearTypeRankToLabel(clearRank);
+  clearRankOverride = clearRank;
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
       "Course", std::nullopt, clearLabelOverride, clearRankOverride, "COURSE",
