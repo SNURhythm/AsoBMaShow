@@ -336,6 +336,8 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
   const auto caseGroups =
       practice::analyzeCompatibleAttempts(chart, caseAttempts);
   require(caseGroups.size() == 1 &&
+              caseGroups.front().conditions.windowResolution ==
+                  practice::TimingWindowResolution::Resolved &&
               caseGroups.front().conditions.effectiveJudgeWindows ==
                   windows(-11'000),
           "durable stage hashes match case-insensitively");
@@ -350,7 +352,9 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
   const std::vector<ReplayData> conflictAttempts = {conflictingSha};
   const auto conflictGroups =
       practice::analyzeCompatibleAttempts(chart, conflictAttempts);
-  require(conflictGroups.front().conditions.effectiveJudgeWindows.empty(),
+  require(conflictGroups.front().conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              conflictGroups.front().conditions.effectiveJudgeWindows.empty(),
           "matching MD5 cannot override a conflicting durable SHA-256");
 
   auto md5Chart = makeChart();
@@ -363,8 +367,10 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
   const std::vector<ReplayData> md5Attempts = {md5Fallback};
   const auto md5Groups =
       practice::analyzeCompatibleAttempts(md5Chart, md5Attempts);
-  require(md5Groups.front().conditions.effectiveJudgeWindows ==
-              windows(-15'000),
+  require(md5Groups.front().conditions.windowResolution ==
+                  practice::TimingWindowResolution::Resolved &&
+              md5Groups.front().conditions.effectiveJudgeWindows ==
+                  windows(-15'000),
           "MD5 is used when durable SHA-256 is unavailable");
 
   auto ambiguous = makeReplay();
@@ -377,8 +383,124 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
   const std::vector<ReplayData> ambiguousAttempts = {ambiguous};
   const auto ambiguousGroups =
       practice::analyzeCompatibleAttempts(chart, ambiguousAttempts);
-  require(ambiguousGroups.front().conditions.effectiveJudgeWindows.empty(),
+  require(ambiguousGroups.front().conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              ambiguousGroups.front().conditions.effectiveJudgeWindows.empty(),
           "ambiguous durable stage identity selects no conditions");
+}
+
+void testUnresolvedTimingConditionsAlwaysUseSingletonGroups() {
+  auto chart = makeChart();
+  const auto useNeutralConditions = [](ReplayData &replay) {
+    replay.provenance.playback = {};
+    replay.provenance.judgeWindowScalePercent = 100;
+  };
+
+  auto ambiguousA = makeReplay();
+  useNeutralConditions(ambiguousA);
+  ambiguousA.provenance.stages = {
+      provenanceStage(std::string(64, 'a'), std::string(32, 'b'),
+                      windows(-20'000)),
+      provenanceStage(std::string(64, 'A'), std::string(32, 'B'),
+                      windows(-21'000)),
+  };
+  auto ambiguousB = ambiguousA;
+  ambiguousB.provenance.stages[0].effectiveJudgeWindows = windows(-22'000);
+  ambiguousB.provenance.stages[1].effectiveJudgeWindows = windows(-23'000);
+  auto sameAmbiguousData = ambiguousA;
+  for (ReplayData *replay : {&ambiguousA, &ambiguousB, &sameAmbiguousData}) {
+    replay->events.push_back(
+        event(ReplayEventAction::Press, 3, 0, Great, -1'000));
+  }
+
+  ReplayData legacyA;
+  ReplayData legacyB;
+
+  auto resolvedA = makeReplay();
+  useNeutralConditions(resolvedA);
+  auto resolvedB = resolvedA;
+
+  auto unmatchedA = makeReplay();
+  useNeutralConditions(unmatchedA);
+  unmatchedA.provenance.stages = {provenanceStage(
+      std::string(64, 'c'), std::string(32, 'd'), windows(-24'000))};
+  auto unmatchedB = unmatchedA;
+  unmatchedA.events.push_back(
+      event(ReplayEventAction::Press, 3, 0, Great, -2'000));
+  unmatchedB.events = unmatchedA.events;
+
+  ReplayData currentWithoutStagesA;
+  currentWithoutStagesA.provenance.ruleset = RulesetDescriptor::Current();
+  auto currentWithoutStagesB = currentWithoutStagesA;
+  currentWithoutStagesA.events.push_back(
+      event(ReplayEventAction::Press, 3, 0, Great, -3'000));
+  currentWithoutStagesB.events = currentWithoutStagesA.events;
+
+  const std::vector<ReplayData> attempts = {
+      ambiguousA,
+      ambiguousB,
+      sameAmbiguousData,
+      legacyA,
+      legacyB,
+      resolvedA,
+      resolvedB,
+      unmatchedA,
+      unmatchedB,
+      currentWithoutStagesA,
+      currentWithoutStagesB,
+  };
+  const auto groups = practice::analyzeCompatibleAttempts(chart, attempts);
+
+  require(groups.size() == 9,
+          "every unresolved attempt forms a singleton compatibility group");
+  require(groups[0].attemptIndices == std::vector<std::size_t>({0}) &&
+              groups[1].attemptIndices == std::vector<std::size_t>({1}) &&
+              groups[2].attemptIndices == std::vector<std::size_t>({2}),
+          "different and identical ambiguous attempts remain separate");
+  require(groups[3].attemptIndices == std::vector<std::size_t>({3, 4}) &&
+              groups[3].conditions.windowResolution ==
+                  practice::TimingWindowResolution::LegacyAbsent,
+          "genuine legacy timing conditions still group together");
+  require(groups[4].attemptIndices == std::vector<std::size_t>({5, 6}) &&
+              groups[4].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Resolved,
+          "resolved exact timing conditions still group together");
+  require(groups[5].attemptIndices == std::vector<std::size_t>({7}) &&
+              groups[6].attemptIndices == std::vector<std::size_t>({8}),
+          "identical unmatched provenance attempts remain separate");
+  require(groups[7].attemptIndices == std::vector<std::size_t>({9}) &&
+              groups[8].attemptIndices == std::vector<std::size_t>({10}),
+          "non-legacy provenance with missing stages remains separate");
+  require(groups[0].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              groups[1].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              groups[2].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              groups[5].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              groups[6].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              groups[7].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved &&
+              groups[8].conditions.windowResolution ==
+                  practice::TimingWindowResolution::Unresolved,
+          "ambiguous and unmatched conditions preserve unresolved state");
+  for (const std::size_t index : {0U, 1U, 2U, 5U, 6U, 7U, 8U}) {
+    require(groups[index].aggregate.overall.samples == 1,
+            "unresolved singleton aggregate contains only its attempt");
+  }
+
+  const auto unresolvedConditions = groups[0].conditions;
+  const auto identicalUnresolvedConditions = unresolvedConditions;
+  require(unresolvedConditions == unresolvedConditions &&
+              unresolvedConditions == identicalUnresolvedConditions,
+          "structural timing-condition equality remains reflexive");
+  auto legacyConditions = unresolvedConditions;
+  legacyConditions.windowResolution =
+      practice::TimingWindowResolution::LegacyAbsent;
+  require(!(unresolvedConditions == legacyConditions),
+          "unresolved timing conditions never compare as legacy");
 }
 
 } // namespace
@@ -390,5 +512,6 @@ int main() {
   testHistogramSeparatesOverflowFromFiniteEndpointBins();
   testCompatibleAttemptGroups();
   testTimingConditionsUseStrictDurableStageIdentity();
+  testUnresolvedTimingConditionsAlwaysUseSingletonGroups();
   return 0;
 }

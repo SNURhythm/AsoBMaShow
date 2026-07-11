@@ -3,6 +3,7 @@
 #include "../ReplayData.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
@@ -49,9 +50,17 @@ struct Analysis {
   std::vector<SectionAnalysis> sections;
 };
 
+enum class TimingWindowResolution : std::uint8_t {
+  LegacyAbsent,
+  Resolved,
+  Unresolved,
+};
+
 struct TimingConditions {
   audio::PlaybackRate playback;
   int judgeWindowScalePercent = 100;
+  TimingWindowResolution windowResolution =
+      TimingWindowResolution::LegacyAbsent;
   std::vector<JudgeWindowProvenance> effectiveJudgeWindows;
 
   bool operator==(const TimingConditions &) const = default;

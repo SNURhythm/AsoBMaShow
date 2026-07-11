@@ -170,21 +170,28 @@ std::optional<std::size_t> sectionForEvent(const ChartLayout &layout,
   return found->second;
 }
 
-std::vector<JudgeWindowProvenance>
-effectiveWindows(const bms_parser::Chart &chart, const ReplayData &replay) {
-  const ScoreStageProvenance *matching =
-      score_provenance::uniqueStageForChart(replay.provenance, chart.Meta);
-  return matching == nullptr ? std::vector<JudgeWindowProvenance>{}
-                             : matching->effectiveJudgeWindows;
-}
-
 TimingConditions conditionsFor(const bms_parser::Chart &chart,
                                const ReplayData &replay) {
-  return {
+  TimingConditions result{
       .playback = replay.provenance.playback,
       .judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent,
-      .effectiveJudgeWindows = effectiveWindows(chart, replay),
   };
+  if (replay.provenance.stages.empty()) {
+    if (replay.provenance.ruleset.version > 0) {
+      result.windowResolution = TimingWindowResolution::Unresolved;
+    }
+    return result;
+  }
+
+  const ScoreStageProvenance *matching =
+      score_provenance::uniqueStageForChart(replay.provenance, chart.Meta);
+  if (matching == nullptr) {
+    result.windowResolution = TimingWindowResolution::Unresolved;
+    return result;
+  }
+  result.windowResolution = TimingWindowResolution::Resolved;
+  result.effectiveJudgeWindows = matching->effectiveJudgeWindows;
+  return result;
 }
 
 Analysis analyzeAttempts(const bms_parser::Chart &chart,
@@ -287,10 +294,13 @@ analyzeCompatibleAttempts(const bms_parser::Chart &chart,
   std::vector<std::vector<const ReplayData *>> groupedAttempts;
   for (std::size_t index = 0; index < attempts.size(); ++index) {
     const TimingConditions conditions = conditionsFor(chart, attempts[index]);
-    const auto found = std::find_if(result.begin(), result.end(),
-                                    [&](const AnalysisGroup &group) {
-                                      return group.conditions == conditions;
-                                    });
+    const auto found =
+        conditions.windowResolution == TimingWindowResolution::Unresolved
+            ? result.end()
+            : std::find_if(result.begin(), result.end(),
+                           [&](const AnalysisGroup &group) {
+                             return group.conditions == conditions;
+                           });
     if (found == result.end()) {
       result.push_back({.conditions = conditions, .attemptIndices = {index}});
       groupedAttempts.push_back({&attempts[index]});
