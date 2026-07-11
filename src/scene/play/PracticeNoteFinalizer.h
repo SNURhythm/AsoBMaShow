@@ -34,14 +34,14 @@ inline std::vector<bms_parser::Note *> finalizePendingPracticeNotes(
         }
         auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
         if (longNote != nullptr && !longNote->IsTail() &&
-            effectiveLongNoteIsClassic(longNote, &chart,
-                                       longNoteModeOverride) &&
-            longNote->IsPlayed && !longNote->IsDead &&
-            longNote->Tail != nullptr && !longNote->Tail->IsPlayed &&
-            !range.contains(longNote->Tail)) {
-          markMissed(longNote);
-          misses.push_back(longNote);
-          continue;
+            longNote->IsPlayed && longNote->Tail != nullptr &&
+            !longNote->Tail->IsPlayed && !range.contains(longNote->Tail)) {
+          longNote->IsHolding = false;
+          longNote->Tail->IsHolding = false;
+          if (effectiveLongNoteIsClassic(longNote, &chart,
+                                         longNoteModeOverride)) {
+            continue;
+          }
         }
         if (note->IsPlayed) {
           continue;

@@ -942,6 +942,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_practice_input_boundary_tests.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/practice/PracticeAnalytics.cpp
         src/scene/play/Judge.cpp
         src/scene/play/RhythmLaneInputController.cpp
     )

@@ -3,7 +3,9 @@
 #include "scene/play/NoteTimeRange.h"
 #include "scene/play/PracticeNoteFinalizer.h"
 #include "scene/play/RhythmLaneInputController.h"
+#include "practice/PracticeAnalytics.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -243,10 +245,20 @@ void testExactPendingNoteFinalization() {
   auto *classicHead =
       addLongNote(*measure, endMicros - 30, endMicros + 10, 5,
                   bms_parser::LongNoteType::LongNote);
+  auto *fullClassicHead =
+      addLongNote(*measure, endMicros - 50, endMicros - 40, 0,
+                  bms_parser::LongNoteType::LongNote);
   auto *heldClassicHead =
       addLongNote(*measure, endMicros - 40, endMicros + 20, 6,
                   bms_parser::LongNoteType::LongNote);
   heldClassicHead->Press(endMicros - 40);
+  auto *outsideStartHead =
+      addLongNote(*measure, startMicros - 10, startMicros + 10, 1,
+                  bms_parser::LongNoteType::LongNote);
+  outsideStartHead->IsPlayed = true;
+  outsideStartHead->IsDead = true;
+  outsideStartHead->Tail->IsPlayed = true;
+  outsideStartHead->Tail->IsDead = true;
   auto *mineTimeline = addTimeline(*measure, endMicros - 2);
   auto *mine = new bms_parser::LandmineNote(5.0f);
   mineTimeline->SetLandmineNote(7, mine);
@@ -255,7 +267,7 @@ void testExactPendingNoteFinalization() {
   const auto misses = finalizePendingPracticeNotes(
       chart, range, endMicros - 1, 0);
   require(misses.size() == 5,
-          "normal, charge identities, and classic heads finalize once");
+          "normal, charge identities, and unpressed classic heads finalize");
   require(lastValid->IsPlayed && lastValid->IsDead,
           "end-1 pending note becomes a miss");
   require(chargeHead->IsPlayed && chargeHead->IsDead &&
@@ -263,10 +275,19 @@ void testExactPendingNoteFinalization() {
           "in-range charge identities each finalize as misses");
   require(classicHead->IsPlayed && classicHead->IsDead &&
               !classicHead->Tail->IsPlayed,
-          "classic head finalizes without touching its out-of-range tail");
-  require(heldClassicHead->IsPlayed && heldClassicHead->IsDead &&
-              !heldClassicHead->Tail->IsPlayed,
-          "held classic head receives its pending judgement at the boundary");
+          "unpressed crossing classic head finalizes as a miss");
+  require(fullClassicHead->IsPlayed && fullClassicHead->IsDead &&
+              fullClassicHead->Tail->IsPlayed,
+          "fully in-range classic long note retains one miss");
+  require(heldClassicHead->IsPlayed && !heldClassicHead->IsDead &&
+              !heldClassicHead->Tail->IsPlayed &&
+              !heldClassicHead->IsHolding &&
+              !heldClassicHead->Tail->IsHolding,
+          "pressed crossing classic keeps its head judgement without holding");
+  require(outsideStartHead->IsPlayed && outsideStartHead->IsDead &&
+              outsideStartHead->Tail->IsPlayed &&
+              outsideStartHead->Tail->IsDead,
+          "long note starting outside remains skipped");
   require(!atEnd->IsPlayed && !afterEnd->IsPlayed && !mine->IsPlayed &&
               !mine->IsDead,
           "at/after notes and mines are never finalized as misses");
@@ -276,11 +297,85 @@ void testExactPendingNoteFinalization() {
   require(duplicate.empty(), "practice finalization is idempotent");
 }
 
+void testPressedCrossingClassicReplayAnalyticsStream() {
+  constexpr long long startMicros = 500'000;
+  constexpr long long endMicros = 1'000'000;
+  const NoteTimeRange range{.startMicros = startMicros,
+                            .endMicros = endMicros};
+  bms_parser::Chart chart;
+  chart.Meta.Rank = 1;
+  chart.Meta.TotalLength = endMicros + 100'000;
+  auto *measure = new bms_parser::Measure();
+  auto *head = addLongNote(*measure, endMicros - 100'000,
+                           endMicros + 50'000, 1,
+                           bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+
+  std::unordered_map<int, bool> lanePressed{{1, false}};
+  RhythmLaneInputController controller(&chart, nullptr, lanePressed,
+                                       Judge(chart.Meta.Rank), 0, range);
+  lanePressed[1] = false;
+  const auto press = controller.pressLane(
+      1, {.songTimeMicros = endMicros - 100'000,
+          .laneBeamTimeMicros = endMicros - 100'000});
+  require(press.note == head && press.hasReplayEvent &&
+              press.replayEvent.action == ReplayEventAction::Press &&
+              press.replayEvent.judge.judgement == PGreat,
+          "crossing classic records its in-range head Press judgement");
+  const auto outsideRelease = controller.releaseLane(
+      1, {.songTimeMicros = head->Tail->Timeline->Timing,
+          .laneBeamTimeMicros = head->Tail->Timeline->Timing});
+  require(outsideRelease.note == nullptr &&
+              !outsideRelease.hasReplayEvent && !head->Tail->IsPlayed &&
+              lanePressed[1],
+          "crossing classic tail is unavailable outside practice range");
+
+  ReplayData replay;
+  replay.events.push_back({
+      .action = press.replayEvent.action,
+      .lane = press.replayEvent.lane,
+      .noteTimeMicros = head->Timeline->Timing,
+      .songTimeMicros = press.replayEvent.songTimeMicros,
+      .judgeTimeMicros = press.replayEvent.judgeTimeMicros,
+      .judgement = press.replayEvent.judge.judgement,
+      .diffMicros = press.replayEvent.judge.Diff,
+  });
+  for (auto *missed : finalizePendingPracticeNotes(
+           chart, range, endMicros - 1, 0)) {
+    replay.events.push_back({
+        .action = ReplayEventAction::Miss,
+        .lane = missed->Lane,
+        .noteTimeMicros = missed->Timeline->Timing,
+        .songTimeMicros = endMicros - 1,
+        .judgeTimeMicros = endMicros - 1,
+        .judgement = Poor,
+        .diffMicros = endMicros - 1 - missed->Timeline->Timing,
+    });
+  }
+
+  const auto missCount =
+      std::ranges::count_if(replay.events, [](const auto &event) {
+        return event.action == ReplayEventAction::Miss;
+      });
+  require(replay.events.size() == 1 && missCount == 0,
+          "pressed crossing classic stream retains Press and emits zero Miss");
+  const practice::Analysis analysis = practice::analyze(chart, replay);
+  require(analysis.overall.samples == 1 && analysis.overall.misses == 0,
+          "analytics consumes one Press sample and zero crossing misses");
+  require(!head->IsHolding && !head->Tail->IsHolding,
+          "crossing classic finalization clears held state");
+  head->Reset();
+  head->Tail->Reset();
+  require(!head->IsHolding && !head->Tail->IsHolding,
+          "crossing classic held state stays clear across reset");
+}
+
 } // namespace
 
 int main() {
   testControllerUsesResolvedEffectiveJudge();
   testActualInputAndJudgeRange();
   testExactPendingNoteFinalization();
+  testPressedCrossingClassicReplayAnalyticsStream();
   return 0;
 }
