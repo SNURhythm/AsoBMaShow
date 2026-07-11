@@ -364,7 +364,7 @@ void SettingsScene::refreshInputMonitorText() {
       break;
     case InputCaptureController::State::Listening:
       inputCaptureStateText->setText(
-          "Listening — press a key/button or cross 50% on an axis.");
+          "Listening — press a key/button or cross 20% on an axis.");
       break;
     case InputCaptureController::State::AwaitingConflictConfirmation:
       inputCaptureStateText->setText(
