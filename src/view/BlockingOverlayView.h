@@ -20,6 +20,7 @@ private:
     case SDL_KEYUP:
     case SDL_TEXTINPUT:
     case SDL_TEXTEDITING:
+    case SDL_TEXTEDITING_EXT:
       return false;
     default:
       return true;

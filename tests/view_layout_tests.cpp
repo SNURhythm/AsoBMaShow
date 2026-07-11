@@ -50,7 +50,7 @@ void testBlockingOverlayStopsAllInteractiveEvents() {
 
   constexpr std::array eventTypes{
       SDL_MOUSEBUTTONDOWN, SDL_MOUSEWHEEL, SDL_FINGERDOWN, SDL_KEYDOWN,
-      SDL_TEXTINPUT, SDL_TEXTEDITING};
+      SDL_TEXTINPUT, SDL_TEXTEDITING, SDL_TEXTEDITING_EXT};
   for (const Uint32 eventType : eventTypes) {
     SDL_Event event{};
     event.type = eventType;
