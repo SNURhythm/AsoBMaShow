@@ -497,7 +497,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gyroscope_input_backend_core_tests PRIVATE cxx_std_23)
 
-    add_subdirectory(yoga)
+    add_subdirectory(yoga/yoga)
 else()
     add_subdirectory(yoga/yoga)
 endif()
