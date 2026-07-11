@@ -58,7 +58,8 @@ public:
       ResultCourseOptions courseOptions = {}, std::string pacemakerTarget = {},
       std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
       bms_parser::Chart *reusableRetryChart = nullptr,
-      std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt);
+      std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
+      const ReplayData *analyticsSource = nullptr);
   ~ResultScene() override = default;
 
   void init() override;
@@ -96,6 +97,7 @@ private:
   const ScoreProvenance attemptProvenance;
   std::optional<ReplayData> replayToSave;
   std::optional<ReplayData> retryData;
+  std::optional<ReplayData> analyticsData;
   std::optional<ResultPreviousBestData> previousBest;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;

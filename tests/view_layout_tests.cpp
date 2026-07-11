@@ -306,6 +306,37 @@ void testWrappedGridRowsKeepColumnMeasurements() {
   assertRowsAligned(row1, row3);
 }
 
+void testIndexedInsertionPreservesLayoutOrderAndFullWidth() {
+  View root(0, 0, 500, 300);
+  root.setFlexDirection(FlexDirection::Column);
+
+  auto *content = new View();
+  content->setName("content");
+  content->setHeight(40);
+  auto *actions = new View();
+  actions->setName("resultActions");
+  actions->setHeight(50);
+  root.addView(content);
+  root.addView(actions);
+
+  auto *analytics = new View();
+  analytics->setName("timingAnalytics");
+  analytics->setWidthPercent(100.0f);
+  analytics->setHeight(80);
+  root.insertView(analytics, 1);
+
+  SDL_Event sortEvent{};
+  sortEvent.type = SDL_USEREVENT;
+  root.handleEvents(sortEvent);
+  const auto &children = root.getChildren();
+  assert(children.size() == 3 && children[0] == content &&
+         children[1] == analytics && children[2] == actions);
+  assert(analytics->getX() == root.getContentX());
+  assert(analytics->getWidth() == root.getContentWidth());
+  assert(analytics->getY() == content->getY() + content->getHeight());
+  assert(actions->getY() == analytics->getY() + analytics->getHeight());
+}
+
 void testInputSettingsLayoutPolicy() {
   const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
   assert(!wide.stackSelectors);
@@ -493,6 +524,7 @@ int main() {
   assert(second->getX() == 80);
 
   testWrappedGridRowsKeepColumnMeasurements();
+  testIndexedInsertionPreservesLayoutOrderAndFullWidth();
 
   return 0;
 }

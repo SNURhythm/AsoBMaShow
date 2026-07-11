@@ -943,6 +943,29 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(practice_result_model_tests PRIVATE cxx_std_23)
 
+    add_executable(practice_result_flow_tests
+        tests/practice_result_flow_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultFlow.cpp
+        src/practice/PracticeResultModel.cpp
+    )
+    target_include_directories(practice_result_flow_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_result_flow_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_analytics_presentation_tests
+        tests/practice_analytics_presentation_tests.cpp
+        src/scene/PracticeAnalyticsPresentation.cpp
+    )
+    target_include_directories(practice_analytics_presentation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_analytics_presentation_tests PRIVATE cxx_std_23)
+
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
@@ -1274,6 +1297,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
+    asobmashow_register_test(practice_result_flow_tests)
+    asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)

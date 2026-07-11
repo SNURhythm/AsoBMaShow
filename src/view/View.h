@@ -333,6 +333,7 @@ public:
   View *clearBorderColor();
   View *setBorderWidth(int width);
   View *addView(View *view);
+  View *insertView(View *view, std::size_t index);
   View *clearChildren();
   YGNodeRef getNode() const { return node; }
   std::vector<View *> &getChildren() { return children; }

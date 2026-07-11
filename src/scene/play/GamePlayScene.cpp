@@ -9,6 +9,7 @@
 #include "../../PrepMetronome.h"
 #include "../../ReplayDBHelper.h"
 #include "../../ResultPresentationUtils.h"
+#include "../../practice/PracticeResultFlow.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../view/TextView.h"
 #include "BMSRenderer.h"
@@ -1056,11 +1057,21 @@ int GamePlayScene::effectiveNoteStartPositionPercent() const {
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
-  return !options.autoPlay && !isReplayPlayback();
+  return practice::resultCapturePolicy({
+      .autoPlay = options.autoPlay,
+      .practice = options.practiceMode || options.practiceSession != nullptr,
+      .replayPlayback = isReplayPlayback(),
+      .coursePlayback = isCoursePlayback(),
+  }).recordReplay;
 }
 
 bool GamePlayScene::shouldPersistRecordedReplay() const {
-  return shouldRecordReplay() && !options.practiceMode && !isCoursePlayback();
+  return practice::resultCapturePolicy({
+      .autoPlay = options.autoPlay,
+      .practice = options.practiceMode || options.practiceSession != nullptr,
+      .replayPlayback = isReplayPlayback(),
+      .coursePlayback = isCoursePlayback(),
+  }).persistReplay;
 }
 
 void GamePlayScene::configurePacemakerTarget() {
@@ -1266,7 +1277,21 @@ void GamePlayScene::beginReplayRecording() {
   practiceGhostPublished = false;
   recordedAttemptCompleted = false;
   lastRecordedTouchSamples.clear();
-  if (!shouldRecordReplay()) {
+  const auto capturePolicy = practice::resultCapturePolicy({
+      .autoPlay = options.autoPlay,
+      .practice = options.practiceMode || options.practiceSession != nullptr,
+      .replayPlayback = isReplayPlayback(),
+      .coursePlayback = isCoursePlayback(),
+  });
+  analyticsReplay = {};
+  if (capturePolicy.captureAnalytics) {
+    analyticsReplay.autoPlay = options.autoPlay;
+    analyticsReplay.chartMeta = chart->Meta;
+    analyticsReplay.provenance = attemptProvenance;
+    analyticsReplay.events.reserve(
+        static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
+  }
+  if (!capturePolicy.recordReplay) {
     recordedReplay = {};
     return;
   }
@@ -1313,7 +1338,13 @@ void GamePlayScene::finishReplayRecording() {
 }
 
 void GamePlayScene::publishPracticeGhost() {
-  if (!options.practiceMode || practiceGhostPublished ||
+  const auto capturePolicy = practice::resultCapturePolicy({
+      .autoPlay = options.autoPlay,
+      .practice = options.practiceMode || options.practiceSession != nullptr,
+      .replayPlayback = isReplayPlayback(),
+      .coursePlayback = isCoursePlayback(),
+  });
+  if (!capturePolicy.publishPracticeGhost || practiceGhostPublished ||
       !options.practiceGhostCallback) {
     return;
   }
@@ -1332,9 +1363,11 @@ void GamePlayScene::completePracticeAttempt() {
   if (options.practiceSession == nullptr) {
     return;
   }
+  const bool recordReplay = shouldRecordReplay();
   finishReplayRecording();
-  recordedAttemptCompleted = true;
-  options.practiceSession->completeAttempt(std::move(recordedReplay));
+  recordedAttemptCompleted = recordReplay;
+  options.practiceSession->completeAttempt(
+      recordReplay ? std::move(recordedReplay) : std::move(analyticsReplay));
   publishPracticeGhost();
 }
 
@@ -1518,6 +1551,17 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
                 ? replayToSave
                 : (options.replayData != nullptr ? options.replayData.get()
                                                  : nullptr);
+        const auto capturePolicy = practice::resultCapturePolicy({
+            .autoPlay = options.autoPlay,
+            .practice =
+                options.practiceMode || options.practiceSession != nullptr,
+            .replayPlayback = isReplayPlayback(),
+            .coursePlayback = isCoursePlayback(),
+        });
+        const ReplayData *analyticsSource =
+            practice::selectResultAnalyticsSource(
+                capturePolicy.captureAnalytics ? &analyticsReplay : nullptr,
+                replayToSave, retrySource);
         ResultPracticeOptions practiceResultOptions;
         if (options.practiceMode) {
           practiceResultOptions.enabled = true;
@@ -1576,14 +1620,13 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
                 context, resultMeta, *state, attemptProvenance, replayToSave,
-                !options.autoPlay && !options.practiceMode &&
-                    !isReplayPlayback() && !isCoursePlayback(),
+                capturePolicy.persistScore,
                 retrySource, practiceResultOptions,
                 options.autoPlay || (options.replayData != nullptr &&
                                      options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
                 std::move(ownedReusableRetryChart), reusableRetryChart,
-                gbattleResultPacemaker),
+                gbattleResultPacemaker, analyticsSource),
             false);
         return false;
       },
@@ -2491,7 +2534,14 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
                                       long long songTimeMicros,
                                       long long judgeTimeMicros,
                                       const JudgeResult &judgeResult) {
-  if (!shouldRecordReplay() || state == nullptr) {
+  const auto capturePolicy = practice::resultCapturePolicy({
+      .autoPlay = options.autoPlay,
+      .practice = options.practiceMode || options.practiceSession != nullptr,
+      .replayPlayback = isReplayPlayback(),
+      .coursePlayback = isCoursePlayback(),
+  });
+  if ((!capturePolicy.recordReplay && !capturePolicy.captureAnalytics) ||
+      state == nullptr) {
     return;
   }
 
@@ -2509,7 +2559,12 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
   event.gaugeType = state->gaugeType;
   event.combo = state->combo;
   event.score = state->getScore();
-  recordedReplay.events.push_back(event);
+  if (capturePolicy.captureAnalytics) {
+    analyticsReplay.events.push_back(event);
+  }
+  if (capturePolicy.recordReplay) {
+    recordedReplay.events.push_back(event);
+  }
 }
 
 void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,

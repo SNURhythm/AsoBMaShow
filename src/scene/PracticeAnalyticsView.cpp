@@ -1,4 +1,5 @@
 #include "PracticeAnalyticsView.h"
+#include "PracticeAnalyticsPresentation.h"
 
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/common.h"
@@ -84,8 +85,7 @@ public:
 
   void setMode(PracticeAnalyticsMode value) {
     mode = value;
-    dragging = false;
-    activeTouchId = -1;
+    pointerCapture.cancelAll();
   }
 
 protected:
@@ -118,70 +118,87 @@ protected:
   bool handleEventsImpl(SDL_Event &event) override {
     if (mode != PracticeAnalyticsMode::Sections ||
         model.displayedAnalysis().sections.empty()) {
+      pointerCapture.cancelAll();
       return true;
     }
 
+    using practice_analytics_presentation::PointerPhase;
+    using practice_analytics_presentation::PointerTransition;
     float x = 0.0f;
     float y = 0.0f;
     switch (event.type) {
     case SDL_MOUSEBUTTONDOWN:
-      if (event.button.button != SDL_BUTTON_LEFT ||
-          event.button.which == SDL_TOUCH_MOUSEID) {
+      if (event.button.button != SDL_BUTTON_LEFT) {
         return true;
       }
       mouseToUi(event.button.x, event.button.y, x, y);
       if (!pointInside(*this, x, y)) {
         return true;
       }
-      dragging = true;
-      dragFirst = sectionForX(x);
-      publish(dragFirst, dragFirst);
+      if (pointerCapture.handleMouse(PointerPhase::Down,
+                                     event.button.which == SDL_TOUCH_MOUSEID) !=
+          PointerTransition::Begin) {
+        return true;
+      }
+      mouseDragFirst = sectionForX(x);
+      publish(mouseDragFirst, mouseDragFirst);
       return false;
     case SDL_MOUSEMOTION:
-      if (!dragging) {
+      if (pointerCapture.handleMouse(PointerPhase::Move,
+                                     event.motion.which == SDL_TOUCH_MOUSEID) !=
+          PointerTransition::Update) {
         return true;
       }
       mouseToUi(event.motion.x, event.motion.y, x, y);
-      publish(dragFirst, sectionForX(x));
+      publish(mouseDragFirst, sectionForX(x));
       return false;
     case SDL_MOUSEBUTTONUP:
-      if (!dragging || event.button.button != SDL_BUTTON_LEFT ||
-          event.button.which == SDL_TOUCH_MOUSEID) {
+      if (event.button.button != SDL_BUTTON_LEFT ||
+          pointerCapture.handleMouse(PointerPhase::Up,
+                                     event.button.which == SDL_TOUCH_MOUSEID) !=
+              PointerTransition::End) {
         return true;
       }
-      dragging = false;
       mouseToUi(event.button.x, event.button.y, x, y);
-      publish(dragFirst, sectionForX(x));
+      publish(mouseDragFirst, sectionForX(x));
       return false;
     case SDL_FINGERDOWN:
-      if (activeTouchId != -1) {
-        return true;
-      }
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
       if (!pointInside(*this, x, y)) {
         return true;
       }
-      activeTouchId = event.tfinger.fingerId;
-      dragging = true;
-      dragFirst = sectionForX(x);
-      publish(dragFirst, dragFirst);
+      if (pointerCapture.handleTouch(PointerPhase::Down,
+                                     event.tfinger.fingerId) !=
+          PointerTransition::Begin) {
+        return true;
+      }
+      touchDragFirst = sectionForX(x);
+      publish(touchDragFirst, touchDragFirst);
       return false;
     case SDL_FINGERMOTION:
-      if (!dragging || event.tfinger.fingerId != activeTouchId) {
+      if (pointerCapture.handleTouch(PointerPhase::Move,
+                                     event.tfinger.fingerId) !=
+          PointerTransition::Update) {
         return true;
       }
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
-      publish(dragFirst, sectionForX(x));
+      publish(touchDragFirst, sectionForX(x));
       return false;
     case SDL_FINGERUP:
-      if (!dragging || event.tfinger.fingerId != activeTouchId) {
+      if (pointerCapture.handleTouch(PointerPhase::Up,
+                                     event.tfinger.fingerId) !=
+          PointerTransition::End) {
         return true;
       }
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
-      dragging = false;
-      activeTouchId = -1;
-      publish(dragFirst, sectionForX(x));
+      publish(touchDragFirst, sectionForX(x));
       return false;
+    case SDL_WINDOWEVENT:
+      if (event.window.event == SDL_WINDOWEVENT_LEAVE ||
+          event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+        pointerCapture.cancelAll();
+      }
+      return true;
     default:
       return true;
     }
@@ -192,19 +209,17 @@ private:
   std::function<void(std::size_t, std::size_t)> listener;
   PracticeAnalyticsMode mode = PracticeAnalyticsMode::Histogram;
   rendering::SimpleBatchRenderer batch;
-  bool dragging = false;
-  SDL_FingerID activeTouchId = -1;
-  std::size_t dragFirst = 0;
+  practice_analytics_presentation::PointerCaptureState pointerCapture;
+  std::size_t mouseDragFirst = 0;
+  std::size_t touchDragFirst = 0;
 
   std::size_t sectionForX(float x) const {
     const std::size_t count = model.displayedAnalysis().sections.size();
     if (count <= 1 || getWidth() <= 0) {
       return 0;
     }
-    const float fraction = std::clamp((x - static_cast<float>(getX())) /
-                                          static_cast<float>(getWidth()),
-                                      0.0f, std::nextafter(1.0f, 0.0f));
-    return std::min(count - 1, static_cast<std::size_t>(fraction * count));
+    return practice_analytics_presentation::exactSectionForX(
+        count, x - static_cast<float>(getX()), static_cast<float>(getWidth()));
   }
 
   void publish(std::size_t first, std::size_t last) {
@@ -289,17 +304,18 @@ private:
     }
   }
 
-  static Color sectionColor(const practice::SectionAnalysis &section) {
-    if (section.badMissRate >= 0.25) {
+  static Color sectionColor(practice_analytics_presentation::SectionTone tone) {
+    using practice_analytics_presentation::SectionTone;
+    if (tone == SectionTone::Danger) {
       return ui_theme::coral();
     }
-    if (!section.timing.meanMillis.has_value()) {
+    if (tone == SectionTone::Neutral) {
       return ui_theme::control();
     }
-    if (*section.timing.meanMillis < -5.0) {
+    if (tone == SectionTone::Early) {
       return ui_theme::cyan();
     }
-    if (*section.timing.meanMillis > 5.0) {
+    if (tone == SectionTone::Late) {
       return ui_theme::amber();
     }
     return ui_theme::lime();
@@ -315,24 +331,16 @@ private:
     const float width = static_cast<float>(getWidth());
     const float height = static_cast<float>(getHeight());
     const float exactWidth = width / static_cast<float>(sections.size());
-    const std::size_t visualGroupSize = std::max<std::size_t>(
-        1, static_cast<std::size_t>(std::ceil(6.0f / exactWidth)));
-    for (std::size_t first = 0; first < sections.size();
-         first += visualGroupSize) {
-      const std::size_t last =
-          std::min(sections.size(), first + visualGroupSize);
-      std::size_t representative = first;
-      for (std::size_t index = first + 1; index < last; ++index) {
-        if (sections[index].badMissRate >
-            sections[representative].badMissRate) {
-          representative = index;
-        }
-      }
-      const float groupX = x + exactWidth * static_cast<float>(first);
-      const float groupEnd = x + exactWidth * static_cast<float>(last);
+    const auto visualGroups =
+        practice_analytics_presentation::visualSectionGroups(sections, width,
+                                                             6.0f);
+    for (const auto &group : visualGroups) {
+      const float groupX =
+          x + exactWidth * static_cast<float>(group.firstSection);
+      const float groupEnd =
+          x + exactWidth * static_cast<float>(group.lastSection + 1);
       batch.addRect(groupX, y + 2.0f, std::max(1.0f, groupEnd - groupX - 1.0f),
-                    height - 4.0f,
-                    sectionColor(sections[representative]).toABGR());
+                    height - 4.0f, sectionColor(group.tone).toABGR());
     }
     if (const auto selected = model.selectedRange(); selected.has_value()) {
       const auto first = std::find_if(
@@ -379,9 +387,10 @@ PracticeAnalyticsView::PracticeAnalyticsView(practice::ResultModel model)
 
 void PracticeAnalyticsView::build() {
   setWidthPercent(100.0f);
-  setHeight(250);
+  setFlexGrow(1.0f);
+  setFlexShrink(1.0f);
   setMinWidth(0);
-  setFlexShrink(0.0f);
+  setMinHeight(0);
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setGap(6);
@@ -446,6 +455,9 @@ void PracticeAnalyticsView::build() {
         selectSections(first, last);
       });
   chartView->setHeight(52);
+  chartView->setMinHeight(44);
+  chartView->setFlexGrow(1.0f);
+  chartView->setFlexShrink(1.0f);
   chartView->setWidthPercent(100.0f);
   chartView->setCornerRadius(ui_theme::controlRadius());
   chartView->setBorderColor(ui_theme::hairlineSubtle());

@@ -172,6 +172,7 @@ private:
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
+  ReplayData analyticsReplay;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   std::unordered_map<bms_parser::LongNote *, long long>

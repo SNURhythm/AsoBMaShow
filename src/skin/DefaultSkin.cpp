@@ -1,4 +1,5 @@
 #include "DefaultSkin.h"
+#include "../scene/PracticeAnalyticsPresentation.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -847,8 +848,11 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   auto *timingAnalyticsHost = new View();
   timingAnalyticsHost->setName("timingAnalytics");
   timingAnalyticsHost->setWidthPercent(100.0f);
-  timingAnalyticsHost->setHeight(250);
-  timingAnalyticsHost->setFlexShrink(0.0f);
+  timingAnalyticsHost->setHeight(
+      practice_analytics_presentation::kPreferredAnalyticsHeight);
+  timingAnalyticsHost->setMinHeight(
+      practice_analytics_presentation::kMinimumAnalyticsHeight);
+  timingAnalyticsHost->setFlexShrink(1.0f);
   timingAnalyticsHost->setFlexDirection(FlexDirection::Column);
   timingAnalyticsHost->setAlignItems(YGAlignStretch);
   rootLayout->addView(timingAnalyticsHost);

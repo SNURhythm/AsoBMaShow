@@ -14,6 +14,7 @@
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
+#include "PracticeAnalyticsPresentation.h"
 #include "PracticeAnalyticsView.h"
 
 #include "../rendering/Color.h"
@@ -276,7 +277,8 @@ ResultScene::ResultScene(
     std::string pacemakerTarget,
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
     bms_parser::Chart *reusableRetryChart,
-    std::optional<ResultPacemakerData> pacemakerOverride)
+    std::optional<ResultPacemakerData> pacemakerOverride,
+    const ReplayData *analyticsSource)
     : Scene(context), meta(meta), resultState(state),
       attemptProvenance(attemptProvenance),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
@@ -285,6 +287,9 @@ ResultScene::ResultScene(
                     ? std::optional<ReplayData>(*retrySource)
                     : (replay != nullptr ? std::optional<ReplayData>(*replay)
                                          : std::nullopt)),
+      analyticsData(analyticsSource != nullptr
+                        ? std::optional<ReplayData>(*analyticsSource)
+                        : std::nullopt),
       practiceOptions(std::move(practiceOptions)),
       courseOptions(std::move(courseOptions)),
       ownedReusableRetryChart(std::move(ownedReusableRetryChart)),
@@ -489,6 +494,9 @@ void ResultScene::addTimingAnalytics() {
   if (practiceOptions.session != nullptr) {
     completedAttempts = practiceOptions.session->completedAttempts();
     abandonedAttempts = practiceOptions.session->abandonedAttemptCount();
+  } else if (analyticsData.has_value()) {
+    singleAttempt.front() = *analyticsData;
+    completedAttempts = singleAttempt;
   } else if (replayToSave.has_value()) {
     singleAttempt.front() = *replayToSave;
     singleAttempt.front().autoPlay =
@@ -511,16 +519,25 @@ void ResultScene::addTimingAnalytics() {
     host = new View();
     host->setName("timingAnalytics");
     host->setWidthPercent(100.0f);
-    host->setHeight(250);
-    host->setFlexShrink(0.0f);
+    host->setHeight(
+        practice_analytics_presentation::kPreferredAnalyticsHeight);
+    host->setMinHeight(
+        practice_analytics_presentation::kMinimumAnalyticsHeight);
+    host->setFlexShrink(1.0f);
     host->setFlexDirection(FlexDirection::Column);
     host->setAlignItems(YGAlignStretch);
-    if (View *actions = rootLayout->findViewByName("resultActions");
-        actions != nullptr) {
-      actions->addView(host);
-    } else {
-      rootLayout->addView(host);
+    std::size_t insertionIndex = rootLayout->getChildren().size();
+    for (std::size_t index = 0; index < rootLayout->getChildren().size();
+         ++index) {
+      View *child = rootLayout->getChildren()[index];
+      if (child != nullptr &&
+          (child->getName() == "resultActions" ||
+           child->findViewByName("resultActions") != nullptr)) {
+        insertionIndex = index;
+        break;
+      }
     }
+    rootLayout->insertView(host, insertionIndex);
   }
 
   timingAnalyticsView = new PracticeAnalyticsView(practice::ResultModel(
