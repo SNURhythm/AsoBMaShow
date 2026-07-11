@@ -263,6 +263,76 @@ void testPortableFileValidationRejectsInvalidData() {
          "malformed portable preset JSON is rejected distinctly");
 }
 
+void testPortableFileValidationRejectsUndeclaredFieldsAndInvalidIds() {
+  TempDirectory temp;
+  practice::PresetStore store(temp.path());
+  std::string error;
+  expect(store.saveLastUsed(kHash, configuration(1'000'000, 5'000'000), error),
+         "strict portable validation fixture saves: " + error);
+  expect(store
+             .saveNamed(kHash, "Opening", configuration(1'000'000, 3'000'000),
+                        error)
+             .has_value(),
+         "strict portable validation named fixture saves: " + error);
+  const auto path = temp.path() / (std::string(kNormalizedHash) + ".json");
+
+  nlohmann::json document;
+  {
+    std::ifstream input(path);
+    input >> document;
+  }
+  auto statusFor = [&](const nlohmann::json &candidate) {
+    {
+      std::ofstream output(path, std::ios::trunc);
+      output << candidate.dump();
+    }
+    return practice::validatePresetFile(path, 1).status;
+  };
+
+  nlohmann::json unexpectedRoot = document;
+  unexpectedRoot["future"] = true;
+  expect(statusFor(unexpectedRoot) == versioned_json::LoadStatus::InvalidRoot,
+         "portable root rejects undeclared schema-v1 fields");
+
+  nlohmann::json unexpectedLastUsed = document;
+  unexpectedLastUsed["lastUsed"]["future"] = true;
+  expect(statusFor(unexpectedLastUsed) ==
+             versioned_json::LoadStatus::InvalidRoot,
+         "portable last-used configuration rejects undeclared fields");
+
+  nlohmann::json unexpectedJudge = document;
+  unexpectedJudge["lastUsed"]["judge"]["future"] = true;
+  expect(statusFor(unexpectedJudge) == versioned_json::LoadStatus::InvalidRoot,
+         "portable judge object rejects undeclared fields");
+
+  nlohmann::json unexpectedPlayback = document;
+  unexpectedPlayback["lastUsed"]["playback"]["future"] = true;
+  expect(statusFor(unexpectedPlayback) ==
+             versioned_json::LoadStatus::InvalidRoot,
+         "portable playback object rejects undeclared fields");
+
+  nlohmann::json unexpectedNamed = document;
+  unexpectedNamed["named"][0]["future"] = true;
+  expect(statusFor(unexpectedNamed) == versioned_json::LoadStatus::InvalidRoot,
+         "portable named entry rejects undeclared fields");
+
+  nlohmann::json unexpectedNamedConfiguration = document;
+  unexpectedNamedConfiguration["named"][0]["configuration"]["future"] = true;
+  expect(statusFor(unexpectedNamedConfiguration) ==
+             versioned_json::LoadStatus::InvalidRoot,
+         "portable named configuration rejects undeclared fields");
+
+  nlohmann::json invalidId = document;
+  invalidId["named"][0]["id"] = "not-a-valid-preset-id";
+  expect(statusFor(invalidId) == versioned_json::LoadStatus::InvalidRoot,
+         "portable named entry rejects invalid preset IDs");
+
+  nlohmann::json duplicateId = document;
+  duplicateId["named"].push_back(duplicateId["named"][0]);
+  expect(statusFor(duplicateId) == versioned_json::LoadStatus::InvalidRoot,
+         "portable named entries require unique preset IDs");
+}
+
 void testMalformedFileReturnsNeutralDefaults() {
   TempDirectory temp;
   {
@@ -345,6 +415,7 @@ int main() {
   testHashMismatchIsRejected();
   testPortableFilenameClassificationIsExact();
   testPortableFileValidationRejectsInvalidData();
+  testPortableFileValidationRejectsUndeclaredFieldsAndInvalidIds();
   testMalformedFileReturnsNeutralDefaults();
   testFailedAtomicReplacePreservesPreviousFile();
   testLoadResultUsabilityAndNotices();

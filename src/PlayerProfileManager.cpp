@@ -454,16 +454,6 @@ bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
                            : "profile practice file exceeds the 1 MiB limit";
       return false;
     }
-    if (primary) {
-      const auto validation = practice::validatePresetFile(
-          entry.path(), practice::kPresetSchemaVersion);
-      if (!validation.valid()) {
-        errorMessage = validation.diagnostics.empty()
-                           ? "profile practice preset data is invalid"
-                           : validation.diagnostics.front();
-        return false;
-      }
-    }
     if (files && primary) {
       files->push_back(entry.path());
     }

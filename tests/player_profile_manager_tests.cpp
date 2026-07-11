@@ -858,6 +858,17 @@ void testPracticeDirectoryLifecycleAndValidation() {
   writeFile(presetPath, validPracticePresetJson(hash));
   expect(manager.validateProfile(sourceId).ok(),
          "routine validation admits semantic hash-matched practice JSON");
+  writeFile(presetPath, "{not-json");
+  expect(manager.validateProfile(sourceId).ok() &&
+             manager.validateProfileForActivation(sourceId).ok(),
+         "malformed optional practice JSON remains structurally valid and "
+         "activatable");
+  const auto malformedVisibleProfiles = manager.listProfiles();
+  expect(std::ranges::find(malformedVisibleProfiles, sourceId,
+                           &PlayerProfile::id) !=
+             malformedVisibleProfiles.end(),
+         "malformed optional practice JSON does not hide its profile");
+  writeFile(presetPath, validPracticePresetJson(hash));
   const std::array<std::string_view, 4> sidecarSuffixes = {
       ".tmp", ".bak", ".bak.pending", ".bak.previous"};
   for (const std::string_view suffix : sidecarSuffixes) {

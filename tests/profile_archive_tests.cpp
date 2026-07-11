@@ -750,6 +750,53 @@ void testPresetStoreSidecarRemainsProfilePortable() {
   }
 }
 
+void testMalformedOptionalPracticeRemainsVisibleButCannotExport() {
+  Fixture fixture;
+  const auto primary =
+      fixture.manager.pathsFor(fixture.sourceId).practiceDirectory /
+      (std::string(kPracticeHash) + ".json");
+  const std::string validContents = readFile(primary);
+  writeFile(primary, "{not-json");
+
+  expect(
+      fixture.manager.validateProfile(fixture.sourceId).ok() &&
+          fixture.manager.validateProfileForActivation(fixture.sourceId).ok(),
+      "malformed optional practice data remains visible and activatable");
+  const auto visible = fixture.manager.listProfiles();
+  expect(std::ranges::find(visible, fixture.sourceId, &PlayerProfile::id) !=
+             visible.end(),
+         "malformed optional practice data does not hide its profile");
+
+  const auto destination = fixture.exchange.path() / "malformed-practice.zip";
+  bool temporaryArchiveWritten = false;
+  ProfileArchiveDependencies dependencies;
+  dependencies.beforeExportPhase = [&](ProfileArchiveExportPhase,
+                                       std::string &) {
+    temporaryArchiveWritten = true;
+    return true;
+  };
+  ProfileArchiveService service(fixture.manager, std::move(dependencies));
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(exported.error == ProfileError::IntegrityFailure &&
+             !std::filesystem::exists(destination) && !temporaryArchiveWritten,
+         "portable export rejects malformed primary practice JSON before "
+         "writing an archive");
+
+  Json invalid = Json::parse(validContents);
+  invalid["lastUsed"]["future"] = true;
+  writeFile(primary, invalid.dump());
+  temporaryArchiveWritten = false;
+  const auto invalidDestination =
+      fixture.exchange.path() / "invalid-practice.zip";
+  const auto invalidExport =
+      service.Export(fixture.sourceId, invalidDestination);
+  expect(invalidExport.error == ProfileError::IntegrityFailure &&
+             !std::filesystem::exists(invalidDestination) &&
+             !temporaryArchiveWritten,
+         "portable export rejects invalid primary practice JSON before "
+         "writing an archive");
+}
+
 void testArchiveUsesNativeUnicodeFilesystemPaths() {
   Fixture fixture;
   const auto archive =
@@ -1211,6 +1258,18 @@ void testPracticeMembersAreValidatedBeforeInstall() {
   Json semantic = document;
   semantic["lastUsed"]["countInBeats"] = 17;
   rejectPractice(valid, semantic.dump(), "invalid-practice-semantics");
+
+  Json undeclared = document;
+  undeclared["lastUsed"]["judge"]["future"] = true;
+  rejectPractice(valid, undeclared.dump(), "undeclared-practice-field");
+
+  Json duplicateIds = document;
+  Json namedEntry{{"id", "0123456789abcdef0123456789abcdef"},
+                  {"name", "Opening"},
+                  {"configuration", document["lastUsed"]}};
+  duplicateIds["named"].push_back(namedEntry);
+  duplicateIds["named"].push_back(namedEntry);
+  rejectPractice(valid, duplicateIds.dump(), "duplicate-practice-preset-id");
 
   ProfileArchiveService service(fixture.manager);
   const auto imported = service.Import(validPath);
@@ -2348,6 +2407,7 @@ int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
   testPresetStoreSidecarRemainsProfilePortable();
+  testMalformedOptionalPracticeRemainsVisibleButCannotExport();
   testArchiveUsesNativeUnicodeFilesystemPaths();
   testCreateImportUsesNewIdAndRoundTripsExactly();
   testVersionOneArchiveImportsWithEmptyPracticeDirectory();

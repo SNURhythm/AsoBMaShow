@@ -1571,6 +1571,19 @@ ProfileArchiveService::Export(std::string_view profileId,
         }
         continue;
       }
+      if (kind == practice::PresetFileKind::Primary) {
+        const auto validation = practice::validatePresetFile(
+            practiceFile, practice::kPresetSchemaVersion);
+        if (!validation.valid()) {
+          return failure(
+              validation.status == versioned_json::LoadStatus::FutureVersion
+                  ? ProfileError::FutureVersion
+                  : ProfileError::IntegrityFailure,
+              validation.diagnostics.empty()
+                  ? "practice preset is invalid for portable export"
+                  : validation.diagnostics.front());
+        }
+      }
       if (kind != practice::PresetFileKind::Primary ||
           !copyFileStreaming(practiceFile,
                              workspace / "practice" / practiceFile.filename(),

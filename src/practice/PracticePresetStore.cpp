@@ -45,6 +45,99 @@ std::optional<std::string> normalizedName(std::string value) {
   return normalized;
 }
 
+template <std::size_t Size>
+bool hasOnlyKeys(const Json &document,
+                 const std::array<std::string_view, Size> &allowed) {
+  if (!document.is_object()) {
+    return false;
+  }
+  return std::ranges::all_of(document.items(), [&](const auto &item) {
+    return std::ranges::find(allowed, item.key()) != allowed.end();
+  });
+}
+
+template <std::size_t Size>
+bool hasAllKeys(const Json &document,
+                const std::array<std::string_view, Size> &required) {
+  return std::ranges::all_of(required, [&](std::string_view key) {
+    return document.contains(std::string(key));
+  });
+}
+
+bool validPresetId(std::string_view id) {
+  return id.size() == 32 &&
+         std::ranges::all_of(id, [](unsigned char character) {
+           return std::isdigit(character) ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+bool strictConfigurationShape(const Json &document) {
+  static constexpr std::array<std::string_view, 10> allowed = {
+      "chartSha256",  "startMicros", "endMicros",      "loop",
+      "countInBeats", "gaugeType",   "gaugeAutoShift", "startingGaugePercent",
+      "judge",        "playback"};
+  static constexpr std::array<std::string_view, 9> required = {
+      "chartSha256",
+      "startMicros",
+      "endMicros",
+      "loop",
+      "countInBeats",
+      "gaugeType",
+      "startingGaugePercent",
+      "judge",
+      "playback"};
+  static constexpr std::array<std::string_view, 2> judgeKeys = {"kind",
+                                                                "scalePercent"};
+  static constexpr std::array<std::string_view, 2> playbackKeys = {"percent",
+                                                                   "mode"};
+  if (!hasOnlyKeys(document, allowed) || !hasAllKeys(document, required) ||
+      !document.at("judge").is_object() ||
+      document.at("judge").size() != judgeKeys.size() ||
+      !hasAllKeys(document.at("judge"), judgeKeys) ||
+      !hasOnlyKeys(document.at("judge"), judgeKeys) ||
+      !document.at("playback").is_object() ||
+      document.at("playback").size() != playbackKeys.size() ||
+      !hasAllKeys(document.at("playback"), playbackKeys) ||
+      !hasOnlyKeys(document.at("playback"), playbackKeys)) {
+    return false;
+  }
+  return document.size() == allowed.size() ||
+         (document.size() + 1 == allowed.size() &&
+          !document.contains("gaugeAutoShift"));
+}
+
+bool strictPortableDocumentShape(const Json &document) {
+  static constexpr std::array<std::string_view, 4> rootKeys = {
+      "schemaVersion", "chartSha256", "lastUsed", "named"};
+  static constexpr std::array<std::string_view, 3> namedKeys = {
+      "id", "name", "configuration"};
+  if (document.size() != rootKeys.size() || !hasAllKeys(document, rootKeys) ||
+      !hasOnlyKeys(document, rootKeys) ||
+      !strictConfigurationShape(document.at("lastUsed")) ||
+      !document.at("named").is_array()) {
+    return false;
+  }
+  std::vector<std::string> ids;
+  for (const Json &encoded : document.at("named")) {
+    if (encoded.size() != namedKeys.size() || !hasAllKeys(encoded, namedKeys) ||
+        !hasOnlyKeys(encoded, namedKeys) || !encoded.at("id").is_string() ||
+        !encoded.at("name").is_string() ||
+        !strictConfigurationShape(encoded.at("configuration"))) {
+      return false;
+    }
+    const std::string id = encoded.at("id").get<std::string>();
+    const std::string name = encoded.at("name").get<std::string>();
+    const auto normalized = normalizedName(name);
+    if (!validPresetId(id) || !normalized ||
+        std::ranges::find(ids, id) != ids.end()) {
+      return false;
+    }
+    ids.push_back(id);
+  }
+  return true;
+}
+
 const char *gaugeTypeName(GaugeType value) {
   switch (value) {
   case GaugeType::AssistedEasy:
@@ -403,6 +496,11 @@ PresetFileValidationResult validatePresetFile(const std::filesystem::path &path,
   if (encodedVersion != expectedSchemaVersion) {
     result.diagnostics.emplace_back(
         "practice preset schema does not match the profile manifest");
+    return result;
+  }
+  if (!strictPortableDocumentShape(document)) {
+    result.diagnostics.emplace_back(
+        "practice preset contains undeclared or invalid schema-v1 fields");
     return result;
   }
 
