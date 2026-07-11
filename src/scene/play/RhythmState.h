@@ -673,7 +673,8 @@ public:
       if (!gaugeAutoShift && type != gaugeType) {
         continue;
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeSurvivalFailed[i]) {
+      const bool survival = gaugeIsSurvival(type, gaugeProfile);
+      if (survival && gaugeSurvivalFailed[i]) {
         gaugeValues[i] = 0.0f;
         continue;
       }
@@ -682,12 +683,12 @@ public:
           type, judgement, gaugeTotalNotes, gaugeTotal, gaugeValues[i],
           gaugeProfile) *
                           rate;
-      if (gaugeValues[i] > 0.0f) {
+      if (gaugeValues[i] > 0.0f || !survival) {
         gaugeValues[i] = std::clamp(gaugeValues[i] + delta,
                                     gaugeMinimumValue(type, gaugeProfile),
                                     100.0f);
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeValues[i] <= 0.0f) {
+      if (survival && gaugeValues[i] <= 0.0f) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
       }
@@ -706,17 +707,18 @@ public:
       if (!gaugeAutoShift && type != gaugeType) {
         continue;
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeSurvivalFailed[i]) {
+      const bool survival = gaugeIsSurvival(type, gaugeProfile);
+      if (survival && gaugeSurvivalFailed[i]) {
         gaugeValues[i] = 0.0f;
         continue;
       }
 
-      if (gaugeValues[i] > 0.0f) {
+      if (gaugeValues[i] > 0.0f || !survival) {
         gaugeValues[i] = std::clamp(gaugeValues[i] + delta,
                                     gaugeMinimumValue(type, gaugeProfile),
                                     100.0f);
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeValues[i] <= 0.0f) {
+      if (survival && gaugeValues[i] <= 0.0f) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
       }
