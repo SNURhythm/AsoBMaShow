@@ -9,6 +9,7 @@
 #include "ScoreDBHelper.h"
 #include "input/InputProfile.h"
 #include "input/InputProfileStore.h"
+#include "practice/PracticePresetStore.h"
 
 #include "../yoga/lib/nlohmann/json.hpp"
 
@@ -637,23 +638,9 @@ bool isUuid(std::string_view value) {
 
 bool isPracticeMember(std::string_view name) {
   constexpr std::string_view prefix = "practice/";
-  constexpr std::string_view suffix = ".json";
-  if (!name.starts_with(prefix) || !name.ends_with(suffix) ||
-      name.size() != prefix.size() + 64 + suffix.size()) {
-    return false;
-  }
-  for (const unsigned char character : name.substr(prefix.size(), 64)) {
-    if (!std::isdigit(character) && !(character >= 'a' && character <= 'f')) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool isPracticeBackupMember(std::string_view name) {
-  constexpr std::string_view suffix = ".bak";
-  return name.ends_with(suffix) &&
-         isPracticeMember(name.substr(0, name.size() - suffix.size()));
+  return name.starts_with(prefix) &&
+         practice::classifyPresetFilename(name.substr(prefix.size())) ==
+             practice::PresetFileKind::Primary;
 }
 
 bool isKnownMember(std::string_view name) {
@@ -1333,6 +1320,23 @@ validateArchive(const std::filesystem::path &archivePath,
     return {.error = ProfileError::IntegrityFailure,
             .message = "version-one archive cannot contain practice data"};
   }
+  for (const std::string &name : memberNames) {
+    if (!isPracticeMember(name)) {
+      continue;
+    }
+    const auto practiceValidation = practice::validatePresetFile(
+        extractDirectory / name, manifest.manifest->practiceSchemaVersion);
+    if (!practiceValidation.valid()) {
+      const std::string detail = practiceValidation.diagnostics.empty()
+                                     ? "archive practice preset is invalid"
+                                     : practiceValidation.diagnostics.front();
+      return {.error = practiceValidation.status ==
+                               versioned_json::LoadStatus::FutureVersion
+                           ? ProfileError::FutureVersion
+                           : ProfileError::IntegrityFailure,
+              .message = detail};
+    }
+  }
 
   const auto settings =
       AppSettingsStore::Load(extractDirectory / "settings.json");
@@ -1549,7 +1553,9 @@ ProfileArchiveService::Export(std::string_view profileId,
     for (const auto &practiceFile : practiceFiles) {
       const std::string memberName =
           "practice/" + practiceFile.filename().string();
-      if (isPracticeBackupMember(memberName)) {
+      const practice::PresetFileKind kind =
+          practice::classifyPresetFilename(practiceFile.filename().string());
+      if (kind == practice::PresetFileKind::AtomicSidecar) {
         const auto status =
             std::filesystem::symlink_status(practiceFile, filesystemError);
         const auto size =
@@ -1565,7 +1571,7 @@ ProfileArchiveService::Export(std::string_view profileId,
         }
         continue;
       }
-      if (!isPracticeMember(memberName) ||
+      if (kind != practice::PresetFileKind::Primary ||
           !copyFileStreaming(practiceFile,
                              workspace / "practice" / practiceFile.filename(),
                              memberName, errorMessage)) {

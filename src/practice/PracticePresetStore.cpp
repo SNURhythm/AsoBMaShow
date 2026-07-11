@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <fstream>
 #include <limits>
 #include <random>
 #include <ranges>
@@ -12,7 +13,6 @@
 namespace practice {
 namespace {
 using Json = nlohmann::json;
-constexpr int kSchemaVersion = 1;
 
 std::optional<std::string> normalizedSha256(std::string_view value) {
   if (value.size() != 64 ||
@@ -168,8 +168,8 @@ PresetLoadResult loadData(const std::filesystem::path &directory,
   PresetLoadResult result{.data = neutralData(*hash, chartEndMicros)};
   const std::array<versioned_json::Migration, 1> migrations = {
       [](Json &, std::string &) { return true; }};
-  auto loaded = versioned_json::loadAndMigrate(pathFor(directory, *hash),
-                                               kSchemaVersion, migrations);
+  auto loaded = versioned_json::loadAndMigrate(
+      pathFor(directory, *hash), kPresetSchemaVersion, migrations);
   result.status = loaded.status;
   result.diagnostics = std::move(loaded.diagnostics);
   if (loaded.status == versioned_json::LoadStatus::Missing) {
@@ -246,7 +246,7 @@ Json presetDataJson(const std::string &hash, const PresetData &data) {
          {"name", preset.name},
          {"configuration", configurationJson(preset.configuration)}});
   }
-  return {{"schemaVersion", kSchemaVersion},
+  return {{"schemaVersion", kPresetSchemaVersion},
           {"chartSha256", hash},
           {"lastUsed", configurationJson(data.lastUsed)},
           {"named", std::move(named)}};
@@ -302,6 +302,122 @@ std::string generatePresetId(const PresetData &data) {
   }
 }
 } // namespace
+
+PresetFileKind classifyPresetFilename(std::string_view filename) noexcept {
+  constexpr std::string_view primarySuffix = ".json";
+  constexpr std::array<std::string_view, 4> sidecarSuffixes = {
+      ".tmp", ".bak", ".bak.pending", ".bak.previous"};
+  std::string_view primary = filename;
+  bool sidecar = false;
+  for (const std::string_view suffix : sidecarSuffixes) {
+    if (filename.ends_with(suffix)) {
+      primary.remove_suffix(suffix.size());
+      sidecar = true;
+      break;
+    }
+  }
+  if (primary.size() != 64 + primarySuffix.size() ||
+      !primary.ends_with(primarySuffix)) {
+    return PresetFileKind::Invalid;
+  }
+  for (const unsigned char character : primary.substr(0, 64)) {
+    if (!std::isdigit(character) && !(character >= 'a' && character <= 'f')) {
+      return PresetFileKind::Invalid;
+    }
+  }
+  return sidecar ? PresetFileKind::AtomicSidecar : PresetFileKind::Primary;
+}
+
+PresetFileValidationResult validatePresetFile(const std::filesystem::path &path,
+                                              int expectedSchemaVersion) {
+  PresetFileValidationResult result;
+  if (classifyPresetFilename(path.filename().string()) !=
+      PresetFileKind::Primary) {
+    result.diagnostics.emplace_back(
+        "practice preset filename is not a normalized chart SHA-256 JSON");
+    return result;
+  }
+  if (expectedSchemaVersion > kPresetSchemaVersion) {
+    result.status = versioned_json::LoadStatus::FutureVersion;
+    result.diagnostics.emplace_back(
+        "practice preset schema is newer than supported");
+    return result;
+  }
+  if (expectedSchemaVersion < 0) {
+    result.diagnostics.emplace_back("practice preset schema is invalid");
+    return result;
+  }
+
+  Json document;
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    result.status = versioned_json::LoadStatus::IoError;
+    result.diagnostics.emplace_back("unable to open practice preset file");
+    return result;
+  }
+  try {
+    input >> document;
+  } catch (const Json::exception &exception) {
+    result.status = versioned_json::LoadStatus::Malformed;
+    result.diagnostics.push_back(
+        std::string("malformed practice preset JSON: ") + exception.what());
+    return result;
+  }
+  if (input.bad()) {
+    result.status = versioned_json::LoadStatus::IoError;
+    result.diagnostics.emplace_back("I/O failure reading practice preset file");
+    return result;
+  }
+  if (!document.is_object() || !document.contains("schemaVersion") ||
+      !document.at("schemaVersion").is_number_integer()) {
+    result.diagnostics.emplace_back(
+        "practice preset schemaVersion must be an integer");
+    return result;
+  }
+  std::int64_t encodedVersion = 0;
+  try {
+    if (document.at("schemaVersion").is_number_unsigned()) {
+      const auto encoded = document.at("schemaVersion").get<std::uint64_t>();
+      if (encoded > static_cast<std::uint64_t>(kPresetSchemaVersion)) {
+        result.status = versioned_json::LoadStatus::FutureVersion;
+        result.diagnostics.emplace_back(
+            "practice preset schema is newer than supported");
+        return result;
+      }
+      encodedVersion = static_cast<std::int64_t>(encoded);
+    } else {
+      encodedVersion = document.at("schemaVersion").get<std::int64_t>();
+    }
+  } catch (const Json::exception &exception) {
+    result.diagnostics.push_back(
+        std::string("practice preset schemaVersion is invalid: ") +
+        exception.what());
+    return result;
+  }
+  if (encodedVersion > kPresetSchemaVersion) {
+    result.status = versioned_json::LoadStatus::FutureVersion;
+    result.diagnostics.emplace_back(
+        "practice preset schema is newer than supported");
+    return result;
+  }
+  if (encodedVersion != expectedSchemaVersion) {
+    result.diagnostics.emplace_back(
+        "practice preset schema does not match the profile manifest");
+    return result;
+  }
+
+  const std::string filename = path.filename().string();
+  const std::string hash = filename.substr(0, 64);
+  PresetLoadResult loaded =
+      loadData(path.parent_path(), hash, std::numeric_limits<long long>::max());
+  result.status = loaded.status;
+  result.diagnostics = std::move(loaded.diagnostics);
+  if (result.status == versioned_json::LoadStatus::Loaded &&
+      !result.diagnostics.empty()) {
+    result.status = versioned_json::LoadStatus::InvalidRoot;
+  }
+  return result;
+}
 
 bool PresetLoadResult::usable() const noexcept {
   return status == versioned_json::LoadStatus::Loaded ||

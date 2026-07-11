@@ -10,6 +10,26 @@
 #include <vector>
 
 namespace practice {
+inline constexpr int kPresetSchemaVersion = 1;
+
+enum class PresetFileKind { Invalid, Primary, AtomicSidecar };
+
+[[nodiscard]] PresetFileKind
+classifyPresetFilename(std::string_view filename) noexcept;
+
+struct PresetFileValidationResult {
+  versioned_json::LoadStatus status = versioned_json::LoadStatus::InvalidRoot;
+  std::vector<std::string> diagnostics;
+
+  [[nodiscard]] bool valid() const noexcept {
+    return status == versioned_json::LoadStatus::Loaded;
+  }
+};
+
+[[nodiscard]] PresetFileValidationResult
+validatePresetFile(const std::filesystem::path &path,
+                   int expectedSchemaVersion);
+
 struct NamedPreset {
   std::string id;
   std::string name;

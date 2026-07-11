@@ -430,7 +430,11 @@ struct Fixture {
                                  "33333333-3333-4333-8333-333333333333",
                                  "44444444-4444-4444-8444-444444444444",
                                  "55555555-5555-4555-8555-555555555555",
-                                 "66666666-6666-4666-8666-666666666666"};
+                                 "66666666-6666-4666-8666-666666666666",
+                                 "77777777-7777-4777-8777-777777777777",
+                                 "88888888-8888-4888-8888-888888888888",
+                                 "99999999-9999-4999-8999-999999999999",
+                                 "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"};
   std::size_t uuidIndex = 0;
   PlayerProfileManager manager;
   std::string sourceId;
@@ -468,9 +472,18 @@ struct Fixture {
     seedMarker(manager.pathsFor(targetId).scoresDb, "score-target");
     seedMarker(manager.pathsFor(targetId).replaysDb, "replay-target");
     seedProvenance(manager.pathsFor(sourceId));
-    writeFile(manager.pathsFor(sourceId).practiceDirectory /
-                  (std::string(kPracticeHash) + ".json"),
-              "{\"schemaVersion\":1,\"practice\":\"portable\"}\n");
+    practice::PresetStore presetStore(
+        manager.pathsFor(sourceId).practiceDirectory);
+    practice::Configuration configuration{
+        .chartSha256 = std::string(kPracticeHash),
+        .startMicros = 1'000'000,
+        .endMicros = 9'000'000,
+        .loop = true,
+        .gaugeType = GaugeType::Normal,
+        .playback = {.percent = 100},
+    };
+    expect(presetStore.saveLastUsed(kPracticeHash, configuration, error),
+           "archive source practice preset saves: " + error);
     expect(manager.validateProfile(sourceId).ok(),
            "archive source remains valid after seeding");
     expect(manager.validateProfile(targetId).ok(),
@@ -659,6 +672,13 @@ void testPresetStoreSidecarRemainsProfilePortable() {
          "integration last-used practice configuration saves: " + error);
   expect(store.saveNamed(kPracticeHash, "Opening", lastUsed, error).has_value(),
          "integration named practice preset saves: " + error);
+  const auto primary =
+      source.practiceDirectory / (std::string(kPracticeHash) + ".json");
+  for (const std::string_view suffix :
+       {".tmp", ".bak.pending", ".bak.previous"}) {
+    writeFile(std::filesystem::path(primary.string() + std::string(suffix)),
+              "bounded crash sidecar\n");
+  }
 
   std::vector<std::string> sourceEntries;
   for (const auto &entry :
@@ -667,10 +687,14 @@ void testPresetStoreSidecarRemainsProfilePortable() {
   }
   std::ranges::sort(sourceEntries);
   expect(sourceEntries ==
-             std::vector<std::string>{std::string(kPracticeHash) + ".json",
-                                      std::string(kPracticeHash) + ".json.bak"},
-         "live profile practice storage contains only the primary JSON and "
-         "its exact backup sidecar");
+             std::vector<std::string>{
+                 std::string(kPracticeHash) + ".json",
+                 std::string(kPracticeHash) + ".json.bak",
+                 std::string(kPracticeHash) + ".json.bak.pending",
+                 std::string(kPracticeHash) + ".json.bak.previous",
+                 std::string(kPracticeHash) + ".json.tmp"},
+         "live profile practice storage recognizes every exact atomic "
+         "writer sidecar");
   expect(manager.validateProfile(sourceId).ok(),
          "profile validation accepts the PresetStore atomic backup sidecar");
 
@@ -690,8 +714,7 @@ void testPresetStoreSidecarRemainsProfilePortable() {
            "profile duplication copies the portable primary JSON, not its "
            "rollback sidecar");
     practice::PresetStore duplicateStore(duplicatePractice);
-    const auto duplicatePreset =
-        duplicateStore.load(kPracticeHash, 10'000'000);
+    const auto duplicatePreset = duplicateStore.load(kPracticeHash, 10'000'000);
     expect(duplicatePreset.status == versioned_json::LoadStatus::Loaded &&
                duplicatePreset.data.lastUsed.gaugeType == GaugeType::ExHard &&
                duplicatePreset.data.lastUsed.gaugeAutoShift,
@@ -706,11 +729,16 @@ void testPresetStoreSidecarRemainsProfilePortable() {
   if (exported.ok()) {
     auto members = readArchive(archive, error);
     const auto *practiceMember =
-        findMember(members,
-                   "practice/" + std::string(kPracticeHash) + ".json");
+        findMember(members, "practice/" + std::string(kPracticeHash) + ".json");
     expect(practiceMember != nullptr &&
-               findMember(members, "practice/" + std::string(kPracticeHash) +
-                                       ".json.bak") == nullptr,
+               std::ranges::none_of(
+                   members,
+                   [](const ArchiveMember &member) {
+                     return member.name.starts_with("practice/") &&
+                            member.name != "practice/" +
+                                               std::string(kPracticeHash) +
+                                               ".json";
+                   }),
            "portable archive includes only the primary practice JSON");
     const Json practiceDocument =
         practiceMember == nullptr
@@ -1056,6 +1084,7 @@ void expectRejectedWithoutMutation(
   expect(writeArchive(archive, members, error),
          std::string(label) + " malicious archive writes: " + error);
   const std::size_t profilesBefore = fixture.manager.listProfiles().size();
+  const std::size_t uuidIndexBefore = fixture.uuidIndex;
   std::filesystem::path observedWorkspace;
   ProfileArchiveDependencies dependencies;
   dependencies.importWorkspaceCreated =
@@ -1068,6 +1097,8 @@ void expectRejectedWithoutMutation(
          std::string(label) + " archive is rejected: " + result.message);
   expect(fixture.manager.listProfiles().size() == profilesBefore,
          std::string(label) + " rejection does not create a profile");
+  expect(fixture.uuidIndex == uuidIndexBefore,
+         std::string(label) + " rejection occurs before profile install");
   expect(transactionArtifacts(fixture.temp.path()).empty(),
          std::string(label) + " rejection leaves no transaction artifacts");
   expect(!observedWorkspace.empty() &&
@@ -1102,6 +1133,9 @@ void testStrictMemberAllowlistAndTypes() {
            std::string("../manifest.json"), std::string("/manifest.json"),
            std::string("C:/manifest.json"), std::string("folder/manifest.json"),
            std::string("practice/not-a-hash.json"),
+           std::string("practice/") + std::string(kPracticeHash) + ".json.tmp",
+           std::string("practice/") + std::string(kPracticeHash) + ".json.bak",
+           std::string("practice/") + std::string(kPracticeHash) + ".json.old",
            std::string("practice/"
                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                        "AAAAAAAAA.json"),
@@ -1127,6 +1161,69 @@ void testStrictMemberAllowlistAndTypes() {
   directory.front().type = AE_IFDIR;
   directory.front().contents.clear();
   expectRejectedWithoutMutation(fixture, directory, "directory-member");
+}
+
+void testPracticeMembersAreValidatedBeforeInstall() {
+  Fixture fixture;
+  const auto validPath = exportFixture(fixture, "practice-validation.zip");
+  std::string error;
+  auto valid = readArchive(validPath, error);
+  expect(error.empty(), "practice validation source archive reads: " + error);
+  const std::string memberName =
+      "practice/" + std::string(kPracticeHash) + ".json";
+
+  auto rejectPractice = [&](std::vector<ArchiveMember> members,
+                            std::string contents, std::string_view label,
+                            ProfileError expected =
+                                ProfileError::IntegrityFailure) {
+    ArchiveMember *practiceMember = findMember(members, memberName);
+    expect(practiceMember != nullptr,
+           std::string(label) + " source practice member exists");
+    if (!practiceMember) {
+      return;
+    }
+    practiceMember->contents = std::move(contents);
+    refreshChecksums(members);
+    expectRejectedWithoutMutation(fixture, members, label, expected);
+  };
+
+  rejectPractice(valid, "{not-json", "malformed-practice");
+
+  ArchiveMember *validPractice = findMember(valid, memberName);
+  if (!validPractice) {
+    return;
+  }
+  Json document = Json::parse(validPractice->contents);
+  Json future = document;
+  future["schemaVersion"] = practice::kPresetSchemaVersion + 1;
+  rejectPractice(valid, future.dump(), "future-practice",
+                 ProfileError::FutureVersion);
+
+  Json wrongSchema = document;
+  wrongSchema["schemaVersion"] = practice::kPresetSchemaVersion - 1;
+  rejectPractice(valid, wrongSchema.dump(), "mismatched-practice-schema");
+
+  Json mismatched = document;
+  mismatched["chartSha256"] =
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+  rejectPractice(valid, mismatched.dump(), "mismatched-practice-hash");
+
+  Json semantic = document;
+  semantic["lastUsed"]["countInBeats"] = 17;
+  rejectPractice(valid, semantic.dump(), "invalid-practice-semantics");
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(validPath);
+  expect(imported.ok() && imported.profile,
+         "valid semantic practice data imports: " + imported.message);
+  if (imported.profile) {
+    const auto loaded =
+        practice::PresetStore(
+            fixture.manager.pathsFor(imported.profile->id).practiceDirectory)
+            .load(kPracticeHash, 10'000'000);
+    expect(loaded.status == versioned_json::LoadStatus::Loaded,
+           "imported valid practice data remains readable");
+  }
 }
 
 void testChecksumsVersionsValidatorsAndLimits() {
@@ -2259,6 +2356,7 @@ int main() {
   testOverwriteRefusesTheLastProfile();
   testOverwriteRollbackRestoresOriginalProfile();
   testStrictMemberAllowlistAndTypes();
+  testPracticeMembersAreValidatedBeforeInstall();
   testChecksumsVersionsValidatorsAndLimits();
   testSizePolicyBoundariesWithoutLargeAllocations();
   testZipParserEnforcesDeclaredAndStreamedSizeLimits();

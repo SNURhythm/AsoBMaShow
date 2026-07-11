@@ -179,6 +179,90 @@ void testHashMismatchIsRejected() {
          "a mismatched chart does not create a file");
 }
 
+void testPortableFilenameClassificationIsExact() {
+  using practice::PresetFileKind;
+  const std::string primary = std::string(kNormalizedHash) + ".json";
+  expect(practice::classifyPresetFilename(primary) == PresetFileKind::Primary,
+         "normalized chart hash JSON is a portable primary preset file");
+  for (const std::string_view suffix :
+       {".tmp", ".bak", ".bak.pending", ".bak.previous"}) {
+    expect(practice::classifyPresetFilename(primary + std::string(suffix)) ==
+               PresetFileKind::AtomicSidecar,
+           "the exact atomic writer sidecar is classified as transient");
+  }
+  for (const std::string &unknown :
+       {primary + ".previous", primary + ".bak.tmp", primary + ".old",
+        std::string(kHash) + ".json"}) {
+    expect(practice::classifyPresetFilename(unknown) == PresetFileKind::Invalid,
+           "unknown or non-normalized practice filename is rejected");
+  }
+}
+
+void testPortableFileValidationRejectsInvalidData() {
+  TempDirectory temp;
+  practice::PresetStore store(temp.path());
+  std::string error;
+  expect(store.saveLastUsed(kHash, configuration(1'000'000, 5'000'000), error),
+         "portable validation fixture saves: " + error);
+  const auto path = temp.path() / (std::string(kNormalizedHash) + ".json");
+
+  auto validation = practice::validatePresetFile(path, 1);
+  expect(validation.status == versioned_json::LoadStatus::Loaded,
+         "current semantic preset data validates for portability");
+
+  nlohmann::json document;
+  {
+    std::ifstream input(path);
+    input >> document;
+  }
+  document["schemaVersion"] = 2;
+  {
+    std::ofstream output(path, std::ios::trunc);
+    output << document.dump();
+  }
+  validation = practice::validatePresetFile(path, 1);
+  expect(validation.status == versioned_json::LoadStatus::FutureVersion,
+         "future portable preset schema is rejected distinctly");
+
+  document["schemaVersion"] = 1;
+  document["chartSha256"] = std::string(kOtherHash);
+  {
+    std::ofstream output(path, std::ios::trunc);
+    output << document.dump();
+  }
+  validation = practice::validatePresetFile(path, 1);
+  expect(validation.status == versioned_json::LoadStatus::InvalidRoot,
+         "portable preset root hash must match its filename");
+
+  document["chartSha256"] = std::string(kNormalizedHash);
+  document["lastUsed"]["chartSha256"] = std::string(kOtherHash);
+  {
+    std::ofstream output(path, std::ios::trunc);
+    output << document.dump();
+  }
+  validation = practice::validatePresetFile(path, 1);
+  expect(validation.status == versioned_json::LoadStatus::InvalidRoot,
+         "portable preset configuration hash must match its filename");
+
+  document["lastUsed"]["chartSha256"] = std::string(kNormalizedHash);
+  document["lastUsed"]["countInBeats"] = 17;
+  {
+    std::ofstream output(path, std::ios::trunc);
+    output << document.dump();
+  }
+  validation = practice::validatePresetFile(path, 1);
+  expect(validation.status == versioned_json::LoadStatus::InvalidRoot,
+         "portable preset configurations requiring sanitization are rejected");
+
+  {
+    std::ofstream output(path, std::ios::trunc);
+    output << "{not-json";
+  }
+  validation = practice::validatePresetFile(path, 1);
+  expect(validation.status == versioned_json::LoadStatus::Malformed,
+         "malformed portable preset JSON is rejected distinctly");
+}
+
 void testMalformedFileReturnsNeutralDefaults() {
   TempDirectory temp;
   {
@@ -259,6 +343,8 @@ int main() {
   testRoundTripAndMutations();
   testLegacyPresetDefaultsGaugeAutoShiftOff();
   testHashMismatchIsRejected();
+  testPortableFilenameClassificationIsExact();
+  testPortableFileValidationRejectsInvalidData();
   testMalformedFileReturnsNeutralDefaults();
   testFailedAtomicReplacePreservesPreviousFile();
   testLoadResultUsabilityAndNotices();

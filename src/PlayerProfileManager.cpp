@@ -8,6 +8,7 @@
 #include "ScoreDBHelper.h"
 #include "VersionedJson.h"
 #include "input/InputProfileStore.h"
+#include "practice/PracticePresetStore.h"
 
 #include "../yoga/lib/nlohmann/json.hpp"
 
@@ -390,25 +391,6 @@ PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   return paths;
 }
 
-bool isPracticeFilename(std::string_view filename) {
-  constexpr std::string_view suffix = ".json";
-  if (filename.size() != 64 + suffix.size() || !filename.ends_with(suffix)) {
-    return false;
-  }
-  for (const unsigned char character : filename.substr(0, 64)) {
-    if (!std::isdigit(character) && !(character >= 'a' && character <= 'f')) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool isPracticeBackupFilename(std::string_view filename) {
-  constexpr std::string_view suffix = ".bak";
-  return filename.ends_with(suffix) && isPracticeFilename(filename.substr(
-                                           0, filename.size() - suffix.size()));
-}
-
 bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
                                const PlayerProfilePaths &paths,
                                std::vector<std::filesystem::path> *files,
@@ -453,10 +435,12 @@ bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
     const auto entryStatus =
         std::filesystem::symlink_status(entry.path(), error);
     const std::string filename = entry.path().filename().string();
-    const bool primary = isPracticeFilename(filename);
+    const practice::PresetFileKind kind =
+        practice::classifyPresetFilename(filename);
+    const bool primary = kind == practice::PresetFileKind::Primary;
     if (error || !std::filesystem::is_regular_file(entryStatus) ||
         hasUnsafeLink(entry.path(), entryStatus, errorMessage) ||
-        (!primary && !isPracticeBackupFilename(filename))) {
+        kind == practice::PresetFileKind::Invalid) {
       if (errorMessage.empty()) {
         errorMessage =
             "profile practice directory contains an unsafe or invalid entry";
@@ -469,6 +453,16 @@ bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
                                  error.message()
                            : "profile practice file exceeds the 1 MiB limit";
       return false;
+    }
+    if (primary) {
+      const auto validation = practice::validatePresetFile(
+          entry.path(), practice::kPresetSchemaVersion);
+      if (!validation.valid()) {
+        errorMessage = validation.diagnostics.empty()
+                           ? "profile practice preset data is invalid"
+                           : validation.diagnostics.front();
+        return false;
+      }
     }
     if (files && primary) {
       files->push_back(entry.path());
