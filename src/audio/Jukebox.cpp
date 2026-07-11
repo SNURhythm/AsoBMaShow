@@ -2949,7 +2949,6 @@ bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
 
 void Jukebox::restoreVisualsAtTimelineMicrosLocked(
     long long bgaTimelineMicros) {
-  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
   bmpCursor = 0;
@@ -2984,8 +2983,6 @@ void Jukebox::restoreVisualsAtTimelineMicrosLocked(
 }
 
 void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
-  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
-
   std::lock_guard<std::mutex> lock(seekLock);
   if (lastVisualTimelineMicros < 0 ||
       bgaTimelineMicros < lastVisualTimelineMicros) {

@@ -295,6 +295,29 @@ void testRateScaledSnapshotRestoresBgaTimeline() {
           "restoration retains rate, exact position, and paused state");
 }
 
+void testNegativeCountInKeepsBgaAtPreChartState() {
+  const std::filesystem::path imageFolder =
+      std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "SDL" / "test";
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  bms_parser::Chart chart;
+  populateVisualChart(chart, false, imageFolder, "sample.bmp");
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+
+  require(jukebox.play(-2'000'000).success,
+          "negative count-in starts the production Jukebox");
+  require(!jukebox.hasActiveVisuals(),
+          "time-zero BGA remains inactive when negative count-in starts");
+  jukebox.seekVisualsToSongTime(-1'000'000);
+  require(!jukebox.hasActiveVisuals(),
+          "negative visual resync retains the pre-chart BGA state");
+  jukebox.seekVisualsToSongTime(0);
+  require(jukebox.hasActiveVisuals(),
+          "time-zero BGA activates when the chart timeline begins");
+}
+
 } // namespace
 
 int main() {
@@ -307,6 +330,7 @@ int main() {
   try {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
     testRateScaledSnapshotRestoresBgaTimeline();
+    testNegativeCountInKeepsBgaAtPreChartState();
     rendering::UniformCache::getInstance().destroyAll();
     bgfx::shutdown();
     return 0;
