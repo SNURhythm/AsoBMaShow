@@ -155,15 +155,33 @@ void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
 }
 
 void testPlaybackAndJudgeProvenanceValidation() {
+  const auto assertValid = [](ScoreProvenance value) {
+    std::string error;
+    assert(serializeValidatedScoreProvenance(value, error).has_value());
+    assert(error.empty());
+  };
   const auto assertInvalid = [](ScoreProvenance value) {
     std::string error;
     assert(!serializeValidatedScoreProvenance(value, error).has_value());
     assert(!error.empty());
   };
 
+  auto minimumPlayback = sampleVerifiedProvenance();
+  minimumPlayback.playback.percent = 50;
+  assertValid(minimumPlayback);
+
+  auto maximumPlayback = sampleVerifiedProvenance();
+  maximumPlayback.playback = {.percent = 200,
+                              .mode = audio::PlaybackMode::TimeStretch};
+  assertValid(maximumPlayback);
+
   auto invalidPlayback = sampleVerifiedProvenance();
   invalidPlayback.playback.percent = 49;
   assertInvalid(invalidPlayback);
+
+  auto offStepPlayback = sampleVerifiedProvenance();
+  offStepPlayback.playback.percent = 51;
+  assertInvalid(offStepPlayback);
 
   auto invalidPlaybackMode = sampleVerifiedProvenance();
   invalidPlaybackMode.playback.mode = static_cast<audio::PlaybackMode>(99);
@@ -172,6 +190,18 @@ void testPlaybackAndJudgeProvenanceValidation() {
   auto invalidJudgeScale = sampleVerifiedProvenance();
   invalidJudgeScale.judgeWindowScalePercent = 20;
   assertInvalid(invalidJudgeScale);
+
+  auto minimumJudgeScale = sampleVerifiedProvenance();
+  minimumJudgeScale.judgeWindowScalePercent = 25;
+  assertValid(minimumJudgeScale);
+
+  auto maximumJudgeScale = sampleVerifiedProvenance();
+  maximumJudgeScale.judgeWindowScalePercent = 200;
+  assertValid(maximumJudgeScale);
+
+  auto offStepJudgeScale = sampleVerifiedProvenance();
+  offStepJudgeScale.judgeWindowScalePercent = 26;
+  assertInvalid(offStepJudgeScale);
 
   auto invalidStartingGauge = sampleVerifiedProvenance();
   invalidStartingGauge.startingGaugePercent = 101;
@@ -361,16 +391,16 @@ void testPlayStartCaptureIsImmutableAndShared() {
 }
 
 void testReplayStartRestoresPracticeProvenance() {
-  auto replay = std::make_shared<ReplayData>();
-  replay->provenance = sampleVerifiedProvenance("replay-start");
-  replay->provenance.playback = {.percent = 75,
-                                 .mode = audio::PlaybackMode::PitchShift};
-  replay->provenance.judgeWindowScalePercent = 80;
-  replay->provenance.startingGaugePercent = 37;
+  ReplayData replay;
+  replay.provenance = sampleVerifiedProvenance("replay-start");
+  replay.provenance.playback = {.percent = 75,
+                                .mode = audio::PlaybackMode::PitchShift};
+  replay.provenance.judgeWindowScalePercent = 80;
+  replay.provenance.startingGaugePercent = 37;
 
-  const StartOptions options =
-      makeCourseReplayStageStartOptions(nullptr, replay);
-  assert(options.playback == replay->provenance.playback);
+  StartOptions options;
+  applyReplayProvenanceToStartOptions(options, replay);
+  assert(options.playback == replay.provenance.playback);
   assert(options.judgeWindowScalePercent == 80);
   assert(options.startingGaugePercent == 37);
 }

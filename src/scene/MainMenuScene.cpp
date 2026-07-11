@@ -8915,22 +8915,21 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
 
         auto replayData =
             std::make_shared<ReplayData>(std::move(replay.value()));
+        StartOptions replayOptions{
+            .startPosition = 0,
+            .autoKeySound = false,
+            .autoPlay = false,
+            .gaugeType = replayData->initialGaugeType,
+            .gaugeAutoShift = replayData->gaugeAutoShift,
+            .replayData = replayData,
+            .pacemakerTarget = pacemakerTarget,
+            .touchVisualizationEnabled = selectedReplayRenderTouchPoints,
+            .replayGhostRenderingEnabled = selectedReplayRenderGhosts,
+        };
+        applyReplayProvenanceToStartOptions(replayOptions, *replayData);
         context.jukebox.stop();
         hideReplayModal();
-        changeToGameplayScene(chart,
-                              {
-                                  .startPosition = 0,
-                                  .autoKeySound = false,
-                                  .autoPlay = false,
-                                  .gaugeType = replayData->initialGaugeType,
-                                  .gaugeAutoShift = replayData->gaugeAutoShift,
-                                  .replayData = replayData,
-                                  .pacemakerTarget = pacemakerTarget,
-                                  .touchVisualizationEnabled =
-                                      selectedReplayRenderTouchPoints,
-                                  .replayGhostRenderingEnabled =
-                                      selectedReplayRenderGhosts,
-                              });
+        changeToGameplayScene(chart, std::move(replayOptions));
         willStart.store(false);
         return true;
       },

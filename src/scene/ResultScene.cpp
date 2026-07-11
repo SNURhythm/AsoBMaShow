@@ -1091,18 +1091,19 @@ void ResultScene::startReplay() {
         }
 
         auto replayData = std::make_shared<ReplayData>(replaySource);
+        StartOptions replayOptions{
+            .startPosition = 0,
+            .autoKeySound = false,
+            .autoPlay = false,
+            .gaugeType = replayData->initialGaugeType,
+            .gaugeAutoShift = replayData->gaugeAutoShift,
+            .replayData = replayData,
+            .ownsChart = true,
+        };
+        applyReplayProvenanceToStartOptions(replayOptions, *replayData);
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(
-                context, std::move(replayChart),
-                StartOptions{
-                    .startPosition = 0,
-                    .autoKeySound = false,
-                    .autoPlay = false,
-                    .gaugeType = replayData->initialGaugeType,
-                    .gaugeAutoShift = replayData->gaugeAutoShift,
-                    .replayData = replayData,
-                    .ownsChart = true,
-                }),
+                context, std::move(replayChart), std::move(replayOptions)),
             false);
         return false;
       },

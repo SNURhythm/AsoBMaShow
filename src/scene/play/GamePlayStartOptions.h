@@ -91,6 +91,13 @@ struct StartOptions {
   std::optional<RulesetDescriptor> rulesetDescriptor;
 };
 
+inline void applyReplayProvenanceToStartOptions(StartOptions &options,
+                                                const ReplayData &replay) {
+  options.playback = replay.provenance.playback;
+  options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
+  options.startingGaugePercent = replay.provenance.startingGaugePercent;
+}
+
 [[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
     const std::map<Judgement, std::pair<long long, long long>>
@@ -157,10 +164,7 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.longNoteMode =
         normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
     options.assistOption = stageReplay->assistOption;
-    options.playback = stageReplay->provenance.playback;
-    options.judgeWindowScalePercent =
-        stageReplay->provenance.judgeWindowScalePercent;
-    options.startingGaugePercent = stageReplay->provenance.startingGaugePercent;
+    applyReplayProvenanceToStartOptions(options, *stageReplay);
   }
   return options;
 }
