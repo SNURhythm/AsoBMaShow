@@ -222,6 +222,20 @@ public:
   }
 
 private:
+  void publishStartupDiagnostic(std::string detail) const {
+    publishDevice({
+        .stableId = std::string(input::kGyroscopeTurntableStableId),
+        .displayName = std::string(input::kGyroscopeTurntableDisplayName) +
+                       " · " + std::move(detail),
+        .deviceClass = input::DeviceClass::Gyroscope,
+        .connected = true,
+        .status = input::InputDeviceStatus::Calibrating,
+        .buttons = 0,
+        .axes = 1,
+        .hats = 0,
+    });
+  }
+
   void drainCommands(std::uint64_t now) {
     while (true) {
       switch (core_.takeCommand()) {
@@ -261,6 +275,7 @@ private:
     if (motionManager_ == nil ||
         referenceFrameChoice_ ==
             input::ios_gyroscope::ReferenceFrameChoice::Unsupported) {
+      publishStartupDiagnostic("waiting for corrected compass frame");
       nativeRetryAtMicros_ = now + kNativeRetryDelayMicros;
       return;
     }
@@ -274,6 +289,7 @@ private:
                     "active after start.");
         loggedInactiveStart_ = true;
       }
+      publishStartupDiagnostic("Core Motion inactive");
       nativeRetryAtMicros_ = now + kNativeRetryDelayMicros;
       return;
     }
@@ -288,6 +304,7 @@ private:
                   "(referenceFrame=0x%lx).",
                   activeReferenceFrame);
     }
+    publishStartupDiagnostic("waiting for first motion sample");
     awaitingFirstSample_ = true;
     nativeRetryAtMicros_ = now + kFirstSampleTimeoutMicros;
   }
