@@ -14,26 +14,41 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
-#include <cstdlib>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <sstream>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
 constexpr int kLegacyScoreDatabaseSchemaVersion = 4;
+constexpr int kScoreProvenanceSchemaVersion = 5;
 constexpr int kScoreDatabaseSchemaVersion =
     ScoreDBHelper::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
+
+bool isCanonicalCourseKey(std::string_view key) {
+  constexpr std::string_view prefix = "course:v1:";
+  if (!key.starts_with(prefix) || key.size() != prefix.size() + 64) {
+    return false;
+  }
+  return std::ranges::all_of(key.substr(prefix.size()), [](unsigned char ch) {
+    return std::isdigit(ch) != 0 || (ch >= 'a' && ch <= 'f');
+  });
+}
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
@@ -238,7 +253,7 @@ bool migrateScoreDatabaseToVersion5(sqlite3 *db) {
   if (*version > kScoreDatabaseSchemaVersion) {
     return false;
   }
-  if (*version >= kScoreDatabaseSchemaVersion) {
+  if (*version >= kScoreProvenanceSchemaVersion) {
     return true;
   }
   if (*version < kLegacyScoreDatabaseSchemaVersion) {
@@ -268,11 +283,145 @@ bool migrateScoreDatabaseToVersion5(sqlite3 *db) {
   }
   if (!ensureScoreProvenanceColumns(db, "scores") ||
       !ensureScoreProvenanceColumns(db, "course_scores") ||
-      !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+      !setDatabaseUserVersion(db, kScoreProvenanceSchemaVersion)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
     logSqlErrorText("committing score provenance migration", transactionError);
+    return false;
+  }
+  return true;
+}
+
+bool migrateScoreDatabaseToVersion6(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading course score identity migration version",
+                    versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScoreDatabaseSchemaVersion) {
+    return true;
+  }
+  if (*version < kScoreProvenanceSchemaVersion) {
+    SDL_Log("Score database must reach version %d before course identity "
+            "migration",
+            kScoreProvenanceSchemaVersion);
+    return false;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery =
+      callerOwnsTransaction ? "SAVEPOINT asobmashow_score_course_identity_v6"
+                            : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_score_course_identity_v6"
+                            : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_course_identity_v6; RELEASE "
+            "asobmashow_score_course_identity_v6"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting course score identity migration",
+                    transactionError);
+    return false;
+  }
+
+  if (!ensureSqliteTableColumnLogged(
+          db, "course_scores", "legacy_course_key",
+          "ALTER TABLE course_scores ADD COLUMN legacy_course_key TEXT NOT "
+          "NULL DEFAULT ''",
+          "reading course score identity schema",
+          "adding legacy course score key column", logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "course_scores", "ln_mode",
+          "ALTER TABLE course_scores ADD COLUMN ln_mode INTEGER NOT NULL "
+          "DEFAULT -1",
+          "reading course score identity schema",
+          "adding course score long note mode column", logSqlErrorText)) {
+    return false;
+  }
+
+  struct CourseKeyMigrationRow {
+    sqlite3_int64 id = 0;
+    std::string courseKey;
+    std::string legacyCourseKey;
+  };
+  std::vector<CourseKeyMigrationRow> rows;
+  SqliteStatementHandle selectStmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT id, COALESCE(course_key, ''), legacy_course_key FROM "
+          "course_scores ORDER BY id",
+          selectStmt, "reading legacy course score keys", logSqlErrorText)) {
+    return false;
+  }
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(selectStmt.get())) == SQLITE_ROW) {
+    rows.push_back({.id = sqlite3_column_int64(selectStmt.get(), 0),
+                    .courseKey = sqliteColumnString(selectStmt.get(), 1),
+                    .legacyCourseKey =
+                        sqliteColumnString(selectStmt.get(), 2)});
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading legacy course score keys", db);
+    return false;
+  }
+  selectStmt.reset();
+
+  SqliteStatementHandle updateStmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "UPDATE course_scores SET "
+          "legacy_course_key = CASE WHEN ?1 THEN ?2 ELSE legacy_course_key "
+          "END, course_key = CASE WHEN ?3 THEN ?4 ELSE course_key END, "
+          "ln_mode = -1 WHERE id = ?5",
+          updateStmt, "preparing course score identity migration",
+          logSqlErrorText)) {
+    return false;
+  }
+  for (const auto &row : rows) {
+    const bool noncanonical =
+        !row.courseKey.empty() && !isCanonicalCourseKey(row.courseKey);
+    const bool copyLegacy = noncanonical && row.legacyCourseKey.empty();
+    const auto parsed = noncanonical
+                            ? course_identity::parseLegacyScoreKey(row.courseKey)
+                            : std::nullopt;
+    const bool replaceCourseKey = parsed.has_value();
+
+    sqlite3_bind_int(updateStmt.get(), 1, copyLegacy ? 1 : 0);
+    bindSqliteText(updateStmt.get(), 2, row.courseKey);
+    sqlite3_bind_int(updateStmt.get(), 3, replaceCourseKey ? 1 : 0);
+    bindSqliteText(updateStmt.get(), 4,
+                   parsed.has_value() ? parsed->courseKey : row.courseKey);
+    sqlite3_bind_int64(updateStmt.get(), 5, row.id);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      logSqlError("migrating course score identity", db);
+      return false;
+    }
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+  }
+
+  if (!execSql(db,
+               "CREATE INDEX IF NOT EXISTS "
+               "idx_course_scores_key_ln_mode_clear_type ON "
+               "course_scores(course_key, ln_mode, clear_type)",
+               "creating course score identity index") ||
+      !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing course score identity migration",
+                    transactionError);
     return false;
   }
   return true;
@@ -482,20 +631,6 @@ bool serializeProvenanceForWrite(const ScoreProvenance &provenance,
   return true;
 }
 
-std::string stableChartKey(const bms_parser::ChartMeta &chartMeta) {
-  const std::string sha256 = normalizedHash(chartMeta.SHA256);
-  if (!sha256.empty()) {
-    return "sha256:" + sha256;
-  }
-  const std::string md5 = normalizedHash(chartMeta.MD5);
-  if (!md5.empty()) {
-    return "md5:" + md5;
-  }
-  const std::string chartPath =
-      Utils::GetStoragePathUtf8RelativeToDocuments(chartMeta.BmsPath, "BMS/");
-  return "path:" + chartPath;
-}
-
 struct ScoreChartMatch {
   std::string chartPath;
   std::string sha256;
@@ -531,13 +666,11 @@ int bindScoreChartMatch(sqlite3_stmt *stmt, int bindIndex,
 }
 
 std::string courseKeyForSession(const CoursePlaySession &session) {
-  std::ostringstream key;
-  key << "course:" << session.courseName << "\n";
-  key << "constraint:" << session.constraintJson << "\n";
-  for (const auto &entry : session.entries) {
-    key << stableChartKey(entry.meta) << "\n";
+  std::string key = session.courseKey;
+  if (key.empty()) {
+    key = course_identity::makeCourseKey(session);
   }
-  return key.str();
+  return key;
 }
 
 int scoreLongNoteModeForClearLampValues(int chartLongNoteMode,
@@ -570,15 +703,17 @@ void storeBestRank(ScoreRankMap &ranks, const std::string &key, int lnMode,
   }
 }
 
-void storeBestCourseRank(CourseScoreRankMap &ranks, const std::string &key,
+void storeBestCourseRank(CourseScoreRankByLongNoteMode &ranks, int lnMode,
                          int rank) {
-  if (key.empty()) {
+  if (lnMode == -1) {
+    ranks.wildcardRank = std::max(ranks.wildcardRank, rank);
     return;
   }
-  auto it = ranks.find(key);
-  if (it == ranks.end() || rank > it->second) {
-    ranks[key] = rank;
+  if (lnMode < 0 || lnMode >= static_cast<int>(ranks.ranks.size())) {
+    return;
   }
+  auto &stored = ranks.ranks[static_cast<std::size_t>(lnMode)];
+  stored = std::max(stored, rank);
 }
 
 bool isBetterScoreSnapshot(const ScoreBestSnapshot &candidate,
@@ -671,13 +806,13 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
   }
 }
 
-void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks,
+void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
                          std::string_view schema = {}) {
-  const std::string query = "SELECT course_id, " + bestClearMarkRankExpr() +
-                            " FROM " +
-                            qualifiedScoreTable(schema, "course_scores") +
-                            " WHERE course_id IS NOT NULL AND course_id > 0 "
-                            "GROUP BY course_id";
+  const std::string query =
+      "SELECT COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode, " +
+      bestClearMarkRankExpr() + " FROM " +
+      qualifiedScoreTable(schema, "course_scores") +
+      " GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading course score clear ranks",
@@ -686,9 +821,15 @@ void loadBestCourseRanks(sqlite3 *db, CourseScoreRankMap &ranks,
   }
 
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const int courseId = sqlite3_column_int(stmt.get(), 0);
-    const int rank = sqlite3_column_int(stmt.get(), 1);
-    storeBestCourseRank(ranks, std::to_string(courseId), rank);
+    const std::string courseKey = sqliteColumnString(stmt.get(), 0);
+    const int courseId = sqlite3_column_int(stmt.get(), 1);
+    const int lnMode = sqlite3_column_int(stmt.get(), 2);
+    const int rank = sqlite3_column_int(stmt.get(), 3);
+    if (!courseKey.empty()) {
+      storeBestCourseRank(cache.rankByCourseKey[courseKey], lnMode, rank);
+    } else if (courseId > 0) {
+      storeBestCourseRank(cache.rankByLegacyCourseId[courseId], lnMode, rank);
+    }
   }
 }
 
@@ -1001,6 +1142,11 @@ int ScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
   return ranks[0];
 }
 
+int CourseScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
+  const int mode = long_note_mode::normalizeValue(lnMode);
+  return std::max(ranks[static_cast<std::size_t>(mode)], wildcardRank);
+}
+
 std::optional<ScoreBestSnapshot>
 ScoreBestByLongNoteMode::bestForMode(int lnMode) const {
   const int mode = long_note_mode::normalizeValue(lnMode);
@@ -1049,12 +1195,23 @@ int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
   return kNoClearTypeRank;
 }
 
-int ScoreClearRankCache::bestCourseRankForId(int courseId) const {
-  if (courseId <= 0) {
-    return kNoClearTypeRank;
+int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
+                                           int legacyCourseId,
+                                           int lnMode) const {
+  int rank = kNoClearTypeRank;
+  if (!courseKey.empty()) {
+    const auto keyIt = rankByCourseKey.find(courseKey);
+    if (keyIt != rankByCourseKey.end()) {
+      rank = keyIt->second.bestRankForMode(lnMode);
+    }
   }
-  const auto it = rankByCourseId.find(std::to_string(courseId));
-  return it == rankByCourseId.end() ? kNoClearTypeRank : it->second;
+  if (legacyCourseId > 0) {
+    const auto idIt = rankByLegacyCourseId.find(legacyCourseId);
+    if (idIt != rankByLegacyCourseId.end()) {
+      rank = std::max(rank, idIt->second.bestRankForMode(lnMode));
+    }
+  }
+  return rank;
 }
 
 std::optional<ScoreBestSnapshot>
@@ -1353,6 +1510,8 @@ bool ScoreDBHelper::CreateCourseScoreTableOnConnection(sqlite3 *db) {
                       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                       "course_id INTEGER,"
                       "course_key TEXT,"
+                      "legacy_course_key TEXT NOT NULL DEFAULT '',"
+                      "ln_mode INTEGER NOT NULL DEFAULT -1,"
                       "course_name TEXT,"
                       "course_group_name TEXT,"
                       "constraint_json TEXT,"
@@ -1416,7 +1575,8 @@ bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
       !CreateCourseScoreTableOnConnection(db)) {
     return false;
   }
-  return migrateScoreDatabaseToVersion5(db);
+  return migrateScoreDatabaseToVersion5(db) &&
+         migrateScoreDatabaseToVersion6(db);
 }
 
 bool ScoreDBHelper::EnsureSchema() {
@@ -1520,6 +1680,10 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                       int completedCharts, int totalCharts,
                                       const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
+  if (courseKeyForSession(session).empty()) {
+    SDL_Log("Refusing to save course score without a durable course key");
+    return false;
+  }
   std::string provenanceJson;
   if (!serializeProvenanceForWrite(provenance, "course score",
                                    provenanceJson)) {
@@ -1537,16 +1701,22 @@ bool ScoreDBHelper::InsertCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
     int completedCharts, int totalCharts, const ScoreProvenance &provenance,
     const std::string &provenanceJson) {
+  const std::string courseKey = courseKeyForSession(session);
+  if (courseKey.empty()) {
+    SDL_Log("Refusing to save course score without a durable course key");
+    return false;
+  }
   const char *query =
       "INSERT INTO course_scores ("
-      "course_id, course_key, course_name, course_group_name, constraint_json,"
+      "course_id, course_key, ln_mode, course_name, course_group_name, "
+      "constraint_json,"
       "gauge_type, gauge_profile, gauge_auto_shift, play_option, assist_option,"
       "completed_charts, total_charts,"
       "score, max_score, max_combo, combo_break,"
       "pgreat, great, good, bad, poor, kpoor, fast, slow, final_gauge,"
       "clear_type, ruleset_version, eligibility, provenance_json"
       ") VALUES ("
-      "@course_id, @course_key, @course_name, @course_group_name,"
+      "@course_id, @course_key, @ln_mode, @course_name, @course_group_name,"
       "@constraint_json, @gauge_type, @gauge_profile, @gauge_auto_shift,"
       "@play_option, @assist_option, @completed_charts, @total_charts,"
       "@score, @max_score, @max_combo, @combo_break,"
@@ -1568,7 +1738,9 @@ bool ScoreDBHelper::InsertCourseScoreOnConnection(
 
   int bindIndex = 1;
   sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
-  bindSqliteText(stmt.get(), bindIndex++, courseKeyForSession(session));
+  bindSqliteText(stmt.get(), bindIndex++, courseKey);
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   long_note_mode::normalizeValue(session.longNoteMode));
   bindSqliteText(stmt.get(), bindIndex++, session.courseName);
   bindSqliteText(stmt.get(), bindIndex++, session.courseGroupName);
   bindSqliteText(stmt.get(), bindIndex++, session.constraintJson);
@@ -1642,6 +1814,10 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     int completedCharts, int totalCharts,
                                     const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
+  if (courseKeyForSession(session).empty()) {
+    SDL_Log("Refusing to save course score without a durable course key");
+    return false;
+  }
   std::lock_guard lock(sessionMutex_);
   std::string provenanceJson;
   if (!serializeProvenanceForWrite(provenance, "course score",
@@ -1739,11 +1915,14 @@ std::optional<ScoreBestSnapshot>
 ScoreDBHelper::LoadBestCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session) {
   const std::string courseKey = courseKeyForSession(session);
+  const int lnMode = long_note_mode::normalizeValue(session.longNoteMode);
   const char *query =
       "SELECT score, max_score, max_combo, combo_break, final_gauge,"
       "clear_type, created_at "
       "FROM course_scores "
-      "WHERE ((? != '' AND course_key = ?) OR (? > 0 AND course_id = ?)) "
+      "WHERE ((? != '' AND course_key = ?) OR "
+      "(COALESCE(course_key, '') = '' AND course_id = ?)) "
+      "AND (ln_mode = ? OR ln_mode = -1) "
       "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC "
       "LIMIT 1";
 
@@ -1757,7 +1936,7 @@ ScoreDBHelper::LoadBestCourseScoreOnConnection(
   bindSqliteText(stmt.get(), bindIndex++, courseKey);
   bindSqliteText(stmt.get(), bindIndex++, courseKey);
   sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
-  sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
+  sqlite3_bind_int(stmt.get(), bindIndex++, lnMode);
 
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
     return std::nullopt;
@@ -1775,6 +1954,206 @@ ScoreDBHelper::LoadBestCourseScoreOnConnection(
   return snapshot;
 }
 
+CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecords(
+    std::span<const course_identity::Definition> definitions) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(sessionMutex_);
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
+    return {.errorMessage = "score database validation failed"};
+  }
+  return RecoverCourseRecordsOnConnection(db, definitions);
+}
+
+CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
+    sqlite3 *db,
+    std::span<const course_identity::Definition> definitions) {
+  CourseScoreRecoveryResult result;
+  if (db == nullptr) {
+    result.errorMessage = "score database is unavailable";
+    return result;
+  }
+
+  std::vector<const course_identity::Definition *> validDefinitions;
+  std::unordered_set<std::string> currentKeys;
+  validDefinitions.reserve(definitions.size());
+  for (const auto &definition : definitions) {
+    if (!isCanonicalCourseKey(definition.courseKey) ||
+        definition.charts.empty() ||
+        course_identity::canonicalConstraintPayload(definition.constraintJson)
+            .empty() ||
+        course_identity::makeCourseKey(definition.charts,
+                                       definition.constraintJson)
+            .empty()) {
+      continue;
+    }
+    validDefinitions.push_back(&definition);
+    currentKeys.insert(definition.courseKey);
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery =
+      callerOwnsTransaction ? "SAVEPOINT asobmashow_score_course_recovery"
+                            : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_score_course_recovery"
+                            : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_course_recovery; RELEASE "
+            "asobmashow_score_course_recovery"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    result.errorMessage = "could not start score recovery transaction: " +
+                          transactionError;
+    return result;
+  }
+
+  struct StoredCourseScore {
+    sqlite3_int64 id = 0;
+    int legacyCourseId = 0;
+    int totalCharts = 0;
+    std::string courseKey;
+    std::string legacyCourseKey;
+    std::string courseName;
+    std::string courseGroupName;
+    std::string constraintJson;
+  };
+  std::vector<StoredCourseScore> rows;
+  SqliteStatementHandle selectStmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT id, COALESCE(course_id, 0), COALESCE(course_key, ''), "
+          "legacy_course_key, COALESCE(course_name, ''), "
+          "COALESCE(course_group_name, ''), COALESCE(constraint_json, ''), "
+          "total_charts FROM course_scores ORDER BY id",
+          selectStmt, "reading course scores for identity recovery",
+          logSqlErrorText)) {
+    result.errorMessage = sqliteDatabaseError(db);
+    return result;
+  }
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(selectStmt.get())) == SQLITE_ROW) {
+    rows.push_back({
+        .id = sqlite3_column_int64(selectStmt.get(), 0),
+        .legacyCourseId = sqlite3_column_int(selectStmt.get(), 1),
+        .totalCharts = sqlite3_column_int(selectStmt.get(), 7),
+        .courseKey = sqliteColumnString(selectStmt.get(), 2),
+        .legacyCourseKey = sqliteColumnString(selectStmt.get(), 3),
+        .courseName = sqliteColumnString(selectStmt.get(), 4),
+        .courseGroupName = sqliteColumnString(selectStmt.get(), 5),
+        .constraintJson = sqliteColumnString(selectStmt.get(), 6),
+    });
+  }
+  if (rc != SQLITE_DONE) {
+    result.errorMessage = sqliteDatabaseError(db);
+    return result;
+  }
+  selectStmt.reset();
+
+  struct CourseKeyRewrite {
+    sqlite3_int64 id = 0;
+    std::string courseKey;
+  };
+  std::vector<CourseKeyRewrite> rewrites;
+  for (const auto &row : rows) {
+    std::string resultingKey = row.courseKey;
+    std::string rawEvidence = row.legacyCourseKey;
+    if (rawEvidence.empty() && !row.courseKey.empty() &&
+        !isCanonicalCourseKey(row.courseKey)) {
+      rawEvidence = row.courseKey;
+    }
+
+    if (!rawEvidence.empty()) {
+      const auto parsed = course_identity::parseLegacyScoreKey(rawEvidence);
+      if (parsed.has_value()) {
+        course_identity::Definition legacyDefinition{
+            .constraintJson = parsed->constraintJson,
+            .charts = parsed->charts,
+        };
+        std::set<std::string> matchingKeys;
+        for (const auto *definition : validDefinitions) {
+          if (course_identity::sameDefinition(legacyDefinition, *definition)) {
+            matchingKeys.insert(definition->courseKey);
+          }
+        }
+        if (matchingKeys.size() == 1 && !matchingKeys.begin()->empty()) {
+          resultingKey = *matchingKeys.begin();
+          if (resultingKey != row.courseKey) {
+            rewrites.push_back({.id = row.id, .courseKey = resultingKey});
+          }
+        }
+      }
+    }
+
+    if (!currentKeys.contains(resultingKey) || row.totalCharts <= 0) {
+      continue;
+    }
+    const std::string canonicalConstraint =
+        course_identity::canonicalConstraintPayload(row.constraintJson);
+    if (canonicalConstraint.empty()) {
+      continue;
+    }
+    result.evidence.push_back({
+        .legacyCourseId = row.legacyCourseId,
+        .totalCharts = row.totalCharts,
+        .courseName = row.courseName,
+        .courseGroupName = row.courseGroupName,
+        .canonicalConstraintPayload = canonicalConstraint,
+        .courseKey = resultingKey,
+    });
+  }
+
+  SqliteStatementHandle updateStmt;
+  if (!rewrites.empty() &&
+      !prepareSqliteStatementLogged(
+          db, "UPDATE course_scores SET course_key = ?1 WHERE id = ?2",
+          updateStmt, "preparing course score recovery update",
+          logSqlErrorText)) {
+    result.errorMessage = sqliteDatabaseError(db);
+    result.evidence.clear();
+    return result;
+  }
+  for (const auto &rewrite : rewrites) {
+    bindSqliteText(updateStmt.get(), 1, rewrite.courseKey);
+    sqlite3_bind_int64(updateStmt.get(), 2, rewrite.id);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      result.errorMessage = sqliteDatabaseError(db);
+      result.evidence.clear();
+      return result;
+    }
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+  }
+
+  std::ranges::sort(result.evidence, [](const CourseScoreEvidence &left,
+                                        const CourseScoreEvidence &right) {
+    return std::tie(left.legacyCourseId, left.courseName,
+                    left.courseGroupName, left.canonicalConstraintPayload,
+                    left.totalCharts, left.courseKey) <
+           std::tie(right.legacyCourseId, right.courseName,
+                    right.courseGroupName, right.canonicalConstraintPayload,
+                    right.totalCharts, right.courseKey);
+  });
+  result.evidence.erase(
+      std::unique(result.evidence.begin(), result.evidence.end()),
+      result.evidence.end());
+
+  if (!transaction.commit(transactionError)) {
+    result.errorMessage = "could not commit score recovery transaction: " +
+                          transactionError;
+    result.evidence.clear();
+    return result;
+  }
+  if (!rewrites.empty()) {
+    gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+  return result;
+}
+
 ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
@@ -1785,7 +2164,7 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   }
 
   loadBestChartRanks(db, cache);
-  loadBestCourseRanks(db, cache.rankByCourseId);
+  loadBestCourseRanks(db, cache);
   return cache;
 }
 
@@ -1795,7 +2174,7 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks(sqlite3 *db,
   ScoreClearRankCache cache;
   if (db != nullptr) {
     loadBestChartRanks(db, cache, schema);
-    loadBestCourseRanks(db, cache.rankByCourseId, schema);
+    loadBestCourseRanks(db, cache, schema);
   }
   return cache;
 }

@@ -1,4 +1,5 @@
 #include "../src/ChartDBHelper.h"
+#include "../src/CourseIdentity.h"
 #include "../src/CoursePlaySession.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/ScoreProvenance.h"
@@ -12,7 +13,9 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if !TARGET_OS_WINDOWS
@@ -32,6 +35,17 @@ namespace {
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
+
+constexpr std::string_view kShaA =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+constexpr std::string_view kShaB =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+constexpr std::string_view kShaC =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+constexpr std::string_view kShaD =
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+constexpr std::string_view kMd5A = "11111111111111111111111111111111";
+constexpr std::string_view kMd5B = "22222222222222222222222222222222";
 
 void execOrAbort(sqlite3 *db, const std::string &sql) {
   char *error = nullptr;
@@ -87,6 +101,73 @@ bool columnExists(sqlite3 *db, const std::string &table,
     }
   }
   return false;
+}
+
+bool indexExists(sqlite3 *db, const std::string &index) {
+  SqliteStatementHandle stmt;
+  assert(prepareSqliteStatement(
+             db, "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+             stmt) == SQLITE_OK);
+  sqlite3_bind_text(stmt.get(), 1, index.c_str(), -1, SQLITE_TRANSIENT);
+  return sqlite3_step(stmt.get()) == SQLITE_ROW;
+}
+
+std::string legacyCourseKey(std::string_view name,
+                            std::string_view constraintJson,
+                            std::span<const course_identity::ChartIdentity>
+                                charts) {
+  std::string key = "course:" + std::string(name) + "\nconstraint:" +
+                    std::string(constraintJson) + "\n";
+  for (const auto &chart : charts) {
+    if (!chart.sha256.empty()) {
+      key += "sha256:" + chart.sha256 + "\n";
+    } else {
+      key += "md5:" + chart.md5 + "\n";
+    }
+  }
+  return key;
+}
+
+void insertCourseScoreRow(sqlite3 *db, int courseId,
+                          std::string_view courseKey,
+                          std::string_view courseName,
+                          std::string_view groupName,
+                          std::string_view constraintJson, int totalCharts,
+                          int score, int comboBreak, int clearType,
+                          std::optional<int> lnMode = std::nullopt) {
+  const std::string lnColumn = lnMode.has_value() ? ", ln_mode" : "";
+  const std::string lnValue = lnMode.has_value() ? ", ?10" : "";
+  const std::string sql =
+      "INSERT INTO course_scores ("
+      "course_id, course_key, course_name, course_group_name, constraint_json,"
+      "gauge_type, gauge_profile, gauge_auto_shift, completed_charts,"
+      "total_charts, score, max_score, max_combo, combo_break, pgreat, great,"
+      "good, bad, poor, kpoor, fast, slow, final_gauge, clear_type,"
+      "ruleset_version, eligibility, provenance_json" +
+      lnColumn +
+      ") VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, ?6, ?6, ?7, ?8, 0, ?9,"
+      "0, 0, 0, 0, 0, 0, 0, 0, 50.0, " +
+      std::to_string(clearType) + ", 0, 2, '" + kLegacyProvenanceJson + "'" +
+      lnValue + ")";
+  SqliteStatementHandle stmt;
+  assert(prepareSqliteStatement(db, sql, stmt) == SQLITE_OK);
+  sqlite3_bind_int(stmt.get(), 1, courseId);
+  sqlite3_bind_text(stmt.get(), 2, courseKey.data(),
+                    static_cast<int>(courseKey.size()), SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt.get(), 3, courseName.data(),
+                    static_cast<int>(courseName.size()), SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt.get(), 4, groupName.data(),
+                    static_cast<int>(groupName.size()), SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt.get(), 5, constraintJson.data(),
+                    static_cast<int>(constraintJson.size()), SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt.get(), 6, totalCharts);
+  sqlite3_bind_int(stmt.get(), 7, score);
+  sqlite3_bind_int(stmt.get(), 8, score * 2);
+  sqlite3_bind_int(stmt.get(), 9, comboBreak);
+  if (lnMode.has_value()) {
+    sqlite3_bind_int(stmt.get(), 10, *lnMode);
+  }
+  assert(sqlite3_step(stmt.get()) == SQLITE_DONE);
 }
 
 std::string schemaSnapshot(sqlite3 *db) {
@@ -413,6 +494,49 @@ void createVersion4ScoreFixture(const std::filesystem::path &path) {
   execOrAbort(db.get(), "PRAGMA user_version = 4");
 }
 
+void createVersion5ScoreFixture(const std::filesystem::path &path) {
+  createVersion4ScoreFixture(path);
+  auto db = openDatabase(path);
+  for (const std::string table : {"scores", "course_scores"}) {
+    execOrAbort(db.get(), "ALTER TABLE " + table +
+                              " ADD COLUMN ruleset_version INTEGER NOT NULL "
+                              "DEFAULT 0");
+    execOrAbort(db.get(), "ALTER TABLE " + table +
+                              " ADD COLUMN eligibility INTEGER NOT NULL "
+                              "DEFAULT 2");
+    execOrAbort(db.get(), "ALTER TABLE " + table +
+                              " ADD COLUMN provenance_json TEXT NOT NULL "
+                              "DEFAULT '" +
+                              kLegacyProvenanceJson + "'");
+  }
+  execOrAbort(db.get(), "PRAGMA user_version = 5");
+}
+
+void createVersion5CourseMigrationFixture(const std::filesystem::path &path) {
+  createVersion5ScoreFixture(path);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DELETE FROM course_scores");
+
+  const std::vector<course_identity::ChartIdentity> md5Charts = {
+      {.md5 = std::string(kMd5A)}, {.md5 = std::string(kMd5B)}};
+  const std::string raw = legacyCourseKey("Legacy Course", "[]", md5Charts);
+  const std::string converted = course_identity::makeCourseKey(md5Charts, "[]");
+  const std::string canonical = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{
+          {.sha256 = std::string(kShaC), .md5 = std::string(kMd5A)}},
+      "[]");
+
+  insertCourseScoreRow(db.get(), 17, raw, "Legacy Course", "Legacy Group",
+                       "[]", 2, 2345, 8, kClearTypeHardClearRank);
+  insertCourseScoreRow(db.get(), 18, canonical, "Canonical", "Group", "[]",
+                       1, 1234, 4, kClearTypeEasyClearRank);
+  insertCourseScoreRow(db.get(), 19, "not-a-course-key", "Malformed", "Group",
+                       "[]", 1, 1000, 5, kClearTypeNormalClearRank);
+  insertCourseScoreRow(db.get(), 20, "", "Blank", "Group", "[]", 1, 900, 6,
+                       kClearTypeAssistedEasyClearRank);
+  assert(!converted.empty());
+}
+
 std::string chartOutcome(sqlite3 *db) {
   return queryText(
       db,
@@ -456,8 +580,8 @@ bms_parser::ChartMeta sampleMeta(const std::filesystem::path &root,
                                  const std::string &hash) {
   bms_parser::ChartMeta meta;
   meta.BmsPath = root / "BMS" / (hash + ".bms");
-  meta.MD5 = "md5-" + hash;
-  meta.SHA256 = "sha-" + hash;
+  meta.MD5 = std::string(kMd5A);
+  meta.SHA256 = std::string(kShaA);
   meta.Title = "Title " + hash;
   meta.Artist = "Artist";
   meta.TotalNotes = 100;
@@ -504,7 +628,7 @@ void testVersion4MigrationPreservesOutcomesAndRows(
   assert(helper.EnsureSchema());
 
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") == 6);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   assert(chartOutcome(migrated.get()) == chartBefore);
@@ -532,6 +656,494 @@ void testVersion4MigrationPreservesOutcomesAndRows(
   assert(schemaSnapshot(second.get()) == firstSchema);
   assert(queryInt(second.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(second.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+}
+
+void testVersion5MigrationPreservesRawCourseEvidence(
+    const std::filesystem::path &root) {
+  const auto path = root / "migration-v6" / "score.db";
+  createVersion5CourseMigrationFixture(path);
+  auto before = openDatabase(path);
+  const std::string chartBefore = chartOutcome(before.get());
+  const int rowsBefore =
+      queryInt(before.get(), "SELECT COUNT(*) FROM course_scores");
+  before.reset();
+
+  const std::vector<course_identity::ChartIdentity> md5Charts = {
+      {.md5 = std::string(kMd5A)}, {.md5 = std::string(kMd5B)}};
+  const std::string raw = legacyCourseKey("Legacy Course", "[]", md5Charts);
+  const std::string converted = course_identity::makeCourseKey(md5Charts, "[]");
+
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  auto migrated = openDatabase(path);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") == 6);
+  assert(columnExists(migrated.get(), "course_scores", "legacy_course_key"));
+  assert(columnExists(migrated.get(), "course_scores", "ln_mode"));
+  assert(indexExists(migrated.get(),
+                     "idx_course_scores_key_ln_mode_clear_type"));
+  assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") ==
+         rowsBefore);
+  assert(chartOutcome(migrated.get()) == chartBefore);
+  assert(queryInt(migrated.get(),
+                  "SELECT COUNT(*) FROM course_scores WHERE ln_mode=-1") ==
+         rowsBefore);
+  assert(queryText(migrated.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=17") ==
+         converted);
+  assert(queryText(
+             migrated.get(),
+             "SELECT legacy_course_key FROM course_scores WHERE course_id=17") ==
+         raw);
+  assert(queryText(
+             migrated.get(),
+             "SELECT legacy_course_key FROM course_scores WHERE course_id=18")
+             .empty());
+  assert(queryText(migrated.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=19") ==
+         "not-a-course-key");
+  assert(queryText(
+             migrated.get(),
+             "SELECT legacy_course_key FROM course_scores WHERE course_id=19") ==
+         "not-a-course-key");
+  assert(queryText(migrated.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=20")
+             .empty());
+  assert(queryText(
+             migrated.get(),
+             "SELECT legacy_course_key FROM course_scores WHERE course_id=20")
+             .empty());
+  const std::string schemaAfterFirstPass = schemaSnapshot(migrated.get());
+  migrated.reset();
+
+  assert(helper.EnsureSchema());
+  auto second = openDatabase(path);
+  assert(schemaSnapshot(second.get()) == schemaAfterFirstPass);
+  assert(queryText(
+             second.get(),
+             "SELECT legacy_course_key FROM course_scores WHERE course_id=17") ==
+         raw);
+}
+
+void testVersion6MigrationIsSavepointSafeAndAtomic(
+    const std::filesystem::path &root) {
+  const auto commitPath = root / "migration-v6-outer-commit" / "score.db";
+  createVersion5CourseMigrationFixture(commitPath);
+  {
+    auto db = openDatabase(commitPath);
+    execOrAbort(db.get(), "BEGIN TRANSACTION");
+    ScoreDBHelper helper(commitPath);
+    assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-commit"),
+                              sampleState(1, 1)));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
+    execOrAbort(db.get(), "COMMIT");
+  }
+  auto committed = openDatabase(commitPath);
+  assert(queryInt(committed.get(), "PRAGMA user_version") == 6);
+  assert(columnExists(committed.get(), "course_scores", "ln_mode"));
+  committed.reset();
+
+  const auto rollbackPath = root / "migration-v6-outer-rollback" / "score.db";
+  createVersion5CourseMigrationFixture(rollbackPath);
+  {
+    auto db = openDatabase(rollbackPath);
+    execOrAbort(db.get(), "BEGIN TRANSACTION");
+    ScoreDBHelper helper(rollbackPath);
+    assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-rollback"),
+                              sampleState(1, 1)));
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
+    execOrAbort(db.get(), "ROLLBACK");
+  }
+  auto rolledBack = openDatabase(rollbackPath);
+  assert(queryInt(rolledBack.get(), "PRAGMA user_version") == 5);
+  assert(!columnExists(rolledBack.get(), "course_scores", "legacy_course_key"));
+  assert(!columnExists(rolledBack.get(), "course_scores", "ln_mode"));
+  assert(!indexExists(rolledBack.get(),
+                      "idx_course_scores_key_ln_mode_clear_type"));
+  assert(queryInt(rolledBack.get(), "SELECT COUNT(*) FROM scores") == 1);
+  rolledBack.reset();
+
+  const auto failurePath = root / "migration-v6-failure" / "score.db";
+  createVersion5CourseMigrationFixture(failurePath);
+  {
+    auto db = openDatabase(failurePath);
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_v6_course_update BEFORE UPDATE ON "
+                "course_scores BEGIN SELECT RAISE(ABORT, 'injected'); END");
+  }
+  ScoreDBHelper failing(failurePath);
+  assert(!failing.EnsureSchema());
+  auto failed = openDatabase(failurePath);
+  assert(queryInt(failed.get(), "PRAGMA user_version") == 5);
+  assert(!columnExists(failed.get(), "course_scores", "legacy_course_key"));
+  assert(!columnExists(failed.get(), "course_scores", "ln_mode"));
+  assert(!indexExists(failed.get(),
+                      "idx_course_scores_key_ln_mode_clear_type"));
+  assert(queryText(failed.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=17")
+             .starts_with("course:Legacy Course\n"));
+}
+
+void testCourseWritesUseAuthoritativeKeysAndExactMode(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-write-v6" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  bms_parser::ChartMeta meta = sampleMeta(root, "course-key-authoritative");
+  meta.SHA256 = std::string(kShaA);
+  meta.MD5 = std::string(kMd5A);
+  CoursePlaySession session;
+  session.courseId = 71;
+  session.courseName = "Renamed course";
+  session.constraintJson = "[]";
+  session.entries.push_back({.meta = meta});
+  session.courseKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.md5 = std::string(kMd5A)}},
+      "[]");
+  session.longNoteMode = long_note_mode::kHcnValue;
+  const std::string recomputed = course_identity::makeCourseKey(session);
+  assert(recomputed != session.courseKey);
+  assert(helper.SaveCourseScore(session, sampleState(5, 1), 1, 1));
+
+  auto db = openDatabase(path);
+  assert(queryText(db.get(), "SELECT course_key FROM course_scores") ==
+         session.courseKey);
+  assert(queryInt(db.get(), "SELECT ln_mode FROM course_scores") ==
+         long_note_mode::kHcnValue);
+  db.reset();
+
+  CoursePlaySession fallback = session;
+  fallback.courseId = 72;
+  fallback.courseKey.clear();
+  fallback.longNoteMode = 99;
+  assert(helper.SaveCourseScore(fallback, sampleState(4, 1), 1, 1));
+  db = openDatabase(path);
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=72") ==
+         recomputed);
+  assert(queryInt(db.get(),
+                  "SELECT ln_mode FROM course_scores WHERE course_id=72") ==
+         long_note_mode::kUnknownValue);
+
+  const auto rejectedPath = root / "course-write-unkeyable" / "score.db";
+  CoursePlaySession unkeyable;
+  unkeyable.courseId = 73;
+  unkeyable.constraintJson = "[]";
+  ScoreDBHelper rejected(rejectedPath);
+  assert(!rejected.SaveCourseScore(unkeyable, sampleState(1, 0), 0, 0));
+  assert(!std::filesystem::exists(rejectedPath));
+}
+
+void testCourseReadsAreKeyAndModeAuthoritative(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-read-v6" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  const std::string keyA = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaA)}},
+      "[]");
+  const std::string keyB = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaB)}},
+      "[]");
+  const std::string wildcardKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaC)}},
+      "[]");
+  const std::string missingKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaD)}},
+      "[]");
+
+  auto db = openDatabase(path);
+  insertCourseScoreRow(db.get(), 11, keyA, "Old name", "Group", "[]", 1,
+                       200, 1, kClearTypeEasyClearRank,
+                       long_note_mode::kCnValue);
+  insertCourseScoreRow(db.get(), 44, keyA, "Old name", "Group", "[]", 1,
+                       150, 1, kClearTypeNormalClearRank,
+                       long_note_mode::kLnValue);
+  insertCourseScoreRow(db.get(), 55, keyA, "Old name", "Group", "[]", 1,
+                       900, 1, kClearTypeHardClearRank,
+                       long_note_mode::kHcnValue);
+  insertCourseScoreRow(db.get(), 11, keyB, "Other content", "Group", "[]", 1,
+                       999, 1, kClearTypeFullComboRank,
+                       long_note_mode::kCnValue);
+  insertCourseScoreRow(db.get(), 66, "", "Blank legacy", "Group", "[]", 1,
+                       300, 1, kClearTypeNormalClearRank,
+                       long_note_mode::kCnValue);
+  insertCourseScoreRow(db.get(), 67, "", "Other blank legacy", "Group", "[]",
+                       1, 800, 1, kClearTypeHardClearRank,
+                       long_note_mode::kCnValue);
+  insertCourseScoreRow(db.get(), 77, "malformed", "Malformed", "Group", "[]",
+                       1, 1000, 1, kClearTypeFullComboRank,
+                       long_note_mode::kCnValue);
+  insertCourseScoreRow(db.get(), 88, wildcardKey, "Wildcard", "Group", "[]", 1,
+                       500, 1, kClearTypeNormalClearRank, -1);
+  insertCourseScoreRow(db.get(), 88, wildcardKey, "Wildcard", "Group", "[]", 1,
+                       400, 1, kClearTypeHardClearRank,
+                       long_note_mode::kCnValue);
+  db.reset();
+
+  CoursePlaySession renamed;
+  renamed.courseId = 999;
+  renamed.courseKey = keyA;
+  renamed.courseName = "New name";
+  renamed.longNoteMode = long_note_mode::kCnValue;
+  const auto byKey = helper.LoadBestCourseScore(renamed);
+  assert(byKey.has_value() && byKey->score == 200);
+
+  CoursePlaySession mismatchingKey = renamed;
+  mismatchingKey.courseId = 11;
+  mismatchingKey.courseKey = missingKey;
+  assert(!helper.LoadBestCourseScore(mismatchingKey).has_value());
+
+  CoursePlaySession blankFallback = renamed;
+  blankFallback.courseId = 66;
+  blankFallback.courseKey = missingKey;
+  const auto byBlankId = helper.LoadBestCourseScore(blankFallback);
+  assert(byBlankId.has_value() && byBlankId->score == 300);
+
+  CoursePlaySession emptyRequestedKey;
+  emptyRequestedKey.courseId = 66;
+  emptyRequestedKey.longNoteMode = long_note_mode::kCnValue;
+  const auto blankRequestById = helper.LoadBestCourseScore(emptyRequestedKey);
+  assert(blankRequestById.has_value() && blankRequestById->score == 300);
+
+  CoursePlaySession malformedDoesNotFallback = renamed;
+  malformedDoesNotFallback.courseId = 77;
+  malformedDoesNotFallback.courseKey = missingKey;
+  assert(!helper.LoadBestCourseScore(malformedDoesNotFallback).has_value());
+
+  CoursePlaySession wildcard = renamed;
+  wildcard.courseId = 88;
+  wildcard.courseKey = wildcardKey;
+  for (int mode : long_note_mode::kPlayableValues) {
+    wildcard.longNoteMode = mode;
+    const auto score = helper.LoadBestCourseScore(wildcard);
+    assert(score.has_value() && score->score == 500);
+  }
+
+  db = openDatabase(path);
+  insertCourseScoreRow(db.get(), 88, wildcardKey, "Wildcard", "Group", "[]", 1,
+                       600, 1, kClearTypeEasyClearRank,
+                       long_note_mode::kCnValue);
+  db.reset();
+  wildcard.longNoteMode = long_note_mode::kCnValue;
+  const auto exactHigher = helper.LoadBestCourseScore(wildcard);
+  assert(exactHigher.has_value() && exactHigher->score == 600);
+}
+
+void testCourseLampCacheSeparatesKeysIdsAndModes(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-lamp-v6" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  const std::string keyA = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaA)}},
+      "[]");
+  const std::string keyB = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaB)}},
+      "[]");
+
+  auto db = openDatabase(path);
+  insertCourseScoreRow(db.get(), 1, keyA, "Old", "Group", "[]", 1, 100, 1,
+                       kClearTypeEasyClearRank, long_note_mode::kLnValue);
+  insertCourseScoreRow(db.get(), 2, keyA, "New", "Group", "[]", 1, 200, 1,
+                       kClearTypeHardClearRank, long_note_mode::kCnValue);
+  insertCourseScoreRow(db.get(), 3, keyA, "Wildcard", "Group", "[]", 1, 150,
+                       1, kClearTypeNormalClearRank, -1);
+  insertCourseScoreRow(db.get(), 50, keyB, "Nonblank", "Group", "[]", 1, 300,
+                       1, kClearTypeFullComboRank,
+                       long_note_mode::kLnValue);
+  insertCourseScoreRow(db.get(), 50, "", "Blank", "Group", "[]", 1, 90, 1,
+                       kClearTypeAssistedEasyClearRank,
+                       long_note_mode::kLnValue);
+  db.reset();
+
+  const ScoreClearRankCache cache = helper.LoadBestClearRanks();
+  assert(cache.bestCourseRankFor(keyA, 999, long_note_mode::kLnValue) ==
+         kClearTypeNormalClearRank);
+  assert(cache.bestCourseRankFor(keyA, 999, long_note_mode::kCnValue) ==
+         kClearTypeHardClearRank);
+  assert(cache.bestCourseRankFor(keyA, 999, long_note_mode::kHcnValue) ==
+         kClearTypeNormalClearRank);
+  assert(cache.bestCourseRankFor("missing", 50, long_note_mode::kLnValue) ==
+         kClearTypeAssistedEasyClearRank);
+  assert(cache.bestCourseRankFor("missing", 2, long_note_mode::kCnValue) ==
+         kNoClearTypeRank);
+}
+
+std::vector<course_identity::ChartIdentity> enrichedRecoveryCharts() {
+  return {{.sha256 = std::string(kShaA), .md5 = std::string(kMd5A)},
+          {.sha256 = std::string(kShaB), .md5 = std::string(kMd5B)}};
+}
+
+void testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-recovery-v6" / "score.db";
+  createVersion5CourseMigrationFixture(path);
+  {
+    auto db = openDatabase(path);
+    const std::vector<course_identity::ChartIdentity> md5Charts = {
+        {.md5 = std::string(kMd5A)}, {.md5 = std::string(kMd5B)}};
+    insertCourseScoreRow(db.get(), 17,
+                         legacyCourseKey("Legacy Course", "[]", md5Charts),
+                         "Legacy Course", "Legacy Group", "[]", 2, 2000, 2,
+                         kClearTypeEasyClearRank);
+  }
+
+  const auto enriched = enrichedRecoveryCharts();
+  const std::string currentKey = course_identity::makeCourseKey(enriched, "[]");
+  std::vector<course_identity::Definition> definitions = {
+      {.courseId = 700,
+       .courseKey = currentKey,
+       .name = "Current renamed course",
+       .groupName = "Current group",
+       .constraintJson = "[]",
+       .charts = enriched},
+      {.courseId = 701,
+       .courseKey = currentKey,
+       .name = "Duplicate current definition",
+       .groupName = "Other group",
+       .constraintJson = "[]",
+       .charts = enriched},
+  };
+
+  ScoreDBHelper helper(path);
+  const CourseScoreRecoveryResult result = helper.RecoverCourseRecords(definitions);
+  assert(result.ok());
+  assert(result.evidence.size() == 1);
+  assert((result.evidence.front() ==
+          CourseScoreEvidence{.legacyCourseId = 17,
+                              .totalCharts = 2,
+                              .courseName = "Legacy Course",
+                              .courseGroupName = "Legacy Group",
+                              .canonicalConstraintPayload = "[]",
+                              .courseKey = currentKey}));
+  definitions.clear();
+  assert(result.evidence.front().courseKey == currentKey);
+
+  auto db = openDatabase(path);
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=17 "
+                   "ORDER BY id LIMIT 1") == currentKey);
+  assert(queryText(db.get(),
+                   "SELECT legacy_course_key FROM course_scores WHERE "
+                   "course_id=17 ORDER BY id LIMIT 1")
+             .starts_with("course:Legacy Course\n"));
+  assert(queryText(db.get(),
+                   "SELECT course_id || '|' || course_name || '|' || "
+                   "course_group_name || '|' || constraint_json || '|' || "
+                   "total_charts FROM course_scores WHERE course_id=17 "
+                   "ORDER BY id LIMIT 1") ==
+         "17|Legacy Course|Legacy Group|[]|2");
+}
+
+void testCourseRecoveryFailsClosedOnAmbiguityAndFailure(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-recovery-ambiguous" / "score.db";
+  createVersion5CourseMigrationFixture(path);
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const std::vector<course_identity::ChartIdentity> firstCharts = {
+      {.sha256 = std::string(kShaA), .md5 = std::string(kMd5A)},
+      {.sha256 = std::string(kShaB), .md5 = std::string(kMd5B)}};
+  const std::vector<course_identity::ChartIdentity> secondCharts = {
+      {.sha256 = std::string(kShaC), .md5 = std::string(kMd5A)},
+      {.sha256 = std::string(kShaD), .md5 = std::string(kMd5B)}};
+  const std::string firstKey = course_identity::makeCourseKey(firstCharts, "[]");
+  const std::string secondKey =
+      course_identity::makeCourseKey(secondCharts, "[]");
+  const std::vector<course_identity::Definition> definitions = {
+      {.courseId = 801,
+       .courseKey = firstKey,
+       .constraintJson = "[]",
+       .charts = firstCharts},
+      {.courseId = 802,
+       .courseKey = secondKey,
+       .constraintJson = "[]",
+       .charts = secondCharts},
+  };
+
+  auto db = openDatabase(path);
+  insertCourseScoreRow(db.get(), 99, firstKey, "Shared tuple", "Old group",
+                       "[]", 2, 100, 1, kClearTypeEasyClearRank,
+                       long_note_mode::kLnValue);
+  insertCourseScoreRow(db.get(), 99, secondKey, "Shared tuple", "Old group",
+                       "[]", 2, 110, 1, kClearTypeNormalClearRank,
+                       long_note_mode::kLnValue);
+  db.reset();
+
+  const CourseScoreRecoveryResult ambiguous =
+      helper.RecoverCourseRecords(definitions);
+  assert(ambiguous.ok());
+  db = openDatabase(path);
+  const std::vector<course_identity::ChartIdentity> md5Charts = {
+      {.md5 = std::string(kMd5A)}, {.md5 = std::string(kMd5B)}};
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=17") ==
+         course_identity::makeCourseKey(md5Charts, "[]"));
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=19") ==
+         "not-a-course-key");
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=20")
+             .empty());
+  const auto sharedEvidence = std::ranges::count_if(
+      ambiguous.evidence, [](const CourseScoreEvidence &item) {
+        return item.legacyCourseId == 99 && item.courseName == "Shared tuple";
+      });
+  assert(sharedEvidence == 2);
+  db.reset();
+
+  const auto failurePath = root / "course-recovery-failure" / "score.db";
+  createVersion5CourseMigrationFixture(failurePath);
+  ScoreDBHelper failing(failurePath);
+  assert(failing.EnsureSchema());
+  {
+    auto failureDb = openDatabase(failurePath);
+    execOrAbort(failureDb.get(),
+                "CREATE TRIGGER fail_recovery_update BEFORE UPDATE OF "
+                "course_key ON course_scores BEGIN SELECT RAISE(ABORT, "
+                "'injected recovery failure'); END");
+  }
+  const std::uint64_t revisionBefore = failing.GetRevision();
+  const CourseScoreRecoveryResult failed = failing.RecoverCourseRecords(
+      std::vector<course_identity::Definition>{{.courseId = 900,
+                                                .courseKey = firstKey,
+                                                .constraintJson = "[]",
+                                                .charts = firstCharts}});
+  assert(!failed.ok());
+  assert(failed.evidence.empty());
+  assert(failing.GetRevision() == revisionBefore);
+  auto failureDb = openDatabase(failurePath);
+  assert(queryText(failureDb.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=17") ==
+         course_identity::makeCourseKey(md5Charts, "[]"));
+}
+
+void testExactFutureVersionSevenRejectsScoreRecovery(
+    const std::filesystem::path &root) {
+  const auto path = root / "future-v7-recovery" / "score.db";
+  createFutureSentinelDatabase(path);
+  {
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "PRAGMA user_version=7");
+  }
+  const auto before = rawDatabaseFamilySnapshot(path);
+  ScoreDBHelper helper(path);
+  assert(!helper.EnsureSchema());
+  CoursePlaySession session;
+  session.courseId = 7;
+  session.courseKey = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaA)}},
+      "[]");
+  session.entries.push_back({.meta = sampleMeta(root, "future-v7")});
+  assert(!helper.SaveCourseScore(session, sampleState(1, 0), 1, 1));
+  const CourseScoreRecoveryResult result = helper.RecoverCourseRecords({});
+  assert(!result.ok());
+  assert(result.evidence.empty());
+  assert(rawDatabaseFamilySnapshot(path) == before);
 }
 
 void testChartAndCourseRoundTripAndPathIsolation(
@@ -619,7 +1231,7 @@ void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
 
   assert(helper.InsertScore(db.get(), meta, state));
   assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 6);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
 }
@@ -732,10 +1344,10 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
     execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   }
 
@@ -744,7 +1356,7 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
     execOrAbort(db.get(), "ROLLBACK");
     assert(queryInt(db.get(), "PRAGMA user_version") == 4);
@@ -757,10 +1369,10 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
     execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   }
 
@@ -769,7 +1381,7 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
     execOrAbort(db.get(), "ROLLBACK");
     assert(queryInt(db.get(), "PRAGMA user_version") == 4);
@@ -944,7 +1556,7 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
 #if !TARGET_OS_WINDOWS
   {
     const auto path = root / "preflight-live-writer" / "score.db";
-    withLiveWalWriter(path, 5, [&] {
+    withLiveWalWriter(path, 6, [&] {
       const auto before = rawDatabaseFamilySnapshot(path);
       ScoreDBHelper helper(path);
       SqliteConnectionHandle connection(helper.Connect());
@@ -1038,7 +1650,7 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
 #if !TARGET_OS_WINDOWS
   {
     const auto path = root / "wal-without-shm-supported" / "score.db";
-    createWalDatabaseWithVersion(path, 5);
+    createWalDatabaseWithVersion(path, 6);
     assert(std::filesystem::remove(path.string() + "-shm"));
     const auto before = rawDatabaseFamilySnapshot(path);
     ScoreDBHelper helper(path);
@@ -1074,7 +1686,7 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const auto path = root / "required-pragma-error" / "score.db";
     auto db = openDatabase(path);
     execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
-    execOrAbort(db.get(), "PRAGMA user_version=5");
+    execOrAbort(db.get(), "PRAGMA user_version=6");
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
     ScopedDenyJournalModeAutoExtension denyJournalMode;
@@ -1138,7 +1750,7 @@ void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
     const auto before = readSqliteDatabaseFamilyState(path, stateError);
     assert(before.has_value());
     std::string preflightError;
-    assert(!preflightSqliteUserVersion(path, 5, preflightError).has_value());
+    assert(!preflightSqliteUserVersion(path, 6, preflightError).has_value());
     assert(preflightError.find("snapshot budget") != std::string::npos);
     const auto after = readSqliteDatabaseFamilyState(path, stateError);
     assert(after == before);
@@ -1146,14 +1758,14 @@ void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
 
   {
     const auto path = root / "owned-open-race" / "score.db";
-    createWalDatabaseWithVersion(path, 5);
+    createWalDatabaseWithVersion(path, 6);
     OwnedOpenRaceContext context{.path = path};
     SqliteValidatedOpenHooks hooks;
     hooks.context = &context;
     hooks.afterSnapshotValidated = commitFutureVersionAfterSnapshot;
     std::string error;
     SqliteConnectionHandle connection(
-        openValidatedSqliteDatabase(path, 5, false, error, hooks));
+        openValidatedSqliteDatabase(path, 6, false, error, hooks));
     assert(!connection);
     assert(context.afterWriter.has_value());
     assert(rawDatabaseFamilySnapshot(path) == *context.afterWriter);
@@ -1161,14 +1773,14 @@ void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
 
   {
     const auto path = root / "wal-without-shm-config-error" / "score.db";
-    createWalDatabaseWithVersion(path, 5);
+    createWalDatabaseWithVersion(path, 6);
     assert(std::filesystem::remove(path.string() + "-shm"));
     const auto before = rawDatabaseFamilySnapshot(path);
     SqliteValidatedOpenHooks hooks;
     hooks.configureNoCheckpoint = failNoCheckpointConfiguration;
     std::string error;
     SqliteConnectionHandle connection(
-        openValidatedSqliteDatabase(path, 5, false, error, hooks));
+        openValidatedSqliteDatabase(path, 6, false, error, hooks));
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
@@ -1230,6 +1842,14 @@ int main() {
   std::filesystem::create_directories(root);
 
   testVersion4MigrationPreservesOutcomesAndRows(root);
+  testVersion5MigrationPreservesRawCourseEvidence(root);
+  testVersion6MigrationIsSavepointSafeAndAtomic(root);
+  testCourseWritesUseAuthoritativeKeysAndExactMode(root);
+  testCourseReadsAreKeyAndModeAuthoritative(root);
+  testCourseLampCacheSeparatesKeysIdsAndModes(root);
+  testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(root);
+  testCourseRecoveryFailsClosedOnAmbiguityAndFailure(root);
+  testExactFutureVersionSevenRejectsScoreRecovery(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
   testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(root);
