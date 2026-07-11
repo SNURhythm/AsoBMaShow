@@ -1133,25 +1133,18 @@ void addToChartItemLookup(TableChartItemLookup &lookup,
   }
 }
 
-void addToChartHashEvidenceLookup(
-    ChartHashEvidenceLookup &lookup, const TableChartItem &chart,
-    const std::string &keyPrefix = "",
-    const std::unordered_set<std::string> *requestedKeys = nullptr) {
+void addToChartHashEvidenceLookup(ChartHashEvidenceLookup &lookup,
+                                  const TableChartItem &chart) {
   const course_identity::ChartIdentity candidate = chartIdentity(chart);
   if (!chart.md5.empty()) {
-    const std::string key = keyPrefix + chartLookupKey("md5", chart.md5);
-    if (requestedKeys == nullptr || requestedKeys->contains(key)) {
-      lookup[key].observeMatchingCandidate(
-          course_identity::ChartIdentity{.md5 = chart.md5}, candidate);
-    }
+    lookup[chartLookupKey("md5", chart.md5)].observeMatchingCandidate(
+        course_identity::ChartIdentity{.md5 = chart.md5}, candidate);
   }
   if (!chart.sha256.empty()) {
-    const std::string key =
-        keyPrefix + chartLookupKey("sha256", chart.sha256);
-    if (requestedKeys == nullptr || requestedKeys->contains(key)) {
-      lookup[key].observeMatchingCandidate(
-          course_identity::ChartIdentity{.sha256 = chart.sha256}, candidate);
-    }
+    lookup[chartLookupKey("sha256", chart.sha256)]
+        .observeMatchingCandidate(
+            course_identity::ChartIdentity{.sha256 = chart.sha256},
+            candidate);
   }
 }
 
@@ -7832,9 +7825,15 @@ ChartDBHelper::SelectDifficultyCourseDefinitions(sqlite3 *db) {
     std::string tableEvidenceKey;
     std::string localEvidenceKey;
   };
+  struct HashEvidenceRequest {
+    int tableId = 0;
+    bool matchSha256 = false;
+    std::string hash;
+  };
   std::vector<course_identity::Definition> definitions;
   std::vector<EntryEvidenceLocation> evidenceLocations;
-  std::unordered_set<std::string> requestedEvidenceKeys;
+  std::unordered_map<std::string, HashEvidenceRequest> tableEvidenceRequests;
+  std::unordered_map<std::string, HashEvidenceRequest> localEvidenceRequests;
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
     const int courseId = columnInt(stmt.get(), 0);
@@ -7853,15 +7852,25 @@ ChartDBHelper::SelectDifficultyCourseDefinitions(sqlite3 *db) {
           {.sha256 = normalizedHash(columnString(stmt.get(), 6)),
            .md5 = normalizedHash(columnString(stmt.get(), 7))});
       const auto &stored = definition.charts.back();
+      const int tableId = columnInt(stmt.get(), 8);
       const std::string tablePrefix =
-          std::to_string(columnInt(stmt.get(), 8)) + ":";
+          std::to_string(tableId) + ":";
       const std::string tableEvidenceKey =
           missingCounterpartEvidenceKey(stored, tablePrefix);
       const std::string localEvidenceKey =
           missingCounterpartEvidenceKey(stored, "local:");
       if (!tableEvidenceKey.empty()) {
-        requestedEvidenceKeys.insert(tableEvidenceKey);
-        requestedEvidenceKeys.insert(localEvidenceKey);
+        const bool matchSha256 = !stored.sha256.empty();
+        const std::string &hash =
+            matchSha256 ? stored.sha256 : stored.md5;
+        tableEvidenceRequests.try_emplace(
+            tableEvidenceKey,
+            HashEvidenceRequest{.tableId = tableId,
+                                .matchSha256 = matchSha256,
+                                .hash = hash});
+        localEvidenceRequests.try_emplace(
+            localEvidenceKey,
+            HashEvidenceRequest{.matchSha256 = matchSha256, .hash = hash});
         evidenceLocations.push_back({
             .definitionIndex = definitions.size() - 1,
             .chartIndex = definition.charts.size() - 1,
@@ -7876,44 +7885,82 @@ ChartDBHelper::SelectDifficultyCourseDefinitions(sqlite3 *db) {
   }
 
   ChartHashEvidenceLookup evidenceByHash;
-  if (!requestedEvidenceKeys.empty()) {
-    const char *tableEvidenceQuery =
-        "SELECT table_id, sha256, md5 FROM difficulty_table_entries "
-        "ORDER BY table_id, sort_order, id";
-    if (!prepareSqliteStatementLogged(db, tableEvidenceQuery, stmt,
-                                      "reading difficulty table hash evidence",
-                                      logSqlErrorText)) {
+  if (!tableEvidenceRequests.empty()) {
+    SqliteStatementHandle tableMd5Stmt;
+    SqliteStatementHandle tableSha256Stmt;
+    const char *tableMd5Query =
+        "SELECT sha256, md5 FROM difficulty_table_entries "
+        "WHERE table_id = @table_id AND md5 = @hash "
+        "ORDER BY sort_order, id";
+    const char *tableSha256Query =
+        "SELECT sha256, md5 FROM difficulty_table_entries "
+        "WHERE table_id = @table_id AND sha256 = @hash "
+        "ORDER BY sort_order, id";
+    if (!prepareSqliteStatementLogged(
+            db, tableMd5Query, tableMd5Stmt,
+            "preparing difficulty table MD5 evidence lookup",
+            logSqlErrorText) ||
+        !prepareSqliteStatementLogged(
+            db, tableSha256Query, tableSha256Stmt,
+            "preparing difficulty table SHA-256 evidence lookup",
+            logSqlErrorText)) {
       return {};
     }
-    while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
-      TableChartItem candidate{
-          .md5 = normalizedHash(columnString(stmt.get(), 2)),
-          .sha256 = normalizedHash(columnString(stmt.get(), 1)),
-      };
-      addToChartHashEvidenceLookup(
-          evidenceByHash, candidate,
-          std::to_string(columnInt(stmt.get(), 0)) + ":",
-          &requestedEvidenceKeys);
-    }
-    if (rc != SQLITE_DONE) {
-      return {};
-    }
-
-    if (chartMetaExists) {
-      const char *localEvidenceQuery =
-          "SELECT sha256, md5 FROM chart_meta ORDER BY path";
-      if (!prepareSqliteStatementLogged(db, localEvidenceQuery, stmt,
-                                        "reading local chart hash evidence",
-                                        logSqlErrorText)) {
+    for (const auto &[evidenceKey, request] : tableEvidenceRequests) {
+      sqlite3_stmt *lookupStmt = request.matchSha256
+                                     ? tableSha256Stmt.get()
+                                     : tableMd5Stmt.get();
+      sqlite3_reset(lookupStmt);
+      sqlite3_clear_bindings(lookupStmt);
+      sqlite3_bind_int(lookupStmt, 1, request.tableId);
+      bindSqliteText(lookupStmt, 2, request.hash);
+      const course_identity::ChartIdentity stored =
+          request.matchSha256
+              ? course_identity::ChartIdentity{.sha256 = request.hash}
+              : course_identity::ChartIdentity{.md5 = request.hash};
+      while ((rc = sqlite3_step(lookupStmt)) == SQLITE_ROW) {
+        evidenceByHash[evidenceKey].observeMatchingCandidate(
+            stored,
+            {.sha256 = normalizedHash(columnString(lookupStmt, 0)),
+             .md5 = normalizedHash(columnString(lookupStmt, 1))});
+      }
+      if (rc != SQLITE_DONE) {
         return {};
       }
-      while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
-        TableChartItem candidate{
-            .md5 = normalizedHash(columnString(stmt.get(), 1)),
-            .sha256 = normalizedHash(columnString(stmt.get(), 0)),
-        };
-        addToChartHashEvidenceLookup(evidenceByHash, candidate, "local:",
-                                     &requestedEvidenceKeys);
+    }
+  }
+
+  if (chartMetaExists && !localEvidenceRequests.empty()) {
+    SqliteStatementHandle localMd5Stmt;
+    SqliteStatementHandle localSha256Stmt;
+    const char *localMd5Query =
+        "SELECT sha256, md5 FROM chart_meta WHERE md5 = @hash ORDER BY path";
+    const char *localSha256Query =
+        "SELECT sha256, md5 FROM chart_meta WHERE sha256 = @hash ORDER BY path";
+    if (!prepareSqliteStatementLogged(db, localMd5Query, localMd5Stmt,
+                                      "preparing local MD5 evidence lookup",
+                                      logSqlErrorText) ||
+        !prepareSqliteStatementLogged(
+            db, localSha256Query, localSha256Stmt,
+            "preparing local SHA-256 evidence lookup", logSqlErrorText)) {
+      return {};
+    }
+    for (const auto &[evidenceKey, request] : localEvidenceRequests) {
+      sqlite3_stmt *lookupStmt = request.matchSha256
+                                     ? localSha256Stmt.get()
+                                     : localMd5Stmt.get();
+      sqlite3_reset(lookupStmt);
+      sqlite3_clear_bindings(lookupStmt);
+      bindSqliteText(lookupStmt, 1, request.hash);
+      const course_identity::ChartIdentity stored =
+          request.matchSha256
+              ? course_identity::ChartIdentity{.sha256 = request.hash}
+              : course_identity::ChartIdentity{.md5 = request.hash};
+      while ((rc = sqlite3_step(lookupStmt)) == SQLITE_ROW) {
+        evidenceByHash[evidenceKey].observeMatchingCandidate(
+            stored,
+            {.sha256 = normalizedHash(columnString(lookupStmt, 0)),
+             .md5 = normalizedHash(columnString(lookupStmt, 1))});
       }
       if (rc != SQLITE_DONE) {
         return {};

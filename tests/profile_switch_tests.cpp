@@ -174,6 +174,22 @@ struct BlockingStatementTrace {
   bool released = false;
 };
 
+struct SqlStatementTrace {
+  std::vector<std::string> statements;
+};
+
+int collectSqlStatement(unsigned traceType, void *rawContext, void *statement,
+                        void *) {
+  if (traceType != SQLITE_TRACE_STMT) {
+    return 0;
+  }
+  const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+  if (sql != nullptr) {
+    static_cast<SqlStatementTrace *>(rawContext)->statements.emplace_back(sql);
+  }
+  return 0;
+}
+
 BlockingStatementTrace *activeBlockingTrace = nullptr;
 
 int blockMatchingStatement(unsigned traceType, void *rawContext,
@@ -1602,7 +1618,10 @@ void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
       std::string(sharedMd5) +
       "\"}]},{\"name\":\"Local SHA A2\",\"constraint\":[],\"charts\":[{"
       "\"sha256\":\"" +
-      std::string(sharedSha) + "\"}]}]}";
+      std::string(sharedSha) +
+      "\"}]},{\"name\":\"Local MD5 Duplicate A3\",\"constraint\":[],"
+      "\"charts\":[{\"md5\":\"" +
+      std::string(sharedMd5) + "\"}]}]}";
   const std::string data =
       "[{\"md5\":\"" + std::string(sharedMd5) +
       "\"},{\"sha256\":\"" + std::string(sharedSha) + "\"}]";
@@ -1626,8 +1645,30 @@ void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
                      "','" + std::string(sharedSha) + "')"),
          "conflicting local hash counterparts are installed");
 
+  SqlStatementTrace trace;
+  expect(sqlite3_trace_v2(chartDatabase.get(), SQLITE_TRACE_STMT,
+                          collectSqlStatement, &trace) == SQLITE_OK,
+         "course definition query trace installs");
   const auto definitions =
       chartDb.SelectDifficultyCourseDefinitions(chartDatabase.get());
+  sqlite3_trace_v2(chartDatabase.get(), 0, nullptr, nullptr);
+  const auto statementCount = [&](std::string_view fragment) {
+    return std::ranges::count_if(trace.statements, [&](const std::string &sql) {
+      return std::string_view(sql).find(fragment) != std::string_view::npos;
+    });
+  };
+  expect(statementCount(
+             "SELECT table_id, sha256, md5 FROM difficulty_table_entries ") ==
+                 0 &&
+             statementCount("SELECT sha256, md5 FROM chart_meta ORDER BY") ==
+                 0 &&
+             statementCount("FROM difficulty_table_entries WHERE table_id = "
+                            "@table_id AND md5 = @hash") == 1 &&
+             statementCount("FROM difficulty_table_entries WHERE table_id = "
+                            "@table_id AND sha256 = @hash") == 1 &&
+             statementCount("FROM chart_meta WHERE md5 = @hash") == 1 &&
+             statementCount("FROM chart_meta WHERE sha256 = @hash") == 1,
+         "course definition evidence uses deduplicated indexed hash lookups");
   const auto md5Definition =
       std::find_if(definitions.begin(), definitions.end(), [](const auto &item) {
         return item.name == "Local MD5 A1";
