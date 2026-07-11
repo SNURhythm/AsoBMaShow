@@ -4428,8 +4428,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .practiceMode = autoPlay,
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
-                    .playback = autoPlay ? audio::PlaybackRate{}
-                                         : launchConfiguration.playback,
+                    .playback = launchConfiguration.playback,
                     .judgeWindowScalePercent =
                         autoPlay ? 100
                                  : launchConfiguration.judge.scalePercent,

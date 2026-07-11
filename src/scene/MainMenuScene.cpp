@@ -8978,9 +8978,13 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
   }
   const std::string pacemakerTarget =
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+  const audio::PlaybackRate autoPlayPlayback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode,
+  };
 
   defer(
-      [this, record, replayId, pacemakerTarget]() {
+      [this, record, replayId, pacemakerTarget, autoPlayPlayback]() {
         auto failReplayLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -9026,6 +9030,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                              profileSelections.longNoteMode),
                          .assistOption = profileSelections.assistOption,
                          .pacemakerTarget = pacemaker::kTargetOff,
+                         .playback = autoPlayPlayback,
                          .touchVisualizationEnabled = false,
                          .replayGhostRenderingEnabled = false,
                      });
