@@ -760,6 +760,25 @@ void testJukeboxSourceClassificationAndSeekOverlap() {
           "seek overlap excludes audio at the end of its duration");
 }
 
+void testSchedulerWaitConvertsChartDeltaToWallTime() {
+  constexpr long long maxSleepMicros = 250'000;
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              100'000, {.percent = 50}, maxSleepMicros) == 200'000,
+          "50 percent scheduler wait doubles chart delta in wall time");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              100'000, {.percent = 100}, maxSleepMicros) == 100'000,
+          "100 percent scheduler wait preserves chart delta");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              100'000, {.percent = 200}, maxSleepMicros) == 50'000,
+          "200 percent scheduler wait halves chart delta in wall time");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              1'000'000, {.percent = 50}, maxSleepMicros) == maxSleepMicros,
+          "scheduler wall waits retain the maximum idle clamp");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              -1, {.percent = 200}, maxSleepMicros) == 0,
+          "past scheduler targets remain immediately eligible");
+}
+
 } // namespace
 
 int main() {
@@ -864,6 +883,7 @@ int main() {
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
     testJukeboxSourceClassificationAndSeekOverlap();
+    testSchedulerWaitConvertsChartDeltaToWallTime();
 
     return 0;
   } catch (const std::exception &error) {

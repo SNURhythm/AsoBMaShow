@@ -410,7 +410,8 @@ void GamePlayScene::init() {
                                        : options.longNoteMode);
   }
   ownedRenderer = std::make_unique<BMSRenderer>(
-      chart, judge.timingWindows, effectiveVisibleTimeGreenNumber());
+      chart, judge.timingWindows, effectiveVisibleTimeGreenNumber(), true,
+      options.playback);
   renderer = ownedRenderer.get();
   renderer->setVisibleTimeBpmStrategy(
       courseNoSpeed() ? AppSettings::VisibleTimeBpmStrategy::Chart

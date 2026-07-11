@@ -3281,7 +3281,8 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
           std::this_thread::yield();
           continue;
         }
-        sleepMicros = std::min(kSchedulerMaxIdleSleepMicros, untilNextMicros);
+        sleepMicros = audio::playback::SchedulerWaitMicrosForChartDelta(
+            untilNextMicros, playbackRate(), kSchedulerMaxIdleSleepMicros);
       }
       std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
       schedulerWakeCv.wait_for(waitLock,

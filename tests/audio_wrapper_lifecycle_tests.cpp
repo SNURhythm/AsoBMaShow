@@ -1331,6 +1331,83 @@ void testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock() {
   }
 }
 
+void testStoppedPlaybackRateTransitionRebasesClockWithoutSeek() {
+  for (const int percent : {50, 200}) {
+    Stopwatch stopwatch;
+    auto control = std::make_shared<FactoryControl>();
+    AudioWrapper wrapper(&stopwatch,
+                         std::make_unique<FakeConfigurableFactory>(control));
+    std::string error;
+    require(wrapper.stopSounds().success,
+            "transition fixture drains its initial stream");
+    require(wrapper.restart({.sampleRate = 48000}, error),
+            "transition fixture starts at 48 kHz");
+    require(wrapper.stopSounds().success &&
+                wrapper.setPlaybackRate({.percent = 100}, error),
+            "transition fixture selects a stopped 100 percent rate");
+    require(wrapper.startDevice().success,
+            "transition fixture restarts at 100 percent");
+
+    stopwatch.start();
+    std::vector<std::int16_t> output(48'000 * 2);
+    control->renderCallback(output.data(), 48'000, 2, control->renderUserData);
+    std::array<std::int16_t, 2> emptyOutput{};
+    control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
+    stopwatch.pause();
+    require(wrapper.getTimeMicros() == 1'000'000,
+            "the initial callback publishes one chart second");
+
+    require(wrapper.stopSounds().success &&
+                wrapper.setPlaybackRate({.percent = percent}, error),
+            "stopped transition rebases before selecting its new rate");
+    require(wrapper.getTimeMicros() == 1'000'000,
+            "stopped rate mutation preserves the published chart position");
+    require(wrapper.startDevice().success,
+            "transition fixture restarts without an explicit seek");
+
+    stopwatch.resume();
+    control->renderCallback(output.data(), 1, 2, control->renderUserData);
+    stopwatch.pause();
+    require(wrapper.getTimeMicros() == 1'000'000,
+            "the first restarted buffer begins without a chart-time jump");
+    stopwatch.resume();
+    control->renderCallback(output.data() + 2, 47'999, 2,
+                            control->renderUserData);
+    control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
+    stopwatch.pause();
+    const long long expected =
+        1'000'000 + (percent == 50 ? 500'000 : 2'000'000);
+    require(wrapper.getTimeMicros() == expected,
+            "the restarted buffer advances from the rebased chart position");
+  }
+}
+
+void testWallInterpolationUsesTheRatePublishedWithItsAnchor() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  auto *callbackData = static_cast<UserData *>(control->renderUserData);
+  require(callbackData != nullptr &&
+              callbackData->audioClockAnchorRatePercent != nullptr,
+          "callback data publishes an anchor-associated playback rate");
+
+  const long long wallNow =
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count();
+  callbackData->audioClockAnchorMicros->store(1'000'000);
+  callbackData->audioClockAnchorEndMicros->store(2'000'000);
+  callbackData->audioClockAnchorWallMicros->store(wallNow - 100'000);
+  callbackData->audioClockAnchorRatePercent->store(50);
+  callbackData->playbackRatePercent->store(200);
+  stopwatch.start();
+  const long long interpolated = wrapper.getTimeMicros();
+  stopwatch.pause();
+  require(interpolated >= 1'045'000 && interpolated <= 1'065'000,
+          "wall interpolation uses the callback anchor's 50 percent rate");
+}
+
 void testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -1468,6 +1545,8 @@ int main() {
     testJukeboxProductionStateTransitionsFailClosed();
     testPlaybackSnapshotClockModesRestoreWithoutPrematureEligibility();
     testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock();
+    testStoppedPlaybackRateTransitionRebasesClockWithoutSeek();
+    testWallInterpolationUsesTheRatePublishedWithItsAnchor();
     testConfigurableWrapperRestartsAndRestoresRetainedPcm();
     testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
     testBufferCapabilityProbePublishesOnlyVerifiedCandidates();

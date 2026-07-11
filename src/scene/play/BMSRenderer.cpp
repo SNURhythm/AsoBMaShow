@@ -590,11 +590,12 @@ AtomicLaneState::operator=(AtomicLaneState &&other) noexcept {
 BMSRenderer::BMSRenderer(
     bms_parser::Chart *chart,
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
-    int visibleTimeGreenNumber, bool renderHud)
+    int visibleTimeGreenNumber, bool renderHud,
+    audio::PlaybackRate playbackRate)
     : judgementIndicator(timingWindows),
       latePoorTiming(latePoorTimingFromWindows(timingWindows)),
-      visibleTimeGreenNumber(visibleTimeGreenNumber), renderHud(renderHud),
-      chart(chart) {
+      visibleTimeGreenNumber(visibleTimeGreenNumber),
+      playbackRate(playbackRate), renderHud(renderHud), chart(chart) {
   setCurrentBpm(chart != nullptr ? chart->Meta.Bpm : 0.0);
   auto textureGuard = makeScopeExit([this] { destroyNoteSheetTextures(); });
 
@@ -2185,7 +2186,8 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       1.0f, static_cast<float>(visibleTimeGreenNumber) * (1000.0f / 600.0f));
   const float hispeed =
       240000.0f / static_cast<float>(visibleTimeReferenceBpm()) /
-      visibleTimeMs;
+      visibleTimeMs *
+      static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
   const float laneHeight = std::max(0.001f, upperBound - judgeY);
   const float hiddenRatio =
       static_cast<float>(noteStartPositionPercent) / 100.0f;

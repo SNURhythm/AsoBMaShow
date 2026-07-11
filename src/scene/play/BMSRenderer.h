@@ -7,6 +7,7 @@
 #include "../../ReplayData.h"
 #include "../../ReplayGhostUtils.h"
 #include "../../AppSettings.h"
+#include "../../audio/PlaybackRate.h"
 #include "../../view/View.h"
 #include "../../bms_parser.hpp"
 #include "../../rendering/SimpleBatchRenderer.h"
@@ -202,6 +203,7 @@ private:
   float judgeY = 0.0f;
   long long latePoorTiming;
   int visibleTimeGreenNumber = 400;
+  audio::PlaybackRate playbackRate;
   bool visibleTimeUseMilliseconds = false;
   double currentBpm = 0.0;
   std::optional<double> floatingVisibleTimeReferenceBpm;
@@ -371,7 +373,8 @@ public:
   explicit BMSRenderer(
       bms_parser::Chart *chart,
       const std::map<Judgement, std::pair<long long, long long>> &timingWindows,
-                       int visibleTimeGreenNumber, bool renderHud = true);
+      int visibleTimeGreenNumber, bool renderHud = true,
+      audio::PlaybackRate playbackRate = {});
 
   void render(RenderContext &context, long long micro);
   void render(RenderContext &context, long long micro,

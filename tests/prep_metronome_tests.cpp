@@ -26,6 +26,35 @@
   }
 
 int main() {
+  const auto compensatedTravel = [](audio::PlaybackRate rate,
+                                    long long realMicros, double bpm) {
+    constexpr double referenceBpm = 120.0;
+    constexpr double visibleTimeMs = 400.0 * 1000.0 / 600.0;
+    const double hispeed = 240000.0 / referenceBpm / visibleTimeMs;
+    const long long chartMicros = rate.chartMicrosFromReal(realMicros);
+    return gameplay_timing::leadInBeatDistance(0, -chartMicros, bpm) *
+           gameplay_timing::playbackTravelScale(rate) * hispeed;
+  };
+  const audio::PlaybackRate halfRate{.percent = 50};
+  const audio::PlaybackRate normalRate{.percent = 100};
+  const audio::PlaybackRate doubleRate{.percent = 200};
+  const double normalLeadInTravel =
+      compensatedTravel(normalRate, 800000, 120.0);
+  ASSERT_NEAR(normalLeadInTravel, compensatedTravel(halfRate, 800000, 120.0),
+              0.000001, "50 percent lead-in travel stays in real time");
+  ASSERT_NEAR(normalLeadInTravel, compensatedTravel(doubleRate, 800000, 120.0),
+              0.000001, "200 percent lead-in travel stays in real time");
+
+  const auto bpmChangeTravel = [&](audio::PlaybackRate rate) {
+    return compensatedTravel(rate, 300000, 120.0) +
+           compensatedTravel(rate, 200000, 240.0);
+  };
+  const double normalBpmChangeTravel = bpmChangeTravel(normalRate);
+  ASSERT_NEAR(normalBpmChangeTravel, bpmChangeTravel(halfRate), 0.000001,
+              "50 percent BPM-change travel stays in real time");
+  ASSERT_NEAR(normalBpmChangeTravel, bpmChangeTravel(doubleRate), 0.000001,
+              "200 percent BPM-change travel stays in real time");
+
   bms_parser::ChartMeta meta;
   meta.Bpm = 120.0;
   meta.MostPrevalentBpm = 180.0;

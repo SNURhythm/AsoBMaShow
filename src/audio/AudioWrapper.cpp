@@ -321,12 +321,14 @@ long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
       baseMicros, framesToChartMicros(startFrame + frameCount, sampleRate,
                                       playbackRatePercent));
 
-  userData->audioClockAnchorMicros->store(bufferStartMicros,
-                                          std::memory_order_release);
   userData->audioClockAnchorEndMicros->store(bufferEndMicros,
                                              std::memory_order_release);
   userData->audioClockAnchorWallMicros->store(nowMicros(),
                                               std::memory_order_release);
+  userData->audioClockAnchorRatePercent->store(playbackRatePercent,
+                                               std::memory_order_release);
+  userData->audioClockAnchorMicros->store(bufferStartMicros,
+                                          std::memory_order_release);
   return bufferStartMicros;
 }
 
@@ -480,6 +482,7 @@ void AudioWrapper::initializeUserData() {
   userData.audioClockAnchorMicros = &audioClockAnchorMicros;
   userData.audioClockAnchorWallMicros = &audioClockAnchorWallMicros;
   userData.audioClockAnchorEndMicros = &audioClockAnchorEndMicros;
+  userData.audioClockAnchorRatePercent = &audioClockAnchorRatePercent;
   userData.playbackRatePercent = &playbackRatePercent;
   userData.bgmGain = &bgmGain;
   userData.keysoundGain = &keysoundGain;
@@ -574,12 +577,14 @@ long long AudioWrapper::getTimeMicros() const {
       audioClockAnchorWallMicros.load(std::memory_order_acquire);
   const long long anchorEndMicros =
       audioClockAnchorEndMicros.load(std::memory_order_acquire);
+  const int anchorRatePercent =
+      audioClockAnchorRatePercent.load(std::memory_order_acquire);
 
   if (anchorWallMicros <= 0 || !stopwatch->isRunning()) {
     return anchorMicros;
   }
 
-  const audio::PlaybackRate rate = playbackRate();
+  const audio::PlaybackRate rate{.percent = anchorRatePercent};
   const long long wallDeltaMicros = nowMicros() - anchorWallMicros;
   long long interpolatedMicros =
       addMicrosClamped(anchorMicros, rate.chartMicrosFromReal(wallDeltaMicros));
@@ -597,9 +602,12 @@ void AudioWrapper::seekClock(long long micros) {
   const long long wallMicros = nowMicros();
   audioClockBaseMicros.store(micros, std::memory_order_release);
   audioClockFrameCursor.store(0, std::memory_order_release);
-  audioClockAnchorMicros.store(micros, std::memory_order_release);
   audioClockAnchorEndMicros.store(micros, std::memory_order_release);
   audioClockAnchorWallMicros.store(wallMicros, std::memory_order_release);
+  audioClockAnchorRatePercent.store(
+      playbackRatePercent.load(std::memory_order_acquire),
+      std::memory_order_release);
+  audioClockAnchorMicros.store(micros, std::memory_order_release);
 }
 
 bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
@@ -633,7 +641,23 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
     return false;
   }
 
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  const int previousRatePercent =
+      playbackRatePercent.load(std::memory_order_acquire);
+  const std::int64_t previousFrameCursor =
+      audioClockFrameCursor.exchange(0, std::memory_order_acq_rel);
+  const long long rebasedMicros = addMicrosClamped(
+      audioClockBaseMicros.load(std::memory_order_acquire),
+      framesToChartMicros(previousFrameCursor,
+                          currentSampleRate.load(std::memory_order_acquire),
+                          previousRatePercent));
+  const long long wallMicros = nowMicros();
+  audioClockBaseMicros.store(rebasedMicros, std::memory_order_release);
+  audioClockAnchorEndMicros.store(rebasedMicros, std::memory_order_release);
+  audioClockAnchorWallMicros.store(wallMicros, std::memory_order_release);
+  audioClockAnchorRatePercent.store(rate.percent, std::memory_order_release);
   playbackRatePercent.store(rate.percent, std::memory_order_release);
+  audioClockAnchorMicros.store(rebasedMicros, std::memory_order_release);
   return true;
 }
 

@@ -2,6 +2,7 @@
 #include "../bms_parser.hpp"
 #include "../PrepMetronome.h"
 #include "AudioWrapper.h"
+#include <algorithm>
 #include <array>
 #include <thread>
 #include <unordered_map>
@@ -80,6 +81,18 @@ makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
   return OverlappingAudioRequest{
       .wav = event.wav, .offsetMicros = offsetMicros, .bus = event.bus};
 }
+
+namespace audio::playback {
+inline long long
+SchedulerWaitMicrosForChartDelta(long long chartDeltaMicros, PlaybackRate rate,
+                                 long long maximumWallSleepMicros) noexcept {
+  if (chartDeltaMicros <= 0 || maximumWallSleepMicros <= 0) {
+    return 0;
+  }
+  return std::min(maximumWallSleepMicros,
+                  std::max(0LL, rate.realMicrosFromChart(chartDeltaMicros)));
+}
+} // namespace audio::playback
 
 class Jukebox : public audio::IPlaybackSession {
 public:

@@ -98,6 +98,7 @@ struct UserData {
   std::atomic<long long> *audioClockAnchorMicros;
   std::atomic<long long> *audioClockAnchorWallMicros;
   std::atomic<long long> *audioClockAnchorEndMicros;
+  std::atomic<int> *audioClockAnchorRatePercent;
   std::atomic<int> *playbackRatePercent;
   std::atomic<float> *bgmGain;
   std::atomic<float> *keysoundGain;
@@ -180,6 +181,7 @@ private:
   std::atomic<long long> audioClockAnchorMicros{0};
   std::atomic<long long> audioClockAnchorWallMicros{0};
   std::atomic<long long> audioClockAnchorEndMicros{0};
+  std::atomic<int> audioClockAnchorRatePercent{100};
   std::atomic<int> playbackRatePercent{100};
   std::atomic<float> bgmGain{1.0f};
   std::atomic<float> keysoundGain{1.0f};

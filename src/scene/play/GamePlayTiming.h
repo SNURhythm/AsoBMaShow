@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../../audio/PlaybackRate.h"
+
 #include <cmath>
 
 namespace gameplay_timing {
@@ -17,6 +19,11 @@ inline double leadInBeatDistance(long long targetTimeMicros,
   }
   return static_cast<double>(targetTimeMicros - renderTimeMicros) * bpm /
          240000000.0;
+}
+
+inline double playbackTravelScale(audio::PlaybackRate playback) {
+  return playback.percent > 0 ? 100.0 / static_cast<double>(playback.percent)
+                              : 1.0;
 }
 
 inline bool
