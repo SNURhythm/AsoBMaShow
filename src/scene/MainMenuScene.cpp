@@ -4828,6 +4828,9 @@ void MainMenuScene::refreshPacemakerTargetButtons() {
 }
 
 void MainMenuScene::setPlaybackRateSelection(int percent) {
+  if (playbackSelectionLockedForCourse()) {
+    return;
+  }
   context.settings.selectedPlaybackRatePercent = percent;
   context.settings.sanitize();
   if (!context.saveSettings()) {
@@ -4837,7 +4840,7 @@ void MainMenuScene::setPlaybackRateSelection(int percent) {
 }
 
 void MainMenuScene::setPlaybackModeSelection(const std::string &mode) {
-  if (mode != "pitch-shift") {
+  if (playbackSelectionLockedForCourse() || mode != "pitch-shift") {
     return;
   }
   context.settings.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
@@ -4850,15 +4853,20 @@ void MainMenuScene::setPlaybackModeSelection(const std::string &mode) {
 }
 
 void MainMenuScene::refreshPlaybackSelectionControls() {
-  const int percent = context.settings.selectedPlaybackRatePercent;
+  const bool locked = playbackSelectionLockedForCourse();
+  const int percent =
+      locked ? 100 : context.settings.selectedPlaybackRatePercent;
+  if (locked) {
+    playbackModeDropdownOpen = false;
+  }
   if (playbackRateText != nullptr) {
     playbackRateText->setText(std::to_string(percent) + "%");
   }
   if (playbackRateDecreaseButton != nullptr) {
-    playbackRateDecreaseButton->setEnabled(percent > 50);
+    playbackRateDecreaseButton->setEnabled(!locked && percent > 50);
   }
   if (playbackRateIncreaseButton != nullptr) {
-    playbackRateIncreaseButton->setEnabled(percent < 200);
+    playbackRateIncreaseButton->setEnabled(!locked && percent < 200);
   }
   if (playbackClearCapText != nullptr) {
     const bool assisted = percent != 100;
@@ -4874,11 +4882,18 @@ void MainMenuScene::refreshPlaybackSelectionControls() {
                      .label = "Time Stretch (Unavailable)",
                      .available = false}},
         .open = playbackModeDropdownOpen,
-        .enabled = true,
+        .enabled = !locked,
         .maxVisibleItems = 2,
     });
   }
   refreshReadySettingsSummary();
+}
+
+bool MainMenuScene::playbackSelectionLockedForCourse() const {
+  const auto record = selectedRecordSnapshot();
+  return record.has_value() && record->courseStart &&
+         activeFolder.type == LibraryFolderItem::Type::Course &&
+         activeFolder.courseId > 0;
 }
 
 void MainMenuScene::refreshReadySettingsSummary() {
@@ -4903,12 +4918,13 @@ void MainMenuScene::refreshReadySettingsSummary() {
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
   if (readyPlaybackText != nullptr) {
+    const int percent = playbackSelectionLockedForCourse()
+                            ? 100
+                            : context.settings.selectedPlaybackRatePercent;
     readyPlaybackText->setText(
-        "Rate: " +
-        std::to_string(context.settings.selectedPlaybackRatePercent) + "%" +
-        (context.settings.selectedPlaybackRatePercent == 100
-             ? " / Pitch Shift"
-             : " / Assisted Easy maximum"));
+        "Rate: " + std::to_string(percent) + "%" +
+        (percent == 100 ? " / Pitch Shift"
+                        : " / Assisted Easy maximum"));
   }
 }
 
@@ -5152,6 +5168,7 @@ void MainMenuScene::startCourseDirect(
         options.playOption2Seed = playInfo.seed2;
         options.longNoteMode = selectedLongNoteMode;
         options.assistOption = session->assistOption;
+        options.playback = {};
         options.courseSession = session;
         options.courseConstraints = session->constraints;
         options.ownsChart = true;

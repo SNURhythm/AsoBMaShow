@@ -667,6 +667,7 @@ private:
   void setPlaybackRateSelection(int percent);
   void setPlaybackModeSelection(const std::string &mode);
   void refreshPlaybackSelectionControls();
+  [[nodiscard]] bool playbackSelectionLockedForCourse() const;
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   void refreshSelectedChartActionState();
