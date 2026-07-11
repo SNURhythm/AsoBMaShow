@@ -137,6 +137,88 @@ void testRangeSanitizesAgainstTheParsedChartEnd() {
           "sanitizing a launch range preserves valid stored options");
 }
 
+void testReplayMetadataCannotReplaceTheCurrentPlayedChartIdentityOrPath() {
+  bms_parser::ChartMeta current;
+  current.SHA256 = std::string(64, 'a');
+  current.BmsPath = std::filesystem::path("BMS/current/chart.bms");
+  current.Title = "Current parsed chart";
+
+  ReplayData staleReplay;
+  staleReplay.chartMeta.SHA256 = std::string(64, 'b');
+  staleReplay.chartMeta.BmsPath = std::filesystem::path("BMS/stale/chart.bms");
+  staleReplay.chartMeta.Title = "Stale replay chart";
+  staleReplay.randomSeed = 42;
+  staleReplay.randomPrng = "replay-prng";
+  staleReplay.randomValues = {2, 1, 3};
+
+  const auto merged =
+      practice::mergeReplayLaunchChartMeta(current, staleReplay);
+  require(merged.SHA256 == current.SHA256 &&
+              merged.BmsPath == current.BmsPath &&
+              merged.Title == current.Title,
+          "current parsed identity, path, and metadata beat stale replay data");
+  require(merged.RandomSeed == staleReplay.randomSeed &&
+              merged.RandomPrng == staleReplay.randomPrng &&
+              merged.RandomValues == staleReplay.randomValues,
+          "missing replay-specific randomization metadata is backfilled");
+
+  staleReplay.chartMeta.BmsPath.clear();
+  const auto emptyReplayPath =
+      practice::mergeReplayLaunchChartMeta(current, staleReplay);
+  require(emptyReplayPath.BmsPath == current.BmsPath &&
+              emptyReplayPath.SHA256 == current.SHA256,
+          "empty replay path cannot replace the current path or identity");
+
+  current.RandomSeed = 7;
+  current.RandomPrng = "current-prng";
+  current.RandomValues = {1, 1};
+  const auto currentRandomWins =
+      practice::mergeReplayLaunchChartMeta(current, staleReplay);
+  require(currentRandomWins.RandomSeed == current.RandomSeed &&
+              currentRandomWins.RandomPrng == current.RandomPrng &&
+              currentRandomWins.RandomValues == current.RandomValues,
+          "current parsed randomization metadata remains authoritative");
+}
+
+void testParsedChartIdentityGatesLaunchApplication() {
+  practice::Configuration lastUsed;
+  lastUsed.chartSha256 = std::string(64, 'a');
+  lastUsed.startMicros = 1'000'000;
+  lastUsed.endMicros = 10'000'000;
+  lastUsed.loop = true;
+  lastUsed.countInBeats = 8;
+
+  auto request = makeRequest(practice::LaunchSource::NormalResult);
+  request.chartMeta.SHA256 = std::string(64, 'A');
+  bms_parser::ChartMeta parsed;
+  parsed.SHA256 = std::string(64, 'a');
+
+  const auto equivalent = practice::applyLaunchRequestForParsedChart(
+      lastUsed, request, parsed, 40'000'000);
+  require(equivalent.applied() &&
+              equivalent.configuration.startMicros == request.startMicros &&
+              equivalent.configuration.endMicros == request.endMicros,
+          "case-equivalent request and parsed identities apply the range");
+
+  parsed.SHA256 = std::string(64, 'b');
+  const auto conflicting = practice::applyLaunchRequestForParsedChart(
+      lastUsed, request, parsed, 40'000'000);
+  require(!conflicting.applied() &&
+              conflicting.issue ==
+                  std::optional<std::string>("Chart identity changed") &&
+              conflicting.configuration == lastUsed,
+          "conflicting parsed identity rejects without changing configuration");
+
+  parsed.SHA256.clear();
+  const auto missing = practice::applyLaunchRequestForParsedChart(
+      lastUsed, request, parsed, 40'000'000);
+  require(!missing.applied() &&
+              missing.issue ==
+                  std::optional<std::string>("Chart identity unavailable") &&
+              missing.configuration == lastUsed,
+          "missing parsed identity rejects without trusting record metadata");
+}
+
 } // namespace
 
 int main() {
@@ -144,5 +226,7 @@ int main() {
   testValidationRejectsUnavailableOrInconsistentMetadata();
   testSelectedRangeMergesWithoutChangingLastUsedOptions();
   testRangeSanitizesAgainstTheParsedChartEnd();
+  testReplayMetadataCannotReplaceTheCurrentPlayedChartIdentityOrPath();
+  testParsedChartIdentityGatesLaunchApplication();
   return 0;
 }

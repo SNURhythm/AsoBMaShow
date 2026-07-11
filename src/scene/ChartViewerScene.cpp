@@ -4011,16 +4011,16 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
   const practice::LaunchRequest request =
       std::move(*pendingPracticeLaunchRequest);
   pendingPracticeLaunchRequest.reset();
-  if (const auto issue = practice::validateLaunchRequest(request);
-      issue.has_value()) {
+  auto application = practice::applyLaunchRequestForParsedChart(
+      practiceConfiguration, request, chart->Meta, practiceChartEndMicros);
+  if (!application.applied()) {
     if (statusText != nullptr) {
-      statusText->setText(*issue);
+      statusText->setText(application.issue.value_or("Chart unavailable"));
     }
     return;
   }
 
-  practiceConfiguration = practice::applyLaunchRequest(
-      practiceConfiguration, request, practiceChartEndMicros);
+  practiceConfiguration = std::move(application.configuration);
   selectedPracticePresetId.reset();
   if (canvasView != nullptr) {
     canvasView->setPracticeRange(

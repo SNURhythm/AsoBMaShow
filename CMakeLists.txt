@@ -959,6 +959,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(practice_launch_tests
         tests/practice_launch_tests.cpp
+        src/ScoreProvenance.cpp
         src/practice/PracticeConfiguration.cpp
         src/practice/PracticeLaunchRequest.cpp
     )

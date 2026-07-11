@@ -1259,10 +1259,11 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
           ? practice::LaunchSource::PracticeResult
           : (replayResult ? practice::LaunchSource::ReplayResult
                           : practice::LaunchSource::NormalResult);
-  const bms_parser::ChartMeta &chartMeta =
-      source == practice::LaunchSource::ReplayResult && retryData.has_value()
-          ? retryData->chartMeta
-          : meta;
+  bms_parser::ChartMeta chartMeta = meta;
+  if (source == practice::LaunchSource::ReplayResult &&
+      retryData.has_value()) {
+    chartMeta = practice::mergeReplayLaunchChartMeta(meta, *retryData);
+  }
   return {
       .chartMeta = chartMeta,
       .startMicros = startMicros,

@@ -25,7 +25,30 @@ bool isKnownSource(LaunchSource source) {
   return false;
 }
 
+std::string normalizedSha256(std::string value) {
+  std::ranges::transform(value, value.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  return value;
+}
+
 } // namespace
+
+bms_parser::ChartMeta
+mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
+                           const ReplayData &replay) {
+  bms_parser::ChartMeta result = authoritative;
+  if (!result.RandomSeed.has_value()) {
+    result.RandomSeed = replay.randomSeed;
+  }
+  if (!result.RandomPrng.has_value()) {
+    result.RandomPrng = replay.randomPrng;
+  }
+  if (result.RandomValues.empty()) {
+    result.RandomValues = replay.randomValues;
+  }
+  return result;
+}
 
 std::optional<std::string> validateLaunchRequest(const LaunchRequest &request) {
   if (!isKnownSource(request.source)) {
@@ -57,6 +80,23 @@ Configuration applyLaunchRequest(const Configuration &lastUsed,
   merged.startMicros = request.startMicros;
   merged.endMicros = request.endMicros;
   return sanitize(std::move(merged), chartEndMicros).configuration;
+}
+
+ParsedLaunchApplication applyLaunchRequestForParsedChart(
+    const Configuration &lastUsed, const LaunchRequest &request,
+    const bms_parser::ChartMeta &parsedChartMeta, long long chartEndMicros) {
+  if (const auto issue = validateLaunchRequest(request); issue.has_value()) {
+    return {.configuration = lastUsed, .issue = issue};
+  }
+  if (!isSha256(parsedChartMeta.SHA256)) {
+    return {.configuration = lastUsed, .issue = "Chart identity unavailable"};
+  }
+  if (normalizedSha256(request.chartMeta.SHA256) !=
+      normalizedSha256(parsedChartMeta.SHA256)) {
+    return {.configuration = lastUsed, .issue = "Chart identity changed"};
+  }
+  return {.configuration =
+              applyLaunchRequest(lastUsed, request, chartEndMicros)};
 }
 
 } // namespace practice
