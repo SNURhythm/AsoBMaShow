@@ -2,6 +2,7 @@
 
 #include "Button.h"
 #include "IconText.h"
+#include "OverlayPortal.h"
 #include "ScrollView.h"
 #include "TextView.h"
 #include "UiTheme.h"
@@ -99,8 +100,8 @@ void fingerEventToUi(const SDL_TouchFingerEvent &event, float &uiX,
 
 } // namespace
 
-DropdownView::DropdownView(Callbacks callbacks)
-    : View(), callbacks(std::move(callbacks)) {
+DropdownView::DropdownView(Callbacks callbacks, OverlayPortal *portal)
+    : View(), callbacks(std::move(callbacks)), overlayPortal(portal) {
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setWidth(kDefaultWidth);
@@ -114,6 +115,12 @@ DropdownView::DropdownView(Callbacks callbacks)
 DropdownView::~DropdownView() {
   if (lifetimeToken) {
     *lifetimeToken = false;
+  }
+  if (menuOwnedByPortal && menuScroll != nullptr) {
+    overlayPortal->dismiss(menuScroll);
+    delete menuScroll;
+    menuScroll = nullptr;
+    menuContent = nullptr;
   }
   pendingRefresh.reset();
 }
@@ -177,7 +184,11 @@ void DropdownView::buildView() {
   menuScroll->setZIndex(100);
   menuScroll->setVisible(false);
   menuScroll->setContentView(menuContent);
-  addView(menuScroll);
+  if (overlayPortal != nullptr) {
+    menuOwnedByPortal = true;
+  } else {
+    addView(menuScroll);
+  }
 }
 
 void DropdownView::refresh(const State &state) {
@@ -277,9 +288,16 @@ void DropdownView::rebuildOptions() {
 void DropdownView::refreshVisualState() {
   const bool menuVisible =
       current.enabled && current.open && !current.options.empty();
-  setZIndex(menuVisible ? 100 : 0);
+  setZIndex(!menuOwnedByPortal && menuVisible ? 100 : 0);
   if (menuScroll != nullptr) {
     menuScroll->setVisible(menuVisible);
+  }
+  if (menuOwnedByPortal) {
+    if (menuVisible) {
+      overlayPortal->present(menuScroll);
+    } else {
+      overlayPortal->dismiss(menuScroll);
+    }
   }
   if (triggerText != nullptr) {
     const std::string selected = selectedLabel();
@@ -317,42 +335,23 @@ void DropdownView::updateMenuPlacement() {
   const int desiredHeight = static_cast<int>(
       std::round(static_cast<float>(visibleOptions) * kOptionHeight +
                  kMenuPadding * 2.0f));
-  const int minHeight =
+  const int minimumHeight =
       static_cast<int>(std::round(kOptionHeight + kMenuPadding * 2.0f));
-  const int belowSpace = std::max(
-      0, static_cast<int>(std::floor(
-             static_cast<float>(rendering::window_height) -
-             static_cast<float>(getY() + getHeight()) - kWindowMargin)));
-  const int aboveSpace = std::max(
-      0,
-      static_cast<int>(std::floor(static_cast<float>(getY()) - kWindowMargin)));
-  const bool placeBelow =
-      belowSpace >= desiredHeight || belowSpace >= aboveSpace;
-  const int availableSpace = placeBelow ? belowSpace : aboveSpace;
-  const int menuHeight =
-      std::min(desiredHeight, std::max(minHeight, availableSpace));
 
   int menuWidth = static_cast<int>(std::round(current.menuWidth));
   if (menuWidth <= 0) {
     menuWidth = getWidth() > 0 ? getWidth() : static_cast<int>(kDefaultWidth);
   }
 
-  int left = 0;
-  const int rightEdge = static_cast<int>(
-      std::floor(static_cast<float>(rendering::window_width) - kWindowMargin));
-  const int desiredRight = getX() + menuWidth;
-  if (desiredRight > rightEdge) {
-    left -= desiredRight - rightEdge;
-  }
-  const int leftEdge = static_cast<int>(std::ceil(kWindowMargin));
-  if (getX() + left < leftEdge) {
-    left += leftEdge - (getX() + left);
-  }
-
-  const int top = placeBelow ? getHeight() + static_cast<int>(kMenuGap)
-                             : -menuHeight - static_cast<int>(kMenuGap);
+  const OverlayPlacement placement = placeAnchoredOverlay(
+      {.x = getX(), .y = getY(), .width = getWidth(), .height = getHeight()},
+      menuWidth, desiredHeight, minimumHeight, rendering::window_width,
+      rendering::window_height, static_cast<int>(kWindowMargin),
+      static_cast<int>(kMenuGap));
+  const int left = menuOwnedByPortal ? placement.x : placement.x - getX();
+  const int top = menuOwnedByPortal ? placement.y : placement.y - getY();
   menuScroll->setPositionNoLayout(left, top, YGPositionTypeAbsolute);
-  menuScroll->setSize(menuWidth, menuHeight);
+  menuScroll->setSize(placement.width, placement.height);
   menuScroll->refreshContentLayout();
   placementUpdating = false;
 }
@@ -486,3 +485,12 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
 }
 
 void DropdownView::onLayout() { updateMenuPlacement(); }
+
+void DropdownView::onMove(int, int) { updateMenuPlacement(); }
+
+void DropdownView::onThemeChanged() {
+  View::onThemeChanged();
+  if (menuOwnedByPortal && menuScroll != nullptr) {
+    menuScroll->propagateThemeChange();
+  }
+}

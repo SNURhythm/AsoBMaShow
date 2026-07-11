@@ -20,10 +20,10 @@ struct OverlayPlacement {
   bool opensBelow = true;
 };
 
-[[nodiscard]] inline OverlayPlacement placeAnchoredOverlay(
-    const OverlayAnchor &anchor, int desiredWidth, int desiredHeight,
-    int minimumHeight, int viewportWidth, int viewportHeight, int margin,
-    int gap) {
+[[nodiscard]] inline OverlayPlacement
+placeAnchoredOverlay(const OverlayAnchor &anchor, int desiredWidth,
+                     int desiredHeight, int minimumHeight, int viewportWidth,
+                     int viewportHeight, int margin, int gap) {
   const int safeMargin = std::max(0, margin);
   const int safeGap = std::max(0, gap);
   const int availableWidth = std::max(0, viewportWidth - safeMargin * 2);
@@ -33,8 +33,8 @@ struct OverlayPlacement {
   const int maximumX = std::max(safeMargin, viewportWidth - safeMargin - width);
   const int x = std::clamp(anchor.x, safeMargin, maximumX);
 
-  const int belowSpace = std::max(
-      0, viewportHeight - safeMargin - safeGap - anchor.y - anchor.height);
+  const int belowSpace = std::max(0, viewportHeight - safeMargin - safeGap -
+                                         anchor.y - anchor.height);
   const int aboveSpace = std::max(0, anchor.y - safeMargin - safeGap);
   const int requestedHeight = std::max(0, desiredHeight);
   const int preferredMinimum = std::max(0, minimumHeight);
@@ -78,9 +78,7 @@ public:
     presented.push_back(overlay);
   }
 
-  void dismiss(View *overlay) {
-    std::erase(presented, overlay);
-  }
+  void dismiss(View *overlay) { std::erase(presented, overlay); }
 
   [[nodiscard]] bool isPresented(const View *overlay) const {
     return std::ranges::find(presented, overlay) != presented.end();
