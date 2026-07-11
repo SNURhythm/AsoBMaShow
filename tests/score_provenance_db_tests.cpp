@@ -1122,6 +1122,38 @@ void testCourseRecoveryFailsClosedOnAmbiguityAndFailure(
          course_identity::makeCourseKey(md5Charts, "[]"));
 }
 
+void testIgnoredRecoveryUpdateDoesNotAdvanceRevision(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-recovery-ignored-update" / "score.db";
+  createVersion5CourseMigrationFixture(path);
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "CREATE TRIGGER ignore_recovery_update BEFORE UPDATE OF "
+              "course_key ON course_scores BEGIN SELECT RAISE(IGNORE); END");
+  db.reset();
+
+  const auto charts = enrichedRecoveryCharts();
+  const std::string currentKey = course_identity::makeCourseKey(charts, "[]");
+  const std::uint64_t revisionBefore = helper.GetRevision();
+  const CourseScoreRecoveryResult result = helper.RecoverCourseRecords(
+      std::vector<course_identity::Definition>{{.courseId = 901,
+                                                .courseKey = currentKey,
+                                                .constraintJson = "[]",
+                                                .charts = charts}});
+  assert(result.ok());
+  assert(helper.GetRevision() == revisionBefore);
+
+  db = openDatabase(path);
+  const std::vector<course_identity::ChartIdentity> md5Charts = {
+      {.md5 = std::string(kMd5A)}, {.md5 = std::string(kMd5B)}};
+  assert(queryText(db.get(),
+                   "SELECT course_key FROM course_scores WHERE course_id=17") ==
+         course_identity::makeCourseKey(md5Charts, "[]"));
+}
+
 void testExactFutureVersionSevenRejectsScoreRecovery(
     const std::filesystem::path &root) {
   const auto path = root / "future-v7-recovery" / "score.db";
@@ -1849,6 +1881,7 @@ int main() {
   testCourseLampCacheSeparatesKeysIdsAndModes(root);
   testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(root);
   testCourseRecoveryFailsClosedOnAmbiguityAndFailure(root);
+  testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
   testExactFutureVersionSevenRejectsScoreRecovery(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);

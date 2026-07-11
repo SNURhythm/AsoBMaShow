@@ -20,7 +20,6 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -1974,21 +1973,48 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
     return result;
   }
 
-  std::vector<const course_identity::Definition *> validDefinitions;
+  const auto definitionBucketKey =
+      [](std::string_view canonicalConstraints, std::size_t chartCount,
+         bool sha256, std::string_view firstHash) {
+        std::string key = std::to_string(canonicalConstraints.size());
+        key.push_back(':');
+        key.append(canonicalConstraints);
+        key.push_back(':');
+        key += std::to_string(chartCount);
+        key += sha256 ? ":sha256:" : ":md5:";
+        key.append(firstHash);
+        return key;
+      };
+  std::unordered_map<std::string,
+                     std::vector<const course_identity::Definition *>>
+      definitionBuckets;
   std::unordered_set<std::string> currentKeys;
-  validDefinitions.reserve(definitions.size());
   for (const auto &definition : definitions) {
+    const std::string canonicalConstraints =
+        course_identity::canonicalConstraintPayload(definition.constraintJson);
     if (!isCanonicalCourseKey(definition.courseKey) ||
-        definition.charts.empty() ||
-        course_identity::canonicalConstraintPayload(definition.constraintJson)
-            .empty() ||
+        definition.charts.empty() || canonicalConstraints.empty() ||
         course_identity::makeCourseKey(definition.charts,
                                        definition.constraintJson)
             .empty()) {
       continue;
     }
-    validDefinitions.push_back(&definition);
     currentKeys.insert(definition.courseKey);
+    const auto &firstChart = definition.charts.front();
+    const std::string firstSha256 = normalizedHash(firstChart.sha256);
+    const std::string firstMd5 = normalizedHash(firstChart.md5);
+    if (!firstSha256.empty()) {
+      definitionBuckets[definitionBucketKey(
+                            canonicalConstraints, definition.charts.size(),
+                            true, firstSha256)]
+          .push_back(&definition);
+    }
+    if (!firstMd5.empty()) {
+      definitionBuckets[definitionBucketKey(
+                            canonicalConstraints, definition.charts.size(),
+                            false, firstMd5)]
+          .push_back(&definition);
+    }
   }
 
   const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
@@ -2059,6 +2085,55 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
     std::string courseKey;
   };
   std::vector<CourseKeyRewrite> rewrites;
+  std::unordered_map<std::string, std::optional<std::string>>
+      rawEvidenceResolutions;
+  const auto resolveRawEvidence = [&](const std::string &rawEvidence) {
+    const auto cached = rawEvidenceResolutions.find(rawEvidence);
+    if (cached != rawEvidenceResolutions.end()) {
+      return cached->second;
+    }
+
+    std::optional<std::string> resolvedKey;
+    const auto parsed = course_identity::parseLegacyScoreKey(rawEvidence);
+    if (parsed.has_value() && !parsed->charts.empty()) {
+      const std::string canonicalConstraints =
+          course_identity::canonicalConstraintPayload(parsed->constraintJson);
+      const auto &firstChart = parsed->charts.front();
+      const std::string firstSha256 = normalizedHash(firstChart.sha256);
+      const std::string firstMd5 = normalizedHash(firstChart.md5);
+      std::unordered_set<const course_identity::Definition *> candidates;
+      const auto collectCandidates = [&](bool sha256,
+                                         const std::string &firstHash) {
+        if (firstHash.empty()) {
+          return;
+        }
+        const auto bucket = definitionBuckets.find(definitionBucketKey(
+            canonicalConstraints, parsed->charts.size(), sha256, firstHash));
+        if (bucket == definitionBuckets.end()) {
+          return;
+        }
+        candidates.insert(bucket->second.begin(), bucket->second.end());
+      };
+      collectCandidates(true, firstSha256);
+      collectCandidates(false, firstMd5);
+
+      course_identity::Definition legacyDefinition{
+          .constraintJson = parsed->constraintJson,
+          .charts = parsed->charts,
+      };
+      std::unordered_set<std::string> matchingKeys;
+      for (const auto *definition : candidates) {
+        if (course_identity::sameDefinition(legacyDefinition, *definition)) {
+          matchingKeys.insert(definition->courseKey);
+        }
+      }
+      if (matchingKeys.size() == 1) {
+        resolvedKey = *matchingKeys.begin();
+      }
+    }
+    rawEvidenceResolutions.emplace(rawEvidence, resolvedKey);
+    return resolvedKey;
+  };
   for (const auto &row : rows) {
     std::string resultingKey = row.courseKey;
     std::string rawEvidence = row.legacyCourseKey;
@@ -2068,23 +2143,11 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
     }
 
     if (!rawEvidence.empty()) {
-      const auto parsed = course_identity::parseLegacyScoreKey(rawEvidence);
-      if (parsed.has_value()) {
-        course_identity::Definition legacyDefinition{
-            .constraintJson = parsed->constraintJson,
-            .charts = parsed->charts,
-        };
-        std::set<std::string> matchingKeys;
-        for (const auto *definition : validDefinitions) {
-          if (course_identity::sameDefinition(legacyDefinition, *definition)) {
-            matchingKeys.insert(definition->courseKey);
-          }
-        }
-        if (matchingKeys.size() == 1 && !matchingKeys.begin()->empty()) {
-          resultingKey = *matchingKeys.begin();
-          if (resultingKey != row.courseKey) {
-            rewrites.push_back({.id = row.id, .courseKey = resultingKey});
-          }
+      const auto resolvedKey = resolveRawEvidence(rawEvidence);
+      if (resolvedKey.has_value() && !resolvedKey->empty()) {
+        resultingKey = *resolvedKey;
+        if (resultingKey != row.courseKey) {
+          rewrites.push_back({.id = row.id, .courseKey = resultingKey});
         }
       }
     }
@@ -2117,6 +2180,7 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
     result.evidence.clear();
     return result;
   }
+  int changedRows = 0;
   for (const auto &rewrite : rewrites) {
     bindSqliteText(updateStmt.get(), 1, rewrite.courseKey);
     sqlite3_bind_int64(updateStmt.get(), 2, rewrite.id);
@@ -2125,6 +2189,7 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
       result.evidence.clear();
       return result;
     }
+    changedRows += sqlite3_changes(db);
     sqlite3_reset(updateStmt.get());
     sqlite3_clear_bindings(updateStmt.get());
   }
@@ -2148,7 +2213,7 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
     result.evidence.clear();
     return result;
   }
-  if (!rewrites.empty()) {
+  if (changedRows > 0) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
   return result;

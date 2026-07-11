@@ -157,10 +157,15 @@ int main() {
               "INSERT INTO difficulty_courses(id, course_key, name, table_id, "
               "group_name) VALUES(10, "
               "'course:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "aaaaaaaaaaaaaa', 'Current renamed course', 1, 'Courses')");
+              "aaaaaaaaaaaaaa', 'Current renamed course', 1, 'Courses'),"
+              "(20, 'course:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              "bbbbbbbbbbbbbbbbbb', 'Blank fallback course', 1, 'Courses'),"
+              "(30, 'course:v1:cccccccccccccccccccccccccccccccccccccccccccccc"
+              "cccccccccccccccccc', 'Mismatching key course', 1, 'Courses')");
   execOrAbort(db,
               "INSERT INTO difficulty_course_entries(course_id, sha256, md5, "
-              "sort_order) VALUES(10, '', 'md5-local', 1)");
+              "sort_order) VALUES(10, '', 'md5-local', 1),"
+              "(20, '', 'md5-local', 1),(30, '', 'md5-local', 1)");
 
   ScoreClearRankCache scoreRanks;
   scoreRanks.rankBySha256["sha-local"].ranks[0] = kClearTypeHardClearRank;
@@ -169,6 +174,14 @@ int main() {
       "aaaa"];
   courseRanks.ranks[long_note_mode::kCnValue] = kClearTypeExHardClearRank;
   courseRanks.wildcardRank = kClearTypeNormalClearRank;
+  scoreRanks.rankByLegacyCourseId[20]
+      .ranks[long_note_mode::kLnValue] = kClearTypeFullComboRank;
+  // This keyed record historically used ID 30. Its nonempty key differs from
+  // the current course key, so it must not enter the legacy ID fallback map.
+  scoreRanks
+      .rankByCourseKey["course:v1:ddddddddddddddddddddddddddddddddddddddddddddd"
+                       "ddddddddddddddddddd"]
+      .ranks[long_note_mode::kLnValue] = kClearTypeFullComboRank;
 
   const auto data =
       main_menu_library::LoadFolderClearDataByLongNoteMode(db, scoreRanks);
@@ -216,6 +229,16 @@ int main() {
                               main_menu_library::folderKeyForCourse(10),
                               long_note_mode::kHcnValue),
             "course wildcard lamp contributes to HCN mode");
+  ASSERT_EQ(kClearTypeFullComboRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(20),
+                              long_note_mode::kLnValue),
+            "blank-key score uses same-ID course folder fallback");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForCourse(30),
+                              long_note_mode::kLnValue),
+            "same-ID nonempty mismatching key cannot override course folder");
 
   sqlite3_close(db);
   return 0;
