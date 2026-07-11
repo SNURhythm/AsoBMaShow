@@ -8,12 +8,14 @@
 #include "../ResultPresentationUtils.h"
 #include "../ScoreDBHelper.h"
 #include "../path.h"
+#include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
+#include "ChartViewerScene.h"
 #include "PracticeAnalyticsPresentation.h"
 #include "PracticeAnalyticsView.h"
 
@@ -651,6 +653,30 @@ void ResultScene::addRetryButtons() {
                                        ui_theme::hairlineSubtle());
   }
   retryRow->addView(exportPhotoButton);
+
+  practiceSectionButton = new Button();
+  practiceSectionButtonText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  practiceSectionButtonText->setText("Select Section");
+  practiceSectionButtonText->setAlign(TextView::CENTER);
+  practiceSectionButtonText->setVAlign(TextView::MIDDLE);
+  practiceSectionButtonText->setColor(
+      ui_theme::sdl(ui_theme::textOn(ui_theme::successAction())));
+  practiceSectionButton->setContentView(practiceSectionButtonText);
+  practiceSectionButton->setOnClickListener(
+      [this]() { practiceThisSection(); });
+  practiceSectionButton->setSize(280, 64);
+  practiceSectionButton->setCornerRadius(ui_theme::controlRadius());
+  practiceSectionButton->setBackgroundColors(
+      ui_theme::successAction(), ui_theme::successActionHover(),
+      ui_theme::successActionPressed());
+  practiceSectionButton->setBorderColors(
+      ui_theme::withAlpha(ui_theme::lime(), 150),
+      ui_theme::withAlpha(ui_theme::lime(), 190),
+      ui_theme::withAlpha(ui_theme::lime(), 220));
+  practiceSectionButton->setStyledBorderWidth(1);
+  retryRow->addView(practiceSectionButton);
+  updatePracticeSectionAction();
   actionHost->addView(retryRow);
 }
 
@@ -1226,6 +1252,108 @@ void ResultScene::startReplay() {
       0, true);
 }
 
+practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
+    long long startMicros, long long endMicros) const {
+  const practice::LaunchSource source =
+      practiceOptions.enabled
+          ? practice::LaunchSource::PracticeResult
+          : (replayResult ? practice::LaunchSource::ReplayResult
+                          : practice::LaunchSource::NormalResult);
+  const bms_parser::ChartMeta &chartMeta =
+      source == practice::LaunchSource::ReplayResult && retryData.has_value()
+          ? retryData->chartMeta
+          : meta;
+  return {
+      .chartMeta = chartMeta,
+      .startMicros = startMicros,
+      .endMicros = endMicros,
+      .source = source,
+      .replayId = source == practice::LaunchSource::ReplayResult &&
+                          retryData.has_value()
+                      ? std::optional<int>(retryData->id)
+                      : std::nullopt,
+  };
+}
+
+std::optional<practice::LaunchRequest>
+ResultScene::selectedPracticeLaunchRequest() const {
+  if (timingAnalyticsView == nullptr) {
+    return std::nullopt;
+  }
+  const auto selected = timingAnalyticsView->selectedSection();
+  if (!selected.has_value()) {
+    return std::nullopt;
+  }
+  return makePracticeLaunchRequest(selected->startMicros,
+                                   selected->endMicros);
+}
+
+void ResultScene::updatePracticeSectionAction() {
+  if (practiceSectionButton == nullptr || practiceSectionButtonText == nullptr) {
+    return;
+  }
+
+  const auto availabilityRequest = makePracticeLaunchRequest(0, 1);
+  if (const auto issue = practice::validateLaunchRequest(availabilityRequest);
+      issue.has_value()) {
+    practiceSectionButton->setEnabled(false);
+    practiceSectionButtonText->setText(*issue);
+    return;
+  }
+
+  const auto selectedRequest = selectedPracticeLaunchRequest();
+  if (!selectedRequest.has_value()) {
+    practiceSectionButton->setEnabled(false);
+    practiceSectionButtonText->setText("Select Section");
+    return;
+  }
+  if (const auto issue = practice::validateLaunchRequest(*selectedRequest);
+      issue.has_value()) {
+    practiceSectionButton->setEnabled(false);
+    practiceSectionButtonText->setText(*issue);
+    return;
+  }
+
+  practiceSectionButton->setEnabled(true);
+  practiceSectionButtonText->setText("Practice This Section");
+}
+
+void ResultScene::practiceThisSection() {
+  const auto selectedRequest = selectedPracticeLaunchRequest();
+  if (!selectedRequest.has_value() ||
+      practice::validateLaunchRequest(*selectedRequest).has_value()) {
+    updatePracticeSectionAction();
+    return;
+  }
+
+  practice::LaunchRequest request = *selectedRequest;
+  context.jukebox.stop();
+
+  if (request.source == practice::LaunchSource::PracticeResult &&
+      practiceOptions.returnScene != nullptr) {
+    if (auto *viewer =
+            dynamic_cast<ChartViewerScene *>(practiceOptions.returnScene);
+        viewer != nullptr) {
+      viewer->setPracticeLaunchRequest(std::move(request));
+      context.sceneManager->changeScene(viewer, false);
+      return;
+    }
+  }
+
+  ChartMetaRecord record{
+      .meta = request.chartMeta,
+      .difficultyTableLabels = difficultyLabel,
+  };
+  const auto randomSeed = request.chartMeta.RandomSeed;
+  const auto randomPrng = request.chartMeta.RandomPrng;
+  const auto randomValues = request.chartMeta.RandomValues;
+  context.sceneManager->changeScene(
+      std::make_unique<ChartViewerScene>(
+          context, std::move(record), randomSeed, randomPrng, randomValues,
+          std::move(request)),
+      false);
+}
+
 void ResultScene::startCourseReplay() {
   if (!isCourseFinalResult() || courseOptions.session == nullptr ||
       courseOptions.session->courseReplayData == nullptr ||
@@ -1367,7 +1495,10 @@ void ResultScene::init() {
   }
 }
 
-void ResultScene::update(float dt) {}
+void ResultScene::update(float dt) {
+  (void)dt;
+  updatePracticeSectionAction();
+}
 
 void ResultScene::renderScene() {
   if (graphPlaceHolder && !resultState.gaugeHistory.empty()) {
@@ -1392,5 +1523,7 @@ void ResultScene::cleanupScene() {
   courseExitConfirmation = nullptr;
   exportPhotoButton = nullptr;
   exportPhotoButtonText = nullptr;
+  practiceSectionButton = nullptr;
+  practiceSectionButtonText = nullptr;
   resultPhotoExportInProgress = false;
 }

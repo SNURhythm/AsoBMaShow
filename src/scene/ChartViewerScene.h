@@ -4,6 +4,7 @@
 #include "../ReplayDBHelper.h"
 #include "../bms_parser.hpp"
 #include "../practice/PracticeConfiguration.h"
+#include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticePresetStore.h"
 #include "Scene.h"
 
@@ -29,15 +30,18 @@ public:
       ApplicationContext &context, ChartMetaRecord record,
       std::optional<unsigned int> randomSeed = std::nullopt,
       std::optional<std::string> randomPrng = std::nullopt,
-      std::optional<std::vector<int>> randomValues = std::nullopt);
+      std::optional<std::vector<int>> randomValues = std::nullopt,
+      std::optional<practice::LaunchRequest> launchRequest = std::nullopt);
 
   void init() override;
+  void onResume() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   void update(float dt) override;
   void renderScene() override;
   void cleanupScene() override;
 
   void setPracticeGhostReplay(const ReplayData &replayData);
+  void setPracticeLaunchRequest(practice::LaunchRequest request);
 
 private:
   struct RandomOption {
@@ -94,6 +98,7 @@ private:
   std::vector<practice::NamedPreset> practiceNamedPresets;
   std::optional<std::string> selectedPracticePresetId;
   long long practiceChartEndMicros = 0;
+  std::optional<practice::LaunchRequest> pendingPracticeLaunchRequest;
 
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
@@ -159,6 +164,7 @@ private:
   void selectActivePracticeMarker(practice::Marker marker);
   void moveActivePracticeMarker(practice::TimelineDirection direction);
   void loadPracticeConfiguration();
+  void applyPendingPracticeLaunchRequest();
   bool applyPracticePresetLoad(practice::PresetLoadResult loaded,
                                bool applyLastUsed);
   void refreshPracticePanel();

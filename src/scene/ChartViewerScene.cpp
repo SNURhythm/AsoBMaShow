@@ -8,6 +8,7 @@
 #include "../ReplayGhostUtils.h"
 #include "../path.h"
 #include "../practice/PracticeConfiguration.h"
+#include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticePresetStore.h"
 #include "../practice/PracticeSession.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -2256,9 +2257,11 @@ ChartViewerScene::ChartViewerScene(
     ApplicationContext &context, ChartMetaRecord record,
     std::optional<unsigned int> randomSeed,
     std::optional<std::string> randomPrng,
-    std::optional<std::vector<int>> randomValues)
+    std::optional<std::vector<int>> randomValues,
+    std::optional<practice::LaunchRequest> launchRequest)
     : Scene(context), record(std::move(record)), randomSeed(randomSeed),
-      randomPrng(std::move(randomPrng)) {
+      randomPrng(std::move(randomPrng)),
+      pendingPracticeLaunchRequest(std::move(launchRequest)) {
   if (randomValues.has_value()) {
     selectedRandomValues = *randomValues;
   }
@@ -2277,6 +2280,13 @@ void ChartViewerScene::init() {
   parseAndRefresh(selectedRandomValues.empty()
                       ? std::nullopt
                       : std::optional<std::vector<int>>(selectedRandomValues));
+}
+
+void ChartViewerScene::onResume() { applyPendingPracticeLaunchRequest(); }
+
+void ChartViewerScene::setPracticeLaunchRequest(
+    practice::LaunchRequest request) {
+  pendingPracticeLaunchRequest = std::move(request);
 }
 
 EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
@@ -3989,7 +3999,58 @@ void ChartViewerScene::loadPracticeConfiguration() {
          .endMicros = practiceConfiguration.endMicros,
          .active = practice::Marker::Start});
   }
+  applyPendingPracticeLaunchRequest();
   refreshPracticePanel();
+}
+
+void ChartViewerScene::applyPendingPracticeLaunchRequest() {
+  if (!pendingPracticeLaunchRequest.has_value() || chart == nullptr) {
+    return;
+  }
+
+  const practice::LaunchRequest request =
+      std::move(*pendingPracticeLaunchRequest);
+  pendingPracticeLaunchRequest.reset();
+  if (const auto issue = practice::validateLaunchRequest(request);
+      issue.has_value()) {
+    if (statusText != nullptr) {
+      statusText->setText(*issue);
+    }
+    return;
+  }
+
+  practiceConfiguration = practice::applyLaunchRequest(
+      practiceConfiguration, request, practiceChartEndMicros);
+  selectedPracticePresetId.reset();
+  if (canvasView != nullptr) {
+    canvasView->setPracticeRange(
+        {.startMicros = practiceConfiguration.startMicros,
+         .endMicros = practiceConfiguration.endMicros,
+         .active = practice::Marker::Start});
+  }
+  if (practicePanel != nullptr) {
+    practicePanel->setDisplay(YGDisplayFlex);
+    practicePanel->setVisible(true);
+  }
+  if (practicePresetStore != nullptr) {
+    std::string error;
+    if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
+                                           practiceConfiguration, error) &&
+        statusText != nullptr) {
+      statusText->setText("Practice save failed: " + error);
+      refreshPracticePanel();
+      updateSelectionText();
+      return;
+    }
+  }
+  if (statusText != nullptr) {
+    statusText->setText("Practice section ready");
+  }
+  refreshPracticePanel();
+  updateSelectionText();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
 }
 
 void ChartViewerScene::refreshPracticePanel() {

@@ -1,5 +1,6 @@
 #pragma once
 #include "../ReplayData.h"
+#include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeSession.h"
 #include "Scene.h"
 #include "play/RhythmState.h"
@@ -81,6 +82,8 @@ private:
   void recordCourseStageRestTime();
   void startRetry(bool samePattern);
   void startReplay();
+  void practiceThisSection();
+  void updatePracticeSectionAction();
   void startCourseReplay();
   void startCourseReplayStage(std::shared_ptr<CoursePlaySession> session);
   void continueCourse();
@@ -91,6 +94,10 @@ private:
   [[nodiscard]] bool isCourseFinalResult() const;
   [[nodiscard]] std::optional<ResultPacemakerData>
   pacemakerDataForCurrentResult() const;
+  [[nodiscard]] std::optional<practice::LaunchRequest>
+  selectedPracticeLaunchRequest() const;
+  [[nodiscard]] practice::LaunchRequest
+  makePracticeLaunchRequest(long long startMicros, long long endMicros) const;
 
   bms_parser::ChartMeta meta;
   RhythmState resultState;
@@ -117,6 +124,8 @@ private:
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
   TextView *exportPhotoButtonText = nullptr;
+  Button *practiceSectionButton = nullptr;
+  TextView *practiceSectionButtonText = nullptr;
   std::unique_ptr<ISkin> skin;
   bool shouldSaveScore = true;
   bool replayResult = false;

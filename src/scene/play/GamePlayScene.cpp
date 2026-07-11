@@ -1563,7 +1563,7 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
                 capturePolicy.captureAnalytics ? &analyticsReplay : nullptr,
                 replayToSave, retrySource);
         ResultPracticeOptions practiceResultOptions;
-        if (options.practiceMode) {
+        if (options.practiceMode || options.practiceSession != nullptr) {
           practiceResultOptions.enabled = true;
           practiceResultOptions.session = options.practiceSession;
           if (options.practiceSession == nullptr) {

@@ -793,6 +793,7 @@
 				PrepMetronome.cpp,
 				practice/PracticeAnalytics.cpp,
 				practice/PracticeConfiguration.cpp,
+				practice/PracticeLaunchRequest.cpp,
 				practice/PracticePresetStore.cpp,
 				practice/PracticeResultFlow.cpp,
 				practice/PracticeResultModel.cpp,
