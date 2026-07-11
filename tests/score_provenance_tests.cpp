@@ -1,6 +1,7 @@
 #include "ScoreProvenance.h"
 #include "input/InputTypes.h"
 #include "scene/play/GamePlayStartOptions.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 
 #include <array>
 #include <cassert>
@@ -64,7 +65,7 @@ void testRulesetContract() {
 }
 
 void testSchemaAndInputDeviceVocabularyContract() {
-  assert(ScoreProvenance::kSchemaVersion == 2);
+  assert(ScoreProvenance::kSchemaVersion == 3);
   assert(static_cast<int>(InputDeviceCategory::Keyboard) == 0);
   assert(static_cast<int>(InputDeviceCategory::GameController) == 1);
   assert(static_cast<int>(InputDeviceCategory::Joystick) == 2);
@@ -109,8 +110,90 @@ void testDeterministicRoundTrip() {
   assert(decoded == value);
 }
 
+void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
+  auto input = sampleInput();
+  input.playback = {.percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  input.judgeWindowScalePercent = 80;
+  input.startingGaugePercent = 37;
+  const ScoreProvenance modified = makeScoreProvenance(input);
+  assert(modified.eligibility == ScoreEligibility::Modified);
+  assert(modified.playback.percent == 75);
+  assert(modified.playback.mode == audio::PlaybackMode::PitchShift);
+  assert(modified.judgeWindowScalePercent == 80);
+  assert(modified.startingGaugePercent == 37);
+
+  const std::string serialized = serializeScoreProvenance(modified);
+  assert(serialized.find("\"mode\":\"pitch-shift\"") != std::string::npos);
+  std::string error;
+  const auto roundTrip = deserializeScoreProvenance(serialized, error);
+  assert(error.empty());
+  assert(roundTrip == modified);
+
+  auto timeStretch = input;
+  timeStretch.playback = {.percent = 125,
+                          .mode = audio::PlaybackMode::TimeStretch};
+  const auto timeStretchRoundTrip = deserializeScoreProvenance(
+      serializeScoreProvenance(makeScoreProvenance(timeStretch)), error);
+  assert(error.empty());
+  assert(timeStretchRoundTrip.has_value());
+  assert(timeStretchRoundTrip->playback == timeStretch.playback);
+  assert(serializeScoreProvenance(*timeStretchRoundTrip)
+             .find("\"mode\":\"time-stretch\"") != std::string::npos);
+
+  auto legacyRoot = nlohmann::json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance()));
+  legacyRoot["schemaVersion"] = 2;
+  legacyRoot.erase("playback");
+  legacyRoot.erase("judgeWindowScalePercent");
+  legacyRoot.erase("startingGaugePercent");
+  const auto migrated = deserializeScoreProvenance(legacyRoot.dump(), error);
+  assert(error.empty());
+  assert(migrated.has_value());
+  assert(migrated->playback == audio::PlaybackRate{});
+  assert(migrated->judgeWindowScalePercent == 100);
+  assert(!migrated->startingGaugePercent.has_value());
+}
+
+void testPlaybackAndJudgeProvenanceValidation() {
+  const auto assertInvalid = [](ScoreProvenance value) {
+    std::string error;
+    assert(!serializeValidatedScoreProvenance(value, error).has_value());
+    assert(!error.empty());
+  };
+
+  auto invalidPlayback = sampleVerifiedProvenance();
+  invalidPlayback.playback.percent = 49;
+  assertInvalid(invalidPlayback);
+
+  auto invalidPlaybackMode = sampleVerifiedProvenance();
+  invalidPlaybackMode.playback.mode = static_cast<audio::PlaybackMode>(99);
+  assertInvalid(invalidPlaybackMode);
+
+  auto invalidJudgeScale = sampleVerifiedProvenance();
+  invalidJudgeScale.judgeWindowScalePercent = 20;
+  assertInvalid(invalidJudgeScale);
+
+  auto invalidStartingGauge = sampleVerifiedProvenance();
+  invalidStartingGauge.startingGaugePercent = 101;
+  assertInvalid(invalidStartingGauge);
+}
+
 void testEligibilityClassification() {
   assert(sampleVerifiedProvenance().eligibility == ScoreEligibility::Verified);
+
+  auto slowed = sampleInput();
+  slowed.playback.percent = 75;
+  assert(makeScoreProvenance(slowed).eligibility == ScoreEligibility::Modified);
+
+  auto scaledJudge = sampleInput();
+  scaledJudge.judgeWindowScalePercent = 80;
+  assert(makeScoreProvenance(scaledJudge).eligibility ==
+         ScoreEligibility::Modified);
+
+  auto startingGauge = sampleInput();
+  startingGauge.startingGaugePercent = 100;
+  assert(makeScoreProvenance(startingGauge).eligibility ==
+         ScoreEligibility::Modified);
 
   auto autoplay = sampleInput();
   autoplay.autoPlay = true;
@@ -170,7 +253,7 @@ void testFutureSchemaIsRejected() {
       std::to_string(ScoreProvenance::kSchemaVersion);
   const auto position = json.find(current);
   assert(position != std::string::npos);
-  json.replace(position, current.size(), "\"schemaVersion\":3");
+  json.replace(position, current.size(), "\"schemaVersion\":4");
 
   std::string error;
   assert(!deserializeScoreProvenance(json, error).has_value());
@@ -180,7 +263,7 @@ void testFutureSchemaIsRejected() {
 void testVersionOneMigratesToCurrentSchema() {
   const ScoreProvenance currentValue = sampleVerifiedProvenance();
   std::string json = serializeScoreProvenance(currentValue);
-  const std::string current = "\"schemaVersion\":2";
+  const std::string current = "\"schemaVersion\":3";
   const auto position = json.find(current);
   assert(position != std::string::npos);
   json.replace(position, current.size(), "\"schemaVersion\":1");
@@ -237,6 +320,9 @@ void testPlayStartCaptureIsImmutableAndShared() {
   options.playOptionSeed = 1234;
   options.playOption2 = "MIRROR";
   options.longNoteMode = 2;
+  options.playback = {.percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  options.judgeWindowScalePercent = 80;
+  options.startingGaugePercent = 37;
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard,
                                    InputDeviceCategory::Midi};
   options.rulesetDescriptor = RulesetDescriptor::Current();
@@ -263,12 +349,30 @@ void testPlayStartCaptureIsImmutableAndShared() {
   assert(captured.player1 ==
          PlayerOptionProvenance("RANDOM", std::int64_t{1234}));
   assert(captured.player2 == PlayerOptionProvenance("MIRROR", std::nullopt));
-  assert(captured.eligibility == ScoreEligibility::Verified);
+  assert(captured.playback == options.playback);
+  assert(captured.judgeWindowScalePercent == 80);
+  assert(captured.startingGaugePercent == 37);
+  assert(captured.eligibility == ScoreEligibility::Modified);
 
   const ScoreProvenance scoreProvenance = captured;
   ReplayData replay;
   replay.provenance = captured;
   assert(scoreProvenance == replay.provenance);
+}
+
+void testReplayStartRestoresPracticeProvenance() {
+  auto replay = std::make_shared<ReplayData>();
+  replay->provenance = sampleVerifiedProvenance("replay-start");
+  replay->provenance.playback = {.percent = 75,
+                                 .mode = audio::PlaybackMode::PitchShift};
+  replay->provenance.judgeWindowScalePercent = 80;
+  replay->provenance.startingGaugePercent = 37;
+
+  const StartOptions options =
+      makeCourseReplayStageStartOptions(nullptr, replay);
+  assert(options.playback == replay->provenance.playback);
+  assert(options.judgeWindowScalePercent == 80);
+  assert(options.startingGaugePercent == 37);
 }
 
 void testMobilePlayStartInputCategoriesPreserveResolverClasses() {
@@ -390,12 +494,15 @@ int main() {
   testRulesetContract();
   testSchemaAndInputDeviceVocabularyContract();
   testDeterministicRoundTrip();
+  testPlaybackAndJudgeProvenanceRoundTripAndMigration();
+  testPlaybackAndJudgeProvenanceValidation();
   testEligibilityClassification();
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
   testVersionOneMigratesToCurrentSchema();
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
+  testReplayStartRestoresPracticeProvenance();
   testMobilePlayStartInputCategoriesPreserveResolverClasses();
   testPlayStartInputPlatformDefaultsAreIncluded();
   testConstrainedPlayCapturesEffectiveWindowsAsModified();

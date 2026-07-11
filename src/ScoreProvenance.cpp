@@ -131,6 +131,69 @@ std::optional<InputDeviceCategory> inputDeviceFromName(std::string_view value) {
   return std::nullopt;
 }
 
+const char *playbackModeName(audio::PlaybackMode value) {
+  switch (value) {
+  case audio::PlaybackMode::PitchShift:
+    return "pitch-shift";
+  case audio::PlaybackMode::TimeStretch:
+    return "time-stretch";
+  }
+  throw std::invalid_argument("Unknown playback mode value.");
+}
+
+std::optional<audio::PlaybackMode>
+playbackModeFromName(std::string_view value) {
+  if (value == "pitch-shift") {
+    return audio::PlaybackMode::PitchShift;
+  }
+  if (value == "time-stretch") {
+    return audio::PlaybackMode::TimeStretch;
+  }
+  return std::nullopt;
+}
+
+Json playbackToJson(const audio::PlaybackRate &playback) {
+  Json value = Json::object();
+  value["percent"] = playback.percent;
+  value["mode"] = playbackModeName(playback.mode);
+  return value;
+}
+
+audio::PlaybackRate playbackFromJson(const Json &value) {
+  if (!value.is_object()) {
+    throw std::runtime_error("Score provenance playback must be an object.");
+  }
+  audio::PlaybackRate result;
+  result.percent = value.value("percent", result.percent);
+  const auto mode = playbackModeFromName(value.value("mode", "pitch-shift"));
+  if (!mode.has_value()) {
+    throw std::runtime_error("Unknown playback mode in score provenance.");
+  }
+  result.mode = *mode;
+  if (!result.valid()) {
+    throw std::runtime_error(
+        "Score provenance playback percentage is out of range.");
+  }
+  return result;
+}
+
+void validatePracticePercentages(const ScoreProvenance &value) {
+  if (!value.playback.valid()) {
+    throw std::runtime_error("Score provenance playback is invalid.");
+  }
+  if (value.judgeWindowScalePercent < 25 ||
+      value.judgeWindowScalePercent > 200 ||
+      value.judgeWindowScalePercent % 5 != 0) {
+    throw std::runtime_error(
+        "Score provenance judge window scale percentage is out of range.");
+  }
+  if (value.startingGaugePercent.has_value() &&
+      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 100)) {
+    throw std::runtime_error(
+        "Score provenance starting gauge percentage is out of range.");
+  }
+}
+
 const char *judgementName(Judgement value) {
   switch (value) {
   case PGreat:
@@ -406,7 +469,9 @@ bool buildIsModified(const ScoreProvenanceBuildInput &input) {
   return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
          input.practice || assist_options::isEnabled(input.assistOption) ||
          input.judgeRankSource != JudgeRankSource::Chart ||
-         input.gaugeProfile != GaugeProfile::Standard;
+         input.gaugeProfile != GaugeProfile::Standard ||
+         !input.playback.neutral() || input.judgeWindowScalePercent != 100 ||
+         input.startingGaugePercent.has_value();
 }
 
 } // namespace
@@ -456,6 +521,9 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   root["inputDevices"] = std::move(devices);
   root["autoPlay"] = canonical.autoPlay;
   root["practice"] = canonical.practice;
+  root["playback"] = playbackToJson(canonical.playback);
+  root["judgeWindowScalePercent"] = canonical.judgeWindowScalePercent;
+  writeOptional(root, "startingGaugePercent", canonical.startingGaugePercent);
   root["eligibility"] = eligibilityName(canonical.eligibility);
   return root.dump();
 }
@@ -523,6 +591,16 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
 
     result.autoPlay = root.value("autoPlay", result.autoPlay);
     result.practice = root.value("practice", result.practice);
+    if (schemaVersion >= 3) {
+      if (const auto playback = root.find("playback"); playback != root.end()) {
+        result.playback = playbackFromJson(*playback);
+      }
+      result.judgeWindowScalePercent =
+          root.value("judgeWindowScalePercent", result.judgeWindowScalePercent);
+      result.startingGaugePercent =
+          readOptional<int>(root, "startingGaugePercent");
+    }
+    validatePracticePercentages(result);
     result.eligibility = enumOrThrow(
         eligibilityFromName(root.value("eligibility", "legacy-unverified")),
         "Unknown eligibility in score provenance.");
@@ -595,6 +673,9 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   canonicalizeDevices(result.inputDevices);
   result.autoPlay = input.autoPlay;
   result.practice = input.practice;
+  result.playback = input.playback;
+  result.judgeWindowScalePercent = input.judgeWindowScalePercent;
+  result.startingGaugePercent = input.startingGaugePercent;
   if (input.ruleset.version <= 0) {
     result.eligibility = ScoreEligibility::LegacyUnverified;
   } else {
@@ -627,15 +708,20 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
     result.practice = result.practice || stage.practice;
     eligibility = worseEligibility(eligibility, stage.eligibility);
 
-    inconsistent = inconsistent ||
-                   stage.schemaVersion != ScoreProvenance::kSchemaVersion ||
-                   stage.ruleset != stages.front().ruleset ||
-                   stage.gaugeType != stages.front().gaugeType ||
-                   stage.gaugeProfile != stages.front().gaugeProfile ||
-                   stage.gaugeAutoShift != stages.front().gaugeAutoShift ||
-                   stage.player1 != stages.front().player1 ||
-                   stage.player2 != stages.front().player2 ||
-                   stage.assistOption != stages.front().assistOption;
+    inconsistent =
+        inconsistent ||
+        stage.schemaVersion != ScoreProvenance::kSchemaVersion ||
+        stage.ruleset != stages.front().ruleset ||
+        stage.gaugeType != stages.front().gaugeType ||
+        stage.gaugeProfile != stages.front().gaugeProfile ||
+        stage.gaugeAutoShift != stages.front().gaugeAutoShift ||
+        stage.player1 != stages.front().player1 ||
+        stage.player2 != stages.front().player2 ||
+        stage.assistOption != stages.front().assistOption ||
+        stage.playback != stages.front().playback ||
+        stage.judgeWindowScalePercent !=
+            stages.front().judgeWindowScalePercent ||
+        stage.startingGaugePercent != stages.front().startingGaugePercent;
   }
 
   canonicalizeDevices(result.inputDevices);

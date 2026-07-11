@@ -80,6 +80,9 @@ struct StartOptions {
   bool ownsChart = false;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
+  audio::PlaybackRate playback;
+  int judgeWindowScalePercent = 100;
+  std::optional<int> startingGaugePercent;
   Scene *returnScene = nullptr;
   std::optional<bool> touchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
@@ -117,6 +120,9 @@ struct StartOptions {
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
   input.practice = options.practiceMode;
+  input.playback = options.playback;
+  input.judgeWindowScalePercent = options.judgeWindowScalePercent;
+  input.startingGaugePercent = options.startingGaugePercent;
   input.ruleset =
       options.courseSession != nullptr
           ? options.courseSession->rulesetDescriptor
@@ -151,6 +157,10 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.longNoteMode =
         normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
     options.assistOption = stageReplay->assistOption;
+    options.playback = stageReplay->provenance.playback;
+    options.judgeWindowScalePercent =
+        stageReplay->provenance.judgeWindowScalePercent;
+    options.startingGaugePercent = stageReplay->provenance.startingGaugePercent;
   }
   return options;
 }

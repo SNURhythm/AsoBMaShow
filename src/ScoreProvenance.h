@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssistOptionUtils.h"
+#include "audio/PlaybackRate.h"
 #include "bms_parser.hpp"
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
@@ -81,7 +82,7 @@ struct ScoreStageProvenance {
 };
 
 struct ScoreProvenance {
-  static constexpr int kSchemaVersion = 2;
+  static constexpr int kSchemaVersion = 3;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;
@@ -95,6 +96,9 @@ struct ScoreProvenance {
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;
   bool practice = false;
+  audio::PlaybackRate playback;
+  int judgeWindowScalePercent = 100;
+  std::optional<int> startingGaugePercent;
   ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
 
   bool operator==(const ScoreProvenance &) const = default;
@@ -117,6 +121,9 @@ struct ScoreProvenanceBuildInput {
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;
   bool practice = false;
+  audio::PlaybackRate playback;
+  int judgeWindowScalePercent = 100;
+  std::optional<int> startingGaugePercent;
   RulesetDescriptor ruleset = RulesetDescriptor::Current();
 };
 
