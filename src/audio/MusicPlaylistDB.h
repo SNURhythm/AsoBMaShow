@@ -22,6 +22,12 @@ struct MusicPlayerStateRecord {
 
 class MusicPlaylistDB {
 public:
+  MusicPlaylistDB() = default;
+  MusicPlaylistDB(const MusicPlaylistDB &) = delete;
+  MusicPlaylistDB &operator=(const MusicPlaylistDB &) = delete;
+  MusicPlaylistDB(MusicPlaylistDB &&) = delete;
+  MusicPlaylistDB &operator=(MusicPlaylistDB &&) = delete;
+
   sqlite3 *Connect();
   void Close(sqlite3 *db);
 
@@ -51,4 +57,7 @@ public:
                               std::vector<MusicTrackRecord> &tracks);
   void SelectTracks(sqlite3 *db, int playlistId,
                     std::vector<MusicTrackRecord> &tracks);
+
+private:
+  sqlite3 *schemaDatabase = nullptr;
 };

@@ -1217,11 +1217,13 @@ void MainMenuScene::init() {
   context.profileSwitchBlockers.background = profileOperationBlocker;
   context.profileSwitchBlockers.scene = std::move(profileOperationBlocker);
   context.refreshProfileCaches = [this]() {
-    if (const auto error = reloadScoreClearRanks()) {
-      throw std::runtime_error(*error);
-    }
-    reloadProfileSelectionsFromSettings();
-    refreshLongNoteModeClearRankViews();
+    // Profile switching happens while Main Menu is paused. Defer score DB
+    // attachment and view work until onResume(), when the active profile is
+    // fully committed and the scene owns its database dependencies again.
+    scoreClearRanks = {};
+    scoreBestScores = {};
+    folderClearData = {};
+    scoreClearRanksRevision = 0;
   };
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   context.requestAddChartFolderFromFiles = [this]() {
@@ -1266,12 +1268,23 @@ void MainMenuScene::onResume() {
   context.profileSwitchBlockers.scene =
       context.profileSwitchBlockers.background;
   applyThemeChange();
-  if (!prepareScoreQueryDatabase().has_value()) {
-    reloadProfileSelectionsFromSettings();
-  }
+  const bool scoreQueryReady = !prepareScoreQueryDatabase().has_value();
+  // Gameplay selections belong to the committed profile even when its score
+  // attachment is temporarily unavailable.
+  reloadProfileSelectionsFromSettings();
   syncLibraryTaskPauseStateWithForegroundScene();
   startLibraryTaskWorker();
-  refreshScoreClearRanksIfNeeded();
+  if (scoreQueryReady) {
+    refreshScoreClearRanksIfNeeded();
+  } else {
+    // Never render the previous profile's score-derived state while attachment
+    // retries continue from update().
+    scoreClearRanks = {};
+    scoreBestScores = {};
+    folderClearData = {};
+    scoreClearRanksRevision = 0;
+    refreshLongNoteModeClearRankViews();
+  }
   refreshLibraryIfNeeded();
   reselectCurrentChart();
 }
@@ -4246,7 +4259,16 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
     return;
   }
 
-  refreshScoreClearRankViews();
+  if (refreshScoreClearRankViews().has_value()) {
+    const bool hadVisibleScoreState = scoreClearRanksRevision != 0;
+    scoreClearRanks = {};
+    scoreBestScores = {};
+    folderClearData = {};
+    scoreClearRanksRevision = 0;
+    if (hadVisibleScoreState) {
+      refreshLongNoteModeClearRankViews();
+    }
+  }
 }
 
 void MainMenuScene::refreshLibraryIfNeeded() {

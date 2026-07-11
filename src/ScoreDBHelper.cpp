@@ -51,6 +51,122 @@ void logSqlError(const char *context, sqlite3 *db) {
   logSqlErrorText(context, sqliteDatabaseError(db));
 }
 
+bool ensureScoreDatabaseDirectory(const std::filesystem::path &path,
+                                  std::string &errorMessage) {
+  const std::filesystem::path directory = path.parent_path();
+  std::error_code directoryError;
+  if (!directory.empty() &&
+      !Utils::EnsureDirectoryExists(directory, directoryError)) {
+    errorMessage = "can't create score database directory: " +
+                   directoryError.message();
+    return false;
+  }
+  return true;
+}
+
+sqlite3 *openScoreDatabase(const std::filesystem::path &path,
+                           std::string &errorMessage) {
+  if (!ensureScoreDatabaseDirectory(path, errorMessage)) {
+    return nullptr;
+  }
+
+  return openValidatedSqliteDatabase(path, kScoreDatabaseSchemaVersion, false,
+                                     errorMessage);
+}
+
+sqlite3 *openTrustedScoreDatabase(const std::filesystem::path &path,
+                                  std::string &errorMessage) {
+  sqlite3 *raw = nullptr;
+  const std::string pathText = fspath_to_utf8(path);
+  const int openRc = sqlite3_open_v2(
+      pathText.c_str(), &raw,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_PRIVATECACHE, nullptr);
+  SqliteConnectionHandle connection(raw);
+  if (openRc != SQLITE_OK || connection.get() == nullptr) {
+    errorMessage = raw != nullptr ? sqlite3_errmsg(raw)
+                                  : "could not open trusted score database";
+    return nullptr;
+  }
+
+  int noCheckpointOnClose = 0;
+  if (sqlite3_db_config(connection.get(), SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1,
+                        &noCheckpointOnClose) != SQLITE_OK ||
+      noCheckpointOnClose != 1) {
+    errorMessage = "could not configure score checkpoint-on-close";
+    return nullptr;
+  }
+  sqlite3_busy_timeout(connection.get(), 1000);
+  std::string versionError;
+  const auto version = readSqliteUserVersion(connection.get(), versionError);
+  if (!version.has_value() || *version != kScoreDatabaseSchemaVersion) {
+    errorMessage = version.has_value()
+                       ? "trusted score database schema version changed"
+                       : "could not read trusted score database version: " +
+                             versionError;
+    return nullptr;
+  }
+  SqliteStatementHandle journalMode;
+  if (prepareSqliteStatement(connection.get(), "PRAGMA journal_mode",
+                             journalMode) != SQLITE_OK ||
+      sqlite3_step(journalMode.get()) != SQLITE_ROW ||
+      sqliteColumnString(journalMode.get(), 0) != "wal") {
+    errorMessage = "trusted score database is not in WAL mode";
+    return nullptr;
+  }
+  return connection.release();
+}
+
+void logScoreDatabaseOpenFailure(const std::filesystem::path &path,
+                                 const std::string &errorMessage) {
+  SDL_Log("Refusing to open score database %s: %s",
+          fspath_to_utf8(path).c_str(), errorMessage.c_str());
+}
+
+std::filesystem::path
+resolvedScoreDatabasePath(const std::filesystem::path &databasePath) {
+  return databasePath.empty() ? Utils::GetDocumentsPath("db") / "score.db"
+                              : databasePath;
+}
+
+std::filesystem::path
+normalizedScoreDatabasePath(const std::filesystem::path &databasePath) {
+  std::filesystem::path path = resolvedScoreDatabasePath(databasePath);
+  std::error_code absoluteError;
+  const std::filesystem::path absolutePath =
+      std::filesystem::absolute(path, absoluteError);
+  if (!absoluteError) {
+    path = absolutePath;
+  }
+  std::error_code canonicalError;
+  const std::filesystem::path canonicalPath =
+      std::filesystem::weakly_canonical(path, canonicalError);
+  return (canonicalError ? path : canonicalPath).lexically_normal();
+}
+
+bool equivalentScoreDatabasePaths(const std::filesystem::path &first,
+                                  const std::filesystem::path &second) {
+  const std::filesystem::path firstResolved =
+      resolvedScoreDatabasePath(first);
+  const std::filesystem::path secondResolved =
+      resolvedScoreDatabasePath(second);
+  std::error_code firstExistsError;
+  std::error_code secondExistsError;
+  const bool firstExists =
+      std::filesystem::exists(firstResolved, firstExistsError);
+  const bool secondExists =
+      std::filesystem::exists(secondResolved, secondExistsError);
+  if (!firstExistsError && !secondExistsError && firstExists && secondExists) {
+    std::error_code equivalentError;
+    const bool equivalent = std::filesystem::equivalent(
+        firstResolved, secondResolved, equivalentError);
+    if (!equivalentError) {
+      return equivalent;
+    }
+  }
+  return normalizedScoreDatabasePath(first) ==
+         normalizedScoreDatabasePath(second);
+}
+
 bool execSql(sqlite3 *db, const char *query, const char *context) {
   return executeSqliteLogged(db, query, context, logSqlErrorText);
 }
@@ -349,6 +465,21 @@ int selectScalarInt(sqlite3 *db, const std::string &query, int fallback = 0) {
 int judgeCount(const RhythmState &state, Judgement judgement) {
   const auto it = state.judgeCount.find(judgement);
   return it == state.judgeCount.end() ? 0 : it->second;
+}
+
+bool serializeProvenanceForWrite(const ScoreProvenance &provenance,
+                                 const char *scoreKind,
+                                 std::string &provenanceJson) {
+  std::string provenanceError;
+  const auto serialized =
+      serializeValidatedScoreProvenance(provenance, provenanceError);
+  if (!serialized.has_value()) {
+    SDL_Log("Refusing to save %s with invalid provenance: %s", scoreKind,
+            provenanceError.c_str());
+    return false;
+  }
+  provenanceJson = *serialized;
+  return true;
 }
 
 std::string stableChartKey(const bms_parser::ChartMeta &chartMeta) {
@@ -954,7 +1085,6 @@ ScoreBestCache::bestForStoredKey(std::string_view sha256,
 }
 
 ScoreDBHelper &ScoreDBHelper::GetInstance() {
-  sqlite3_config(SQLITE_CONFIG_SERIALIZED);
   static ScoreDBHelper instance;
   return instance;
 }
@@ -962,33 +1092,44 @@ ScoreDBHelper &ScoreDBHelper::GetInstance() {
 ScoreDBHelper::ScoreDBHelper(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
+ScoreDBHelper::~ScoreDBHelper() {
+  std::lock_guard lock(sessionMutex_);
+  CloseSessionDatabaseLocked();
+}
+
 void ScoreDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
   profile_database_activity::WriteGuard operation;
-  {
-    std::unique_lock lock(databasePathMutex_);
-    databasePath_ = std::move(databasePath);
+  std::lock_guard lock(sessionMutex_);
+  if (!equivalentScoreDatabasePaths(databasePath_, databasePath)) {
+    CloseSessionDatabaseLocked();
   }
+  databasePath_ = std::move(databasePath);
   gScoreRevision.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::filesystem::path ScoreDBHelper::GetDatabasePath() const {
-  std::shared_lock lock(databasePathMutex_);
+  std::lock_guard lock(sessionMutex_);
   return databasePath_;
 }
 
 std::filesystem::path ScoreDBHelper::GetResolvedDatabasePath() const {
-  std::shared_lock lock(databasePathMutex_);
-  return databasePath_.empty() ? Utils::GetDocumentsPath("db") / "score.db"
-                               : databasePath_;
+  std::lock_guard lock(sessionMutex_);
+  return GetResolvedDatabasePathLocked();
+}
+
+std::filesystem::path ScoreDBHelper::GetResolvedDatabasePathLocked() const {
+  return resolvedScoreDatabasePath(databasePath_);
 }
 
 struct ScoreDBHelper::PreparedScoreQueryDatabase::State {
-  State(const ScoreDBHelper &helper, sqlite3 *chartDatabase) {
-    const std::filesystem::path path = helper.GetResolvedDatabasePath();
+  State(const ScoreDBHelper &helper, sqlite3 *chartDatabase)
+      : sessionLock(helper.sessionMutex_) {
+    const std::filesystem::path path = helper.GetResolvedDatabasePathLocked();
     error = score_cache_queries::prepareScoreQueryDatabase(chartDatabase, path);
   }
 
   profile_database_activity::WriteGuard operation;
+  std::unique_lock<std::mutex> sessionLock;
   std::optional<std::string> error;
 };
 
@@ -1016,12 +1157,39 @@ bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
     errorMessage = "score database path is empty";
     return false;
   }
-  ScoreDBHelper candidate(databasePath);
-  if (!candidate.EnsureSchema()) {
+
+  std::lock_guard lock(sessionMutex_);
+  if (sessionDatabase_ != nullptr &&
+      sqlite3_get_autocommit(sessionDatabase_) == 0) {
+    SDL_Log("Discarding score database with an unfinished transaction");
+    CloseSessionDatabaseLocked();
+  }
+  if (sessionDatabase_ != nullptr &&
+      equivalentScoreDatabasePaths(databasePath_, databasePath)) {
+    databasePath_ = std::move(databasePath);
+    gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+    errorMessage.clear();
+    return true;
+  }
+
+  std::string openError;
+  SqliteConnectionHandle candidate(openScoreDatabase(databasePath, openError));
+  if (candidate.get() == nullptr) {
+    logScoreDatabaseOpenFailure(databasePath, openError);
     errorMessage = "score database validation failed";
     return false;
   }
-  SetDatabasePath(std::move(databasePath));
+  if (!EnsureSchemaOnConnection(candidate.get())) {
+    errorMessage = "score database validation failed";
+    return false;
+  }
+
+  sqlite3 *previous = sessionDatabase_;
+  databasePath_ = std::move(databasePath);
+  sessionDatabase_ = candidate.release();
+  closeSqliteDatabase(previous);
+  gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+  errorMessage.clear();
   return true;
 }
 
@@ -1034,23 +1202,24 @@ bool ScoreDBHelper::HasActiveWrites() {
 }
 
 sqlite3 *ScoreDBHelper::Connect() {
-  const std::filesystem::path path = GetResolvedDatabasePath();
-  const std::filesystem::path directory = path.parent_path();
-  std::error_code directoryError;
-  if (!directory.empty() &&
-      !Utils::EnsureDirectoryExists(directory, directoryError)) {
-    SDL_Log("Can't create score database directory %s: %s",
-            fspath_to_utf8(directory).c_str(),
-            directoryError.message().c_str());
+  if (this == &GetInstance()) {
+    SDL_Log("Raw score connections are unavailable on the runtime singleton");
     return nullptr;
+  }
+  std::filesystem::path path;
+  bool trustedSessionPath = false;
+  {
+    std::lock_guard lock(sessionMutex_);
+    path = GetResolvedDatabasePathLocked();
+    trustedSessionPath = sessionDatabase_ != nullptr;
   }
 
   std::string openError;
-  sqlite3 *db = openValidatedSqliteDatabase(path, kScoreDatabaseSchemaVersion,
-                                            false, openError);
+  sqlite3 *db = trustedSessionPath
+                    ? openTrustedScoreDatabase(path, openError)
+                    : openScoreDatabase(path, openError);
   if (db == nullptr) {
-    SDL_Log("Refusing to open score database %s: %s",
-            fspath_to_utf8(path).c_str(), openError.c_str());
+    logScoreDatabaseOpenFailure(path, openError);
     return nullptr;
   }
   return db;
@@ -1058,8 +1227,47 @@ sqlite3 *ScoreDBHelper::Connect() {
 
 void ScoreDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
+void ScoreDBHelper::CloseSessionDatabaseLocked() {
+  closeSqliteDatabase(sessionDatabase_);
+  sessionDatabase_ = nullptr;
+}
+
+void ScoreDBHelper::Shutdown() {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(sessionMutex_);
+  CloseSessionDatabaseLocked();
+}
+
+sqlite3 *ScoreDBHelper::EnsureSessionDatabaseLocked() {
+  if (sessionDatabase_ != nullptr) {
+    if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
+      return sessionDatabase_;
+    }
+    SDL_Log("Discarding score database with an unfinished transaction");
+    CloseSessionDatabaseLocked();
+  }
+
+  const std::filesystem::path path = GetResolvedDatabasePathLocked();
+  std::string openError;
+  SqliteConnectionHandle candidate(openScoreDatabase(path, openError));
+  if (candidate.get() == nullptr) {
+    logScoreDatabaseOpenFailure(path, openError);
+    return nullptr;
+  }
+  if (!EnsureSchemaOnConnection(candidate.get())) {
+    return nullptr;
+  }
+
+  sessionDatabase_ = candidate.release();
+  return sessionDatabase_;
+}
+
 bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
+  return CreateScoreTableOnConnection(db);
+}
+
+bool ScoreDBHelper::CreateScoreTableOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -1134,6 +1342,10 @@ bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
 
 bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
+  return CreateCourseScoreTableOnConnection(db);
+}
+
+bool ScoreDBHelper::CreateCourseScoreTableOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -1193,10 +1405,15 @@ bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
 
 bool ScoreDBHelper::EnsureSchema(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
+  return EnsureSchemaOnConnection(db);
+}
+
+bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
-  if (!CreateScoreTable(db) || !CreateCourseScoreTable(db)) {
+  if (!CreateScoreTableOnConnection(db) ||
+      !CreateCourseScoreTableOnConnection(db)) {
     return false;
   }
   return migrateScoreDatabaseToVersion5(db);
@@ -1204,8 +1421,8 @@ bool ScoreDBHelper::EnsureSchema(sqlite3 *db) {
 
 bool ScoreDBHelper::EnsureSchema() {
   profile_database_activity::WriteGuard operation;
-  SqliteConnectionHandle connection(Connect());
-  return connection.get() != nullptr && EnsureSchema(connection.get());
+  std::lock_guard lock(sessionMutex_);
+  return EnsureSessionDatabaseLocked() != nullptr;
 }
 
 bool ScoreDBHelper::InsertScore(sqlite3 *db,
@@ -1213,18 +1430,21 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
                                 const RhythmState &state,
                                 const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
-  std::string provenanceError;
-  const auto provenanceJson =
-      serializeValidatedScoreProvenance(provenance, provenanceError);
-  if (!provenanceJson.has_value()) {
-    SDL_Log("Refusing to save score with invalid provenance: %s",
-            provenanceError.c_str());
+  std::string provenanceJson;
+  if (!serializeProvenanceForWrite(provenance, "score", provenanceJson)) {
     return false;
   }
   if (!EnsureSchema(db)) {
     return false;
   }
+  return InsertScoreOnConnection(db, chartMeta, state, provenance,
+                                 provenanceJson);
+}
 
+bool ScoreDBHelper::InsertScoreOnConnection(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+    const RhythmState &state, const ScoreProvenance &provenance,
+    const std::string &provenanceJson) {
   const char *query =
       "INSERT INTO scores ("
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
@@ -1281,7 +1501,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(provenance.eligibility));
-  bindSqliteText(stmt.get(), bindIndex++, *provenanceJson);
+  bindSqliteText(stmt.get(), bindIndex++, provenanceJson);
 
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -1300,18 +1520,23 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                       int completedCharts, int totalCharts,
                                       const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
-  std::string provenanceError;
-  const auto provenanceJson =
-      serializeValidatedScoreProvenance(provenance, provenanceError);
-  if (!provenanceJson.has_value()) {
-    SDL_Log("Refusing to save course score with invalid provenance: %s",
-            provenanceError.c_str());
+  std::string provenanceJson;
+  if (!serializeProvenanceForWrite(provenance, "course score",
+                                   provenanceJson)) {
     return false;
   }
   if (!EnsureSchema(db)) {
     return false;
   }
+  return InsertCourseScoreOnConnection(db, session, state, completedCharts,
+                                       totalCharts, provenance,
+                                       provenanceJson);
+}
 
+bool ScoreDBHelper::InsertCourseScoreOnConnection(
+    sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
+    int completedCharts, int totalCharts, const ScoreProvenance &provenance,
+    const std::string &provenanceJson) {
   const char *query =
       "INSERT INTO course_scores ("
       "course_id, course_key, course_name, course_group_name, constraint_json,"
@@ -1379,7 +1604,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(provenance.eligibility));
-  bindSqliteText(stmt.get(), bindIndex++, *provenanceJson);
+  bindSqliteText(stmt.get(), bindIndex++, provenanceJson);
 
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
@@ -1393,21 +1618,19 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state,
                               const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
-  std::string provenanceError;
-  if (!serializeValidatedScoreProvenance(provenance, provenanceError)
-           .has_value()) {
-    SDL_Log("Refusing to save score with invalid provenance: %s",
-            provenanceError.c_str());
+  std::lock_guard lock(sessionMutex_);
+  std::string provenanceJson;
+  if (!serializeProvenanceForWrite(provenance, "score", provenanceJson)) {
     return false;
   }
 
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
     return false;
   }
 
-  const bool result =
-      InsertScore(connection.get(), chartMeta, state, provenance);
+  const bool result = InsertScoreOnConnection(db, chartMeta, state, provenance,
+                                              provenanceJson);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -1419,22 +1642,21 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
                                     int completedCharts, int totalCharts,
                                     const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
-  std::string provenanceError;
-  if (!serializeValidatedScoreProvenance(provenance, provenanceError)
-           .has_value()) {
-    SDL_Log("Refusing to save course score with invalid provenance: %s",
-            provenanceError.c_str());
+  std::lock_guard lock(sessionMutex_);
+  std::string provenanceJson;
+  if (!serializeProvenanceForWrite(provenance, "course score",
+                                   provenanceJson)) {
     return false;
   }
 
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
     return false;
   }
 
-  const bool result =
-      InsertCourseScore(connection.get(), session, state, completedCharts,
-                        totalCharts, provenance);
+  const bool result = InsertCourseScoreOnConnection(
+      db, session, state, completedCharts, totalCharts, provenance,
+      provenanceJson);
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -1445,15 +1667,17 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt) {
   profile_database_activity::ReadGuard operation;
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
+  std::lock_guard lock(sessionMutex_);
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
     return std::nullopt;
   }
+  return LoadBestScoreOnConnection(db, chartMeta, beforeCreatedAt);
+}
 
-  if (!EnsureSchema(connection.get())) {
-    return std::nullopt;
-  }
-
+std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScoreOnConnection(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+    const std::optional<std::string> &beforeCreatedAt) {
   const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
@@ -1471,8 +1695,8 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
            "LIMIT 1";
 
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(connection.get(), query, stmt,
-                                    "loading best score", logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(db, query, stmt, "loading best score",
+                                    logSqlErrorText)) {
     return std::nullopt;
   }
 
@@ -1503,15 +1727,17 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
 std::optional<ScoreBestSnapshot>
 ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
   profile_database_activity::ReadGuard operation;
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
+  std::lock_guard lock(sessionMutex_);
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
     return std::nullopt;
   }
+  return LoadBestCourseScoreOnConnection(db, session);
+}
 
-  if (!EnsureSchema(connection.get())) {
-    return std::nullopt;
-  }
-
+std::optional<ScoreBestSnapshot>
+ScoreDBHelper::LoadBestCourseScoreOnConnection(
+    sqlite3 *db, const CoursePlaySession &session) {
   const std::string courseKey = courseKeyForSession(session);
   const char *query =
       "SELECT score, max_score, max_combo, combo_break, final_gauge,"
@@ -1522,8 +1748,7 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
       "LIMIT 1";
 
   SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(connection.get(), query, stmt,
-                                    "loading best course score",
+  if (!prepareSqliteStatementLogged(db, query, stmt, "loading best course score",
                                     logSqlErrorText)) {
     return std::nullopt;
   }
@@ -1552,16 +1777,15 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
 
 ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(sessionMutex_);
   ScoreClearRankCache cache;
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
     return cache;
   }
 
-  if (EnsureSchema(connection.get())) {
-    loadBestChartRanks(connection.get(), cache);
-    loadBestCourseRanks(connection.get(), cache.rankByCourseId);
-  }
+  loadBestChartRanks(db, cache);
+  loadBestCourseRanks(db, cache.rankByCourseId);
   return cache;
 }
 
@@ -1578,15 +1802,14 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks(sqlite3 *db,
 
 ScoreBestCache ScoreDBHelper::LoadBestScores() {
   profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(sessionMutex_);
   ScoreBestCache cache;
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
+  sqlite3 *db = EnsureSessionDatabaseLocked();
+  if (db == nullptr) {
     return cache;
   }
 
-  if (EnsureSchema(connection.get())) {
-    loadBestChartScores(connection.get(), cache);
-  }
+  loadBestChartScores(db, cache);
   return cache;
 }
 

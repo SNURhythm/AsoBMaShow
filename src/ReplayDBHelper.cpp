@@ -52,9 +52,9 @@ bool setDatabaseUserVersion(sqlite3 *db, int version) {
 }
 
 bool rejectFutureReplayDatabase(sqlite3 *db) {
-  // Connect() performs the guarded path-level preflight before returning an
-  // owned handle. Schema helpers must inspect that handle directly instead of
-  // snapshotting the same database family again.
+  // Validated opens perform the guarded path-level preflight. Schema helpers
+  // inspect the owned handle directly instead of snapshotting the same database
+  // family again.
   std::string error;
   const auto version = readSqliteUserVersion(db, error);
   if (!version.has_value()) {
@@ -141,18 +141,32 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (*version >= kReplayDatabaseSchemaVersion) {
     return true;
   }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_replay_migration"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_replay_migration"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_replay_migration; RELEASE "
+            "asobmashow_replay_migration"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting replay database migration", transactionError);
+    return false;
+  }
+
   if (*version < 1 && !normalizeReplayChartIdentityHashes(db)) {
     return false;
   }
   if (*version < kLegacyReplayDatabaseSchemaVersion &&
       !backfillReplayMaxCombo(db)) {
-    return false;
-  }
-  std::string transactionError;
-  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
-                                      transactionError);
-  if (!transaction.active()) {
-    logSqlErrorText("starting replay provenance migration", transactionError);
     return false;
   }
   if (!ensureReplayProvenanceColumns(db, "replays") ||
@@ -161,7 +175,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
-    logSqlErrorText("committing replay provenance migration", transactionError);
+    logSqlErrorText("committing replay database migration", transactionError);
     return false;
   }
   return true;
@@ -747,10 +761,115 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
   }
   return replayId;
 }
+
+std::filesystem::path resolvedReplayDatabasePath(
+    const std::filesystem::path &databasePath) {
+  return databasePath.empty() ? Utils::GetDocumentsPath("db") / "replay.db"
+                              : databasePath;
+}
+
+std::filesystem::path normalizedReplayDatabasePath(
+    const std::filesystem::path &databasePath) {
+  std::filesystem::path resolved = resolvedReplayDatabasePath(databasePath);
+  std::error_code error;
+  const std::filesystem::path absolute =
+      std::filesystem::absolute(resolved, error);
+  if (!error) {
+    resolved = absolute;
+  }
+  error.clear();
+  const std::filesystem::path canonical =
+      std::filesystem::weakly_canonical(resolved, error);
+  return (error ? resolved : canonical).lexically_normal();
+}
+
+bool equivalentReplayDatabasePaths(const std::filesystem::path &first,
+                                   const std::filesystem::path &second) {
+  const std::filesystem::path firstResolved =
+      resolvedReplayDatabasePath(first);
+  const std::filesystem::path secondResolved =
+      resolvedReplayDatabasePath(second);
+  std::error_code firstExistsError;
+  std::error_code secondExistsError;
+  const bool firstExists =
+      std::filesystem::exists(firstResolved, firstExistsError);
+  const bool secondExists =
+      std::filesystem::exists(secondResolved, secondExistsError);
+  if (!firstExistsError && !secondExistsError && firstExists && secondExists) {
+    std::error_code equivalentError;
+    const bool equivalent = std::filesystem::equivalent(
+        firstResolved, secondResolved, equivalentError);
+    if (!equivalentError) {
+      return equivalent;
+    }
+  }
+  return normalizedReplayDatabasePath(first) ==
+         normalizedReplayDatabasePath(second);
+}
+
+sqlite3 *openReplayDatabase(const std::filesystem::path &path,
+                            std::string &errorMessage) {
+  const std::filesystem::path directory = path.parent_path();
+  std::error_code directoryError;
+  if (!directory.empty() &&
+      !Utils::EnsureDirectoryExists(directory, directoryError)) {
+    errorMessage = "can't create replay database directory " +
+                   fspath_to_utf8(directory) + ": " +
+                   directoryError.message();
+    return nullptr;
+  }
+
+  return openValidatedSqliteDatabase(path, kReplayDatabaseSchemaVersion, true,
+                                     errorMessage);
+}
+
+sqlite3 *openTrustedReplayDatabase(const std::filesystem::path &path,
+                                   std::string &errorMessage) {
+  const std::string pathText = fspath_to_utf8(path);
+  sqlite3 *rawDatabase = nullptr;
+  const int openResult = sqlite3_open_v2(
+      pathText.c_str(), &rawDatabase,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_PRIVATECACHE, nullptr);
+  SqliteConnectionHandle database(rawDatabase);
+  if (openResult != SQLITE_OK || !database) {
+    errorMessage = rawDatabase != nullptr ? sqlite3_errmsg(rawDatabase)
+                                          : "could not open database";
+    return nullptr;
+  }
+
+  sqlite3_busy_timeout(database.get(), 1000);
+  if (!configureSqliteNoCheckpoint(database.get(), {}, errorMessage)) {
+    return nullptr;
+  }
+  std::string versionError;
+  const auto version = readSqliteUserVersion(database.get(), versionError);
+  if (!version.has_value() || *version != kReplayDatabaseSchemaVersion) {
+    errorMessage = version.has_value()
+                       ? "trusted replay database schema version changed"
+                       : "could not read trusted replay database version: " +
+                             versionError;
+    return nullptr;
+  }
+  SqliteStatementHandle journalMode;
+  if (prepareSqliteStatement(database.get(), "PRAGMA journal_mode",
+                             journalMode) != SQLITE_OK ||
+      sqlite3_step(journalMode.get()) != SQLITE_ROW ||
+      sqliteColumnString(journalMode.get(), 0) != "wal") {
+    errorMessage = "trusted replay database is not in WAL mode";
+    return nullptr;
+  }
+  int foreignKeysEnabled = 0;
+  if (sqlite3_db_config(database.get(), SQLITE_DBCONFIG_ENABLE_FKEY, 1,
+                        &foreignKeysEnabled) != SQLITE_OK ||
+      foreignKeysEnabled != 1) {
+    errorMessage = "could not enable foreign keys";
+    return nullptr;
+  }
+  return database.release();
+}
 } // namespace
 
 ReplayDBHelper &ReplayDBHelper::GetInstance() {
-  sqlite3_config(SQLITE_CONFIG_SERIALIZED);
   static ReplayDBHelper instance;
   return instance;
 }
@@ -758,21 +877,32 @@ ReplayDBHelper &ReplayDBHelper::GetInstance() {
 ReplayDBHelper::ReplayDBHelper(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
+ReplayDBHelper::~ReplayDBHelper() {
+  std::lock_guard lock(sessionMutex_);
+  ShutdownLocked();
+}
+
 void ReplayDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
   profile_database_activity::WriteGuard operation;
-  std::unique_lock lock(databasePathMutex_);
+  std::lock_guard lock(sessionMutex_);
+  if (!equivalentReplayDatabasePaths(databasePath_, databasePath)) {
+    ShutdownLocked();
+  }
   databasePath_ = std::move(databasePath);
 }
 
 std::filesystem::path ReplayDBHelper::GetDatabasePath() const {
-  std::shared_lock lock(databasePathMutex_);
+  std::lock_guard lock(sessionMutex_);
   return databasePath_;
 }
 
 std::filesystem::path ReplayDBHelper::GetResolvedDatabasePath() const {
-  std::shared_lock lock(databasePathMutex_);
-  return databasePath_.empty() ? Utils::GetDocumentsPath("db") / "replay.db"
-                               : databasePath_;
+  std::lock_guard lock(sessionMutex_);
+  return GetResolvedDatabasePathLocked();
+}
+
+std::filesystem::path ReplayDBHelper::GetResolvedDatabasePathLocked() const {
+  return resolvedReplayDatabasePath(databasePath_);
 }
 
 bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
@@ -782,12 +912,40 @@ bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
     errorMessage = "replay database path is empty";
     return false;
   }
-  ReplayDBHelper candidate(databasePath);
-  if (!candidate.EnsureSchema()) {
+
+  std::lock_guard lock(sessionMutex_);
+  if (sessionDatabase_ != nullptr &&
+      sqlite3_get_autocommit(sessionDatabase_) == 0) {
+    SDL_Log("Discarding replay database with an unfinished transaction");
+    ShutdownLocked();
+  }
+  if (sessionDatabase_ != nullptr &&
+      equivalentReplayDatabasePaths(databasePath_, databasePath)) {
+    databasePath_ = std::move(databasePath);
+    errorMessage.clear();
+    return true;
+  }
+
+  const std::filesystem::path resolvedPath =
+      resolvedReplayDatabasePath(databasePath);
+  std::string openError;
+  SqliteConnectionHandle candidate(openReplayDatabase(resolvedPath, openError));
+  if (!candidate) {
+    SDL_Log("Refusing to bind replay database %s: %s",
+            fspath_to_utf8(resolvedPath).c_str(), openError.c_str());
     errorMessage = "replay database validation failed";
     return false;
   }
-  SetDatabasePath(std::move(databasePath));
+  if (!CreateReplayTablesOnConnection(candidate.get())) {
+    errorMessage = "replay database validation failed";
+    return false;
+  }
+
+  sqlite3 *oldDatabase = sessionDatabase_;
+  sessionDatabase_ = candidate.release();
+  databasePath_ = std::move(databasePath);
+  closeSqliteDatabase(oldDatabase);
+  errorMessage.clear();
   return true;
 }
 
@@ -799,21 +957,57 @@ bool ReplayDBHelper::HasActiveWrites() {
   return profile_database_activity::writesActive();
 }
 
-sqlite3 *ReplayDBHelper::Connect() {
-  const std::filesystem::path path = GetResolvedDatabasePath();
-  const std::filesystem::path directory = path.parent_path();
-  std::error_code directoryError;
-  if (!directory.empty() &&
-      !Utils::EnsureDirectoryExists(directory, directoryError)) {
-    SDL_Log("Can't create replay database directory %s: %s",
-            fspath_to_utf8(directory).c_str(),
-            directoryError.message().c_str());
-    return nullptr;
+void ReplayDBHelper::Shutdown() {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(sessionMutex_);
+  ShutdownLocked();
+}
+
+void ReplayDBHelper::ShutdownLocked() {
+  sqlite3 *database = sessionDatabase_;
+  sessionDatabase_ = nullptr;
+  closeSqliteDatabase(database);
+}
+
+bool ReplayDBHelper::EnsureSessionDatabaseLocked() {
+  if (sessionDatabase_ != nullptr) {
+    if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
+      return true;
+    }
+    SDL_Log("Discarding replay database with an unfinished transaction");
+    ShutdownLocked();
   }
 
+  const std::filesystem::path path = GetResolvedDatabasePathLocked();
   std::string openError;
-  sqlite3 *db = openValidatedSqliteDatabase(path, kReplayDatabaseSchemaVersion,
-                                            true, openError);
+  SqliteConnectionHandle candidate(openReplayDatabase(path, openError));
+  if (!candidate) {
+    SDL_Log("Refusing to open replay database %s: %s",
+            fspath_to_utf8(path).c_str(), openError.c_str());
+    return false;
+  }
+  if (!CreateReplayTablesOnConnection(candidate.get())) {
+    return false;
+  }
+  sessionDatabase_ = candidate.release();
+  return true;
+}
+
+sqlite3 *ReplayDBHelper::Connect() {
+  if (this == &GetInstance()) {
+    SDL_Log("Raw replay connections are unavailable on the runtime singleton");
+    return nullptr;
+  }
+  std::filesystem::path path;
+  bool trustedSession = false;
+  {
+    std::lock_guard lock(sessionMutex_);
+    path = GetResolvedDatabasePathLocked();
+    trustedSession = sessionDatabase_ != nullptr;
+  }
+  std::string openError;
+  sqlite3 *db = trustedSession ? openTrustedReplayDatabase(path, openError)
+                               : openReplayDatabase(path, openError);
   if (db == nullptr) {
     SDL_Log("Refusing to open replay database %s: %s",
             fspath_to_utf8(path).c_str(), openError.c_str());
@@ -826,6 +1020,10 @@ void ReplayDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
 bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
+  return CreateReplayTablesOnConnection(db);
+}
+
+bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
     return false;
   }
@@ -1038,8 +1236,8 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
 
 bool ReplayDBHelper::EnsureSchema() {
   profile_database_activity::WriteGuard operation;
-  SqliteConnectionHandle connection(Connect());
-  return connection.get() != nullptr && CreateReplayTables(connection.get());
+  std::lock_guard lock(sessionMutex_);
+  return EnsureSessionDatabaseLocked();
 }
 
 std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
@@ -1053,17 +1251,15 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   if (!provenanceJson.has_value()) {
     return std::nullopt;
   }
-
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr) {
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
+  return SaveReplayOnConnection(sessionDatabase_, replay, *provenanceJson);
+}
 
-  if (!CreateReplayTables(db)) {
-    return std::nullopt;
-  }
-
+std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
+    sqlite3 *db, const ReplayData &replay, const std::string &provenanceJson) {
   std::string transactionError;
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
                                       transactionError);
@@ -1072,7 +1268,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
     return std::nullopt;
   }
 
-  const auto replayId = insertReplayRows(db, replay, *provenanceJson);
+  const auto replayId = insertReplayRows(db, replay, provenanceJson);
   if (!replayId.has_value()) {
     return std::nullopt;
   }
@@ -1118,16 +1314,19 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
     stageProvenanceJson.push_back(std::move(*serialized));
   }
 
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr) {
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
+  return SaveCourseReplayOnConnection(sessionDatabase_, replay,
+                                      *courseProvenanceJson,
+                                      stageProvenanceJson);
+}
 
-  if (!CreateReplayTables(db)) {
-    return std::nullopt;
-  }
-
+std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
+    sqlite3 *db, const CourseReplayData &replay,
+    const std::string &courseProvenanceJson,
+    const std::vector<std::string> &stageProvenanceJson) {
   std::string transactionError;
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
                                       transactionError);
@@ -1179,7 +1378,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
                    replay.provenance.ruleset.version);
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    static_cast<int>(replay.provenance.eligibility));
-  bindSqliteText(courseStmt.get(), bindIndex++, *courseProvenanceJson);
+  bindSqliteText(courseStmt.get(), bindIndex++, courseProvenanceJson);
 
   int rc = sqlite3_step(courseStmt.get());
   courseStmt.reset();
@@ -1231,16 +1430,16 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
 std::vector<ReplaySummary>
 ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   profile_database_activity::ReadGuard operation;
-  std::vector<ReplaySummary> replays;
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr) {
-    return replays;
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {};
   }
+  return ListReplaysOnConnection(sessionDatabase_, chartMeta, limit);
+}
 
-  if (!CreateReplayTables(db)) {
-    return replays;
-  }
+std::vector<ReplaySummary> ReplayDBHelper::ListReplaysOnConnection(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta, int limit) {
+  std::vector<ReplaySummary> replays;
 
   std::string snapshotError;
   SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
@@ -1374,14 +1573,17 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
 std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplays(int courseId,
                                                              int limit) {
   profile_database_activity::ReadGuard operation;
-  std::vector<ReplaySummary> replays;
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr || courseId <= 0) {
-    return replays;
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {};
   }
+  return ListCourseReplaysOnConnection(sessionDatabase_, courseId, limit);
+}
 
-  if (!CreateReplayTables(db)) {
+std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
+    sqlite3 *db, int courseId, int limit) {
+  std::vector<ReplaySummary> replays;
+  if (courseId <= 0) {
     return replays;
   }
 
@@ -1746,12 +1948,15 @@ std::optional<ReplayData>
 ReplayDBHelper::LoadReplay(int replayId,
                            const bms_parser::ChartMeta &chartMeta) {
   profile_database_activity::ReadGuard operation;
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr || !CreateReplayTables(db)) {
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
+  return LoadReplayOnConnection(sessionDatabase_, replayId, chartMeta);
+}
 
+std::optional<ReplayData> ReplayDBHelper::LoadReplayOnConnection(
+    sqlite3 *db, int replayId, const bms_parser::ChartMeta &chartMeta) {
   std::string snapshotError;
   SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
   if (!readSnapshot.active()) {
@@ -1771,16 +1976,15 @@ ReplayDBHelper::LoadReplay(int replayId,
 
 std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
   profile_database_activity::ReadGuard operation;
-  SqliteConnectionHandle dbHandle(Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr) {
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
+  return LoadCourseReplayOnConnection(sessionDatabase_, replayId);
+}
 
-  if (!CreateReplayTables(db)) {
-    return std::nullopt;
-  }
-
+std::optional<CourseReplayData>
+ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
   std::string snapshotError;
   SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
   if (!readSnapshot.active()) {
@@ -1878,9 +2082,18 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
 std::optional<ReplayData>
 ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
   profile_database_activity::ReadGuard operation;
-  const auto replays = ListReplays(chartMeta, 1);
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+  return LoadLatestReplayOnConnection(sessionDatabase_, chartMeta);
+}
+
+std::optional<ReplayData> ReplayDBHelper::LoadLatestReplayOnConnection(
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta) {
+  const auto replays = ListReplaysOnConnection(db, chartMeta, 1);
   if (replays.empty()) {
     return std::nullopt;
   }
-  return LoadReplay(replays.front().id, chartMeta);
+  return LoadReplayOnConnection(db, replays.front().id, chartMeta);
 }

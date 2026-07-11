@@ -168,6 +168,15 @@ rawDatabaseFamilySnapshot(const std::filesystem::path &path) {
   return snapshot;
 }
 
+bool sameDatabaseFamilyIgnoringWalSharedMemoryBytes(
+    const RawDatabaseFamilySnapshot &left,
+    const RawDatabaseFamilySnapshot &right) {
+  return left.files[0] == right.files[0] &&
+         left.files[1] == right.files[1] &&
+         left.files[2] == right.files[2] &&
+         left.files[3].has_value() == right.files[3].has_value();
+}
+
 enum class FutureDatabaseState { Delete, WalAfterExit, HotJournal };
 
 const char *futureDatabaseStateName(FutureDatabaseState state) {
@@ -692,6 +701,47 @@ void testVersion2MigrationPreservesOutcomesAndRows(
   assert(queryInt(second.get(), "SELECT COUNT(*) FROM course_replays") == 1);
 }
 
+void testReplayMigrationNestsInsideCallerTransaction(
+    const std::filesystem::path &root) {
+  const auto path = root / "nested-migration" / "replay.db";
+  createVersion2ReplayFixture(path);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE replays SET chart_md5='ABCDEF', "
+              "chart_sha256='FEDCBA', max_combo=0");
+  execOrAbort(db.get(),
+              "INSERT INTO replay_events (replay_id,event_index,action,lane,"
+              "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+              "diff_micros,gauge,gauge_type,combo,score)"
+              " VALUES (2,0,0,3,100000,100100,100050,0,-50,73.5,2,7,2)");
+  execOrAbort(db.get(), "UPDATE course_replays SET max_combo=0");
+  execOrAbort(db.get(), "PRAGMA user_version=0");
+
+  execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+  ReplayDBHelper helper(path);
+  assert(helper.CreateReplayTables(db.get()));
+  assert(queryInt(db.get(), "PRAGMA user_version") == 3);
+  assert(queryText(db.get(), "SELECT chart_md5 FROM replays WHERE id=1") ==
+         "abcdef");
+  assert(queryText(db.get(), "SELECT chart_sha256 FROM replays WHERE id=1") ==
+         "fedcba");
+  assert(queryInt(db.get(), "SELECT max_combo FROM replays WHERE id=1") == 1);
+  assert(queryInt(db.get(), "SELECT max_combo FROM course_replays WHERE id=1") ==
+         7);
+  assert(columnExists(db.get(), "replays", "provenance_json"));
+
+  execOrAbort(db.get(), "ROLLBACK");
+  assert(queryInt(db.get(), "PRAGMA user_version") == 0);
+  assert(queryText(db.get(), "SELECT chart_md5 FROM replays WHERE id=1") ==
+         "ABCDEF");
+  assert(queryText(db.get(), "SELECT chart_sha256 FROM replays WHERE id=1") ==
+         "FEDCBA");
+  assert(queryInt(db.get(), "SELECT max_combo FROM replays WHERE id=1") == 0);
+  assert(queryInt(db.get(), "SELECT max_combo FROM course_replays WHERE id=1") ==
+         0);
+  assert(!columnExists(db.get(), "replays", "provenance_json"));
+}
+
 void testChartAndCourseRoundTripAndPathIsolation(
     const std::filesystem::path &root) {
   const auto firstPath = root / "profiles" / "one" / "replay.db";
@@ -825,6 +875,71 @@ void testInvalidProvenanceRejectsReplayWrites(
   auto invalidEnum = sampleProvenance("invalid-enum");
   invalidEnum.eligibility = static_cast<ScoreEligibility>(999);
   assertRejectedWithoutRows(invalidEnum, "invalid-enum");
+}
+
+void testInvalidReplayWritesDoNotCreateDatabase(
+    const std::filesystem::path &root) {
+  const auto path = root / "invalid-write-no-database" / "replay.db";
+  ReplayDBHelper helper(path);
+  const auto assertDatabaseMissing = [&] {
+    assert(!std::filesystem::exists(path));
+  };
+
+  ReplayData unmatchable = sampleReplay(root, "missing-identity");
+  unmatchable.chartMeta.BmsPath.clear();
+  unmatchable.chartMeta.MD5.clear();
+  unmatchable.chartMeta.SHA256.clear();
+  assert(!helper.SaveReplay(unmatchable).has_value());
+  assertDatabaseMissing();
+
+  auto invalidProvenance = sampleProvenance("invalid-no-database");
+  invalidProvenance.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
+  ReplayData invalidReplay = sampleReplay(root, "invalid-no-database");
+  invalidReplay.provenance = invalidProvenance;
+  assert(!helper.SaveReplay(invalidReplay).has_value());
+  assertDatabaseMissing();
+
+  CourseReplayData emptyCourse;
+  emptyCourse.courseId = 80;
+  emptyCourse.provenance = sampleProvenance("empty-course-no-database");
+  assert(!helper.SaveCourseReplay(emptyCourse).has_value());
+  assertDatabaseMissing();
+
+  CourseReplayData unmatchableCourse;
+  unmatchableCourse.courseId = 81;
+  unmatchableCourse.provenance =
+      sampleProvenance("unmatchable-course-no-database");
+  unmatchableCourse.stages.push_back({.replay = unmatchable});
+  assert(!helper.SaveCourseReplay(unmatchableCourse).has_value());
+  assertDatabaseMissing();
+
+  CourseReplayData invalidCourse;
+  invalidCourse.courseId = 82;
+  invalidCourse.provenance = invalidProvenance;
+  invalidCourse.stages.push_back(
+      {.replay = sampleReplay(root, "valid-course-stage-no-database")});
+  assert(!helper.SaveCourseReplay(invalidCourse).has_value());
+  assertDatabaseMissing();
+
+  CourseReplayData invalidStage;
+  invalidStage.courseId = 83;
+  invalidStage.provenance = sampleProvenance("valid-course-no-database");
+  invalidStage.stages.push_back(
+      {.replay = sampleReplay(root, "invalid-course-stage-no-database")});
+  invalidStage.stages.front().replay.provenance = invalidProvenance;
+  assert(!helper.SaveCourseReplay(invalidStage).has_value());
+  assertDatabaseMissing();
+
+  CourseReplayData oversizedCourse;
+  oversizedCourse.courseId = 84;
+  oversizedCourse.provenance =
+      sampleProvenance("oversized-course-no-database");
+  oversizedCourse.stages.resize(
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
+      CourseReplayStageData{
+          .replay = sampleReplay(root, "oversized-stage-no-database")});
+  assert(!helper.SaveCourseReplay(oversizedCourse).has_value());
+  assertDatabaseMissing();
 }
 
 void testUnmatchableAndOversizedReplayWritesLeaveNoRows(
@@ -1158,7 +1273,16 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
   const auto directBefore = rawDatabaseFamilySnapshot(directPath);
   ReplayDBHelper directHelper(directPath);
   assert(!directHelper.CreateReplayTables(directDb.get()));
-  assert(rawDatabaseFamilySnapshot(directPath) == directBefore);
+  const auto directAfter = rawDatabaseFamilySnapshot(directPath);
+  // Reading a live WAL database may update transient reader marks in -shm.
+  // Durable files and application-visible state must remain unchanged.
+  assert(sameDatabaseFamilyIgnoringWalSharedMemoryBytes(directAfter,
+                                                        directBefore));
+  assert(queryInt(directDb.get(), "PRAGMA user_version") == 99);
+  assert(queryText(directDb.get(), "SELECT value FROM sentinel") ==
+         "unchanged");
+  assert(!tableExists(directDb.get(), "replays"));
+  assert(!tableExists(directDb.get(), "course_replays"));
 #else
   (void)root;
 #endif
@@ -1261,6 +1385,40 @@ public:
   }
   ~ScopedDenyJournalModeAutoExtension() { sqlite3_reset_auto_extension(); }
 };
+
+void testEquivalentReplayAliasesRetainValidatedSession(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  const auto path = root / "equivalent-alias" / "replay.db";
+  const auto firstHardLink =
+      root / "equivalent-alias" / "replay-hard-link-one.db";
+  const auto secondHardLink =
+      root / "equivalent-alias" / "replay-hard-link-two.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  std::error_code linkError;
+  std::filesystem::create_hard_link(path, firstHardLink, linkError);
+  assert(!linkError);
+  {
+    ScopedDenyJournalModeAutoExtension denyJournalMode;
+    std::string error;
+    assert(helper.BindDatabasePath(firstHardLink, error));
+  }
+  assert(helper.GetDatabasePath() == firstHardLink);
+
+  std::filesystem::create_hard_link(path, secondHardLink, linkError);
+  assert(!linkError);
+  {
+    ScopedDenyJournalModeAutoExtension denyJournalMode;
+    helper.SetDatabasePath(secondHardLink);
+    assert(helper.EnsureSchema());
+  }
+  assert(helper.GetDatabasePath() == secondHardLink);
+#else
+  (void)root;
+#endif
+}
 
 int installDenySchemaRead(sqlite3 *db, char **, const sqlite3_api_routines *) {
   return sqlite3_set_authorizer(db, denySchemaReadAuthorizer, nullptr);
@@ -1476,20 +1634,24 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
   const auto courseReplayId = helper.SaveCourseReplay(course);
   assert(courseReplayId.has_value());
 
+  helper.Shutdown();
   {
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
     assert(helper.ListCourseReplays(course.courseId, 1).empty());
+    helper.Shutdown();
   }
   {
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
     assert(helper.ListCourseReplays(course.courseId, 0).empty());
+    helper.Shutdown();
   }
   {
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
     assert(!helper.LoadCourseReplay(*courseReplayId).has_value());
+    helper.Shutdown();
   }
 }
 
@@ -1535,6 +1697,7 @@ void testReplayHydrationStepErrorsFailWholeLoad(
   const auto courseReplayId = helper.SaveCourseReplay(course);
   assert(courseReplayId.has_value());
 
+  helper.Shutdown();
   for (const char *queryFragment : {
            "FROM replay_events WHERE replay_id",
            "FROM replay_touch_samples WHERE replay_id",
@@ -1544,10 +1707,12 @@ void testReplayHydrationStepErrorsFailWholeLoad(
       ScopedInterruptStatementAutoExtension interrupt(queryFragment);
       assert(!helper.LoadReplay(*chartReplayId, chartReplay.chartMeta)
                   .has_value());
+      helper.Shutdown();
     }
     {
       ScopedInterruptStatementAutoExtension interrupt(queryFragment);
       assert(!helper.LoadCourseReplay(*courseReplayId).has_value());
+      helper.Shutdown();
     }
   }
 }
@@ -1874,9 +2039,11 @@ int main() {
   std::filesystem::create_directories(root);
 
   testVersion2MigrationPreservesOutcomesAndRows(root);
+  testReplayMigrationNestsInsideCallerTransaction(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testInvalidNewProvenanceFailsLoad(root);
   testInvalidProvenanceRejectsReplayWrites(root);
+  testInvalidReplayWritesDoNotCreateDatabase(root);
   testUnmatchableAndOversizedReplayWritesLeaveNoRows(root);
   testChartSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(root);
@@ -1885,6 +2052,7 @@ int main() {
   testFutureReplayWritesPreservePersistentDatabaseState(root);
   testFutureReplayPreflightPreservesRawDatabaseFamily(root);
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
+  testEquivalentReplayAliasesRetainValidatedSession(root);
   testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testReplayTransactionalVersionErrorsDoNotMutateSchema(root);
   testCourseStageStepErrorsFailListsAndFullLoad(root);

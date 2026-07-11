@@ -172,6 +172,15 @@ rawDatabaseFamilySnapshot(const std::filesystem::path &path) {
   return snapshot;
 }
 
+bool sameDatabaseFamilyIgnoringWalSharedMemoryBytes(
+    const RawDatabaseFamilySnapshot &left,
+    const RawDatabaseFamilySnapshot &right) {
+  return left.files[0] == right.files[0] &&
+         left.files[1] == right.files[1] &&
+         left.files[2] == right.files[2] &&
+         left.files[3].has_value() == right.files[3].has_value();
+}
+
 enum class FutureDatabaseState { Delete, WalAfterExit, HotJournal };
 
 const char *futureDatabaseStateName(FutureDatabaseState state) {
@@ -873,7 +882,16 @@ void testFutureScorePreflightPreservesRawDatabaseFamily(
   assert(!directHelper.InsertScore(directDb.get(), meta, state, provenance));
   assert(!directHelper.InsertCourseScore(directDb.get(), session, state, 1, 1,
                                          provenance));
-  assert(rawDatabaseFamilySnapshot(directPath) == directBefore);
+  const auto directAfter = rawDatabaseFamilySnapshot(directPath);
+  // Reading a live WAL database may update transient reader marks in -shm.
+  // Durable files and application-visible state must remain unchanged.
+  assert(sameDatabaseFamilyIgnoringWalSharedMemoryBytes(directAfter,
+                                                        directBefore));
+  assert(queryInt(directDb.get(), "PRAGMA user_version") == 99);
+  assert(queryText(directDb.get(), "SELECT value FROM sentinel") ==
+         "unchanged");
+  assert(!tableExists(directDb.get(), "scores"));
+  assert(!tableExists(directDb.get(), "course_scores"));
 #else
   (void)root;
 #endif
@@ -967,6 +985,38 @@ public:
   }
   ~ScopedDenyJournalModeAutoExtension() { sqlite3_reset_auto_extension(); }
 };
+
+void testEquivalentScoreAliasesRetainValidatedSession(
+    const std::filesystem::path &root) {
+#if !TARGET_OS_WINDOWS
+  const auto path = root / "equivalent-alias" / "score.db";
+  const auto hardLink = root / "equivalent-alias" / "score-hard-link.db";
+  const auto symlink = root / "equivalent-alias" / "score-symlink.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  std::error_code linkError;
+  std::filesystem::create_hard_link(path, hardLink, linkError);
+  assert(!linkError);
+  {
+    ScopedDenyJournalModeAutoExtension denyJournalMode;
+    std::string error;
+    assert(helper.BindDatabasePath(hardLink, error));
+  }
+  assert(helper.GetDatabasePath() == hardLink);
+
+  std::filesystem::create_symlink(hardLink, symlink, linkError);
+  assert(!linkError);
+  {
+    ScopedDenyJournalModeAutoExtension denyJournalMode;
+    helper.SetDatabasePath(symlink);
+    assert(helper.EnsureSchema());
+  }
+  assert(helper.GetDatabasePath() == symlink);
+#else
+  (void)root;
+#endif
+}
 
 void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
   std::filesystem::create_directories(path.parent_path());
@@ -1190,6 +1240,7 @@ int main() {
   testFutureScoreWritesPreservePersistentDatabaseState(root);
   testFutureScorePreflightPreservesRawDatabaseFamily(root);
   testScorePreflightRejectsMalformedStatesAndAllowsCreation(root);
+  testEquivalentScoreAliasesRetainValidatedSession(root);
   testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(root);
   testScoreTransactionalVersionErrorsDoNotMutateSchema(root);

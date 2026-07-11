@@ -769,6 +769,57 @@ void testEveryTransactionalFailureRollsBackAllVisibleState() {
   }
 }
 
+void testRollbackBindFailureClosesTargetAndFailsClosed() {
+  for (const bool failScoreRestore : {true, false}) {
+    SwitchFixture fixture;
+    if (fixture.firstId.empty()) {
+      continue;
+    }
+
+    bool injectFailure = true;
+    fixture.refreshAction = [&]() {
+      if (!injectFailure) {
+        return;
+      }
+      injectFailure = false;
+      const std::filesystem::path sourcePath =
+          failScoreRestore ? fixture.firstPaths.scoresDb
+                           : fixture.firstPaths.replaysDb;
+      std::error_code filesystemError;
+      const bool removed = std::filesystem::remove(sourcePath, filesystemError);
+      expect(removed && !filesystemError,
+             "rollback failure fixture removes the source database");
+      filesystemError.clear();
+      const bool directoryCreated =
+          std::filesystem::create_directory(sourcePath, filesystemError);
+      expect(directoryCreated && !filesystemError,
+             "rollback failure fixture replaces the source with a directory");
+      throw std::runtime_error("injected post-bind cache failure");
+    };
+
+    const ProfileSwitchResult result =
+        fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+    const std::string databaseKind = failScoreRestore ? "score" : "replay";
+    expect(!result.ok() &&
+               result.message.find("unable to restore " + databaseKind +
+                                   " database") != std::string::npos,
+           "rollback reports the failed " + databaseKind + " rebind");
+    expect(fixture.manager.activeProfile().id == fixture.firstId,
+           "rollback bind failure leaves the profile manager on the source");
+    expect(fixture.score.GetDatabasePath() == fixture.firstPaths.scoresDb &&
+               fixture.replay.GetDatabasePath() == fixture.firstPaths.replaysDb,
+           "rollback bind failure closes target handles and restores source "
+           "paths");
+    if (failScoreRestore) {
+      expect(fixture.currentClearRank() == kNoClearTypeRank,
+             "failed score restoration cannot expose target scores");
+    } else {
+      expect(fixture.currentReplayCount() == 0,
+             "failed replay restoration cannot expose target replays");
+    }
+  }
+}
+
 void testInvalidTargetFailsBeforeSavingOrBinding() {
   SwitchFixture fixture;
   if (fixture.firstId.empty()) {
@@ -1241,6 +1292,7 @@ int main() {
   testEveryDeclaredBlockerRejectsWithoutMutation();
   testBackgroundLibraryBlockerSurvivesSceneReplacement();
   testEveryTransactionalFailureRollsBackAllVisibleState();
+  testRollbackBindFailureClosesTargetAndFailsClosed();
   testInvalidTargetFailsBeforeSavingOrBinding();
   testInputReplacementNotificationPrecedesApplyAndRollback();
   testPersistentScoreAttachmentFailureRollsBackToSource();

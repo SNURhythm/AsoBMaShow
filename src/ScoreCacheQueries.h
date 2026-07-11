@@ -280,6 +280,29 @@ prepareScoreQueryDatabase(sqlite3 *db, const std::filesystem::path &path) {
 inline std::optional<std::string>
 ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
   profile_database_activity::WriteGuard operation;
+  if (db == nullptr) {
+    return "database is not open";
+  }
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_score_summary_schema"
+                               : "BEGIN";
+  const char *commitQuery =
+      callerOwnsTransaction
+          ? "RELEASE asobmashow_score_summary_schema"
+          : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_summary_schema; RELEASE "
+            "asobmashow_score_summary_schema"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    return transactionError;
+  }
+
   const std::string clearTable = detail::clearRankSummaryTable(schema);
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
   const std::string trigger =
@@ -315,7 +338,13 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
   const std::string createTrigger =
       "CREATE TRIGGER " + trigger + " AFTER INSERT ON " + scores + " BEGIN " +
       detail::clearRankUpsertSql() + detail::bestScoreUpsertSql() + " END";
-  return executeSqlite(db, createTrigger.c_str());
+  if (const auto error = executeSqlite(db, createTrigger.c_str())) {
+    return error;
+  }
+  if (!transaction.commit(transactionError)) {
+    return transactionError;
+  }
+  return std::nullopt;
 }
 
 inline std::optional<std::string>

@@ -5,8 +5,8 @@
 #include "sqlite3.h"
 
 #include <filesystem>
+#include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -53,6 +53,7 @@ public:
 
   ReplayDBHelper() = default;
   explicit ReplayDBHelper(std::filesystem::path databasePath);
+  ~ReplayDBHelper();
   ReplayDBHelper(const ReplayDBHelper &) = delete;
   ReplayDBHelper &operator=(const ReplayDBHelper &) = delete;
 
@@ -65,7 +66,10 @@ public:
                         std::string &errorMessage);
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
+  void Shutdown();
   bool EnsureSchema();
+  // Compatibility API for standalone helpers. The runtime singleton keeps its
+  // connection private so raw handles cannot outlive a profile switch.
   sqlite3 *Connect();
   void Close(sqlite3 *db);
   bool CreateReplayTables(sqlite3 *db);
@@ -82,6 +86,33 @@ public:
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
 
 private:
-  mutable std::shared_mutex databasePathMutex_;
+  [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;
+  bool EnsureSessionDatabaseLocked();
+  void ShutdownLocked();
+  bool CreateReplayTablesOnConnection(sqlite3 *db);
+  std::optional<int>
+  SaveReplayOnConnection(sqlite3 *db, const ReplayData &replay,
+                         const std::string &provenanceJson);
+  std::optional<int> SaveCourseReplayOnConnection(
+      sqlite3 *db, const CourseReplayData &replay,
+      const std::string &courseProvenanceJson,
+      const std::vector<std::string> &stageProvenanceJson);
+  std::vector<ReplaySummary>
+  ListReplaysOnConnection(sqlite3 *db,
+                          const bms_parser::ChartMeta &chartMeta, int limit);
+  std::vector<ReplaySummary> ListCourseReplaysOnConnection(sqlite3 *db,
+                                                           int courseId,
+                                                           int limit);
+  std::optional<ReplayData>
+  LoadReplayOnConnection(sqlite3 *db, int replayId,
+                         const bms_parser::ChartMeta &chartMeta);
+  std::optional<CourseReplayData> LoadCourseReplayOnConnection(sqlite3 *db,
+                                                               int replayId);
+  std::optional<ReplayData>
+  LoadLatestReplayOnConnection(sqlite3 *db,
+                               const bms_parser::ChartMeta &chartMeta);
+
+  mutable std::mutex sessionMutex_;
   std::filesystem::path databasePath_;
+  sqlite3 *sessionDatabase_ = nullptr;
 };

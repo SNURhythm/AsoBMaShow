@@ -23,6 +23,14 @@ void appendRollbackError(std::string &message, std::string_view operation,
   }
   message += std::string(operation) + ": " + error.what();
 }
+
+void appendRollbackError(std::string &message, std::string_view operation,
+                         const std::string &error) {
+  if (!message.empty()) {
+    message += "; ";
+  }
+  message += std::string(operation) + ": " + error;
+}
 } // namespace
 
 ProfileSessionCoordinator::ProfileSessionCoordinator(
@@ -119,8 +127,18 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
   bool inputApplyAttempted = false;
 
   auto rollback = [&](ProfileError error, std::string message) {
-    score_.SetDatabasePath(oldScorePath);
-    replay_.SetDatabasePath(oldReplayPath);
+    std::string databaseError;
+    if (!score_.BindDatabasePath(oldScorePath, databaseError)) {
+      appendRollbackError(message, "unable to restore score database",
+                          databaseError);
+      score_.SetDatabasePath(oldScorePath);
+    }
+    databaseError.clear();
+    if (!replay_.BindDatabasePath(oldReplayPath, databaseError)) {
+      appendRollbackError(message, "unable to restore replay database",
+                          databaseError);
+      replay_.SetDatabasePath(oldReplayPath);
+    }
     currentSettings = oldSettings;
     if (inputApplyAttempted && restoreInput_) {
       try {

@@ -306,6 +306,8 @@ public:
         thread.second.join();
       }
     }
+    ScoreDBHelper::GetInstance().Shutdown();
+    ReplayDBHelper::GetInstance().Shutdown();
     std::cout << "Main function is quitting..." << std::endl;
   }
 };

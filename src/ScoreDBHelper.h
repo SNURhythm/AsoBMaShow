@@ -10,8 +10,8 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -114,6 +114,7 @@ public:
 
   ScoreDBHelper() = default;
   explicit ScoreDBHelper(std::filesystem::path databasePath);
+  ~ScoreDBHelper();
   ScoreDBHelper(const ScoreDBHelper &) = delete;
   ScoreDBHelper &operator=(const ScoreDBHelper &) = delete;
 
@@ -129,6 +130,9 @@ public:
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
+  void Shutdown();
+  // Compatibility API for standalone helpers. The runtime singleton keeps its
+  // connection private so raw handles cannot outlive a profile switch.
   sqlite3 *Connect();
   void Close(sqlite3 *db);
   bool CreateScoreTable(sqlite3 *db);
@@ -161,6 +165,30 @@ public:
 
 private:
   bool EnsureSchema(sqlite3 *db);
-  mutable std::shared_mutex databasePathMutex_;
+  bool CreateScoreTableOnConnection(sqlite3 *db);
+  bool CreateCourseScoreTableOnConnection(sqlite3 *db);
+  bool EnsureSchemaOnConnection(sqlite3 *db);
+  bool InsertScoreOnConnection(sqlite3 *db,
+                               const bms_parser::ChartMeta &chartMeta,
+                               const RhythmState &state,
+                               const ScoreProvenance &provenance,
+                               const std::string &provenanceJson);
+  bool InsertCourseScoreOnConnection(
+      sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
+      int completedCharts, int totalCharts, const ScoreProvenance &provenance,
+      const std::string &provenanceJson);
+  std::optional<ScoreBestSnapshot> LoadBestScoreOnConnection(
+      sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+      const std::optional<std::string> &beforeCreatedAt);
+  std::optional<ScoreBestSnapshot>
+  LoadBestCourseScoreOnConnection(sqlite3 *db,
+                                  const CoursePlaySession &session);
+  [[nodiscard]] std::filesystem::path
+  GetResolvedDatabasePathLocked() const;
+  sqlite3 *EnsureSessionDatabaseLocked();
+  void CloseSessionDatabaseLocked();
+
+  mutable std::mutex sessionMutex_;
   std::filesystem::path databasePath_;
+  sqlite3 *sessionDatabase_ = nullptr;
 };
