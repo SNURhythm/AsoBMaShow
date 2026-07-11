@@ -74,15 +74,20 @@ row's key is empty; a nonempty mismatching key must never match by ID.
 
 Replay schema version 4 adds `course_replays.course_key` and an index ordered by
 key and replay ID. New replay saves receive the full session key before stages
-are reduced to a completed/recorded prefix.
+are reduced to a completed/recorded prefix. A stored partial replay must contain
+exactly the contiguous stages `[0, completed_charts)`; missing middle stages
+cause the save to fail instead of compacting later stages into a false prefix.
 
-Migration backfills complete legacy course replays from their ordered stage
-chart identities and canonical constraints. Partial legacy replays cannot
+Migration backfills only complete legacy course replays whose completed count,
+total count, and contiguous ordered stage count agree, using stage hash
+identities and canonical constraints. Partial legacy replays cannot
 derive the unplayed suffix from replay data alone. Recovery therefore uses
 current chart-course definitions and, when available, full legacy score keys.
 A partial replay is assigned only when its canonical constraints, total stage
 count, and recorded ordered prefix resolve to one distinct current content key.
-Ambiguous or corrupt rows remain unkeyed.
+Score evidence may narrow only definitions already compatible with that prefix.
+Ambiguous or corrupt rows remain unkeyed, and recovery updates only
+`course_key` so the historical replay tuple stays intact.
 
 Replay listing uses `course_key`, with numeric fallback only for rows whose key
 is empty. Loading a replay by replay-row ID remains unchanged.
@@ -109,9 +114,10 @@ cross-database transaction or second connection to a profile database. Failure
 in one database rolls back that database and leaves all original rows intact.
 Reads still work for already-canonical records.
 
-Profile initialization and archive import must run the supported v5-to-v6
-score and v3-to-v4 replay migrations before strict "current version"
-validation. Databases newer than the application remain rejected.
+Profile activation and archive import must allow supported v5/v3 databases to
+reach the v6/v4 migrations before strict "current version" validation.
+Inactive archive export remains strict-current unless it migrates a private
+copy. Databases newer than the application remain rejected.
 
 Rows without enough evidence are never guessed, deleted, or assigned merely by
 course name. Only rows whose content key is actually empty may use the legacy

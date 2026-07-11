@@ -17,6 +17,7 @@
 - Numeric fallback applies only to rows with an empty content key.
 - Recovery never guesses ambiguous or corrupt rows and never deletes historical rows.
 - Score migration preserves raw legacy keys permanently, and recovery never rewrites the historical ID/name/group/constraint/chart-count tuple.
+- Replay recovery updates only the content key; partial replay stages must be a contiguous prefix and historical replay tuple fields remain unchanged.
 - Preserve the current numeric-ID retention change as compatibility protection.
 - Keep Yoga tests excluded from CTest.
 
@@ -223,7 +224,7 @@ Run both focused targets and their CTest entries.
 
 - [ ] **Step 1: Write replay RED tests**
 
-Cover new-save full key despite a partial stage prefix, v3-to-v4 complete backfill, key lookup after ID change, mismatching nonempty key refusing numeric fallback, blank legacy fallback, and incomplete/corrupt rows remaining intact.
+Cover new-save full key with a valid partial stage prefix, rejection of missing-middle-stage compaction, v3-to-v4 strict complete backfill, key lookup after ID change, mismatching nonempty key refusing numeric fallback, blank legacy fallback, and incomplete/corrupt rows remaining intact.
 
 - [ ] **Step 2: Run RED**
 
@@ -233,11 +234,11 @@ Expected: missing schema/API assertions fail.
 
 - [ ] **Step 3: Implement replay v4 migration**
 
-Add `course_key TEXT NOT NULL DEFAULT ''` before creating its index. Backfill only complete, contiguous, fully matchable stage sequences in the migration transaction. Bump version after successful commit.
+Add `course_key TEXT NOT NULL DEFAULT ''` before creating its index. Backfill only rows where `completed_charts == total_charts == contiguous stage count` and every stage has valid hash identity in the migration transaction. Bump version after successful commit.
 
 - [ ] **Step 4: Persist and query the full session key**
 
-Set `CourseReplayData.courseKey` from `CoursePlaySession.courseKey` in `ResultScene`, save it, load it, and list with:
+Set `CourseReplayData.courseKey` from the full `CoursePlaySession.courseKey` in `ResultScene` before reducing stages. Store exactly stages `[0, completed_charts)` and reject a gap rather than compacting later stages. Save/load the key and list with:
 
 ```sql
 WHERE course_key = :key
@@ -246,7 +247,7 @@ WHERE course_key = :key
 
 - [ ] **Step 5: Recover partial replays conservatively**
 
-Match canonical constraints, `total_charts`, and ordered recorded prefix against current definitions. Use the exact immutable legacy score tuple evidence to disambiguate. Assign only one distinct content key; leave ambiguous rows blank.
+Match canonical constraints, `total_charts`, and ordered recorded prefix against current definitions. Only after that candidate set exists, use the exact immutable legacy score tuple evidence to disambiguate. Update only `course_key`, assign only one distinct content key, and leave ambiguous rows blank.
 
 - [ ] **Step 6: Run GREEN**
 
@@ -274,11 +275,11 @@ Run the profile manager/archive/switch targets and matching CTest entries.
 
 - [ ] **Step 3: Allow supported older versions through preflight**
 
-Relax only the equality check in routine/deep profile preflight. Keep future-version rejection and integrity checks. Bind/initialization then performs the atomic schema migration before the profile is treated as current.
+Use a context-specific preflight policy: activation/import may admit supported v5/v3 databases only when binding immediately performs the atomic migration; inactive archive export remains strict-current. Keep future-version rejection and integrity checks.
 
 - [ ] **Step 4: Orchestrate recovery before cache load**
 
-In `MainMenuScene::reloadScoreClearRanks`, select current course definitions, run score recovery, pass returned evidence to replay recovery, then load/attach score caches. Log recovery failures and keep original rows; do not open a second connection to either profile database.
+In `MainMenuScene::reloadScoreClearRanks`, hold one outer profile-database activity guard, detach any prior score attachment, select current definitions, run score recovery, pass returned evidence to replay recovery, then prepare/attach and load score caches. This order avoids a score-mutex self-deadlock and prevents a profile switch between the two repairs. Log recovery failures, keep original rows, do not recover from the pre-commit profile-switch cache callback, and do not open a second connection to either profile database.
 
 - [ ] **Step 5: Run GREEN**
 
