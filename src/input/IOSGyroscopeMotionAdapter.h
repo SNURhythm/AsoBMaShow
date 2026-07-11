@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <numbers>
+#include <utility>
 
 namespace input::ios_gyroscope {
 
@@ -87,6 +88,20 @@ enum class ReferenceFrameChoice {
   MagneticNorthZVertical,
 };
 
+struct ReferenceFrameAvailability {
+  bool deviceMotionAvailable = false;
+  bool arbitraryCorrectedZVerticalAvailable = false;
+  bool magneticNorthZVerticalAvailable = false;
+};
+
+constexpr bool hasRequiredMotionHardware(bool simulator,
+                                         bool deviceMotionAvailable,
+                                         bool gyroscopeAvailable,
+                                         bool magnetometerAvailable) {
+  return !simulator && deviceMotionAvailable && gyroscopeAvailable &&
+         magnetometerAvailable;
+}
+
 constexpr ReferenceFrameChoice chooseReferenceFrame(
     bool simulator, bool deviceMotionAvailable,
     bool arbitraryCorrectedZVerticalAvailable,
@@ -101,6 +116,17 @@ constexpr ReferenceFrameChoice chooseReferenceFrame(
     return ReferenceFrameChoice::MagneticNorthZVertical;
   }
   return ReferenceFrameChoice::Unsupported;
+}
+
+template <typename Probe>
+ReferenceFrameChoice probeReferenceFrameForAttempt(bool simulator,
+                                                   Probe &&probe) {
+  const ReferenceFrameAvailability availability =
+      std::forward<Probe>(probe)();
+  return chooseReferenceFrame(
+      simulator, availability.deviceMotionAvailable,
+      availability.arbitraryCorrectedZVerticalAvailable,
+      availability.magneticNorthZVerticalAvailable);
 }
 
 } // namespace input::ios_gyroscope

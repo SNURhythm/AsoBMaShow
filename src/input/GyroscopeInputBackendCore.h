@@ -16,6 +16,7 @@ public:
   explicit GyroscopeInputBackendCore(InputBackendSink sink);
 
   void start(bool supported, std::uint64_t nowMicros);
+  void sensorAvailable();
   void stop(std::uint64_t nowMicros);
   void setForeground(bool foreground, std::uint64_t nowMicros);
   void sensorStartSucceeded(std::uint64_t nowMicros);

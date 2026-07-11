@@ -102,8 +102,16 @@ void testAccuracyGenerationChangesOnlyAcrossMeaningfulTiers() {
 }
 
 void testReferenceFramePolicyRejectsSimulatorAndUncorrectedMotion() {
+  using input::ios_gyroscope::hasRequiredMotionHardware;
   using input::ios_gyroscope::ReferenceFrameChoice;
   using input::ios_gyroscope::chooseReferenceFrame;
+
+  expect(!hasRequiredMotionHardware(true, true, true, true),
+         "iOS Simulator never advertises physical motion hardware");
+  expect(hasRequiredMotionHardware(false, true, true, true),
+         "device motion, gyroscope, and magnetometer are required hardware");
+  expect(!hasRequiredMotionHardware(false, true, true, false),
+         "missing magnetometer cannot provide compass correction");
 
   expect(chooseReferenceFrame(true, true, true, true) ==
              ReferenceFrameChoice::Unsupported,
@@ -119,7 +127,35 @@ void testReferenceFramePolicyRejectsSimulatorAndUncorrectedMotion() {
          "magnetic-north Z-vertical is the corrected fallback");
   expect(chooseReferenceFrame(false, true, false, false) ==
              ReferenceFrameChoice::Unsupported,
-         "uncorrected reference frames do not advertise support");
+         "corrected-frame readiness is separate from hardware support");
+}
+
+void testReferenceFrameAttemptReprobesAfterTemporaryUnavailability() {
+  using input::ios_gyroscope::ReferenceFrameAvailability;
+  using input::ios_gyroscope::ReferenceFrameChoice;
+  using input::ios_gyroscope::probeReferenceFrameForAttempt;
+
+  int probeCount = 0;
+  const auto probe = [&]() {
+    ++probeCount;
+    return probeCount == 1
+               ? ReferenceFrameAvailability{
+                     .deviceMotionAvailable = true,
+                     .arbitraryCorrectedZVerticalAvailable = false,
+                     .magneticNorthZVerticalAvailable = false}
+               : ReferenceFrameAvailability{
+                     .deviceMotionAvailable = true,
+                     .arbitraryCorrectedZVerticalAvailable = true,
+                     .magneticNorthZVerticalAvailable = false};
+  };
+
+  expect(probeReferenceFrameForAttempt(false, probe) ==
+             ReferenceFrameChoice::Unsupported,
+         "the first attempt waits when no corrected frame is available");
+  expect(probeReferenceFrameForAttempt(false, probe) ==
+             ReferenceFrameChoice::ArbitraryCorrectedZVertical,
+         "a retry observes a corrected frame that became available later");
+  expect(probeCount == 2, "each native start attempt performs a fresh probe");
 }
 
 } // namespace
@@ -129,6 +165,7 @@ int main() {
   testWorldVerticalRateProjectionKeepsClockwisePositive();
   testAccuracyGenerationChangesOnlyAcrossMeaningfulTiers();
   testReferenceFramePolicyRejectsSimulatorAndUncorrectedMotion();
+  testReferenceFrameAttemptReprobesAfterTemporaryUnavailability();
 
   if (failures != 0) {
     std::cerr << failures << " iOS gyroscope adapter assertion(s) failed\n";

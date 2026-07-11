@@ -101,7 +101,18 @@ error without promising an earth-absolute heading. Magnetic north is
 unnecessary because each attempt deliberately establishes its own zero. If
 that frame is unavailable, the backend uses
 `CMAttitudeReferenceFrameXMagneticNorthZVertical`. It must not advertise a
-compass-corrected turntable when neither corrected frame is available.
+Ready compass-corrected turntable or emit input when neither corrected frame
+is available.
+
+Hardware support and corrected-frame readiness are separate. A physical iOS
+device is supported when device motion, gyroscope, and magnetometer services
+are present. Supported hardware publishes the logical device as Calibrating
+while native motion starts, even if neither corrected frame is currently
+available. Before every initial start, retry, and foreground resume, the
+backend re-queries the currently available reference-frame bitmask and selects
+the preferred corrected frame again. If no corrected frame is currently
+available, the device remains listed, transitions through the existing retry
+state, and emits no input; uncorrected yaw is never used as gameplay input.
 
 Read `CMDeviceMotion.attitude.yaw`, not `CMDeviceMotion.heading`: the preferred
 arbitrary-corrected frame intentionally has no magnetic-north heading value.

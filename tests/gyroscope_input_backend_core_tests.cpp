@@ -1,4 +1,5 @@
 #include "input/GyroscopeInputBackendCore.h"
+#include "input/IOSGyroscopeMotionAdapter.h"
 
 #include <cstdint>
 #include <iostream>
@@ -72,6 +73,7 @@ void activateClockwise(Harness &harness, std::uint64_t firstNowMicros = 1000) {
 void testUnsupportedAndConnectedBeforeInput() {
   Harness unsupported;
   unsupported.core.start(false, 0);
+  unsupported.core.sensorAvailable();
   unsupported.core.start(false, 1);
   unsupported.core.pump(5000000);
   require(unsupported.core.takeCommand() ==
@@ -82,6 +84,14 @@ void testUnsupportedAndConnectedBeforeInput() {
   Harness supported;
   supported.core.start(true, 0);
   supported.core.start(true, 1);
+  require(supported.devices.empty(),
+          "platform backend controls when supported hardware is advertised");
+  supported.core.sensorAvailable();
+  require(supported.devices.size() == 1 &&
+              supported.devices.front().connected &&
+              supported.devices.front().status ==
+                  input::InputDeviceStatus::Calibrating,
+          "supported hardware is listed while its native sensor starts");
   require(
       supported.core.takeCommand() == input::GyroscopeSensorCommand::Start &&
           supported.core.takeCommand() == input::GyroscopeSensorCommand::None,
@@ -118,6 +128,28 @@ void testUnsupportedAndConnectedBeforeInput() {
               event.rawValue == 1.0 && event.normalizedValue == 1.0F &&
               event.timestampMicros == 101000,
           "axis event carries fixed semantic identity and monotonic time");
+
+  Harness firstStartFailure;
+  firstStartFailure.core.start(true, 0);
+  firstStartFailure.core.sensorAvailable();
+  require(firstStartFailure.core.takeCommand() ==
+              input::GyroscopeSensorCommand::Start,
+          "discoverable hardware still attempts its native sensor");
+  firstStartFailure.core.sensorStartFailed(0);
+  require(firstStartFailure.devices.size() == 2 &&
+              firstStartFailure.devices.front().connected &&
+              firstStartFailure.devices.front().status ==
+                  input::InputDeviceStatus::Calibrating &&
+              !firstStartFailure.devices.back().connected &&
+              firstStartFailure.devices.back().status ==
+                  input::InputDeviceStatus::Disconnected,
+          "first native-start failure remains visible in the device list");
+  firstStartFailure.core.pump(2000000);
+  require(firstStartFailure.devices.back().status ==
+                  input::InputDeviceStatus::Retrying &&
+              firstStartFailure.core.takeCommand() ==
+                  input::GyroscopeSensorCommand::Start,
+          "visible first-start failure retries at the normal deadline");
 }
 
 void testCalibrationConfigAndSessionRelease() {
@@ -251,6 +283,66 @@ void testWatchdogDisconnectRetryAndReconnect() {
           "input resumes only after the post-backlog baseline");
 }
 
+void testTransientCorrectedFrameRecoveryReprobesAndRebaselines() {
+  using input::ios_gyroscope::ReferenceFrameAvailability;
+  using input::ios_gyroscope::ReferenceFrameChoice;
+  using input::ios_gyroscope::probeReferenceFrameForAttempt;
+
+  Harness harness;
+  harness.core.start(true, 0);
+  harness.core.sensorAvailable();
+  int probeCount = 0;
+  const auto startAttempt = [&](std::uint64_t nowMicros) {
+    const ReferenceFrameChoice choice = probeReferenceFrameForAttempt(
+        false, [&]() {
+          ++probeCount;
+          return probeCount == 1
+                     ? ReferenceFrameAvailability{
+                           .deviceMotionAvailable = true}
+                     : ReferenceFrameAvailability{
+                           .deviceMotionAvailable = true,
+                           .arbitraryCorrectedZVerticalAvailable = true};
+        });
+    if (choice == ReferenceFrameChoice::Unsupported) {
+      harness.core.sensorStartFailed(nowMicros);
+    } else {
+      harness.core.sensorStartSucceeded(nowMicros);
+    }
+  };
+
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::Start,
+          "supported iOS hardware requests its first corrected-frame probe");
+  startAttempt(0);
+  require(probeCount == 1 && harness.inputs.empty() &&
+              harness.devices.back().status ==
+                  input::InputDeviceStatus::Disconnected,
+          "a temporarily unavailable corrected frame emits no input and "
+          "enters visible retry");
+
+  harness.clearEvents();
+  harness.core.pump(2000000);
+  require(harness.devices.size() == 1 &&
+              harness.devices.front().status ==
+                  input::InputDeviceStatus::Retrying &&
+              harness.core.takeCommand() ==
+                  input::GyroscopeSensorCommand::Start,
+          "corrected-frame availability is retried at the normal deadline");
+  startAttempt(2000000);
+  require(probeCount == 2 && harness.devices.back().connected &&
+              harness.devices.back().status ==
+                  input::InputDeviceStatus::Calibrating,
+          "retry observes the newly available corrected frame");
+
+  harness.clearEvents();
+  harness.core.observe(motion(90.0, 30.0, 3.0), 2000100);
+  require(harness.inputs.empty(),
+          "corrected-frame recovery establishes a fresh heading baseline");
+  harness.core.observe(motion(93.0, 30.0, 3.1), 2100100);
+  require(harness.inputs.size() == 1 &&
+              harness.inputs.front().normalizedValue == 1.0F,
+          "input begins only after the recovered corrected-frame baseline");
+}
+
 void testActiveStallAndLifecycleOrdering() {
   Harness stalled;
   startRunning(stalled, 0);
@@ -340,6 +432,7 @@ int main() {
     testUnsupportedAndConnectedBeforeInput();
     testCalibrationConfigAndSessionRelease();
     testWatchdogDisconnectRetryAndReconnect();
+    testTransientCorrectedFrameRecoveryReprobesAndRebaselines();
     testActiveStallAndLifecycleOrdering();
     return 0;
   } catch (const std::exception &error) {

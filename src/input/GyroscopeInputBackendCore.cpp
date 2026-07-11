@@ -38,6 +38,12 @@ void GyroscopeInputBackendCore::start(bool supported, std::uint64_t nowMicros) {
   }
 }
 
+void GyroscopeInputBackendCore::sensorAvailable() {
+  if (backendStarted_ && supported_) {
+    publishSnapshot(true, InputDeviceStatus::Calibrating);
+  }
+}
+
 void GyroscopeInputBackendCore::stop(std::uint64_t nowMicros) {
   if (!backendStarted_) {
     return;
