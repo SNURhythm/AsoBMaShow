@@ -1,6 +1,7 @@
 #include "AtomicFile.h"
 #include "practice/PracticePresetStore.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -8,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 constexpr std::string_view kHash = "0123456789ABCDEF0123456789ABCDEF"
@@ -58,6 +60,16 @@ practice::Configuration configuration(long long start, long long end) {
           .playback = {.percent = 90}};
 }
 
+std::vector<std::string>
+directoryFilenames(const std::filesystem::path &directory) {
+  std::vector<std::string> result;
+  for (const auto &entry : std::filesystem::directory_iterator(directory)) {
+    result.push_back(entry.path().filename().string());
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
 void testRoundTripAndMutations() {
   TempDirectory temp;
   practice::PresetStore store(temp.path());
@@ -91,6 +103,12 @@ void testRoundTripAndMutations() {
   expect(loaded.data.named.size() == 2 &&
              loaded.data.named[0].configuration.chartSha256 == kNormalizedHash,
          "named presets round-trip as chart-scoped configurations");
+  expect(
+      directoryFilenames(temp.path()) ==
+          std::vector<std::string>{std::string(kNormalizedHash) + ".json",
+                                   std::string(kNormalizedHash) + ".json.bak"},
+      "successful repeated saves retain only the primary preset file and "
+      "its exact atomic backup sidecar");
 
   if (firstId) {
     expect(store.renameNamed(kHash, *firstId, "Opening", error),

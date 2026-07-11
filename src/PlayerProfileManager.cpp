@@ -403,6 +403,12 @@ bool isPracticeFilename(std::string_view filename) {
   return true;
 }
 
+bool isPracticeBackupFilename(std::string_view filename) {
+  constexpr std::string_view suffix = ".bak";
+  return filename.ends_with(suffix) && isPracticeFilename(filename.substr(
+                                           0, filename.size() - suffix.size()));
+}
+
 bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
                                const PlayerProfilePaths &paths,
                                std::vector<std::filesystem::path> *files,
@@ -446,9 +452,11 @@ bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
     error.clear();
     const auto entryStatus =
         std::filesystem::symlink_status(entry.path(), error);
+    const std::string filename = entry.path().filename().string();
+    const bool primary = isPracticeFilename(filename);
     if (error || !std::filesystem::is_regular_file(entryStatus) ||
         hasUnsafeLink(entry.path(), entryStatus, errorMessage) ||
-        !isPracticeFilename(entry.path().filename().string())) {
+        (!primary && !isPracticeBackupFilename(filename))) {
       if (errorMessage.empty()) {
         errorMessage =
             "profile practice directory contains an unsafe or invalid entry";
@@ -462,7 +470,7 @@ bool validatePracticeDirectory(const std::filesystem::path &applicationRoot,
                            : "profile practice file exceeds the 1 MiB limit";
       return false;
     }
-    if (files) {
+    if (files && primary) {
       files->push_back(entry.path());
     }
   }

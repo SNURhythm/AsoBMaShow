@@ -650,6 +650,12 @@ bool isPracticeMember(std::string_view name) {
   return true;
 }
 
+bool isPracticeBackupMember(std::string_view name) {
+  constexpr std::string_view suffix = ".bak";
+  return name.ends_with(suffix) &&
+         isPracticeMember(name.substr(0, name.size() - suffix.size()));
+}
+
 bool isKnownMember(std::string_view name) {
   return std::ranges::find(kMemberNames, name) != kMemberNames.end() ||
          isPracticeMember(name);
@@ -1543,6 +1549,22 @@ ProfileArchiveService::Export(std::string_view profileId,
     for (const auto &practiceFile : practiceFiles) {
       const std::string memberName =
           "practice/" + practiceFile.filename().string();
+      if (isPracticeBackupMember(memberName)) {
+        const auto status =
+            std::filesystem::symlink_status(practiceFile, filesystemError);
+        const auto size =
+            filesystemError
+                ? 0
+                : std::filesystem::file_size(practiceFile, filesystemError);
+        if (filesystemError || !std::filesystem::is_regular_file(status) ||
+            std::filesystem::is_symlink(status) ||
+            size > ProfileArchiveSizePolicy::kMaximumMetadataBytes) {
+          return failure(ProfileError::IoFailure,
+                         "unable to validate practice backup sidecar for "
+                         "export");
+        }
+        continue;
+      }
       if (!isPracticeMember(memberName) ||
           !copyFileStreaming(practiceFile,
                              workspace / "practice" / practiceFile.filename(),

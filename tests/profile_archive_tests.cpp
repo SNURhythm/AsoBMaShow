@@ -6,6 +6,7 @@
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileArchive.h"
 #include "../src/ProfileDatabaseTools.h"
+#include "../src/practice/PracticePresetStore.h"
 #include "../src/ReplayDBHelper.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/input/InputProfileStore.h"
@@ -594,7 +595,7 @@ void testExportIsDeterministicAndStrict() {
   const auto members = readArchive(first, error);
   expect(error.empty(), "exported ZIP reads: " + error);
   expect(members.size() == kExpectedMembers.size(),
-         "export contains exactly six members");
+         "export contains exactly seven members");
   for (std::size_t index = 0;
        index < std::min(members.size(), kExpectedMembers.size()); ++index) {
     expect(members[index].name == kExpectedMembers[index],
@@ -625,6 +626,81 @@ void testExportIsDeterministicAndStrict() {
                document.at("replaySchemaVersion") ==
                    ReplayDBHelper::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
+  }
+}
+
+void testPresetStoreSidecarRemainsProfilePortable() {
+  TempDirectory temp{"profile-practice-integration"};
+  TempDirectory exchange{"profile-practice-integration-exchange"};
+  std::vector<std::string> uuids{"11111111-1111-4111-8111-111111111111",
+                                 "22222222-2222-4222-8222-222222222222"};
+  std::size_t uuidIndex = 0;
+  PlayerProfileManagerDependencies dependencies;
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.utcNow = [] { return std::string("2026-07-11T02:34:56Z"); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "practice portability integration profile initializes");
+  const std::string sourceId = manager.activeProfile().id;
+  const PlayerProfilePaths source = manager.activePaths();
+
+  practice::PresetStore store(source.practiceDirectory);
+  practice::Configuration lastUsed{
+      .chartSha256 = std::string(kPracticeHash),
+      .startMicros = 1'000'000,
+      .endMicros = 9'000'000,
+      .loop = true,
+      .playback = {.percent = 90},
+  };
+  std::string error;
+  expect(store.saveLastUsed(kPracticeHash, lastUsed, error),
+         "integration last-used practice configuration saves: " + error);
+  expect(store.saveNamed(kPracticeHash, "Opening", lastUsed, error).has_value(),
+         "integration named practice preset saves: " + error);
+
+  std::vector<std::string> sourceEntries;
+  for (const auto &entry :
+       std::filesystem::directory_iterator(source.practiceDirectory)) {
+    sourceEntries.push_back(entry.path().filename().string());
+  }
+  std::ranges::sort(sourceEntries);
+  expect(sourceEntries ==
+             std::vector<std::string>{std::string(kPracticeHash) + ".json",
+                                      std::string(kPracticeHash) + ".json.bak"},
+         "live profile practice storage contains only the primary JSON and "
+         "its exact backup sidecar");
+  expect(manager.validateProfile(sourceId).ok(),
+         "profile validation accepts the PresetStore atomic backup sidecar");
+
+  const auto duplicated = manager.duplicateProfile(sourceId, "Practice Copy");
+  expect(duplicated.ok() && duplicated.profile,
+         "profile with repeated PresetStore saves duplicates");
+  if (duplicated.profile) {
+    const auto duplicatePractice =
+        manager.pathsFor(duplicated.profile->id).practiceDirectory;
+    std::vector<std::string> duplicateEntries;
+    for (const auto &entry :
+         std::filesystem::directory_iterator(duplicatePractice)) {
+      duplicateEntries.push_back(entry.path().filename().string());
+    }
+    expect(duplicateEntries ==
+               std::vector<std::string>{std::string(kPracticeHash) + ".json"},
+           "profile duplication copies the portable primary JSON, not its "
+           "rollback sidecar");
+  }
+
+  const auto archive = exchange.path() / "practice-sidecar.asobprofile";
+  ProfileArchiveService service(manager);
+  const auto exported = service.Export(sourceId, archive);
+  expect(exported.ok(),
+         "profile with PresetStore sidecar exports: " + exported.message);
+  if (exported.ok()) {
+    auto members = readArchive(archive, error);
+    expect(findMember(members, "practice/" + std::string(kPracticeHash) +
+                                   ".json") != nullptr &&
+               findMember(members, "practice/" + std::string(kPracticeHash) +
+                                       ".json.bak") == nullptr,
+           "portable archive includes only the primary practice JSON");
   }
 }
 
@@ -2156,6 +2232,7 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testPresetStoreSidecarRemainsProfilePortable();
   testArchiveUsesNativeUnicodeFilesystemPaths();
   testCreateImportUsesNewIdAndRoundTripsExactly();
   testVersionOneArchiveImportsWithEmptyPracticeDirectory();

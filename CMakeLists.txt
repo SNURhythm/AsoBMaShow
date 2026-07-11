@@ -1004,6 +1004,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
         src/VersionedJson.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp

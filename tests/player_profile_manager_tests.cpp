@@ -837,6 +837,18 @@ void testPracticeDirectoryLifecycleAndValidation() {
   writeFile(presetPath, "{\"schemaVersion\":1}\n");
   expect(manager.validateProfile(sourceId).ok(),
          "routine validation admits bounded hash-named JSON without parsing");
+  const auto backupPath = std::filesystem::path(presetPath.string() + ".bak");
+  writeFile(backupPath, "{\"schemaVersion\":1}\n");
+  expect(manager.validateProfile(sourceId).ok(),
+         "routine validation admits the exact bounded atomic backup sidecar");
+  writeFile(std::filesystem::path(presetPath.string() + ".tmp"), "{}\n");
+  expect(!manager.validateProfile(sourceId).ok(),
+         "practice validation rejects non-backup atomic sidecar names");
+  std::filesystem::remove(std::filesystem::path(presetPath.string() + ".tmp"));
+  writeFile(backupPath, std::string((1U * 1024U * 1024U) + 1U, 'x'));
+  expect(!manager.validateProfile(sourceId).ok(),
+         "practice validation applies the one MiB bound to backup sidecars");
+  writeFile(backupPath, "{\"schemaVersion\":1}\n");
 
   const auto duplicate = manager.duplicateProfile(sourceId, "Practice Copy");
   expect(duplicate.ok() && duplicate.profile,
@@ -847,9 +859,13 @@ void testPracticeDirectoryLifecycleAndValidation() {
         presetPath.filename();
     expect(readFile(copied) == readFile(presetPath),
            "duplication copies validated practice JSON bytes");
+    expect(!std::filesystem::exists(
+               std::filesystem::path(copied.string() + ".bak")),
+           "duplication omits atomic rollback sidecars");
   }
 
   std::filesystem::remove(presetPath);
+  std::filesystem::remove(backupPath);
   std::filesystem::remove(source.practiceDirectory);
   expect(manager.validateProfile(sourceId).ok(),
          "legacy profile without a practice directory remains valid");
