@@ -1,5 +1,6 @@
 #pragma once
 #include "../ReplayData.h"
+#include "../practice/PracticeSession.h"
 #include "Scene.h"
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
@@ -14,6 +15,7 @@ struct CoursePlaySession;
 
 struct ResultPracticeOptions {
   bool enabled = false;
+  std::shared_ptr<practice::Session> session = nullptr;
   unsigned long long startPosition = 0;
   bool autoKeySound = false;
   bool autoPlay = false;

@@ -4,6 +4,7 @@
 
 #pragma once
 #include "../../CoursePlaySession.h"
+#include "../../PrepMetronome.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
@@ -69,6 +70,11 @@ private:
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
   void retryWithNewPattern();
+  void finishPractice();
+  void exitPracticeWithoutSummary();
+  void completePracticeAttempt();
+  void scheduleResultTransition(int delayMillis);
+  void updatePracticeHud(long long chartTimeMicros);
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool isCoursePlayback() const;
   [[nodiscard]] bool courseNoSpeed() const;
@@ -111,6 +117,8 @@ private:
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
   View *pauseLayout = nullptr;
   Button *pauseButton = nullptr;
+  Button *practiceRestartButton = nullptr;
+  TextView *practiceHudText = nullptr;
   bool coursePauseHoldActive = false;
   bool coursePauseHoldRewinding = false;
   bool coursePauseHoldTouch = false;
@@ -174,12 +182,15 @@ private:
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;
   bool practiceGhostPublished = false;
+  bool recordedAttemptCompleted = false;
+  bool resultTransitionScheduled = false;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;
   SDL_FingerID floatingLaneCoverFinger = -1;
   float floatingLaneCoverDragOffsetY = 0.0f;
   double currentGameplayBpm = 0.0;
+  prep_metronome::PrepMetronomePlan practiceCountInPlan;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void configurePacemakerTarget();

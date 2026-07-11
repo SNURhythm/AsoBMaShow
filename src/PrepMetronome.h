@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/PlaybackRate.h"
 #include "bms_parser.hpp"
 
 #include <optional>
@@ -32,5 +33,8 @@ PrepMetronomePlan buildPlan(const bms_parser::ChartMeta &meta,
 PrepMetronomePlan buildPlan(const bms_parser::Chart &chart,
                             bool settingEnabled, bool chartPreviewPlayback,
                             long long playbackAnchorMicros);
+PrepMetronomePlan buildPracticeCountInPlan(
+    const bms_parser::Chart &chart, long long startMicros, int countInBeats,
+    audio::PlaybackRate playback);
 
 } // namespace prep_metronome

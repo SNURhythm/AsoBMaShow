@@ -914,6 +914,11 @@ void ResultScene::showCourseResult() {
 }
 
 void ResultScene::startRetry(bool samePattern) {
+  const std::optional<practice::Configuration> practiceConfiguration =
+      practiceOptions.session != nullptr
+          ? std::optional<practice::Configuration>(
+                practiceOptions.session->configuration())
+          : std::nullopt;
   ReplayData retrySource;
   if (retryData.has_value()) {
     retrySource = *retryData;
@@ -929,13 +934,16 @@ void ResultScene::startRetry(bool samePattern) {
     retrySource.playOption2 = practiceOptions.playOption2;
     retrySource.playOption2Seed = practiceOptions.playOption2Seed;
     retrySource.assistOption = practiceOptions.assistOption;
-    retrySource.initialGaugeType = practiceOptions.gaugeType;
+    retrySource.initialGaugeType =
+        practiceConfiguration.has_value()
+            ? practiceConfiguration->gaugeType
+            : practiceOptions.gaugeType;
     retrySource.gaugeAutoShift = practiceOptions.gaugeAutoShift;
   }
 
   context.jukebox.stop();
   defer(
-      [this, retrySource, samePattern]() {
+      [this, retrySource, samePattern, practiceConfiguration]() {
         std::atomic_bool parseCancelled = false;
         const bool reuseCurrentPattern =
             samePattern && reusableRetryChart != nullptr;
@@ -958,15 +966,24 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         StartOptions options;
-        options.startPosition =
-            practiceOptions.enabled ? practiceOptions.startPosition : 0;
+        options.startPosition = practiceOptions.enabled
+                                    ? (practiceConfiguration.has_value()
+                                           ? static_cast<unsigned long long>(
+                                                 std::max(
+                                                     0LL,
+                                                     practiceConfiguration
+                                                         ->startMicros))
+                                           : practiceOptions.startPosition)
+                                    : 0;
         options.autoKeySound =
             practiceOptions.enabled
                 ? (practiceOptions.autoPlay || practiceOptions.autoKeySound)
                                     : !context.settings.inputKeysoundEnabled;
         options.autoPlay =
             practiceOptions.enabled ? practiceOptions.autoPlay : false;
-        options.gaugeType = retrySource.initialGaugeType;
+        options.gaugeType = practiceConfiguration.has_value()
+                                ? practiceConfiguration->gaugeType
+                                : retrySource.initialGaugeType;
         options.gaugeAutoShift = retrySource.gaugeAutoShift;
         options.longNoteMode = normalizeChartLongNoteModeValue(
             retrySource.chartMeta.LnMode);
@@ -978,8 +995,18 @@ void ResultScene::startRetry(bool samePattern) {
                       context.settings.selectedPacemakerTarget);
         options.ownsChart = true;
         if (practiceOptions.enabled) {
-          options.practiceMode = true;
-          options.practiceLeadInMicros = practiceOptions.leadInMicros;
+          options.practiceSession = practiceOptions.session;
+          options.practiceMode = practiceOptions.session == nullptr;
+          options.practiceLeadInMicros =
+              practiceOptions.session == nullptr ? practiceOptions.leadInMicros
+                                                 : 0;
+          if (practiceConfiguration.has_value()) {
+            options.playback = practiceConfiguration->playback;
+            options.judgeWindowScalePercent =
+                practiceConfiguration->judge.scalePercent;
+            options.startingGaugePercent =
+                practiceConfiguration->startingGaugePercent;
+          }
           options.longNoteMode = practiceOptions.longNoteMode;
           options.returnScene = practiceOptions.returnScene;
           if (!options.autoPlay) {

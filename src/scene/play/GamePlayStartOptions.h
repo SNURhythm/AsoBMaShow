@@ -3,6 +3,7 @@
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../input/InputTypes.h"
+#include "../../practice/PracticeSession.h"
 #include "Pacemaker.h"
 
 #include <algorithm>
@@ -78,6 +79,7 @@ struct StartOptions {
   std::shared_ptr<CoursePlaySession> courseSession = nullptr;
   CourseConstraintRules courseConstraints;
   bool ownsChart = false;
+  std::shared_ptr<practice::Session> practiceSession = nullptr;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
   audio::PlaybackRate playback;

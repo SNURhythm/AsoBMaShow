@@ -793,6 +793,7 @@
 				PrepMetronome.cpp,
 				practice/PracticeConfiguration.cpp,
 				practice/PracticePresetStore.cpp,
+				practice/PracticeSession.cpp,
 				ProfileArchive.cpp,
 				ProfileExportStaging.cpp,
 				ProfileDatabaseTools.cpp,

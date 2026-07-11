@@ -64,6 +64,24 @@ long long beatIntervalMicrosForBpm(double bpm) {
   return std::max(1LL, static_cast<long long>(std::llround(interval)));
 }
 
+double bpmAtChartTime(const bms_parser::Chart &chart, long long timeMicros) {
+  double bpm = effectiveBpm(chart.Meta, firstMeasureBpmCandidate(chart));
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr || timeline->Timing > timeMicros) {
+        continue;
+      }
+      if (timeline->BpmChange && isSaneBpm(timeline->Bpm)) {
+        bpm = timeline->Bpm;
+      }
+    }
+  }
+  return bpm;
+}
+
 int effectiveBeatsPerMeasure(const bms_parser::ChartMeta &meta) {
   if (meta.GuessedBeatsPerMeasure >= kMinBeatsPerMeasure &&
       meta.GuessedBeatsPerMeasure <= kMaxBeatsPerMeasure) {
@@ -113,6 +131,35 @@ PrepMetronomePlan buildPlan(const bms_parser::Chart &chart,
   return buildPlanFromMeta(chart.Meta, firstMeasureBpmCandidate(chart),
                            settingEnabled, chartPreviewPlayback,
                            playbackAnchorMicros);
+}
+
+PrepMetronomePlan buildPracticeCountInPlan(
+    const bms_parser::Chart &chart, long long startMicros, int countInBeats,
+    audio::PlaybackRate playback) {
+  PrepMetronomePlan plan;
+  if (countInBeats <= 0) {
+    return plan;
+  }
+
+  plan.enabled = true;
+  plan.bpm = bpmAtChartTime(chart, startMicros);
+  plan.beatsPerMeasure = countInBeats;
+  plan.beatIntervalMicros = beatIntervalMicrosForBpm(plan.bpm);
+  plan.leadInMicros =
+      plan.beatIntervalMicros * static_cast<long long>(countInBeats);
+  plan.startTimeMicros = startMicros - plan.leadInMicros;
+  plan.clicks.reserve(static_cast<std::size_t>(countInBeats));
+  for (int beat = 0; beat < countInBeats; ++beat) {
+    plan.clicks.push_back(
+        {.timeMicros = plan.startTimeMicros +
+                       plan.beatIntervalMicros * static_cast<long long>(beat),
+         .accent = beat == 0});
+  }
+
+  // Clicks stay on the chart timeline. The rate-scaled audio clock converts
+  // their chart-time spacing to real-time spacing during playback.
+  (void)playback;
+  return plan;
 }
 
 } // namespace prep_metronome

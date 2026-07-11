@@ -109,6 +109,42 @@ int main() {
   plan = prep_metronome::buildPlan(meta, true, true, 0);
   ASSERT_TRUE(!plan.enabled, "preview excluded");
 
+  bms_parser::Chart practiceChart;
+  practiceChart.Meta.Bpm = 120.0;
+  practiceChart.Meta.GuessedBeatsPerMeasure = 4;
+  auto *practiceMeasure = new bms_parser::Measure();
+  auto *practiceStartTimeline = new bms_parser::TimeLine(1, false);
+  practiceStartTimeline->Timing = 0;
+  practiceStartTimeline->BpmChange = true;
+  practiceStartTimeline->Bpm = 120.0;
+  practiceMeasure->TimeLines.push_back(practiceStartTimeline);
+  auto *practiceTempoChange = new bms_parser::TimeLine(1, false);
+  practiceTempoChange->Timing = 6000000;
+  practiceTempoChange->BpmChange = true;
+  practiceTempoChange->Bpm = 150.0;
+  practiceMeasure->TimeLines.push_back(practiceTempoChange);
+  auto *practiceLaterTempoChange = new bms_parser::TimeLine(1, false);
+  practiceLaterTempoChange->Timing = 12000000;
+  practiceLaterTempoChange->BpmChange = true;
+  practiceLaterTempoChange->Bpm = 90.0;
+  practiceMeasure->TimeLines.push_back(practiceLaterTempoChange);
+  practiceChart.Measures.push_back(practiceMeasure);
+
+  const audio::PlaybackRate slowPlayback{.percent = 75};
+  plan = prep_metronome::buildPracticeCountInPlan(
+      practiceChart, 10000000, 4, slowPlayback);
+  ASSERT_TRUE(plan.enabled, "practice count-in enabled");
+  ASSERT_EQ(150.0, plan.bpm, "tempo active at marker");
+  ASSERT_EQ(4U, plan.clicks.size(), "practice click count");
+  ASSERT_EQ(8400000LL, plan.clicks[0].timeMicros,
+            "practice first click remains in chart time");
+  ASSERT_EQ(9600000LL, plan.clicks[3].timeMicros,
+            "practice last click remains in chart time");
+  ASSERT_EQ(533333LL,
+            slowPlayback.realMicrosFromChart(plan.clicks[1].timeMicros -
+                                             plan.clicks[0].timeMicros),
+            "practice click real spacing follows playback rate");
+
   ASSERT_EQ(-2000000LL,
             gameplay_timing::visualTimeMicros(-2000000LL, 0LL),
             "negative visual time without offset");

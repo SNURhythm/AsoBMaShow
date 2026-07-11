@@ -23,8 +23,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -51,6 +53,16 @@ Judge makeEffectiveJudge(int rank, CourseJudgementConstraint constraint) {
 StartOptions resolvePlayStartInputDevices(StartOptions options,
                                           const InputProfile &profile,
                                           int keyMode) {
+  if (options.practiceSession != nullptr) {
+    const auto &configuration = options.practiceSession->configuration();
+    options.startPosition = static_cast<unsigned long long>(
+        std::max(0LL, configuration.startMicros));
+    options.gaugeType = configuration.gaugeType;
+    options.practiceMode = true;
+    options.playback = configuration.playback;
+    options.judgeWindowScalePercent = configuration.judge.scalePercent;
+    options.startingGaugePercent = configuration.startingGaugePercent;
+  }
   if (!options.inputDeviceCategories.empty()) {
     return options;
   }
@@ -67,6 +79,17 @@ long long nowMicros() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+std::string formatPracticeTime(long long micros) {
+  const long long totalMillis = std::max(0LL, micros) / 1000LL;
+  const long long minutes = totalMillis / 60000LL;
+  const long long seconds = (totalMillis / 1000LL) % 60LL;
+  const long long millis = totalMillis % 1000LL;
+  std::ostringstream stream;
+  stream << minutes << ':' << std::setfill('0') << std::setw(2) << seconds
+         << '.' << std::setw(3) << millis;
+  return stream.str();
 }
 
 std::string replayNoteKey(int lane, long long noteTimeMicros) {
@@ -500,7 +523,7 @@ void GamePlayScene::init() {
   {
     auto pauseScreen = new View();
     pauseScreen->setWidth(520);
-    pauseScreen->setHeight(430);
+    pauseScreen->setHeight(options.practiceSession != nullptr ? 500 : 430);
     pauseScreen->setFlexDirection(FlexDirection::Column);
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
@@ -546,49 +569,63 @@ void GamePlayScene::init() {
           Color(40, 173, 164, 255), ui_theme::accentBorderStrong(), [this]() {
         closePauseMenu();
       }));
-      const bool canRetrySame =
-          !coursePlayback && !isReplayPlayback() && !options.practiceMode &&
-          chart != nullptr && gameplayHasSamePatternRandomization(*chart,
-                                                                  options);
-      pauseScreen->addView(makePauseButton(
-          coursePlayback ? "Restart Course"
-                         : (isReplayPlayback() ? "Replay" : "Retry"),
-          Color(57, 105, 42, 238),
-          Color(72, 127, 51, 248), Color(91, 153, 61, 255),
-          ui_theme::lime(), [this, canRetrySame]() {
-            if (isCoursePlayback()) {
-              restartCourseFromBeginning();
-            } else if (isReplayPlayback() || options.practiceMode ||
-                       options.autoPlay || !canRetrySame) {
-              restartCurrentPattern();
-            } else {
-              retryWithNewPattern();
-            }
-          }));
-      if (canRetrySame) {
+      if (options.practiceSession != nullptr) {
         pauseScreen->addView(makePauseButton(
-            "Retry Same", ui_theme::control(), ui_theme::controlHover(),
-            ui_theme::controlPressed(), ui_theme::hairline(),
+            "Restart Section", Color(57, 105, 42, 238),
+            Color(72, 127, 51, 248), Color(91, 153, 61, 255),
+            ui_theme::lime(),
             [this]() { restartCurrentPattern(); }));
-      }
-      pauseScreen->addView(makePauseButton("Exit", Color(119, 45, 46, 238),
-                                           Color(145, 53, 51, 248),
-                                           Color(174, 64, 57, 255),
-                                           ui_theme::coral(), [this]() {
-        finishReplayRecording();
-        publishPracticeGhost();
-        context.jukebox.stop();
-        defer(
-            [this]() {
-              if (options.practiceMode && options.returnScene != nullptr) {
-                context.sceneManager->changeScene(options.returnScene, false);
+        pauseScreen->addView(makePauseButton(
+            "Finish Practice", ui_theme::primaryAction(),
+            ui_theme::primaryActionHover(), ui_theme::primaryActionPressed(),
+            ui_theme::cyan(), [this]() { finishPractice(); }));
+        pauseScreen->addView(makePauseButton(
+            "Exit Without Summary", Color(119, 45, 46, 238),
+            Color(145, 53, 51, 248), Color(174, 64, 57, 255),
+            ui_theme::coral(), [this]() { exitPracticeWithoutSummary(); }));
+      } else {
+        const bool canRetrySame =
+            !coursePlayback && !isReplayPlayback() && !options.practiceMode &&
+            chart != nullptr && gameplayHasSamePatternRandomization(*chart,
+                                                                    options);
+        pauseScreen->addView(makePauseButton(
+            coursePlayback ? "Restart Course"
+                           : (isReplayPlayback() ? "Replay" : "Retry"),
+            Color(57, 105, 42, 238), Color(72, 127, 51, 248),
+            Color(91, 153, 61, 255), ui_theme::lime(),
+            [this, canRetrySame]() {
+              if (isCoursePlayback()) {
+                restartCourseFromBeginning();
+              } else if (isReplayPlayback() || options.practiceMode ||
+                         options.autoPlay || !canRetrySame) {
+                restartCurrentPattern();
               } else {
-                context.sceneManager->changeScene("MainMenu");
+                retryWithNewPattern();
               }
-              return false;
-            },
-            0, true);
-      }));
+            }));
+        if (canRetrySame) {
+          pauseScreen->addView(makePauseButton(
+              "Retry Same", ui_theme::control(), ui_theme::controlHover(),
+              ui_theme::controlPressed(), ui_theme::hairline(),
+              [this]() { restartCurrentPattern(); }));
+        }
+        pauseScreen->addView(makePauseButton(
+            "Exit", Color(119, 45, 46, 238), Color(145, 53, 51, 248),
+            Color(174, 64, 57, 255), ui_theme::coral(), [this]() {
+              context.jukebox.stop();
+              defer(
+                  [this]() {
+                    if (options.practiceMode && options.returnScene != nullptr) {
+                      context.sceneManager->changeScene(options.returnScene,
+                                                        false);
+                    } else {
+                      context.sceneManager->changeScene("MainMenu");
+                    }
+                    return false;
+                  },
+                  0, true);
+            }));
+      }
     }
 
     pauseLayout->addView(pauseScreen);
@@ -619,6 +656,40 @@ void GamePlayScene::init() {
     }
     showPauseMenu(true);
   });
+
+  if (options.practiceSession != nullptr) {
+    practiceRestartButton =
+        new Button(rendering::window_width - 260, 50, 150, 52);
+    addView(practiceRestartButton);
+    auto restartText =
+        new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    restartText->setText("Restart");
+    restartText->setAlign(TextView::CENTER);
+    restartText->setVAlign(TextView::MIDDLE);
+    restartText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    practiceRestartButton->setContentView(restartText);
+    practiceRestartButton->setCornerRadius(ui_theme::controlRadius());
+    practiceRestartButton->setBackgroundColors(
+        Color(57, 105, 42, 238), Color(72, 127, 51, 248),
+        Color(91, 153, 61, 255));
+    practiceRestartButton->setBorderColors(
+        ui_theme::withAlpha(ui_theme::lime(), 150),
+        ui_theme::withAlpha(ui_theme::lime(), 190),
+        ui_theme::withAlpha(ui_theme::lime(), 220));
+    practiceRestartButton->setStyledBorderWidth(1);
+    practiceRestartButton->setOnClickListener(
+        [this]() { restartCurrentPattern(); });
+
+    practiceHudText =
+        new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+    addView(practiceHudText);
+    practiceHudText->setSize(620, 58);
+    practiceHudText->setPositionNoLayout(24, 34);
+    practiceHudText->setAlign(TextView::LEFT);
+    practiceHudText->setVAlign(TextView::MIDDLE);
+    practiceHudText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    updatePracticeHud(context.jukebox.getTimeMicros());
+  }
 }
 
 void GamePlayScene::reset() {
@@ -656,20 +727,29 @@ void GamePlayScene::reset() {
   context.jukebox.stop();
   const long long startPositionMicros = getStartPositionMicros();
   const std::optional<long long> practiceKeySoundCutoff =
-      options.practiceLeadInMicros > 0 ? std::optional<long long>(
-                                             startPositionMicros)
-                                       : std::nullopt;
+      options.practiceSession != nullptr || options.practiceLeadInMicros > 0
+          ? std::optional<long long>(startPositionMicros)
+          : std::nullopt;
   const long long audioSeekPosition = getAudioSeekPositionMicros();
-  const bool prepMetronomeEnabled = gameplay_timing::shouldApplyPrepMetronome(
-      context.settings.prepMetronomeEnabled, options.practiceLeadInMicros,
-      startPositionMicros);
-  const auto prepPlan = prep_metronome::buildPlan(
-      *chart, prepMetronomeEnabled, false, audioSeekPosition);
+  if (options.practiceSession != nullptr) {
+    const auto &configuration = options.practiceSession->configuration();
+    practiceCountInPlan = prep_metronome::buildPracticeCountInPlan(
+        *chart, configuration.startMicros, configuration.countInBeats,
+        configuration.playback);
+  } else {
+    const bool prepMetronomeEnabled = gameplay_timing::shouldApplyPrepMetronome(
+        context.settings.prepMetronomeEnabled, options.practiceLeadInMicros,
+        startPositionMicros);
+    practiceCountInPlan = prep_metronome::buildPlan(
+        *chart, prepMetronomeEnabled, false, audioSeekPosition);
+  }
   context.jukebox.schedule(*chart, options.autoKeySound, isCancelled,
                            practiceKeySoundCutoff,
-                           prepPlan.enabled ? &prepPlan : nullptr);
-  context.jukebox.play(prepPlan.enabled ? prepPlan.startTimeMicros
-                                        : audioSeekPosition);
+                           practiceCountInPlan.enabled ? &practiceCountInPlan
+                                                       : nullptr);
+  context.jukebox.play(practiceCountInPlan.enabled
+                           ? practiceCountInPlan.startTimeMicros
+                           : audioSeekPosition);
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
@@ -731,6 +811,10 @@ void GamePlayScene::reset() {
   }
   buildReplayNoteLookup();
   beginReplayRecording();
+  if (options.practiceSession != nullptr) {
+    options.practiceSession->beginAttempt();
+  }
+  updatePracticeHud(context.jukebox.getTimeMicros());
   updateGaugeStatusText();
 }
 
@@ -747,6 +831,9 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   if (pauseButton != nullptr) {
     pauseButton->setVisible(false);
   }
+  if (practiceRestartButton != nullptr) {
+    practiceRestartButton->setVisible(false);
+  }
   resetCoursePauseHold();
 }
 
@@ -759,6 +846,9 @@ void GamePlayScene::closePauseMenu() {
   }
   if (pauseButton != nullptr) {
     pauseButton->setVisible(true);
+  }
+  if (practiceRestartButton != nullptr) {
+    practiceRestartButton->setVisible(true);
   }
   resetCoursePauseHold();
 }
@@ -829,11 +919,17 @@ void GamePlayScene::adjustLaneCoverFromInput(int deltaPercent) {
 }
 
 void GamePlayScene::restartCurrentPattern() {
+  if (options.practiceSession != nullptr) {
+    options.practiceSession->abandonAttempt();
+  }
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
   }
   if (pauseButton != nullptr) {
     pauseButton->setVisible(true);
+  }
+  if (practiceRestartButton != nullptr) {
+    practiceRestartButton->setVisible(true);
   }
   resetCoursePauseHold();
   context.jukebox.stop();
@@ -1164,6 +1260,7 @@ bool GamePlayScene::startNextCourseChart() {
 
 void GamePlayScene::beginReplayRecording() {
   practiceGhostPublished = false;
+  recordedAttemptCompleted = false;
   lastRecordedTouchSamples.clear();
   if (!shouldRecordReplay()) {
     recordedReplay = {};
@@ -1213,14 +1310,82 @@ void GamePlayScene::finishReplayRecording() {
 }
 
 void GamePlayScene::publishPracticeGhost() {
-  if (!options.practiceMode || practiceGhostPublished ||
-      !options.practiceGhostCallback || recordedReplay.events.empty()) {
+  if (!options.practiceMode || !recordedAttemptCompleted ||
+      practiceGhostPublished || !options.practiceGhostCallback) {
     return;
   }
 
-  finishReplayRecording();
+  const ReplayData *completedReplay = &recordedReplay;
+  if (options.practiceSession != nullptr) {
+    const auto &attempts = options.practiceSession->completedAttempts();
+    if (attempts.empty()) {
+      return;
+    }
+    completedReplay = &attempts.back();
+  }
+  if (completedReplay->events.empty()) {
+    return;
+  }
   practiceGhostPublished = true;
-  options.practiceGhostCallback(recordedReplay);
+  options.practiceGhostCallback(*completedReplay);
+}
+
+void GamePlayScene::completePracticeAttempt() {
+  if (options.practiceSession == nullptr) {
+    return;
+  }
+  finishReplayRecording();
+  recordedAttemptCompleted = true;
+  options.practiceSession->completeAttempt(std::move(recordedReplay));
+  publishPracticeGhost();
+}
+
+void GamePlayScene::finishPractice() {
+  if (options.practiceSession == nullptr || resultTransitionScheduled) {
+    return;
+  }
+  options.practiceSession->abandonAttempt();
+  if (state != nullptr) {
+    state->isEnding = true;
+  }
+  context.jukebox.stop();
+  scheduleResultTransition(0);
+}
+
+void GamePlayScene::exitPracticeWithoutSummary() {
+  if (options.practiceSession == nullptr) {
+    return;
+  }
+  options.practiceSession->abandonAttempt();
+  options.practiceSession.reset();
+  context.jukebox.stop();
+  defer(
+      [this]() {
+        if (options.returnScene != nullptr) {
+          context.sceneManager->changeScene(options.returnScene, false);
+        } else {
+          context.sceneManager->changeScene("MainMenu");
+        }
+        return false;
+      },
+      0, true);
+}
+
+void GamePlayScene::updatePracticeHud(long long chartTimeMicros) {
+  if (practiceHudText == nullptr || options.practiceSession == nullptr) {
+    return;
+  }
+  const auto &configuration = options.practiceSession->configuration();
+  const auto remaining = std::ranges::count_if(
+      practiceCountInPlan.clicks, [chartTimeMicros](const auto &click) {
+        return click.timeMicros > chartTimeMicros;
+      });
+  practiceHudText->setText(
+      "Loop " + std::to_string(options.practiceSession->loopNumber()) +
+      "  |  " + formatPracticeTime(configuration.startMicros) + " - " +
+      formatPracticeTime(configuration.endMicros) + "  |  " +
+      std::to_string(configuration.playback.percent) +
+      "%  |  Count-in " + std::to_string(remaining));
 }
 
 long long GamePlayScene::getAudioOffsetMicros() const {
@@ -1238,6 +1403,9 @@ long long GamePlayScene::getStartPositionMicros() const {
 
 long long GamePlayScene::getAudioSeekPositionMicros() const {
   const long long startPosition = getStartPositionMicros();
+  if (options.practiceSession != nullptr) {
+    return startPosition;
+  }
   const long long leadIn =
       static_cast<long long>(std::min<unsigned long long>(
           options.practiceLeadInMicros,
@@ -1338,50 +1506,11 @@ long long GamePlayScene::getVisualTimeMicros(long long songTimeMicros) const {
                                            getVisualOffsetMicros());
 }
 
-void GamePlayScene::update(float dt) {
-  (void)dt;
-  if (inputHandler != nullptr) {
-    inputHandler->pumpPendingTouchEvents();
-  }
-  updateCoursePauseHoldProgress(nowMicros());
-  if (state == nullptr || !state->isPlaying || state->isEnding) {
+void GamePlayScene::scheduleResultTransition(int delayMillis) {
+  if (resultTransitionScheduled) {
     return;
   }
-
-  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  const long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
-  touchVisualizerLoaded = true;
-  if (isReplayPlayback()) {
-    processReplayKeySounds(rawSongTimeMicros);
-    processReplayEvents(gameplayTimeMicros);
-  }
-  updateHellChargeGauge(gameplayTimeMicros);
-  checkPassedTimeline(gameplayTimeMicros);
-  if (isReplayPlayback()) {
-    processReplayLaneCoverEvents(gameplayTimeMicros);
-  }
-  if (state->passedMeasureCount != chart->Measures.size()) {
-    return;
-  }
-
-  SDL_Log("All measures passed");
-  state->isEnding = true;
-  finishReplayRecording();
-  publishPracticeGhost();
-  if (isCoursePlayback()) {
-    options.courseSession->carriedGauge = state->gaugeSnapshot();
-    options.courseSession->carriedCombo = state->combo;
-    options.courseSession->maxCombo =
-        std::max(options.courseSession->maxCombo, state->maxCombo);
-    options.courseSession->recordResult(chart->Meta, *state);
-    if (!options.courseSession->courseReplayPlayback) {
-      options.courseSession->recordStageProvenance(
-          options.courseSession->currentIndex, attemptProvenance);
-    }
-    if (shouldRecordReplay()) {
-      options.courseSession->recordReplayStage(recordedReplay);
-    }
-  }
+  resultTransitionScheduled = true;
   defer(
       [this]() {
         const ReplayData *replayToSave =
@@ -1394,11 +1523,14 @@ void GamePlayScene::update(float dt) {
         ResultPracticeOptions practiceResultOptions;
         if (options.practiceMode) {
           practiceResultOptions.enabled = true;
-          practiceResultOptions.startPosition =
-              static_cast<unsigned long long>(getStartPositionMicros());
+          practiceResultOptions.session = options.practiceSession;
+          if (options.practiceSession == nullptr) {
+            practiceResultOptions.startPosition =
+                static_cast<unsigned long long>(getStartPositionMicros());
+            practiceResultOptions.gaugeType = options.gaugeType;
+          }
           practiceResultOptions.autoKeySound = options.autoKeySound;
           practiceResultOptions.autoPlay = options.autoPlay;
-          practiceResultOptions.gaugeType = options.gaugeType;
           practiceResultOptions.gaugeAutoShift = options.gaugeAutoShift;
           practiceResultOptions.playOption = options.playOption;
           practiceResultOptions.playOptionSeed = options.playOptionSeed;
@@ -1457,7 +1589,76 @@ void GamePlayScene::update(float dt) {
             false);
         return false;
       },
-      2000, true);
+      delayMillis, true);
+}
+
+void GamePlayScene::update(float dt) {
+  (void)dt;
+  if (inputHandler != nullptr) {
+    inputHandler->pumpPendingTouchEvents();
+  }
+  updateCoursePauseHoldProgress(nowMicros());
+  if (state == nullptr || !state->isPlaying || state->isEnding) {
+    return;
+  }
+
+  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  updatePracticeHud(rawSongTimeMicros);
+  touchVisualizerLoaded = true;
+  if (isReplayPlayback()) {
+    processReplayKeySounds(rawSongTimeMicros);
+    processReplayEvents(gameplayTimeMicros);
+  }
+  updateHellChargeGauge(gameplayTimeMicros);
+  checkPassedTimeline(gameplayTimeMicros);
+  if (isReplayPlayback()) {
+    processReplayLaneCoverEvents(gameplayTimeMicros);
+  }
+  const auto completePracticeSection = [this]() {
+    state->isEnding = true;
+    completePracticeAttempt();
+    if (options.practiceSession->shouldLoop()) {
+      reset();
+    } else {
+      scheduleResultTransition(0);
+    }
+  };
+  if (options.practiceSession != nullptr &&
+      rawSongTimeMicros >=
+          options.practiceSession->configuration().endMicros) {
+    completePracticeSection();
+    return;
+  }
+  if (state->passedMeasureCount != chart->Measures.size()) {
+    return;
+  }
+
+  if (options.practiceSession != nullptr) {
+    completePracticeSection();
+    return;
+  }
+
+  SDL_Log("All measures passed");
+  state->isEnding = true;
+  finishReplayRecording();
+  recordedAttemptCompleted = options.practiceMode;
+  publishPracticeGhost();
+  if (isCoursePlayback()) {
+    options.courseSession->carriedGauge = state->gaugeSnapshot();
+    options.courseSession->carriedCombo = state->combo;
+    options.courseSession->maxCombo =
+        std::max(options.courseSession->maxCombo, state->maxCombo);
+    options.courseSession->recordResult(chart->Meta, *state);
+    if (!options.courseSession->courseReplayPlayback) {
+      options.courseSession->recordStageProvenance(
+          options.courseSession->currentIndex, attemptProvenance);
+    }
+    if (shouldRecordReplay()) {
+      options.courseSession->recordReplayStage(recordedReplay);
+    }
+  }
+  scheduleResultTransition(2000);
 }
 
 void GamePlayScene::renderScene() {
@@ -1465,6 +1666,10 @@ void GamePlayScene::renderScene() {
   pauseLayout->setSize(rendering::window_width, rendering::window_height);
   if (pauseButton != nullptr) {
     pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
+  }
+  if (practiceRestartButton != nullptr) {
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - 260,
+                                               38);
   }
   const long long gameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
@@ -1477,7 +1682,8 @@ void GamePlayScene::renderScene() {
 }
 
 bool GamePlayScene::renderViewBeforeScene(const View *view) const {
-  return view != pauseLayout && view != pauseButton;
+  return view != pauseLayout && view != pauseButton &&
+         view != practiceRestartButton && view != practiceHudText;
 }
 
 bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {

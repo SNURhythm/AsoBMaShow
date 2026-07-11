@@ -8,6 +8,7 @@
 #include "../path.h"
 #include "../practice/PracticeConfiguration.h"
 #include "../practice/PracticePresetStore.h"
+#include "../practice/PracticeSession.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
@@ -4311,7 +4312,12 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .playOption2Seed = viewerPlayOption2Seed,
                     .assistOption = assistOption,
                     .ownsChart = true,
-                    .practiceMode = true,
+                    .practiceSession =
+                        autoPlay
+                            ? nullptr
+                            : std::make_shared<practice::Session>(
+                                  launchConfiguration),
+                    .practiceMode = autoPlay,
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
                     .playback = autoPlay ? audio::PlaybackRate{}
