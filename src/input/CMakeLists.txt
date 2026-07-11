@@ -12,7 +12,6 @@ target_sources(main PRIVATE
     InputDeviceRegistry.cpp
     SDLInputBackend.cpp
     LogicalGameplayInputAdapter.cpp
-    GyroscopeTurntable.cpp
 )
 
 function(asobmashow_add_midi_backend target_name)
@@ -46,8 +45,36 @@ function(asobmashow_add_midi_backend target_name)
     endif()
 endfunction()
 
+function(asobmashow_add_gyroscope_backend target_name)
+    target_sources(${target_name} PRIVATE
+        ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/GyroscopeTurntable.cpp
+        ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/GyroscopeInputBackendCore.cpp
+        ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/GyroscopeInputBackendFactory.cpp
+    )
+
+    if(IOS)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/IOSGyroscopeInputBackend.mm
+        )
+        target_link_libraries(${target_name} PRIVATE ${CORE_MOTION_FRAMEWORK})
+    elseif(ANDROID)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/AndroidGyroscopeInputBackend.cpp
+        )
+    else()
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/UnsupportedGyroscopeInputBackend.cpp
+        )
+    endif()
+endfunction()
+
 if(APPLE)
     find_library(CORE_MIDI_FRAMEWORK CoreMIDI REQUIRED)
 endif()
 
+if(IOS)
+    find_library(CORE_MOTION_FRAMEWORK CoreMotion REQUIRED)
+endif()
+
 asobmashow_add_midi_backend(main)
+asobmashow_add_gyroscope_backend(main)

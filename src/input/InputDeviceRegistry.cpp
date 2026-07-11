@@ -1,6 +1,7 @@
 #include "InputDeviceRegistry.h"
 
 #include "MidiInputBackendFactory.h"
+#include "GyroscopeInputBackendFactory.h"
 #include "SDLInputBackend.h"
 
 #include <SDL2/SDL_log.h>
@@ -112,6 +113,9 @@ InputDeviceRegistry::InputDeviceRegistry()
                            },
                            [](input::InputBackendSink sink) {
                              return makeMidiInputBackend(std::move(sink));
+                           },
+                           [](input::InputBackendSink sink) {
+                             return makeGyroscopeInputBackend(std::move(sink));
                            }}) {}
 
 InputDeviceRegistry::InputDeviceRegistry(
@@ -182,6 +186,21 @@ void InputDeviceRegistry::handleSdlEventAndDispatch(const SDL_Event &event) {
 }
 
 void InputDeviceRegistry::pump() { pumpInternal(true); }
+
+void InputDeviceRegistry::configureGyroscopeTurntable(
+    input::GyroscopeTurntableConfig config) {
+  for (const auto &backend : backends_) {
+    backend->configureGyroscopeTurntable(config);
+  }
+  dispatchPending();
+}
+
+void InputDeviceRegistry::resetGyroscopeTurntableSession() {
+  for (const auto &backend : backends_) {
+    backend->resetGyroscopeTurntableSession();
+  }
+  dispatchPending();
+}
 
 void InputDeviceRegistry::dispatchPending() { pumpInternal(false); }
 

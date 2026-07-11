@@ -32,6 +32,8 @@ public:
   // Dispatches this SDL event before returning without polling async backends.
   void handleSdlEventAndDispatch(const SDL_Event &event);
   void pump();
+  void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
+  void resetGyroscopeTurntableSession();
 
   // Input subscriptions never inherit events queued before their sequence
   // boundary.

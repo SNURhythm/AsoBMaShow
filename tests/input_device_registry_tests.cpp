@@ -74,6 +74,21 @@ public:
 
   void pump() override { ++pumpCalls; }
 
+  void
+  configureGyroscopeTurntable(input::GyroscopeTurntableConfig config) override {
+    gyroscopeConfigs.push_back(config);
+    if (publishGyroscopeReleaseOnControl) {
+      publishGyroscopeRelease();
+    }
+  }
+
+  void resetGyroscopeTurntableSession() override {
+    ++gyroscopeResetCalls;
+    if (publishGyroscopeReleaseOnControl) {
+      publishGyroscopeRelease();
+    }
+  }
+
   void sendInput(input::PhysicalInputEvent event) {
     publishInput(std::move(event));
   }
@@ -86,9 +101,22 @@ public:
   int stopCalls = 0;
   int handledEvents = 0;
   int pumpCalls = 0;
+  int gyroscopeResetCalls = 0;
   bool publishHandledKeyboardEvents = false;
+  bool publishGyroscopeReleaseOnControl = false;
+  std::vector<input::GyroscopeTurntableConfig> gyroscopeConfigs;
 
 private:
+  void publishGyroscopeRelease() {
+    publishInput({.control = {.deviceId = std::string(
+                                  input::kGyroscopeTurntableStableId),
+                              .deviceClass = input::DeviceClass::Gyroscope,
+                              .kind = input::ControlKind::Axis,
+                              .index = input::kGyroscopeTurntableAxis},
+                  .rawValue = 0.0,
+                  .normalizedValue = 0.0F});
+  }
+
   bool startResult_ = true;
   std::string startError_;
 };
@@ -1393,6 +1421,49 @@ void testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals() {
              joystickIds[1].ends_with(":2"),
          "serial-less stable IDs use deterministic ordinals");
 }
+
+void testGyroscopeControlFanoutDispatchesWithoutBackendPump() {
+  FakeBackend *first = nullptr;
+  FakeBackend *second = nullptr;
+  std::vector<InputDeviceRegistry::BackendFactory> factories;
+  factories.emplace_back(
+      [&](input::InputBackendSink sink) -> std::unique_ptr<IInputBackend> {
+        auto backend =
+            std::make_unique<FakeBackend>(std::move(sink), true, std::string{});
+        first = backend.get();
+        return backend;
+      });
+  factories.emplace_back(
+      [&](input::InputBackendSink sink) -> std::unique_ptr<IInputBackend> {
+        auto backend =
+            std::make_unique<FakeBackend>(std::move(sink), true, std::string{});
+        second = backend.get();
+        return backend;
+      });
+  InputDeviceRegistry registry(std::move(factories));
+  first->publishGyroscopeReleaseOnControl = true;
+  second->publishGyroscopeReleaseOnControl = true;
+  std::vector<input::PhysicalInputEvent> events;
+  registry.subscribeInput([&](const auto &event) { events.push_back(event); });
+
+  const input::GyroscopeTurntableConfig config{.stepAngleDegrees = 7,
+                                               .releaseDelayMs = 350};
+  registry.configureGyroscopeTurntable(config);
+  expect(first->gyroscopeConfigs == std::vector{config} &&
+             second->gyroscopeConfigs == std::vector{config},
+         "gyroscope configuration fans out to every backend");
+  expect(events.size() == 2 && first->pumpCalls == 0 && second->pumpCalls == 0,
+         "configuration-generated zero dispatches synchronously without pump");
+
+  registry.resetGyroscopeTurntableSession();
+  expect(first->gyroscopeResetCalls == 1 && second->gyroscopeResetCalls == 1,
+         "gyroscope session reset fans out to every backend");
+  expect(events.size() == 4 && first->pumpCalls == 0 && second->pumpCalls == 0,
+         "reset-generated zero dispatches synchronously without async pump");
+  expect(events.back().control.deviceId == input::kGyroscopeTurntableStableId &&
+             events.back().normalizedValue == 0.0F,
+         "synchronous release preserves gyroscope semantic identity");
+}
 } // namespace
 
 int main() {
@@ -1422,6 +1493,7 @@ int main() {
   testSdlOverlappingReconnectWaitsForLastOwnerRemoval();
   testSdlReconnectRemovalDedupAndAxisNormalization();
   testSdlIdenticalNameOnlyDevicesUseDistinctOrdinals();
+  testGyroscopeControlFanoutDispatchesWithoutBackendPump();
 
   if (failures != 0) {
     std::cerr << failures << " input device registry assertion(s) failed\n";

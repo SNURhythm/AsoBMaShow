@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InputTypes.h"
+#include "GyroscopeTurntable.h"
 
 #include <SDL2/SDL_events.h>
 
@@ -29,6 +30,8 @@ public:
   virtual void stop() = 0;
   virtual void handleSdlEvent(const SDL_Event &) {}
   virtual void pump() = 0;
+  virtual void configureGyroscopeTurntable(input::GyroscopeTurntableConfig) {}
+  virtual void resetGyroscopeTurntableSession() {}
 
 protected:
   explicit IInputBackend(input::InputBackendSink sink)
