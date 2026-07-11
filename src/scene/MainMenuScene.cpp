@@ -7641,7 +7641,17 @@ void MainMenuScene::buildPlayOptionsModal() {
   assistOptionRow->addView(makeAssistOptionButton(assist_options::kDrag));
   optionsContent->addView(assistOptionRow);
 
-  optionsContent->addView(makeModalLabel("Playback Rate"));
+  auto *playbackAssistGroup = new View();
+  playbackAssistGroup->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(10)
+      ->setMargin(Edge::Left, 20)
+      ->setPadding(Edge::All, 12)
+      ->setThemedBackgroundColor(ui_theme::panelSubtle)
+      ->setThemedBorderColor(ui_theme::hairlineSubtle)
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  playbackAssistGroup->addView(makeModalLabel("Playback Rate"));
 
   auto *playbackRateRow = makeModalOptionRow(58);
   TextView *playbackRateDecreaseText = nullptr;
@@ -7668,13 +7678,13 @@ void MainMenuScene::buildPlayOptionsModal() {
     setPlaybackRateSelection(context.settings.selectedPlaybackRatePercent + 5);
   });
   playbackRateRow->addView(playbackRateIncreaseButton);
-  optionsContent->addView(playbackRateRow);
+  playbackAssistGroup->addView(playbackRateRow);
 
   playbackClearCapText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
   playbackClearCapText->setText("Assisted Easy maximum");
   playbackClearCapText->setAlign(TextView::CENTER);
   playbackClearCapText->setThemedColor(ui_theme::textSecondary);
-  optionsContent->addView(playbackClearCapText);
+  playbackAssistGroup->addView(playbackClearCapText);
 
   playbackModeDropdown = new DropdownView({
       .onOpenChanged =
@@ -7686,7 +7696,8 @@ void MainMenuScene::buildPlayOptionsModal() {
           [this](const std::string &mode) { setPlaybackModeSelection(mode); },
   });
   playbackModeDropdown->setWidthPercent(100.0f);
-  optionsContent->addView(playbackModeDropdown);
+  playbackAssistGroup->addView(playbackModeDropdown);
+  optionsContent->addView(playbackAssistGroup);
 
   optionsContent->addView(makeModalLabel("Pacemaker"));
 
