@@ -52,9 +52,11 @@ new score and replay writes use the chart definition's authoritative identity.
 ## Score database
 
 Score schema version 6 keeps the existing `course_scores.course_key` column but
-changes its meaning to the canonical definition key. Migration converts the
-legacy value (`name + raw constraints + ordered chart tokens`) into the new key
-without using the name.
+changes its meaning to the canonical definition key. It also adds
+`legacy_course_key`, which permanently preserves the former raw value
+(`name + raw constraints + ordered chart tokens`) before migration converts a
+parseable key. Keeping this ordered evidence allows subsequent strongest-common
+repair when an MD5-only definition becomes SHA-256-enriched.
 
 Course scores also gain `ln_mode`. New rows store the effective selected LN
 mode, allowing course lamps and best-record lookup to distinguish LN/CN/HCN in
@@ -92,9 +94,11 @@ canonical key, normalized constraints, and ordered SHA-256/MD5 identities.
 Main-menu profile/cache refresh runs an idempotent recovery pass before loading
 course lamps and replay summaries:
 
-1. Score migration canonicalizes all legacy nonempty score keys.
-2. Exact or strongest-common current-definition matches normalize the stored
-   key and may update the non-authoritative `course_id` for diagnostics.
+1. Score migration preserves every raw legacy key, then canonicalizes parseable
+   nonempty score keys.
+2. Exact or strongest-common current-definition matches normalize only the
+   stored authoritative key. Historical `course_id`, name, group, constraints,
+   and chart count remain unchanged as repeatable replay-recovery evidence.
 3. Replay migration/backfill handles complete rows.
 4. The recovery pass resolves partial replay rows conservatively against the
    current definitions and score evidence.
@@ -110,7 +114,8 @@ score and v3-to-v4 replay migrations before strict "current version"
 validation. Databases newer than the application remain rejected.
 
 Rows without enough evidence are never guessed, deleted, or assigned merely by
-course name. They keep their legacy ID fallback when that ID still exists.
+course name. Only rows whose content key is actually empty may use the legacy
+ID fallback; malformed or unresolved nonempty keys remain isolated.
 
 ## Error handling and performance
 
@@ -119,7 +124,7 @@ course name. They keep their legacy ID fallback when that ID still exists.
 - Future-version databases remain read-rejected without mutation.
 - Invalid hashes, malformed legacy keys, missing replay stages, and ambiguous
   candidates are counted/logged and left untouched.
-- Recovery is idempotent and scans only noncanonical, unkeyed, or stale-ID
+- Recovery is idempotent and scans only noncanonical, unkeyed, or raw-evidence
   course rows. Normal startup performs indexed key reads.
 - The existing numeric-ID preservation remains as compatibility protection and
   for hash-enrichment continuity, but no authoritative record lookup depends on

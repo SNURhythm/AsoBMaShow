@@ -16,6 +16,7 @@
 - New score rows store exact LN mode; legacy unknown LN mode uses `-1` and matches every selected mode.
 - Numeric fallback applies only to rows with an empty content key.
 - Recovery never guesses ambiguous or corrupt rows and never deletes historical rows.
+- Score migration preserves raw legacy keys permanently, and recovery never rewrites the historical ID/name/group/constraint/chart-count tuple.
 - Preserve the current numeric-ID retention change as compatibility protection.
 - Keep Yoga tests excluded from CTest.
 
@@ -166,6 +167,7 @@ Cover:
 ```cpp
 expect(legacyV5MigratesToVersion6());
 expect(storedCourseKey() == canonicalKey);
+expect(storedLegacyCourseKey() == rawLegacyKey);
 expect(storedCourseLnMode() == -1); // unknowable legacy selection
 expect(loadBestCourseScore(newId, canonicalKey).has_value());
 expect(!loadBestCourseScore(sameId, differentNonemptyKey).has_value());
@@ -182,7 +184,7 @@ Expected: schema/key/lamp assertions fail.
 
 - [ ] **Step 3: Implement atomic v5-to-v6 migration**
 
-Add `ln_mode INTEGER NOT NULL DEFAULT -1`, convert parseable legacy course keys, create `(course_key, ln_mode, clear_type)` index, and set `user_version=6` only on commit. Leave malformed keys unchanged and rows intact.
+Add `legacy_course_key TEXT NOT NULL DEFAULT ''` and `ln_mode INTEGER NOT NULL DEFAULT -1`. Copy every noncanonical raw key to `legacy_course_key` before converting parseable keys, retain that evidence permanently, create `(course_key, ln_mode, clear_type)` index, and set `user_version=6` only on commit. Leave malformed keys unchanged and all rows intact.
 
 - [ ] **Step 4: Write exact new score identity**
 
@@ -199,7 +201,7 @@ Group lamps by key and LN mode; maximize across actual play options. Permit `cou
 
 - [ ] **Step 6: Implement conservative score association recovery**
 
-Parse legacy evidence, strongest-common match it against current definitions, rewrite the key and diagnostic `course_id` only when all matching definitions collapse to one content key, and return score evidence for replay repair.
+Parse the persistent raw legacy evidence, strongest-common match it against current definitions, and rewrite only `course_key` when all matches collapse to one content key. Preserve the historical ID/name/group/constraint/chart-count tuple and return owned, deduplicated tuple-to-key evidence for replay repair, including multiple keys when the tuple itself is ambiguous.
 
 - [ ] **Step 7: Run GREEN**
 
@@ -244,7 +246,7 @@ WHERE course_key = :key
 
 - [ ] **Step 5: Recover partial replays conservatively**
 
-Match canonical constraints, `total_charts`, and ordered recorded prefix against current definitions. Use same-legacy-tuple score evidence to disambiguate. Assign only one distinct content key; leave ambiguous rows blank.
+Match canonical constraints, `total_charts`, and ordered recorded prefix against current definitions. Use the exact immutable legacy score tuple evidence to disambiguate. Assign only one distinct content key; leave ambiguous rows blank.
 
 - [ ] **Step 6: Run GREEN**
 
