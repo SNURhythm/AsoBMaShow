@@ -980,6 +980,78 @@ struct TableChartItem {
   std::string urlDiff;
 };
 
+struct UnambiguousHashEvidence {
+  std::string value;
+  bool conflicting = false;
+
+  void observe(const std::string &candidate) {
+    const std::string normalized = normalizedHash(candidate);
+    if (normalized.empty()) {
+      return;
+    }
+    if (value.empty()) {
+      value = normalized;
+    } else if (value != normalized) {
+      conflicting = true;
+    }
+  }
+
+  void merge(const UnambiguousHashEvidence &other) {
+    observe(other.value);
+    conflicting = conflicting || other.conflicting;
+  }
+
+  [[nodiscard]] std::string resolved() const {
+    return conflicting ? std::string() : value;
+  }
+};
+
+struct ChartHashEvidence {
+  UnambiguousHashEvidence sha256;
+  UnambiguousHashEvidence md5;
+
+  void observeMatchingCandidate(
+      const course_identity::ChartIdentity &stored,
+      const course_identity::ChartIdentity &candidate) {
+    const course_identity::ChartIdentity normalizedStored{
+        .sha256 = normalizedHash(stored.sha256),
+        .md5 = normalizedHash(stored.md5),
+    };
+    const course_identity::ChartIdentity normalizedCandidate{
+        .sha256 = normalizedHash(candidate.sha256),
+        .md5 = normalizedHash(candidate.md5),
+    };
+    if (normalizedStored.sha256.empty() &&
+        !normalizedStored.md5.empty() &&
+        normalizedCandidate.md5 == normalizedStored.md5) {
+      sha256.observe(normalizedCandidate.sha256);
+    }
+    if (normalizedStored.md5.empty() &&
+        !normalizedStored.sha256.empty() &&
+        normalizedCandidate.sha256 == normalizedStored.sha256) {
+      md5.observe(normalizedCandidate.md5);
+    }
+  }
+
+  void enrichMissing(course_identity::ChartIdentity &stored) const {
+    if (stored.sha256.empty()) {
+      stored.sha256 = sha256.resolved();
+    }
+    if (stored.md5.empty()) {
+      stored.md5 = md5.resolved();
+    }
+  }
+
+  void merge(const ChartHashEvidence &other) {
+    sha256.merge(other.sha256);
+    md5.merge(other.md5);
+  }
+};
+
+course_identity::ChartIdentity chartIdentity(const TableChartItem &chart) {
+  return {.sha256 = chart.sha256, .md5 = chart.md5};
+}
+
 using RetainedDifficultyCourses =
     std::vector<course_identity::Definition>;
 
@@ -988,7 +1060,7 @@ courseChartIdentities(const std::vector<TableChartItem> &charts) {
   std::vector<course_identity::ChartIdentity> identities;
   identities.reserve(charts.size());
   for (const auto &chart : charts) {
-    identities.push_back({.sha256 = chart.sha256, .md5 = chart.md5});
+    identities.push_back(chartIdentity(chart));
   }
   return identities;
 }
@@ -1028,9 +1100,25 @@ TableChartItem readChartItem(const json &item,
 }
 
 using TableChartItemLookup = std::unordered_map<std::string, TableChartItem>;
+using ChartHashEvidenceLookup =
+    std::unordered_map<std::string, ChartHashEvidence>;
 
 std::string chartLookupKey(const std::string &kind, const std::string &hash) {
   return hash.empty() ? "" : kind + ":" + hash;
+}
+
+std::string missingCounterpartEvidenceKey(
+    const course_identity::ChartIdentity &stored,
+    const std::string &keyPrefix = "") {
+  const std::string sha256 = normalizedHash(stored.sha256);
+  const std::string md5 = normalizedHash(stored.md5);
+  if (sha256.empty() && !md5.empty()) {
+    return keyPrefix + chartLookupKey("md5", md5);
+  }
+  if (md5.empty() && !sha256.empty()) {
+    return keyPrefix + chartLookupKey("sha256", sha256);
+  }
+  return {};
 }
 
 void addToChartItemLookup(TableChartItemLookup &lookup,
@@ -1042,6 +1130,28 @@ void addToChartItemLookup(TableChartItemLookup &lookup,
   const std::string md5Key = chartLookupKey("md5", chart.md5);
   if (!md5Key.empty()) {
     lookup.emplace(md5Key, chart);
+  }
+}
+
+void addToChartHashEvidenceLookup(
+    ChartHashEvidenceLookup &lookup, const TableChartItem &chart,
+    const std::string &keyPrefix = "",
+    const std::unordered_set<std::string> *requestedKeys = nullptr) {
+  const course_identity::ChartIdentity candidate = chartIdentity(chart);
+  if (!chart.md5.empty()) {
+    const std::string key = keyPrefix + chartLookupKey("md5", chart.md5);
+    if (requestedKeys == nullptr || requestedKeys->contains(key)) {
+      lookup[key].observeMatchingCandidate(
+          course_identity::ChartIdentity{.md5 = chart.md5}, candidate);
+    }
+  }
+  if (!chart.sha256.empty()) {
+    const std::string key =
+        keyPrefix + chartLookupKey("sha256", chart.sha256);
+    if (requestedKeys == nullptr || requestedKeys->contains(key)) {
+      lookup[key].observeMatchingCandidate(
+          course_identity::ChartIdentity{.sha256 = chart.sha256}, candidate);
+    }
   }
 }
 
@@ -1065,17 +1175,33 @@ findChartItemInLookup(const TableChartItemLookup &lookup,
   return nullptr;
 }
 
+void fillUnambiguousCourseChartHash(
+    TableChartItem &courseChart,
+    const ChartHashEvidenceLookup &evidenceByHash) {
+  const std::string lookupKey =
+      missingCounterpartEvidenceKey(chartIdentity(courseChart));
+  if (lookupKey.empty()) {
+    return;
+  }
+  const auto evidence = evidenceByHash.find(lookupKey);
+  if (evidence == evidenceByHash.end()) {
+    return;
+  }
+  course_identity::ChartIdentity identity = chartIdentity(courseChart);
+  evidence->second.enrichMissing(identity);
+  if (courseChart.sha256.empty()) {
+    courseChart.sha256 = std::move(identity.sha256);
+  }
+  if (courseChart.md5.empty()) {
+    courseChart.md5 = std::move(identity.md5);
+  }
+}
+
 void fillMissingCourseChartMetadata(TableChartItem &courseChart,
                                     const TableChartItem &tableChart) {
   if ((courseChart.level.empty() || courseChart.level == "0") &&
       !tableChart.level.empty()) {
     courseChart.level = tableChart.level;
-  }
-  if (courseChart.md5.empty()) {
-    courseChart.md5 = tableChart.md5;
-  }
-  if (courseChart.sha256.empty()) {
-    courseChart.sha256 = tableChart.sha256;
   }
   if (courseChart.title.empty()) {
     courseChart.title = tableChart.title;
@@ -7021,8 +7147,11 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
   }
   TableChartItemLookup chartLookup;
   chartLookup.reserve(chartItems.size() * 2);
+  ChartHashEvidenceLookup chartHashEvidence;
+  chartHashEvidence.reserve(chartItems.size() * 2);
   for (const auto &chart : chartItems) {
     addToChartItemLookup(chartLookup, chart);
+    addToChartHashEvidenceLookup(chartHashEvidence, chart);
   }
 
   std::vector<const json *> courses;
@@ -7056,6 +7185,7 @@ bool ChartDBHelper::ImportDifficultyTable(sqlite3 *db,
       if (const auto *tableChart = findChartItemInLookup(chartLookup, chart)) {
         fillMissingCourseChartMetadata(chart, *tableChart);
       }
+      fillUnambiguousCourseChartHash(chart, chartHashEvidence);
       storedCourseCharts.push_back(std::move(chart));
     }
 
@@ -7683,32 +7813,12 @@ ChartDBHelper::SelectDifficultyCourseDefinitions(sqlite3 *db) {
     return {};
   }
 
-  std::string query =
+  const char *query =
       "SELECT dc.id, dc.course_key, dc.name, dc.group_name, "
-      "dc.constraint_json, dce.id, ";
-  if (chartMetaExists) {
-    query +=
-        "COALESCE(NULLIF(dce.sha256, ''), NULLIF(dte.sha256, ''), "
-        "NULLIF(cm.sha256, ''), ''), "
-        "COALESCE(NULLIF(dce.md5, ''), NULLIF(dte.md5, ''), "
-        "NULLIF(cm.md5, ''), '') ";
-  } else {
-    query +=
-        "COALESCE(NULLIF(dce.sha256, ''), NULLIF(dte.sha256, ''), ''), "
-        "COALESCE(NULLIF(dce.md5, ''), NULLIF(dte.md5, ''), '') ";
-  }
-  query +=
+      "dc.constraint_json, dce.id, dce.sha256, dce.md5, dc.table_id "
       "FROM difficulty_courses dc "
       "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
-  query += matchedDifficultyEntryIdSubquery();
-  if (chartMetaExists) {
-    query += " LEFT JOIN chart_meta cm ON cm.path = ";
-    query += matchedChartPathSubquery("dce", true);
-  }
-  query +=
-      " ORDER BY dc.table_id, dc.sort_order, dc.id, dce.sort_order, dce.id";
-
+      "ORDER BY dc.table_id, dc.sort_order, dc.id, dce.sort_order, dce.id";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "selecting difficulty course definitions",
@@ -7716,36 +7826,116 @@ ChartDBHelper::SelectDifficultyCourseDefinitions(sqlite3 *db) {
     return {};
   }
 
-  std::vector<course_identity::Definition> definitions;
-  course_identity::Definition current;
-  const auto retainCurrentCourse = [&]() {
-    if (current.courseId <= 0) {
-      return;
-    }
-    definitions.push_back(std::move(current));
-    current = {};
+  struct EntryEvidenceLocation {
+    std::size_t definitionIndex = 0;
+    std::size_t chartIndex = 0;
+    std::string tableEvidenceKey;
+    std::string localEvidenceKey;
   };
+  std::vector<course_identity::Definition> definitions;
+  std::vector<EntryEvidenceLocation> evidenceLocations;
+  std::unordered_set<std::string> requestedEvidenceKeys;
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
     const int courseId = columnInt(stmt.get(), 0);
-    if (courseId != current.courseId) {
-      retainCurrentCourse();
-      current.courseId = courseId;
-      current.courseKey = columnString(stmt.get(), 1);
-      current.name = columnString(stmt.get(), 2);
-      current.groupName = columnString(stmt.get(), 3);
-      current.constraintJson = columnString(stmt.get(), 4);
+    if (definitions.empty() || definitions.back().courseId != courseId) {
+      definitions.push_back({
+          .courseId = courseId,
+          .courseKey = columnString(stmt.get(), 1),
+          .name = columnString(stmt.get(), 2),
+          .groupName = columnString(stmt.get(), 3),
+          .constraintJson = columnString(stmt.get(), 4),
+      });
     }
     if (sqlite3_column_type(stmt.get(), 5) != SQLITE_NULL) {
-      current.charts.push_back(
+      auto &definition = definitions.back();
+      definition.charts.push_back(
           {.sha256 = normalizedHash(columnString(stmt.get(), 6)),
            .md5 = normalizedHash(columnString(stmt.get(), 7))});
+      const auto &stored = definition.charts.back();
+      const std::string tablePrefix =
+          std::to_string(columnInt(stmt.get(), 8)) + ":";
+      const std::string tableEvidenceKey =
+          missingCounterpartEvidenceKey(stored, tablePrefix);
+      const std::string localEvidenceKey =
+          missingCounterpartEvidenceKey(stored, "local:");
+      if (!tableEvidenceKey.empty()) {
+        requestedEvidenceKeys.insert(tableEvidenceKey);
+        requestedEvidenceKeys.insert(localEvidenceKey);
+        evidenceLocations.push_back({
+            .definitionIndex = definitions.size() - 1,
+            .chartIndex = definition.charts.size() - 1,
+            .tableEvidenceKey = tableEvidenceKey,
+            .localEvidenceKey = localEvidenceKey,
+        });
+      }
     }
   }
   if (rc != SQLITE_DONE) {
     return {};
   }
-  retainCurrentCourse();
+
+  ChartHashEvidenceLookup evidenceByHash;
+  if (!requestedEvidenceKeys.empty()) {
+    const char *tableEvidenceQuery =
+        "SELECT table_id, sha256, md5 FROM difficulty_table_entries "
+        "ORDER BY table_id, sort_order, id";
+    if (!prepareSqliteStatementLogged(db, tableEvidenceQuery, stmt,
+                                      "reading difficulty table hash evidence",
+                                      logSqlErrorText)) {
+      return {};
+    }
+    while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+      TableChartItem candidate{
+          .md5 = normalizedHash(columnString(stmt.get(), 2)),
+          .sha256 = normalizedHash(columnString(stmt.get(), 1)),
+      };
+      addToChartHashEvidenceLookup(
+          evidenceByHash, candidate,
+          std::to_string(columnInt(stmt.get(), 0)) + ":",
+          &requestedEvidenceKeys);
+    }
+    if (rc != SQLITE_DONE) {
+      return {};
+    }
+
+    if (chartMetaExists) {
+      const char *localEvidenceQuery =
+          "SELECT sha256, md5 FROM chart_meta ORDER BY path";
+      if (!prepareSqliteStatementLogged(db, localEvidenceQuery, stmt,
+                                        "reading local chart hash evidence",
+                                        logSqlErrorText)) {
+        return {};
+      }
+      while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        TableChartItem candidate{
+            .md5 = normalizedHash(columnString(stmt.get(), 1)),
+            .sha256 = normalizedHash(columnString(stmt.get(), 0)),
+        };
+        addToChartHashEvidenceLookup(evidenceByHash, candidate, "local:",
+                                     &requestedEvidenceKeys);
+      }
+      if (rc != SQLITE_DONE) {
+        return {};
+      }
+    }
+  }
+
+  for (const auto &location : evidenceLocations) {
+    ChartHashEvidence combined;
+    if (const auto tableEvidence =
+            evidenceByHash.find(location.tableEvidenceKey);
+        tableEvidence != evidenceByHash.end()) {
+      combined.merge(tableEvidence->second);
+    }
+    if (const auto localEvidence =
+            evidenceByHash.find(location.localEvidenceKey);
+        localEvidence != evidenceByHash.end()) {
+      combined.merge(localEvidence->second);
+    }
+    combined.enrichMissing(definitions[location.definitionIndex]
+                               .charts[location.chartIndex]);
+  }
   return definitions;
 }
 

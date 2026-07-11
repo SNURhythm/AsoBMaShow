@@ -1496,6 +1496,158 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
   }
 }
 
+void testDifficultyCourseImportRejectsAmbiguousCounterpartHashes() {
+  Database chartDatabase = openDatabase(":memory:");
+  expect(chartDatabase != nullptr,
+         "ambiguous difficulty table evidence database opens");
+  if (!chartDatabase) {
+    return;
+  }
+
+  constexpr std::string_view sharedMd5 = "33333333333333333333333333333333";
+  constexpr std::string_view sharedSha =
+      "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  constexpr std::string_view shaC =
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+  constexpr std::string_view shaD =
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+  constexpr std::string_view md5D = "44444444444444444444444444444444";
+  constexpr std::string_view md5E = "55555555555555555555555555555555";
+  const std::string header =
+      "{\"name\":\"Ambiguous Import\",\"symbol\":\"A\","
+      "\"data_url\":\"data.json\",\"course\":["
+      "{\"name\":\"MD5 A1\",\"constraint\":[],\"charts\":[{\"md5\":\"" +
+      std::string(sharedMd5) +
+      "\"}]},{\"name\":\"SHA A2\",\"constraint\":[],\"charts\":[{"
+      "\"sha256\":\"" +
+      std::string(sharedSha) + "\"}]}]}";
+  const std::string data =
+      "[{\"md5\":\"" + std::string(sharedMd5) +
+      "\",\"sha256\":\"" + std::string(shaC) +
+      "\"},{\"md5\":\"" + std::string(sharedMd5) +
+      "\",\"sha256\":\"" + std::string(shaD) +
+      "\"},{\"md5\":\"" + std::string(md5D) +
+      "\",\"sha256\":\"" + std::string(sharedSha) +
+      "\"},{\"md5\":\"" + std::string(md5E) +
+      "\",\"sha256\":\"" + std::string(sharedSha) + "\"}]";
+
+  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
+  expect(chartDb.ImportDifficultyTable(
+             chartDatabase.get(), header, data,
+             "https://example.test/ambiguous-import.json"),
+         "ambiguous counterpart table imports without inventing identity");
+
+  expect(queryString(chartDatabase.get(),
+                     "SELECT dce.md5 FROM difficulty_course_entries dce JOIN "
+                     "difficulty_courses dc ON dc.id=dce.course_id WHERE "
+                     "dc.name='MD5 A1'") == sharedMd5 &&
+             queryString(
+                 chartDatabase.get(),
+                 "SELECT dce.sha256 FROM difficulty_course_entries dce JOIN "
+                 "difficulty_courses dc ON dc.id=dce.course_id WHERE "
+                 "dc.name='MD5 A1'")
+                 .empty(),
+         "conflicting SHA candidates preserve only the directly stored MD5");
+  expect(queryString(chartDatabase.get(),
+                     "SELECT dce.sha256 FROM difficulty_course_entries dce "
+                     "JOIN difficulty_courses dc ON dc.id=dce.course_id WHERE "
+                     "dc.name='SHA A2'") == sharedSha &&
+             queryString(
+                 chartDatabase.get(),
+                 "SELECT dce.md5 FROM difficulty_course_entries dce JOIN "
+                 "difficulty_courses dc ON dc.id=dce.course_id WHERE "
+                 "dc.name='SHA A2'")
+                 .empty(),
+         "conflicting MD5 candidates preserve only the directly stored SHA");
+
+  expect(queryString(chartDatabase.get(),
+                     "SELECT course_key FROM difficulty_courses WHERE "
+                     "name='MD5 A1'") ==
+             course_identity::makeCourseKey(
+                 std::vector<course_identity::ChartIdentity>{
+                     {.md5 = std::string(sharedMd5)}},
+                 "[]") &&
+             queryString(chartDatabase.get(),
+                         "SELECT course_key FROM difficulty_courses WHERE "
+                         "name='SHA A2'") ==
+                 course_identity::makeCourseKey(
+                     std::vector<course_identity::ChartIdentity>{
+                         {.sha256 = std::string(sharedSha)}},
+                     "[]"),
+         "ambiguous table evidence keeps canonical directly stored keys");
+}
+
+void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
+  Database chartDatabase = openDatabase(":memory:");
+  expect(chartDatabase != nullptr,
+         "ambiguous local course definition database opens");
+  if (!chartDatabase) {
+    return;
+  }
+
+  constexpr std::string_view sharedMd5 = "66666666666666666666666666666666";
+  constexpr std::string_view sharedSha =
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+  constexpr std::string_view shaA =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  constexpr std::string_view shaB =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  constexpr std::string_view md5A = "77777777777777777777777777777777";
+  constexpr std::string_view md5B = "88888888888888888888888888888888";
+  const std::string header =
+      "{\"name\":\"Ambiguous Local\",\"symbol\":\"A\","
+      "\"data_url\":\"data.json\",\"course\":["
+      "{\"name\":\"Local MD5 A1\",\"constraint\":[],\"charts\":[{"
+      "\"md5\":\"" +
+      std::string(sharedMd5) +
+      "\"}]},{\"name\":\"Local SHA A2\",\"constraint\":[],\"charts\":[{"
+      "\"sha256\":\"" +
+      std::string(sharedSha) + "\"}]}]}";
+  const std::string data =
+      "[{\"md5\":\"" + std::string(sharedMd5) +
+      "\"},{\"sha256\":\"" + std::string(sharedSha) + "\"}]";
+
+  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
+  expect(chartDb.ImportDifficultyTable(
+             chartDatabase.get(), header, data,
+             "https://example.test/ambiguous-local.json"),
+         "direct-only local evidence fixture imports");
+  expect(chartDb.CreateChartMetaTable(chartDatabase.get()),
+         "ambiguous local chart metadata schema opens");
+  expect(execute(chartDatabase.get(),
+                 "INSERT INTO chart_meta(path,md5,sha256) VALUES "
+                 "('ambiguous-md5-a.bms','" +
+                     std::string(sharedMd5) + "','" + std::string(shaA) +
+                     "'),('ambiguous-md5-b.bms','" +
+                     std::string(sharedMd5) + "','" + std::string(shaB) +
+                     "'),('ambiguous-sha-a.bms','" + std::string(md5A) +
+                     "','" + std::string(sharedSha) +
+                     "'),('ambiguous-sha-b.bms','" + std::string(md5B) +
+                     "','" + std::string(sharedSha) + "')"),
+         "conflicting local hash counterparts are installed");
+
+  const auto definitions =
+      chartDb.SelectDifficultyCourseDefinitions(chartDatabase.get());
+  const auto md5Definition =
+      std::find_if(definitions.begin(), definitions.end(), [](const auto &item) {
+        return item.name == "Local MD5 A1";
+      });
+  const auto shaDefinition =
+      std::find_if(definitions.begin(), definitions.end(), [](const auto &item) {
+        return item.name == "Local SHA A2";
+      });
+  expect(md5Definition != definitions.end() &&
+             md5Definition->charts.size() == 1 &&
+             md5Definition->charts.front().md5 == sharedMd5 &&
+             md5Definition->charts.front().sha256.empty(),
+         "conflicting local SHA evidence does not enrich a stored MD5");
+  expect(shaDefinition != definitions.end() &&
+             shaDefinition->charts.size() == 1 &&
+             shaDefinition->charts.front().sha256 == sharedSha &&
+             shaDefinition->charts.front().md5.empty(),
+         "conflicting local MD5 evidence does not enrich a stored SHA");
+}
+
 void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
   Database chartDatabase = openDatabase(":memory:");
   expect(chartDatabase != nullptr, "legacy difficulty course database opens");
@@ -1529,10 +1681,17 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
              queryInt(chartDatabase.get(),
                       "SELECT id FROM difficulty_courses LIMIT 1") == 42,
          "course key migration does not delete legacy course rows");
-  expect(!queryString(chartDatabase.get(),
-                      "SELECT course_key FROM difficulty_courses WHERE id=42")
-              .empty(),
-         "course key migration backfills blank legacy keys");
+  const std::vector<course_identity::ChartIdentity> legacyDefinition = {
+      {.md5 = "11111111111111111111111111111111"},
+      {.md5 = "22222222222222222222222222222222"}};
+  expect(queryString(chartDatabase.get(),
+                     "SELECT course_key FROM difficulty_courses WHERE id=42") ==
+                 course_identity::makeCourseKey(legacyDefinition, "[]") &&
+             queryInt(chartDatabase.get(),
+                      "SELECT COUNT(*) FROM difficulty_course_entries WHERE "
+                      "course_id=42") == 2,
+         "course key migration preserves both entries and backfills their "
+         "exact ordered key");
   expect(queryInt(chartDatabase.get(),
                   "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND "
                   "name='idx_difficulty_courses_key'") == 1,
@@ -1567,6 +1726,8 @@ int main() {
   testPreparedScoreQueryGuardLivesThroughDependentQuery();
   testRealChartDbScoreQueryRetainsPreparedAttachmentGuard();
   testDifficultyCourseKeysTrackCanonicalDefinitions();
+  testDifficultyCourseImportRejectsAmbiguousCounterpartHashes();
+  testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence();
   testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows();
 
   if (failures != 0) {
