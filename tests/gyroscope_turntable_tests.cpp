@@ -149,6 +149,24 @@ void testCompassDriftNoiseFloorAndDisagreementFallback() {
       oneMovingEndpoint.observe(sample(3.0, 24.0, 0.25), 250000), 1.0F,
       "a moving endpoint across the exact 250 ms limit is accepted");
 
+  input::GyroscopeTurntable correctedYaw;
+  requireNoTransition(correctedYaw.observe(sample(0.0, 10.0, 0.0), 0),
+                      "corrected-yaw fixture baselines");
+  requireNoTransition(correctedYaw.observe(sample(1.5, 10.0, 0.1), 100000),
+                      "an agreeing corrected-yaw delta is accumulated");
+  requireTransition(correctedYaw.observe(sample(3.0, 10.0, 0.2), 200000), 1.0F,
+                    "corrected yaw is preferred over its smaller gyro delta");
+
+  input::GyroscopeTurntable outsideTolerance;
+  requireNoTransition(outsideTolerance.observe(sample(0.0, 10.0, 0.0), 0),
+                      "fusion-tolerance fixture baselines");
+  requireNoTransition(
+      outsideTolerance.observe(sample(1.751, 10.0, 0.1), 100000),
+      "yaw just outside tolerance falls back to one gyro degree");
+  requireNoTransition(
+      outsideTolerance.observe(sample(3.502, 10.0, 0.2), 200000),
+      "two fallback intervals remain below a three-degree step");
+
   input::GyroscopeTurntable disagreement;
   requireNoTransition(disagreement.observe(sample(0.0, 10.0, 0.0), 0),
                       "disagreement fixture baselines");
@@ -214,6 +232,26 @@ void testDiscontinuitiesAccuracyAndGenerationReseed() {
     requireTransition(turntable.observe(invalid, 200000), 0.0F,
                       "invalid or discontinuous motion releases output");
   }
+
+  auto requireDiscardedFaultSample =
+      [&](const input::GyroscopeMotionSample &fault, double baselineTimestamp,
+          std::string_view reason) {
+        auto turntable = active();
+        requireTransition(turntable.observe(fault, 200000), 0.0F, reason);
+        requireNoTransition(
+            turntable.observe(sample(100.0, 30.0, baselineTimestamp), 300000),
+            "the first valid sample after a fault is baseline-silent");
+        requireTransition(
+            turntable.observe(sample(103.0, 30.0, baselineTimestamp + 0.1),
+                              400000),
+            1.0F, "movement resumes only after the fresh baseline");
+      };
+  requireDiscardedFaultSample(sample(6.0, 30.0, 0.05), 0.2,
+                              "an older timestamp is discarded");
+  requireDiscardedFaultSample(sample(20.0, 30.0, 0.5), 0.6,
+                              "a sample after a long gap is discarded");
+  requireDiscardedFaultSample(sample(6.0, 1080.01, 0.2), 0.3,
+                              "an over-rate sample is discarded");
 
   {
     auto turntable = active();
