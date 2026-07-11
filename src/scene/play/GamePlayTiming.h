@@ -6,6 +6,24 @@
 
 namespace gameplay_timing {
 
+struct PracticeFrameTiming {
+  long long chartTimeMicros = 0;
+  bool sectionComplete = false;
+};
+
+inline PracticeFrameTiming practiceFrameTiming(long long rawSongTimeMicros,
+                                               long long audioOffsetMicros,
+                                               long long endMicros) {
+  const long long chartTimeMicros = rawSongTimeMicros + audioOffsetMicros;
+  if (chartTimeMicros < endMicros) {
+    return {.chartTimeMicros = chartTimeMicros};
+  }
+  return {
+      .chartTimeMicros = endMicros - 1,
+      .sectionComplete = true,
+  };
+}
+
 inline long long visualTimeMicros(long long songTimeMicros,
                                   long long visualOffsetMicros) {
   return songTimeMicros - visualOffsetMicros;

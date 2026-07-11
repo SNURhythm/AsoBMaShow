@@ -1644,8 +1644,16 @@ void GamePlayScene::update(float dt) {
   }
 
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  const long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
-  updatePracticeHud(rawSongTimeMicros);
+  long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
+  bool practiceSectionComplete = false;
+  if (options.practiceSession != nullptr) {
+    const auto practiceFrame = gameplay_timing::practiceFrameTiming(
+        rawSongTimeMicros, getAudioOffsetMicros(),
+        options.practiceSession->configuration().endMicros);
+    gameplayTimeMicros = practiceFrame.chartTimeMicros;
+    practiceSectionComplete = practiceFrame.sectionComplete;
+  }
+  updatePracticeHud(gameplayTimeMicros);
   touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
     processReplayKeySounds(rawSongTimeMicros);
@@ -1665,9 +1673,7 @@ void GamePlayScene::update(float dt) {
       scheduleResultTransition(0);
     }
   };
-  if (options.practiceSession != nullptr &&
-      rawSongTimeMicros >=
-          options.practiceSession->configuration().endMicros) {
+  if (practiceSectionComplete) {
     completePracticeSection();
     return;
   }
