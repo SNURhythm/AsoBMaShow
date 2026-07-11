@@ -1,4 +1,5 @@
 #include "practice/PracticeConfiguration.h"
+#include "scene/SceneEventRouting.h"
 
 #include <cassert>
 #include <vector>
@@ -29,4 +30,30 @@ int main() {
       timelines, 0, practice::TimelineDirection::Previous));
   assert(!practice::adjacentTimelineMicros(timelines, 5'000'000,
                                            practice::TimelineDirection::Next));
+
+  constexpr Uint32 previouslyForwarded[] = {
+      SDL_QUIT,
+      SDL_WINDOWEVENT,
+      SDL_KEYDOWN,
+      SDL_KEYUP,
+      SDL_TEXTINPUT,
+      SDL_TEXTEDITING,
+      SDL_TEXTEDITING_EXT,
+      SDL_MOUSEMOTION,
+      SDL_MOUSEBUTTONDOWN,
+      SDL_MOUSEBUTTONUP,
+      SDL_MOUSEWHEEL,
+      SDL_FINGERDOWN,
+      SDL_FINGERMOTION,
+      SDL_FINGERUP,
+  };
+  for (const Uint32 eventType : previouslyForwarded) {
+    assert(scene_event_routing::shouldDispatchToScene(eventType));
+  }
+  assert(scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERBUTTONDOWN));
+  assert(scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERBUTTONUP));
+  assert(!scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERAXISMOTION));
+  assert(
+      !scene_event_routing::shouldDispatchToScene(SDL_CONTROLLERSENSORUPDATE));
+  assert(!scene_event_routing::shouldDispatchToScene(SDL_JOYBUTTONDOWN));
 }
