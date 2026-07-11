@@ -599,6 +599,17 @@ public:
     gaugeHistory.clear();
   }
 
+  void setStartingGaugePercent(int percent) {
+    const float value = static_cast<float>(std::clamp(percent, 0, 100));
+    if (gaugeAutoShift) {
+      gaugeValues.fill(value);
+      gaugeType = bestAdmittedGaugeType();
+    } else {
+      gaugeValues[gaugeTypeIndex(gaugeType)] = value;
+    }
+    currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
+  }
+
   void restoreGaugeState(const GaugeStateSnapshot &snapshot) {
     gaugeAutoShift = snapshot.gaugeAutoShift;
     gaugeType = snapshot.gaugeType;

@@ -44,12 +44,6 @@ constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Mobile;
 constexpr auto kPlayStartInputPlatform = PlayStartInputPlatform::Desktop;
 #endif
 
-Judge makeEffectiveJudge(int rank, CourseJudgementConstraint constraint) {
-  Judge judge(rank);
-  judge.applyCourseJudgementConstraint(constraint);
-  return judge;
-}
-
 StartOptions resolvePlayStartInputDevices(StartOptions options,
                                           const InputProfile &profile,
                                           int keyMode) {
@@ -381,10 +375,9 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              bms_parser::Chart *chart, StartOptions options)
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
-      judge(makeEffectiveJudge(chart->Meta.Rank,
-                               options.courseConstraints.judgement)),
       options(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, chart->Meta.KeyMode)),
+      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta.Rank)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
   latePoorTiming = judge.timingWindows[Bad].second;
@@ -394,10 +387,9 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              std::unique_ptr<bms_parser::Chart> chart,
                              StartOptions options)
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
-      judge(makeEffectiveJudge(this->chart->Meta.Rank,
-                               options.courseConstraints.judgement)),
       options(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, this->chart->Meta.KeyMode)),
+      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta.Rank)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
   this->options.ownsChart = true;
@@ -774,6 +766,9 @@ void GamePlayScene::reset() {
           : (isReplayPlayback() ? options.replayData->gaugeAutoShift
                                 : options.gaugeAutoShift);
   state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile);
+  if (options.startingGaugePercent.has_value()) {
+    state->setStartingGaugePercent(*options.startingGaugePercent);
+  }
   if (options.courseSession != nullptr &&
       options.courseSession->carriedGauge.has_value()) {
     state->restoreGaugeState(*options.courseSession->carriedGauge);

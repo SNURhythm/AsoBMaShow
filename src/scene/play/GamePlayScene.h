@@ -127,8 +127,8 @@ private:
   long long coursePauseHoldRewindStartMicros = 0;
   float coursePauseHoldProgress = 0.0f;
   float coursePauseHoldRewindStartProgress = 0.0f;
-  Judge judge;
   StartOptions options;
+  Judge judge;
   const ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
   void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,

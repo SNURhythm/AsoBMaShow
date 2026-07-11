@@ -12,6 +12,17 @@ void collapseJudgementWindow(
   }
   targetIt->second = replacementIt->second;
 }
+
+long long scaleWindowEdge(long long value, int playbackRatePercent,
+                          int judgeScalePercent) {
+  constexpr long long denominator = 10000LL;
+  const long long numerator = value *
+                              static_cast<long long>(playbackRatePercent) *
+                              static_cast<long long>(judgeScalePercent);
+  const long long roundingOffset = denominator / 2;
+  return numerator >= 0 ? (numerator + roundingOffset) / denominator
+                        : (numerator - roundingOffset) / denominator;
+}
 } // namespace
 
 Judge::Judge(const int Rank) {
@@ -31,6 +42,16 @@ void Judge::applyCourseJudgementConstraint(
     return;
   case CourseJudgementConstraint::None:
     return;
+  }
+}
+
+void Judge::applyWindowScale(int playbackRatePercent, int judgeScalePercent) {
+  for (auto &[judgement, window] : timingWindows) {
+    (void)judgement;
+    window.first =
+        scaleWindowEdge(window.first, playbackRatePercent, judgeScalePercent);
+    window.second =
+        scaleWindowEdge(window.second, playbackRatePercent, judgeScalePercent);
   }
 }
 

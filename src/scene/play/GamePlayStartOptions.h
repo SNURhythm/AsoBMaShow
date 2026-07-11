@@ -93,6 +93,15 @@ struct StartOptions {
   std::optional<RulesetDescriptor> rulesetDescriptor;
 };
 
+[[nodiscard]] inline Judge
+makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
+  Judge judge(rank);
+  judge.applyCourseJudgementConstraint(options.courseConstraints.judgement);
+  judge.applyWindowScale(options.playback.percent,
+                         options.judgeWindowScalePercent);
+  return judge;
+}
+
 inline void applyReplayProvenanceToStartOptions(StartOptions &options,
                                                 const ReplayData &replay) {
   options.playback = replay.provenance.playback;

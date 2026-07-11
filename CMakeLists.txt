@@ -896,6 +896,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(practice_configuration_tests PRIVATE cxx_std_23)
 
+    add_executable(practice_rule_override_tests
+        tests/practice_rule_override_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(practice_rule_override_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_rule_override_tests PRIVATE cxx_std_23)
+
     add_executable(practice_session_tests
         tests/practice_session_tests.cpp
         src/ScoreProvenance.cpp
@@ -1233,6 +1244,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(practice_configuration_tests)
+    asobmashow_register_test(practice_rule_override_tests)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)

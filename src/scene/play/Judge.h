@@ -80,6 +80,7 @@ public:
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
   explicit Judge(int Rank);
   void applyCourseJudgementConstraint(CourseJudgementConstraint constraint);
+  void applyWindowScale(int playbackRatePercent, int judgeScalePercent);
   static bool checkRange(long long Diff, long long Early, long long Late);
   JudgeResult judgeNow(const bms_parser::Note *Note, long long InputTime);
   static int clampRank(int rank);
