@@ -108,7 +108,10 @@ public class AsoBMaShowActivity extends SDLActivity {
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
     private final Object nativeMusicLock = new Object();
     private final Object midiInputLock = new Object();
+    private final Object gyroscopeTurntableLock = new Object();
     private AsoBMaShowMidiManager midiInputManager;
+    private AsoBMaShowGyroscopeTurntableManager gyroscopeTurntableManager;
+    private boolean gyroscopeActivityResumed;
     private MediaPlayer nativeMusicPlayer;
     private MediaSession nativeMusicSession;
     private String nativeMusicTitle = "AsoBMaShow";
@@ -188,7 +191,26 @@ public class AsoBMaShowActivity extends SDLActivity {
     protected void onResume() {
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         super.onResume();
+        synchronized (gyroscopeTurntableLock) {
+            gyroscopeActivityResumed = true;
+            if (gyroscopeTurntableManager != null) {
+                gyroscopeTurntableManager.setActivityResumed(true);
+            }
+        }
+        nativeGyroscopeActivityResumed();
         finishManageStorageRequest();
+    }
+
+    @Override
+    protected void onPause() {
+        synchronized (gyroscopeTurntableLock) {
+            gyroscopeActivityResumed = false;
+            if (gyroscopeTurntableManager != null) {
+                gyroscopeTurntableManager.setActivityResumed(false);
+            }
+        }
+        nativeGyroscopeActivityPaused();
+        super.onPause();
     }
 
     @Override
@@ -200,6 +222,14 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        synchronized (gyroscopeTurntableLock) {
+            gyroscopeActivityResumed = false;
+            if (gyroscopeTurntableManager != null) {
+                gyroscopeTurntableManager.destroy();
+                gyroscopeTurntableManager = null;
+            }
+        }
+        nativeGyroscopeActivityDestroyed();
         DocumentHandoffOperation operation;
         synchronized (documentHandoffLock) {
             documentHandoffDestroyed = true;
@@ -238,6 +268,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
     private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
+    private static native void nativeGyroscopeActivityPaused();
+    private static native void nativeGyroscopeActivityResumed();
+    private static native void nativeGyroscopeActivityDestroyed();
 
     public String startMidiInput() {
         synchronized (midiInputLock) {
@@ -255,6 +288,37 @@ public class AsoBMaShowActivity extends SDLActivity {
                 midiInputManager = null;
             }
         }
+    }
+
+    public boolean isGyroscopeTurntableSupported() {
+        synchronized (gyroscopeTurntableLock) {
+            return gyroscopeTurntableManagerLocked().isSupported();
+        }
+    }
+
+    public void startGyroscopeTurntableSensors() {
+        synchronized (gyroscopeTurntableLock) {
+            gyroscopeTurntableManagerLocked().setNativeStarted(true);
+        }
+    }
+
+    public void stopGyroscopeTurntableSensors() {
+        synchronized (gyroscopeTurntableLock) {
+            if (gyroscopeTurntableManager != null) {
+                gyroscopeTurntableManager.setNativeStarted(false);
+            }
+        }
+    }
+
+    private AsoBMaShowGyroscopeTurntableManager gyroscopeTurntableManagerLocked() {
+        if (gyroscopeTurntableManager == null) {
+            gyroscopeTurntableManager =
+                    new AsoBMaShowGyroscopeTurntableManager(this);
+            if (gyroscopeActivityResumed) {
+                gyroscopeTurntableManager.setActivityResumed(true);
+            }
+        }
+        return gyroscopeTurntableManager;
     }
 
     public String getInternalFilesDirPath() {
