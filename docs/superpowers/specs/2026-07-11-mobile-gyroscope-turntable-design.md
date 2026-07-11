@@ -148,7 +148,9 @@ event is converted with `SensorManager.getRotationMatrixFromVector()` and
 The same rotation matrix projects the latest gyroscope vector onto world Z;
 the adapter normalizes its sign so clockwise is positive. The landscape lock
 and differences in a phone or tablet's natural orientation add only a constant
-offset, which the per-attempt baseline removes.
+offset, which the per-attempt baseline removes. A rotation-vector event is
+paired only with the newest gyroscope event at or before its timestamp and no
+more than 50 ms old; an unpaired event cannot advance the turntable state.
 
 `SensorEvent.timestamp` is converted from nanoseconds to the canonical
 monotonic seconds used by the shared state machine. Only
