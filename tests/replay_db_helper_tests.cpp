@@ -663,6 +663,78 @@ void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
               "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
               "replay_id,rest_micros_after_stage) VALUES (" +
                   std::to_string(malformedConstraintId) + ",0,1,0)");
+
+  const auto insertCourse = [&](int courseId, int completedCharts,
+                                int totalCharts) {
+    execOrAbort(
+        db.get(),
+        "INSERT INTO course_replays (course_id,course_name,course_group_name,"
+        "constraint_json,gauge_type,gauge_profile,gauge_auto_shift,ln_mode,"
+        "requested_play_option,assist_option,final_score,max_combo,"
+        "final_gauge,clear_type,completed_charts,total_charts) VALUES (" +
+            std::to_string(courseId) + ",'Corrupt','Group','{}',0,0,0,0,"
+            "'NORMAL','OFF',100,1,100.0,300," +
+            std::to_string(completedCharts) + "," +
+            std::to_string(totalCharts) + ")");
+    return static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  };
+  const auto linkStage = [&](int courseReplayId, int stageIndex,
+                             int replayId) {
+    execOrAbort(db.get(),
+                "INSERT INTO course_replay_stages (course_replay_id,"
+                "stage_index,replay_id,rest_micros_after_stage) VALUES (" +
+                    std::to_string(courseReplayId) + "," +
+                    std::to_string(stageIndex) + "," +
+                    std::to_string(replayId) + ",0)");
+  };
+
+  execOrAbort(
+      db.get(),
+      "INSERT INTO replays (chart_path,chart_md5,chart_sha256,chart_title,"
+      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
+      "final_gauge,clear_type,assist_option) VALUES "
+      "('BMS/malformed.bms','','not-a-sha','Malformed','Artist',0,0,0,0,0,"
+      "0.0,0,'OFF')");
+  const int malformedHashReplayId =
+      static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  linkStage(insertCourse(21, 1, 1), 0, malformedHashReplayId);
+
+  const int gapId = insertCourse(22, 2, 2);
+  linkStage(gapId, 0, 1);
+  linkStage(gapId, 2, 1);
+  linkStage(insertCourse(23, 1, 1), 0, 999999);
+
+  const int excessiveId = insertCourse(
+      24, replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
+      replay_summary_scan::kMaxCourseStagesPerCandidate + 1);
+  execOrAbort(
+      db.get(),
+      "WITH RECURSIVE stage(value) AS (VALUES(0) UNION ALL SELECT value+1 "
+      "FROM stage WHERE value<256) INSERT INTO course_replay_stages "
+      "(course_replay_id,stage_index,replay_id,rest_micros_after_stage) "
+      "SELECT " +
+          std::to_string(excessiveId) + ",value,1,0 FROM stage");
+
+  const int invalidCourseProvenanceId = insertCourse(25, 1, 1);
+  linkStage(invalidCourseProvenanceId, 0, 1);
+  execOrAbort(db.get(),
+              "UPDATE course_replays SET provenance_json='{' WHERE id=" +
+                  std::to_string(invalidCourseProvenanceId));
+
+  execOrAbort(
+      db.get(),
+      "INSERT INTO replays (chart_path,chart_md5,chart_sha256,chart_title,"
+      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
+      "final_gauge,clear_type,assist_option) VALUES ('BMS/bad-provenance.bms',"
+      "'', '" +
+          file_checksum::sha256("bad-provenance-stage") +
+          "','Bad provenance','Artist',0,0,0,0,0,0.0,0,'OFF')");
+  const int invalidStageProvenanceReplayId =
+      static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
+                            std::to_string(invalidStageProvenanceReplayId));
+  linkStage(insertCourse(26, 1, 1), 0,
+            invalidStageProvenanceReplayId);
   execOrAbort(db.get(), "PRAGMA user_version = 3");
 }
 
@@ -1690,6 +1762,26 @@ public:
   }
 };
 
+void testCourseKeyMigrationStageFailureRollsBack(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-v4-stage-failure" / "replay.db";
+  createVersion3CourseKeyFixture(path);
+  {
+    ScopedInterruptStatementAutoExtension interrupt(
+        "FROM course_replay_stages s LEFT JOIN replays r");
+    ReplayDBHelper helper(path);
+    assert(!helper.EnsureSchema());
+  }
+
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 3);
+  assert(!columnExists(db.get(), "course_replays", "course_key"));
+  assert(!indexExists(db.get(), "idx_course_replays_key_id"));
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 10);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") ==
+         267);
+}
+
 void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
   std::filesystem::create_directories(path.parent_path());
   std::string bytes(4096, '\0');
@@ -1829,6 +1921,9 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
   course.stages.push_back(
       {.replay = sampleReplay(root, "interrupted-stage-b")});
   finalizeCourseReplay(course);
+  const auto olderCourseReplayId = helper.SaveCourseReplay(course);
+  assert(olderCourseReplayId.has_value());
+  course.finalScore += 1;
   const auto courseReplayId = helper.SaveCourseReplay(course);
   assert(courseReplayId.has_value());
 
@@ -2242,8 +2337,12 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   assert(queryText(db.get(),
                    "SELECT course_key FROM course_replays WHERE course_id=20")
              .empty());
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 4);
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") == 4);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays") == 10);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM course_replays WHERE course_id<>18 "
+                  "AND course_key=''") == 9);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replay_stages") ==
+         267);
   const std::string firstSchema = schemaSnapshot(db.get());
   db.reset();
   assert(helper.EnsureSchema());
@@ -2264,7 +2363,9 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   assert(!columnExists(rollbackDb.get(), "course_replays", "course_key"));
   assert(!indexExists(rollbackDb.get(), "idx_course_replays_key_id"));
   assert(queryInt(rollbackDb.get(), "SELECT COUNT(*) FROM course_replays") ==
-         4);
+         10);
+  assert(queryInt(rollbackDb.get(),
+                  "SELECT COUNT(*) FROM course_replay_stages") == 267);
 }
 
 void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
@@ -2363,6 +2464,26 @@ void testCourseStagePreparationValidatesBeforeMetadataFallback(
   assert(prepared->replay.chartMeta.BmsPath == expected.BmsPath);
   assert(prepared->replay.chartMeta.SHA256.empty());
   assert(prepared->replay.chartMeta.MD5 == expected.MD5);
+
+  std::vector<bms_parser::ChartMeta> expectedPrefix = {
+      sampleReplay(root, "prefix-stage-0").chartMeta,
+      sampleReplay(root, "prefix-stage-1").chartMeta,
+  };
+  std::vector<CourseReplayStageData> sparseStages(2);
+  sparseStages[1].replay = sampleReplay(root, "prefix-stage-1");
+  assert(!course_replay::prepareCompletedPrefixForSave(
+              sparseStages, expectedPrefix, 2)
+              .has_value());
+
+  sparseStages[0].replay = sampleReplay(root, "prefix-stage-0");
+  const auto validPrefix = course_replay::prepareCompletedPrefixForSave(
+      sparseStages, expectedPrefix, 2);
+  assert(validPrefix.has_value());
+  assert(validPrefix->size() == 2);
+  assert((*validPrefix)[0].replay.chartMeta.SHA256 ==
+         expectedPrefix[0].SHA256);
+  assert((*validPrefix)[1].replay.chartMeta.SHA256 ==
+         expectedPrefix[1].SHA256);
 }
 
 void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
@@ -2420,6 +2541,44 @@ void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
     return value.id == nonemptyMismatch || value.id == blankOtherId ||
            value.id == corruptNewest;
   }));
+}
+
+void testCourseReplayLookupInspectsInt64MaxFirstPage(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-list-max-id" / "replay.db";
+  ReplayDBHelper helper(path);
+  CourseReplayData valid;
+  valid.courseId = 78;
+  valid.courseName = "Max ID boundary";
+  valid.constraintJson = "[]";
+  valid.provenance = sampleProvenance("max-id-boundary");
+  valid.stages.push_back(
+      {.replay = sampleReplay(root, "max-id-boundary-stage")});
+  finalizeCourseReplay(valid);
+  const auto validId = helper.SaveCourseReplay(valid);
+  assert(validId.has_value());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "INSERT INTO course_replays (id,course_id,course_key,course_name,"
+      "course_group_name,constraint_json,gauge_type,gauge_profile,"
+      "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+      "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+      "total_charts,ruleset_version,eligibility,provenance_json) VALUES (" +
+          std::to_string(std::numeric_limits<sqlite3_int64>::max()) + "," +
+          std::to_string(valid.courseId) + ",'" + valid.courseKey +
+          "','Corrupt max','Group','[]',0,0,0,0,'NORMAL','OFF',0,0,0.0,0,"
+          "1,1,1,0,'{')");
+  db.reset();
+
+  ScopedLogCapture logs;
+  const auto summaries = helper.ListCourseReplays(
+      {.courseKey = valid.courseKey, .legacyCourseId = valid.courseId}, 0);
+  assert(summaries.size() == 1 && summaries.front().id == *validId);
+  assert(logs.anyContains("inspected=2"));
+  assert(logs.anyContains("rejected=1"));
 }
 
 void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
@@ -2596,6 +2755,95 @@ void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
              .empty());
 }
 
+void testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-key-recovery-rollback" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const std::vector<course_identity::ChartIdentity> firstCharts = {
+      {.sha256 = file_checksum::sha256("rollback-stage-a")}};
+  const std::vector<course_identity::ChartIdentity> secondCharts = {
+      {.sha256 = file_checksum::sha256("rollback-stage-b")}};
+  const std::string firstKey =
+      course_identity::makeCourseKey(firstCharts, "[]");
+  const std::string secondKey =
+      course_identity::makeCourseKey(secondCharts, "[]");
+  const std::vector<course_identity::Definition> definitions = {
+      {.courseId = 801,
+       .courseKey = firstKey,
+       .constraintJson = "[]",
+       .charts = firstCharts},
+      {.courseId = 802,
+       .courseKey = secondKey,
+       .constraintJson = "[]",
+       .charts = secondCharts},
+  };
+
+  const auto save = [&](int legacyId, const std::string &name,
+                        const std::string &key) {
+    CourseReplayData replay;
+    replay.courseId = legacyId;
+    replay.courseKey = key;
+    replay.courseName = name;
+    replay.constraintJson = "[]";
+    replay.completedCharts = 1;
+    replay.totalCharts = 1;
+    replay.provenance = sampleProvenance("rollback-" + name);
+    replay.stages.push_back(
+        {.replay = sampleReplay(root, "rollback-stage-" + name)});
+    const auto id = helper.SaveCourseReplay(replay);
+    assert(id.has_value());
+    return *id;
+  };
+  const int firstId = save(801, "a", firstKey);
+  const int secondId = save(802, "b", secondKey);
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE course_replays SET course_key=''");
+  execOrAbort(
+      db.get(),
+      "CREATE TRIGGER fail_second_course_recovery "
+      "BEFORE UPDATE OF course_key ON course_replays WHEN OLD.id=" +
+          std::to_string(secondId) +
+          " BEGIN SELECT RAISE(ABORT, 'forced recovery failure'); END");
+  db.reset();
+
+  std::string error;
+  assert(!helper.RecoverCourseRecords(definitions, {}, error));
+  assert(!error.empty());
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(firstId))
+             .empty());
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(secondId))
+             .empty());
+  execOrAbort(db.get(), "DROP TRIGGER fail_second_course_recovery");
+
+  execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+  error.clear();
+  assert(helper.RecoverCourseRecords(db.get(), definitions, {}, error));
+  assert(error.empty());
+  assert(sqlite3_get_autocommit(db.get()) == 0);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(firstId)) == firstKey);
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(secondId)) == secondKey);
+  execOrAbort(db.get(), "UPDATE course_replays SET final_score=final_score "
+                        "WHERE id=" +
+                            std::to_string(firstId));
+  execOrAbort(db.get(), "ROLLBACK");
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(firstId))
+             .empty());
+  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                 std::to_string(secondId))
+             .empty());
+}
+
 void testExistingListLimits(const std::filesystem::path &root) {
   const auto path = root / "limits" / "replay.db";
   ReplayDBHelper helper(path);
@@ -2653,6 +2901,7 @@ int main() {
   testEquivalentReplayAliasesRetainValidatedSession(root);
   testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testReplayTransactionalVersionErrorsDoNotMutateSchema(root);
+  testCourseKeyMigrationStageFailureRollsBack(root);
   testCourseStageStepErrorsFailListsAndFullLoad(root);
   testReplayHydrationStepErrorsFailWholeLoad(root);
   testLargeWalReplayPreflightPreservesFamily(root);
@@ -2663,7 +2912,9 @@ int main() {
   testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(root);
   testCourseStagePreparationValidatesBeforeMetadataFallback(root);
   testCourseReplayLookupMergesKeyAndBlankLegacyRows(root);
+  testCourseReplayLookupInspectsInt64MaxFirstPage(root);
   testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(root);
+  testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(root);
   testExistingListLimits(root);
 
   std::filesystem::remove_all(root);

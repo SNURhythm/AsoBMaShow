@@ -95,6 +95,13 @@ public:
       std::span<const course_identity::Definition> definitions,
       std::span<const CourseScoreEvidence> scoreEvidence,
       std::string &errorMessage);
+  // Standalone-helper compatibility path for caller-owned transactions. The
+  // runtime singleton never accepts an external/raw connection.
+  bool RecoverCourseRecords(
+      sqlite3 *db,
+      std::span<const course_identity::Definition> definitions,
+      std::span<const CourseScoreEvidence> scoreEvidence,
+      std::string &errorMessage);
   std::optional<ReplayData>
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
 

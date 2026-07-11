@@ -8,7 +8,9 @@
 #include "scene/play/RhythmState.h"
 
 #include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 enum class ReplayEventAction {
@@ -107,6 +109,29 @@ prepareStageForSave(const CourseReplayStageData &recorded,
   }
   if (prepared.replay.chartMeta.Artist.empty()) {
     prepared.replay.chartMeta.Artist = expectedMeta.Artist;
+  }
+  return prepared;
+}
+
+inline std::optional<std::vector<CourseReplayStageData>>
+prepareCompletedPrefixForSave(
+    std::span<const CourseReplayStageData> recordedStages,
+    std::span<const bms_parser::ChartMeta> expectedMetas,
+    std::size_t completedCharts) {
+  if (completedCharts == 0 || completedCharts > recordedStages.size() ||
+      completedCharts > expectedMetas.size()) {
+    return std::nullopt;
+  }
+
+  std::vector<CourseReplayStageData> prepared;
+  prepared.reserve(completedCharts);
+  for (std::size_t index = 0; index < completedCharts; ++index) {
+    auto stage = prepareStageForSave(recordedStages[index],
+                                     expectedMetas[index]);
+    if (!stage.has_value()) {
+      return std::nullopt;
+    }
+    prepared.push_back(std::move(*stage));
   }
   return prepared;
 }

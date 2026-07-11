@@ -208,11 +208,32 @@ std::optional<CourseReplayData>
 courseReplayDataForSession(const CoursePlaySession &session,
                            const RhythmState &resultState,
                            const ScoreProvenance &provenance) {
+  const std::size_t completedCharts = session.completedResults.size();
+  const std::size_t totalCharts = session.entries.size();
+  if (completedCharts == 0 || completedCharts > totalCharts ||
+      totalCharts > static_cast<std::size_t>(
+                        replay_summary_scan::kMaxCourseStagesPerCandidate)) {
+    return std::nullopt;
+  }
+  std::vector<bms_parser::ChartMeta> expectedMetas;
+  expectedMetas.reserve(completedCharts);
+  for (std::size_t index = 0; index < completedCharts; ++index) {
+    expectedMetas.push_back(session.entries[index].meta);
+  }
+  auto preparedStages = course_replay::prepareCompletedPrefixForSave(
+      session.replayStages, expectedMetas, completedCharts);
+  if (!preparedStages.has_value()) {
+    return std::nullopt;
+  }
+
   CourseReplayData replay;
   replay.courseId = session.courseId;
   replay.courseKey = session.courseKey;
   if (replay.courseKey.empty()) {
     replay.courseKey = course_identity::makeCourseKey(session);
+  }
+  if (replay.courseKey.empty()) {
+    return std::nullopt;
   }
   replay.courseName = session.courseName;
   replay.courseGroupName = session.courseGroupName;
@@ -227,17 +248,8 @@ courseReplayDataForSession(const CoursePlaySession &session,
   replay.maxCombo = session.maxCombo;
   replay.finalGauge = resultState.currentGauge;
   replay.clearType = resultState.getClearTypeRank();
-  replay.completedCharts =
-      static_cast<int>(session.completedResults.size());
-  replay.totalCharts = static_cast<int>(session.entries.size());
-  if (replay.courseKey.empty() || replay.completedCharts <= 0 ||
-      replay.completedCharts > replay.totalCharts ||
-      replay.totalCharts >
-          replay_summary_scan::kMaxCourseStagesPerCandidate ||
-      session.replayStages.size() <
-          static_cast<std::size_t>(replay.completedCharts)) {
-    return std::nullopt;
-  }
+  replay.completedCharts = static_cast<int>(completedCharts);
+  replay.totalCharts = static_cast<int>(totalCharts);
   replay.provenance = provenance;
   const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
   if (result_presentation::isFullComboCourseResult(
@@ -246,16 +258,7 @@ courseReplayDataForSession(const CoursePlaySession &session,
     replay.clearType = kClearTypeFullComboRank;
   }
 
-  replay.stages.reserve(static_cast<std::size_t>(replay.completedCharts));
-  for (std::size_t i = 0;
-       i < static_cast<std::size_t>(replay.completedCharts); ++i) {
-    auto stage = course_replay::prepareStageForSave(session.replayStages[i],
-                                                    session.entries[i].meta);
-    if (!stage.has_value()) {
-      return std::nullopt;
-    }
-    replay.stages.push_back(std::move(*stage));
-  }
+  replay.stages = std::move(*preparedStages);
   return replay;
 }
 } // namespace
@@ -418,7 +421,7 @@ void ResultScene::saveReplay() {
   if (isCourseFinalResult()) {
     auto session = courseOptions.session;
     if (session == nullptr || session->courseReplayPlayback ||
-        session->courseReplaySaved || session->replayStages.empty()) {
+        session->courseReplaySaved) {
       return;
     }
 
