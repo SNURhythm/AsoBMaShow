@@ -697,6 +697,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/ClubBeat.cpp
         src/audio/Jukebox.cpp
         src/audio/decoder.cpp
         src/bms_parser.cpp
