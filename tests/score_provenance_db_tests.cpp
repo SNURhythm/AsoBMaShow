@@ -1,6 +1,7 @@
 #include "../src/ChartDBHelper.h"
 #include "../src/CourseIdentity.h"
 #include "../src/CoursePlaySession.h"
+#include "../src/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/ScoreProvenance.h"
 #include "../src/SqliteRAII.h"
@@ -35,6 +36,10 @@ namespace {
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
+constexpr const char *kAssistedProvenanceJson =
+    "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
+    "\"playback\":{\"percent\":75,\"mode\":\"pitch-shift\"},"
+    "\"eligibility\":\"modified\"}";
 
 constexpr std::string_view kShaA =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -537,6 +542,89 @@ void createVersion5CourseMigrationFixture(const std::filesystem::path &path) {
   assert(!converted.empty());
 }
 
+void createVersion6StaleScoreSummaryFixture(const std::filesystem::path &path) {
+  createVersion5ScoreFixture(path);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DELETE FROM scores");
+  execOrAbort(
+      db.get(),
+      "ALTER TABLE course_scores ADD COLUMN legacy_course_key TEXT NOT NULL "
+      "DEFAULT ''");
+  execOrAbort(db.get(),
+              "ALTER TABLE course_scores ADD COLUMN ln_mode INTEGER NOT NULL "
+              "DEFAULT -1");
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_course_scores_key_ln_mode_clear_type ON "
+              "course_scores(course_key, ln_mode, clear_type)");
+  const char *scoreIndexes[] = {
+      "CREATE INDEX idx_scores_chart_sha256 ON scores(chart_sha256)",
+      "CREATE INDEX idx_scores_chart_md5 ON scores(chart_md5)",
+      "CREATE INDEX idx_scores_chart_path ON scores(chart_path)",
+      "CREATE INDEX idx_scores_chart_sha256_clear_type ON "
+      "scores(chart_sha256, clear_type)",
+      "CREATE INDEX idx_scores_chart_md5_clear_type ON "
+      "scores(chart_md5, clear_type)",
+      "CREATE INDEX idx_scores_chart_path_clear_type ON "
+      "scores(chart_path, clear_type)",
+      "CREATE INDEX idx_scores_chart_sha256_ln_mode ON "
+      "scores(chart_sha256, ln_mode)",
+      "CREATE INDEX idx_scores_chart_md5_ln_mode ON "
+      "scores(chart_md5, ln_mode)",
+      "CREATE INDEX idx_scores_chart_path_ln_mode ON "
+      "scores(chart_path, ln_mode)",
+      "CREATE INDEX idx_scores_identity_ln_mode ON "
+      "scores(chart_sha256, chart_md5, chart_path, ln_mode)",
+      "CREATE INDEX idx_scores_created_at ON scores(created_at)",
+      "CREATE INDEX idx_course_scores_course_id ON course_scores(course_id)",
+      "CREATE INDEX idx_course_scores_course_id_clear_type ON "
+      "course_scores(course_id, clear_type)",
+      "CREATE INDEX idx_course_scores_course_key ON course_scores(course_key)",
+      "CREATE INDEX idx_course_scores_clear_type ON course_scores(clear_type)",
+      "CREATE INDEX idx_course_scores_created_at ON course_scores(created_at)",
+  };
+  for (const char *indexSql : scoreIndexes) {
+    execOrAbort(db.get(), indexSql);
+  }
+
+  const std::string insertScores =
+      "INSERT INTO scores (chart_path, chart_md5, chart_sha256, ln_mode, "
+      "chart_title, chart_artist, score, max_score, max_combo, combo_break, "
+      "pgreat, great, good, bad, poor, kpoor, fast, slow, final_gauge, "
+      "clear_type, ruleset_version, eligibility, provenance_json, created_at) "
+      "VALUES "
+      "('assisted.bms','assisted-md5','" +
+      std::string(kShaA) +
+      "',2,'Assisted','Artist',180,200,100,0,90,0,0,0,0,0,0,0,100," +
+      std::to_string(kClearTypeHardClearRank) + ",0,1,'" +
+      kAssistedProvenanceJson +
+      "','2026-03-01 00:00:00'),"
+      "('neutral.bms','neutral-md5','" +
+      std::string(kShaB) +
+      "',2,'Neutral','Artist',190,200,100,0,95,0,0,0,0,0,0,0,100," +
+      std::to_string(kClearTypeFullComboRank) + ",0,2,'" +
+      kLegacyProvenanceJson + "','2026-03-02 00:00:00')";
+  execOrAbort(db.get(), insertScores);
+
+  const auto summaryError =
+      score_cache_queries::ensureScoreSummarySchema(db.get());
+  assert(!summaryError.has_value());
+  execOrAbort(
+      db.get(),
+      "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, rank) "
+      "SELECT lower(chart_sha256), ln_mode, " +
+          std::to_string(kClearTypeFullComboRank) + " FROM scores");
+  execOrAbort(
+      db.get(),
+      "INSERT INTO score_sha256_best_score_cache(chart_sha256, ln_mode, "
+      "score_id, score, max_score, max_combo, combo_break, final_gauge, "
+      "clear_type, clear_rank, score_rank, created_at) SELECT "
+      "lower(chart_sha256), ln_mode, id, score, max_score, max_combo, "
+      "combo_break, final_gauge, clear_type, " +
+          std::to_string(kClearTypeFullComboRank) +
+          ", 'AA', created_at FROM scores");
+  execOrAbort(db.get(), "PRAGMA user_version = 6");
+}
+
 std::string chartOutcome(sqlite3 *db) {
   return queryText(
       db,
@@ -628,7 +716,7 @@ void testVersion4MigrationPreservesOutcomesAndRows(
   assert(helper.EnsureSchema());
 
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 6);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") == 7);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   assert(chartOutcome(migrated.get()) == chartBefore);
@@ -676,7 +764,7 @@ void testVersion5MigrationPreservesRawCourseEvidence(
   ScoreDBHelper helper(path);
   assert(helper.EnsureSchema());
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 6);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") == 7);
   assert(columnExists(migrated.get(), "course_scores", "legacy_course_key"));
   assert(columnExists(migrated.get(), "course_scores", "ln_mode"));
   assert(indexExists(migrated.get(),
@@ -734,12 +822,12 @@ void testVersion6MigrationIsSavepointSafeAndAtomic(
     ScoreDBHelper helper(commitPath);
     assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-commit"),
                               sampleState(1, 1)));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
     execOrAbort(db.get(), "COMMIT");
   }
   auto committed = openDatabase(commitPath);
-  assert(queryInt(committed.get(), "PRAGMA user_version") == 6);
+  assert(queryInt(committed.get(), "PRAGMA user_version") == 7);
   assert(columnExists(committed.get(), "course_scores", "ln_mode"));
   committed.reset();
 
@@ -751,7 +839,7 @@ void testVersion6MigrationIsSavepointSafeAndAtomic(
     ScoreDBHelper helper(rollbackPath);
     assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-rollback"),
                               sampleState(1, 1)));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
     execOrAbort(db.get(), "ROLLBACK");
   }
@@ -783,6 +871,96 @@ void testVersion6MigrationIsSavepointSafeAndAtomic(
   assert(queryText(failed.get(),
                    "SELECT course_key FROM course_scores WHERE course_id=17")
              .starts_with("course:Legacy Course\n"));
+}
+
+void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
+    const std::filesystem::path &root) {
+  const auto path = root / "migration-v7-summary-semantics" / "score.db";
+  createVersion6StaleScoreSummaryFixture(path);
+  {
+    auto stale = openDatabase(path);
+    assert(queryInt(stale.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(stale.get(),
+                    "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                    "chart_sha256='" +
+                        std::string(kShaA) + "'") == kClearTypeFullComboRank);
+    assert(queryInt(stale.get(),
+                    "SELECT clear_rank FROM score_sha256_best_score_cache "
+                    "WHERE chart_sha256='" +
+                        std::string(kShaA) + "'") == kClearTypeFullComboRank);
+  }
+
+  {
+    ScoreDBHelper helper(path);
+    assert(helper.EnsureSchema());
+  }
+
+  std::string schemaAfterMigration;
+  {
+    auto migrated = openDatabase(path);
+    assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 2);
+    assert(queryInt(migrated.get(),
+                    "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                    "chart_sha256='" +
+                        std::string(kShaA) + "'") ==
+           kClearTypeAssistedEasyClearRank);
+    assert(queryInt(migrated.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(migrated.get(),
+                    "SELECT clear_rank FROM score_sha256_best_score_cache "
+                    "WHERE chart_sha256='" +
+                        std::string(kShaA) + "'") ==
+           kClearTypeAssistedEasyClearRank);
+    assert(queryInt(migrated.get(),
+                    "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                    "chart_sha256='" +
+                        std::string(kShaB) + "'") == kClearTypeFullComboRank);
+    assert(queryInt(migrated.get(),
+                    "SELECT clear_rank FROM score_sha256_best_score_cache "
+                    "WHERE chart_sha256='" +
+                        std::string(kShaB) + "'") == kClearTypeFullComboRank);
+    assert(queryInt(migrated.get(),
+                    "SELECT clear_type FROM scores WHERE chart_sha256='" +
+                        std::string(kShaA) + "'") == kClearTypeHardClearRank);
+    assert(queryInt(migrated.get(),
+                    "SELECT clear_type FROM scores WHERE chart_sha256='" +
+                        std::string(kShaB) + "'") == kClearTypeFullComboRank);
+    schemaAfterMigration = schemaSnapshot(migrated.get());
+  }
+
+  {
+    ScoreDBHelper reopened(path);
+    assert(reopened.EnsureSchema());
+  }
+  auto idempotent = openDatabase(path);
+  assert(queryInt(idempotent.get(), "PRAGMA user_version") == 7);
+  assert(schemaSnapshot(idempotent.get()) == schemaAfterMigration);
+  assert(queryInt(idempotent.get(),
+                  "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                  "chart_sha256='" +
+                      std::string(kShaA) + "'") ==
+         kClearTypeAssistedEasyClearRank);
+
+  const auto failurePath =
+      root / "migration-v7-summary-semantics-failure" / "score.db";
+  createVersion6StaleScoreSummaryFixture(failurePath);
+  std::string schemaBeforeFailure;
+  {
+    auto db = openDatabase(failurePath);
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_v7_summary_rebuild BEFORE DELETE ON "
+                "score_sha256_clear_rank_cache BEGIN SELECT RAISE(ABORT, "
+                "'injected'); END");
+    schemaBeforeFailure = schemaSnapshot(db.get());
+  }
+  ScoreDBHelper failing(failurePath);
+  assert(!failing.EnsureSchema());
+  auto failed = openDatabase(failurePath);
+  assert(queryInt(failed.get(), "PRAGMA user_version") == 6);
+  assert(schemaSnapshot(failed.get()) == schemaBeforeFailure);
+  assert(queryInt(failed.get(),
+                  "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                  "chart_sha256='" +
+                      std::string(kShaA) + "'") == kClearTypeFullComboRank);
 }
 
 void testCourseWritesUseAuthoritativeKeysAndExactMode(
@@ -1154,13 +1332,13 @@ void testIgnoredRecoveryUpdateDoesNotAdvanceRevision(
          course_identity::makeCourseKey(md5Charts, "[]"));
 }
 
-void testExactFutureVersionSevenRejectsScoreRecovery(
+void testExactFutureVersionEightRejectsScoreRecovery(
     const std::filesystem::path &root) {
-  const auto path = root / "future-v7-recovery" / "score.db";
+  const auto path = root / "future-v8-recovery" / "score.db";
   createFutureSentinelDatabase(path);
   {
     auto db = openDatabase(path);
-    execOrAbort(db.get(), "PRAGMA user_version=7");
+    execOrAbort(db.get(), "PRAGMA user_version=8");
   }
   const auto before = rawDatabaseFamilySnapshot(path);
   ScoreDBHelper helper(path);
@@ -1170,7 +1348,7 @@ void testExactFutureVersionSevenRejectsScoreRecovery(
   session.courseKey = course_identity::makeCourseKey(
       std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaA)}},
       "[]");
-  session.entries.push_back({.meta = sampleMeta(root, "future-v7")});
+  session.entries.push_back({.meta = sampleMeta(root, "future-v8")});
   assert(!helper.SaveCourseScore(session, sampleState(1, 0), 1, 1));
   const CourseScoreRecoveryResult result = helper.RecoverCourseRecords({});
   assert(!result.ok());
@@ -1224,6 +1402,48 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(retargetable.GetRevision() > revisionBefore);
 }
 
+void testAssistedPlaybackCapsScoreAndCourseClearRanks(
+    const std::filesystem::path &root) {
+  const auto path = root / "assisted-clear-cap" / "score.db";
+  ScoreDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto meta = sampleMeta(root, "assisted-clear-cap");
+  RhythmState state = sampleState(meta.TotalNotes, 0);
+  state.comboBreak = 0;
+  state.maxCombo = meta.TotalNotes;
+  state.currentGauge = 100.0f;
+  state.setAssistClearMark(true);
+
+  ScoreProvenance provenance = sampleProvenance("assisted-clear-cap");
+  provenance.playback = {.percent = 75,
+                         .mode = audio::PlaybackMode::PitchShift};
+  provenance.eligibility = ScoreEligibility::Modified;
+  assert(helper.SaveScore(meta, state, provenance));
+
+  CoursePlaySession session;
+  session.courseId = 91;
+  session.courseName = "Assisted Course";
+  session.constraintJson = "{}";
+  session.longNoteMode = meta.LnMode;
+  session.entries.push_back({.meta = meta});
+  session.courseKey = course_identity::makeCourseKey(session);
+  assert(helper.SaveCourseScore(session, state, 1, 1, provenance));
+
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT clear_type FROM scores") ==
+         kClearTypeAssistedEasyClearRank);
+  assert(queryInt(db.get(), "SELECT clear_type FROM course_scores") ==
+         kClearTypeAssistedEasyClearRank);
+  db.reset();
+
+  const ScoreClearRankCache cache = helper.LoadBestClearRanks();
+  assert(cache.bestRankFor(meta) == kClearTypeAssistedEasyClearRank);
+  assert(cache.bestCourseRankFor(session.courseKey, session.courseId,
+                                 meta.LnMode) ==
+         kClearTypeAssistedEasyClearRank);
+}
+
 void testFutureVersionRejectsWithoutSchemaMutation(
     const std::filesystem::path &root) {
   const auto path = root / "future" / "score.db";
@@ -1263,7 +1483,7 @@ void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
 
   assert(helper.InsertScore(db.get(), meta, state));
   assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 7);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
 }
@@ -1376,10 +1596,10 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
     execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   }
 
@@ -1388,7 +1608,7 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
     execOrAbort(db.get(), "ROLLBACK");
     assert(queryInt(db.get(), "PRAGMA user_version") == 4);
@@ -1401,10 +1621,10 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
     execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   }
 
@@ -1413,7 +1633,7 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
     execOrAbort(db.get(), "ROLLBACK");
     assert(queryInt(db.get(), "PRAGMA user_version") == 4);
@@ -1718,7 +1938,7 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const auto path = root / "required-pragma-error" / "score.db";
     auto db = openDatabase(path);
     execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
-    execOrAbort(db.get(), "PRAGMA user_version=6");
+    execOrAbort(db.get(), "PRAGMA user_version=7");
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
     ScopedDenyJournalModeAutoExtension denyJournalMode;
@@ -1876,14 +2096,16 @@ int main() {
   testVersion4MigrationPreservesOutcomesAndRows(root);
   testVersion5MigrationPreservesRawCourseEvidence(root);
   testVersion6MigrationIsSavepointSafeAndAtomic(root);
+  testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(root);
   testCourseWritesUseAuthoritativeKeysAndExactMode(root);
   testCourseReadsAreKeyAndModeAuthoritative(root);
   testCourseLampCacheSeparatesKeysIdsAndModes(root);
   testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(root);
   testCourseRecoveryFailsClosedOnAmbiguityAndFailure(root);
   testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
-  testExactFutureVersionSevenRejectsScoreRecovery(root);
+  testExactFutureVersionEightRejectsScoreRecovery(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
+  testAssistedPlaybackCapsScoreAndCourseClearRanks(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
   testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(root);
   testFutureVersionRejectsDirectScoreWrites(root);

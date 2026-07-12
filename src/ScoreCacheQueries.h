@@ -30,13 +30,28 @@ inline std::string bestScoreSummaryTable(std::string_view schema = {}) {
   return qualifiedName(schema, "score_sha256_best_score_cache");
 }
 
-inline std::string fullComboClearRankExpr(std::string_view alias) {
+inline std::string playbackPercentExpr(std::string_view alias) {
   const std::string prefix(alias);
-  return "(CASE WHEN " + prefix + ".combo_break = 0 AND " + prefix +
-         ".clear_type >= " +
-         std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
-         std::to_string(kClearTypeFullComboRank) + " ELSE " + prefix +
-         ".clear_type END)";
+  return "(CASE WHEN json_valid(" + prefix +
+         ".provenance_json) THEN COALESCE(json_extract(" + prefix +
+         ".provenance_json, '$.playback.percent'), 100) ELSE 0 END)";
+}
+
+inline std::string
+fullComboClearRankExpr(std::string_view alias,
+                       std::string playbackPercentExpression = {}) {
+  const std::string prefix(alias);
+  if (playbackPercentExpression.empty()) {
+    playbackPercentExpression = playbackPercentExpr(alias);
+  }
+  return "(CASE WHEN " + prefix +
+         ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
+         " AND " + playbackPercentExpression + " <> 100 THEN " +
+         std::to_string(kClearTypeAssistedEasyClearRank) + " WHEN " + prefix +
+         ".combo_break = 0 AND " + prefix +
+         ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
+         " THEN " + std::to_string(kClearTypeFullComboRank) + " ELSE " +
+         prefix + ".clear_type END)";
 }
 
 inline std::string scoreRankLabelExpr(std::string_view alias) {
@@ -134,12 +149,32 @@ inline std::string bestScoreUpsertSql() {
          "excluded.score_id > score_sha256_best_score_cache.score_id);";
 }
 
-inline std::string scoreIdentityCte(std::string_view schema) {
+inline std::string scoreIdentityCte(std::string_view schema,
+                                    bool hasProvenance) {
   const std::string scores = qualifiedName(schema, "scores");
+  const std::string playbackPercent =
+      hasProvenance ? playbackPercentExpr("s") : "100";
   return "SELECT lower(trim(chart_sha256)) AS chart_sha256, ln_mode, "
          "id AS score_id, score, max_score, max_combo, combo_break, "
-         "final_gauge, clear_type, created_at FROM " +
-         scores + " WHERE " + keyHasValueExpr("chart_sha256");
+         "final_gauge, clear_type, " +
+         playbackPercent + " AS playback_percent, created_at FROM " + scores +
+         " s WHERE " + keyHasValueExpr("chart_sha256");
+}
+
+inline bool scoreTableHasProvenance(sqlite3 *db, std::string_view schema) {
+  const std::string query =
+      "PRAGMA " + std::string(schema.empty() ? "" : std::string(schema) + ".") +
+      "table_info(scores)";
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(db, query, stmt) != SQLITE_OK) {
+    return false;
+  }
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    if (sqliteColumnString(stmt.get(), 1) == "provenance_json") {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace detail
@@ -352,7 +387,8 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
   profile_database_activity::WriteGuard operation;
   const std::string clearTable = detail::clearRankSummaryTable(schema);
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
-  const std::string identityCte = detail::scoreIdentityCte(schema);
+  const std::string identityCte = detail::scoreIdentityCte(
+      schema, detail::scoreTableHasProvenance(db, schema));
 
   const std::string deleteClear = "DELETE FROM " + clearTable;
   if (const auto error = executeSqlite(db, deleteClear.c_str())) {
@@ -366,14 +402,15 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
   const std::string insertClear =
       "WITH identities AS (" + identityCte + ") INSERT INTO " + clearTable +
       "(chart_sha256, ln_mode, rank) SELECT i.chart_sha256, i.ln_mode, MAX(" +
-      detail::fullComboClearRankExpr("i") +
+      detail::fullComboClearRankExpr("i", "i.playback_percent") +
       ") FROM identities i GROUP BY i.chart_sha256, i.ln_mode";
   if (const auto error = executeSqlite(db, insertClear.c_str())) {
     return error;
   }
 
   const std::string insertBest =
-      "WITH identities AS (" + identityCte + "), ranked AS ("
+      "WITH identities AS (" + identityCte +
+      "), ranked AS ("
       "SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.chart_sha256, i.ln_mode "
       "ORDER BY i.score DESC, i.clear_type DESC, i.created_at DESC, "
       "i.score_id DESC) AS row_number FROM identities i"
@@ -384,7 +421,7 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
       "created_at) SELECT r.chart_sha256, r.ln_mode, r.score_id, r.score, "
       "r.max_score, r.max_combo, r.combo_break, r.final_gauge, "
       "r.clear_type, " +
-      detail::fullComboClearRankExpr("r") + ", " +
+      detail::fullComboClearRankExpr("r", "r.playback_percent") + ", " +
       detail::scoreRankLabelExpr("r") +
       ", r.created_at FROM ranked r WHERE r.row_number = 1";
   return executeSqlite(db, insertBest.c_str());

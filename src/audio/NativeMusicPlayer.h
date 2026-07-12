@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PlaybackRate.h"
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -55,6 +57,7 @@ bool Play(std::string &errorMessage);
 bool Pause(std::string &errorMessage);
 bool Stop(std::string &errorMessage);
 bool Seek(long long positionMicros, std::string &errorMessage);
+bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
 PlaybackState GetState();
 void NotifyControlEvent(ControlEvent event);
 std::vector<ControlEvent> DrainControlEvents();

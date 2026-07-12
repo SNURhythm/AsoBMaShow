@@ -10,7 +10,7 @@
 #include <string_view>
 
 struct ProfileArchiveManifest {
-  static constexpr int kFormatVersion = 1;
+  static constexpr int kFormatVersion = 2;
 
   int formatVersion = kFormatVersion;
   std::string sourceApplicationVersion;
@@ -20,6 +20,7 @@ struct ProfileArchiveManifest {
   int profileSchemaVersion = 1;
   int settingsSchemaVersion = 1;
   int inputSchemaVersion = 1;
+  int practiceSchemaVersion = 1;
   int scoreSchemaVersion = 5;
   int replaySchemaVersion = 3;
 };

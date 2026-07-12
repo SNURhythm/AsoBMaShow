@@ -1,7 +1,9 @@
 #pragma once
 #include "../bms_parser.hpp"
 #include "../PrepMetronome.h"
+#include "ClubBeat.h"
 #include "AudioWrapper.h"
+#include <algorithm>
 #include <array>
 #include <thread>
 #include <unordered_map>
@@ -43,13 +45,16 @@ enum class JukeboxAudioSource : std::uint8_t {
   DirectKeysound,
   ReplayKeysound,
   PrepMetronome,
+  ClubBeat,
   SettingsTestTone,
 };
 
 constexpr audio::Bus
 audioBusForJukeboxSource(JukeboxAudioSource source) noexcept {
-  return source == JukeboxAudioSource::BackgroundNote ? audio::Bus::Bgm
-                                                      : audio::Bus::Keysound;
+  return source == JukeboxAudioSource::BackgroundNote ||
+                 source == JukeboxAudioSource::ClubBeat
+             ? audio::Bus::Bgm
+             : audio::Bus::Keysound;
 }
 
 constexpr ScheduledAudioEvent
@@ -80,6 +85,18 @@ makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
   return OverlappingAudioRequest{
       .wav = event.wav, .offsetMicros = offsetMicros, .bus = event.bus};
 }
+
+namespace audio::playback {
+inline long long
+SchedulerWaitMicrosForChartDelta(long long chartDeltaMicros, PlaybackRate rate,
+                                 long long maximumWallSleepMicros) noexcept {
+  if (chartDeltaMicros <= 0 || maximumWallSleepMicros <= 0) {
+    return 0;
+  }
+  return std::min(maximumWallSleepMicros,
+                  std::max(0LL, rate.realMicrosFromChart(chartDeltaMicros)));
+}
+} // namespace audio::playback
 
 class Jukebox : public audio::IPlaybackSession {
 public:
@@ -117,7 +134,8 @@ public:
                 std::optional<long long> noteScheduleCutoffMicros =
                     std::nullopt,
                 const prep_metronome::PrepMetronomePlan *prepMetronomePlan =
-                    nullptr);
+                    nullptr,
+                bool clubMode = false);
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
@@ -146,6 +164,8 @@ public:
   void pause();
   void resume();
   bool isPaused();
+  bool setPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
+  [[nodiscard]] audio::PlaybackRate playbackRate() const;
   [[nodiscard]] AudioWrapper &audioRuntime() { return audio; }
   audio::PlaybackSnapshot suspendAndDrain() override;
   bool restorePlayback(const audio::PlaybackSnapshot &snapshot,
@@ -226,6 +246,7 @@ private:
   audio::playback::BackendOperationResult
   playWithClockState(long long startMicros, bool paused);
   void ensurePrepMetronomeSoundsLoaded();
+  void ensureClubBeatSoundsLoaded();
   void wakeScheduler();
   void syncVisualClockToAudio();
   [[nodiscard]] long long getBgaOffsetMicros() const;

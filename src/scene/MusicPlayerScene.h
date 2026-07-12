@@ -16,7 +16,9 @@
 #include <vector>
 
 class Button;
+class DropdownView;
 class ImageView;
+class OverlayPortal;
 class TextInputBox;
 class TextView;
 class View;
@@ -169,6 +171,11 @@ private:
   void shuffleQueue();
   void togglePlayback();
   void cycleRepeatMode();
+  void setPlaybackRate(const std::string &id);
+  void setPlaybackMode(const std::string &id);
+  void refreshPlaybackRateControl();
+  void toggleClubMode();
+  void refreshClubModeControl();
   void setSleepTimerFromInput();
   void clearSleepTimer();
   void toggleSystemPlaybackJacket();
@@ -201,6 +208,7 @@ private:
   void goBack();
 
   View *rootLayout = nullptr;
+  OverlayPortal *overlayPortal = nullptr;
   View *videoOverlayRoot = nullptr;
   View *videoArtworkBackdrop = nullptr;
   View *videoControlsPanel = nullptr;
@@ -271,6 +279,10 @@ private:
   TextInputBox *playlistNameInput = nullptr;
   TextInputBox *playlistRenameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
+  DropdownView *playbackModeDropdown = nullptr;
+  DropdownView *playbackRateDropdown = nullptr;
+  Button *clubModeButton = nullptr;
+  TextView *clubModeButtonText = nullptr;
   TextView *deletePlaylistButtonText = nullptr;
   TextView *clearPlaylistButtonText = nullptr;
   View *seekProgressTrack = nullptr;
@@ -322,6 +334,8 @@ private:
   bool videoPreviousVisualsEnabled = true;
   bool videoRestoresVisualsEnabled = false;
   bool videoControlsVisible = false;
+  bool playbackModeDropdownOpen = false;
+  bool playbackRateDropdownOpen = false;
   Uint64 videoControlsVisibleUntil = 0;
   std::string videoTrackId;
   std::unique_ptr<bms_parser::Chart> videoChart;

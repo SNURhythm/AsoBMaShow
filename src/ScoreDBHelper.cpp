@@ -32,6 +32,8 @@ namespace {
 std::atomic<std::uint64_t> gScoreRevision{1};
 constexpr int kLegacyScoreDatabaseSchemaVersion = 4;
 constexpr int kScoreProvenanceSchemaVersion = 5;
+constexpr int kScoreCourseIdentitySchemaVersion = 6;
+constexpr int kScoreSummarySemanticsSchemaVersion = 7;
 constexpr int kScoreDatabaseSchemaVersion =
     ScoreDBHelper::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
@@ -303,7 +305,7 @@ bool migrateScoreDatabaseToVersion6(sqlite3 *db) {
   if (*version > kScoreDatabaseSchemaVersion) {
     return false;
   }
-  if (*version >= kScoreDatabaseSchemaVersion) {
+  if (*version >= kScoreCourseIdentitySchemaVersion) {
     return true;
   }
   if (*version < kScoreProvenanceSchemaVersion) {
@@ -415,11 +417,73 @@ bool migrateScoreDatabaseToVersion6(sqlite3 *db) {
                "idx_course_scores_key_ln_mode_clear_type ON "
                "course_scores(course_key, ln_mode, clear_type)",
                "creating course score identity index") ||
-      !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion)) {
+      !setDatabaseUserVersion(db, kScoreCourseIdentitySchemaVersion)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
     logSqlErrorText("committing course score identity migration",
+                    transactionError);
+    return false;
+  }
+  return true;
+}
+
+bool migrateScoreDatabaseToVersion7(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading score summary semantics migration version",
+                    versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScoreSummarySemanticsSchemaVersion) {
+    return true;
+  }
+  if (*version < kScoreCourseIdentitySchemaVersion) {
+    SDL_Log("Score database must reach version %d before summary semantics "
+            "migration",
+            kScoreCourseIdentitySchemaVersion);
+    return false;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery =
+      callerOwnsTransaction ? "SAVEPOINT asobmashow_score_summary_semantics_v7"
+                            : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_score_summary_semantics_v7"
+                            : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_summary_semantics_v7; RELEASE "
+            "asobmashow_score_summary_semantics_v7"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting score summary semantics migration",
+                    transactionError);
+    return false;
+  }
+
+  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("recreating score summary trigger", *error);
+    return false;
+  }
+  if (const auto error = score_cache_queries::rebuildScoreSummaryTables(db)) {
+    logSqlErrorText("rebuilding score summaries for assisted clear caps",
+                    *error);
+    return false;
+  }
+  if (!setDatabaseUserVersion(db, kScoreSummarySemanticsSchemaVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing score summary semantics migration",
                     transactionError);
     return false;
   }
@@ -745,10 +809,9 @@ void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
   }
 }
 
-std::string bestClearMarkRankExpr() {
-  return "MAX(CASE WHEN combo_break = 0 AND clear_type >= " +
-         std::to_string(kClearTypeAssistedEasyClearRank) + " THEN " +
-         std::to_string(kClearTypeFullComboRank) + " ELSE clear_type END)";
+std::string bestClearMarkRankExpr(std::string_view alias) {
+  return "MAX(" + score_cache_queries::detail::fullComboClearRankExpr(alias) +
+         ")";
 }
 
 std::string qualifiedScoreTable(std::string_view schema,
@@ -809,9 +872,9 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
                          std::string_view schema = {}) {
   const std::string query =
       "SELECT COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode, " +
-      bestClearMarkRankExpr() + " FROM " +
+      bestClearMarkRankExpr("c") + " FROM " +
       qualifiedScoreTable(schema, "course_scores") +
-      " GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
+      " c GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading course score clear ranks",
@@ -1478,11 +1541,24 @@ bool ScoreDBHelper::CreateScoreTableOnConnection(sqlite3 *db) {
       return false;
     }
   }
-  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
-    logSqlErrorText("creating score identity summary schema", *error);
-    return false;
-  }
+  bool ensureCurrentSummarySchema = !existingScoreTable;
   if (existingScoreTable) {
+    std::string versionError;
+    const auto version = readSqliteUserVersion(db, versionError);
+    if (!version.has_value()) {
+      logSqlErrorText("reading score summary schema version", versionError);
+      return false;
+    }
+    ensureCurrentSummarySchema =
+        *version >= kScoreSummarySemanticsSchemaVersion;
+  }
+  if (ensureCurrentSummarySchema) {
+    if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+      logSqlErrorText("creating score identity summary schema", *error);
+      return false;
+    }
+  }
+  if (existingScoreTable && ensureCurrentSummarySchema) {
     if (const auto error =
             score_cache_queries::repairScoreSummaryTablesIfEmpty(db)) {
       logSqlErrorText("repairing score identity summaries", *error);
@@ -1575,7 +1651,8 @@ bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
     return false;
   }
   return migrateScoreDatabaseToVersion5(db) &&
-         migrateScoreDatabaseToVersion6(db);
+         migrateScoreDatabaseToVersion6(db) &&
+         migrateScoreDatabaseToVersion7(db);
 }
 
 bool ScoreDBHelper::EnsureSchema() {
@@ -1766,11 +1843,11 @@ bool ScoreDBHelper::InsertCourseScoreOnConnection(
   sqlite3_bind_int(stmt.get(), bindIndex++, state.slowCount);
   sqlite3_bind_double(stmt.get(), bindIndex++, state.currentGauge);
   int clearRank = state.getClearTypeRank();
-  if (completedCharts == totalCharts && totalCharts > 0 &&
-      state.currentGauge > 0.0f && state.comboBreak == 0 &&
-      state.maxCombo >= courseTotalNotes) {
-    clearRank = kClearTypeFullComboRank;
-  }
+  const bool fullCombo = completedCharts == totalCharts && totalCharts > 0 &&
+                         state.currentGauge > 0.0f && state.comboBreak == 0 &&
+                         state.maxCombo >= courseTotalNotes;
+  clearRank = clear_policy::fullComboRankForPlayback(clearRank, fullCombo,
+                                                     provenance.playback);
   sqlite3_bind_int(stmt.get(), bindIndex++, clearRank);
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,

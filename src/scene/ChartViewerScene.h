@@ -3,11 +3,15 @@
 #include "../ChartDBHelper.h"
 #include "../ReplayDBHelper.h"
 #include "../bms_parser.hpp"
+#include "../practice/PracticeConfiguration.h"
+#include "../practice/PracticeLaunchRequest.h"
+#include "../practice/PracticePresetStore.h"
 #include "Scene.h"
 
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class Button;
@@ -15,9 +19,43 @@ class ChartCanvasView;
 class ReplaySummaryListItemView;
 class ReplaySummaryListView;
 class ScrollView;
-class TextInputBox;
+class OverlayPortal;
+class PracticePanelView;
+class PlayOptionsPanelView;
 class TextView;
 class View;
+
+namespace chart_viewer_practice {
+struct GhostRefreshState {
+  long long chartEndMicros = 0;
+  practice::Configuration configuration;
+  std::vector<practice::NamedPreset> namedPresets;
+  std::optional<std::string> selectedPresetId;
+  std::optional<practice::LaunchRequest> pendingLaunchRequest;
+  std::optional<ReplayData> ghostReplay;
+  int loadedGhostReplayId = -1;
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
+  std::string visibleStatus;
+};
+
+template <typename Commit>
+[[nodiscard]] bool installGhostRefreshState(
+    GhostRefreshState state, long long newChartEndMicros,
+    practice::PresetLoadResult loaded, const std::string &successText,
+    Commit &&commit) {
+  state.chartEndMicros = newChartEndMicros;
+  const auto notice = loaded.notice();
+  const bool usable = practice::installPresetLoadState(
+      std::move(loaded), true, state.configuration, state.namedPresets,
+      state.selectedPresetId);
+  state.visibleStatus = notice ? "Practice presets: " + *notice : successText;
+  std::forward<Commit>(commit)(std::move(state));
+  return usable;
+}
+} // namespace chart_viewer_practice
 
 class ChartViewerScene : public Scene {
 public:
@@ -25,15 +63,18 @@ public:
       ApplicationContext &context, ChartMetaRecord record,
       std::optional<unsigned int> randomSeed = std::nullopt,
       std::optional<std::string> randomPrng = std::nullopt,
-      std::optional<std::vector<int>> randomValues = std::nullopt);
+      std::optional<std::vector<int>> randomValues = std::nullopt,
+      std::optional<practice::LaunchRequest> launchRequest = std::nullopt);
 
   void init() override;
+  void onResume() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   void update(float dt) override;
   void renderScene() override;
   void cleanupScene() override;
 
   void setPracticeGhostReplay(const ReplayData &replayData);
+  void setPracticeLaunchRequest(practice::LaunchRequest request);
 
 private:
   struct RandomOption {
@@ -74,15 +115,17 @@ private:
   ReplaySummaryListView *ghostReplayListView = nullptr;
   View *optionsDrawerRoot = nullptr;
   TextView *viewerOptionText = nullptr;
-  TextView *viewerAssistOptionText = nullptr;
-  Button *viewerAssistOffButton = nullptr;
-  Button *viewerAssistDragButton = nullptr;
-  TextView *viewerAssistOffButtonText = nullptr;
-  TextView *viewerAssistDragButtonText = nullptr;
-  TextInputBox *laneAssignInput = nullptr;
-  TextView *laneAssignStatusText = nullptr;
+  PlayOptionsPanelView *viewerPlayOptionsPanel = nullptr;
   View *randomDrawerRoot = nullptr;
   ScrollView *randomDrawerScroll = nullptr;
+  OverlayPortal *overlayPortal = nullptr;
+  PracticePanelView *practicePanel = nullptr;
+  std::unique_ptr<practice::PresetStore> practicePresetStore;
+  practice::Configuration practiceConfiguration;
+  std::vector<practice::NamedPreset> practiceNamedPresets;
+  std::optional<std::string> selectedPracticePresetId;
+  long long practiceChartEndMicros = 0;
+  std::optional<practice::LaunchRequest> pendingPracticeLaunchRequest;
 
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
@@ -133,7 +176,11 @@ private:
   void refreshOptionsDrawer();
   void setViewerNamedPlayOption(const std::string &option);
   void setViewerAssistOption(const std::string &option);
-  void refreshViewerAssistOptionButtons();
+  void setViewerLongNoteMode(const std::string &mode);
+  void setViewerPlaybackRate(int percent);
+  void setViewerPlaybackMode(const std::string &mode);
+  void toggleViewerClubMode();
+  void refreshViewerOptionControls();
   void setViewerLaneAssign(const std::string &notation);
   void setViewerPlayOptions(const std::optional<std::string> &option,
                             const std::optional<long long> &seed,
@@ -142,6 +189,22 @@ private:
   bool applyViewerPlayOptions(bms_parser::Chart &target,
                               const char *logContext);
   void onCanvasSelectionChanged(long long timeMicros);
+  void onPracticeRangeChanged(const practice::RangeSelection &range);
+  void onPracticeConfigurationChanged(
+      const practice::Configuration &configuration);
+  void selectActivePracticeMarker(practice::Marker marker);
+  void moveActivePracticeMarker(practice::TimelineDirection direction);
+  void loadPracticeConfiguration(
+      bool applyPendingLaunch = true,
+      std::optional<std::string> chartReplacementSuccessText = std::nullopt);
+  void applyPendingPracticeLaunchRequest();
+  bool applyPracticePresetLoad(practice::PresetLoadResult loaded,
+                               bool applyLastUsed);
+  void refreshPracticePanel();
+  void savePracticeAs(std::string name);
+  void renamePracticePreset(std::string name);
+  void updatePracticePreset();
+  void deletePracticePreset();
   void retainLoadedListenResourcesForChartChange();
   void startListeningFromSelection();
   void toggleListenPause();
@@ -154,5 +217,4 @@ private:
       const std::vector<unsigned char> *sourceBytes = nullptr) const;
   [[nodiscard]] std::string randomSummary() const;
   [[nodiscard]] std::string viewerPlayOptionLabel() const;
-  [[nodiscard]] std::string defaultLaneAssignNotation() const;
 };

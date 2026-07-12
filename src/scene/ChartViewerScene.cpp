@@ -1,24 +1,33 @@
 #include "ChartViewerScene.h"
+#include "ChartListenStart.h"
 
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
+#include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
 #include "../path.h"
+#include "../practice/PracticeConfiguration.h"
+#include "../practice/PracticeLaunchRequest.h"
+#include "../practice/PracticePresetStore.h"
+#include "../practice/PracticeSession.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
+#include "../view/OverlayPortal.h"
+#include "../view/PlayOptionsPanelView.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
-#include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "../view/View.h"
+#include "PracticePanelView.h"
 #include "play/GamePlayScene.h"
+#include "play/Pacemaker.h"
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -348,23 +357,18 @@ public:
   }
 
   void setChart(bms_parser::Chart *newChart) {
-    const std::optional<long long> previousSelectedTime = selectedTimeMicros;
+    const practice::RangeSelection previousRange = practiceRange;
+    const bool hadPracticeRange = practiceRangeSet;
     chart = newChart;
     markerGlyphTextures.clear();
     playbackActive = false;
     replayGhostEvents.clear();
     rebuildLayout();
-    selectedTimeMicros.reset();
-    selectedBeatPosition.reset();
-    if (chart == nullptr || !previousSelectedTime.has_value()) {
+    practiceRangeSet = false;
+    if (chart == nullptr || !hadPracticeRange) {
       return;
     }
-    const long long clampedTime = std::max(0LL, *previousSelectedTime);
-    if (clampedTime > chart_playback_duration::ChartTimelineEndMicros(*chart)) {
-      return;
-    }
-    selectedTimeMicros = clampedTime;
-    selectedBeatPosition = timeToBeatPosition(clampedTime);
+    setPracticeRange(previousRange);
   }
 
   void setShowInvisibleNotes(bool enabled) { showInvisibleNotes = enabled; }
@@ -389,12 +393,75 @@ public:
     selectionListener = std::move(listener);
   }
 
+  void setPracticeRange(const practice::RangeSelection &range) {
+    practiceRange = range;
+    const long long chartEnd =
+        chart == nullptr
+            ? std::max({0LL, range.startMicros, range.endMicros})
+            : chart_playback_duration::ChartTimelineEndMicros(*chart);
+    practiceRange.startMicros =
+        std::clamp(practiceRange.startMicros, 0LL, std::max(0LL, chartEnd));
+    practiceRange.endMicros =
+        std::clamp(practiceRange.endMicros, 0LL, std::max(0LL, chartEnd));
+    if (practiceRange.startMicros > practiceRange.endMicros) {
+      std::swap(practiceRange.startMicros, practiceRange.endMicros);
+      practiceRange.active = practiceRange.active == practice::Marker::Start
+                                 ? practice::Marker::End
+                                 : practice::Marker::Start;
+    }
+    practiceRangeSet = true;
+  }
+
+  [[nodiscard]] practice::RangeSelection getPracticeRange() const {
+    return practiceRange;
+  }
+
+  void setActivePracticeMarker(practice::Marker marker) {
+    practiceRange.active = marker;
+  }
+
+  bool moveActivePracticeMarker(practice::TimelineDirection direction) {
+    if (chart == nullptr || !practiceRangeSet) {
+      return false;
+    }
+    std::vector<long long> timelineMicros;
+    timelineMicros.reserve(orderedTimelines.size());
+    for (const auto *timeline : orderedTimelines) {
+      if (timeline != nullptr) {
+        timelineMicros.push_back(timeline->Timing);
+      }
+    }
+    std::ranges::sort(timelineMicros);
+    const auto adjacent = practice::adjacentTimelineMicros(
+        timelineMicros, getSelectedTimeMicros(), direction);
+    if (!adjacent) {
+      return false;
+    }
+    practiceRange.placeActiveMarker(
+        *adjacent, chart_playback_duration::ChartTimelineEndMicros(*chart));
+    playbackActive = false;
+    if (selectionListener != nullptr) {
+      selectionListener(getSelectedTimeMicros());
+    }
+    if (practiceRangeListener != nullptr) {
+      practiceRangeListener(practiceRange);
+    }
+    return true;
+  }
+
+  void setPracticeRangeListener(
+      std::function<void(const practice::RangeSelection &)> listener) {
+    practiceRangeListener = std::move(listener);
+  }
+
   [[nodiscard]] bool hasSelectedTime() const {
-    return selectedTimeMicros.has_value();
+    return practiceRangeSet;
   }
 
   [[nodiscard]] long long getSelectedTimeMicros() const {
-    return selectedTimeMicros.value_or(0LL);
+    return practiceRange.active == practice::Marker::Start
+               ? practiceRange.startMicros
+               : practiceRange.endMicros;
   }
 
   void setPlaybackTime(long long timeMicros, bool active) {
@@ -438,6 +505,7 @@ protected:
 
     batch.begin();
     drawGrid();
+    drawPracticeRangeSpan();
     drawMarkers();
     drawLongNotes();
     drawNotes();
@@ -714,12 +782,13 @@ private:
   float pinchStartScreenZoom = 1.0f;
   float pinchAnchorContentX = 0.0f;
   float pinchAnchorContentY = 0.0f;
-  std::optional<long long> selectedTimeMicros;
-  std::optional<double> selectedBeatPosition;
+  practice::RangeSelection practiceRange;
+  bool practiceRangeSet = false;
   long long playbackTimeMicros = 0;
   bool playbackActive = false;
   bool showInvisibleNotes = false;
   std::function<void(long long)> selectionListener;
+  std::function<void(const practice::RangeSelection &)> practiceRangeListener;
 
   void rebuildLayout() {
     layoutDirty = false;
@@ -1064,13 +1133,41 @@ private:
   }
 
   void drawCursorBars() {
-    if (selectedTimeMicros.has_value()) {
-      drawCursorBarAtBeat(
-          selectedBeatPosition.value_or(timeToBeatPosition(*selectedTimeMicros)),
-          Color(255, 220, 92, 235), 4.0f);
+    if (practiceRangeSet) {
+      drawCursorBar(practiceRange.startMicros, Color(77, 220, 236, 240),
+                    practiceRange.active == practice::Marker::Start ? 4.5f
+                                                                    : 3.0f);
+      drawCursorBar(practiceRange.endMicros, Color(255, 190, 66, 240),
+                    practiceRange.active == practice::Marker::End ? 4.5f
+                                                                  : 3.0f);
     }
     if (playbackActive) {
       drawCursorBar(playbackTimeMicros, Color(91, 218, 236, 242), 3.0f);
+    }
+  }
+
+  void drawPracticeRangeSpan() {
+    if (!practiceRangeSet ||
+        practiceRange.startMicros >= practiceRange.endMicros) {
+      return;
+    }
+    const double startBeat = timeToBeatPosition(practiceRange.startMicros);
+    const double endBeat = timeToBeatPosition(practiceRange.endMicros);
+    const uint32_t fill = Color(31, 173, 173, 56).toABGR();
+    for (const auto &layout : measureLayouts) {
+      if (layout.scale <= 0.0) {
+        continue;
+      }
+      const double overlapStart = std::max(startBeat, layout.beatStart);
+      const double overlapEnd =
+          std::min(endBeat, layout.beatStart + layout.scale);
+      if (overlapStart >= overlapEnd) {
+        continue;
+      }
+      const auto startPosition = cursorPositionForLayout(layout, overlapStart);
+      const auto endPosition = cursorPositionForLayout(layout, overlapEnd);
+      drawRectClip(layout.x + gutterWidth, endPosition.y, laneAreaWidth,
+                   std::max(0.0f, startPosition.y - endPosition.y), fill);
     }
   }
 
@@ -1162,13 +1259,21 @@ private:
   }
 
   void selectBeatPosition(double beatPosition) {
-    selectedBeatPosition =
+    const double selectedBeatPosition =
         std::clamp(beatPosition, 0.0, std::max(0.0, totalBeatLength));
-    const long long timeMicros = beatToTimeMicros(*selectedBeatPosition);
-    selectedTimeMicros = std::max(0LL, timeMicros);
+    const long long timeMicros = beatToTimeMicros(selectedBeatPosition);
+    const long long chartEnd = chart == nullptr
+                                   ? std::max(0LL, timeMicros)
+                                   : chart_playback_duration::
+                                         ChartTimelineEndMicros(*chart);
+    practiceRange.placeActiveMarker(timeMicros, chartEnd);
+    practiceRangeSet = true;
     playbackActive = false;
     if (selectionListener != nullptr) {
-      selectionListener(*selectedTimeMicros);
+      selectionListener(getSelectedTimeMicros());
+    }
+    if (practiceRangeListener != nullptr) {
+      practiceRangeListener(practiceRange);
     }
   }
 
@@ -2154,9 +2259,11 @@ ChartViewerScene::ChartViewerScene(
     ApplicationContext &context, ChartMetaRecord record,
     std::optional<unsigned int> randomSeed,
     std::optional<std::string> randomPrng,
-    std::optional<std::vector<int>> randomValues)
+    std::optional<std::vector<int>> randomValues,
+    std::optional<practice::LaunchRequest> launchRequest)
     : Scene(context), record(std::move(record)), randomSeed(randomSeed),
-      randomPrng(std::move(randomPrng)) {
+      randomPrng(std::move(randomPrng)),
+      pendingPracticeLaunchRequest(std::move(launchRequest)) {
   if (randomValues.has_value()) {
     selectedRandomValues = *randomValues;
   }
@@ -2177,10 +2284,57 @@ void ChartViewerScene::init() {
                       : std::optional<std::vector<int>>(selectedRandomValues));
 }
 
+void ChartViewerScene::onResume() { applyPendingPracticeLaunchRequest(); }
+
+void ChartViewerScene::setPracticeLaunchRequest(
+    practice::LaunchRequest request) {
+  pendingPracticeLaunchRequest = std::move(request);
+}
+
 EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
   if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
     goBack();
     return {};
+  }
+  const bool editingPresetName =
+      practicePanel != nullptr && practicePanel->isEditingPresetName();
+  if (event.type == SDL_KEYDOWN && !editingPresetName) {
+    switch (event.key.keysym.sym) {
+    case SDLK_1:
+    case SDLK_KP_1:
+      selectActivePracticeMarker(practice::Marker::Start);
+      return {};
+    case SDLK_2:
+    case SDLK_KP_2:
+      selectActivePracticeMarker(practice::Marker::End);
+      return {};
+    case SDLK_LEFT:
+      moveActivePracticeMarker(practice::TimelineDirection::Previous);
+      return {};
+    case SDLK_RIGHT:
+      moveActivePracticeMarker(practice::TimelineDirection::Next);
+      return {};
+    default:
+      break;
+    }
+  }
+  if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+    switch (event.cbutton.button) {
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+      selectActivePracticeMarker(practice::Marker::Start);
+      return {};
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+      selectActivePracticeMarker(practice::Marker::End);
+      return {};
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+      moveActivePracticeMarker(practice::TimelineDirection::Previous);
+      return {};
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+      moveActivePracticeMarker(practice::TimelineDirection::Next);
+      return {};
+    default:
+      break;
+    }
   }
   return Scene::handleEvents(event);
 }
@@ -2228,6 +2382,11 @@ void ChartViewerScene::update(float dt) {
                                  rendering::window_height);
       optionsDrawerRoot->applyYogaLayout();
     }
+    if (overlayPortal != nullptr) {
+      overlayPortal->setSize(rendering::window_width,
+                             rendering::window_height);
+      overlayPortal->applyYogaLayout();
+    }
   }
 }
 
@@ -2269,19 +2428,21 @@ void ChartViewerScene::cleanupScene() {
   ghostReplayListView = nullptr;
   optionsDrawerRoot = nullptr;
   viewerOptionText = nullptr;
-  viewerAssistOptionText = nullptr;
-  viewerAssistOffButton = nullptr;
-  viewerAssistDragButton = nullptr;
-  viewerAssistOffButtonText = nullptr;
-  viewerAssistDragButtonText = nullptr;
-  laneAssignInput = nullptr;
-  laneAssignStatusText = nullptr;
+  viewerPlayOptionsPanel = nullptr;
   randomDrawerRoot = nullptr;
   randomDrawerScroll = nullptr;
+  overlayPortal = nullptr;
+  practicePanel = nullptr;
+  practicePresetStore.reset();
+  practiceNamedPresets.clear();
+  selectedPracticePresetId.reset();
+  practiceChartEndMicros = 0;
 }
 
 void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
   if (replayData.events.empty()) {
+    practiceGhostReplay.reset();
+    clearGhostReplay();
     return;
   }
 
@@ -2458,10 +2619,51 @@ void ChartViewerScene::initView() {
   canvasView->setFlex(1);
   canvasView->setSelectionListener(
       [this](long long timeMicros) { onCanvasSelectionChanged(timeMicros); });
+  canvasView->setPracticeRangeListener(
+      [this](const practice::RangeSelection &range) {
+        onPracticeRangeChanged(range);
+      });
+
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                    rendering::window_height);
+  overlayPortal->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal->setPosition(Edge::Left, 0);
+  overlayPortal->setPosition(Edge::Top, 0);
+  overlayPortal->setZIndex(1200);
+
+  practicePanel = new PracticePanelView(
+      0,
+      {
+          .onChanged = [this](const practice::Configuration &configuration) {
+            onPracticeConfigurationChanged(configuration);
+          },
+          .onStart = [this]() { startPracticeFromSelection(false); },
+          .onSaveAs = [this](std::string name) {
+            savePracticeAs(std::move(name));
+          },
+          .onRename = [this](std::string name) {
+            renamePracticePreset(std::move(name));
+          },
+          .onUpdateNamed = [this]() { updatePracticePreset(); },
+          .onDeleteNamed = [this]() { deletePracticePreset(); },
+      },
+      overlayPortal, [this](practice::Marker marker) {
+        if (canvasView != nullptr) {
+          canvasView->setActivePracticeMarker(marker);
+          updateSelectionText();
+        }
+      });
+
+  auto *body = new View();
+  body->setFlex(1.0f);
+  body->setFlexDirection(FlexDirection::Row);
+  body->setAlignItems(YGAlignStretch);
+  body->addView(canvasView);
+  body->addView(practicePanel);
 
   rootLayout->addView(header);
   rootLayout->addView(toolbar);
-  rootLayout->addView(canvasView);
+  rootLayout->addView(body);
 
   updateZoomText();
   updateSelectionText();
@@ -2471,6 +2673,7 @@ void ChartViewerScene::initView() {
   rebuildGhostModal();
   rebuildOptionsDrawer();
   rebuildRandomDrawer();
+  rootLayout->addView(overlayPortal);
   rootLayout->applyYogaLayout();
 }
 
@@ -2763,6 +2966,14 @@ void ChartViewerScene::parseAndRefresh(
     return;
   }
 
+  int effectiveLongNoteMode =
+      normalizeChartLongNoteModeValue(parsed->Meta.LnMode);
+  if (effectiveLongNoteMode == 0) {
+    effectiveLongNoteMode = long_note_mode::valueFromId(
+        context.settings.selectedLnMode, long_note_mode::kLnValue);
+  }
+  applyEffectiveLongNoteModeToChart(*parsed, effectiveLongNoteMode);
+
   randomSeed = parsed->Meta.RandomSeed;
   randomPrng = parsed->Meta.RandomPrng;
   selectedRandomValues = parsed->Meta.RandomValues;
@@ -2775,6 +2986,7 @@ void ChartViewerScene::parseAndRefresh(
   if (statusText != nullptr) {
     statusText->setText(std::to_string(chart->Meta.TotalNotes) + " notes");
   }
+  loadPracticeConfiguration();
   refreshHeaderText();
   updateSelectionText();
   rebuildRandomDrawer();
@@ -2885,8 +3097,11 @@ void ChartViewerScene::updateSelectionText() {
     return;
   }
 
-  std::string text =
-      "Cursor " + formatMicrosTime(canvasView->getSelectedTimeMicros());
+  const auto range = canvasView->getPracticeRange();
+  std::string text = "Practice " + formatMicrosTime(range.startMicros) +
+                     " - " + formatMicrosTime(range.endMicros) +
+                     (range.active == practice::Marker::Start ? " / Start"
+                                                              : " / End");
   if (listenActive) {
     text += " / Listening";
   }
@@ -3186,9 +3401,7 @@ bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
   canvasView->setGhostReplay(replayData);
   loadedGhostReplayId = loadedReplayId;
 
-  if (statusText != nullptr) {
-    statusText->setText(successText);
-  }
+  loadPracticeConfiguration(false, successText);
   hideGhostModal();
   updatePracticeGhostReplayButton();
   updateGhostControls();
@@ -3253,7 +3466,9 @@ void ChartViewerScene::rebuildOptionsDrawer() {
     return;
   }
 
-  constexpr float kPanelWidth = 660.0f;
+  constexpr float kPanelWidth = 760.0f;
+  constexpr float kPanelPadding = 22.0f;
+  constexpr float kContentWidth = kPanelWidth - kPanelPadding * 2.0f - 18.0f;
   optionsDrawerRoot = new BlockingOverlayView(0, 0, rendering::window_width,
                                               rendering::window_height);
   optionsDrawerRoot->setPositionType(YGPositionTypeAbsolute);
@@ -3268,11 +3483,11 @@ void ChartViewerScene::rebuildOptionsDrawer() {
 
   auto *panel = new View();
   panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
-      ->setHeight(std::min<float>(610, rendering::window_height - 36))
+      ->setHeight(std::min<float>(760, rendering::window_height - 36))
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(16)
-      ->setPadding(Edge::All, 22)
+      ->setGap(12)
+      ->setPadding(Edge::All, kPanelPadding)
       ->setBackgroundColor(ui_theme::panelStrong())
       ->setCornerRadius(ui_theme::panelRadius())
       ->setShadow(ui_theme::shadow(), ui_theme::kModalShadow)
@@ -3297,6 +3512,17 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   header->addView(closeButton);
   panel->addView(header);
 
+  auto *scroll = new ScrollView();
+  scroll->setFlex(1.0f);
+  scroll->clearBackgroundColor();
+  scroll->setContentPadding(Edge::Right, 12);
+
+  auto *content = new View();
+  content->setWidth(kContentWidth);
+  content->setFlexDirection(FlexDirection::Column);
+  content->setAlignItems(YGAlignStretch);
+  content->setGap(12);
+
   auto *currentRow = new View();
   currentRow->setFlexDirection(FlexDirection::Row);
   currentRow->setAlignItems(YGAlignCenter);
@@ -3318,117 +3544,38 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   viewerOptionText->setFlex(1);
   viewerOptionText->setHeight(44);
   currentRow->addView(viewerOptionText);
-  panel->addView(currentRow);
+  content->addView(currentRow);
 
-  auto makeOptionButton = [this](const std::string &option, int width) {
-    auto *button = makeButton(option, width, 16);
-    button->setOnClickListener([this, option]() {
-      setViewerNamedPlayOption(option);
-    });
-    return button;
-  };
+  viewerPlayOptionsPanel = new PlayOptionsPanelView(
+      {.onPlayOptionSelected = [this](const std::string &option) {
+         setViewerNamedPlayOption(option);
+       },
+       .onLaneOrderSubmitted = [this](const std::string &notation) {
+         setViewerLaneAssign(notation);
+       },
+       .onLongNoteModeSelected = [this](const std::string &mode) {
+         setViewerLongNoteMode(mode);
+       },
+       .onAssistOptionSelected = [this](const std::string &option) {
+         setViewerAssistOption(option);
+       },
+       .onPlaybackRateSelected = [this](int percent) {
+         setViewerPlaybackRate(percent);
+       },
+       .onPlaybackModeSelected = [this](const std::string &mode) {
+         setViewerPlaybackMode(mode);
+       },
+       .onClubModeToggled = [this]() { toggleViewerClubMode(); }},
+      {.width = kContentWidth,
+       .playOptionColumns = 4,
+       .showGauge = false,
+       .showLaneOrder = true,
+       .showPacemaker = false},
+      overlayPortal);
+  content->addView(viewerPlayOptionsPanel);
 
-  for (int rowIndex = 0; rowIndex < 3; ++rowIndex) {
-    auto *optionRow = new View();
-    optionRow->setFlexDirection(FlexDirection::Row);
-    optionRow->setAlignItems(YGAlignCenter);
-    optionRow->setGap(10);
-    optionRow->setHeight(52);
-    const size_t start = static_cast<size_t>(rowIndex) * 4;
-    const size_t end =
-        std::min(start + 4, play_options::kPlayOptions.size());
-    for (size_t i = start; i < end; ++i) {
-      optionRow->addView(makeOptionButton(play_options::kPlayOptions[i], 136));
-    }
-    panel->addView(optionRow);
-  }
-
-  auto *assistRow = new View();
-  assistRow->setFlexDirection(FlexDirection::Row);
-  assistRow->setAlignItems(YGAlignCenter);
-  assistRow->setGap(12);
-  assistRow->setHeight(52);
-
-  auto *assistLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-  assistLabel->setText("Assist");
-  assistLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-  assistLabel->setVAlign(TextView::MIDDLE);
-  assistLabel->setWidth(86);
-  assistLabel->setHeight(44);
-  assistRow->addView(assistLabel);
-
-  viewerAssistOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  viewerAssistOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
-  viewerAssistOptionText->setVAlign(TextView::MIDDLE);
-  viewerAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
-  viewerAssistOptionText->setFlex(1);
-  viewerAssistOptionText->setHeight(44);
-  assistRow->addView(viewerAssistOptionText);
-
-  viewerAssistOffButton =
-      makeButton(assist_options::kOff, 98, 18, &viewerAssistOffButtonText);
-  viewerAssistOffButton->setOnClickListener(
-      [this]() { setViewerAssistOption(assist_options::kOff); });
-  assistRow->addView(viewerAssistOffButton);
-
-  viewerAssistDragButton =
-      makeButton(assist_options::kDrag, 98, 18, &viewerAssistDragButtonText);
-  viewerAssistDragButton->setOnClickListener(
-      [this]() { setViewerAssistOption(assist_options::kDrag); });
-  assistRow->addView(viewerAssistDragButton);
-  panel->addView(assistRow);
-
-  auto *assignRow = new View();
-  assignRow->setFlexDirection(FlexDirection::Row);
-  assignRow->setAlignItems(YGAlignCenter);
-  assignRow->setGap(12);
-  assignRow->setHeight(62);
-
-  auto *assignLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-  assignLabel->setText("Lane");
-  assignLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-  assignLabel->setVAlign(TextView::MIDDLE);
-  assignLabel->setWidth(58);
-  assignLabel->setHeight(46);
-  assignRow->addView(assignLabel);
-
-  laneAssignInput = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 20);
-  laneAssignInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  laneAssignInput->setBackgroundColor(ui_theme::control());
-  laneAssignInput->setCornerRadius(ui_theme::controlRadius());
-  laneAssignInput->setBorderColor(ui_theme::hairline());
-  laneAssignInput->setBorderWidth(1);
-  laneAssignInput->setPadding(Edge::Left, 12);
-  laneAssignInput->setPadding(Edge::Right, 12);
-  laneAssignInput->setVAlign(TextView::MIDDLE);
-  laneAssignInput->setOverflow(TextView::TextOverflow::Hidden);
-  laneAssignInput->setFlex(1);
-  laneAssignInput->setHeight(48);
-  laneAssignInput->onSubmit(
-      [this](const std::string &text) { setViewerLaneAssign(text); });
-  assignRow->addView(laneAssignInput);
-
-  auto *applyButton = makeButton("Apply", 96, 18);
-  applyButton->setOnClickListener([this]() {
-    if (laneAssignInput != nullptr) {
-      setViewerLaneAssign(laneAssignInput->getText());
-    }
-  });
-  assignRow->addView(applyButton);
-
-  auto *resetButton = makeButton("Reset", 92, 18);
-  resetButton->setOnClickListener([this]() {
-    setViewerNamedPlayOption("NORMAL");
-  });
-  assignRow->addView(resetButton);
-  panel->addView(assignRow);
-
-  laneAssignStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  laneAssignStatusText->setText("");
-  laneAssignStatusText->setColor(ui_theme::sdl(ui_theme::textMuted()));
-  laneAssignStatusText->setOverflow(TextView::TextOverflow::Hidden);
-  laneAssignStatusText->setHeight(28);
-  panel->addView(laneAssignStatusText);
+  scroll->setContentView(content);
+  panel->addView(scroll);
 
   optionsDrawerRoot->addView(panel);
   rootLayout->addView(optionsDrawerRoot);
@@ -3447,6 +3594,9 @@ void ChartViewerScene::showOptionsDrawer() {
 }
 
 void ChartViewerScene::hideOptionsDrawer() {
+  if (viewerPlayOptionsPanel != nullptr) {
+    viewerPlayOptionsPanel->closeDropdowns();
+  }
   if (optionsDrawerRoot != nullptr) {
     optionsDrawerRoot->setVisible(false);
   }
@@ -3456,20 +3606,7 @@ void ChartViewerScene::refreshOptionsDrawer() {
   if (viewerOptionText != nullptr) {
     viewerOptionText->setText(viewerPlayOptionLabel());
   }
-  if (viewerAssistOptionText != nullptr) {
-    viewerAssistOptionText->setText(viewerAssistOption);
-  }
-  refreshViewerAssistOptionButtons();
-  if (laneAssignInput != nullptr) {
-    const auto assign = viewerPlayOption.has_value()
-                            ? play_options::laneAssignNotationFromOption(
-                                  *viewerPlayOption)
-                            : std::nullopt;
-    laneAssignInput->setEditingText(assign.value_or(defaultLaneAssignNotation()));
-  }
-  if (laneAssignStatusText != nullptr) {
-    laneAssignStatusText->setText("");
-  }
+  refreshViewerOptionControls();
 }
 
 void ChartViewerScene::setViewerAssistOption(const std::string &option) {
@@ -3482,37 +3619,79 @@ void ChartViewerScene::setViewerAssistOption(const std::string &option) {
   refreshOptionsDrawer();
 }
 
-void ChartViewerScene::refreshViewerAssistOptionButtons() {
-  auto styleButton = [](Button *button, TextView *text, bool selected) {
-    if (button == nullptr || text == nullptr) {
-      return;
-    }
-    if (selected) {
-      button->setBackgroundColors(ui_theme::primaryAction(),
-                                  ui_theme::primaryActionHover(),
-                                  ui_theme::primaryActionPressed());
-      button->setBorderColors(ui_theme::accentBorderStrong(),
-                              ui_theme::accentBorderStrong(),
-                              ui_theme::accentBorderStrong());
-      text->setColor(ui_theme::sdl(ui_theme::textOn(
-          ui_theme::primaryAction())));
-    } else {
-      button->setBackgroundColors(ui_theme::control(),
-                                  ui_theme::controlHover(),
-                                  ui_theme::controlPressed());
-      button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
-                              ui_theme::cyan());
-      text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-    }
-  };
+void ChartViewerScene::setViewerLongNoteMode(const std::string &mode) {
+  if (normalizeChartLongNoteModeValue(record.meta.LnMode) > 0) {
+    return;
+  }
+  context.settings.selectedLnMode =
+      long_note_mode::parseId(mode, AppSettings::kDefaultLnMode);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer long note mode");
+  }
+  parseAndRefresh(selectedRandomValues.empty()
+                      ? std::nullopt
+                      : std::optional<std::vector<int>>(selectedRandomValues));
+  refreshOptionsDrawer();
+}
 
-  styleButton(viewerAssistOffButton, viewerAssistOffButtonText,
-              viewerAssistOption == assist_options::kOff);
-  styleButton(viewerAssistDragButton, viewerAssistDragButtonText,
-              viewerAssistOption == assist_options::kDrag);
+void ChartViewerScene::setViewerPlaybackRate(int percent) {
+  auto configuration = practiceConfiguration;
+  configuration.playback.percent = std::clamp(percent, 50, 200);
+  onPracticeConfigurationChanged(configuration);
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::setViewerPlaybackMode(const std::string &mode) {
+  if (mode != "pitch-shift") {
+    return;
+  }
+  auto configuration = practiceConfiguration;
+  configuration.playback.mode = audio::PlaybackMode::PitchShift;
+  onPracticeConfigurationChanged(configuration);
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::toggleViewerClubMode() {
+  context.settings.gameplayClubModeEnabled =
+      !context.settings.gameplayClubModeEnabled;
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer Club mode");
+  }
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::refreshViewerOptionControls() {
+  if (viewerPlayOptionsPanel == nullptr) {
+    return;
+  }
+  const int fixedLongNoteMode =
+      normalizeChartLongNoteModeValue(record.meta.LnMode);
+  const bool longNoteModeLocked = fixedLongNoteMode > 0;
+  const std::string selectedLongNoteMode =
+      longNoteModeLocked
+          ? long_note_mode::idFromValue(fixedLongNoteMode,
+                                        AppSettings::kDefaultLnMode)
+          : long_note_mode::parseId(context.settings.selectedLnMode,
+                                    AppSettings::kDefaultLnMode);
+  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+  viewerPlayOptionsPanel->refresh(
+      {.playOption = viewerPlayOption.value_or("NORMAL"),
+       .defaultLaneOrder = play_options::defaultLaneAssignNotation(meta),
+       .laneOrderEnabled = true,
+       .longNoteMode = selectedLongNoteMode,
+       .longNoteModeLocked = longNoteModeLocked,
+       .assistOption = viewerAssistOption,
+       .assistOptionLocked = false,
+       .playbackRatePercent = practiceConfiguration.playback.percent,
+       .playbackLocked = false,
+       .clubMode = context.settings.gameplayClubModeEnabled});
 }
 
 void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
+  if (viewerPlayOptionsPanel != nullptr) {
+    viewerPlayOptionsPanel->setLaneOrderMessage("");
+  }
   const std::string normalized = play_options::normalizePlayOption(option);
   if (play_options::laneAssignNotationFromOption(normalized).has_value()) {
     setViewerLaneAssign(normalized);
@@ -3529,6 +3708,11 @@ void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
           ? std::optional<std::string>(normalized)
           : std::nullopt,
       std::nullopt);
+  context.settings.selectedPlayOption = normalized;
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer play option");
+  }
   parseAndRefresh(selectedRandomValues.empty()
                       ? std::nullopt
                       : std::optional<std::vector<int>>(selectedRandomValues));
@@ -3541,9 +3725,9 @@ void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
   const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
   if (play_options::isNormalPlayOption(option) ||
       !play_options::validateLaneAssignOption(meta, option, &error)) {
-    if (laneAssignStatusText != nullptr) {
-      laneAssignStatusText->setText(error.empty() ? "Invalid lane assign."
-                                                 : error);
+    if (viewerPlayOptionsPanel != nullptr) {
+      viewerPlayOptionsPanel->setLaneOrderMessage(
+          error.empty() ? "Invalid lane order." : error, true);
     }
     return;
   }
@@ -3553,8 +3737,8 @@ void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
                       ? std::nullopt
                       : std::optional<std::vector<int>>(selectedRandomValues));
   refreshOptionsDrawer();
-  if (laneAssignStatusText != nullptr) {
-    laneAssignStatusText->setText("Applied");
+  if (viewerPlayOptionsPanel != nullptr) {
+    viewerPlayOptionsPanel->setLaneOrderMessage("Lane order applied.");
   }
 }
 
@@ -3669,6 +3853,325 @@ void ChartViewerScene::onCanvasSelectionChanged(long long timeMicros) {
   updateSelectionText();
 }
 
+void ChartViewerScene::onPracticeRangeChanged(
+    const practice::RangeSelection &range) {
+  if (chart == nullptr) {
+    return;
+  }
+  practiceConfiguration.startMicros = range.startMicros;
+  practiceConfiguration.endMicros = range.endMicros;
+  practiceConfiguration =
+      practice::sanitize(practiceConfiguration, practiceChartEndMicros)
+          .configuration;
+  if (practicePresetStore != nullptr) {
+    std::string error;
+    if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
+                                           practiceConfiguration, error) &&
+        practicePanel != nullptr) {
+      practicePanel->setPresetMessage("Could not save practice settings: " +
+                                          error,
+                                      true);
+    }
+  }
+  refreshPracticePanel();
+}
+
+void ChartViewerScene::onPracticeConfigurationChanged(
+    const practice::Configuration &configuration) {
+  if (chart == nullptr) {
+    return;
+  }
+  selectedPracticePresetId =
+      practicePanel == nullptr ? std::nullopt
+                               : practicePanel->selectedPresetId();
+  practiceConfiguration =
+      practice::sanitize(configuration, practiceChartEndMicros).configuration;
+  if (canvasView != nullptr) {
+    auto range = canvasView->getPracticeRange();
+    range.startMicros = practiceConfiguration.startMicros;
+    range.endMicros = practiceConfiguration.endMicros;
+    canvasView->setPracticeRange(range);
+  }
+  if (practicePresetStore != nullptr) {
+    std::string error;
+    if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
+                                           practiceConfiguration, error) &&
+        practicePanel != nullptr) {
+      practicePanel->setPresetMessage("Could not save practice settings: " +
+                                          error,
+                                      true);
+    }
+  }
+  refreshPracticePanel();
+  updateSelectionText();
+}
+
+void ChartViewerScene::selectActivePracticeMarker(practice::Marker marker) {
+  if (canvasView == nullptr) {
+    return;
+  }
+  canvasView->setActivePracticeMarker(marker);
+  refreshPracticePanel();
+  updateSelectionText();
+}
+
+void ChartViewerScene::moveActivePracticeMarker(
+    practice::TimelineDirection direction) {
+  if (canvasView != nullptr) {
+    (void)canvasView->moveActivePracticeMarker(direction);
+  }
+}
+
+bool ChartViewerScene::applyPracticePresetLoad(
+    practice::PresetLoadResult loaded, bool applyLastUsed) {
+  const auto notice = loaded.notice();
+  const bool usable = practice::installPresetLoadState(
+      std::move(loaded), applyLastUsed, practiceConfiguration,
+      practiceNamedPresets, selectedPracticePresetId);
+  if (notice && practicePanel != nullptr) {
+    practicePanel->setPresetMessage(*notice, true);
+  }
+  return usable;
+}
+
+void ChartViewerScene::loadPracticeConfiguration(
+    bool applyPendingLaunch,
+    std::optional<std::string> chartReplacementSuccessText) {
+  if (chart == nullptr) {
+    return;
+  }
+  const long long newChartEndMicros =
+      chart_playback_duration::ChartTimelineEndMicros(*chart);
+  practicePresetStore = std::make_unique<practice::PresetStore>(
+      context.profileManager.activePaths().practiceDirectory);
+  const std::string chartHash =
+      chart->Meta.SHA256.empty() ? record.meta.SHA256 : chart->Meta.SHA256;
+  auto loaded = practicePresetStore->load(chartHash, newChartEndMicros);
+  const auto loadStatus = loaded.status;
+  const auto applyMissingDefaults = [this, loadStatus]() {
+    if (loadStatus != versioned_json::LoadStatus::Missing) {
+      return;
+    }
+    const GaugeSelection gaugeSelection =
+        gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+    practiceConfiguration.gaugeType = gaugeSelection.type;
+    practiceConfiguration.gaugeAutoShift = gaugeSelection.autoShift;
+    practiceConfiguration.countInBeats =
+        practice::defaultCountInBeatsForChart(
+            chart->Meta.GuessedBeatsPerMeasure);
+  };
+  const auto refreshInstalledState = [this, &applyMissingDefaults]() {
+    applyMissingDefaults();
+    if (canvasView != nullptr) {
+      canvasView->setPracticeRange(
+          {.startMicros = practiceConfiguration.startMicros,
+           .endMicros = practiceConfiguration.endMicros,
+           .active = practice::Marker::Start});
+    }
+    refreshPracticePanel();
+  };
+  if (chartReplacementSuccessText.has_value()) {
+    chart_viewer_practice::GhostRefreshState state{
+        .chartEndMicros = practiceChartEndMicros,
+        .configuration = std::move(practiceConfiguration),
+        .namedPresets = std::move(practiceNamedPresets),
+        .selectedPresetId = std::move(selectedPracticePresetId),
+        .pendingLaunchRequest = std::move(pendingPracticeLaunchRequest),
+        .ghostReplay = std::move(practiceGhostReplay),
+        .loadedGhostReplayId = loadedGhostReplayId,
+        .playOption = std::move(viewerPlayOption),
+        .playOptionSeed = std::move(viewerPlayOptionSeed),
+        .playOption2 = std::move(viewerPlayOption2),
+        .playOption2Seed = std::move(viewerPlayOption2Seed)};
+    (void)chart_viewer_practice::installGhostRefreshState(
+        std::move(state), newChartEndMicros, std::move(loaded),
+        *chartReplacementSuccessText,
+        [this, &refreshInstalledState](
+            chart_viewer_practice::GhostRefreshState installed) {
+          practiceChartEndMicros = installed.chartEndMicros;
+          practiceConfiguration = std::move(installed.configuration);
+          practiceNamedPresets = std::move(installed.namedPresets);
+          selectedPracticePresetId = std::move(installed.selectedPresetId);
+          pendingPracticeLaunchRequest =
+              std::move(installed.pendingLaunchRequest);
+          practiceGhostReplay = std::move(installed.ghostReplay);
+          loadedGhostReplayId = installed.loadedGhostReplayId;
+          viewerPlayOption = std::move(installed.playOption);
+          viewerPlayOptionSeed = std::move(installed.playOptionSeed);
+          viewerPlayOption2 = std::move(installed.playOption2);
+          viewerPlayOption2Seed = std::move(installed.playOption2Seed);
+          refreshInstalledState();
+          if (statusText != nullptr) {
+            statusText->setText(installed.visibleStatus);
+          }
+        });
+    return;
+  }
+
+  practiceChartEndMicros = newChartEndMicros;
+  (void)applyPracticePresetLoad(std::move(loaded), true);
+  refreshInstalledState();
+  if (applyPendingLaunch) {
+    applyPendingPracticeLaunchRequest();
+  }
+}
+
+void ChartViewerScene::applyPendingPracticeLaunchRequest() {
+  if (!pendingPracticeLaunchRequest.has_value() || chart == nullptr) {
+    return;
+  }
+
+  const practice::LaunchRequest request =
+      std::move(*pendingPracticeLaunchRequest);
+  pendingPracticeLaunchRequest.reset();
+  auto application = practice::applyLaunchRequestForParsedChart(
+      practiceConfiguration, request, chart->Meta, practiceChartEndMicros);
+  if (!application.applied()) {
+    if (statusText != nullptr) {
+      statusText->setText(application.issue.value_or("Chart unavailable"));
+    }
+    return;
+  }
+
+  practiceConfiguration = std::move(application.configuration);
+  selectedPracticePresetId.reset();
+  if (canvasView != nullptr) {
+    canvasView->setPracticeRange(
+        {.startMicros = practiceConfiguration.startMicros,
+         .endMicros = practiceConfiguration.endMicros,
+         .active = practice::Marker::Start});
+  }
+  if (practicePanel != nullptr) {
+    practicePanel->setDisplay(YGDisplayFlex);
+    practicePanel->setVisible(true);
+  }
+  if (practicePresetStore != nullptr) {
+    std::string error;
+    if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
+                                           practiceConfiguration, error) &&
+        practicePanel != nullptr) {
+      practicePanel->setPresetMessage("Could not save practice settings: " +
+                                          error,
+                                      true);
+      refreshPracticePanel();
+      updateSelectionText();
+      return;
+    }
+  }
+  if (statusText != nullptr) {
+    statusText->setText("Practice section ready");
+  }
+  refreshPracticePanel();
+  updateSelectionText();
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ChartViewerScene::refreshPracticePanel() {
+  if (practicePanel == nullptr) {
+    return;
+  }
+  practicePanel->setChartEndMicros(practiceChartEndMicros);
+  const practice::Marker active =
+      canvasView == nullptr ? practice::Marker::Start
+                            : canvasView->getPracticeRange().active;
+  practicePanel->refresh(practiceConfiguration, practiceNamedPresets,
+                         selectedPracticePresetId, active);
+}
+
+void ChartViewerScene::savePracticeAs(std::string name) {
+  if (practicePresetStore == nullptr) {
+    return;
+  }
+  std::string error;
+  const auto id = practicePresetStore->saveNamed(
+      practiceConfiguration.chartSha256, std::move(name),
+      practiceConfiguration, error);
+  if (!id) {
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
+    }
+    return;
+  }
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  if (applyPracticePresetLoad(std::move(loaded), false)) {
+    selectedPracticePresetId = *id;
+  }
+  refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset saved.");
+  }
+}
+
+void ChartViewerScene::renamePracticePreset(std::string name) {
+  if (practicePresetStore == nullptr || !selectedPracticePresetId) {
+    return;
+  }
+  std::string error;
+  if (!practicePresetStore->renameNamed(practiceConfiguration.chartSha256,
+                                        *selectedPracticePresetId,
+                                        std::move(name), error)) {
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
+    }
+    return;
+  }
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  (void)applyPracticePresetLoad(std::move(loaded), false);
+  refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset renamed.");
+  }
+}
+
+void ChartViewerScene::updatePracticePreset() {
+  if (practicePresetStore == nullptr || !selectedPracticePresetId) {
+    return;
+  }
+  std::string error;
+  if (!practicePresetStore->updateNamed(
+          practiceConfiguration.chartSha256, *selectedPracticePresetId,
+          practiceConfiguration, error)) {
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
+    }
+    return;
+  }
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  (void)applyPracticePresetLoad(std::move(loaded), false);
+  refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset updated.");
+  }
+}
+
+void ChartViewerScene::deletePracticePreset() {
+  if (practicePresetStore == nullptr || !selectedPracticePresetId) {
+    return;
+  }
+  std::string error;
+  if (!practicePresetStore->deleteNamed(practiceConfiguration.chartSha256,
+                                        *selectedPracticePresetId, error)) {
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
+    }
+    return;
+  }
+  auto loaded = practicePresetStore->load(practiceConfiguration.chartSha256,
+                                          practiceChartEndMicros);
+  if (applyPracticePresetLoad(std::move(loaded), false)) {
+    selectedPracticePresetId.reset();
+  }
+  refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset deleted.");
+  }
+}
+
 void ChartViewerScene::retainLoadedListenResourcesForChartChange() {
   stopListening();
   if (listenAudioLoaded) {
@@ -3693,7 +4196,10 @@ void ChartViewerScene::startListeningFromSelection() {
     return;
   }
 
-  const long long selectedTime = canvasView->getSelectedTimeMicros();
+  const auto practiceRange = canvasView->getPracticeRange();
+  const long long selectedTime = chart_viewer_listen::resolveStartMicros(
+      practiceConfiguration, canvasView->getSelectedTimeMicros(),
+      practiceRange.active);
   if (statusText != nullptr) {
     statusText->setText(
         listenAudioLoaded
@@ -3785,25 +4291,39 @@ void ChartViewerScene::stopListening() {
 }
 
 void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
-  if (chart == nullptr || canvasView == nullptr ||
-      !canvasView->hasSelectedTime()) {
-    if (statusText != nullptr) {
-      statusText->setText("Set a cursor first");
-    }
+  if (chart == nullptr || canvasView == nullptr) {
     return;
   }
 
-  const long long selectedTime = canvasView->getSelectedTimeMicros();
+  const auto sanitized =
+      practice::sanitize(practiceConfiguration, practiceChartEndMicros);
+  if (!sanitized.playable()) {
+    if (statusText != nullptr) {
+      statusText->setText(sanitized.diagnostics.empty()
+                              ? "Practice configuration is not playable"
+                              : sanitized.diagnostics.front());
+    }
+    return;
+  }
+  const practice::Configuration launchConfiguration =
+      sanitized.configuration;
+  const long long selectedTime = launchConfiguration.startMicros;
   const auto chartRandomSeed = chart->Meta.RandomSeed;
   const auto chartRandomPrng = chart->Meta.RandomPrng;
   const std::optional<std::vector<int>> chartRandomValues =
       chart->Meta.RandomValues.empty()
           ? std::nullopt
           : std::optional<std::vector<int>>(chart->Meta.RandomValues);
-  const GaugeSelection gaugeSelection =
-      gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+  const GaugeSelection gaugeSelection{
+      .type = launchConfiguration.gaugeType,
+      .autoShift = launchConfiguration.gaugeAutoShift};
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
+  const int selectedLongNoteMode =
+      normalizeChartLongNoteModeValue(record.meta.LnMode) > 0
+          ? normalizeChartLongNoteModeValue(record.meta.LnMode)
+          : long_note_mode::valueFromId(context.settings.selectedLnMode,
+                                        long_note_mode::kLnValue);
   const bool canReuseJukeboxResources =
       listenAudioLoaded || retainedListenResourcesForReload;
 
@@ -3815,8 +4335,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
 
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
-       gaugeSelection, autoKeySound, assistOption, autoPlay,
-       canReuseJukeboxResources]() {
+       gaugeSelection, autoKeySound, assistOption, selectedLongNoteMode,
+       autoPlay, canReuseJukeboxResources, launchConfiguration]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
@@ -3888,11 +4408,21 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .playOptionSeed = viewerPlayOptionSeed,
                     .playOption2 = viewerPlayOption2,
                     .playOption2Seed = viewerPlayOption2Seed,
+                    .longNoteMode = selectedLongNoteMode,
                     .assistOption = assistOption,
+                    .pacemakerTarget = pacemaker::kTargetOff,
                     .ownsChart = true,
-                    .practiceMode = true,
+                    .practiceSession = std::make_shared<practice::Session>(
+                        launchConfiguration),
+                    .practiceMode = autoPlay,
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
+                    .playback = launchConfiguration.playback,
+                    .clubMode = context.settings.gameplayClubModeEnabled,
+                    .judgeWindowScalePercent =
+                        launchConfiguration.judge.scalePercent,
+                    .startingGaugePercent =
+                        launchConfiguration.startingGaugePercent,
                     .returnScene = this,
                     .touchVisualizationEnabled =
                         autoPlay ? std::optional<bool>(false) : std::nullopt,
@@ -4123,23 +4653,4 @@ std::string ChartViewerScene::viewerPlayOptionLabel() const {
     result += " / Lane " + *viewerLaneOrderSummary;
   }
   return result;
-}
-
-std::string ChartViewerScene::defaultLaneAssignNotation() const {
-  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
-  constexpr std::string_view keySymbols = "123456789ABCDE";
-  const auto keyLanes = meta.GetKeyLaneIndices();
-  const auto scratchLanes = meta.GetScratchLaneIndices();
-  std::string notation;
-  if (meta.IsDP && scratchLanes.size() >= 2) {
-    notation.push_back('L');
-  } else if (!meta.IsDP && !scratchLanes.empty()) {
-    notation.push_back('S');
-  }
-  const size_t keyCount = std::min(keyLanes.size(), keySymbols.size());
-  notation.append(keySymbols.substr(0, keyCount));
-  if (meta.IsDP && scratchLanes.size() >= 2) {
-    notation.push_back('R');
-  }
-  return notation;
 }

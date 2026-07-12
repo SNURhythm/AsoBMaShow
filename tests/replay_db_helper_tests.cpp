@@ -1,4 +1,5 @@
 #include "../src/ReplayDBHelper.h"
+#include "../src/ReplayClearMarkUtils.h"
 #include "../src/CourseIdentity.h"
 #include "../src/FileChecksum.h"
 #include "../src/ScoreProvenance.h"
@@ -943,15 +944,47 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(second.EnsureSchema());
 
   ReplayData replay = sampleReplay(root, "chart");
+  replay.provenance.playback = {.percent = 75,
+                                .mode = audio::PlaybackMode::PitchShift};
+  replay.provenance.judgeWindowScalePercent = 80;
+  replay.provenance.startingGaugePercent = 37;
+  replay.provenance.eligibility = ScoreEligibility::Modified;
+  replay.maxCombo = replay.chartMeta.TotalNotes;
+  replay.clearType = kClearTypeFullComboRank;
   const auto replayId = first.SaveReplay(replay);
   assert(replayId.has_value());
   const auto loaded = first.LoadReplay(*replayId, replay.chartMeta);
   assert(loaded.has_value());
   assert(loaded->provenance == replay.provenance);
+  assert(loaded->provenance.playback == replay.provenance.playback);
+  assert(loaded->provenance.judgeWindowScalePercent == 80);
+  assert(loaded->provenance.startingGaugePercent == 37);
+  auto db = openDatabase(firstPath);
+  const std::string storedProvenance =
+      queryText(db.get(), "SELECT provenance_json FROM replays WHERE id=" +
+                              std::to_string(*replayId));
+  assert(storedProvenance.find("\"playback\"") != std::string::npos);
+  assert(storedProvenance.find("\"judgeWindowScalePercent\":80") !=
+         std::string::npos);
+  assert(storedProvenance.find("\"startingGaugePercent\":37") !=
+         std::string::npos);
+  assert(!columnExists(db.get(), "replays", "playback_percent"));
+  assert(!columnExists(db.get(), "replays", "playback_mode"));
+  assert(!columnExists(db.get(), "replays", "judge_window_scale_percent"));
+  assert(!columnExists(db.get(), "replays", "starting_gauge_percent"));
+  assert(!columnExists(db.get(), "course_replays", "playback_percent"));
+  assert(!columnExists(db.get(), "course_replays", "playback_mode"));
+  assert(
+      !columnExists(db.get(), "course_replays", "judge_window_scale_percent"));
+  assert(!columnExists(db.get(), "course_replays", "starting_gauge_percent"));
+  db.reset();
   const auto summaries = first.ListReplays(replay.chartMeta, 0);
   assert(summaries.size() == 1);
   assert(summaries.front().rulesetVersion == 1);
-  assert(summaries.front().eligibility == ScoreEligibility::Verified);
+  assert(summaries.front().eligibility == ScoreEligibility::Modified);
+  assert(summaries.front().playback == replay.provenance.playback);
+  assert(replay_clear_mark::effectiveClearRank(summaries.front()) ==
+         kClearTypeAssistedEasyClearRank);
 
   CourseReplayData course;
   course.courseId = 31;
@@ -961,7 +994,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   course.finalScore = replay.finalScore;
   course.maxCombo = replay.maxCombo;
   course.finalGauge = replay.finalGauge;
-  course.clearType = replay.clearType;
+  course.clearType = kClearTypeFullComboRank;
   course.completedCharts = 1;
   course.totalCharts = 1;
   course.provenance = replay.provenance;
@@ -980,7 +1013,10 @@ void testChartAndCourseRoundTripAndPathIsolation(
       {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 0);
   assert(courseSummaries.size() == 1);
   assert(courseSummaries.front().rulesetVersion == 1);
-  assert(courseSummaries.front().eligibility == ScoreEligibility::Verified);
+  assert(courseSummaries.front().eligibility == ScoreEligibility::Modified);
+  assert(courseSummaries.front().playback == course.provenance.playback);
+  assert(replay_clear_mark::effectiveClearRank(courseSummaries.front()) ==
+         kClearTypeAssistedEasyClearRank);
 
   assert(second.ListReplays(replay.chartMeta, 0).empty());
   assert(second

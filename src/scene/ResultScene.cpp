@@ -8,11 +8,16 @@
 #include "../ResultPresentationUtils.h"
 #include "../ScoreDBHelper.h"
 #include "../path.h"
+#include "../practice/PracticeLaunchRequest.h"
+#include "../practice/PracticeResultModel.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
+#include "ChartViewerScene.h"
+#include "PracticeAnalyticsPresentation.h"
+#include "PracticeAnalyticsView.h"
 
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -22,11 +27,13 @@
 #include "../skin/SkinTypes.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -252,11 +259,11 @@ courseReplayDataForSession(const CoursePlaySession &session,
   replay.totalCharts = static_cast<int>(totalCharts);
   replay.provenance = provenance;
   const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
-  if (result_presentation::isFullComboCourseResult(
-          replay.completedCharts, replay.totalCharts, session.entries.size(),
-          resultState, courseMeta)) {
-    replay.clearType = kClearTypeFullComboRank;
-  }
+  const bool fullCombo = result_presentation::isFullComboCourseResult(
+      replay.completedCharts, replay.totalCharts, session.entries.size(),
+      resultState, courseMeta);
+  replay.clearType = clear_policy::fullComboRankForPlayback(
+      replay.clearType, fullCombo, provenance.playback);
 
   replay.stages = std::move(*preparedStages);
   return replay;
@@ -272,7 +279,8 @@ ResultScene::ResultScene(
     std::string pacemakerTarget,
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
     bms_parser::Chart *reusableRetryChart,
-    std::optional<ResultPacemakerData> pacemakerOverride)
+    std::optional<ResultPacemakerData> pacemakerOverride,
+    const ReplayData *analyticsSource)
     : Scene(context), meta(meta), resultState(state),
       attemptProvenance(attemptProvenance),
       replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
@@ -281,6 +289,9 @@ ResultScene::ResultScene(
                     ? std::optional<ReplayData>(*retrySource)
                     : (replay != nullptr ? std::optional<ReplayData>(*replay)
                                          : std::nullopt)),
+      analyticsData(analyticsSource != nullptr
+                        ? std::optional<ReplayData>(*analyticsSource)
+                        : std::nullopt),
       practiceOptions(std::move(practiceOptions)),
       courseOptions(std::move(courseOptions)),
       ownedReusableRetryChart(std::move(ownedReusableRetryChart)),
@@ -317,12 +328,15 @@ ResultScene::ResultScene(
     headerDifficultyLabelOverride = "COURSE";
     const auto &session = *this->courseOptions.session;
     const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
-    if (result_presentation::isFullComboCourseResult(
-            static_cast<int>(session.completedResults.size()),
-            static_cast<int>(session.entries.size()), session.entries.size(),
-            resultState, courseMeta)) {
-      currentClearLabelOverride = "FULL COMBO";
-      currentClearRankOverride = kClearTypeFullComboRank;
+    const bool fullCombo = result_presentation::isFullComboCourseResult(
+        static_cast<int>(session.completedResults.size()),
+        static_cast<int>(session.entries.size()), session.entries.size(),
+        resultState, courseMeta);
+    if (fullCombo) {
+      const int clearRank = clear_policy::fullComboRankForPlayback(
+          resultState.getClearTypeRank(), true, attemptProvenance.playback);
+      currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+      currentClearRankOverride = clearRank;
     }
   }
   skin = std::make_unique<DefaultSkin>();
@@ -463,6 +477,85 @@ void ResultScene::saveReplay() {
   }
 }
 
+std::optional<practice::ResultModel>
+ResultScene::makeTimingAnalyticsModel() const {
+  if (reusableRetryChart == nullptr || isCourseStageResult() ||
+      isCourseFinalResult()) {
+    return std::nullopt;
+  }
+  std::span<const ReplayData> completedAttempts;
+  std::size_t abandonedAttempts = 0;
+  std::array<ReplayData, 1> singleAttempt;
+  if (practiceOptions.session != nullptr) {
+    completedAttempts = practiceOptions.session->completedAttempts();
+    abandonedAttempts = practiceOptions.session->abandonedAttemptCount();
+  } else if (analyticsData.has_value()) {
+    singleAttempt.front() = *analyticsData;
+    completedAttempts = singleAttempt;
+  } else if (replayToSave.has_value()) {
+    singleAttempt.front() = *replayToSave;
+    singleAttempt.front().autoPlay =
+        singleAttempt.front().autoPlay || autoPlayResult;
+    completedAttempts = singleAttempt;
+  } else if (retryData.has_value()) {
+    singleAttempt.front() = *retryData;
+    singleAttempt.front().autoPlay =
+        singleAttempt.front().autoPlay || autoPlayResult;
+    completedAttempts = singleAttempt;
+  }
+  if (completedAttempts.empty()) {
+    return std::nullopt;
+  }
+
+  return practice::ResultModel(*reusableRetryChart, completedAttempts,
+                               abandonedAttempts);
+}
+
+void ResultScene::addTimingAnalytics() {
+  View *host =
+      rootLayout == nullptr
+          ? nullptr
+          : rootLayout->findViewByName("timingAnalytics");
+  auto analyticsModel = makeTimingAnalyticsModel();
+  if (rootLayout == nullptr || !analyticsModel.has_value()) {
+    if (host != nullptr) {
+      host->setDisplay(YGDisplayNone);
+    }
+    return;
+  }
+
+  if (host == nullptr) {
+    host = new View();
+    host->setName("timingAnalytics");
+    host->setWidthPercent(100.0f);
+    host->setHeight(
+        practice_analytics_presentation::kPreferredAnalyticsHeight);
+    host->setMinHeight(
+        practice_analytics_presentation::kMinimumAnalyticsHeight);
+    host->setFlexShrink(1.0f);
+    host->setFlexDirection(FlexDirection::Column);
+    host->setAlignItems(YGAlignStretch);
+    View *actionSibling = nullptr;
+    for (View *child : rootLayout->getChildren()) {
+      if (child != nullptr &&
+          (child->getName() == "resultActions" ||
+           child->findViewByName("resultActions") != nullptr)) {
+        actionSibling = child;
+        break;
+      }
+    }
+    if (actionSibling != nullptr) {
+      rootLayout->insertViewBefore(host, actionSibling);
+    } else {
+      rootLayout->addView(host);
+    }
+  }
+
+  timingAnalyticsView =
+      new PracticeAnalyticsView(std::move(*analyticsModel));
+  host->addView(timingAnalyticsView);
+}
+
 void ResultScene::addRetryButtons() {
   if (rootLayout == nullptr) {
     return;
@@ -567,6 +660,30 @@ void ResultScene::addRetryButtons() {
                                        ui_theme::hairlineSubtle());
   }
   retryRow->addView(exportPhotoButton);
+
+  practiceSectionButton = new Button();
+  practiceSectionButtonText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  practiceSectionButtonText->setText("Select Section");
+  practiceSectionButtonText->setAlign(TextView::CENTER);
+  practiceSectionButtonText->setVAlign(TextView::MIDDLE);
+  practiceSectionButtonText->setColor(
+      ui_theme::sdl(ui_theme::textOn(ui_theme::successAction())));
+  practiceSectionButton->setContentView(practiceSectionButtonText);
+  practiceSectionButton->setOnClickListener(
+      [this]() { practiceThisSection(); });
+  practiceSectionButton->setSize(280, 64);
+  practiceSectionButton->setCornerRadius(ui_theme::controlRadius());
+  practiceSectionButton->setBackgroundColors(
+      ui_theme::successAction(), ui_theme::successActionHover(),
+      ui_theme::successActionPressed());
+  practiceSectionButton->setBorderColors(
+      ui_theme::withAlpha(ui_theme::lime(), 150),
+      ui_theme::withAlpha(ui_theme::lime(), 190),
+      ui_theme::withAlpha(ui_theme::lime(), 220));
+  practiceSectionButton->setStyledBorderWidth(1);
+  retryRow->addView(practiceSectionButton);
+  updatePracticeSectionAction();
   actionHost->addView(retryRow);
 }
 
@@ -767,10 +884,12 @@ void ResultScene::exportPhoto() {
   exportPhotoButtonText->setText("Saving...");
   const std::optional<ResultPacemakerData> pacemaker =
       pacemakerDataForCurrentResult();
+  const auto analyticsModel = makeTimingAnalyticsModel();
   const auto result = ResultImageExporter::Export(
       context, meta, resultState, playModeLabel, laneOrderLabel,
       difficultyLabel, previousBest, currentClearLabelOverride,
-      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker);
+      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker,
+      analyticsModel);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
@@ -914,6 +1033,15 @@ void ResultScene::showCourseResult() {
 }
 
 void ResultScene::startRetry(bool samePattern) {
+  const std::optional<practice::Configuration> practiceConfiguration =
+      practiceOptions.session != nullptr
+          ? std::optional<practice::Configuration>(
+                practiceOptions.session->configuration())
+          : std::nullopt;
+  const audio::PlaybackRate retryPlayback =
+      resultRetryPlayback(attemptProvenance, practiceConfiguration);
+  const auto retryPracticeSession =
+      freshPracticeSessionForRetry(practiceOptions.session);
   ReplayData retrySource;
   if (retryData.has_value()) {
     retrySource = *retryData;
@@ -929,13 +1057,17 @@ void ResultScene::startRetry(bool samePattern) {
     retrySource.playOption2 = practiceOptions.playOption2;
     retrySource.playOption2Seed = practiceOptions.playOption2Seed;
     retrySource.assistOption = practiceOptions.assistOption;
-    retrySource.initialGaugeType = practiceOptions.gaugeType;
+    retrySource.initialGaugeType =
+        practiceConfiguration.has_value()
+            ? practiceConfiguration->gaugeType
+            : practiceOptions.gaugeType;
     retrySource.gaugeAutoShift = practiceOptions.gaugeAutoShift;
   }
 
   context.jukebox.stop();
   defer(
-      [this, retrySource, samePattern]() {
+      [this, retrySource, samePattern, practiceConfiguration, retryPlayback,
+       retryPracticeSession]() {
         std::atomic_bool parseCancelled = false;
         const bool reuseCurrentPattern =
             samePattern && reusableRetryChart != nullptr;
@@ -958,28 +1090,51 @@ void ResultScene::startRetry(bool samePattern) {
         }
 
         StartOptions options;
-        options.startPosition =
-            practiceOptions.enabled ? practiceOptions.startPosition : 0;
+        options.startPosition = practiceOptions.enabled
+                                    ? (practiceConfiguration.has_value()
+                                           ? static_cast<unsigned long long>(
+                                                 std::max(
+                                                     0LL,
+                                                     practiceConfiguration
+                                                         ->startMicros))
+                                           : practiceOptions.startPosition)
+                                    : 0;
         options.autoKeySound =
             practiceOptions.enabled
                 ? (practiceOptions.autoPlay || practiceOptions.autoKeySound)
                                     : !context.settings.inputKeysoundEnabled;
         options.autoPlay =
             practiceOptions.enabled ? practiceOptions.autoPlay : false;
-        options.gaugeType = retrySource.initialGaugeType;
-        options.gaugeAutoShift = retrySource.gaugeAutoShift;
+        options.gaugeType = practiceConfiguration.has_value()
+                                ? practiceConfiguration->gaugeType
+                                : retrySource.initialGaugeType;
+        options.gaugeAutoShift =
+            practiceConfiguration.has_value()
+                ? practiceConfiguration->gaugeAutoShift
+                : retrySource.gaugeAutoShift;
         options.longNoteMode = normalizeChartLongNoteModeValue(
             retrySource.chartMeta.LnMode);
         options.assistOption = retrySource.assistOption;
+        options.clubMode = attemptProvenance.clubMode;
         options.pacemakerTarget =
             practiceOptions.enabled
                 ? pacemaker::kTargetOff
                 : pacemaker::normalizeTargetId(
                       context.settings.selectedPacemakerTarget);
+        options.playback = retryPlayback;
         options.ownsChart = true;
         if (practiceOptions.enabled) {
-          options.practiceMode = true;
-          options.practiceLeadInMicros = practiceOptions.leadInMicros;
+          options.practiceSession = retryPracticeSession;
+          options.practiceMode = retryPracticeSession == nullptr;
+          options.practiceLeadInMicros =
+              retryPracticeSession == nullptr ? practiceOptions.leadInMicros
+                                              : 0;
+          if (practiceConfiguration.has_value()) {
+            options.judgeWindowScalePercent =
+                practiceConfiguration->judge.scalePercent;
+            options.startingGaugePercent =
+                practiceConfiguration->startingGaugePercent;
+          }
           options.longNoteMode = practiceOptions.longNoteMode;
           options.returnScene = practiceOptions.returnScene;
           if (!options.autoPlay) {
@@ -1091,22 +1246,126 @@ void ResultScene::startReplay() {
         }
 
         auto replayData = std::make_shared<ReplayData>(replaySource);
+        StartOptions replayOptions{
+            .startPosition = 0,
+            .autoKeySound = false,
+            .autoPlay = false,
+            .gaugeType = replayData->initialGaugeType,
+            .gaugeAutoShift = replayData->gaugeAutoShift,
+            .replayData = replayData,
+            .ownsChart = true,
+        };
+        applyReplayProvenanceToStartOptions(replayOptions, *replayData);
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(
-                context, std::move(replayChart),
-                StartOptions{
-                    .startPosition = 0,
-                    .autoKeySound = false,
-                    .autoPlay = false,
-                    .gaugeType = replayData->initialGaugeType,
-                    .gaugeAutoShift = replayData->gaugeAutoShift,
-                    .replayData = replayData,
-                    .ownsChart = true,
-                }),
+                context, std::move(replayChart), std::move(replayOptions)),
             false);
         return false;
       },
       0, true);
+}
+
+practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
+    long long startMicros, long long endMicros) const {
+  const practice::LaunchSource source =
+      practiceOptions.enabled
+          ? practice::LaunchSource::PracticeResult
+          : (replayResult ? practice::LaunchSource::ReplayResult
+                          : practice::LaunchSource::NormalResult);
+  bms_parser::ChartMeta chartMeta = meta;
+  if (source == practice::LaunchSource::ReplayResult &&
+      retryData.has_value()) {
+    chartMeta = practice::mergeReplayLaunchChartMeta(meta, *retryData);
+  }
+  return {
+      .chartMeta = chartMeta,
+      .startMicros = startMicros,
+      .endMicros = endMicros,
+      .source = source,
+      .replayId = source == practice::LaunchSource::ReplayResult &&
+                          retryData.has_value()
+                      ? std::optional<int>(retryData->id)
+                      : std::nullopt,
+  };
+}
+
+std::optional<practice::LaunchRequest>
+ResultScene::selectedPracticeLaunchRequest() const {
+  if (timingAnalyticsView == nullptr) {
+    return std::nullopt;
+  }
+  const auto selected = timingAnalyticsView->selectedSection();
+  if (!selected.has_value()) {
+    return std::nullopt;
+  }
+  return makePracticeLaunchRequest(selected->startMicros,
+                                   selected->endMicros);
+}
+
+void ResultScene::updatePracticeSectionAction() {
+  if (practiceSectionButton == nullptr || practiceSectionButtonText == nullptr) {
+    return;
+  }
+
+  const auto availabilityRequest = makePracticeLaunchRequest(0, 1);
+  if (const auto issue = practice::validateLaunchRequest(availabilityRequest);
+      issue.has_value()) {
+    practiceSectionButton->setEnabled(false);
+    practiceSectionButtonText->setText(*issue);
+    return;
+  }
+
+  const auto selectedRequest = selectedPracticeLaunchRequest();
+  if (!selectedRequest.has_value()) {
+    practiceSectionButton->setEnabled(false);
+    practiceSectionButtonText->setText("Select Section");
+    return;
+  }
+  if (const auto issue = practice::validateLaunchRequest(*selectedRequest);
+      issue.has_value()) {
+    practiceSectionButton->setEnabled(false);
+    practiceSectionButtonText->setText(*issue);
+    return;
+  }
+
+  practiceSectionButton->setEnabled(true);
+  practiceSectionButtonText->setText("Practice This Section");
+}
+
+void ResultScene::practiceThisSection() {
+  const auto selectedRequest = selectedPracticeLaunchRequest();
+  if (!selectedRequest.has_value() ||
+      practice::validateLaunchRequest(*selectedRequest).has_value()) {
+    updatePracticeSectionAction();
+    return;
+  }
+
+  practice::LaunchRequest request = *selectedRequest;
+  context.jukebox.stop();
+
+  if (request.source == practice::LaunchSource::PracticeResult &&
+      practiceOptions.returnScene != nullptr) {
+    if (auto *viewer =
+            dynamic_cast<ChartViewerScene *>(practiceOptions.returnScene);
+        viewer != nullptr) {
+      viewer->setPracticeLaunchRequest(std::move(request));
+      context.sceneManager->changeScene(viewer, false);
+      return;
+    }
+  }
+
+  ChartMetaRecord record{
+      .meta = request.chartMeta,
+      .difficultyTableLabels = difficultyLabel,
+  };
+  const auto randomSeed = request.chartMeta.RandomSeed;
+  const auto randomPrng = request.chartMeta.RandomPrng;
+  const auto randomValues = request.chartMeta.RandomValues;
+  context.sceneManager->changeScene(
+      std::make_unique<ChartViewerScene>(
+          context, std::move(record), randomSeed, randomPrng, randomValues,
+          std::move(request)),
+      false);
 }
 
 void ResultScene::startCourseReplay() {
@@ -1215,6 +1474,7 @@ void ResultScene::init() {
   data.previousBest = previousBest;
   data.pacemaker = pacemakerDataForCurrentResult();
   skin->buildLayout("Result", rootLayout, &data);
+  addTimingAnalytics();
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();
     buildCourseExitConfirmation();
@@ -1249,7 +1509,10 @@ void ResultScene::init() {
   }
 }
 
-void ResultScene::update(float dt) {}
+void ResultScene::update(float dt) {
+  (void)dt;
+  updatePracticeSectionAction();
+}
 
 void ResultScene::renderScene() {
   if (graphPlaceHolder && !resultState.gaugeHistory.empty()) {
@@ -1270,8 +1533,11 @@ void ResultScene::renderScene() {
 void ResultScene::cleanupScene() {
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
+  timingAnalyticsView = nullptr;
   courseExitConfirmation = nullptr;
   exportPhotoButton = nullptr;
   exportPhotoButtonText = nullptr;
+  practiceSectionButton = nullptr;
+  practiceSectionButtonText = nullptr;
   resultPhotoExportInProgress = false;
 }

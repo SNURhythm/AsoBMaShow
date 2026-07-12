@@ -7,8 +7,10 @@
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
+#include "../view/DropdownView.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
+#include "../view/OverlayPortal.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -122,6 +124,25 @@ std::string formatMusicTime(long long micros) {
   }
   stream << seconds;
   return stream.str();
+}
+
+std::vector<DropdownView::Option> playbackRateOptions() {
+  std::vector<DropdownView::Option> options;
+  for (int percent = 50; percent <= 200; percent += 5) {
+    options.push_back({.id = std::to_string(percent),
+                       .label = std::to_string(percent) + "%"});
+  }
+  return options;
+}
+
+std::string playbackModeId(audio::PlaybackMode mode) {
+  return mode == audio::PlaybackMode::TimeStretch ? "time-stretch"
+                                                   : "pitch-shift";
+}
+
+std::string playbackModeLabel(audio::PlaybackMode mode) {
+  return mode == audio::PlaybackMode::TimeStretch ? "Time Stretch"
+                                                   : "Pitch Shift";
 }
 
 std::string formatSleepTimerDuration(long long micros) {
@@ -595,6 +616,14 @@ private:
 void MusicPlayerScene::init() {
   context.jukebox.stop();
   applySystemPlaybackPrivacy(false);
+  std::string clubModeStatus;
+  context.musicPlayer.SetClubMode(
+      context.settings.musicPlayerClubModeEnabled, clubModeStatus);
+  std::string playbackRateError;
+  context.musicPlayer.SetPlaybackRate(
+      {.percent = context.settings.musicPlayerPlaybackRatePercent,
+       .mode = context.settings.musicPlayerPlaybackMode},
+      playbackRateError);
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
   buildView();
@@ -642,6 +671,10 @@ void MusicPlayerScene::update(float) {
     lastLayoutHeight = rendering::window_height;
     rootLayout->setSize(rendering::window_width, rendering::window_height);
     rootLayout->applyYogaLayout();
+    if (overlayPortal != nullptr) {
+      overlayPortal->setSize(rendering::window_width,
+                             rendering::window_height);
+    }
     if (videoOverlayRoot != nullptr) {
       videoOverlayRoot->setSize(rendering::window_width,
                                 rendering::window_height);
@@ -663,6 +696,13 @@ void MusicPlayerScene::update(float) {
     if (!nativeStatus.empty()) {
       setStatus(nativeStatus);
     }
+    const bool appliedClubMode = context.musicPlayer.ClubMode();
+    if (context.settings.musicPlayerClubModeEnabled != appliedClubMode) {
+      context.settings.musicPlayerClubModeEnabled = appliedClubMode;
+      if (!context.saveSettings()) {
+        SDL_Log("Failed to save Music Player Club Beat setting");
+      }
+    }
   }
   if (queueMayHaveChanged) {
     refreshActiveQueueList(true);
@@ -683,6 +723,7 @@ void MusicPlayerScene::cleanupScene() {
     context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
   }
   rootLayout = nullptr;
+  overlayPortal = nullptr;
   videoOverlayRoot = nullptr;
   videoArtworkBackdrop = nullptr;
   videoControlsPanel = nullptr;
@@ -752,6 +793,10 @@ void MusicPlayerScene::cleanupScene() {
   playlistNameInput = nullptr;
   playlistRenameInput = nullptr;
   playPauseButtonText = nullptr;
+  playbackModeDropdown = nullptr;
+  playbackRateDropdown = nullptr;
+  clubModeButton = nullptr;
+  clubModeButtonText = nullptr;
   deletePlaylistButtonText = nullptr;
   clearPlaylistButtonText = nullptr;
   seekProgressTrack = nullptr;
@@ -772,6 +817,8 @@ void MusicPlayerScene::cleanupScene() {
   videoShowingArtwork = false;
   videoRestoresVisualsEnabled = false;
   videoControlsVisible = false;
+  playbackModeDropdownOpen = false;
+  playbackRateDropdownOpen = false;
   videoControlsVisibleUntil = 0;
   videoTrackId.clear();
   videoChart.reset();
@@ -784,6 +831,13 @@ void MusicPlayerScene::buildView() {
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
   addView(rootLayout);
+
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                    rendering::window_height);
+  overlayPortal->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal->setPosition(Edge::Left, 0);
+  overlayPortal->setPosition(Edge::Top, 0);
+  overlayPortal->setZIndex(900);
 
   auto *header = new View();
   header->setHeight(safe.top + kHeaderHeight)
@@ -908,6 +962,7 @@ void MusicPlayerScene::buildView() {
   content->addView(pageStack);
 
   rootLayout->addView(content);
+  rootLayout->addView(overlayPortal);
   refreshNavigation();
   rootLayout->applyYogaLayout();
   buildVideoOverlay();
@@ -1678,7 +1733,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   nowColumn->addView(seekProgressTrack);
 
   auto *transport = new View();
-  transport->setHeight(186)
+  transport->setHeight(308)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(9);
   auto *transportRow = new View();
@@ -1695,6 +1750,13 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowB->setHeight(52)
       ->setFlexDirection(FlexDirection::Row)
       ->setGap(10);
+  auto *playbackRateRow = new View();
+  playbackRateRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter)
+      ->setGap(10);
+  auto *clubModeRow = new View();
+  clubModeRow->setHeight(52)->setFlexDirection(FlexDirection::Row);
 
   TextView *previousText = nullptr;
   auto *previousButton = makeIconButton(kIconBackwardStep, 28, &previousText);
@@ -1777,6 +1839,42 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::accentBorder);
   stopButton->setOnClickListener([this]() { stopPlayback(); });
 
+  playbackModeDropdown = new DropdownView(
+      {
+          .onOpenChanged =
+              [this](bool open) {
+                playbackModeDropdownOpen = open;
+                if (open) {
+                  playbackRateDropdownOpen = false;
+                }
+                refreshPlaybackRateControl();
+              },
+          .onOptionSelected =
+              [this](const std::string &id) { setPlaybackMode(id); },
+      },
+      overlayPortal);
+  playbackModeDropdown->setFlex(1.0f)->setMinWidth(0);
+
+  playbackRateDropdown = new DropdownView(
+      {
+          .onOpenChanged =
+              [this](bool open) {
+                playbackRateDropdownOpen = open;
+                if (open) {
+                  playbackModeDropdownOpen = false;
+                }
+                refreshPlaybackRateControl();
+              },
+          .onOptionSelected =
+              [this](const std::string &id) { setPlaybackRate(id); },
+      },
+      overlayPortal);
+  playbackRateDropdown->setFlex(1.0f)->setMinWidth(0);
+
+  clubModeButton = makeButton("☐ Club Beat", 17, &clubModeButtonText);
+  clubModeButton->setFlex(1.0f);
+  clubModeButton->setOnClickListener([this]() { toggleClubMode(); });
+
   transportRow->addView(previousButton);
   transportRow->addView(back10Button);
   transportRow->addView(playPauseButton);
@@ -1787,9 +1885,16 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowB->addView(repeatButton);
   actionRowB->addView(shuffleButton);
   actionRowB->addView(stopButton);
+  playbackRateRow->addView(playbackModeDropdown);
+  playbackRateRow->addView(playbackRateDropdown);
+  clubModeRow->addView(clubModeButton);
   transport->addView(transportRow);
   transport->addView(actionRowA);
   transport->addView(actionRowB);
+  transport->addView(playbackRateRow);
+  transport->addView(clubModeRow);
+  refreshPlaybackRateControl();
+  refreshClubModeControl();
   nowColumn->addView(transport);
   workspace->addView(nowColumn);
 
@@ -2478,7 +2583,15 @@ void MusicPlayerScene::refreshUi() {
     playerSubtitleText->setText(queueDisplayName(displayedQueueName) + " | " +
                                 std::to_string(queueTracks.size()) +
                                 " tracks | " +
-                                repeatModeLabel(displayedRepeatMode));
+                                repeatModeLabel(displayedRepeatMode) + " | " +
+                                std::to_string(
+                                    context.musicPlayer.PlaybackRate().percent) +
+                                "% " +
+                                playbackModeLabel(
+                                    context.musicPlayer.PlaybackRate().mode) +
+                                (context.musicPlayer.ClubMode()
+                                     ? " | Club Beat"
+                                     : ""));
   }
   if (queueTitleText != nullptr) {
     queueTitleText->setText(queueDisplayName(displayedQueueName));
@@ -2582,6 +2695,7 @@ void MusicPlayerScene::refreshUi() {
   }
   refreshSleepTimerUi();
   refreshSystemPlaybackPrivacyButtons();
+  refreshClubModeControl();
   refreshNavigation();
   refreshLibraryArtwork(selectedLibraryTrack());
   refreshTrackBrowserArtwork(
@@ -2941,6 +3055,9 @@ void MusicPlayerScene::switchTab(MusicPlayerTab tab) {
   if (activeTab != MusicPlayerTab::Player) {
     seekMouseDown = false;
     activeSeekTouchId = -1;
+    playbackModeDropdownOpen = false;
+    playbackRateDropdownOpen = false;
+    refreshPlaybackRateControl();
   }
   refreshNavigation();
   refreshUi();
@@ -3921,6 +4038,121 @@ void MusicPlayerScene::cycleRepeatMode() {
   displayedRepeatMode = next;
   setStatus(repeatModeLabel(next));
   refreshUi();
+}
+
+void MusicPlayerScene::setPlaybackRate(const std::string &id) {
+  const int percent = std::atoi(id.c_str());
+  const audio::PlaybackRate rate{
+      .percent = percent, .mode = context.musicPlayer.PlaybackRate().mode};
+  std::string errorMessage;
+  if (!context.musicPlayer.SetPlaybackRate(rate, errorMessage)) {
+    setStatus(errorMessage);
+    playbackRateDropdownOpen = false;
+    refreshPlaybackRateControl();
+    return;
+  }
+
+  context.settings.musicPlayerPlaybackRatePercent = percent;
+  context.settings.sanitize();
+  playbackRateDropdownOpen = false;
+  if (!context.saveSettings()) {
+    setStatus("Playback rate changed, but could not save it.");
+  } else {
+    setStatus("Music playback rate: " + std::to_string(percent) + "%.");
+  }
+  refreshPlaybackRateControl();
+}
+
+void MusicPlayerScene::setPlaybackMode(const std::string &id) {
+  audio::PlaybackMode mode;
+  if (id == "pitch-shift") {
+    mode = audio::PlaybackMode::PitchShift;
+  } else if (id == "time-stretch") {
+    mode = audio::PlaybackMode::TimeStretch;
+  } else {
+    return;
+  }
+
+  audio::PlaybackRate rate = context.musicPlayer.PlaybackRate();
+  rate.mode = mode;
+  std::string errorMessage;
+  if (!context.musicPlayer.SetPlaybackRate(rate, errorMessage)) {
+    setStatus(errorMessage);
+    playbackModeDropdownOpen = false;
+    refreshPlaybackRateControl();
+    return;
+  }
+
+  context.settings.musicPlayerPlaybackMode = mode;
+  context.settings.sanitize();
+  playbackModeDropdownOpen = false;
+  if (!context.saveSettings()) {
+    setStatus("Playback mode changed, but could not save it.");
+  } else {
+    setStatus("Music playback mode: " + playbackModeLabel(mode) + ".");
+  }
+  refreshPlaybackRateControl();
+}
+
+void MusicPlayerScene::refreshPlaybackRateControl() {
+  if (playbackModeDropdown == nullptr || playbackRateDropdown == nullptr) {
+    return;
+  }
+  const audio::PlaybackRate rate = context.musicPlayer.PlaybackRate();
+  playbackModeDropdown->refresh({
+      .label = "Mode",
+      .selectedId = playbackModeId(rate.mode),
+      .options = {{.id = "pitch-shift", .label = "Pitch Shift"},
+                  {.id = "time-stretch", .label = "Time Stretch"}},
+      .open = playbackModeDropdownOpen,
+      .enabled = true,
+      .maxVisibleItems = 2,
+  });
+  playbackRateDropdown->refresh({
+      .label = "Playback rate",
+      .selectedId = std::to_string(rate.percent),
+      .options = playbackRateOptions(),
+      .open = playbackRateDropdownOpen,
+      .enabled = true,
+      .maxVisibleItems = 6,
+      .menuWidth = 400.0f,
+  });
+}
+
+void MusicPlayerScene::toggleClubMode() {
+  const bool enabled = !context.musicPlayer.ClubMode();
+  std::string status;
+  if (!context.musicPlayer.SetClubMode(enabled, status)) {
+    setStatus(status);
+    refreshClubModeControl();
+    return;
+  }
+
+  setStatus(status);
+  if (context.musicPlayer.ClubMode() == enabled) {
+    context.settings.musicPlayerClubModeEnabled = enabled;
+    if (!context.saveSettings()) {
+      setStatus("Club Beat changed, but could not save it.");
+    }
+  }
+  refreshClubModeControl();
+}
+
+void MusicPlayerScene::refreshClubModeControl() {
+  if (clubModeButton == nullptr || clubModeButtonText == nullptr) {
+    return;
+  }
+  const bool enabled = context.musicPlayer.ClubMode();
+  clubModeButtonText->setText(enabled ? "☑ Club Beat" : "☐ Club Beat");
+  if (enabled) {
+    styleButton(clubModeButton, clubModeButtonText, ui_theme::primaryAction,
+                ui_theme::primaryActionHover,
+                ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
+  } else {
+    styleButton(clubModeButton, clubModeButtonText, ui_theme::control,
+                ui_theme::controlHover, ui_theme::controlPressed,
+                ui_theme::hairlineStrong);
+  }
 }
 
 void MusicPlayerScene::setSleepTimerFromInput() {

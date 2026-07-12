@@ -12,6 +12,7 @@ import android.media.AudioAttributes;
 import android.media.MediaDescription;
 import android.media.MediaMetadata;
 import android.media.MediaPlayer;
+import android.media.PlaybackParams;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.Uri;
@@ -120,6 +121,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     private String nativeMusicArtworkPath = "";
     private Bitmap nativeMusicArtwork;
     private long nativeMusicDurationMicros = 0;
+    private float nativeMusicPlaybackRate = 1.0f;
+    private boolean nativeMusicTimeStretch = false;
     private String nativeMusicQueueTitle = "";
     private final ArrayList<MediaSession.QueueItem> nativeMusicQueue = new ArrayList<>();
     private long nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
@@ -1110,6 +1113,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                         .build());
                 player.setDataSource(pathText);
                 player.prepare();
+                applyNativeMusicPlaybackRateLocked(player);
                 String[] metadataLines = metadataText == null
                         ? new String[0]
                         : metadataText.split("\\n", -1);
@@ -1281,6 +1285,47 @@ public class AsoBMaShowActivity extends SDLActivity {
             } catch (Exception e) {
                 return ERROR_PREFIX + messageForException(e, "Could not seek music.");
             }
+        }
+    }
+
+    public String setNativeMusicPlaybackRate(String rateText) {
+        synchronized (nativeMusicLock) {
+            try {
+                String[] fields = rateText == null
+                        ? new String[0]
+                        : rateText.split("\\n", -1);
+                if (fields.length != 2) {
+                    return ERROR_PREFIX + "Invalid music playback mode.";
+                }
+                int percent = Integer.parseInt(fields[0]);
+                if (percent < 50 || percent > 200 || percent % 5 != 0) {
+                    return ERROR_PREFIX + "Music playback rate must be 50-200% in 5% steps.";
+                }
+                if (!fields[1].equals("pitch-shift") && !fields[1].equals("time-stretch")) {
+                    return ERROR_PREFIX + "Invalid music playback mode.";
+                }
+                nativeMusicPlaybackRate = percent / 100.0f;
+                nativeMusicTimeStretch = fields[1].equals("time-stretch");
+                if (nativeMusicPlayer != null) {
+                    applyNativeMusicPlaybackRateLocked(nativeMusicPlayer);
+                    updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                }
+                return "OK";
+            } catch (Exception e) {
+                return ERROR_PREFIX + messageForException(
+                        e, "Could not change music playback rate.");
+            }
+        }
+    }
+
+    private void applyNativeMusicPlaybackRateLocked(MediaPlayer player) {
+        boolean wasPlaying = player.isPlaying();
+        PlaybackParams params = player.getPlaybackParams();
+        params.setSpeed(nativeMusicPlaybackRate);
+        params.setPitch(nativeMusicTimeStretch ? 1.0f : nativeMusicPlaybackRate);
+        player.setPlaybackParams(params);
+        if (!wasPlaying && player.isPlaying()) {
+            player.pause();
         }
     }
 
@@ -1494,7 +1539,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                 : (playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED);
         PlaybackState.Builder playbackState = new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state, positionMs, playing ? 1.0f : 0.0f);
+                .setState(state, positionMs, playing ? nativeMusicPlaybackRate : 0.0f);
         if (nativeMusicActiveQueueItemId != NATIVE_MUSIC_UNKNOWN_QUEUE_ID) {
             playbackState.setActiveQueueItemId(nativeMusicActiveQueueItemId);
         }

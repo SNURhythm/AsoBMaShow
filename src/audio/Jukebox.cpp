@@ -45,8 +45,12 @@ constexpr std::uint64_t kArchiveAssetMaxInFlightBytes =
     64ull * 1024ull * 1024ull;
 constexpr int kPrepMetronomeAccentWav = -100000;
 constexpr int kPrepMetronomeRegularWav = -100001;
+constexpr int kClubKickWav = -100002;
+constexpr int kClubClapWav = -100003;
 const path_t kPrepMetronomeAccentPath = PATH("@prep_metronome_accent");
 const path_t kPrepMetronomeRegularPath = PATH("@prep_metronome_regular");
+const path_t kClubKickPath = PATH("@club_kick");
+const path_t kClubClapPath = PATH("@club_clap");
 constexpr int kPrepMetronomeSampleRate = 48000;
 constexpr int kPrepMetronomeChannels = 2;
 constexpr double kPrepMetronomeClickSeconds = 0.045;
@@ -82,6 +86,16 @@ std::vector<short> makePrepMetronomeClick(double frequency, double amplitude) {
     pcm[static_cast<size_t>(frame) * 2 + 1] = value;
   }
   return pcm;
+}
+
+std::vector<short> generatedPcm(const club_beat::StereoSound &sound) {
+  std::vector<short> result;
+  result.reserve(sound.samples.size());
+  for (const float sample : sound.samples) {
+    result.push_back(static_cast<short>(
+        std::clamp(sample, -1.0f, 1.0f) * static_cast<float>(INT16_MAX)));
+  }
+  return result;
 }
 
 bool chartHasVirtualAssetBase(const bms_parser::Chart &chart,
@@ -2590,6 +2604,11 @@ Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
     return stopped;
   }
+  std::string playbackRateError;
+  if (!setPlaybackRate({}, playbackRateError)) {
+    return {.success = false,
+            .diagnostic = "Jukebox::loadChart: " + playbackRateError};
+  }
   if (playThread.joinable()) {
     SDL_Log("Joining playThread");
     playThread.join();
@@ -2689,6 +2708,12 @@ Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
     return stopped;
   }
+  std::string playbackRateError;
+  if (!setPlaybackRate({}, playbackRateError)) {
+    return {.success = false,
+            .diagnostic =
+                "Jukebox::reloadChartResources: " + playbackRateError};
+  }
   if (playThread.joinable()) {
     SDL_Log("Joining playThread");
     playThread.join();
@@ -2738,7 +2763,8 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
                        std::atomic_bool &isCancelled,
                        std::optional<long long> noteScheduleCutoffMicros,
                        const prep_metronome::PrepMetronomePlan
-                           *prepMetronomePlan) {
+                           *prepMetronomePlan,
+                       bool clubMode) {
   audioCursor = 0;
   audioList.clear();
   scheduleVisuals(chart, isCancelled);
@@ -2792,6 +2818,17 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
           click.timeMicros,
           click.accent ? kPrepMetronomeAccentWav : kPrepMetronomeRegularWav,
           JukeboxAudioSource::PrepMetronome));
+    }
+  }
+  if (clubMode) {
+    ensureClubBeatSoundsLoaded();
+    for (const auto &event : club_beat::buildPlan(chart)) {
+      audioList.push_back(makeScheduledAudioEvent(
+          event.timeMicros, kClubKickWav, JukeboxAudioSource::ClubBeat));
+      if (event.clap) {
+        audioList.push_back(makeScheduledAudioEvent(
+            event.timeMicros, kClubClapWav, JukeboxAudioSource::ClubBeat));
+      }
     }
   }
   std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
@@ -2880,6 +2917,18 @@ void Jukebox::ensurePrepMetronomeSoundsLoaded() {
   wavTableAbs[kPrepMetronomeRegularWav] = kPrepMetronomeRegularPath;
 }
 
+void Jukebox::ensureClubBeatSoundsLoaded() {
+  constexpr int sampleRate = 48000;
+  audio.loadGeneratedSound(kClubKickPath,
+                           generatedPcm(club_beat::synthesizeKick(sampleRate)),
+                           2, sampleRate);
+  audio.loadGeneratedSound(kClubClapPath,
+                           generatedPcm(club_beat::synthesizeClap(sampleRate)),
+                           2, sampleRate);
+  wavTableAbs[kClubKickWav] = kClubKickPath;
+  wavTableAbs[kClubClapWav] = kClubClapPath;
+}
+
 void Jukebox::wakeScheduler() { schedulerWakeCv.notify_all(); }
 
 void Jukebox::syncVisualClockToAudio() {
@@ -2938,7 +2987,6 @@ bool Jukebox::activateVisualAt(int visualId, bgfx::ViewId viewId,
 
 void Jukebox::restoreVisualsAtTimelineMicrosLocked(
     long long bgaTimelineMicros) {
-  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
   bmpCursor = 0;
@@ -2973,8 +3021,6 @@ void Jukebox::restoreVisualsAtTimelineMicrosLocked(
 }
 
 void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
-  bgaTimelineMicros = std::max(0LL, bgaTimelineMicros);
-
   std::lock_guard<std::mutex> lock(seekLock);
   if (lastVisualTimelineMicros < 0 ||
       bgaTimelineMicros < lastVisualTimelineMicros) {
@@ -3270,7 +3316,8 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
           std::this_thread::yield();
           continue;
         }
-        sleepMicros = std::min(kSchedulerMaxIdleSleepMicros, untilNextMicros);
+        sleepMicros = audio::playback::SchedulerWaitMicrosForChartDelta(
+            untilNextMicros, playbackRate(), kSchedulerMaxIdleSleepMicros);
       }
       std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
       schedulerWakeCv.wait_for(waitLock,
@@ -3370,12 +3417,22 @@ void Jukebox::resume() {
 }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }
 
+bool Jukebox::setPlaybackRate(audio::PlaybackRate rate,
+                              std::string &errorMessage) {
+  return audio.setPlaybackRate(rate, errorMessage);
+}
+
+audio::PlaybackRate Jukebox::playbackRate() const {
+  return audio.playbackRate();
+}
+
 audio::PlaybackSnapshot Jukebox::suspendAndDrain() {
   audio::PlaybackSnapshot snapshot{
       .valid = true,
       .active = isPlaying.load(std::memory_order_acquire),
       .paused = !stopwatch->isRunning(),
       .positionMicros = getTimeMicros(),
+      .rate = playbackRate(),
   };
   const auto stopped = stop();
   if (!stopped.success) {
@@ -3389,6 +3446,16 @@ bool Jukebox::restorePlayback(const audio::PlaybackSnapshot &snapshot,
   errorMessage.clear();
   if (!snapshot.valid) {
     errorMessage = "Invalid playback snapshot";
+    return false;
+  }
+  const auto stopped = audio.stopSounds();
+  if (!stopped.success) {
+    errorMessage = stopped.diagnostic.empty()
+                       ? "Audio playback could not drain before rate restore"
+                       : stopped.diagnostic;
+    return false;
+  }
+  if (!setPlaybackRate(snapshot.rate, errorMessage)) {
     return false;
   }
   if (!snapshot.active) {

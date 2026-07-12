@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/PlaybackRate.h"
 #include "settings/AudioVideoSettings.h"
 
 #include <filesystem>
@@ -150,11 +151,18 @@ public:
   bool systemPlaybackShowJacket = true;
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;
+  int musicPlayerPlaybackRatePercent = 100;
+  audio::PlaybackMode musicPlayerPlaybackMode =
+      audio::PlaybackMode::PitchShift;
+  bool gameplayClubModeEnabled = false;
+  bool musicPlayerClubModeEnabled = false;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
+  int selectedPlaybackRatePercent = 100;
+  audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;
 
   void sanitize();

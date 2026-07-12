@@ -9,6 +9,7 @@
 #include "ScoreDBHelper.h"
 #include "input/InputProfile.h"
 #include "input/InputProfileStore.h"
+#include "practice/PracticePresetStore.h"
 
 #include "../yoga/lib/nlohmann/json.hpp"
 
@@ -54,12 +55,22 @@ constexpr auto kStaleWorkspaceAge = std::chrono::hours(24);
 constexpr std::array<std::string_view, 6> kMemberNames = {
     "manifest.json", "settings.json", "input.json",
     "scores.db",     "replays.db",    "checksums.sha256"};
-constexpr std::array<std::string_view, 5> kChecksummedMemberNames = {
-    "manifest.json", "settings.json", "input.json", "scores.db", "replays.db"};
-constexpr std::array<std::string_view, 10> kManifestKeys = {
+constexpr std::array<std::string_view, 10> kVersionOneManifestKeys = {
     "createdAt",
     "formatVersion",
     "inputSchemaVersion",
+    "profileDisplayName",
+    "profileSchemaVersion",
+    "profileUuid",
+    "replaySchemaVersion",
+    "scoreSchemaVersion",
+    "settingsSchemaVersion",
+    "sourceApplicationVersion"};
+constexpr std::array<std::string_view, 11> kVersionTwoManifestKeys = {
+    "createdAt",
+    "formatVersion",
+    "inputSchemaVersion",
+    "practiceSchemaVersion",
     "profileDisplayName",
     "profileSchemaVersion",
     "profileUuid",
@@ -625,8 +636,51 @@ bool isUuid(std::string_view value) {
   return true;
 }
 
+bool isPracticeMember(std::string_view name) {
+  constexpr std::string_view prefix = "practice/";
+  return name.starts_with(prefix) &&
+         practice::classifyPresetFilename(name.substr(prefix.size())) ==
+             practice::PresetFileKind::Primary;
+}
+
 bool isKnownMember(std::string_view name) {
-  return std::ranges::find(kMemberNames, name) != kMemberNames.end();
+  return std::ranges::find(kMemberNames, name) != kMemberNames.end() ||
+         isPracticeMember(name);
+}
+
+std::vector<std::string>
+archiveMemberNames(const std::filesystem::path &sourceDirectory,
+                   std::string &errorMessage) {
+  std::vector<std::string> names = {"manifest.json", "settings.json",
+                                    "input.json", "scores.db", "replays.db"};
+  std::error_code error;
+  const auto practiceDirectory = sourceDirectory / "practice";
+  if (std::filesystem::exists(practiceDirectory, error)) {
+    std::filesystem::directory_iterator iterator(practiceDirectory, error);
+    if (error) {
+      errorMessage =
+          "unable to enumerate staged practice data: " + error.message();
+      return {};
+    }
+    std::vector<std::string> practiceNames;
+    for (const auto &entry : iterator) {
+      const std::string name = "practice/" + entry.path().filename().string();
+      const auto status = std::filesystem::symlink_status(entry.path(), error);
+      if (error || !std::filesystem::is_regular_file(status) ||
+          std::filesystem::is_symlink(status) || !isPracticeMember(name)) {
+        errorMessage = "staged practice data contains an unsafe entry";
+        return {};
+      }
+      practiceNames.push_back(name);
+    }
+    std::ranges::sort(practiceNames);
+    names.insert(names.end(), practiceNames.begin(), practiceNames.end());
+  } else if (error) {
+    errorMessage = "unable to inspect staged practice data: " + error.message();
+    return {};
+  }
+  names.emplace_back("checksums.sha256");
+  return names;
 }
 
 bool checkedAdd(std::uint64_t &total, std::uint64_t amount) {
@@ -743,6 +797,7 @@ Json manifestJson(const ProfileArchiveManifest &manifest) {
   return {{"createdAt", manifest.createdAt},
           {"formatVersion", manifest.formatVersion},
           {"inputSchemaVersion", manifest.inputSchemaVersion},
+          {"practiceSchemaVersion", manifest.practiceSchemaVersion},
           {"profileDisplayName", manifest.profileDisplayName},
           {"profileSchemaVersion", manifest.profileSchemaVersion},
           {"profileUuid", manifest.profileUuid},
@@ -765,11 +820,34 @@ ManifestParseResult parseManifest(std::string_view contents) {
   }
   const Json document = Json::parse(contents, nullptr, false);
   if (document.is_discarded() || !document.is_object() ||
-      document.size() != kManifestKeys.size()) {
+      !document.contains("formatVersion") ||
+      !document.at("formatVersion").is_number_integer()) {
     return {.error = ProfileError::IntegrityFailure,
             .message = "archive manifest is invalid"};
   }
-  for (const std::string_view key : kManifestKeys) {
+  int encodedFormatVersion = 0;
+  try {
+    encodedFormatVersion = document.at("formatVersion").get<int>();
+  } catch (const Json::exception &error) {
+    return {.error = ProfileError::IntegrityFailure,
+            .message =
+                std::string("archive manifest is invalid: ") + error.what()};
+  }
+  if (encodedFormatVersion > ProfileArchiveManifest::kFormatVersion) {
+    return {.error = ProfileError::FutureVersion,
+            .message = "archive requires a newer application version"};
+  }
+  const auto requiredKeys =
+      encodedFormatVersion == 1
+          ? std::span<const std::string_view>(kVersionOneManifestKeys)
+          : std::span<const std::string_view>(kVersionTwoManifestKeys);
+  if ((encodedFormatVersion != 1 &&
+       encodedFormatVersion != ProfileArchiveManifest::kFormatVersion) ||
+      document.size() != requiredKeys.size()) {
+    return {.error = ProfileError::IntegrityFailure,
+            .message = "archive manifest contains unsupported metadata"};
+  }
+  for (const std::string_view key : requiredKeys) {
     if (!document.contains(std::string(key))) {
       return {.error = ProfileError::IntegrityFailure,
               .message = "archive manifest is missing required fields"};
@@ -780,6 +858,10 @@ ManifestParseResult parseManifest(std::string_view contents) {
     manifest.createdAt = document.at("createdAt").get<std::string>();
     manifest.formatVersion = document.at("formatVersion").get<int>();
     manifest.inputSchemaVersion = document.at("inputSchemaVersion").get<int>();
+    manifest.practiceSchemaVersion =
+        manifest.formatVersion >= 2
+            ? document.at("practiceSchemaVersion").get<int>()
+            : 0;
     manifest.profileDisplayName =
         document.at("profileDisplayName").get<std::string>();
     manifest.profileSchemaVersion =
@@ -798,6 +880,7 @@ ManifestParseResult parseManifest(std::string_view contents) {
         manifest.settingsSchemaVersion >
             AppSettingsStore::kCurrentSchemaVersion ||
         manifest.inputSchemaVersion > InputProfile::kSchemaVersion ||
+        manifest.practiceSchemaVersion > 1 ||
         manifest.scoreSchemaVersion > ScoreDBHelper::kCurrentSchemaVersion ||
         manifest.replaySchemaVersion > ReplayDBHelper::kCurrentSchemaVersion) {
       return {.error = ProfileError::FutureVersion,
@@ -810,9 +893,12 @@ ManifestParseResult parseManifest(std::string_view contents) {
                   "for portable import because their migration requires chart "
                   "library context"};
     }
-    if (manifest.formatVersion != ProfileArchiveManifest::kFormatVersion ||
+    if ((manifest.formatVersion != 1 &&
+         manifest.formatVersion != ProfileArchiveManifest::kFormatVersion) ||
         manifest.profileSchemaVersion < 0 ||
         manifest.settingsSchemaVersion < 0 || manifest.inputSchemaVersion < 0 ||
+        manifest.practiceSchemaVersion < 0 ||
+        (manifest.formatVersion >= 2 && manifest.practiceSchemaVersion != 1) ||
         manifest.replaySchemaVersion < 0 ||
         manifest.sourceApplicationVersion.empty() ||
         !isUuid(manifest.profileUuid) || manifest.profileDisplayName.empty() ||
@@ -829,9 +915,13 @@ ManifestParseResult parseManifest(std::string_view contents) {
 }
 
 std::string canonicalChecksums(const std::filesystem::path &directory,
+                               std::span<const std::string> memberNames,
                                std::string &errorMessage) {
   std::string result;
-  for (const std::string_view name : kChecksummedMemberNames) {
+  for (const std::string_view name : memberNames) {
+    if (name == "checksums.sha256") {
+      continue;
+    }
     const auto digest =
         file_checksum::sha256File(directory / std::string(name), errorMessage);
     if (!digest) {
@@ -953,7 +1043,11 @@ bool writeZip(const std::filesystem::path &sourceDirectory,
   using EntryHandle =
       std::unique_ptr<archive_entry, decltype(&archive_entry_free)>;
   std::array<char, 64 * 1024> buffer{};
-  for (const std::string_view name : kMemberNames) {
+  const auto memberNames = archiveMemberNames(sourceDirectory, errorMessage);
+  if (!errorMessage.empty()) {
+    return false;
+  }
+  for (const std::string_view name : memberNames) {
     const auto source = sourceDirectory / std::string(name);
     std::error_code sizeError;
     const auto size = std::filesystem::file_size(source, sizeError);
@@ -1067,6 +1161,7 @@ validateArchive(const std::filesystem::path &archivePath,
   }
 
   std::set<std::string, std::less<>> seen;
+  std::vector<std::string> memberNames;
   std::uint64_t declaredTotal = 0;
   std::uint64_t actualTotal = 0;
   std::array<char, 64 * 1024> buffer{};
@@ -1098,6 +1193,7 @@ validateArchive(const std::filesystem::path &archivePath,
               .message = "archive contains an invalid, duplicate, or "
                          "unexpected member name"};
     }
+    memberNames.push_back(name);
     if (archive_entry_filetype(entry) != AE_IFREG ||
         archive_entry_symlink(entry) != nullptr ||
         archive_entry_hardlink(entry) != nullptr ||
@@ -1121,6 +1217,16 @@ validateArchive(const std::filesystem::path &archivePath,
     declaredTotal += declared;
 
     const auto outputPath = extractDirectory / name;
+    if (isPracticeMember(name)) {
+      std::error_code directoryError;
+      std::filesystem::create_directory(extractDirectory / "practice",
+                                        directoryError);
+      if (directoryError &&
+          !std::filesystem::is_directory(extractDirectory / "practice")) {
+        return {.error = ProfileError::IoFailure,
+                .message = "unable to create extracted practice directory"};
+      }
+    }
     std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
     if (!output) {
       return {.error = ProfileError::IoFailure,
@@ -1159,10 +1265,6 @@ validateArchive(const std::filesystem::path &archivePath,
               .message = "archive member size does not match its declaration"};
     }
   }
-  if (seen.size() != kMemberNames.size()) {
-    return {.error = ProfileError::IntegrityFailure,
-            .message = "archive must contain exactly six required members"};
-  }
   for (const std::string_view name : kMemberNames) {
     if (!seen.contains(name)) {
       return {.error = ProfileError::IntegrityFailure,
@@ -1183,8 +1285,13 @@ validateArchive(const std::filesystem::path &archivePath,
                            ? "checksum manifest is not valid UTF-8"
                            : errorMessage};
   }
-  const std::string expected =
-      canonicalChecksums(extractDirectory, errorMessage);
+  const auto canonicalMemberNames =
+      archiveMemberNames(extractDirectory, errorMessage);
+  const std::string expected = errorMessage.empty()
+                                   ? canonicalChecksums(extractDirectory,
+                                                        canonicalMemberNames,
+                                                        errorMessage)
+                                   : std::string{};
   if (!errorMessage.empty()) {
     return {.error = ProfileError::IoFailure, .message = errorMessage};
   }
@@ -1209,6 +1316,31 @@ validateArchive(const std::filesystem::path &archivePath,
   ManifestParseResult manifest = parseManifest(*manifestContents);
   if (manifest.error != ProfileError::None || !manifest.manifest) {
     return {.error = manifest.error, .message = std::move(manifest.message)};
+  }
+  const bool hasPracticeMembers =
+      std::ranges::any_of(memberNames, [](std::string_view name) {
+        return isPracticeMember(name);
+      });
+  if (manifest.manifest->formatVersion == 1 && hasPracticeMembers) {
+    return {.error = ProfileError::IntegrityFailure,
+            .message = "version-one archive cannot contain practice data"};
+  }
+  for (const std::string &name : memberNames) {
+    if (!isPracticeMember(name)) {
+      continue;
+    }
+    const auto practiceValidation = practice::validatePresetFile(
+        extractDirectory / name, manifest.manifest->practiceSchemaVersion);
+    if (!practiceValidation.valid()) {
+      const std::string detail = practiceValidation.diagnostics.empty()
+                                     ? "archive practice preset is invalid"
+                                     : practiceValidation.diagnostics.front();
+      return {.error = practiceValidation.status ==
+                               versioned_json::LoadStatus::FutureVersion
+                           ? ProfileError::FutureVersion
+                           : ProfileError::IntegrityFailure,
+              .message = detail};
+    }
   }
 
   const auto settings =
@@ -1393,6 +1525,12 @@ ProfileArchiveService::Export(std::string_view profileId,
   });
 
   const PlayerProfilePaths source = manager_.pathsFor(profileId);
+  std::filesystem::create_directory(workspace / "practice", filesystemError);
+  if (filesystemError) {
+    return failure(ProfileError::IoFailure,
+                   "unable to stage practice export directory: " +
+                       filesystemError.message());
+  }
   if (!copyFileStreaming(source.settingsJson, workspace / "settings.json",
                          "settings.json", errorMessage) ||
       !copyFileStreaming(source.inputJson, workspace / "input.json",
@@ -1403,6 +1541,66 @@ ProfileArchiveService::Export(std::string_view profileId,
                               errorMessage)) {
     return failure(ProfileError::IoFailure,
                    "unable to stage profile export: " + errorMessage);
+  }
+  if (std::filesystem::exists(source.practiceDirectory, filesystemError)) {
+    std::filesystem::directory_iterator iterator(source.practiceDirectory,
+                                                 filesystemError);
+    if (filesystemError) {
+      return failure(ProfileError::IoFailure,
+                     "unable to enumerate practice data for export: " +
+                         filesystemError.message());
+    }
+    std::vector<std::filesystem::path> practiceFiles;
+    for (const auto &entry : iterator) {
+      practiceFiles.push_back(entry.path());
+    }
+    std::ranges::sort(practiceFiles);
+    for (const auto &practiceFile : practiceFiles) {
+      const std::string memberName =
+          "practice/" + practiceFile.filename().string();
+      const practice::PresetFileKind kind =
+          practice::classifyPresetFilename(practiceFile.filename().string());
+      if (kind == practice::PresetFileKind::AtomicSidecar) {
+        const auto status =
+            std::filesystem::symlink_status(practiceFile, filesystemError);
+        const auto size =
+            filesystemError
+                ? 0
+                : std::filesystem::file_size(practiceFile, filesystemError);
+        if (filesystemError || !std::filesystem::is_regular_file(status) ||
+            std::filesystem::is_symlink(status) ||
+            size > ProfileArchiveSizePolicy::kMaximumMetadataBytes) {
+          return failure(ProfileError::IoFailure,
+                         "unable to validate practice backup sidecar for "
+                         "export");
+        }
+        continue;
+      }
+      if (kind == practice::PresetFileKind::Primary) {
+        const auto validation = practice::validatePresetFile(
+            practiceFile, practice::kPresetSchemaVersion);
+        if (!validation.valid()) {
+          return failure(
+              validation.status == versioned_json::LoadStatus::FutureVersion
+                  ? ProfileError::FutureVersion
+                  : ProfileError::IntegrityFailure,
+              validation.diagnostics.empty()
+                  ? "practice preset is invalid for portable export"
+                  : validation.diagnostics.front());
+        }
+      }
+      if (kind != practice::PresetFileKind::Primary ||
+          !copyFileStreaming(practiceFile,
+                             workspace / "practice" / practiceFile.filename(),
+                             memberName, errorMessage)) {
+        return failure(ProfileError::IoFailure,
+                       "unable to stage practice export: " + errorMessage);
+      }
+    }
+  } else if (filesystemError) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect practice data for export: " +
+                       filesystemError.message());
   }
   for (const std::string_view database : {"scores.db", "replays.db"}) {
     const auto size = std::filesystem::file_size(
@@ -1422,13 +1620,18 @@ ProfileArchiveService::Export(std::string_view profileId,
   manifest.profileSchemaVersion = kPlayerProfileSchemaVersion;
   manifest.settingsSchemaVersion = AppSettingsStore::kCurrentSchemaVersion;
   manifest.inputSchemaVersion = InputProfile::kSchemaVersion;
+  manifest.practiceSchemaVersion = 1;
   manifest.scoreSchemaVersion = ScoreDBHelper::kCurrentSchemaVersion;
   manifest.replaySchemaVersion = ReplayDBHelper::kCurrentSchemaVersion;
   if (!writeTextFile(workspace / "manifest.json",
                      manifestJson(manifest).dump(2) + "\n", errorMessage)) {
     return failure(ProfileError::IoFailure, errorMessage);
   }
-  const std::string checksums = canonicalChecksums(workspace, errorMessage);
+  const auto stagedMemberNames = archiveMemberNames(workspace, errorMessage);
+  const std::string checksums =
+      errorMessage.empty()
+          ? canonicalChecksums(workspace, stagedMemberNames, errorMessage)
+          : std::string{};
   if (!errorMessage.empty() ||
       !writeTextFile(workspace / "checksums.sha256", checksums, errorMessage)) {
     return failure(ProfileError::IoFailure,
@@ -1436,7 +1639,7 @@ ProfileArchiveService::Export(std::string_view profileId,
   }
 
   std::uint64_t total = 0;
-  for (const std::string_view name : kMemberNames) {
+  for (const std::string_view name : stagedMemberNames) {
     const auto size = std::filesystem::file_size(workspace / std::string(name),
                                                  filesystemError);
     if (filesystemError ||
@@ -1665,6 +1868,40 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
   const ProfileResult installed = manager_.installProfile(
       std::move(profile), overwrite,
       [&](const PlayerProfilePaths &staging, std::string &errorMessage) {
+        std::error_code practiceError;
+        std::filesystem::create_directory(staging.practiceDirectory,
+                                          practiceError);
+        if (practiceError) {
+          errorMessage = "unable to create imported practice directory: " +
+                         practiceError.message();
+          return false;
+        }
+        const auto extractedPractice = extracted / "practice";
+        if (validated.manifest->formatVersion >= 2 &&
+            std::filesystem::exists(extractedPractice, practiceError)) {
+          std::filesystem::directory_iterator iterator(extractedPractice,
+                                                       practiceError);
+          if (practiceError) {
+            errorMessage = "unable to enumerate imported practice data: " +
+                           practiceError.message();
+            return false;
+          }
+          for (const auto &entry : iterator) {
+            const std::string memberName =
+                "practice/" + entry.path().filename().string();
+            if (!isPracticeMember(memberName) ||
+                !copyFileStreaming(entry.path(),
+                                   staging.practiceDirectory /
+                                       entry.path().filename(),
+                                   memberName, errorMessage)) {
+              return false;
+            }
+          }
+        } else if (practiceError) {
+          errorMessage = "unable to inspect imported practice data: " +
+                         practiceError.message();
+          return false;
+        }
         const bool settingsWritten =
             validated.manifest->settingsSchemaVersion ==
                     AppSettingsStore::kCurrentSchemaVersion

@@ -1,4 +1,6 @@
 #include "../src/ReplaySummaryFormatting.h"
+#include "../src/ReplayResultStateBuilder.h"
+#include "../src/ReplayAutoPlay.h"
 
 #include <iostream>
 
@@ -50,6 +52,54 @@ int main() {
   const std::string normalDetail =
       replay_summary_ui::detailLabel(normalSummary);
   ASSERT_NOT_CONTAINS(normalDetail, "Lane", "normal lane order");
+
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.Total = 100.0;
+  ReplayData assistedReplay;
+  assistedReplay.initialGaugeType = GaugeType::Hard;
+  assistedReplay.maxCombo = 1;
+  assistedReplay.finalGauge = 100.0f;
+  assistedReplay.clearType = kClearTypeFullComboRank;
+  assistedReplay.provenance.playback = {
+      .percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  assistedReplay.provenance.eligibility = ScoreEligibility::Modified;
+  assistedReplay.events.push_back({.action = ReplayEventAction::Release,
+                                   .judgement = PGreat,
+                                   .gauge = 100.0f,
+                                   .gaugeType = GaugeType::Hard,
+                                   .combo = 1,
+                                   .score = 2});
+  const RhythmState assistedState =
+      replay_result::BuildResultState(chart, assistedReplay);
+  if (assistedState.getClearTypeRank() != kClearTypeAssistedEasyClearRank) {
+    std::cerr << "export result state must retain playback assist cap"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData neutralReplay = assistedReplay;
+  neutralReplay.provenance = ScoreProvenance::Legacy();
+  const RhythmState neutralState =
+      replay_result::BuildResultState(chart, neutralReplay);
+  if (neutralState.getClearTypeRank() != kClearTypeHardClearRank) {
+    std::cerr << "legacy neutral export result state remains unassisted"
+              << std::endl;
+    return 1;
+  }
+
+  const ReplayData autoExport = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Normal, false, {.percent = 200}, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, true);
+  if (autoExport.provenance.playback.percent != 200) {
+    std::cerr << "synthetic Auto export retains the selected playback rate"
+              << std::endl;
+    return 1;
+  }
+  if (!autoExport.provenance.clubMode) {
+    std::cerr << "synthetic Auto export retains Club Beat" << std::endl;
+    return 1;
+  }
 
   return 0;
 }

@@ -4,9 +4,11 @@
 
 #pragma once
 #include "../../CoursePlaySession.h"
+#include "../../PrepMetronome.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
+#include "NoteTimeRange.h"
 #include "Pacemaker.h"
 #include "RhythmState.h"
 #include "../Scene.h"
@@ -57,7 +59,8 @@ public:
   EventHandleResult handleEvents(SDL_Event &event) override;
 
 private:
-  void reset();
+  bool reset();
+  void showPlaybackInitializationFailure(const std::string &message);
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
   void showPauseMenu(bool pausePlayback);
@@ -69,6 +72,12 @@ private:
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
   void retryWithNewPattern();
+  void finishPractice();
+  void exitPracticeWithoutSummary();
+  void completePracticeAttempt();
+  void finalizePracticeRangeMisses();
+  void scheduleResultTransition(int delayMillis);
+  void updatePracticeHud(long long chartTimeMicros);
   [[nodiscard]] bool isReplayPlayback() const;
   [[nodiscard]] bool isCoursePlayback() const;
   [[nodiscard]] bool courseNoSpeed() const;
@@ -76,6 +85,10 @@ private:
   [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  [[nodiscard]] std::optional<NoteTimeRange> practiceNoteRange() const;
+  [[nodiscard]] bool practiceInputAllowed(long long chartTimeMicros) const;
+  [[nodiscard]] bool practiceReplayEventAllowed(
+      const ReplayEvent &event) const;
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();
@@ -110,7 +123,10 @@ private:
   [[nodiscard]] long long getVisualOffsetMicros() const;
   [[nodiscard]] long long getVisualTimeMicros(long long songTimeMicros) const;
   View *pauseLayout = nullptr;
+  View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
+  Button *practiceRestartButton = nullptr;
+  TextView *practiceHudText = nullptr;
   bool coursePauseHoldActive = false;
   bool coursePauseHoldRewinding = false;
   bool coursePauseHoldTouch = false;
@@ -119,8 +135,8 @@ private:
   long long coursePauseHoldRewindStartMicros = 0;
   float coursePauseHoldProgress = 0.0f;
   float coursePauseHoldRewindStartProgress = 0.0f;
-  Judge judge;
   StartOptions options;
+  Judge judge;
   const ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
   void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,
@@ -164,6 +180,7 @@ private:
   RhythmInputHandler *inputHandler = nullptr;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
+  ReplayData analyticsReplay;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   std::unordered_map<bms_parser::LongNote *, long long>
@@ -173,13 +190,17 @@ private:
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;
+  bool playbackInitializationFailed = false;
   bool practiceGhostPublished = false;
+  bool recordedAttemptCompleted = false;
+  bool resultTransitionScheduled = false;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;
   SDL_FingerID floatingLaneCoverFinger = -1;
   float floatingLaneCoverDragOffsetY = 0.0f;
   double currentGameplayBpm = 0.0;
+  prep_metronome::PrepMetronomePlan practiceCountInPlan;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void configurePacemakerTarget();

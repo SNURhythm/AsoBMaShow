@@ -116,6 +116,10 @@ public:
   bool Pause(std::string &errorMessage);
   bool Stop(std::string &errorMessage);
   bool Seek(long long positionMicros, std::string &errorMessage);
+  bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
+  [[nodiscard]] audio::PlaybackRate PlaybackRate() const;
+  bool SetClubMode(bool enabled, std::string &statusMessage);
+  [[nodiscard]] bool ClubMode() const;
   bool SetSleepTimer(long long durationMicros, std::string &statusMessage);
   void ClearSleepTimer();
   [[nodiscard]] long long SleepTimerRemainingMicros() const;
@@ -138,16 +142,22 @@ private:
                           std::string successMessage);
   void PlaybackWorker(music_playlist::MusicTrack track,
                       std::uint64_t requestRevision,
+                      bool requestedClubMode,
                       std::string successMessage,
                       const std::stop_token &stopToken);
+  void ClubModeSwitchWorker(music_playlist::MusicTrack track,
+                            std::uint64_t requestRevision,
+                            bool requestedClubMode,
+                            const std::stop_token &stopToken);
   std::vector<music_playlist::MusicTrack> AdjacentTracksLocked() const;
   std::vector<std::filesystem::path> PlaybackCacheKeepPathsLocked(
       const chart_music_cache::CacheResult &currentResult) const;
   void StartAdjacentPreloadWorker(
-      std::vector<music_playlist::MusicTrack> tracks);
+      std::vector<music_playlist::MusicTrack> tracks, bool requestedClubMode);
   void StopAdjacentPreloadWorker();
   void AdjacentPreloadWorker(std::vector<music_playlist::MusicTrack> tracks,
                              std::uint64_t preloadRevision,
+                             bool requestedClubMode,
                              const std::stop_token &stopToken);
   void RefreshPlaylistCachesLocked(MusicPlaylistDB &playlistDb, sqlite3 *db,
                                    int preferredSelectedPlaylistId);
@@ -185,6 +195,8 @@ private:
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
   std::vector<music_playlist::MusicTrack> selectedPlaylistTracks;
   std::optional<music_playlist::MusicTrack> loadedTrack;
+  audio::PlaybackRate playbackRate{};
+  bool clubMode = false;
   int defaultPlaylistId = 0;
   int selectedPlaylistId = 0;
   MusicPlayerStateRecord persistedState;

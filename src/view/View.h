@@ -333,8 +333,11 @@ public:
   View *clearBorderColor();
   View *setBorderWidth(int width);
   View *addView(View *view);
+  View *insertViewBefore(View *view, const View *sibling);
   View *clearChildren();
   YGNodeRef getNode() const { return node; }
+  // This collection may be z-sorted for render/event dispatch. It is not a
+  // stable Yoga layout-order index; use sibling identity for layout insertion.
   std::vector<View *> &getChildren() { return children; }
   void setName(const std::string &name) { this->name = name; }
   const std::string &getName() const { return name; }
@@ -365,6 +368,8 @@ protected:
   virtual void onMove(int newX, int newY) {}
 
 private:
+  View *insertViewAtLayoutIndex(View *view, std::size_t layoutIndex);
+  void refreshInsertionOrderFromLayout();
   void renderBoxDecoration(RenderContext &context) const;
   [[nodiscard]] int getLayoutInset(YGEdge edge) const {
     return (hasBorder ? std::max(0, borderWidth) : 0) + getStoredPadding(edge);

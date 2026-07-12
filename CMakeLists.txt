@@ -520,6 +520,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(prep_metronome_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(prep_metronome_tests PRIVATE cxx_std_23)
 
+    add_executable(club_beat_tests
+        tests/club_beat_tests.cpp
+        src/audio/ClubBeat.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(club_beat_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(club_beat_tests PRIVATE cxx_std_23)
+
     add_executable(gbattle_tests
         tests/gbattle_tests.cpp
         src/bms_parser.cpp
@@ -530,6 +538,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_summary_list_tests
         tests/replay_summary_list_tests.cpp
+        src/ReplayResultStateBuilder.cpp
+        src/ScoreProvenance.cpp
         src/bms_parser.cpp
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -687,6 +697,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/ClubBeat.cpp
         src/audio/Jukebox.cpp
         src/audio/decoder.cpp
         src/bms_parser.cpp
@@ -886,6 +897,155 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
+
+    add_executable(practice_configuration_tests
+        tests/practice_configuration_tests.cpp
+        src/practice/PracticeConfiguration.cpp
+    )
+    target_include_directories(practice_configuration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_configuration_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_rule_override_tests
+        tests/practice_rule_override_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(practice_rule_override_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_rule_override_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_session_tests
+        tests/practice_session_tests.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeSession.cpp
+    )
+    target_include_directories(practice_session_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_session_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_practice_boundary_tests
+        tests/gameplay_practice_boundary_tests.cpp
+    )
+    target_include_directories(gameplay_practice_boundary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_practice_boundary_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_playback_startup_tests
+        tests/gameplay_playback_startup_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(gameplay_playback_startup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_playback_startup_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_practice_input_boundary_tests
+        tests/gameplay_practice_input_boundary_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/scene/play/Judge.cpp
+        src/scene/play/RhythmLaneInputController.cpp
+    )
+    target_include_directories(gameplay_practice_input_boundary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_practice_input_boundary_tests PRIVATE
+        cxx_std_23
+    )
+    target_compile_definitions(gameplay_practice_input_boundary_tests PRIVATE
+        BX_CONFIG_DEBUG=1
+    )
+    target_link_libraries(gameplay_practice_input_boundary_tests PRIVATE
+        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+    )
+
+    add_executable(practice_analytics_tests
+        tests/practice_analytics_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeAnalytics.cpp
+    )
+    target_include_directories(practice_analytics_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_analytics_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_result_model_tests
+        tests/practice_result_model_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+    )
+    target_include_directories(practice_result_model_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_result_model_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_result_flow_tests
+        tests/practice_result_flow_tests.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultFlow.cpp
+        src/practice/PracticeResultModel.cpp
+    )
+    target_include_directories(practice_result_flow_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_result_flow_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_launch_tests
+        tests/practice_launch_tests.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeLaunchRequest.cpp
+    )
+    target_include_directories(practice_launch_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_launch_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_analytics_presentation_tests
+        tests/practice_analytics_presentation_tests.cpp
+        src/scene/PracticeAnalyticsPresentation.cpp
+    )
+    target_include_directories(practice_analytics_presentation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_analytics_presentation_tests PRIVATE cxx_std_23)
+
+    add_executable(chart_practice_range_tests
+        tests/chart_practice_range_tests.cpp
+        src/practice/PracticeConfiguration.cpp
+    )
+    target_include_directories(chart_practice_range_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_practice_range_tests PRIVATE cxx_std_23)
+
+    add_executable(practice_preset_store_tests
+        tests/practice_preset_store_tests.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticePresetStore.cpp
+    )
+    target_include_directories(practice_preset_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(practice_preset_store_tests PRIVATE cxx_std_23)
     if(WIN32)
         target_link_libraries(app_settings_store_tests PRIVATE shell32 ole32)
     endif()
@@ -899,6 +1059,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
         src/VersionedJson.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
@@ -937,6 +1099,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
         src/VersionedJson.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
@@ -983,6 +1147,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
         src/VersionedJson.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
@@ -1156,6 +1322,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     foreach(test_target IN ITEMS
         prep_metronome_tests
+        club_beat_tests
         gbattle_tests
         replay_summary_list_tests
         replay_record_filters_tests
@@ -1190,6 +1357,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(practice_configuration_tests)
+    asobmashow_register_test(practice_rule_override_tests)
+    asobmashow_register_test(practice_session_tests)
+    asobmashow_register_test(gameplay_practice_boundary_tests)
+    asobmashow_register_test(gameplay_playback_startup_tests)
+    asobmashow_register_test(gameplay_practice_input_boundary_tests)
+    asobmashow_register_test(practice_analytics_tests)
+    asobmashow_register_test(practice_result_model_tests)
+    asobmashow_register_test(practice_result_flow_tests)
+    asobmashow_register_test(practice_launch_tests)
+    asobmashow_register_test(practice_analytics_presentation_tests)
+    asobmashow_register_test(chart_practice_range_tests)
+    asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive)

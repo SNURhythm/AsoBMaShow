@@ -157,7 +157,13 @@ void testLegacyFixtureLoadsEverySetting() {
 void testJsonRoundTripIncludesAudioAndVideo() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
-  const AppSettings expected = makeDistinctSettings();
+  AppSettings expected = makeDistinctSettings();
+  expected.selectedPlaybackRatePercent = 75;
+  expected.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+  expected.musicPlayerPlaybackRatePercent = 135;
+  expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
+  expected.gameplayClubModeEnabled = true;
+  expected.musicPlayerClubModeEnabled = true;
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -167,6 +173,72 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "JSON round trip preserves every setting including audio/video");
   expect(readFile(path).find("\"schemaVersion\": 1") != std::string::npos,
          "saved JSON declares schema version 1");
+  expect(readFile(path).find("\"selectedPlaybackRatePercent\": 75") !=
+             std::string::npos,
+         "saved JSON includes the selected normal-play rate");
+  expect(readFile(path).find("\"selectedPlaybackMode\": 0") !=
+             std::string::npos,
+         "saved JSON includes the selected pitch-shift mode");
+  expect(readFile(path).find("\"musicPlayerPlaybackRatePercent\": 135") !=
+             std::string::npos,
+         "saved JSON includes the music player rate");
+  expect(readFile(path).find("\"musicPlayerPlaybackMode\": 1") !=
+             std::string::npos,
+         "saved JSON includes the music player mode");
+  expect(readFile(path).find("\"gameplayClubModeEnabled\": true") !=
+             std::string::npos,
+         "saved JSON includes gameplay Club mode");
+  expect(readFile(path).find("\"musicPlayerClubModeEnabled\": true") !=
+             std::string::npos,
+         "saved JSON includes music-player Club mode");
+}
+
+void testPlaybackSelectionSanitizationAndLegacyDefaults() {
+  AppSettings rounded;
+  rounded.selectedPlaybackRatePercent = 73;
+  rounded.sanitize();
+  expect(rounded.selectedPlaybackRatePercent == 75,
+         "normal-play rate rounds to the nearest supported step");
+
+  AppSettings clamped;
+  clamped.selectedPlaybackRatePercent = 250;
+  clamped.sanitize();
+  expect(clamped.selectedPlaybackRatePercent == 200,
+         "normal-play rate clamps to the supported maximum");
+
+  AppSettings musicPlayerRounded;
+  musicPlayerRounded.musicPlayerPlaybackRatePercent = 73;
+  musicPlayerRounded.sanitize();
+  expect(musicPlayerRounded.musicPlayerPlaybackRatePercent == 75,
+         "music-player rate rounds to the nearest supported step");
+
+  AppSettings invalidMusicPlayerMode;
+  invalidMusicPlayerMode.musicPlayerPlaybackMode =
+      static_cast<audio::PlaybackMode>(99);
+  invalidMusicPlayerMode.sanitize();
+  expect(invalidMusicPlayerMode.musicPlayerPlaybackMode ==
+             audio::PlaybackMode::PitchShift,
+         "invalid music-player mode falls back to pitch shift");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "legacy-neutral-settings.json";
+  writeFile(path, R"({"schemaVersion":1,"audioOffsetMs":12})");
+  const auto legacy = AppSettingsStore::Load(path);
+  expect(legacy.status == AppSettingsLoadStatus::Loaded,
+         "settings written before normal-play controls still load");
+  expect(legacy.settings.selectedPlaybackRatePercent == 100,
+         "legacy settings default to neutral playback rate");
+  expect(legacy.settings.selectedPlaybackMode ==
+             audio::PlaybackMode::PitchShift,
+         "legacy settings default to pitch-shift playback mode");
+  expect(legacy.settings.musicPlayerPlaybackRatePercent == 100,
+         "legacy settings default to neutral music-player rate");
+  expect(legacy.settings.musicPlayerPlaybackMode ==
+             audio::PlaybackMode::PitchShift,
+         "legacy settings default to pitch-shift music-player mode");
+  expect(!legacy.settings.gameplayClubModeEnabled &&
+             !legacy.settings.musicPlayerClubModeEnabled,
+         "legacy settings default both Club modes off");
 }
 
 void testVersionFixturesAndNoRewrite() {
@@ -466,6 +538,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testPlaybackSelectionSanitizationAndLegacyDefaults();
   testVersionFixturesAndNoRewrite();
   testMigrationRunsExactlyOnce();
   testOversizedVersionsAndSettingsFailClosed();

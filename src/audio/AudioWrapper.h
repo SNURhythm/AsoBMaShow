@@ -98,6 +98,10 @@ struct UserData {
   std::atomic<long long> *audioClockAnchorMicros;
   std::atomic<long long> *audioClockAnchorWallMicros;
   std::atomic<long long> *audioClockAnchorEndMicros;
+  std::atomic<int> *audioClockAnchorRatePercent;
+  std::atomic<std::uint64_t> *audioClockAnchorSequence;
+  std::atomic_flag *audioClockAnchorWriter;
+  std::atomic<int> *playbackRatePercent;
   std::atomic<float> *bgmGain;
   std::atomic<float> *keysoundGain;
   std::vector<float> *mixBuffer;
@@ -131,6 +135,8 @@ public:
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
   void seekClock(long long micros);
+  bool setPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
+  [[nodiscard]] audio::PlaybackRate playbackRate() const;
   audio::playback::BackendOperationResult startDevice();
   audio::playback::BackendOperationResult stopSounds();
   audio::playback::BackendOperationResult unloadSound(const path_t &path);
@@ -177,6 +183,11 @@ private:
   std::atomic<long long> audioClockAnchorMicros{0};
   std::atomic<long long> audioClockAnchorWallMicros{0};
   std::atomic<long long> audioClockAnchorEndMicros{0};
+  std::atomic<int> audioClockAnchorRatePercent{100};
+  std::atomic<std::uint64_t> audioClockAnchorSequence{0};
+  std::atomic_flag audioClockAnchorWriter = ATOMIC_FLAG_INIT;
+  mutable std::atomic<long long> audioClockPublishedMicros{0};
+  std::atomic<int> playbackRatePercent{100};
   std::atomic<float> bgmGain{1.0f};
   std::atomic<float> keysoundGain{1.0f};
   audio::RuntimeState runtimeState_;

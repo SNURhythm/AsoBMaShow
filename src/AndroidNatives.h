@@ -114,6 +114,8 @@ bool PauseAndroidNativeMusic(std::string &errorMessage);
 bool StopAndroidNativeMusic(std::string &errorMessage);
 bool SeekAndroidNativeMusic(long long positionMicros,
                             std::string &errorMessage);
+bool SetAndroidNativeMusicPlaybackRate(int percent, bool timeStretch,
+                                       std::string &errorMessage);
 AndroidNativeMusicState GetAndroidNativeMusicState();
 void RequestAndroidExternalActivityRenderPause();
 void FinishAndroidExternalActivityRenderPause();

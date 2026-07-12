@@ -2,6 +2,7 @@
 #include "input/InputBindingResolver.h"
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
+#include "scene/play/RhythmState.h"
 
 #include <SDL2/SDL_scancode.h>
 
@@ -753,6 +754,40 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
           "the lane edge is applied before the queued Escape pause fallback");
 }
 
+void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
+  const audio::PlaybackRate assistedRate{75};
+  require(clear_policy::assistClearRequired(assistedRate),
+          "non-neutral playback requires the assisted clear mark");
+  require(!clear_policy::assistClearRequired(audio::PlaybackRate{100}),
+          "neutral playback preserves the selected gauge clear mark");
+  require(clear_policy::capRankForPlayback(kClearTypeHardClearRank,
+                                           audio::PlaybackRate{100}) ==
+              kClearTypeHardClearRank,
+          "neutral playback leaves hard clears unchanged");
+  require(
+      clear_policy::capRankForPlayback(kClearTypeHardClearRank, assistedRate) ==
+          kClearTypeAssistedEasyClearRank,
+      "rate-assisted hard clears cap at Assisted Easy");
+  require(
+      clear_policy::capRankForPlayback(kClearTypeFullComboRank, assistedRate) ==
+          kClearTypeAssistedEasyClearRank,
+      "rate-assisted full combos cannot bypass the clear cap");
+  require(clear_policy::capRankForPlayback(
+              kClearTypeFailedRank, assistedRate) == kClearTypeFailedRank,
+          "the assisted clear cap never promotes a failed attempt");
+  require(clear_policy::fullComboRankForPlayback(kClearTypeHardClearRank, true,
+                                                 assistedRate) ==
+              kClearTypeAssistedEasyClearRank,
+          "rate-assisted full-combo derivation stays capped");
+  require(clear_policy::fullComboRankForPlayback(kClearTypeHardClearRank, true,
+                                                 audio::PlaybackRate{100}) ==
+              kClearTypeFullComboRank,
+          "neutral full-combo derivation remains unchanged");
+  require(clear_policy::fullComboRankForPlayback(
+              kClearTypeFailedRank, true, assistedRate) == kClearTypeFailedRank,
+          "full-combo derivation never promotes a failed attempt");
+}
+
 } // namespace
 
 int main() {
@@ -779,5 +814,6 @@ int main() {
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

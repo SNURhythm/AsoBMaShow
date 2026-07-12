@@ -48,6 +48,7 @@ struct ReplaySummary {
   int stageCount = 0;
   int rulesetVersion = 0;
   ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
+  audio::PlaybackRate playback;
 };
 
 struct CourseReplayLookup {

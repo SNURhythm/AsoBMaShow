@@ -1,4 +1,5 @@
 #pragma once
+#include "../../audio/PlaybackRate.h"
 #include "../../bms_parser.hpp"
 #include "Judge.h"
 #include <algorithm>
@@ -35,6 +36,31 @@ inline constexpr int kClearTypeHardClearRank = 400;
 inline constexpr int kClearTypeExHardClearRank = 500;
 inline constexpr int kClearTypeFullComboRank = 600;
 inline constexpr size_t kGaugeTypeCount = 5;
+
+namespace clear_policy {
+[[nodiscard]] inline bool
+assistClearRequired(const audio::PlaybackRate &playback) noexcept {
+  return !playback.neutral();
+}
+
+[[nodiscard]] inline int
+capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
+  if (!assistClearRequired(playback) ||
+      rank < kClearTypeAssistedEasyClearRank) {
+    return rank;
+  }
+  return kClearTypeAssistedEasyClearRank;
+}
+
+[[nodiscard]] inline int
+fullComboRankForPlayback(int rank, bool fullComboAchieved,
+                         const audio::PlaybackRate &playback) noexcept {
+  if (fullComboAchieved && rank >= kClearTypeAssistedEasyClearRank) {
+    rank = std::max(rank, kClearTypeFullComboRank);
+  }
+  return capRankForPlayback(rank, playback);
+}
+} // namespace clear_policy
 
 struct JudgementFastSlowCount {
   int fast = 0;
@@ -599,6 +625,17 @@ public:
     gaugeHistory.clear();
   }
 
+  void setStartingGaugePercent(int percent) {
+    const float value = static_cast<float>(std::clamp(percent, 0, 100));
+    if (gaugeAutoShift) {
+      gaugeValues.fill(value);
+      gaugeType = bestAdmittedGaugeType();
+    } else {
+      gaugeValues[gaugeTypeIndex(gaugeType)] = value;
+    }
+    currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
+  }
+
   void restoreGaugeState(const GaugeStateSnapshot &snapshot) {
     gaugeAutoShift = snapshot.gaugeAutoShift;
     gaugeType = snapshot.gaugeType;
@@ -636,7 +673,8 @@ public:
       if (!gaugeAutoShift && type != gaugeType) {
         continue;
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeSurvivalFailed[i]) {
+      const bool survival = gaugeIsSurvival(type, gaugeProfile);
+      if (survival && gaugeSurvivalFailed[i]) {
         gaugeValues[i] = 0.0f;
         continue;
       }
@@ -645,12 +683,12 @@ public:
           type, judgement, gaugeTotalNotes, gaugeTotal, gaugeValues[i],
           gaugeProfile) *
                           rate;
-      if (gaugeValues[i] > 0.0f) {
+      if (gaugeValues[i] > 0.0f || !survival) {
         gaugeValues[i] = std::clamp(gaugeValues[i] + delta,
                                     gaugeMinimumValue(type, gaugeProfile),
                                     100.0f);
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeValues[i] <= 0.0f) {
+      if (survival && gaugeValues[i] <= 0.0f) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
       }
@@ -669,17 +707,18 @@ public:
       if (!gaugeAutoShift && type != gaugeType) {
         continue;
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeSurvivalFailed[i]) {
+      const bool survival = gaugeIsSurvival(type, gaugeProfile);
+      if (survival && gaugeSurvivalFailed[i]) {
         gaugeValues[i] = 0.0f;
         continue;
       }
 
-      if (gaugeValues[i] > 0.0f) {
+      if (gaugeValues[i] > 0.0f || !survival) {
         gaugeValues[i] = std::clamp(gaugeValues[i] + delta,
                                     gaugeMinimumValue(type, gaugeProfile),
                                     100.0f);
       }
-      if (gaugeIsSurvival(type, gaugeProfile) && gaugeValues[i] <= 0.0f) {
+      if (survival && gaugeValues[i] <= 0.0f) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
       }

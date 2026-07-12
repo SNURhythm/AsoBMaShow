@@ -3,6 +3,7 @@
 #include "../../CoursePlaySession.h"
 
 #include <array>
+#include <utility>
 
 namespace {
 struct PressLaneCandidate {
@@ -109,12 +110,14 @@ void setReplayEvent(RhythmLaneInputController::Result &result,
 
 RhythmLaneInputController::RhythmLaneInputController(
     bms_parser::Chart *chart, BMSRenderer *renderer,
-    std::unordered_map<int, bool> &lanePressed,
-    CourseJudgementConstraint judgementConstraint, int longNoteModeOverride)
+    std::unordered_map<int, bool> &lanePressed, Judge effectiveJudge,
+    int longNoteModeOverride,
+    std::optional<NoteTimeRange> allowedNoteRange)
     : chart(chart), renderer(renderer), lanePressed(lanePressed),
       longNoteModeOverride(longNoteModeOverride),
-      judge(chart != nullptr ? chart->Meta.Rank : 3) {
-  judge.applyCourseJudgementConstraint(judgementConstraint);
+      judge(std::move(effectiveJudge)),
+      allowedNoteRange(std::move(allowedNoteRange)) {
+  judge.setAllowedNoteRange(this->allowedNoteRange);
   if (const auto it = judge.timingWindows.find(Bad);
       it != judge.timingWindows.end()) {
     latePoorTiming = it->second.second;
@@ -130,7 +133,9 @@ RhythmLaneInputController::pressLane(int lane, const InputContext &context) {
 RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
     int mainLane, int compensateLane, const InputContext &context) {
   Result result;
-  if (chart == nullptr || renderer == nullptr) {
+  if (chart == nullptr ||
+      (allowedNoteRange.has_value() &&
+       context.songTimeMicros >= allowedNoteRange->endMicros)) {
     return result;
   }
 
@@ -212,16 +217,20 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
         pressedIt != lanePressed.end()) {
       pressedIt->second = true;
     }
-    renderer->onLanePressed(selectedCandidate.lane, result.judge,
-                            context.laneBeamTimeMicros);
+    if (renderer != nullptr) {
+      renderer->onLanePressed(selectedCandidate.lane, result.judge,
+                              context.laneBeamTimeMicros);
+    }
     return result;
   }
 
   if (mainLaneIt != lanePressed.end()) {
     mainLaneIt->second = true;
   }
-  renderer->onLanePressed(mainLane, JudgeResult(None, 0),
-                          context.laneBeamTimeMicros);
+  if (renderer != nullptr) {
+    renderer->onLanePressed(mainLane, JudgeResult(None, 0),
+                            context.laneBeamTimeMicros);
+  }
   setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
                  inputTime, inputTime, JudgeResult(None, 0));
   return result;
@@ -232,7 +241,9 @@ RhythmLaneInputController::releaseLane(int lane,
                                        const InputContext &context,
                                        bool isBackSpin) {
   Result result;
-  if (chart == nullptr || renderer == nullptr) {
+  if (chart == nullptr ||
+      (allowedNoteRange.has_value() &&
+       context.songTimeMicros >= allowedNoteRange->endMicros)) {
     return result;
   }
   auto laneIt = lanePressed.find(lane);
@@ -240,7 +251,9 @@ RhythmLaneInputController::releaseLane(int lane,
     return result;
   }
   laneIt->second = false;
-  renderer->onLaneReleased(lane, context.laneBeamTimeMicros);
+  if (renderer != nullptr) {
+    renderer->onLaneReleased(lane, context.laneBeamTimeMicros);
+  }
 
   const long long inputTime = inputTimeMicros(context);
   for (const auto *measure : chart->Measures) {
@@ -258,7 +271,7 @@ RhythmLaneInputController::releaseLane(int lane,
         continue;
       }
       auto *note = timeline->Notes[lane];
-      if (note == nullptr || note->IsPlayed) {
+      if (note == nullptr || note->IsPlayed || !judge.allowsNote(note)) {
         continue;
       }
       result = releaseNote(note, inputTime, inputTime, isBackSpin);

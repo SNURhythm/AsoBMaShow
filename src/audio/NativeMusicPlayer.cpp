@@ -315,6 +315,26 @@ bool Seek(long long positionMicros, std::string &errorMessage) {
 #endif
 }
 
+bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage) {
+  errorMessage.clear();
+  if (!rate.valid()) {
+    errorMessage = "Music playback rate must be 50-200% in 5% steps.";
+    return false;
+  }
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  return SetIOSNativeMusicPlaybackRate(
+      rate.percent, rate.mode == audio::PlaybackMode::TimeStretch,
+      errorMessage);
+#elif TARGET_OS_ANDROID
+  return SetAndroidNativeMusicPlaybackRate(
+      rate.percent, rate.mode == audio::PlaybackMode::TimeStretch,
+      errorMessage);
+#else
+  errorMessage = "Native music playback is not supported on this platform.";
+  return false;
+#endif
+}
+
 PlaybackState GetState() {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   const IOSNativeMusicState state = GetIOSNativeMusicState();

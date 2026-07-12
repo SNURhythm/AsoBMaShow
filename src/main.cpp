@@ -17,6 +17,7 @@
 #include "main.h"
 #include "path.h"
 #include "scene/MainMenuScene.h"
+#include "scene/SceneEventRouting.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/SettingsScene.h"
 #include "scene/SceneManager.h"
@@ -938,28 +939,6 @@ void run() {
     bool hasPendingMouseMotion = false;
     bool hasPendingResize = false;
 
-    auto shouldDispatchToScene = [](Uint32 eventType) {
-      switch (eventType) {
-      case SDL_QUIT:
-      case SDL_WINDOWEVENT:
-      case SDL_KEYDOWN:
-      case SDL_KEYUP:
-      case SDL_TEXTINPUT:
-      case SDL_TEXTEDITING:
-      case SDL_TEXTEDITING_EXT:
-      case SDL_MOUSEMOTION:
-      case SDL_MOUSEBUTTONDOWN:
-      case SDL_MOUSEBUTTONUP:
-      case SDL_MOUSEWHEEL:
-      case SDL_FINGERDOWN:
-      case SDL_FINGERMOTION:
-      case SDL_FINGERUP:
-        return true;
-      default:
-        return false;
-      }
-    };
-
     auto deferWindowResize = [&](int logicalW, int logicalH) {
       deferredRenderResizeW = logicalW;
       deferredRenderResizeH = logicalH;
@@ -1133,7 +1112,7 @@ void run() {
       }
 #endif
 
-      if (shouldDispatchToScene(event.type)) {
+      if (scene_event_routing::shouldDispatchToScene(event.type)) {
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;

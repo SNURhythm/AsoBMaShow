@@ -3,9 +3,11 @@
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
 #include "../../input/InputTypes.h"
+#include "../../practice/PracticeSession.h"
 #include "Pacemaker.h"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
@@ -78,15 +80,118 @@ struct StartOptions {
   std::shared_ptr<CoursePlaySession> courseSession = nullptr;
   CourseConstraintRules courseConstraints;
   bool ownsChart = false;
+  std::shared_ptr<practice::Session> practiceSession = nullptr;
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
+  audio::PlaybackRate playback;
+  bool clubMode = false;
+  int judgeWindowScalePercent = 100;
+  std::optional<int> startingGaugePercent;
   Scene *returnScene = nullptr;
   std::optional<bool> touchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
   std::function<void(const ReplayData &)> practiceGhostCallback;
   std::vector<InputDeviceCategory> inputDeviceCategories;
   std::optional<RulesetDescriptor> rulesetDescriptor;
+  std::optional<ScoreStageProvenance> replayJudgeOverride;
 };
+
+namespace play_start_detail {
+[[nodiscard]] inline std::optional<
+    std::map<Judgement, std::pair<long long, long long>>>
+validatedJudgeWindows(const ScoreStageProvenance &stage) {
+  constexpr std::array expected = {PGreat, Great, Good, Bad, Kpoor};
+  std::map<Judgement, std::pair<long long, long long>> result;
+  for (const auto &window : stage.effectiveJudgeWindows) {
+    if (std::ranges::find(expected, window.judgement) == expected.end() ||
+        window.earlyMicros > 0 || window.lateMicros < 0 ||
+        window.earlyMicros > window.lateMicros ||
+        !result
+             .emplace(window.judgement,
+                      std::pair<long long, long long>(window.earlyMicros,
+                                                      window.lateMicros))
+             .second) {
+      return std::nullopt;
+    }
+  }
+  if (result.size() != expected.size()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+[[nodiscard]] inline std::optional<ScoreStageProvenance>
+replayJudgeOverrideForChart(const ScoreProvenance &provenance,
+                            const bms_parser::ChartMeta &chartMeta) {
+  const ScoreStageProvenance *matching =
+      score_provenance::uniqueStageForChart(provenance, chartMeta);
+  if (matching == nullptr || !validatedJudgeWindows(*matching).has_value()) {
+    return std::nullopt;
+  }
+  return *matching;
+}
+} // namespace play_start_detail
+
+inline void applyPracticeConfigurationToStartOptions(
+    StartOptions &options, const practice::Configuration &configuration) {
+  options.startPosition =
+      static_cast<unsigned long long>(std::max(0LL, configuration.startMicros));
+  options.gaugeType = configuration.gaugeType;
+  options.gaugeAutoShift = configuration.gaugeAutoShift;
+  options.practiceMode = true;
+  options.playback = configuration.playback;
+  options.judgeWindowScalePercent = configuration.judge.scalePercent;
+  options.startingGaugePercent = configuration.startingGaugePercent;
+}
+
+[[nodiscard]] inline audio::PlaybackRate resultRetryPlayback(
+    const ScoreProvenance &attemptProvenance,
+    const std::optional<practice::Configuration> &practiceConfiguration) {
+  return practiceConfiguration.has_value() ? practiceConfiguration->playback
+                                           : attemptProvenance.playback;
+}
+
+[[nodiscard]] inline Judge
+makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
+  Judge judge(rank);
+  judge.applyCourseJudgementConstraint(options.courseConstraints.judgement);
+  judge.applyWindowScale(options.playback.percent,
+                         options.judgeWindowScalePercent);
+  return judge;
+}
+
+[[nodiscard]] inline Judge
+makeEffectiveJudgeAtPlayStart(const StartOptions &options,
+                              const bms_parser::ChartMeta &chartMeta) {
+  Judge judge = makeEffectiveJudgeAtPlayStart(options, chartMeta.Rank);
+  if (options.replayJudgeOverride.has_value() &&
+      score_provenance::stageMatchesChart(*options.replayJudgeOverride,
+                                          chartMeta)) {
+    if (const auto windows = play_start_detail::validatedJudgeWindows(
+            *options.replayJudgeOverride)) {
+      judge.timingWindows = *windows;
+    }
+  }
+  return judge;
+}
+
+inline void applyReplayProvenanceToStartOptions(StartOptions &options,
+                                                const ReplayData &replay) {
+  options.playback = replay.provenance.playback;
+  options.clubMode = replay.provenance.clubMode;
+  options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
+  options.startingGaugePercent = replay.provenance.startingGaugePercent;
+  options.replayJudgeOverride = play_start_detail::replayJudgeOverrideForChart(
+      replay.provenance, replay.chartMeta);
+}
+
+[[nodiscard]] inline StartOptions
+enforceCoursePlaybackRules(StartOptions options) {
+  if (options.courseSession != nullptr) {
+    options.playback = course_rules::kRequiredPlaybackRate;
+  }
+  return options;
+}
 
 [[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
@@ -117,6 +222,10 @@ struct StartOptions {
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
   input.practice = options.practiceMode;
+  input.clubMode = options.clubMode;
+  input.playback = options.playback;
+  input.judgeWindowScalePercent = options.judgeWindowScalePercent;
+  input.startingGaugePercent = options.startingGaugePercent;
   input.ruleset =
       options.courseSession != nullptr
           ? options.courseSession->rulesetDescriptor
@@ -151,6 +260,7 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.longNoteMode =
         normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
     options.assistOption = stageReplay->assistOption;
+    applyReplayProvenanceToStartOptions(options, *stageReplay);
   }
-  return options;
+  return enforceCoursePlaybackRules(std::move(options));
 }

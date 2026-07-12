@@ -27,6 +27,9 @@
 
 namespace {
 
+constexpr const char *kNeutralProvenanceJson =
+    R"({"playback":{"percent":100}})";
+
 void execOrAbort(sqlite3 *db, const std::string &sql) {
   char *error = nullptr;
   if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error) != SQLITE_OK) {
@@ -136,6 +139,8 @@ bool createScoreDatabase(const std::filesystem::path &path,
                    "combo_break INTEGER NOT NULL,"
                    "final_gauge REAL NOT NULL DEFAULT 0,"
                    "clear_type INTEGER NOT NULL,"
+                   "provenance_json TEXT NOT NULL DEFAULT "
+                   "'{\"playback\":{\"percent\":100}}',"
                    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
                    ")") &&
       execSucceeds(database, "INSERT INTO scores(chart_sha256, ln_mode, score, "
@@ -148,14 +153,15 @@ bool createScoreDatabase(const std::filesystem::path &path,
   return created;
 }
 
-void insertScore(sqlite3 *db, const std::string &sha256,
-                 const std::string &md5, const std::string &path, int lnMode,
-                 int score, int maxScore, int maxCombo, int comboBreak,
-                 int clearType, const std::string &createdAt) {
+void insertScore(sqlite3 *db, const std::string &sha256, const std::string &md5,
+                 const std::string &path, int lnMode, int score, int maxScore,
+                 int maxCombo, int comboBreak, int clearType,
+                 const std::string &createdAt,
+                 const std::string &provenanceJson = kNeutralProvenanceJson) {
   std::string sql =
       "INSERT INTO score_db.scores(chart_sha256, chart_md5, chart_path, "
       "ln_mode, score, max_score, max_combo, combo_break, clear_type, "
-      "created_at) VALUES(";
+      "created_at, provenance_json) VALUES(";
   sql += "'" + sha256 + "', ";
   sql += "'" + md5 + "', ";
   sql += "'" + path + "', ";
@@ -165,37 +171,39 @@ void insertScore(sqlite3 *db, const std::string &sha256,
   sql += std::to_string(maxCombo) + ", ";
   sql += std::to_string(comboBreak) + ", ";
   sql += std::to_string(clearType) + ", ";
-  sql += "'" + createdAt + "')";
+  sql += "'" + createdAt + "', ";
+  sql += "'" + provenanceJson + "')";
   execOrAbort(db, sql);
 }
 
 void attachScoreDatabaseForTest(sqlite3 *db) {
   execOrAbort(db, "ATTACH ':memory:' AS score_db");
-  execOrAbort(db,
-              "CREATE TABLE score_db.scores ("
-              "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-              "chart_path TEXT,"
-              "chart_md5 TEXT,"
-              "chart_sha256 TEXT NOT NULL,"
-              "ln_mode INTEGER NOT NULL DEFAULT 0,"
-              "chart_title TEXT,"
-              "chart_artist TEXT,"
-              "score INTEGER NOT NULL,"
-              "max_score INTEGER NOT NULL,"
-              "max_combo INTEGER NOT NULL,"
-              "combo_break INTEGER NOT NULL,"
-              "pgreat INTEGER NOT NULL DEFAULT 0,"
-              "great INTEGER NOT NULL DEFAULT 0,"
-              "good INTEGER NOT NULL DEFAULT 0,"
-              "bad INTEGER NOT NULL DEFAULT 0,"
-              "poor INTEGER NOT NULL DEFAULT 0,"
-              "kpoor INTEGER NOT NULL DEFAULT 0,"
-              "fast INTEGER NOT NULL DEFAULT 0,"
-              "slow INTEGER NOT NULL DEFAULT 0,"
-              "final_gauge REAL NOT NULL DEFAULT 0,"
-              "clear_type INTEGER NOT NULL,"
-              "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-              ")");
+  execOrAbort(db, "CREATE TABLE score_db.scores ("
+                  "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                  "chart_path TEXT,"
+                  "chart_md5 TEXT,"
+                  "chart_sha256 TEXT NOT NULL,"
+                  "ln_mode INTEGER NOT NULL DEFAULT 0,"
+                  "chart_title TEXT,"
+                  "chart_artist TEXT,"
+                  "score INTEGER NOT NULL,"
+                  "max_score INTEGER NOT NULL,"
+                  "max_combo INTEGER NOT NULL,"
+                  "combo_break INTEGER NOT NULL,"
+                  "pgreat INTEGER NOT NULL DEFAULT 0,"
+                  "great INTEGER NOT NULL DEFAULT 0,"
+                  "good INTEGER NOT NULL DEFAULT 0,"
+                  "bad INTEGER NOT NULL DEFAULT 0,"
+                  "poor INTEGER NOT NULL DEFAULT 0,"
+                  "kpoor INTEGER NOT NULL DEFAULT 0,"
+                  "fast INTEGER NOT NULL DEFAULT 0,"
+                  "slow INTEGER NOT NULL DEFAULT 0,"
+                  "final_gauge REAL NOT NULL DEFAULT 0,"
+                  "clear_type INTEGER NOT NULL,"
+                  "provenance_json TEXT NOT NULL DEFAULT "
+                  "'{\"playback\":{\"percent\":100}}',"
+                  "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                  ")");
   const auto summaryError =
       score_cache_queries::ensureScoreSummarySchema(db, "score_db");
   if (summaryError.has_value()) {
@@ -226,6 +234,9 @@ int main() {
               "2026-01-01 00:00:00");
   insertScore(db, "rank-only", "md5-rank", "", 0, 150, 200, 75, 1, 200,
               "2026-01-02 00:00:00");
+  insertScore(db, "assisted", "md5-assisted", "", 0, 200, 200, 100, 0,
+              kClearTypeHardClearRank, "2026-01-03 00:00:00",
+              R"({"playback":{"percent":75}})");
 
   ASSERT_EQ(180,
             queryInt(db,
@@ -255,6 +266,10 @@ int main() {
                      "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                      "'rank-only'", "0")),
             "clear rank summary keeps highest clear lamp separately");
+  ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+            queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                         "'assisted'", "0")),
+            "rate-assisted zero-break score cache remains capped");
   ASSERT_EQ(0,
             queryInt(db,
                      "SELECT COUNT(*) FROM "
@@ -293,6 +308,10 @@ int main() {
                      "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                      "'rank-only'", "0")),
             "rebuilt clear rank summary keeps best clear lamp");
+  ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+            queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                         "'assisted'", "0")),
+            "rebuilt rate-assisted clear rank remains capped");
 
   sqlite3_close(db);
 

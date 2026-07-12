@@ -6,6 +6,7 @@
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileArchive.h"
 #include "../src/ProfileDatabaseTools.h"
+#include "../src/practice/PracticePresetStore.h"
 #include "../src/ReplayDBHelper.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/input/InputProfileStore.h"
@@ -44,11 +45,17 @@ bool ChartDBHelper::CreateChartMetaTable(sqlite3 *) { return false; }
 namespace {
 using Json = nlohmann::json;
 
-constexpr std::array<std::string_view, 6> kExpectedMembers = {
-    "manifest.json", "settings.json", "input.json",
-    "scores.db",     "replays.db",    "checksums.sha256"};
-constexpr std::array<std::string_view, 5> kChecksummedMembers = {
-    "manifest.json", "settings.json", "input.json", "scores.db", "replays.db"};
+constexpr std::string_view kPracticeHash = "0123456789abcdef0123456789abcdef"
+                                           "0123456789abcdef0123456789abcdef";
+constexpr std::array<std::string_view, 7> kExpectedMembers = {
+    "manifest.json",
+    "settings.json",
+    "input.json",
+    "scores.db",
+    "replays.db",
+    "practice/"
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json",
+    "checksums.sha256"};
 
 int failures = 0;
 
@@ -380,14 +387,13 @@ ArchiveMember *findMember(std::vector<ArchiveMember> &members,
 
 std::string canonicalChecksums(const std::vector<ArchiveMember> &members) {
   std::string result;
-  for (const std::string_view name : kChecksummedMembers) {
-    const auto found = std::ranges::find(members, name, &ArchiveMember::name);
-    if (found == members.end()) {
+  for (const auto &member : members) {
+    if (member.name == "checksums.sha256") {
       continue;
     }
-    result += file_checksum::sha256(found->contents);
+    result += file_checksum::sha256(member.contents);
     result += "  ";
-    result += name;
+    result += member.name;
     result += '\n';
   }
   return result;
@@ -424,7 +430,11 @@ struct Fixture {
                                  "33333333-3333-4333-8333-333333333333",
                                  "44444444-4444-4444-8444-444444444444",
                                  "55555555-5555-4555-8555-555555555555",
-                                 "66666666-6666-4666-8666-666666666666"};
+                                 "66666666-6666-4666-8666-666666666666",
+                                 "77777777-7777-4777-8777-777777777777",
+                                 "88888888-8888-4888-8888-888888888888",
+                                 "99999999-9999-4999-8999-999999999999",
+                                 "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"};
   std::size_t uuidIndex = 0;
   PlayerProfileManager manager;
   std::string sourceId;
@@ -462,6 +472,18 @@ struct Fixture {
     seedMarker(manager.pathsFor(targetId).scoresDb, "score-target");
     seedMarker(manager.pathsFor(targetId).replaysDb, "replay-target");
     seedProvenance(manager.pathsFor(sourceId));
+    practice::PresetStore presetStore(
+        manager.pathsFor(sourceId).practiceDirectory);
+    practice::Configuration configuration{
+        .chartSha256 = std::string(kPracticeHash),
+        .startMicros = 1'000'000,
+        .endMicros = 9'000'000,
+        .loop = true,
+        .gaugeType = GaugeType::Normal,
+        .playback = {.percent = 100},
+    };
+    expect(presetStore.saveLastUsed(kPracticeHash, configuration, error),
+           "archive source practice preset saves: " + error);
     expect(manager.validateProfile(sourceId).ok(),
            "archive source remains valid after seeding");
     expect(manager.validateProfile(targetId).ok(),
@@ -586,7 +608,7 @@ void testExportIsDeterministicAndStrict() {
   const auto members = readArchive(first, error);
   expect(error.empty(), "exported ZIP reads: " + error);
   expect(members.size() == kExpectedMembers.size(),
-         "export contains exactly six members");
+         "export contains exactly seven members");
   for (std::size_t index = 0;
        index < std::min(members.size(), kExpectedMembers.size()); ++index) {
     expect(members[index].name == kExpectedMembers[index],
@@ -608,7 +630,8 @@ void testExportIsDeterministicAndStrict() {
   expect(manifest != members.end(), "export manifest is present");
   if (manifest != members.end()) {
     const Json document = Json::parse(manifest->contents, nullptr, false);
-    expect(!document.is_discarded() && document.at("formatVersion") == 1 &&
+    expect(!document.is_discarded() && document.at("formatVersion") == 2 &&
+               document.at("practiceSchemaVersion") == 1 &&
                document.at("profileUuid") == fixture.sourceId &&
                document.at("profileDisplayName") == "Portable Profile" &&
                document.at("scoreSchemaVersion") ==
@@ -617,6 +640,161 @@ void testExportIsDeterministicAndStrict() {
                    ReplayDBHelper::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
   }
+}
+
+void testPresetStoreSidecarRemainsProfilePortable() {
+  TempDirectory temp{"profile-practice-integration"};
+  TempDirectory exchange{"profile-practice-integration-exchange"};
+  std::vector<std::string> uuids{"11111111-1111-4111-8111-111111111111",
+                                 "22222222-2222-4222-8222-222222222222"};
+  std::size_t uuidIndex = 0;
+  PlayerProfileManagerDependencies dependencies;
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.utcNow = [] { return std::string("2026-07-11T02:34:56Z"); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "practice portability integration profile initializes");
+  const std::string sourceId = manager.activeProfile().id;
+  const PlayerProfilePaths source = manager.activePaths();
+
+  practice::PresetStore store(source.practiceDirectory);
+  practice::Configuration lastUsed{
+      .chartSha256 = std::string(kPracticeHash),
+      .startMicros = 1'000'000,
+      .endMicros = 9'000'000,
+      .loop = true,
+      .gaugeType = GaugeType::ExHard,
+      .gaugeAutoShift = true,
+      .playback = {.percent = 90},
+  };
+  std::string error;
+  expect(store.saveLastUsed(kPracticeHash, lastUsed, error),
+         "integration last-used practice configuration saves: " + error);
+  expect(store.saveNamed(kPracticeHash, "Opening", lastUsed, error).has_value(),
+         "integration named practice preset saves: " + error);
+  const auto primary =
+      source.practiceDirectory / (std::string(kPracticeHash) + ".json");
+  for (const std::string_view suffix :
+       {".tmp", ".bak.pending", ".bak.previous"}) {
+    writeFile(std::filesystem::path(primary.string() + std::string(suffix)),
+              "bounded crash sidecar\n");
+  }
+
+  std::vector<std::string> sourceEntries;
+  for (const auto &entry :
+       std::filesystem::directory_iterator(source.practiceDirectory)) {
+    sourceEntries.push_back(entry.path().filename().string());
+  }
+  std::ranges::sort(sourceEntries);
+  expect(sourceEntries ==
+             std::vector<std::string>{
+                 std::string(kPracticeHash) + ".json",
+                 std::string(kPracticeHash) + ".json.bak",
+                 std::string(kPracticeHash) + ".json.bak.pending",
+                 std::string(kPracticeHash) + ".json.bak.previous",
+                 std::string(kPracticeHash) + ".json.tmp"},
+         "live profile practice storage recognizes every exact atomic "
+         "writer sidecar");
+  expect(manager.validateProfile(sourceId).ok(),
+         "profile validation accepts the PresetStore atomic backup sidecar");
+
+  const auto duplicated = manager.duplicateProfile(sourceId, "Practice Copy");
+  expect(duplicated.ok() && duplicated.profile,
+         "profile with repeated PresetStore saves duplicates");
+  if (duplicated.profile) {
+    const auto duplicatePractice =
+        manager.pathsFor(duplicated.profile->id).practiceDirectory;
+    std::vector<std::string> duplicateEntries;
+    for (const auto &entry :
+         std::filesystem::directory_iterator(duplicatePractice)) {
+      duplicateEntries.push_back(entry.path().filename().string());
+    }
+    expect(duplicateEntries ==
+               std::vector<std::string>{std::string(kPracticeHash) + ".json"},
+           "profile duplication copies the portable primary JSON, not its "
+           "rollback sidecar");
+    practice::PresetStore duplicateStore(duplicatePractice);
+    const auto duplicatePreset = duplicateStore.load(kPracticeHash, 10'000'000);
+    expect(duplicatePreset.status == versioned_json::LoadStatus::Loaded &&
+               duplicatePreset.data.lastUsed.gaugeType == GaugeType::ExHard &&
+               duplicatePreset.data.lastUsed.gaugeAutoShift,
+           "profile duplication preserves practice GAS configuration");
+  }
+
+  const auto archive = exchange.path() / "practice-sidecar.asobprofile";
+  ProfileArchiveService service(manager);
+  const auto exported = service.Export(sourceId, archive);
+  expect(exported.ok(),
+         "profile with PresetStore sidecar exports: " + exported.message);
+  if (exported.ok()) {
+    auto members = readArchive(archive, error);
+    const auto *practiceMember =
+        findMember(members, "practice/" + std::string(kPracticeHash) + ".json");
+    expect(practiceMember != nullptr &&
+               std::ranges::none_of(
+                   members,
+                   [](const ArchiveMember &member) {
+                     return member.name.starts_with("practice/") &&
+                            member.name != "practice/" +
+                                               std::string(kPracticeHash) +
+                                               ".json";
+                   }),
+           "portable archive includes only the primary practice JSON");
+    const Json practiceDocument =
+        practiceMember == nullptr
+            ? Json()
+            : Json::parse(practiceMember->contents, nullptr, false);
+    expect(practiceDocument.is_object() &&
+               practiceDocument.at("lastUsed").at("gaugeAutoShift") == true,
+           "portable archive preserves GAS in practice preset JSON");
+  }
+}
+
+void testMalformedOptionalPracticeRemainsVisibleButCannotExport() {
+  Fixture fixture;
+  const auto primary =
+      fixture.manager.pathsFor(fixture.sourceId).practiceDirectory /
+      (std::string(kPracticeHash) + ".json");
+  const std::string validContents = readFile(primary);
+  writeFile(primary, "{not-json");
+
+  expect(
+      fixture.manager.validateProfile(fixture.sourceId).ok() &&
+          fixture.manager.validateProfileForActivation(fixture.sourceId).ok(),
+      "malformed optional practice data remains visible and activatable");
+  const auto visible = fixture.manager.listProfiles();
+  expect(std::ranges::find(visible, fixture.sourceId, &PlayerProfile::id) !=
+             visible.end(),
+         "malformed optional practice data does not hide its profile");
+
+  const auto destination = fixture.exchange.path() / "malformed-practice.zip";
+  bool temporaryArchiveWritten = false;
+  ProfileArchiveDependencies dependencies;
+  dependencies.beforeExportPhase = [&](ProfileArchiveExportPhase,
+                                       std::string &) {
+    temporaryArchiveWritten = true;
+    return true;
+  };
+  ProfileArchiveService service(fixture.manager, std::move(dependencies));
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(exported.error == ProfileError::IntegrityFailure &&
+             !std::filesystem::exists(destination) && !temporaryArchiveWritten,
+         "portable export rejects malformed primary practice JSON before "
+         "writing an archive");
+
+  Json invalid = Json::parse(validContents);
+  invalid["lastUsed"]["future"] = true;
+  writeFile(primary, invalid.dump());
+  temporaryArchiveWritten = false;
+  const auto invalidDestination =
+      fixture.exchange.path() / "invalid-practice.zip";
+  const auto invalidExport =
+      service.Export(fixture.sourceId, invalidDestination);
+  expect(invalidExport.error == ProfileError::IntegrityFailure &&
+             !std::filesystem::exists(invalidDestination) &&
+             !temporaryArchiveWritten,
+         "portable export rejects invalid primary practice JSON before "
+         "writing an archive");
 }
 
 void testArchiveUsesNativeUnicodeFilesystemPaths() {
@@ -704,6 +882,11 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
   expect(readFile(importedPaths.settingsJson) == sourceSettings &&
              readFile(importedPaths.inputJson) == sourceInput,
          "settings and input bytes round-trip exactly");
+  expect(readFile(importedPaths.practiceDirectory /
+                  (std::string(kPracticeHash) + ".json")) ==
+             readFile(sourcePaths.practiceDirectory /
+                      (std::string(kPracticeHash) + ".json")),
+         "practice preset bytes round-trip exactly");
   expect(rowCount(importedPaths.scoresDb, "archive_marker") == 1 &&
              rowCount(importedPaths.replaysDb, "archive_marker") == 1,
          "score and replay database data round-trip exactly");
@@ -731,6 +914,42 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
   expect(!observedWorkspace.empty() &&
              !std::filesystem::exists(observedWorkspace),
          "successful import cleans its private workspace outside profile root");
+}
+
+void testVersionOneArchiveImportsWithEmptyPracticeDirectory() {
+  Fixture fixture;
+  const auto exported = exportFixture(fixture, "version-two.asobprofile");
+  std::string error;
+  auto members = readArchive(exported, error);
+  expect(error.empty(), "v1 compatibility fixture reads: " + error);
+  std::erase_if(members, [](const ArchiveMember &member) {
+    return member.name.starts_with("practice/");
+  });
+  ArchiveMember *manifestMember = findMember(members, "manifest.json");
+  expect(manifestMember != nullptr, "v1 compatibility manifest exists");
+  if (!manifestMember) {
+    return;
+  }
+  Json manifest = Json::parse(manifestMember->contents, nullptr, false);
+  manifest["formatVersion"] = 1;
+  manifest.erase("practiceSchemaVersion");
+  manifestMember->contents = manifest.dump(2) + "\n";
+  refreshChecksums(members);
+  const auto legacy = fixture.exchange.path() / "version-one.asobprofile";
+  expect(writeArchive(legacy, members, error),
+         "v1 compatibility archive writes: " + error);
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(legacy);
+  expect(imported.ok() && imported.profile,
+         "version-one profile archive still imports: " + imported.message);
+  if (imported.profile) {
+    const auto practiceDirectory =
+        fixture.manager.pathsFor(imported.profile->id).practiceDirectory;
+    expect(std::filesystem::is_directory(practiceDirectory) &&
+               std::filesystem::is_empty(practiceDirectory),
+           "version-one archive imports with an empty practice directory");
+  }
 }
 
 void testCreateImportRetriesUnsafeAndOccupiedGeneratedIds() {
@@ -912,6 +1131,7 @@ void expectRejectedWithoutMutation(
   expect(writeArchive(archive, members, error),
          std::string(label) + " malicious archive writes: " + error);
   const std::size_t profilesBefore = fixture.manager.listProfiles().size();
+  const std::size_t uuidIndexBefore = fixture.uuidIndex;
   std::filesystem::path observedWorkspace;
   ProfileArchiveDependencies dependencies;
   dependencies.importWorkspaceCreated =
@@ -924,6 +1144,8 @@ void expectRejectedWithoutMutation(
          std::string(label) + " archive is rejected: " + result.message);
   expect(fixture.manager.listProfiles().size() == profilesBefore,
          std::string(label) + " rejection does not create a profile");
+  expect(fixture.uuidIndex == uuidIndexBefore,
+         std::string(label) + " rejection occurs before profile install");
   expect(transactionArtifacts(fixture.temp.path()).empty(),
          std::string(label) + " rejection leaves no transaction artifacts");
   expect(!observedWorkspace.empty() &&
@@ -936,8 +1158,9 @@ void testStrictMemberAllowlistAndTypes() {
   const auto validPath = exportFixture(fixture, "strict-source.zip");
   std::string error;
   const auto valid = readArchive(validPath, error);
-  expect(error.empty() && valid.size() == 6, "strict source archive reads");
-  if (valid.size() != 6) {
+  expect(error.empty() && valid.size() == kExpectedMembers.size(),
+         "strict source archive reads");
+  if (valid.size() != kExpectedMembers.size()) {
     return;
   }
 
@@ -956,6 +1179,13 @@ void testStrictMemberAllowlistAndTypes() {
   for (const std::string hostileName : std::array{
            std::string("../manifest.json"), std::string("/manifest.json"),
            std::string("C:/manifest.json"), std::string("folder/manifest.json"),
+           std::string("practice/not-a-hash.json"),
+           std::string("practice/") + std::string(kPracticeHash) + ".json.tmp",
+           std::string("practice/") + std::string(kPracticeHash) + ".json.bak",
+           std::string("practice/") + std::string(kPracticeHash) + ".json.old",
+           std::string("practice/"
+                       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                       "AAAAAAAAA.json"),
            std::string("bad-\xff.json", 10)}) {
     auto hostile = valid;
     hostile.front().name = hostileName;
@@ -980,13 +1210,89 @@ void testStrictMemberAllowlistAndTypes() {
   expectRejectedWithoutMutation(fixture, directory, "directory-member");
 }
 
+void testPracticeMembersAreValidatedBeforeInstall() {
+  Fixture fixture;
+  const auto validPath = exportFixture(fixture, "practice-validation.zip");
+  std::string error;
+  auto valid = readArchive(validPath, error);
+  expect(error.empty(), "practice validation source archive reads: " + error);
+  const std::string memberName =
+      "practice/" + std::string(kPracticeHash) + ".json";
+
+  auto rejectPractice = [&](std::vector<ArchiveMember> members,
+                            std::string contents, std::string_view label,
+                            ProfileError expected =
+                                ProfileError::IntegrityFailure) {
+    ArchiveMember *practiceMember = findMember(members, memberName);
+    expect(practiceMember != nullptr,
+           std::string(label) + " source practice member exists");
+    if (!practiceMember) {
+      return;
+    }
+    practiceMember->contents = std::move(contents);
+    refreshChecksums(members);
+    expectRejectedWithoutMutation(fixture, members, label, expected);
+  };
+
+  rejectPractice(valid, "{not-json", "malformed-practice");
+
+  ArchiveMember *validPractice = findMember(valid, memberName);
+  if (!validPractice) {
+    return;
+  }
+  Json document = Json::parse(validPractice->contents);
+  Json future = document;
+  future["schemaVersion"] = practice::kPresetSchemaVersion + 1;
+  rejectPractice(valid, future.dump(), "future-practice",
+                 ProfileError::FutureVersion);
+
+  Json wrongSchema = document;
+  wrongSchema["schemaVersion"] = practice::kPresetSchemaVersion - 1;
+  rejectPractice(valid, wrongSchema.dump(), "mismatched-practice-schema");
+
+  Json mismatched = document;
+  mismatched["chartSha256"] =
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+  rejectPractice(valid, mismatched.dump(), "mismatched-practice-hash");
+
+  Json semantic = document;
+  semantic["lastUsed"]["countInBeats"] = 17;
+  rejectPractice(valid, semantic.dump(), "invalid-practice-semantics");
+
+  Json undeclared = document;
+  undeclared["lastUsed"]["judge"]["future"] = true;
+  rejectPractice(valid, undeclared.dump(), "undeclared-practice-field");
+
+  Json duplicateIds = document;
+  Json namedEntry{{"id", "0123456789abcdef0123456789abcdef"},
+                  {"name", "Opening"},
+                  {"configuration", document["lastUsed"]}};
+  duplicateIds["named"].push_back(namedEntry);
+  duplicateIds["named"].push_back(namedEntry);
+  rejectPractice(valid, duplicateIds.dump(), "duplicate-practice-preset-id");
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(validPath);
+  expect(imported.ok() && imported.profile,
+         "valid semantic practice data imports: " + imported.message);
+  if (imported.profile) {
+    const auto loaded =
+        practice::PresetStore(
+            fixture.manager.pathsFor(imported.profile->id).practiceDirectory)
+            .load(kPracticeHash, 10'000'000);
+    expect(loaded.status == versioned_json::LoadStatus::Loaded,
+           "imported valid practice data remains readable");
+  }
+}
+
 void testChecksumsVersionsValidatorsAndLimits() {
   Fixture fixture;
   const auto validPath = exportFixture(fixture, "validation-source.zip");
   std::string error;
   const auto valid = readArchive(validPath, error);
-  expect(error.empty() && valid.size() == 6, "validation source archive reads");
-  if (valid.size() != 6) {
+  expect(error.empty() && valid.size() == kExpectedMembers.size(),
+         "validation source archive reads");
+  if (valid.size() != kExpectedMembers.size()) {
     return;
   }
 
@@ -1010,11 +1316,12 @@ void testChecksumsVersionsValidatorsAndLimits() {
                                 ProfileError::FutureVersion);
 
   for (const auto &[field, current] :
-       std::array<std::pair<std::string_view, int>, 5>{
+       std::array<std::pair<std::string_view, int>, 6>{
            std::pair{"profileSchemaVersion", kPlayerProfileSchemaVersion},
            std::pair{"settingsSchemaVersion",
                      AppSettingsStore::kCurrentSchemaVersion},
            std::pair{"inputSchemaVersion", InputProfile::kSchemaVersion},
+           std::pair{"practiceSchemaVersion", 1},
            std::pair{"scoreSchemaVersion",
                      ScoreDBHelper::kCurrentSchemaVersion},
            std::pair{"replaySchemaVersion",
@@ -1119,9 +1426,9 @@ void testZipParserEnforcesDeclaredAndStreamedSizeLimits() {
   const auto source = exportFixture(fixture, "size-parser-source.zip");
   std::string error;
   const auto valid = readArchive(source, error);
-  expect(error.empty() && valid.size() == 6,
+  expect(error.empty() && valid.size() == kExpectedMembers.size(),
          "size parser source archive reads");
-  if (!error.empty() || valid.size() != 6) {
+  if (!error.empty() || valid.size() != kExpectedMembers.size()) {
     return;
   }
   ProfileArchiveService service(fixture.manager);
@@ -1198,9 +1505,9 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
   const auto validPath = exportFixture(fixture, "migration-source.zip");
   std::string error;
   auto members = readArchive(validPath, error);
-  expect(error.empty() && members.size() == 6,
+  expect(error.empty() && members.size() == kExpectedMembers.size(),
          "migration source archive reads");
-  if (!error.empty() || members.size() != 6) {
+  if (!error.empty() || members.size() != kExpectedMembers.size()) {
     return;
   }
 
@@ -1313,7 +1620,7 @@ void testFutureDatabaseAndCorruptionAreRejected() {
   const auto validPath = exportFixture(fixture, "database-source.zip");
   std::string error;
   const auto valid = readArchive(validPath, error);
-  if (!error.empty() || valid.size() != 6) {
+  if (!error.empty() || valid.size() != kExpectedMembers.size()) {
     expect(false, "database source archive reads: " + error);
     return;
   }
@@ -2099,13 +2406,17 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testPresetStoreSidecarRemainsProfilePortable();
+  testMalformedOptionalPracticeRemainsVisibleButCannotExport();
   testArchiveUsesNativeUnicodeFilesystemPaths();
   testCreateImportUsesNewIdAndRoundTripsExactly();
+  testVersionOneArchiveImportsWithEmptyPracticeDirectory();
   testCreateImportRetriesUnsafeAndOccupiedGeneratedIds();
   testOverwriteIsRestrictedAndReplacesInactiveProfile();
   testOverwriteRefusesTheLastProfile();
   testOverwriteRollbackRestoresOriginalProfile();
   testStrictMemberAllowlistAndTypes();
+  testPracticeMembersAreValidatedBeforeInstall();
   testChecksumsVersionsValidatorsAndLimits();
   testSizePolicyBoundariesWithoutLargeAllocations();
   testZipParserEnforcesDeclaredAndStreamedSizeLimits();

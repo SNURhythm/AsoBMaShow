@@ -158,11 +158,19 @@ json settingsToJson(const AppSettings &settings) {
       {"systemPlaybackShowJacket", settings.systemPlaybackShowJacket},
       {"systemPlaybackShowTitle", settings.systemPlaybackShowTitle},
       {"systemPlaybackShowArtist", settings.systemPlaybackShowArtist},
+      {"musicPlayerPlaybackRatePercent",
+       settings.musicPlayerPlaybackRatePercent},
+      {"musicPlayerPlaybackMode",
+       static_cast<int>(settings.musicPlayerPlaybackMode)},
+      {"gameplayClubModeEnabled", settings.gameplayClubModeEnabled},
+      {"musicPlayerClubModeEnabled", settings.musicPlayerClubModeEnabled},
       {"selectedGaugeType", settings.selectedGaugeType},
       {"selectedPlayOption", settings.selectedPlayOption},
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
+      {"selectedPlaybackMode", static_cast<int>(settings.selectedPlaybackMode)},
       {"defaultDifficultyTablesSeeded", settings.defaultDifficultyTablesSeeded},
       {"audio",
        {{"outputDeviceId", settings.audioVideo.audio.outputDeviceId},
@@ -254,6 +262,14 @@ AppSettings settingsFromJson(const json &document,
             settings.systemPlaybackShowTitle, diagnostics);
   readValue(document, "systemPlaybackShowArtist",
             settings.systemPlaybackShowArtist, diagnostics);
+  readValue(document, "musicPlayerPlaybackRatePercent",
+            settings.musicPlayerPlaybackRatePercent, diagnostics);
+  readEnum(document, "musicPlayerPlaybackMode",
+           settings.musicPlayerPlaybackMode, diagnostics);
+  readValue(document, "gameplayClubModeEnabled",
+            settings.gameplayClubModeEnabled, diagnostics);
+  readValue(document, "musicPlayerClubModeEnabled",
+            settings.musicPlayerClubModeEnabled, diagnostics);
   readValue(document, "selectedGaugeType", settings.selectedGaugeType,
             diagnostics);
   readValue(document, "selectedPlayOption", settings.selectedPlayOption,
@@ -263,6 +279,10 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "selectedPlaybackRatePercent",
+            settings.selectedPlaybackRatePercent, diagnostics);
+  readEnum(document, "selectedPlaybackMode", settings.selectedPlaybackMode,
+           diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
 

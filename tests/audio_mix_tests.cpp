@@ -1,5 +1,6 @@
 #include "audio/AudioMix.h"
 #include "audio/AudioWrapper.h"
+#include "audio/ChartAudioRenderer.h"
 #include "audio/Jukebox.h"
 
 #include <array>
@@ -76,6 +77,8 @@ using StartDeviceSignature =
     audio::playback::BackendOperationResult (AudioWrapper::*)();
 using StopSoundsSignature =
     audio::playback::BackendOperationResult (AudioWrapper::*)();
+using SetPlaybackRateSignature = bool (AudioWrapper::*)(audio::PlaybackRate,
+                                                        std::string &);
 
 static_assert(std::same_as<decltype(std::declval<SoundData>().sourceData),
                            std::vector<short>>);
@@ -89,6 +92,9 @@ static_assert(
     std::same_as<decltype(std::declval<SoundData>().sourceSampleRate), int>);
 static_assert(
     std::same_as<decltype(std::declval<PlayingSound>().bus), audio::Bus>);
+static_assert(
+    std::same_as<decltype(std::declval<PlayingSound>().sourceFrameQ32),
+                 std::uint64_t>);
 static_assert(
     std::same_as<decltype(std::declval<ScheduledSound>().bus), audio::Bus>);
 static_assert(
@@ -111,6 +117,9 @@ static_assert(std::same_as<decltype(static_cast<StartDeviceSignature>(
 static_assert(std::same_as<decltype(static_cast<StopSoundsSignature>(
                                &AudioWrapper::stopSounds)),
                            StopSoundsSignature>);
+static_assert(std::same_as<decltype(static_cast<SetPlaybackRateSignature>(
+                               &AudioWrapper::setPlaybackRate)),
+                           SetPlaybackRateSignature>);
 
 std::vector<short> stereoRamp(size_t frameCount) {
   std::vector<short> result;
@@ -282,7 +291,8 @@ void testConfirmedDrainPublishesThenRestartsAtNewRate() {
   sound.outputFrameCount = sound.outputData.size();
 
   AudioCallbackState callbackState;
-  callbackState.playingSounds[0] = {.soundData = &sound, .currentFrame = 220};
+  callbackState.playingSounds[0] = {.soundData = &sound,
+                                    .sourceFrameQ32 = 220ULL << 32};
   callbackState.playingSoundCount = 1;
   std::atomic<int> sampleRate{44100};
   std::atomic<int64_t> audioClockFrameCursor{441};
@@ -301,7 +311,7 @@ void testConfirmedDrainPublishesThenRestartsAtNewRate() {
   backend.onStart = [&] {
     require(
         sound.outputFrameCount == 480 && sampleRate.load() == 48000 &&
-            callbackState.playingSounds[0].currentFrame == 239 &&
+            (callbackState.playingSounds[0].sourceFrameQ32 >> 32) == 239 &&
             audioClockFrameCursor.load() == 480,
         "restart happens only after PCM, positions, clock, and rate publish");
   };
@@ -522,7 +532,7 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   AudioCallbackState state;
   state.playingSounds[0] = {.soundData = &sound,
                             .bus = audio::Bus::Bgm,
-                            .currentFrame = 44100,
+                            .sourceFrameQ32 = 44100ULL << 32,
                             .outputOffsetFrames = 441};
   state.playingSoundCount = 1;
   state.scheduledSounds[0] = {.soundData = &sound,
@@ -543,7 +553,7 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   require(transition.has_value(),
           "a valid retained PCM set prepares a new output-rate candidate");
   require(sound.outputFrameCount == 88200 &&
-              state.playingSounds[0].currentFrame == 44100 &&
+              state.playingSounds[0].sourceFrameQ32 == 44100ULL << 32 &&
               state.scheduledSounds[0].startFrame == 22050 &&
               state.commandQueue[0].startFrame == 11025,
           "preparing a rate transition does not publish mixed-rate state");
@@ -551,7 +561,7 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   audio::playback::CommitOutputRateTransition(std::move(*transition), state);
   require(sound.outputFrameCount == 96000 && sound.currentFrame == 4800,
           "committing regenerates output from retained PCM at 48 kHz");
-  require(state.playingSounds[0].currentFrame == 48000 &&
+  require(state.playingSounds[0].sourceFrameQ32 == 48000ULL << 32 &&
               state.playingSounds[0].outputOffsetFrames == 480,
           "active playback offsets retain their elapsed time at 48 kHz");
   require(state.scheduledSounds[0].startFrame == 24000,
@@ -567,11 +577,102 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   require(
       sound.outputFrameCount == 88200 && sound.outputData == sound.sourceData,
       "returning to the source rate regenerates from source, not prior output");
-  require(state.playingSounds[0].currentFrame == 44100 &&
+  require(state.playingSounds[0].sourceFrameQ32 == 44100ULL << 32 &&
               state.playingSounds[0].outputOffsetFrames == 441 &&
               state.scheduledSounds[0].startFrame == 22050 &&
               state.commandQueue[0].startFrame == 11025,
           "all nonzero frame domains remain time-correct after 48 to 44.1 kHz");
+}
+
+std::vector<float> mixMonoRampAtRate(int playbackRatePercent,
+                                     std::uint32_t outputFrames) {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {0, 1000, 2000, 3000, 4000, 5000, 6000, 7000};
+  sound.outputFrameCount = sound.outputData.size();
+
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(state, &sound, audio::Bus::Bgm, 0),
+          "mono ramp enters the active mixer");
+  std::vector<float> output(outputFrames, 0.0f);
+  audio::playback::MixActiveSounds(state, output, outputFrames, 1, 1.0f, 1.0f,
+                                   playbackRatePercent);
+  return output;
+}
+
+void testPitchShiftMixerUsesQ32Interpolation() {
+  const auto fast = mixMonoRampAtRate(200, 4);
+  requireNear(fast[0], 0.0f, "200 percent starts at source frame zero");
+  requireNear(fast[1], 2000.0f / 32768.0f * 0.9f,
+              "200 percent consumes source frame two");
+  requireNear(fast[2], 4000.0f / 32768.0f * 0.9f,
+              "200 percent consumes source frame four");
+  requireNear(fast[3], 6000.0f / 32768.0f * 0.9f,
+              "200 percent consumes source frame six");
+
+  const auto slow = mixMonoRampAtRate(50, 4);
+  requireNear(slow[0], 0.0f, "50 percent starts at source position zero");
+  requireNear(slow[1], 500.0f / 32768.0f * 0.9f,
+              "50 percent interpolates source position one half");
+  requireNear(slow[2], 1000.0f / 32768.0f * 0.9f,
+              "50 percent reaches source position one");
+  requireNear(slow[3], 1500.0f / 32768.0f * 0.9f,
+              "50 percent interpolates source position one and one half");
+}
+
+void testQ32ActiveCursorRejectsUnrepresentableStartFrame() {
+  if constexpr (std::numeric_limits<size_t>::max() >
+                std::numeric_limits<std::uint32_t>::max()) {
+    SoundData sound;
+    sound.channels = 1;
+    sound.outputFrameCount =
+        static_cast<size_t>(std::numeric_limits<std::uint32_t>::max()) + 2;
+    AudioCallbackState state;
+    require(
+        !audio::playback::AppendActiveSound(
+            state, &sound, audio::Bus::Bgm, 0,
+            static_cast<size_t>(std::numeric_limits<std::uint32_t>::max()) + 1),
+        "Q32 active cursors reject an unrepresentable source frame");
+  }
+}
+
+void testScheduledOffsetsUseInversePlaybackRate() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200, 300, 400};
+  sound.outputFrameCount = sound.outputData.size();
+
+  AudioCallbackState slowState;
+  require(audio::playback::InsertScheduledSound(
+              slowState, {.soundData = &sound, .startMicros = 500}),
+          "slow scheduled sound enters the callback state");
+  audio::playback::ActivateScheduledSounds(slowState, 0, 1000, 4, 50);
+  require(slowState.playingSoundCount == 1 &&
+              slowState.playingSounds[0].outputOffsetFrames == 1,
+          "500 chart microseconds take one output frame at 50 percent");
+
+  sound.playing = false;
+  AudioCallbackState fastState;
+  require(audio::playback::InsertScheduledSound(
+              fastState, {.soundData = &sound, .startMicros = 2000}),
+          "fast scheduled sound enters the callback state");
+  audio::playback::ActivateScheduledSounds(fastState, 0, 1000, 4, 200);
+  require(fastState.playingSoundCount == 1 &&
+              fastState.playingSounds[0].outputOffsetFrames == 1,
+          "two chart milliseconds take one output frame at 200 percent");
+
+  sound.playing = false;
+  AudioCallbackState boundedState;
+  require(
+      audio::playback::InsertScheduledSound(
+          boundedState, {.soundData = &sound,
+                         .startMicros = std::numeric_limits<long long>::max()}),
+      "far-future scheduled sound enters the callback state");
+  audio::playback::ActivateScheduledSounds(
+      boundedState, std::numeric_limits<long long>::min(), 1000, 4, 100);
+  require(boundedState.playingSoundCount == 0 &&
+              boundedState.scheduledSoundCount == 1,
+          "extreme chart-time deltas remain future events without overflow");
 }
 
 void testBusFlowAndMixing() {
@@ -606,7 +707,7 @@ void testBusFlowAndMixing() {
               state.scheduledSounds[0].bus == audio::Bus::Keysound,
           "schedule commands preserve the keysound bus in scheduled state");
 
-  audio::playback::ActivateScheduledSounds(state, 0, 48000, 1);
+  audio::playback::ActivateScheduledSounds(state, 0, 48000, 1, 100);
   require(state.playingSoundCount == 2 &&
               state.playingSounds[1].bus == audio::Bus::Keysound,
           "scheduled activation preserves the keysound bus in active state");
@@ -623,7 +724,7 @@ void testBusFlowAndMixing() {
 
   std::vector<float> mixBuffer(2, 0.0f);
   audio::playback::MixActiveSounds(state, mixBuffer, 1, 2, bgmGain,
-                                   keysoundGain);
+                                   keysoundGain, 100);
   requireNear(mixBuffer[0], 0.3375f,
               "the left channel mixes each voice with its own bus gain");
   requireNear(mixBuffer[1], 0.3375f,
@@ -637,12 +738,16 @@ void testJukeboxSourceClassificationAndSeekOverlap() {
       makeScheduledAudioEvent(1000, 11, JukeboxAudioSource::BackgroundNote);
   const auto metronome =
       makeScheduledAudioEvent(1000, 12, JukeboxAudioSource::PrepMetronome);
+  const auto clubBeat =
+      makeScheduledAudioEvent(1000, 13, JukeboxAudioSource::ClubBeat);
   require(chartNote.bus == audio::Bus::Keysound,
           "chart notes classify as keysounds");
   require(background.bus == audio::Bus::Bgm,
           "background notes classify as BGM");
   require(metronome.bus == audio::Bus::Keysound,
           "preparation metronome clicks classify as keysounds");
+  require(clubBeat.bus == audio::Bus::Bgm,
+          "Club kick and clap classify as BGM");
   require(audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound) ==
                   audio::Bus::Keysound &&
               audioBusForJukeboxSource(JukeboxAudioSource::ReplayKeysound) ==
@@ -658,6 +763,25 @@ void testJukeboxSourceClassificationAndSeekOverlap() {
           "seek overlap preserves the scheduled event bus and elapsed time");
   require(!makeOverlappingAudioRequest(background, 2000, 1000).has_value(),
           "seek overlap excludes audio at the end of its duration");
+}
+
+void testSchedulerWaitConvertsChartDeltaToWallTime() {
+  constexpr long long maxSleepMicros = 250'000;
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              100'000, {.percent = 50}, maxSleepMicros) == 200'000,
+          "50 percent scheduler wait doubles chart delta in wall time");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              100'000, {.percent = 100}, maxSleepMicros) == 100'000,
+          "100 percent scheduler wait preserves chart delta");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              100'000, {.percent = 200}, maxSleepMicros) == 50'000,
+          "200 percent scheduler wait halves chart delta in wall time");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              1'000'000, {.percent = 50}, maxSleepMicros) == maxSleepMicros,
+          "scheduler wall waits retain the maximum idle clamp");
+  require(audio::playback::SchedulerWaitMicrosForChartDelta(
+              -1, {.percent = 200}, maxSleepMicros) == 0,
+          "past scheduler targets remain immediately eligible");
 }
 
 } // namespace
@@ -735,6 +859,16 @@ int main() {
     require(audio::ResamplePcm(partialStereoFrame, 2, 44100, 48000).empty(),
             "rate conversion rejects partial interleaved PCM");
 
+    const audio::PlaybackRate doubleSpeed{.percent = 200};
+    require(chart_audio::outputTimeMicros(2'000'000, doubleSpeed) ==
+                1'000'000,
+            "offline chart audio compresses event time at double speed");
+    requireNear(static_cast<float>(chart_audio::sourceFramesPerOutputFrame(
+                    44100, doubleSpeed)),
+                2.0f,
+                "offline chart audio advances two source frames at double "
+                "speed");
+
     const ScheduledAudioEvent defaultEvent;
     require(defaultEvent.wav == bms_parser::Parser::NoWav &&
                 defaultEvent.bus == audio::Bus::Bgm,
@@ -759,8 +893,12 @@ int main() {
     testPostStartQueryFailureCannotPublishRunningState();
     testStopFailureCannotClearCallbackState();
     testConfirmedStopClearsCallbackStateAfterDrain();
+    testPitchShiftMixerUsesQ32Interpolation();
+    testQ32ActiveCursorRejectsUnrepresentableStartFrame();
+    testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
     testJukeboxSourceClassificationAndSeekOverlap();
+    testSchedulerWaitConvertsChartDeltaToWallTime();
 
     return 0;
   } catch (const std::exception &error) {
