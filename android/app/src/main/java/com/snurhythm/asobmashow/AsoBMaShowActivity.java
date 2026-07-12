@@ -122,6 +122,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private Bitmap nativeMusicArtwork;
     private long nativeMusicDurationMicros = 0;
     private float nativeMusicPlaybackRate = 1.0f;
+    private boolean nativeMusicTimeStretch = false;
     private String nativeMusicQueueTitle = "";
     private final ArrayList<MediaSession.QueueItem> nativeMusicQueue = new ArrayList<>();
     private long nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
@@ -1287,14 +1288,24 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
-    public String setNativeMusicPlaybackRate(String percentText) {
+    public String setNativeMusicPlaybackRate(String rateText) {
         synchronized (nativeMusicLock) {
             try {
-                int percent = Integer.parseInt(percentText);
+                String[] fields = rateText == null
+                        ? new String[0]
+                        : rateText.split("\\n", -1);
+                if (fields.length != 2) {
+                    return ERROR_PREFIX + "Invalid music playback mode.";
+                }
+                int percent = Integer.parseInt(fields[0]);
                 if (percent < 50 || percent > 200 || percent % 5 != 0) {
                     return ERROR_PREFIX + "Music playback rate must be 50-200% in 5% steps.";
                 }
+                if (!fields[1].equals("pitch-shift") && !fields[1].equals("time-stretch")) {
+                    return ERROR_PREFIX + "Invalid music playback mode.";
+                }
                 nativeMusicPlaybackRate = percent / 100.0f;
+                nativeMusicTimeStretch = fields[1].equals("time-stretch");
                 if (nativeMusicPlayer != null) {
                     applyNativeMusicPlaybackRateLocked(nativeMusicPlayer);
                     updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
@@ -1311,7 +1322,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         boolean wasPlaying = player.isPlaying();
         PlaybackParams params = player.getPlaybackParams();
         params.setSpeed(nativeMusicPlaybackRate);
-        params.setPitch(nativeMusicPlaybackRate);
+        params.setPitch(nativeMusicTimeStretch ? 1.0f : nativeMusicPlaybackRate);
         player.setPlaybackParams(params);
         if (!wasPlaying && player.isPlaying()) {
             player.pause();

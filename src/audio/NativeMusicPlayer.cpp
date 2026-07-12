@@ -324,7 +324,9 @@ bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   return SetIOSNativeMusicPlaybackRate(rate.percent, errorMessage);
 #elif TARGET_OS_ANDROID
-  return SetAndroidNativeMusicPlaybackRate(rate.percent, errorMessage);
+  return SetAndroidNativeMusicPlaybackRate(
+      rate.percent, rate.mode == audio::PlaybackMode::TimeStretch,
+      errorMessage);
 #else
   errorMessage = "Native music playback is not supported on this platform.";
   return false;
