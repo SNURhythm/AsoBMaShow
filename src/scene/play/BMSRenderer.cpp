@@ -1177,13 +1177,6 @@ void BMSRenderer::drawHudGaugeBar() {
         gaugeFillColor(accent).toABGR());
   }
 
-  const float fillTipY = y + height * (1.0f - progress);
-  const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
-  const float cursorX = left ? x - 3.0f : x - 10.0f;
-  simpleBatchRenderer.addRoundedRect(
-      cursorX, fillTipY - 1.5f, width + 13.0f, 3.0f, 1.5f,
-      Color(248, 252, 255, 246).toABGR());
-
   const float borderValue =
       gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
