@@ -321,6 +321,12 @@ public:
   View *clearBackgroundColor();
   View *setCornerRadius(float radius);
   [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
+  View *setRotationDegrees(float degrees) {
+    rotationDegrees = std::isfinite(degrees) ? std::fmod(degrees, 360.0f)
+                                              : 0.0f;
+    return this;
+  }
+  [[nodiscard]] float getRotationDegrees() const { return rotationDegrees; }
   View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
   View *setShadow(const Color &color, const ui_theme::ShadowSpec &shadow);
   View *setThemedShadow(ThemeColorProvider provider, int offsetX, int offsetY,
@@ -516,6 +522,7 @@ private:
   int paddingRight = 0;
   int paddingBottom = 0;
   float cornerRadius = 0.0f;
+  float rotationDegrees = 0.0f;
   int shadowOffsetX = 0;
   int shadowOffsetY = 0;
   int shadowSpread = 0;

@@ -835,6 +835,11 @@ BMSRenderer::BMSRenderer(
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
   gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
+  gaugeTypeText = std::make_unique<TextView>(kHudFontPath, 15);
+  gaugeTypeText->setAlign(TextView::CENTER);
+  gaugeTypeText->setVAlign(TextView::MIDDLE);
+  gaugeTypeText->setOverflow(TextView::TextOverflow::Hidden);
+  gaugeTypeText->setRotationDegrees(90.0f);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
   playOptionText->setAlign(TextView::LEFT);
@@ -960,6 +965,9 @@ void BMSRenderer::drawGauge(RenderContext &context) const {
   if (gaugeText != nullptr) {
     gaugeText->render(context);
   }
+  if (gaugeTypeText != nullptr) {
+    gaugeTypeText->render(context);
+  }
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
@@ -1031,8 +1039,10 @@ std::array<float, 4> BMSRenderer::hudGaugeRect() const {
   y = std::max(128.0f, y);
 
   const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
-  float x = left ? 28.0f
-                 : static_cast<float>(rendering::window_width) - 28.0f - width;
+  constexpr float kSideBadgeInset = 56.0f;
+  float x = left ? kSideBadgeInset
+                 : static_cast<float>(rendering::window_width) -
+                       kSideBadgeInset - width;
   const bool counterOnSameSide =
       judgementCounterEnabled &&
       ((left && judgementCounterPosition ==
@@ -1319,6 +1329,9 @@ void BMSRenderer::layoutGaugeText() {
 
   gaugeText->setVisible(true);
   if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    if (gaugeTypeText != nullptr) {
+      gaugeTypeText->setVisible(false);
+    }
     const auto rect = worldGaugeRect();
     const auto topLeft = projectWorldToUi(rect[0], rect[1] + rect[3]);
     const auto topRight =
@@ -1369,6 +1382,19 @@ void BMSRenderer::layoutGaugeText() {
       static_cast<int>(std::round(tipY - textHeight * 0.5f)), 8,
       std::max(8, rendering::window_height - textHeight - 8));
   placeText(gaugeText.get(), x, y, textWidth, textHeight);
+
+  if (gaugeTypeText != nullptr) {
+    gaugeTypeText->setVisible(true);
+    constexpr int typeWidth = 34;
+    const int typeHeight = std::clamp(gaugeTypeText->textureWidth() + 24, 76,
+                                      156);
+    const int typeX =
+        left ? static_cast<int>(std::round(rect[0] - typeWidth - 8.0f))
+             : static_cast<int>(std::round(rect[0] + rect[2] + 8.0f));
+    const int typeY = static_cast<int>(
+        std::round(rect[1] + (rect[3] - typeHeight) * 0.24f));
+    placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
+  }
 }
 
 void BMSRenderer::refreshGaugeTextStyle() {
@@ -1388,6 +1414,9 @@ void BMSRenderer::refreshGaugeTextStyle() {
     gaugeText->clearBorderColor();
     gaugeText->setBorderWidth(0);
     gaugeText->setCornerRadius(0.0f);
+    if (gaugeTypeText != nullptr) {
+      gaugeTypeText->setVisible(false);
+    }
     return;
   }
 
@@ -1397,6 +1426,18 @@ void BMSRenderer::refreshGaugeTextStyle() {
   gaugeText->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
   gaugeText->setBorderWidth(1);
   gaugeText->setCornerRadius(9.0f);
+  if (gaugeTypeText != nullptr) {
+    gaugeTypeText->setVisible(true);
+    gaugeTypeText->setText(currentGaugeAutoShift
+                               ? "GAS"
+                               : gaugeDisplayShortLabel(currentGaugeType,
+                                                       currentGaugeProfile));
+    gaugeTypeText->setColor({250, 253, 255, 255});
+    gaugeTypeText->setBackgroundColor(Color(4, 8, 15, 238));
+    gaugeTypeText->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
+    gaugeTypeText->setBorderWidth(1);
+    gaugeTypeText->setCornerRadius(9.0f);
+  }
 }
 
 float BMSRenderer::gameplayHudTitleWidth() const {
