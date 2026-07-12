@@ -43,4 +43,16 @@ inline std::string labelForScore(int score, int maxScore) {
   return "F";
 }
 
+inline int deficitFromMax(int score, int maxScore) {
+  return std::max(0, maxScore - score);
+}
+
+inline std::string displayLabelForScore(int score, int maxScore) {
+  const std::string rank = labelForScore(score, maxScore);
+  if (rank == "MAX -") {
+    return "MAX-" + std::to_string(deficitFromMax(score, maxScore));
+  }
+  return rank;
+}
+
 } // namespace score_rank

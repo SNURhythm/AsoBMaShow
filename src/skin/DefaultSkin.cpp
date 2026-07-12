@@ -147,6 +147,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const int maxScore = totalNotes * 2;
   const int currentScore = resultState.getScore();
   const std::string grade = score_rank::labelForScore(currentScore, maxScore);
+  const std::string gradeDisplay =
+      score_rank::displayLabelForScore(currentScore, maxScore);
   const Color gradeAccent = ui_theme::scoreRankColor(grade);
   const int playLevelDecimals =
       std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
@@ -372,8 +374,13 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   gradeLabel->setHeight(23);
   gradeLabel->setAlign(TextView::CENTER);
   gradePanel->addView(gradeLabel);
-  auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
-  gradeText->setText(grade);
+  const int gradeFontSize =
+      grade == "MAX -"
+          ? std::max(24, 280 / static_cast<int>(gradeDisplay.size()))
+          : 96;
+  auto *gradeText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", gradeFontSize);
+  gradeText->setText(gradeDisplay);
   gradeText->setColor(ui_theme::sdl(gradeAccent));
   gradeText->setAlign(TextView::CENTER);
   gradeText->setHeight(106);
@@ -411,7 +418,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
           ? (data->pacemaker->usesReplayProgression ? "PACEMAKER GHOST"
                                                     : "PACEMAKER")
           : (hasPreviousBest
-                 ? score_rank::labelForScore(previousScore, previousMaxScore)
+                 ? score_rank::displayLabelForScore(previousScore,
+                                                    previousMaxScore)
                  : "");
   const Color targetAccent =
       hasPacemaker ? ui_theme::cyan()

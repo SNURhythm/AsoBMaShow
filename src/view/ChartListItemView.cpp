@@ -59,6 +59,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
   scoreRankView = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
+  scoreRankDeltaView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
   favoriteButton = new Button();
   favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
 
@@ -155,7 +156,15 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankView->setVAlign(TextView::TextVAlign::MIDDLE);
   scoreRankView->setOverflow(TextView::TextOverflow::Hidden);
   scoreRankView->setWidth(112)->setHeight(84);
+  scoreRankDeltaView->setPositionType(YGPositionTypeAbsolute);
+  scoreRankDeltaView->setPosition(Edge::Left, 76);
+  scoreRankDeltaView->setPosition(Edge::Top, 7);
+  scoreRankDeltaView->setWidth(36)->setHeight(24);
+  scoreRankDeltaView->setAlign(TextView::TextAlign::LEFT);
+  scoreRankDeltaView->setVAlign(TextView::TextVAlign::MIDDLE);
+  scoreRankDeltaView->setOverflow(TextView::TextOverflow::Hidden);
   scoreRankColumn->addView(scoreRankView);
+  scoreRankColumn->addView(scoreRankDeltaView);
   contentCard->addView(scoreRankColumn);
   contentCard->addView(detailsLayout);
 
@@ -210,6 +219,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   artistView->setText(meta.Artist);
   scoreRank.clear();
   scoreRankView->setText("");
+  scoreRankDeltaView->setText("");
   scoreRankColumn->setDisplay(YGDisplayNone);
   scoreRankColumn->setVisible(false);
   if (record.courseStart) {
@@ -252,6 +262,7 @@ void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   if (currentRecord.courseStart || solidArchive || unavailable ||
       maxScore <= 0 || score <= 0) {
     scoreRankView->setText("");
+    scoreRankDeltaView->setText("");
     scoreRank.clear();
     scoreRankColumn->setDisplay(YGDisplayNone);
     scoreRankColumn->setVisible(false);
@@ -259,7 +270,14 @@ void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   }
 
   scoreRank = score_rank::labelForScore(score, maxScore);
-  scoreRankView->setText(scoreRank);
+  if (scoreRank == "MAX -") {
+    scoreRankView->setText("MAX");
+    scoreRankDeltaView->setText(
+        "-" + std::to_string(score_rank::deficitFromMax(score, maxScore)));
+  } else {
+    scoreRankView->setText(scoreRank);
+    scoreRankDeltaView->setText("");
+  }
   const bool visible = !scoreRank.empty();
   scoreRankColumn->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
   scoreRankColumn->setVisible(visible);
@@ -295,6 +313,8 @@ void ChartListItemView::refreshScoreRankColor() {
   }
   const std::string rank = scoreRank;
   scoreRankView->setThemedColor(
+      [rank] { return ui_theme::scoreRankColor(rank); });
+  scoreRankDeltaView->setThemedColor(
       [rank] { return ui_theme::scoreRankColor(rank); });
 }
 

@@ -83,7 +83,8 @@ public:
                                         : std::to_string(summary.finalScore));
     currentRank = score_rank::labelForScore(summary.finalScore,
                                             summary.maxScore);
-    rankText->setText(currentRank);
+    rankText->setText(score_rank::displayLabelForScore(summary.finalScore,
+                                                       summary.maxScore));
 
     const int clearRank = replay_clear_mark::effectiveClearRank(summary);
     if (hasClearLampColor(clearRank)) {
