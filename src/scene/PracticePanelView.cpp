@@ -141,12 +141,14 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *shortcutLabel = makeText("Shortcuts", 13, ui_theme::textMuted());
   shortcutLabel->setHeight(19);
   content->addView(shortcutLabel);
-  auto *shortcutText = makeText(
-      "1/2 or LB/RB: select marker\nLeft/Right or D-pad: step timeline", 13,
-      ui_theme::textMuted());
-  shortcutText->setWrap(true);
-  shortcutText->setHeight(42);
-  content->addView(shortcutText);
+  auto *markerShortcut =
+      makeText("1/2 or LB/RB: select marker", 12, ui_theme::textMuted());
+  markerShortcut->setHeight(18);
+  content->addView(markerShortcut);
+  auto *stepShortcut = makeText("Left/Right or D-pad: step timeline", 12,
+                                ui_theme::textMuted());
+  stepShortcut->setHeight(18);
+  content->addView(stepShortcut);
 
   auto *markerRow = new View();
   markerRow->setFlexDirection(FlexDirection::Row);
@@ -207,6 +209,10 @@ void PracticePanelView::build(OverlayPortal *portal) {
   presetMessageText->setHeight(0);
   presetMessageText->setDisplay(YGDisplayNone);
   content->addView(presetMessageText);
+  presetMessageSecondLine = makeText("", 14, ui_theme::textSecondary());
+  presetMessageSecondLine->setHeight(0);
+  presetMessageSecondLine->setDisplay(YGDisplayNone);
+  content->addView(presetMessageSecondLine);
 
   auto *saveRow = new View();
   saveRow->setFlexDirection(FlexDirection::Row);
@@ -294,15 +300,31 @@ bool PracticePanelView::isEditingPresetName() const {
 }
 
 void PracticePanelView::setPresetMessage(std::string message, bool error) {
-  if (presetMessageText == nullptr) {
+  if (presetMessageText == nullptr || presetMessageSecondLine == nullptr) {
     return;
   }
   const bool empty = message.empty();
+  std::string secondLine;
+  if (message.size() > 40) {
+    size_t split = message.rfind(' ', 40);
+    if (split == std::string::npos || split < 20) {
+      split = 40;
+    }
+    secondLine = message.substr(split + (message[split] == ' ' ? 1 : 0));
+    message.erase(split);
+  }
+  const SDL_Color color =
+      ui_theme::sdl(error ? ui_theme::coral() : ui_theme::cyan());
+  const bool hasSecondLine = !secondLine.empty();
   presetMessageText->setText(std::move(message));
-  presetMessageText->setColor(
-      ui_theme::sdl(error ? ui_theme::coral() : ui_theme::cyan()));
-  presetMessageText->setHeight(empty ? 0 : 40);
+  presetMessageText->setColor(color);
+  presetMessageText->setHeight(empty ? 0 : 20);
   presetMessageText->setDisplay(empty ? YGDisplayNone : YGDisplayFlex);
+  presetMessageSecondLine->setText(std::move(secondLine));
+  presetMessageSecondLine->setColor(color);
+  presetMessageSecondLine->setHeight(hasSecondLine ? 20 : 0);
+  presetMessageSecondLine->setDisplay(hasSecondLine ? YGDisplayFlex
+                                                    : YGDisplayNone);
 }
 
 void PracticePanelView::setDropdownOpen(DropDownIndex index, bool open) {

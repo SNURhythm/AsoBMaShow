@@ -73,6 +73,7 @@ private:
   TextView *rangeText = nullptr;
   TextView *diagnosticText = nullptr;
   TextView *presetMessageText = nullptr;
+  TextView *presetMessageSecondLine = nullptr;
   TextInputBox *presetNameInput = nullptr;
   Button *startButton = nullptr;
   Button *updateButton = nullptr;
