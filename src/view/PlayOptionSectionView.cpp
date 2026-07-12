@@ -125,7 +125,8 @@ PlayOptionSectionView::PlayOptionSectionView(
   auto *laneLabel = makeText("Lane Order", 17);
   laneLabel->setThemedColor(ui_theme::textSecondary);
   laneLabel->setAlign(TextView::LEFT);
-  laneLabel->setWidth(104);
+  laneLabel->setWidth(90);
+  laneLabel->setFlexShrink(0.0f);
   laneLabel->setHeight(46);
   laneRow->addView(laneLabel);
 
@@ -139,7 +140,9 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneOrderInput->setPadding(Edge::Right, 12);
   laneOrderInput->setVAlign(TextView::MIDDLE);
   laneOrderInput->setOverflow(TextView::TextOverflow::Hidden);
-  laneOrderInput->setFlex(1.0f);
+  laneOrderInput->setFlexGrow(1.0f);
+  laneOrderInput->setFlexBasis(0.0f);
+  laneOrderInput->setFlexShrink(1.0f);
   laneOrderInput->setHeight(46);
   laneOrderInput->onSubmit([this](const std::string &text) {
     if (this->callbacks.onLaneOrderSubmitted) {
@@ -151,7 +154,8 @@ PlayOptionSectionView::PlayOptionSectionView(
   TextView *applyText = nullptr;
   applyLaneOrderButton = makeButton("Apply", 17, &applyText);
   applyLaneOrderButton->setFlexGrow(0.0f);
-  applyLaneOrderButton->setFlexBasis(88.0f);
+  applyLaneOrderButton->setFlexBasis(84.0f);
+  applyLaneOrderButton->setFlexShrink(0.0f);
   applyLaneOrderButton->setOnClickListener([this]() {
     if (this->callbacks.onLaneOrderSubmitted && laneOrderInput != nullptr) {
       this->callbacks.onLaneOrderSubmitted(laneOrderInput->getText());
@@ -162,7 +166,8 @@ PlayOptionSectionView::PlayOptionSectionView(
   TextView *resetText = nullptr;
   resetLaneOrderButton = makeButton("Reset", 17, &resetText);
   resetLaneOrderButton->setFlexGrow(0.0f);
-  resetLaneOrderButton->setFlexBasis(88.0f);
+  resetLaneOrderButton->setFlexBasis(84.0f);
+  resetLaneOrderButton->setFlexShrink(0.0f);
   resetLaneOrderButton->setOnClickListener([this]() {
     if (this->callbacks.onOptionSelected) {
       this->callbacks.onOptionSelected("NORMAL");

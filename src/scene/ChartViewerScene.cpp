@@ -3,6 +3,7 @@
 
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
+#include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
 #include "../ReplayDBHelper.h"
 #include "../ReplayGhostUtils.h"
@@ -17,6 +18,7 @@
 #include "../targets.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
+#include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/PlayOptionSectionView.h"
 #include "../view/ReplaySummaryListView.h"
@@ -26,6 +28,7 @@
 #include "../view/View.h"
 #include "PracticePanelView.h"
 #include "play/GamePlayScene.h"
+#include "play/Pacemaker.h"
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -107,6 +110,44 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
     return {.type = GaugeType::ExHard};
   }
   return {.type = GaugeType::Normal};
+}
+
+const char *gaugeSettingId(GaugeType type, bool autoShift) {
+  if (autoShift) {
+    return "gas";
+  }
+  switch (type) {
+  case GaugeType::AssistedEasy:
+    return "assisted_easy";
+  case GaugeType::Easy:
+    return "easy";
+  case GaugeType::Hard:
+    return "hard";
+  case GaugeType::ExHard:
+    return "exhard";
+  case GaugeType::Normal:
+  default:
+    return "normal";
+  }
+}
+
+std::string gaugeOptionLabel(GaugeType type, bool autoShift) {
+  if (autoShift) {
+    return "GAS";
+  }
+  switch (type) {
+  case GaugeType::AssistedEasy:
+    return "A-EASY";
+  case GaugeType::Easy:
+    return "EASY";
+  case GaugeType::Hard:
+    return "HARD";
+  case GaugeType::ExHard:
+    return "EX-HARD";
+  case GaugeType::Normal:
+  default:
+    return "NORMAL";
+  }
 }
 
 ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
@@ -2426,12 +2467,19 @@ void ChartViewerScene::cleanupScene() {
   ghostReplayListView = nullptr;
   optionsDrawerRoot = nullptr;
   viewerOptionText = nullptr;
-  viewerAssistOptionText = nullptr;
-  viewerAssistOffButton = nullptr;
-  viewerAssistDragButton = nullptr;
-  viewerAssistOffButtonText = nullptr;
-  viewerAssistDragButtonText = nullptr;
   playOptionSection = nullptr;
+  viewerGaugeButtons.clear();
+  viewerLongNoteModeButtons.clear();
+  viewerAssistButtons.clear();
+  viewerPacemakerButtons.clear();
+  viewerAssistLabelText = nullptr;
+  viewerPlaybackRateDecreaseButton = nullptr;
+  viewerPlaybackRateIncreaseButton = nullptr;
+  viewerPlaybackRateText = nullptr;
+  viewerPlaybackModeDropdown = nullptr;
+  viewerPlaybackModeDropdownOpen = false;
+  viewerClubModeButton = nullptr;
+  viewerClubModeButtonText = nullptr;
   randomDrawerRoot = nullptr;
   randomDrawerScroll = nullptr;
   overlayPortal = nullptr;
@@ -2969,6 +3017,14 @@ void ChartViewerScene::parseAndRefresh(
     return;
   }
 
+  int effectiveLongNoteMode =
+      normalizeChartLongNoteModeValue(parsed->Meta.LnMode);
+  if (effectiveLongNoteMode == 0) {
+    effectiveLongNoteMode = long_note_mode::valueFromId(
+        context.settings.selectedLnMode, long_note_mode::kLnValue);
+  }
+  applyEffectiveLongNoteModeToChart(*parsed, effectiveLongNoteMode);
+
   randomSeed = parsed->Meta.RandomSeed;
   randomPrng = parsed->Meta.RandomPrng;
   selectedRandomValues = parsed->Meta.RandomValues;
@@ -3461,7 +3517,9 @@ void ChartViewerScene::rebuildOptionsDrawer() {
     return;
   }
 
-  constexpr float kPanelWidth = 660.0f;
+  constexpr float kPanelWidth = 760.0f;
+  constexpr float kPanelPadding = 22.0f;
+  constexpr float kContentWidth = kPanelWidth - kPanelPadding * 2.0f - 18.0f;
   optionsDrawerRoot = new BlockingOverlayView(0, 0, rendering::window_width,
                                               rendering::window_height);
   optionsDrawerRoot->setPositionType(YGPositionTypeAbsolute);
@@ -3476,11 +3534,11 @@ void ChartViewerScene::rebuildOptionsDrawer() {
 
   auto *panel = new View();
   panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
-      ->setHeight(std::min<float>(610, rendering::window_height - 36))
+      ->setHeight(std::min<float>(760, rendering::window_height - 36))
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(16)
-      ->setPadding(Edge::All, 22)
+      ->setGap(12)
+      ->setPadding(Edge::All, kPanelPadding)
       ->setBackgroundColor(ui_theme::panelStrong())
       ->setCornerRadius(ui_theme::panelRadius())
       ->setShadow(ui_theme::shadow(), ui_theme::kModalShadow)
@@ -3505,6 +3563,42 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   header->addView(closeButton);
   panel->addView(header);
 
+  auto *scroll = new ScrollView();
+  scroll->setFlex(1.0f);
+  scroll->clearBackgroundColor();
+  scroll->setContentPadding(Edge::Right, 12);
+
+  auto *content = new View();
+  content->setWidth(kContentWidth);
+  content->setFlexDirection(FlexDirection::Column);
+  content->setAlignItems(YGAlignStretch);
+  content->setGap(12);
+
+  auto makeLabel = [](const std::string &label) {
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+    text->setText(label);
+    text->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+    text->setVAlign(TextView::MIDDLE);
+    text->setHeight(28);
+    return text;
+  };
+  auto makeRow = []() {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setAlignItems(YGAlignStretch);
+    row->setGap(10);
+    row->setHeight(54);
+    return row;
+  };
+  auto makeFlexibleButton = [](const std::string &label, int fontSize,
+                               TextView **textOut = nullptr) {
+    auto *button = makeButton(label, 0, fontSize, textOut);
+    button->setFlexGrow(1.0f);
+    button->setFlexBasis(0.0f);
+    button->setFlexShrink(1.0f);
+    return button;
+  };
+
   auto *currentRow = new View();
   currentRow->setFlexDirection(FlexDirection::Row);
   currentRow->setAlignItems(YGAlignCenter);
@@ -3526,52 +3620,146 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   viewerOptionText->setFlex(1);
   viewerOptionText->setHeight(44);
   currentRow->addView(viewerOptionText);
-  panel->addView(currentRow);
+  content->addView(currentRow);
+
+  content->addView(makeLabel("Gauge"));
+  auto addGaugeButton = [this, &makeFlexibleButton](View *row, GaugeType type,
+                                                    bool autoShift) {
+    TextView *text = nullptr;
+    const std::string label = gaugeOptionLabel(type, autoShift);
+    auto *button = makeFlexibleButton(label, 17, &text);
+    button->setOnClickListener(
+        [this, type, autoShift]() { setViewerGaugeOption(type, autoShift); });
+    viewerGaugeButtons.push_back(
+        {.button = button,
+         .text = text,
+         .id = label,
+         .gaugeType = type,
+         .gaugeAutoShift = autoShift});
+    row->addView(button);
+  };
+  auto *gaugeRowA = makeRow();
+  addGaugeButton(gaugeRowA, GaugeType::AssistedEasy, false);
+  addGaugeButton(gaugeRowA, GaugeType::Easy, false);
+  addGaugeButton(gaugeRowA, GaugeType::Normal, false);
+  content->addView(gaugeRowA);
+  auto *gaugeRowB = makeRow();
+  addGaugeButton(gaugeRowB, GaugeType::Hard, false);
+  addGaugeButton(gaugeRowB, GaugeType::ExHard, false);
+  addGaugeButton(gaugeRowB, GaugeType::ExHard, true);
+  content->addView(gaugeRowB);
 
   playOptionSection = new PlayOptionSectionView(
       {.onOptionSelected = [this](const std::string &option) {
          setViewerNamedPlayOption(option);
-       },
+      },
        .onLaneOrderSubmitted = [this](const std::string &notation) {
          setViewerLaneAssign(notation);
        }},
       {.columns = 4, .rowHeight = 52, .buttonFontSize = 16});
-  panel->addView(playOptionSection);
+  content->addView(playOptionSection);
 
-  auto *assistRow = new View();
-  assistRow->setFlexDirection(FlexDirection::Row);
-  assistRow->setAlignItems(YGAlignCenter);
-  assistRow->setGap(12);
-  assistRow->setHeight(52);
+  content->addView(makeLabel("Long Note Mode"));
+  auto *longNoteRow = makeRow();
+  for (const char *mode : long_note_mode::kPlayableIds) {
+    TextView *text = nullptr;
+    auto *button = makeFlexibleButton(mode, 18, &text);
+    button->setOnClickListener(
+        [this, mode = std::string(mode)]() { setViewerLongNoteMode(mode); });
+    viewerLongNoteModeButtons.push_back(
+        {.button = button, .text = text, .id = mode});
+    longNoteRow->addView(button);
+  }
+  content->addView(longNoteRow);
 
-  auto *assistLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-  assistLabel->setText("Assist");
-  assistLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-  assistLabel->setVAlign(TextView::MIDDLE);
-  assistLabel->setWidth(86);
-  assistLabel->setHeight(44);
-  assistRow->addView(assistLabel);
+  viewerAssistLabelText = makeLabel("Assist Option");
+  content->addView(viewerAssistLabelText);
+  auto *assistRow = makeRow();
+  for (const char *option : {assist_options::kOff, assist_options::kDrag}) {
+    TextView *text = nullptr;
+    auto *button = makeFlexibleButton(option, 18, &text);
+    button->setOnClickListener([this, option = std::string(option)]() {
+      setViewerAssistOption(option);
+    });
+    viewerAssistButtons.push_back(
+        {.button = button, .text = text, .id = option});
+    assistRow->addView(button);
+  }
+  content->addView(assistRow);
 
-  viewerAssistOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  viewerAssistOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
-  viewerAssistOptionText->setVAlign(TextView::MIDDLE);
-  viewerAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
-  viewerAssistOptionText->setFlex(1);
-  viewerAssistOptionText->setHeight(44);
-  assistRow->addView(viewerAssistOptionText);
+  auto *playbackGroup = new View();
+  playbackGroup->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(10)
+      ->setMargin(Edge::Left, 20)
+      ->setPadding(Edge::All, 12)
+      ->setBackgroundColor(ui_theme::panelSubtle())
+      ->setBorderColor(ui_theme::hairlineSubtle())
+      ->setBorderWidth(1)
+      ->setCornerRadius(ui_theme::controlRadius());
+  playbackGroup->addView(makeLabel("Playback Rate"));
+  auto *playbackRow = makeRow();
+  viewerPlaybackRateDecreaseButton = makeFlexibleButton("-5%", 18);
+  viewerPlaybackRateDecreaseButton->setOnClickListener([this]() {
+    setViewerPlaybackRate(context.settings.selectedPlaybackRatePercent - 5);
+  });
+  playbackRow->addView(viewerPlaybackRateDecreaseButton);
+  viewerPlaybackRateText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  viewerPlaybackRateText->setAlign(TextView::CENTER);
+  viewerPlaybackRateText->setVAlign(TextView::MIDDLE);
+  viewerPlaybackRateText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  viewerPlaybackRateText->setFlex(1.0f);
+  playbackRow->addView(viewerPlaybackRateText);
+  viewerPlaybackRateIncreaseButton = makeFlexibleButton("+5%", 18);
+  viewerPlaybackRateIncreaseButton->setOnClickListener([this]() {
+    setViewerPlaybackRate(context.settings.selectedPlaybackRatePercent + 5);
+  });
+  playbackRow->addView(viewerPlaybackRateIncreaseButton);
+  playbackGroup->addView(playbackRow);
+  viewerPlaybackModeDropdown = new DropdownView(
+      {.onOpenChanged = [this](bool open) {
+         viewerPlaybackModeDropdownOpen = open;
+         refreshViewerOptionControls();
+       },
+       .onOptionSelected = [this](const std::string &mode) {
+         setViewerPlaybackMode(mode);
+       }},
+      overlayPortal);
+  viewerPlaybackModeDropdown->setWidthPercent(100.0f);
+  playbackGroup->addView(viewerPlaybackModeDropdown);
+  content->addView(playbackGroup);
 
-  viewerAssistOffButton =
-      makeButton(assist_options::kOff, 98, 18, &viewerAssistOffButtonText);
-  viewerAssistOffButton->setOnClickListener(
-      [this]() { setViewerAssistOption(assist_options::kOff); });
-  assistRow->addView(viewerAssistOffButton);
+  content->addView(makeLabel("Club Mode"));
+  viewerClubModeButton =
+      makeFlexibleButton("Club Beat", 18, &viewerClubModeButtonText);
+  viewerClubModeButton->setHeight(54);
+  viewerClubModeButton->setWidthPercent(100.0f);
+  viewerClubModeButton->setOnClickListener(
+      [this]() { toggleViewerClubMode(); });
+  content->addView(viewerClubModeButton);
 
-  viewerAssistDragButton =
-      makeButton(assist_options::kDrag, 98, 18, &viewerAssistDragButtonText);
-  viewerAssistDragButton->setOnClickListener(
-      [this]() { setViewerAssistOption(assist_options::kDrag); });
-  assistRow->addView(viewerAssistDragButton);
-  panel->addView(assistRow);
+  content->addView(makeLabel("Pacemaker"));
+  const size_t pacemakerColumns = 3;
+  View *pacemakerRow = nullptr;
+  for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
+    if (i % pacemakerColumns == 0) {
+      pacemakerRow = makeRow();
+      content->addView(pacemakerRow);
+    }
+    const std::string target = pacemaker::kSelectableTargets[i];
+    TextView *text = nullptr;
+    auto *button =
+        makeFlexibleButton(pacemaker::displayTargetLabel(target), 18, &text);
+    button->setOnClickListener(
+        [this, target]() { setViewerPacemakerTarget(target); });
+    viewerPacemakerButtons.push_back(
+        {.button = button, .text = text, .id = target});
+    pacemakerRow->addView(button);
+  }
+
+  scroll->setContentView(content);
+  panel->addView(scroll);
 
   optionsDrawerRoot->addView(panel);
   rootLayout->addView(optionsDrawerRoot);
@@ -3590,6 +3778,8 @@ void ChartViewerScene::showOptionsDrawer() {
 }
 
 void ChartViewerScene::hideOptionsDrawer() {
+  viewerPlaybackModeDropdownOpen = false;
+  refreshViewerOptionControls();
   if (optionsDrawerRoot != nullptr) {
     optionsDrawerRoot->setVisible(false);
   }
@@ -3599,16 +3789,14 @@ void ChartViewerScene::refreshOptionsDrawer() {
   if (viewerOptionText != nullptr) {
     viewerOptionText->setText(viewerPlayOptionLabel());
   }
-  if (viewerAssistOptionText != nullptr) {
-    viewerAssistOptionText->setText(viewerAssistOption);
-  }
-  refreshViewerAssistOptionButtons();
   if (playOptionSection != nullptr) {
-    const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+    const bms_parser::ChartMeta &meta =
+        chart != nullptr ? chart->Meta : record.meta;
     playOptionSection->refresh(
         viewerPlayOption.value_or("NORMAL"),
         play_options::defaultLaneAssignNotation(meta), true);
   }
+  refreshViewerOptionControls();
 }
 
 void ChartViewerScene::setViewerAssistOption(const std::string &option) {
@@ -3621,11 +3809,79 @@ void ChartViewerScene::setViewerAssistOption(const std::string &option) {
   refreshOptionsDrawer();
 }
 
-void ChartViewerScene::refreshViewerAssistOptionButtons() {
-  auto styleButton = [](Button *button, TextView *text, bool selected) {
+void ChartViewerScene::setViewerGaugeOption(GaugeType type, bool autoShift) {
+  context.settings.selectedGaugeType = gaugeSettingId(type, autoShift);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer gauge option");
+  }
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::setViewerLongNoteMode(const std::string &mode) {
+  if (normalizeChartLongNoteModeValue(record.meta.LnMode) > 0) {
+    return;
+  }
+  context.settings.selectedLnMode =
+      long_note_mode::parseId(mode, AppSettings::kDefaultLnMode);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer long note mode");
+  }
+  parseAndRefresh(selectedRandomValues.empty()
+                      ? std::nullopt
+                      : std::optional<std::vector<int>>(selectedRandomValues));
+  refreshOptionsDrawer();
+}
+
+void ChartViewerScene::setViewerPlaybackRate(int percent) {
+  context.settings.selectedPlaybackRatePercent = std::clamp(percent, 50, 200);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer playback rate");
+  }
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::setViewerPlaybackMode(const std::string &mode) {
+  if (mode != "pitch-shift") {
+    return;
+  }
+  context.settings.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+  viewerPlaybackModeDropdownOpen = false;
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer playback mode");
+  }
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::toggleViewerClubMode() {
+  context.settings.gameplayClubModeEnabled =
+      !context.settings.gameplayClubModeEnabled;
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer Club mode");
+  }
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::setViewerPacemakerTarget(const std::string &target) {
+  context.settings.selectedPacemakerTarget =
+      pacemaker::normalizeTargetId(target);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer pacemaker target");
+  }
+  refreshViewerOptionControls();
+}
+
+void ChartViewerScene::refreshViewerOptionControls() {
+  auto styleButton = [](Button *button, TextView *text, bool selected,
+                        bool enabled = true) {
     if (button == nullptr || text == nullptr) {
       return;
     }
+    button->setEnabled(enabled);
     if (selected) {
       button->setBackgroundColors(ui_theme::primaryAction(),
                                   ui_theme::primaryActionHover(),
@@ -3635,6 +3891,14 @@ void ChartViewerScene::refreshViewerAssistOptionButtons() {
                               ui_theme::accentBorderStrong());
       text->setColor(ui_theme::sdl(ui_theme::textOn(
           ui_theme::primaryAction())));
+    } else if (!enabled) {
+      button->setBackgroundColors(ui_theme::panelSubtle(),
+                                  ui_theme::panelSubtle(),
+                                  ui_theme::panelSubtle());
+      button->setBorderColors(ui_theme::hairlineSubtle(),
+                              ui_theme::hairlineSubtle(),
+                              ui_theme::hairlineSubtle());
+      text->setColor(ui_theme::sdl(ui_theme::textMuted()));
     } else {
       button->setBackgroundColors(ui_theme::control(),
                                   ui_theme::controlHover(),
@@ -3645,10 +3909,76 @@ void ChartViewerScene::refreshViewerAssistOptionButtons() {
     }
   };
 
-  styleButton(viewerAssistOffButton, viewerAssistOffButtonText,
-              viewerAssistOption == assist_options::kOff);
-  styleButton(viewerAssistDragButton, viewerAssistDragButtonText,
-              viewerAssistOption == assist_options::kDrag);
+  const GaugeSelection gauge =
+      gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
+  for (const auto &item : viewerGaugeButtons) {
+    styleButton(item.button, item.text,
+                item.gaugeType == gauge.type &&
+                    item.gaugeAutoShift == gauge.autoShift);
+  }
+
+  const int fixedLongNoteMode =
+      normalizeChartLongNoteModeValue(record.meta.LnMode);
+  const bool longNoteModeLocked = fixedLongNoteMode > 0;
+  const std::string selectedLongNoteMode =
+      longNoteModeLocked
+          ? long_note_mode::idFromValue(fixedLongNoteMode,
+                                        AppSettings::kDefaultLnMode)
+          : long_note_mode::parseId(context.settings.selectedLnMode,
+                                    AppSettings::kDefaultLnMode);
+  for (const auto &item : viewerLongNoteModeButtons) {
+    styleButton(item.button, item.text, item.id == selectedLongNoteMode,
+                !longNoteModeLocked);
+  }
+
+  for (const auto &item : viewerAssistButtons) {
+    styleButton(item.button, item.text,
+                assist_options::normalize(item.id) == viewerAssistOption);
+  }
+
+  const int percent = context.settings.selectedPlaybackRatePercent;
+  const bool assistedEasyEnabled =
+      percent != 100 || assist_options::isEnabled(viewerAssistOption);
+  if (viewerAssistLabelText != nullptr) {
+    viewerAssistLabelText->setText(
+        assistedEasyEnabled ? "Assist Option - A-EASY enabled"
+                            : "Assist Option");
+  }
+  if (viewerPlaybackRateText != nullptr) {
+    viewerPlaybackRateText->setText(std::to_string(percent) + "%");
+  }
+  if (viewerPlaybackRateDecreaseButton != nullptr) {
+    viewerPlaybackRateDecreaseButton->setEnabled(percent > 50);
+  }
+  if (viewerPlaybackRateIncreaseButton != nullptr) {
+    viewerPlaybackRateIncreaseButton->setEnabled(percent < 200);
+  }
+  if (viewerPlaybackModeDropdown != nullptr) {
+    viewerPlaybackModeDropdown->refresh(
+        {.label = "Mode",
+         .selectedId = "pitch-shift",
+         .options = {{.id = "pitch-shift", .label = "Pitch Shift"},
+                     {.id = "time-stretch",
+                      .label = "Time Stretch (Unavailable)",
+                      .available = false}},
+         .open = viewerPlaybackModeDropdownOpen,
+         .enabled = true,
+         .maxVisibleItems = 2});
+  }
+  if (viewerClubModeButton != nullptr &&
+      viewerClubModeButtonText != nullptr) {
+    const bool enabled = context.settings.gameplayClubModeEnabled;
+    viewerClubModeButtonText->setText(enabled ? "☑ Club Beat"
+                                               : "☐ Club Beat");
+    styleButton(viewerClubModeButton, viewerClubModeButtonText, enabled);
+  }
+
+  const std::string selectedPacemaker =
+      pacemaker::normalizeTargetId(context.settings.selectedPacemakerTarget);
+  for (const auto &item : viewerPacemakerButtons) {
+    styleButton(item.button, item.text,
+                pacemaker::normalizeTargetId(item.id) == selectedPacemaker);
+  }
 }
 
 void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
@@ -3671,6 +4001,11 @@ void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
           ? std::optional<std::string>(normalized)
           : std::nullopt,
       std::nullopt);
+  context.settings.selectedPlayOption = normalized;
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save chart viewer play option");
+  }
   parseAndRefresh(selectedRandomValues.empty()
                       ? std::nullopt
                       : std::optional<std::vector<int>>(selectedRandomValues));
@@ -4285,6 +4620,16 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                      .autoShift = launchConfiguration.gaugeAutoShift};
   const bool autoKeySound = autoPlay || !context.settings.inputKeysoundEnabled;
   const std::string assistOption = viewerAssistOption;
+  const int selectedLongNoteMode =
+      normalizeChartLongNoteModeValue(record.meta.LnMode) > 0
+          ? normalizeChartLongNoteModeValue(record.meta.LnMode)
+          : long_note_mode::valueFromId(context.settings.selectedLnMode,
+                                        long_note_mode::kLnValue);
+  const std::string pacemakerTarget =
+      pacemaker::normalizeTargetId(context.settings.selectedPacemakerTarget);
+  const audio::PlaybackRate autoPlayPlayback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode};
   const bool canReuseJukeboxResources =
       listenAudioLoaded || retainedListenResourcesForReload;
 
@@ -4296,8 +4641,9 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
 
   defer(
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
-       gaugeSelection, autoKeySound, assistOption, autoPlay,
-       canReuseJukeboxResources, launchConfiguration]() {
+       gaugeSelection, autoKeySound, assistOption, selectedLongNoteMode,
+       pacemakerTarget, autoPlayPlayback, autoPlay, canReuseJukeboxResources,
+       launchConfiguration]() {
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {
@@ -4369,7 +4715,9 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .playOptionSeed = viewerPlayOptionSeed,
                     .playOption2 = viewerPlayOption2,
                     .playOption2Seed = viewerPlayOption2Seed,
+                    .longNoteMode = selectedLongNoteMode,
                     .assistOption = assistOption,
+                    .pacemakerTarget = pacemakerTarget,
                     .ownsChart = true,
                     .practiceSession =
                         autoPlay
@@ -4379,7 +4727,9 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .practiceMode = autoPlay,
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
-                    .playback = launchConfiguration.playback,
+                    .playback =
+                        autoPlay ? autoPlayPlayback
+                                 : launchConfiguration.playback,
                     .clubMode = context.settings.gameplayClubModeEnabled,
                     .judgeWindowScalePercent =
                         autoPlay ? 100
