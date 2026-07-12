@@ -83,7 +83,8 @@ inline ReplayData BuildReplayData(
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
     const std::optional<long long> &playOption2Seed = std::nullopt,
-    const std::string &assistOption = assist_options::kOff) {
+    const std::string &assistOption = assist_options::kOff,
+    bool clubMode = false) {
   ReplayData replay;
   replay.id = kReplayId;
   replay.autoPlay = true;
@@ -100,6 +101,7 @@ inline ReplayData BuildReplayData(
   replay.gaugeAutoShift = gaugeAutoShift;
   replay.provenance.playback = playback;
   replay.provenance.autoPlay = true;
+  replay.provenance.clubMode = clubMode;
   replay.createdAt = kLabel;
   replay.events.reserve(static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) *
                         2U);

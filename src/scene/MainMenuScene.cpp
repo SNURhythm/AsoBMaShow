@@ -9021,7 +9021,6 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
   };
-
   defer(
       [this, record, replayId, pacemakerTarget, autoPlayPlayback]() {
         auto failReplayLoad = [this]() {
@@ -9671,6 +9670,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
   };
+  const bool autoPlayClubMode = context.settings.gameplayClubModeEnabled;
   const int autoPlayLongNoteMode =
       long_note_mode::valueFromId(profileSelections.longNoteMode);
   const SelectedChartRandomInfo autoPlayRandomInfo =
@@ -9679,7 +9679,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
   auto runExport = [this, record, replayId, options, complete,
                     autoPlayGaugeType, autoPlayGaugeAutoShift,
                     autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
-                    autoPlayLongNoteMode,
+                    autoPlayClubMode, autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
     try {
       if (loadThread.joinable()) {
@@ -9740,7 +9740,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         ReplayData replay = replay_autoplay::BuildReplayData(
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
             autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
-            playInfo.seed2, autoPlayAssistOption);
+            playInfo.seed2, autoPlayAssistOption, autoPlayClubMode);
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;

@@ -89,10 +89,15 @@ int main() {
   }
 
   const ReplayData autoExport = replay_autoplay::BuildReplayData(
-      chart, GaugeType::Normal, false, {.percent = 200});
+      chart, GaugeType::Normal, false, {.percent = 200}, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, true);
   if (autoExport.provenance.playback.percent != 200) {
     std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
+    return 1;
+  }
+  if (!autoExport.provenance.clubMode) {
+    std::cerr << "synthetic Auto export retains Club Beat" << std::endl;
     return 1;
   }
 

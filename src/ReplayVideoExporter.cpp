@@ -690,6 +690,7 @@ writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
       .keySoundMode = chart_audio::KeySoundMode::ReplayTiming,
       .replay = &replay,
       .playback = playback,
+      .clubMode = replay.provenance.clubMode,
       .keySoundOffsetMicros = 0,
       .isCancelled = &isCancelled,
       .log = [log](const std::string &message) {
