@@ -1115,6 +1115,7 @@ void ResultScene::startRetry(bool samePattern) {
         options.longNoteMode = normalizeChartLongNoteModeValue(
             retrySource.chartMeta.LnMode);
         options.assistOption = retrySource.assistOption;
+        options.clubMode = attemptProvenance.clubMode;
         options.pacemakerTarget =
             practiceOptions.enabled
                 ? pacemaker::kTargetOff
