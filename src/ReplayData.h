@@ -68,7 +68,7 @@ struct ReplayData {
   std::optional<long long> playOption2Seed;
   std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   int finalScore = 0;
   int maxCombo = 0;
   float finalGauge = 0.0f;
@@ -149,7 +149,7 @@ struct CourseReplayData {
   std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   int longNoteMode = 0;
   int finalScore = 0;
   int maxCombo = 0;

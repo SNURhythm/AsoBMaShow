@@ -323,6 +323,10 @@ std::string parseGaugeTypeId(const std::string &value,
   if (value == "gas") {
     return "gas";
   }
+  if (value == "gas_continue" || value == "gas_survival_to_groove" ||
+      value == "gas_best_clear" || value == "gas_select_to_under") {
+    return value;
+  }
   return fallback;
 }
 

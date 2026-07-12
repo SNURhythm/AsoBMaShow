@@ -791,7 +791,7 @@ bool GamePlayScene::reset() {
   const GaugeProfile gaugeProfile =
       isReplayPlayback() && !isCoursePlayback() ? GaugeProfile::Standard
                                                 : options.gaugeProfile;
-  const bool gaugeAutoShift =
+  const GaugeAutoShiftMode gaugeAutoShift =
       courseReplayPlayback
           ? options.gaugeAutoShift
           : (isReplayPlayback() ? options.replayData->gaugeAutoShift

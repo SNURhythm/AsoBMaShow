@@ -7,17 +7,29 @@
 
 namespace practice {
 namespace {
-constexpr std::array<GaugeOption, 7> kGaugeOptions = {{
+constexpr std::array<GaugeOption, 10> kGaugeOptions = {{
     {.id = "0", .label = "Assisted Easy", .gaugeType = GaugeType::AssistedEasy},
     {.id = "1", .label = "Easy", .gaugeType = GaugeType::Easy},
     {.id = "2", .label = "Normal", .gaugeType = GaugeType::Normal},
     {.id = "3", .label = "Hard", .gaugeType = GaugeType::Hard},
     {.id = "4", .label = "Ex-Hard", .gaugeType = GaugeType::ExHard},
     {.id = "5", .label = "Hazard", .gaugeType = GaugeType::Hazard},
-    {.id = "gas",
-     .label = "Gauge Auto Shift (GAS)",
+    {.id = "gas_continue",
+     .label = "Continue at 0%",
      .gaugeType = GaugeType::ExHard,
-     .gaugeAutoShift = true},
+     .gaugeAutoShift = GaugeAutoShiftMode::Continue},
+    {.id = "gas_survival_to_groove",
+     .label = "Survival to Groove",
+     .gaugeType = GaugeType::ExHard,
+     .gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove},
+    {.id = "gas_best_clear",
+     .label = "Best Clear",
+     .gaugeType = GaugeType::ExHard,
+     .gaugeAutoShift = GaugeAutoShiftMode::BestClear},
+    {.id = "gas_select_to_under",
+     .label = "Select to Under (GAS)",
+     .gaugeType = GaugeType::ExHard,
+     .gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder},
 }};
 
 bool isSha256(std::string_view value) {
@@ -56,8 +68,19 @@ bool validGaugeType(GaugeType value) {
 std::span<const GaugeOption> practiceGaugeOptions() { return kGaugeOptions; }
 
 std::string practiceGaugeOptionId(const Configuration &value) {
-  return value.gaugeAutoShift ? "gas"
-                              : std::to_string(gaugeTypeIndex(value.gaugeType));
+  switch (value.gaugeAutoShift) {
+  case GaugeAutoShiftMode::Continue:
+    return "gas_continue";
+  case GaugeAutoShiftMode::SurvivalToGroove:
+    return "gas_survival_to_groove";
+  case GaugeAutoShiftMode::BestClear:
+    return "gas_best_clear";
+  case GaugeAutoShiftMode::SelectToUnder:
+    return "gas_select_to_under";
+  case GaugeAutoShiftMode::None:
+  default:
+    return std::to_string(gaugeTypeIndex(value.gaugeType));
+  }
 }
 
 bool applyPracticeGaugeOption(Configuration &value, std::string_view optionId) {
@@ -161,7 +184,8 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
     diagnoseChange(originalGauge != *value.startingGaugePercent,
                    "starting gauge was clamped to 0 through 120 percent");
   }
-  if (value.gaugeAutoShift && value.gaugeType != GaugeType::ExHard) {
+  if (gaugeAutoShiftEnabled(value.gaugeAutoShift) &&
+      value.gaugeType != GaugeType::ExHard) {
     value.gaugeType = GaugeType::ExHard;
     result.diagnostics.emplace_back(
         "gauge auto shift seed was normalized to Ex-Hard");

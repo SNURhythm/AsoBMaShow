@@ -10,9 +10,19 @@
 
 namespace main_menu_profile {
 
-inline const char *gaugeSettingId(GaugeType gaugeType, bool autoShift) {
-  if (autoShift) {
-    return "gas";
+inline const char *gaugeSettingId(GaugeType gaugeType,
+                                  GaugeAutoShiftMode autoShift) {
+  switch (autoShift) {
+  case GaugeAutoShiftMode::Continue:
+    return "gas_continue";
+  case GaugeAutoShiftMode::SurvivalToGroove:
+    return "gas_survival_to_groove";
+  case GaugeAutoShiftMode::BestClear:
+    return "gas_best_clear";
+  case GaugeAutoShiftMode::SelectToUnder:
+    return "gas_select_to_under";
+  case GaugeAutoShiftMode::None:
+    break;
   }
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
@@ -34,7 +44,7 @@ inline const char *gaugeSettingId(GaugeType gaugeType, bool autoShift) {
 
 struct Selections {
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   std::string playOption = AppSettings::kDefaultPlayOption;
   std::string longNoteMode = AppSettings::kDefaultLnMode;
   std::string assistOption = AppSettings::kDefaultAssistOption;
@@ -47,8 +57,19 @@ struct Selections {
   }
 
   void reload(const AppSettings &settings) {
-    gaugeAutoShift = settings.selectedGaugeType == "gas";
-    if (gaugeAutoShift) {
+    if (settings.selectedGaugeType == "gas" ||
+        settings.selectedGaugeType == "gas_best_clear") {
+      gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+    } else if (settings.selectedGaugeType == "gas_continue") {
+      gaugeAutoShift = GaugeAutoShiftMode::Continue;
+    } else if (settings.selectedGaugeType == "gas_survival_to_groove") {
+      gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove;
+    } else if (settings.selectedGaugeType == "gas_select_to_under") {
+      gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
+    } else {
+      gaugeAutoShift = GaugeAutoShiftMode::None;
+    }
+    if (gaugeAutoShiftEnabled(gaugeAutoShift)) {
       gaugeType = GaugeType::ExHard;
     } else if (settings.selectedGaugeType == "assisted_easy") {
       gaugeType = GaugeType::AssistedEasy;

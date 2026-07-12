@@ -89,12 +89,29 @@ struct MarkerTextRasterConfig {
 
 struct GaugeSelection {
   GaugeType type = GaugeType::Normal;
-  bool autoShift = false;
+  GaugeAutoShiftMode autoShift = GaugeAutoShiftMode::None;
 };
 
 GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   if (id == "gas") {
-    return {.type = GaugeType::ExHard, .autoShift = true};
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::BestClear};
+  }
+  if (id == "gas_continue") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::Continue};
+  }
+  if (id == "gas_survival_to_groove") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::SurvivalToGroove};
+  }
+  if (id == "gas_best_clear") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::BestClear};
+  }
+  if (id == "gas_select_to_under") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::SelectToUnder};
   }
   if (id == "assisted_easy") {
     return {.type = GaugeType::AssistedEasy};

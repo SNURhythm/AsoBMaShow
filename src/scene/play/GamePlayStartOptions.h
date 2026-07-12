@@ -67,7 +67,7 @@ struct StartOptions {
   bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   std::shared_ptr<ReplayData> replayData = nullptr;
   std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
   std::optional<std::string> playOption;

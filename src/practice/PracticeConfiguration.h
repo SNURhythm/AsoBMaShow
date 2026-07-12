@@ -39,7 +39,7 @@ struct GaugeOption {
   std::string_view id;
   std::string_view label;
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
 };
 
 struct Configuration {
@@ -49,7 +49,7 @@ struct Configuration {
   bool loop = false;
   int countInBeats = 4;
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   std::optional<int> startingGaugePercent;
   JudgeOverride judge;
   audio::PlaybackRate playback;

@@ -91,9 +91,9 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   }
 }
 
-std::string gaugeLabel(GaugeType type, bool autoShift) {
-  if (autoShift) {
-    return "GAS";
+std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
+  if (gaugeAutoShiftEnabled(autoShift)) {
+    return gaugeAutoShiftShortLabel(autoShift);
   }
   switch (type) {
   case GaugeType::AssistedEasy:
@@ -124,7 +124,8 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 
   if (layout.showGauge) {
     addView(makeLabel("Gauge"));
-    auto addGaugeButton = [this](View *row, GaugeType type, bool autoShift) {
+    auto addGaugeButton = [this](View *row, GaugeType type,
+                                 GaugeAutoShiftMode autoShift) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, autoShift);
       auto *button = makeButton(label, 18, &text);
@@ -141,16 +142,26 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       row->addView(button);
     };
     auto *gaugeRowA = makeRow();
-    addGaugeButton(gaugeRowA, GaugeType::AssistedEasy, false);
-    addGaugeButton(gaugeRowA, GaugeType::Easy, false);
-    addGaugeButton(gaugeRowA, GaugeType::Normal, false);
+    addGaugeButton(gaugeRowA, GaugeType::AssistedEasy,
+                   GaugeAutoShiftMode::None);
+    addGaugeButton(gaugeRowA, GaugeType::Easy, GaugeAutoShiftMode::None);
+    addGaugeButton(gaugeRowA, GaugeType::Normal, GaugeAutoShiftMode::None);
     addView(gaugeRowA);
     auto *gaugeRowB = makeRow();
-    addGaugeButton(gaugeRowB, GaugeType::Hard, false);
-    addGaugeButton(gaugeRowB, GaugeType::ExHard, false);
-    addGaugeButton(gaugeRowB, GaugeType::Hazard, false);
-    addGaugeButton(gaugeRowB, GaugeType::ExHard, true);
+    addGaugeButton(gaugeRowB, GaugeType::Hard, GaugeAutoShiftMode::None);
+    addGaugeButton(gaugeRowB, GaugeType::ExHard, GaugeAutoShiftMode::None);
+    addGaugeButton(gaugeRowB, GaugeType::Hazard, GaugeAutoShiftMode::None);
     addView(gaugeRowB);
+    auto *gaugeRowC = makeRow();
+    addGaugeButton(gaugeRowC, GaugeType::ExHard,
+                   GaugeAutoShiftMode::Continue);
+    addGaugeButton(gaugeRowC, GaugeType::ExHard,
+                   GaugeAutoShiftMode::SurvivalToGroove);
+    addGaugeButton(gaugeRowC, GaugeType::ExHard,
+                   GaugeAutoShiftMode::BestClear);
+    addGaugeButton(gaugeRowC, GaugeType::ExHard,
+                   GaugeAutoShiftMode::SelectToUnder);
+    addView(gaugeRowC);
   }
 
   playOptionSection = new PlayOptionSectionView(

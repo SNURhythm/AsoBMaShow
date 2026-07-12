@@ -441,10 +441,15 @@ std::string formatSignedScoreDelta(int delta) {
 
 std::string formatGaugeBarLabel(GaugeType gaugeType,
                                 GaugeProfile gaugeProfile,
-                                bool gaugeAutoShift, float currentGauge) {
+                                GaugeAutoShiftMode gaugeAutoShift,
+                                float currentGauge) {
   char text[64];
-  std::snprintf(text, sizeof(text), "%s%s %.1f%%",
-                gaugeAutoShift ? "GAS " : "",
+  const std::string prefix = gaugeAutoShiftEnabled(gaugeAutoShift)
+                                 ? std::string(gaugeAutoShiftShortLabel(
+                                       gaugeAutoShift)) +
+                                       " "
+                                 : "";
+  std::snprintf(text, sizeof(text), "%s%s %.1f%%", prefix.c_str(),
                 gaugeDisplayShortLabel(gaugeType, gaugeProfile),
                 currentGauge);
   return text;
@@ -854,7 +859,8 @@ BMSRenderer::BMSRenderer(
   gaugeAutoShiftText->setVAlign(TextView::MIDDLE);
   gaugeAutoShiftText->setOverflow(TextView::TextOverflow::Hidden);
   gaugeAutoShiftText->setRotationDegrees(90.0f);
-  setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
+  setGaugeStatus(GaugeType::Normal, GaugeAutoShiftMode::None,
+                 gaugeInitialValue(GaugeType::Normal));
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
   playOptionText->setAlign(TextView::LEFT);
   playOptionText->setVAlign(TextView::MIDDLE);
@@ -1452,19 +1458,22 @@ void BMSRenderer::layoutGaugeText() {
     gaugeTypeText->setVisible(true);
     gaugeTypeText->setRotationDegrees(left ? -90.0f : 90.0f);
     if (gaugeAutoShiftText != nullptr) {
-      gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+      gaugeAutoShiftText->setVisible(
+          gaugeAutoShiftEnabled(currentGaugeAutoShift));
       gaugeAutoShiftText->setRotationDegrees(left ? -90.0f : 90.0f);
     }
     constexpr int typeWidth = 34;
     constexpr int typePadding = 12;
     constexpr int gasGap = 4;
     const int gaugeLabelLength = gaugeTypeText->textureWidth();
-    const int gasLabelLength = currentGaugeAutoShift && gaugeAutoShiftText
+    const bool autoShiftEnabled =
+        gaugeAutoShiftEnabled(currentGaugeAutoShift);
+    const int gasLabelLength = autoShiftEnabled && gaugeAutoShiftText
                                    ? gaugeAutoShiftText->textureWidth()
                                    : 0;
     const int typeHeight =
         std::clamp(gaugeLabelLength + gasLabelLength +
-                       (currentGaugeAutoShift ? gasGap : 0) + typePadding * 2,
+                       (autoShiftEnabled ? gasGap : 0) + typePadding * 2,
                    76, 188);
     const int typeX =
         left ? static_cast<int>(std::round(rect[0] - typeWidth - 8.0f))
@@ -1477,7 +1486,7 @@ void BMSRenderer::layoutGaugeText() {
       gaugeTypeBadge->setSize(typeWidth, typeHeight);
     }
 
-    if (!currentGaugeAutoShift || gaugeAutoShiftText == nullptr) {
+    if (!autoShiftEnabled || gaugeAutoShiftText == nullptr) {
       placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
     } else {
       const int gaugeSpan = gaugeLabelLength + typePadding;
@@ -1547,7 +1556,10 @@ void BMSRenderer::refreshGaugeTextStyle() {
     gaugeTypeText->setBorderWidth(0);
   }
   if (gaugeAutoShiftText != nullptr) {
-    gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+    gaugeAutoShiftText->setText(
+        gaugeAutoShiftShortLabel(currentGaugeAutoShift));
+    gaugeAutoShiftText->setVisible(
+        gaugeAutoShiftEnabled(currentGaugeAutoShift));
     gaugeAutoShiftText->setColor({255, 225, 112, 255});
     gaugeAutoShiftText->setBackgroundColor(Color(255, 200, 64, 32));
     gaugeAutoShiftText->clearBorderColor();
@@ -3280,7 +3292,8 @@ void BMSRenderer::setJudgementCounters(
   publishJudgementCounterSnapshot(snapshot);
 }
 
-void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
+void BMSRenderer::setGaugeStatus(GaugeType gaugeType,
+                                 GaugeAutoShiftMode gaugeAutoShift,
                                  float currentGauge,
                                  GaugeProfile gaugeProfile) {
   currentGaugeType = gaugeType;

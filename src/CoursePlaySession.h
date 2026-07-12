@@ -289,7 +289,7 @@ struct CoursePlaySession {
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   int longNoteMode = 0;
   CourseConstraintRules constraints;
   std::optional<GaugeStateSnapshot> carriedGauge;

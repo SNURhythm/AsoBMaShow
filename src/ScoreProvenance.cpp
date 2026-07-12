@@ -295,6 +295,17 @@ std::optional<GaugeType> gaugeTypeFromName(std::string_view value) {
   return std::nullopt;
 }
 
+GaugeAutoShiftMode gaugeAutoShiftFromJson(const Json &value) {
+  if (value.is_boolean()) {
+    return value.get<bool>() ? GaugeAutoShiftMode::SelectToUnder
+                             : GaugeAutoShiftMode::None;
+  }
+  if (value.is_number_integer()) {
+    return gaugeAutoShiftModeFromValue(value.get<int>());
+  }
+  throw std::runtime_error("Gauge auto shift mode must be an integer.");
+}
+
 const char *gaugeProfileName(GaugeProfile value) {
   switch (value) {
   case GaugeProfile::Standard:
@@ -575,7 +586,8 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   root["stages"] = std::move(stages);
   root["gaugeType"] = gaugeTypeName(canonical.gaugeType);
   root["gaugeProfile"] = gaugeProfileName(canonical.gaugeProfile);
-  root["gaugeAutoShift"] = canonical.gaugeAutoShift;
+  root["gaugeAutoShift"] =
+      gaugeAutoShiftModeValue(canonical.gaugeAutoShift);
   root["player1"] = playerOptionToJson(canonical.player1);
   root["player2"] = playerOptionToJson(canonical.player2);
   root["assistOption"] = canonical.assistOption;
@@ -634,7 +646,9 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
     result.gaugeProfile = enumOrThrow(
         gaugeProfileFromName(root.value("gaugeProfile", "standard")),
         "Unknown gauge profile in score provenance.");
-    result.gaugeAutoShift = root.value("gaugeAutoShift", result.gaugeAutoShift);
+    if (const auto mode = root.find("gaugeAutoShift"); mode != root.end()) {
+      result.gaugeAutoShift = gaugeAutoShiftFromJson(*mode);
+    }
     if (const auto player = root.find("player1"); player != root.end()) {
       result.player1 = playerOptionFromJson(*player);
     }

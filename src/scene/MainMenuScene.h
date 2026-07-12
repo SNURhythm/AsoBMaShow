@@ -617,7 +617,7 @@ private:
   void applyPendingUiUpdates();
   void selectFolder(LibraryFolderItem item);
   bool toggleChartFavorite(const ChartMetaRecord &record, bool favorite);
-  void setGaugeSelection(GaugeType gaugeType, bool autoShift);
+  void setGaugeSelection(GaugeType gaugeType, GaugeAutoShiftMode autoShift);
   void refreshGaugeSelectionButtons();
   void setPlayOptionSelection(const std::string &option);
   void refreshPlayOptionButtons();

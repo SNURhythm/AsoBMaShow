@@ -48,7 +48,7 @@ inline ReplayEvent makeAutoPlayEvent(ReplayEventAction action,
 }
 
 inline ReplaySummary BuildSummary(
-    const bms_parser::ChartMeta &meta, GaugeType gaugeType, bool gaugeAutoShift,
+    const bms_parser::ChartMeta &meta, GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
     const std::optional<std::string> &playOption = std::nullopt,
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
@@ -80,7 +80,7 @@ inline ReplaySummary BuildSummary(
 }
 
 inline ReplayData BuildReplayData(
-    bms_parser::Chart &chart, GaugeType gaugeType, bool gaugeAutoShift,
+    bms_parser::Chart &chart, GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
     audio::PlaybackRate playback = {},
     const std::optional<std::string> &playOption = std::nullopt,
     const std::optional<long long> &playOptionSeed = std::nullopt,

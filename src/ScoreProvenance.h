@@ -89,7 +89,7 @@ struct ScoreProvenance {
   std::vector<ScoreStageProvenance> stages;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
   std::string assistOption = assist_options::kOff;
@@ -126,7 +126,7 @@ struct ScoreProvenanceBuildInput {
   std::map<Judgement, std::pair<long long, long long>> effectiveJudgeWindows;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
   std::string assistOption = assist_options::kOff;

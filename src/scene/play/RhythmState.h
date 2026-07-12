@@ -8,6 +8,53 @@
 
 enum class GaugeType { AssistedEasy, Easy, Normal, Hard, ExHard, Hazard };
 
+enum class GaugeAutoShiftMode {
+  None = 0,
+  SelectToUnder = 1,
+  Continue = 2,
+  SurvivalToGroove = 3,
+  BestClear = 4,
+};
+
+inline bool gaugeAutoShiftEnabled(GaugeAutoShiftMode mode) {
+  return mode != GaugeAutoShiftMode::None;
+}
+
+inline int gaugeAutoShiftModeValue(GaugeAutoShiftMode mode) {
+  return static_cast<int>(mode);
+}
+
+inline GaugeAutoShiftMode gaugeAutoShiftModeFromValue(int value) {
+  switch (value) {
+  case 1:
+    return GaugeAutoShiftMode::SelectToUnder;
+  case 2:
+    return GaugeAutoShiftMode::Continue;
+  case 3:
+    return GaugeAutoShiftMode::SurvivalToGroove;
+  case 4:
+    return GaugeAutoShiftMode::BestClear;
+  default:
+    return GaugeAutoShiftMode::None;
+  }
+}
+
+inline const char *gaugeAutoShiftShortLabel(GaugeAutoShiftMode mode) {
+  switch (mode) {
+  case GaugeAutoShiftMode::SelectToUnder:
+    return "GAS";
+  case GaugeAutoShiftMode::Continue:
+    return "CONT";
+  case GaugeAutoShiftMode::SurvivalToGroove:
+    return "S-G";
+  case GaugeAutoShiftMode::BestClear:
+    return "BEST";
+  case GaugeAutoShiftMode::None:
+  default:
+    return "";
+  }
+}
+
 enum class GaugeProfile {
   Standard,
   CourseDefault,
@@ -762,8 +809,9 @@ inline const char *clearTypeRankToLabel(int rank) {
 
 struct GaugeStateSnapshot {
   GaugeType gaugeType = GaugeType::Normal;
+  GaugeType selectedGaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   float currentGauge = 0.0f;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
@@ -795,7 +843,7 @@ public:
                    : beatorajaDefaultGaugeTotal(gaugeKeyMode,
                                                 gaugeTotalNotes));
     resetJudgeCounts();
-    configureGauge(GaugeType::Normal, false);
+    configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
   }
 
   int getScore() const {
@@ -806,8 +854,9 @@ public:
   std::vector<float> gaugeHistory;
   float currentGauge = 100.0f;
   GaugeType gaugeType = GaugeType::Normal;
+  GaugeType selectedGaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   bool assistClearMark = false;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
@@ -848,17 +897,20 @@ public:
     }
   }
 
-  void configureGauge(GaugeType selectedGaugeType, bool autoShift,
+  void configureGauge(GaugeType newSelectedGaugeType,
+                      GaugeAutoShiftMode autoShift,
                       GaugeProfile selectedGaugeProfile =
                           GaugeProfile::Standard) {
     gaugeAutoShift = autoShift;
+    selectedGaugeType = newSelectedGaugeType;
     gaugeType = selectedGaugeType;
     gaugeProfile = resolveGaugeProfile(selectedGaugeProfile, gaugeKeyMode);
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
       gaugeValues[i] = gaugeInitialValue(gaugeTypeAtIndex(i), gaugeProfile);
       gaugeSurvivalFailed[i] = false;
     }
-    if (gaugeAutoShift) {
+    if (gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+        gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
       gaugeType = bestAdmittedGaugeType();
     }
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
@@ -867,7 +919,8 @@ public:
 
   void setStartingGaugePercent(int percent) {
     const float value = static_cast<float>(std::max(0, percent));
-    if (gaugeAutoShift) {
+    if (gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+        gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
       for (int i = 0; i < static_cast<int>(kGaugeTypeCount); ++i) {
         const GaugeType type = gaugeTypeAtIndex(i);
         gaugeValues[i] =
@@ -886,6 +939,7 @@ public:
   void restoreGaugeState(const GaugeStateSnapshot &snapshot) {
     gaugeAutoShift = snapshot.gaugeAutoShift;
     gaugeType = snapshot.gaugeType;
+    selectedGaugeType = snapshot.selectedGaugeType;
     gaugeProfile = snapshot.gaugeProfile;
     gaugeValues = snapshot.gaugeValues;
     gaugeSurvivalFailed = snapshot.gaugeSurvivalFailed;
@@ -902,6 +956,7 @@ public:
   [[nodiscard]] GaugeStateSnapshot gaugeSnapshot() const {
     return GaugeStateSnapshot{
         .gaugeType = gaugeType,
+        .selectedGaugeType = selectedGaugeType,
         .gaugeProfile = gaugeProfile,
         .gaugeAutoShift = gaugeAutoShift,
         .currentGauge = currentGauge,
@@ -919,7 +974,7 @@ public:
   void applyGaugeJudgementRate(Judgement judgement, float rate) {
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
       const GaugeType type = gaugeTypeAtIndex(i);
-      if (!gaugeAutoShift && type != gaugeType) {
+      if (!tracksAllGaugeTypes() && type != gaugeType) {
         continue;
       }
       const bool survival = gaugeIsSurvival(type, gaugeProfile);
@@ -943,9 +998,7 @@ public:
       }
     }
 
-    if (gaugeAutoShift) {
-      gaugeType = bestAdmittedGaugeType();
-    }
+    updateAutoShiftGaugeType();
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
     gaugeHistory.push_back(currentGauge);
   }
@@ -953,7 +1006,7 @@ public:
   void applyGaugeDelta(float delta) {
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
       const GaugeType type = gaugeTypeAtIndex(i);
-      if (!gaugeAutoShift && type != gaugeType) {
+      if (!tracksAllGaugeTypes() && type != gaugeType) {
         continue;
       }
       const bool survival = gaugeIsSurvival(type, gaugeProfile);
@@ -973,9 +1026,7 @@ public:
       }
     }
 
-    if (gaugeAutoShift) {
-      gaugeType = bestAdmittedGaugeType();
-    }
+    updateAutoShiftGaugeType();
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
     gaugeHistory.push_back(currentGauge);
   }
@@ -1000,7 +1051,8 @@ public:
 
   [[nodiscard]] bool activeGaugeFailed() const {
     const int index = gaugeTypeIndex(gaugeType);
-    return !gaugeAutoShift && gaugeIsSurvival(gaugeType, gaugeProfile) &&
+    return gaugeAutoShift == GaugeAutoShiftMode::None &&
+           gaugeIsSurvival(gaugeType, gaugeProfile) &&
            gaugeSurvivalFailed[index];
   }
 
@@ -1008,14 +1060,15 @@ public:
 
 private:
   [[nodiscard]] ClearType getGaugeClearType() const {
-    if (!gaugeAutoShift) {
+    if (gaugeAutoShift != GaugeAutoShiftMode::BestClear &&
+        gaugeAutoShift != GaugeAutoShiftMode::SelectToUnder) {
       return clearTypeForGauge(gaugeType, currentGauge,
                                gaugeSurvivalFailed[gaugeTypeIndex(gaugeType)],
                                gaugeProfile);
     }
 
     ClearType best = ClearType::Failed;
-    for (int i = gaugeTypeIndex(GaugeType::ExHard); i >= 0; i--) {
+    for (int i = autoShiftUpperIndex(); i >= 0; i--) {
       const ClearType clearType =
           clearTypeForGauge(gaugeTypeAtIndex(i), gaugeValues[i],
                             gaugeSurvivalFailed[i], gaugeProfile);
@@ -1027,7 +1080,7 @@ private:
   }
 
   [[nodiscard]] GaugeType bestAdmittedGaugeType() const {
-    for (int i = gaugeTypeIndex(GaugeType::ExHard); i >= 0; i--) {
+    for (int i = autoShiftUpperIndex(); i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (clearTypeForGauge(type, gaugeValues[i], gaugeSurvivalFailed[i],
                             gaugeProfile) !=
@@ -1039,13 +1092,40 @@ private:
   }
 
   [[nodiscard]] GaugeType bestSurvivingGaugeType() const {
-    for (int i = gaugeTypeIndex(GaugeType::ExHard); i >= 0; i--) {
+    for (int i = autoShiftUpperIndex(); i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (!gaugeIsSurvival(type, gaugeProfile) || !gaugeSurvivalFailed[i]) {
         return type;
       }
     }
     return GaugeType::AssistedEasy;
+  }
+
+  [[nodiscard]] int autoShiftUpperIndex() const {
+    if (gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
+      return gaugeTypeIndex(selectedGaugeType);
+    }
+    return gaugeProfileIsCourse(gaugeProfile)
+               ? gaugeTypeIndex(GaugeType::ExHard)
+               : gaugeTypeIndex(GaugeType::Hazard);
+  }
+
+  [[nodiscard]] bool tracksAllGaugeTypes() const {
+    return gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+           gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder ||
+           gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove;
+  }
+
+  void updateAutoShiftGaugeType() {
+    if (gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+        gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
+      gaugeType = bestAdmittedGaugeType();
+    } else if (gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+               !gaugeProfileIsCourse(gaugeProfile) &&
+               gaugeIsSurvival(gaugeType, gaugeProfile) &&
+               gaugeSurvivalFailed[gaugeTypeIndex(gaugeType)]) {
+      gaugeType = GaugeType::Normal;
+    }
   }
 
   long long firstTiming = 0;

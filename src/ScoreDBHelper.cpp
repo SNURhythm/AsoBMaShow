@@ -1823,7 +1823,8 @@ bool ScoreDBHelper::InsertCourseScoreOnConnection(
   sqlite3_bind_int(stmt.get(), bindIndex++, gaugeTypeIndex(session.gaugeType));
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(session.gaugeProfile));
-  sqlite3_bind_int(stmt.get(), bindIndex++, session.gaugeAutoShift ? 1 : 0);
+  sqlite3_bind_int(stmt.get(), bindIndex++,
+                   gaugeAutoShiftModeValue(session.gaugeAutoShift));
   bindSqliteText(stmt.get(), bindIndex++,
                  session.playOption.value_or(session.requestedPlayOption));
   bindSqliteText(stmt.get(), bindIndex++, session.assistOption);

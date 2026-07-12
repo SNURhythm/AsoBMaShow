@@ -227,7 +227,7 @@ private:
       AppSettings::GaugeBarPosition::World;
   GaugeType currentGaugeType = GaugeType::Normal;
   GaugeProfile currentGaugeProfile = GaugeProfile::Standard;
-  bool currentGaugeAutoShift = false;
+  GaugeAutoShiftMode currentGaugeAutoShift = GaugeAutoShiftMode::None;
   float currentGaugeValue = 0.0f;
   bool renderLaneBeams = true;
   bool laneCoverFloatingEnabled = true;
@@ -417,7 +417,7 @@ public:
   void setJudgementCounters(const std::map<Judgement, int> &judgeCounts,
                             int comboBreak);
   void setGaugeBarPosition(AppSettings::GaugeBarPosition position);
-  void setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
+  void setGaugeStatus(GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
                       float currentGauge,
                       GaugeProfile gaugeProfile = GaugeProfile::Standard);
   void setPacemakerTarget(const pacemaker::Target &target);

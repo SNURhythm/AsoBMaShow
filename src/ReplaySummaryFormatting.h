@@ -15,8 +15,11 @@ inline std::string formatGauge(float gauge) {
   return stream.str();
 }
 
-inline std::string gaugeLabel(GaugeType gaugeType, bool autoShift) {
-  return autoShift ? "GAS" : gaugeTypeToShortLabel(gaugeType);
+inline std::string gaugeLabel(GaugeType gaugeType,
+                              GaugeAutoShiftMode autoShift) {
+  return gaugeAutoShiftEnabled(autoShift)
+             ? gaugeAutoShiftShortLabel(autoShift)
+             : gaugeTypeToShortLabel(gaugeType);
 }
 
 inline play_options::PlayModeDisplayLabel

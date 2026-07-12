@@ -1012,7 +1012,7 @@ bool applyReplayEventForVideo(
     BMSRenderer &renderer,
     const bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event, long long visualTimeMicros, bool gaugeAutoShift,
+    const ReplayEvent &event, long long visualTimeMicros, GaugeAutoShiftMode gaugeAutoShift,
     GaugeProfile gaugeProfile = GaugeProfile::Standard) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   auto applyHud = [&]() -> bool {

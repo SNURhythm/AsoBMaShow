@@ -638,7 +638,8 @@ ReplaySummary readReplaySummary(sqlite3_stmt *stmt, int maxComboColumn,
   ReplaySummary summary;
   summary.id = sqlite3_column_int(stmt, 0);
   summary.initialGaugeType = gaugeTypeFromInt(sqlite3_column_int(stmt, 6));
-  summary.gaugeAutoShift = sqlite3_column_int(stmt, 7) != 0;
+  summary.gaugeAutoShift =
+      gaugeAutoShiftModeFromValue(sqlite3_column_int(stmt, 7));
   summary.finalScore = sqlite3_column_int(stmt, 8);
   summary.finalGauge = static_cast<float>(sqlite3_column_double(stmt, 9));
   summary.clearType = sqlite3_column_int(stmt, 10);
@@ -884,7 +885,7 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    gaugeTypeIndex(replay.initialGaugeType));
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
-                   replay.gaugeAutoShift ? 1 : 0);
+                   gaugeAutoShiftModeValue(replay.gaugeAutoShift));
   sqlite3_bind_int(replayStmt.get(), bindIndex++, replay.finalScore);
   sqlite3_bind_int(replayStmt.get(), bindIndex++, std::max(0, replay.maxCombo));
   sqlite3_bind_double(replayStmt.get(), bindIndex++, replay.finalGauge);
@@ -1604,7 +1605,7 @@ std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    gaugeProfileIndex(replay.gaugeProfile));
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
-                   replay.gaugeAutoShift ? 1 : 0);
+                   gaugeAutoShiftModeValue(replay.gaugeAutoShift));
   sqlite3_bind_int(courseStmt.get(), bindIndex++,
                    long_note_mode::normalizeValue(replay.longNoteMode));
   bindSqliteText(courseStmt.get(), bindIndex++, replay.requestedPlayOption);
@@ -2002,7 +2003,8 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
     summary.courseReplay = true;
     summary.initialGaugeType =
         gaugeTypeFromInt(sqlite3_column_int(detailStmt.get(), 1));
-    summary.gaugeAutoShift = sqlite3_column_int(detailStmt.get(), 2) != 0;
+    summary.gaugeAutoShift = gaugeAutoShiftModeFromValue(
+        sqlite3_column_int(detailStmt.get(), 2));
     summary.finalScore = sqlite3_column_int(detailStmt.get(), 3);
     summary.finalGauge =
         static_cast<float>(sqlite3_column_double(detailStmt.get(), 4));
@@ -2421,7 +2423,8 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
     loaded.chartMeta.Artist = readText(stmt.get(), 5);
     loaded.initialGaugeType =
         gaugeTypeFromInt(sqlite3_column_int(stmt.get(), 6));
-    loaded.gaugeAutoShift = sqlite3_column_int(stmt.get(), 7) != 0;
+    loaded.gaugeAutoShift =
+        gaugeAutoShiftModeFromValue(sqlite3_column_int(stmt.get(), 7));
     loaded.finalScore = sqlite3_column_int(stmt.get(), 8);
     loaded.finalGauge =
         static_cast<float>(sqlite3_column_double(stmt.get(), 9));
@@ -2650,7 +2653,8 @@ ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
       gaugeTypeFromInt(sqlite3_column_int(stmt.get(), 6));
   courseReplay.gaugeProfile =
       gaugeProfileFromInt(sqlite3_column_int(stmt.get(), 7));
-  courseReplay.gaugeAutoShift = sqlite3_column_int(stmt.get(), 8) != 0;
+  courseReplay.gaugeAutoShift =
+      gaugeAutoShiftModeFromValue(sqlite3_column_int(stmt.get(), 8));
   courseReplay.longNoteMode =
       long_note_mode::normalizeValue(sqlite3_column_int(stmt.get(), 9));
   courseReplay.requestedPlayOption = readText(stmt.get(), 10);

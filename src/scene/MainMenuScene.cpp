@@ -917,9 +917,10 @@ int clearRankForGaugeType(GaugeType gaugeType) {
   }
 }
 
-std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
-  if (autoShift) {
-    return "GAS";
+std::string gaugeButtonLabel(GaugeType gaugeType,
+                             GaugeAutoShiftMode autoShift) {
+  if (gaugeAutoShiftEnabled(autoShift)) {
+    return gaugeAutoShiftShortLabel(autoShift);
   }
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
@@ -939,8 +940,9 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
   }
 }
 
-SDL_Color readyGaugeTextColor(GaugeType gaugeType, bool autoShift) {
-  if (autoShift) {
+SDL_Color readyGaugeTextColor(GaugeType gaugeType,
+                              GaugeAutoShiftMode autoShift) {
+  if (gaugeAutoShiftEnabled(autoShift)) {
     return SDL_Color{255, 205, 37, 255};
   }
 
@@ -4602,7 +4604,8 @@ bool MainMenuScene::currentAssistOptionSelectionAllowed(
   return assist_options::normalize(option) == selection.assistOption;
 }
 
-void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
+void MainMenuScene::setGaugeSelection(GaugeType gaugeType,
+                                      GaugeAutoShiftMode autoShift) {
   profileSelections.gaugeType = gaugeType;
   profileSelections.gaugeAutoShift = autoShift;
   profileSelections.applyTo(context.settings);
@@ -5096,7 +5099,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   ImageView::dropAllCache();
 
   const GaugeType gaugeType = profileSelections.gaugeType;
-  const bool gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = profileSelections.playOption;
   int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
@@ -7362,7 +7365,8 @@ void MainMenuScene::buildPlayOptionsModal() {
 
   const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
   playOptionsPanel = new PlayOptionsPanelView(
-      {.onGaugeSelected = [this](GaugeType type, bool autoShift) {
+      {.onGaugeSelected = [this](GaugeType type,
+                                 GaugeAutoShiftMode autoShift) {
          setGaugeSelection(type, autoShift);
        },
        .onPlayOptionSelected = [this](const std::string &option) {
@@ -8780,7 +8784,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
   }
 
   const GaugeType gaugeType = profileSelections.gaugeType;
-  const bool gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const audio::PlaybackRate playback{
       .percent = context.settings.selectedPlaybackRatePercent,
@@ -9304,7 +9308,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
     queueReplayExportResult(result);
   };
   const GaugeType autoPlayGaugeType = profileSelections.gaugeType;
-  const bool autoPlayGaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode autoPlayGaugeAutoShift = profileSelections.gaugeAutoShift;
   const std::string autoPlayAssistOption = profileSelections.assistOption;
   const std::string autoPlayOption = profileSelections.playOption;
   const audio::PlaybackRate autoPlayPlayback{
