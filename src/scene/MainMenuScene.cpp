@@ -8597,7 +8597,9 @@ MainMenuScene::autoPlayReplaySummary(const ChartMetaRecord &record) const {
   return replay_autoplay::BuildSummary(
       replayLoadMetaForRecord(record), profileSelections.gaugeType,
       profileSelections.gaugeAutoShift, playOption, std::nullopt, std::nullopt,
-      std::nullopt, profileSelections.assistOption);
+      std::nullopt, profileSelections.assistOption,
+      {.percent = context.settings.selectedPlaybackRatePercent,
+       .mode = context.settings.selectedPlaybackMode});
 }
 
 bool MainMenuScene::prepareAutoPlayChartForRecord(

@@ -53,7 +53,8 @@ inline ReplaySummary BuildSummary(
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
     const std::optional<long long> &playOption2Seed = std::nullopt,
-    const std::string &assistOption = assist_options::kOff) {
+    const std::string &assistOption = assist_options::kOff,
+    audio::PlaybackRate playback = {}) {
   ReplaySummary summary;
   summary.id = kReplayId;
   summary.autoPlay = true;
@@ -63,7 +64,8 @@ inline ReplaySummary BuildSummary(
   summary.maxScore = summary.finalScore;
   summary.maxCombo = std::max(0, meta.TotalNotes);
   summary.finalGauge = 100.0f;
-  summary.clearType = kClearTypeFullComboRank;
+  summary.clearType = clear_policy::fullComboRankForPlayback(
+      kClearTypeFullComboRank, true, playback);
   summary.createdAt = kLabel;
   summary.eventCount = std::max(0, meta.TotalNotes);
   summary.touchSampleCount = 0;
@@ -73,6 +75,7 @@ inline ReplaySummary BuildSummary(
   summary.playOption2 = playOption2;
   summary.playOption2Seed = playOption2Seed;
   summary.assistOption = assist_options::normalize(assistOption);
+  summary.playback = playback;
   return summary;
 }
 

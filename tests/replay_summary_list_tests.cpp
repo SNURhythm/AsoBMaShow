@@ -112,5 +112,15 @@ int main() {
     return 1;
   }
 
+  const ReplaySummary assistedAutoSummary = replay_autoplay::BuildSummary(
+      chart.Meta, GaugeType::Normal, false, std::nullopt, std::nullopt,
+      std::nullopt, std::nullopt, assist_options::kOff, {.percent = 200});
+  if (assistedAutoSummary.playback.percent != 200 ||
+      assistedAutoSummary.clearType != kClearTypeAssistedEasyClearRank) {
+    std::cerr << "synthetic Auto summary must retain playback assist limits"
+              << std::endl;
+    return 1;
+  }
+
   return 0;
 }
