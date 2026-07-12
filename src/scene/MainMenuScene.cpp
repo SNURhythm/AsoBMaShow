@@ -2874,11 +2874,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setThemedBorderColor(ui_theme::hairline);
   nav->setBorderWidth(1);
 
-  auto *navTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  navTitle->setText("Library");
-  navTitle->setThemedColor(ui_theme::textPrimary);
-  nav->addView(navTitle);
-
   bool showAddFolderButton = false;
   std::string addFolderButtonLabel = "Add Folder";
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -3001,12 +2996,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   libraryHeader->addView(tasksButton);
   left->addView(libraryHeader);
 
-  auto *librarySubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  librarySubtitle->setText(
-      "Search your library and preview charts before starting.");
-  librarySubtitle->setThemedColor(ui_theme::textSecondary);
-  left->addView(librarySubtitle);
-
   auto *filterRow = new View();
   filterRow->setFlexDirection(FlexDirection::Row);
   filterRow->setAlignItems(YGAlignStretch);
@@ -3051,7 +3040,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(chartSortButton);
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  filterLabel->setText("Search / Filter / Sort");
+  filterLabel->setText("Search");
   filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
@@ -4790,7 +4779,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
         profileSelections.gaugeType, profileSelections.gaugeAutoShift));
   }
   if (readyPlayOptionText != nullptr) {
-    readyPlayOptionText->setText("Option: " + effective.playOption + " / " +
+    readyPlayOptionText->setText(effective.playOption + " · " +
                                  effective.longNoteMode);
   }
   if (readyAssistOptionText != nullptr) {
@@ -4801,7 +4790,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
     const bool optionEnabled =
         assist_options::isEnabled(effective.assistOption);
     if (!optionEnabled && percent == 100) {
-      readyAssistOptionText->setText("Assist: OFF");
+      readyAssistOptionText->setText("Assist off");
     } else {
       std::string reasons;
       if (optionEnabled) {
@@ -4813,12 +4802,12 @@ void MainMenuScene::refreshReadySettingsSummary() {
         }
         reasons += std::to_string(percent) + "%";
       }
-      readyAssistOptionText->setText("Assist: A-EASY (" + reasons + ")");
+      readyAssistOptionText->setText("Assist · " + reasons);
     }
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
-        "Target: " +
+        "Target · " +
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
 }
