@@ -345,6 +345,29 @@ inline float gaugeMaximumValue(GaugeType gaugeType,
   return 100.0f;
 }
 
+inline float gaugeStartingMaximumValue(
+    GaugeType selectedGaugeType, GaugeAutoShiftMode autoShift,
+    GaugeType autoShiftLowerBound,
+    GaugeProfile profile = GaugeProfile::Standard) {
+  if (autoShift != GaugeAutoShiftMode::BestClear &&
+      autoShift != GaugeAutoShiftMode::SelectToUnder) {
+    return gaugeMaximumValue(selectedGaugeType, profile);
+  }
+
+  const int upperIndex =
+      autoShift == GaugeAutoShiftMode::BestClear
+          ? gaugeTypeIndex(GaugeType::Hazard)
+          : gaugeTypeIndex(selectedGaugeType);
+  const int lowerIndex =
+      std::min(gaugeTypeIndex(autoShiftLowerBound), upperIndex);
+  float maximum = 0.0f;
+  for (int index = lowerIndex; index <= upperIndex; ++index) {
+    maximum = std::max(
+        maximum, gaugeMaximumValue(gaugeTypeAtIndex(index), profile));
+  }
+  return maximum;
+}
+
 inline float gaugeMinimumValue(GaugeType gaugeType,
                                GaugeProfile profile = GaugeProfile::Standard) {
   if (gaugeProfileIsCourse(profile)) {
