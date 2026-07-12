@@ -13,6 +13,16 @@
 
 enum class CourseLongNoteMode { Unspecified, LN, CN, HCN };
 
+namespace course_rules {
+// Course runs intentionally prohibit modified playback speed. Keeping the
+// required value named prevents a neutral default from looking like an omitted
+// setting at course start, stage transitions, replay, or export boundaries.
+inline constexpr audio::PlaybackRate kRequiredPlaybackRate{
+    .percent = 100,
+    .mode = audio::PlaybackMode::PitchShift,
+};
+} // namespace course_rules
+
 struct CourseConstraintRules {
   bool noSpeed = false;
   CourseJudgementConstraint judgement = CourseJudgementConstraint::None;

@@ -384,8 +384,8 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              bms_parser::Chart *chart, StartOptions options)
     : Scene(context), ownedChart(options.ownsChart ? chart : nullptr),
       chart(options.ownsChart ? ownedChart.get() : chart),
-      options(resolvePlayStartInputDevices(
-          std::move(options), context.inputProfile, chart->Meta.KeyMode)),
+      options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
+          std::move(options), context.inputProfile, chart->Meta.KeyMode))),
       judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
@@ -397,8 +397,9 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                              std::unique_ptr<bms_parser::Chart> chart,
                              StartOptions options)
     : Scene(context), ownedChart(std::move(chart)), chart(ownedChart.get()),
-      options(resolvePlayStartInputDevices(
-          std::move(options), context.inputProfile, this->chart->Meta.KeyMode)),
+      options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
+          std::move(options), context.inputProfile,
+          this->chart->Meta.KeyMode))),
       judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
       attemptProvenance(captureScoreProvenanceAtPlayStart(
           this->options, this->chart->Meta, judge.timingWindows)) {
@@ -1389,7 +1390,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.playOption2Seed = playInfo.seed2;
   nextOptions.longNoteMode = options.longNoteMode;
   nextOptions.assistOption = session->assistOption;
-  nextOptions.playback = options.playback;
+  nextOptions.playback = course_rules::kRequiredPlaybackRate;
   nextOptions.clubMode = options.clubMode;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;

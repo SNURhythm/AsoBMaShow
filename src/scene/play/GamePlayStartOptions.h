@@ -185,6 +185,14 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
       replay.provenance, replay.chartMeta);
 }
 
+[[nodiscard]] inline StartOptions
+enforceCoursePlaybackRules(StartOptions options) {
+  if (options.courseSession != nullptr) {
+    options.playback = course_rules::kRequiredPlaybackRate;
+  }
+  return options;
+}
+
 [[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
     const std::map<Judgement, std::pair<long long, long long>>
@@ -254,5 +262,5 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.assistOption = stageReplay->assistOption;
     applyReplayProvenanceToStartOptions(options, *stageReplay);
   }
-  return options;
+  return enforceCoursePlaybackRules(std::move(options));
 }

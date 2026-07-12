@@ -4865,8 +4865,8 @@ void MainMenuScene::toggleGameplayClubMode() {
 
 void MainMenuScene::refreshPlaybackSelectionControls() {
   const bool locked = playbackSelectionLockedForCourse();
-  const int percent =
-      locked ? 100 : context.settings.selectedPlaybackRatePercent;
+  const int percent = locked ? course_rules::kRequiredPlaybackRate.percent
+                             : context.settings.selectedPlaybackRatePercent;
   if (locked) {
     playbackModeDropdownOpen = false;
   }
@@ -4937,9 +4937,10 @@ void MainMenuScene::refreshReadySettingsSummary() {
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
   if (readyPlaybackText != nullptr) {
-    const int percent = playbackSelectionLockedForCourse()
-                            ? 100
-                            : context.settings.selectedPlaybackRatePercent;
+    const int percent =
+        playbackSelectionLockedForCourse()
+            ? course_rules::kRequiredPlaybackRate.percent
+            : context.settings.selectedPlaybackRatePercent;
     readyPlaybackText->setText(
         "Rate: " + std::to_string(percent) + "%" +
         (percent == 100 ? " / Pitch Shift"
@@ -5187,7 +5188,7 @@ void MainMenuScene::startCourseDirect(
         options.playOption2Seed = playInfo.seed2;
         options.longNoteMode = selectedLongNoteMode;
         options.assistOption = session->assistOption;
-        options.playback = {};
+        options.playback = course_rules::kRequiredPlaybackRate;
         options.clubMode = context.settings.gameplayClubModeEnabled;
         options.courseSession = session;
         options.courseConstraints = session->constraints;

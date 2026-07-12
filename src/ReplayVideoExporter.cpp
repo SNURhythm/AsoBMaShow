@@ -4057,9 +4057,9 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
 
     const auto stageWavPath =
         tempDir / ("stage_" + std::to_string(i + 1) + ".wav");
-    const auto audioResult =
-        writeReplayAudioTrack(*chart, stageReplay, audio::PlaybackRate{},
-                              stageWavPath, exportLog);
+    const auto audioResult = writeReplayAudioTrack(
+        *chart, stageReplay, course_rules::kRequiredPlaybackRate, stageWavPath,
+        exportLog);
     if (!audioResult.success) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
