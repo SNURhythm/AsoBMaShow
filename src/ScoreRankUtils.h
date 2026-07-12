@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <string_view>
 
 namespace score_rank {
 
@@ -43,16 +44,12 @@ inline std::string labelForScore(int score, int maxScore) {
   return "F";
 }
 
-inline int deficitFromMax(int score, int maxScore) {
-  return std::max(0, maxScore - score);
+inline std::string displayLabel(std::string_view rank) {
+  return rank == "MAX -" ? "AAA" : std::string(rank);
 }
 
 inline std::string displayLabelForScore(int score, int maxScore) {
-  const std::string rank = labelForScore(score, maxScore);
-  if (rank == "MAX -") {
-    return "MAX-" + std::to_string(deficitFromMax(score, maxScore));
-  }
-  return rank;
+  return displayLabel(labelForScore(score, maxScore));
 }
 
 } // namespace score_rank

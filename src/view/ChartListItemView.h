@@ -46,7 +46,6 @@ private:
   TextView *levelView;
   TextView *keyModeView;
   TextView *scoreRankView;
-  TextView *scoreRankDeltaView;
   std::string scoreRank;
   Button *favoriteButton;
   TextView *favoriteIconView;

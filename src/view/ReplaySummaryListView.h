@@ -122,7 +122,7 @@ public:
 
 private:
   void applyRankColor() {
-    const std::string rank = currentRank;
+    const std::string rank = score_rank::displayLabel(currentRank);
     rankText->setThemedColor(
         [rank] { return ui_theme::scoreRankColor(rank); });
   }

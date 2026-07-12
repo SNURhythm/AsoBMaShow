@@ -146,10 +146,9 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const int totalNotes = meta.TotalNotes;
   const int maxScore = totalNotes * 2;
   const int currentScore = resultState.getScore();
-  const std::string grade = score_rank::labelForScore(currentScore, maxScore);
   const std::string gradeDisplay =
       score_rank::displayLabelForScore(currentScore, maxScore);
-  const Color gradeAccent = ui_theme::scoreRankColor(grade);
+  const Color gradeAccent = ui_theme::scoreRankColor(gradeDisplay);
   const int playLevelDecimals =
       std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
   const std::string playLevelLabel =
@@ -374,12 +373,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   gradeLabel->setHeight(23);
   gradeLabel->setAlign(TextView::CENTER);
   gradePanel->addView(gradeLabel);
-  const int gradeFontSize =
-      grade == "MAX -"
-          ? std::max(24, 280 / static_cast<int>(gradeDisplay.size()))
-          : 96;
-  auto *gradeText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", gradeFontSize);
+  auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
   gradeText->setText(gradeDisplay);
   gradeText->setColor(ui_theme::sdl(gradeAccent));
   gradeText->setAlign(TextView::CENTER);
