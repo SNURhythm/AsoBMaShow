@@ -585,6 +585,9 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
          practice_analytics_presentation::exportAnalyticsModes()) {
       auto *analyticsView = new PracticeAnalyticsView(*analyticsModel);
       analyticsView->setMode(mode);
+      analyticsView->setPhotoExportPresentation(
+          practice_analytics_presentation::
+              photoExportShowsSharedInformation(mode));
       analyticsStack->addView(analyticsView);
     }
     resultRoot->addView(analyticsStack);

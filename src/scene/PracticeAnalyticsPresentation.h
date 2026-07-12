@@ -76,6 +76,11 @@ exportAnalyticsModes() noexcept {
           PracticeAnalyticsMode::Sections};
 }
 
+[[nodiscard]] constexpr bool
+photoExportShowsSharedInformation(PracticeAnalyticsMode mode) noexcept {
+  return mode == PracticeAnalyticsMode::Histogram;
+}
+
 [[nodiscard]] constexpr PracticeAnalyticsMode
 analyticsModeForSlideshow(long long elapsedMicros,
                           long long durationMicros) noexcept {

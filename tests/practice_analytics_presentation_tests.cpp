@@ -110,6 +110,17 @@ void testResultPhotoExportsEveryAnalyticsModeInDisplayOrder() {
           "result photo includes all analytics modes in tab order");
 }
 
+void testResultPhotoShowsSharedInformationOnlyOnHistogram() {
+  using practice_analytics_presentation::photoExportShowsSharedInformation;
+  require(photoExportShowsSharedInformation(
+              PracticeAnalyticsMode::Histogram) &&
+              !photoExportShowsSharedInformation(
+                  PracticeAnalyticsMode::Lanes) &&
+              !photoExportShowsSharedInformation(
+                  PracticeAnalyticsMode::Sections),
+          "photo export does not duplicate aggregate and timing information");
+}
+
 void testResultVideoSlidesAnalyticsInEqualThirds() {
   using practice_analytics_presentation::analyticsModeForSlideshow;
   constexpr long long duration = 9'000'000;
@@ -136,6 +147,7 @@ int main() {
   testPointerCaptureSeparatesMouseTouchAndCancelsReliably();
   testBaselineLayoutHasShrinkRoomWithoutClippingControls();
   testResultPhotoExportsEveryAnalyticsModeInDisplayOrder();
+  testResultPhotoShowsSharedInformationOnlyOnHistogram();
   testResultVideoSlidesAnalyticsInEqualThirds();
   return 0;
 }

@@ -400,22 +400,23 @@ void PracticeAnalyticsView::build() {
   setBorderColor(ui_theme::hairlineSubtle());
   setBorderWidth(1);
 
-  auto *topRow = new View();
-  topRow->setHeight(44);
-  topRow->setFlexDirection(FlexDirection::Row);
-  topRow->setAlignItems(YGAlignCenter);
-  topRow->setGap(8);
+  modeControlsRow = new View();
+  modeControlsRow->setHeight(44);
+  modeControlsRow->setFlexDirection(FlexDirection::Row);
+  modeControlsRow->setAlignItems(YGAlignCenter);
+  modeControlsRow->setGap(8);
   for (const auto &[label, value] :
        {std::pair{"Histogram", PracticeAnalyticsMode::Histogram},
         std::pair{"Lanes", PracticeAnalyticsMode::Lanes},
         std::pair{"Sections", PracticeAnalyticsMode::Sections}}) {
     auto *button = makeButton(label, 112);
     button->setOnClickListener([this, value]() { setMode(value); });
-    topRow->addView(button);
+    modeButtons.push_back(button);
+    modeControlsRow->addView(button);
   }
   auto *spacer = new View();
   spacer->setFlexGrow(1.0f);
-  topRow->addView(spacer);
+  modeControlsRow->addView(spacer);
   auto *abandoned =
       makeText("Abandoned: " + std::to_string(model.abandonedAttempts()), 14,
                model.abandonedAttempts() == 0 ? ui_theme::textMuted()
@@ -423,26 +424,26 @@ void PracticeAnalyticsView::build() {
   abandoned->setWidth(140);
   abandoned->setHeight(28);
   abandoned->setAlign(TextView::RIGHT);
-  topRow->addView(abandoned);
-  addView(topRow);
+  modeControlsRow->addView(abandoned);
+  addView(modeControlsRow);
 
-  auto *choiceRow = new View();
+  choiceRow = new View();
   choiceRow->setHeight(44);
   choiceRow->setFlexDirection(FlexDirection::Row);
   choiceRow->setAlignItems(YGAlignCenter);
   choiceRow->setGap(8);
-  auto *previous = makeButton("<", 48);
-  previous->setOnClickListener([this]() { moveSelection(-1); });
-  choiceRow->addView(previous);
+  previousChoiceButton = makeButton("<", 48);
+  previousChoiceButton->setOnClickListener([this]() { moveSelection(-1); });
+  choiceRow->addView(previousChoiceButton);
   selectionText = makeText("", 15, ui_theme::textPrimary());
   selectionText->setFlexGrow(1.0f);
   selectionText->setMinWidth(0);
   selectionText->setHeight(36);
   selectionText->setAlign(TextView::CENTER);
   choiceRow->addView(selectionText);
-  auto *next = makeButton(">", 48);
-  next->setOnClickListener([this]() { moveSelection(1); });
-  choiceRow->addView(next);
+  nextChoiceButton = makeButton(">", 48);
+  nextChoiceButton->setOnClickListener([this]() { moveSelection(1); });
+  choiceRow->addView(nextChoiceButton);
   addView(choiceRow);
 
   summaryText = makeText("", 15, ui_theme::textPrimary());
@@ -498,6 +499,31 @@ void PracticeAnalyticsView::setMode(PracticeAnalyticsMode value) {
     chart->setMode(value);
   }
   refreshText();
+}
+
+void PracticeAnalyticsView::setPhotoExportPresentation(
+    bool showSharedInformation) {
+  for (auto *button : modeButtons) {
+    button->setDisplay(YGDisplayNone);
+  }
+  if (previousChoiceButton != nullptr) {
+    previousChoiceButton->setDisplay(YGDisplayNone);
+  }
+  if (nextChoiceButton != nullptr) {
+    nextChoiceButton->setDisplay(YGDisplayNone);
+  }
+  if (modeControlsRow != nullptr) {
+    modeControlsRow->setDisplay(showSharedInformation ? YGDisplayFlex
+                                                      : YGDisplayNone);
+  }
+  if (choiceRow != nullptr) {
+    choiceRow->setDisplay(showSharedInformation ? YGDisplayFlex
+                                                : YGDisplayNone);
+  }
+  if (summaryText != nullptr) {
+    summaryText->setDisplay(showSharedInformation ? YGDisplayFlex
+                                                  : YGDisplayNone);
+  }
 }
 
 void PracticeAnalyticsView::setSectionSelectionListener(

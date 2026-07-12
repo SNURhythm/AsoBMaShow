@@ -10,6 +10,7 @@
 #include <vector>
 
 class TextView;
+class Button;
 
 class PracticeAnalyticsView : public View {
 public:
@@ -18,6 +19,7 @@ public:
   void setAttemptSelection(std::optional<std::size_t> attemptIndex);
   void setAggregateSelection(std::size_t groupIndex);
   void setMode(PracticeAnalyticsMode mode);
+  void setPhotoExportPresentation(bool showSharedInformation);
   void setSectionSelectionListener(
       std::function<void(long long, long long)> listener);
   [[nodiscard]] std::optional<practice::RangeSelection> selectedSection() const;
@@ -36,7 +38,12 @@ private:
   TextView *selectionText = nullptr;
   TextView *summaryText = nullptr;
   TextView *detailText = nullptr;
+  View *modeControlsRow = nullptr;
+  View *choiceRow = nullptr;
+  Button *previousChoiceButton = nullptr;
+  Button *nextChoiceButton = nullptr;
   View *chartView = nullptr;
+  std::vector<View *> modeButtons;
 
   void build();
   void moveSelection(int delta);
