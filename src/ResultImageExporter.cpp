@@ -334,9 +334,13 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   const float graphY = y + padding;
   const float graphW = std::max(1.0f, w - padding * 2.0f);
   const float graphH = std::max(1.0f, h - padding * 2.0f);
+  const float gaugeMaximum =
+      gaugeMaximumValue(GaugeType::Normal, resultState.gaugeProfile);
+  auto clampedValue = [gaugeMaximum](float value) {
+    return std::clamp(value, 0.0f, gaugeMaximum);
+  };
   auto valueY = [&](float value) {
-    const float clamped = std::clamp(value, 0.0f, 100.0f);
-    return graphY + graphH - (clamped / 100.0f) * graphH;
+    return graphY + graphH - (clampedValue(value) / gaugeMaximum) * graphH;
   };
 
   const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
@@ -347,17 +351,15 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
   const size_t count = resultState.gaugeHistory.size();
   if (count == 1) {
-    const float value = std::clamp(resultState.gaugeHistory.front(), 0.0f,
-                                   100.0f);
+    const float value = clampedValue(resultState.gaugeHistory.front());
     batch.addCircle(graphX, valueY(value), 3.5f,
                     resultGaugeLineColor(value).toABGR());
     return;
   }
 
   for (size_t i = 1; i < count; ++i) {
-    const float prevValue =
-        std::clamp(resultState.gaugeHistory[i - 1], 0.0f, 100.0f);
-    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float prevValue = clampedValue(resultState.gaugeHistory[i - 1]);
+    const float value = clampedValue(resultState.gaugeHistory[i]);
     const float x0 =
         graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
                      graphW;
@@ -370,7 +372,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
   const size_t markerStep = std::max<size_t>(1, count / 40);
   for (size_t i = 0; i < count; i += markerStep) {
-    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float value = clampedValue(resultState.gaugeHistory[i]);
     const float pointX =
         graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
                      graphW;
