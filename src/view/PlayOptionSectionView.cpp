@@ -162,7 +162,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   TextView *applyText = nullptr;
   applyLaneOrderButton = makeButton("Apply", 17, &applyText);
   applyLaneOrderButton->setFlexGrow(0.0f);
-  applyLaneOrderButton->setFlexBasis(96.0f);
+  applyLaneOrderButton->setWidth(96.0f);
   applyLaneOrderButton->setFlexShrink(0.0f);
   applyLaneOrderButton->setOnClickListener([this]() {
     if (this->callbacks.onLaneOrderSubmitted && laneOrderInput != nullptr) {
@@ -174,7 +174,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   TextView *resetText = nullptr;
   resetLaneOrderButton = makeButton("Reset", 17, &resetText);
   resetLaneOrderButton->setFlexGrow(0.0f);
-  resetLaneOrderButton->setFlexBasis(96.0f);
+  resetLaneOrderButton->setWidth(96.0f);
   resetLaneOrderButton->setFlexShrink(0.0f);
   resetLaneOrderButton->setOnClickListener([this]() {
     if (this->callbacks.onOptionSelected) {
