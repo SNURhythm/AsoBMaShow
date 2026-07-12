@@ -135,7 +135,7 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
   Result result;
   if (chart == nullptr ||
       (allowedNoteRange.has_value() &&
-       !allowedNoteRange->contains(context.songTimeMicros))) {
+       context.songTimeMicros >= allowedNoteRange->endMicros)) {
     return result;
   }
 
@@ -243,7 +243,7 @@ RhythmLaneInputController::releaseLane(int lane,
   Result result;
   if (chart == nullptr ||
       (allowedNoteRange.has_value() &&
-       !allowedNoteRange->contains(context.songTimeMicros))) {
+       context.songTimeMicros >= allowedNoteRange->endMicros)) {
     return result;
   }
   auto laneIt = lanePressed.find(lane);

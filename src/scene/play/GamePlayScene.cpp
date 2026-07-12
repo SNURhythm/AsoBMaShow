@@ -1163,7 +1163,7 @@ std::optional<NoteTimeRange> GamePlayScene::practiceNoteRange() const {
 
 bool GamePlayScene::practiceInputAllowed(long long chartTimeMicros) const {
   const auto range = practiceNoteRange();
-  return !range.has_value() || range->contains(chartTimeMicros);
+  return !range.has_value() || chartTimeMicros < range->endMicros;
 }
 
 bool GamePlayScene::practiceReplayEventAllowed(
