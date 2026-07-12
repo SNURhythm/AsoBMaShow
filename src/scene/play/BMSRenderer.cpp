@@ -490,6 +490,12 @@ Color gaugeMarkerColor() {
              : Color(244, 250, 255, 174);
 }
 
+Color gaugeReducedDamageMarkerColor() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(180, 112, 8, 218)
+             : Color(255, 210, 92, 228);
+}
+
 Color gaugeTextColor(const Color &accent) {
   return ui_theme::textOn(gaugeFillColor(accent));
 }
@@ -1163,6 +1169,17 @@ void BMSRenderer::drawWorldGaugeBar() {
                                 y - height * 0.18f, markerWidth,
                                 height * 1.36f, gaugeMarkerColor().toABGR());
   }
+
+  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
+      currentGaugeType, currentGaugeProfile);
+  if (reducedDamageZone > 0.0f) {
+    const float markerX =
+        x + width * std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+    const float markerWidth = std::max(0.012f, width * 0.005f);
+    simpleBatchRenderer.addRect(
+        markerX - markerWidth * 0.5f, y - height * 0.12f, markerWidth,
+        height * 1.24f, gaugeReducedDamageMarkerColor().toABGR());
+  }
 }
 
 void BMSRenderer::drawHudGaugeBar() {
@@ -1197,6 +1214,17 @@ void BMSRenderer::drawHudGaugeBar() {
         y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
     simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
                                 gaugeMarkerColor().toABGR());
+  }
+
+  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
+      currentGaugeType, currentGaugeProfile);
+  if (reducedDamageZone > 0.0f) {
+    const float markerProgress =
+        std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+    const float markerY = y + height * (1.0f - markerProgress);
+    simpleBatchRenderer.addRect(
+        x - 4.0f, markerY - 1.5f, width + 8.0f, 3.0f,
+        gaugeReducedDamageMarkerColor().toABGR());
   }
 }
 
