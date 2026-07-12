@@ -138,12 +138,14 @@ void PracticePanelView::build(OverlayPortal *portal) {
   diagnosticText->setHeight(42);
   content->addView(diagnosticText);
 
+  auto *shortcutLabel = makeText("Shortcuts", 13, ui_theme::textMuted());
+  shortcutLabel->setHeight(19);
+  content->addView(shortcutLabel);
   auto *shortcutText = makeText(
-      "Shortcuts: 1/2 or LB/RB select marker; Left/Right or D-pad steps "
-      "between chart timelines.",
-      13, ui_theme::textMuted());
+      "1/2 or LB/RB: select marker\nLeft/Right or D-pad: step timeline", 13,
+      ui_theme::textMuted());
   shortcutText->setWrap(true);
-  shortcutText->setHeight(46);
+  shortcutText->setHeight(42);
   content->addView(shortcutText);
 
   auto *markerRow = new View();
@@ -199,6 +201,12 @@ void PracticePanelView::build(OverlayPortal *portal) {
   presetNameInput->setHeight(44);
   presetNameInput->setOverflow(TextView::TextOverflow::Hidden);
   content->addView(makeRow("Preset name", presetNameInput));
+
+  presetMessageText = makeText("", 14, ui_theme::textSecondary());
+  presetMessageText->setWrap(true);
+  presetMessageText->setHeight(0);
+  presetMessageText->setDisplay(YGDisplayNone);
+  content->addView(presetMessageText);
 
   auto *saveRow = new View();
   saveRow->setFlexDirection(FlexDirection::Row);
@@ -283,6 +291,18 @@ void PracticePanelView::refresh(
 
 bool PracticePanelView::isEditingPresetName() const {
   return presetNameInput != nullptr && presetNameInput->getSelected();
+}
+
+void PracticePanelView::setPresetMessage(std::string message, bool error) {
+  if (presetMessageText == nullptr) {
+    return;
+  }
+  const bool empty = message.empty();
+  presetMessageText->setText(std::move(message));
+  presetMessageText->setColor(
+      ui_theme::sdl(error ? ui_theme::coral() : ui_theme::cyan()));
+  presetMessageText->setHeight(empty ? 0 : 40);
+  presetMessageText->setDisplay(empty ? YGDisplayNone : YGDisplayFlex);
 }
 
 void PracticePanelView::setDropdownOpen(DropDownIndex index, bool open) {

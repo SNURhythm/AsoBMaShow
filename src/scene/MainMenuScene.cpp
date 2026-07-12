@@ -3120,7 +3120,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto right = new View();
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
-  right->setPadding(Edge::All, 20);
+  right->setPadding(Edge::Top, 16);
+  right->setPadding(Edge::Bottom, 16);
+  right->setPadding(Edge::Left, 10);
+  right->setPadding(Edge::Right, 10);
   right->setGap(12);
   right->setWidth(300);
   right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
@@ -3129,24 +3132,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setThemedBorderColor(ui_theme::hairline);
   right->setBorderWidth(1);
 
-  auto *rightTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 34);
-  rightTitle->setText("Ready");
-  rightTitle->setThemedColor(ui_theme::textPrimary);
-  rightTitle->setAlign(TextView::CENTER);
-  rightTitle->setHeight(42);
-  right->addView(rightTitle);
-
-  auto *rightSubtitle = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  rightSubtitle->setText("Preview, tweak, and start.");
-  rightSubtitle->setThemedColor(ui_theme::textSecondary);
-  rightSubtitle->setAlign(TextView::CENTER);
-  rightSubtitle->setHeight(28);
-  right->addView(rightSubtitle);
-
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Column);
   readySettings->setAlignItems(YGAlignStretch);
-  readySettings->setWidth(220);
+  readySettings->setWidth(260);
   readySettings->setGap(6);
 
   auto makeReadyStatusText = []() {
@@ -3180,7 +3169,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
 
-  auto *playOptionsButton = new Button(0, 0, 220, 54);
+  auto *playOptionsButton = new Button(0, 0, 260, 54);
   auto *playOptionsButtonText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   playOptionsButtonText->setText("Options");

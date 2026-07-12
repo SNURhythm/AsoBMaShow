@@ -38,6 +38,7 @@ public:
   void setChartEndMicros(long long value) {
     chartEndMicros = std::max(0LL, value);
   }
+  void setPresetMessage(std::string message, bool error = false);
 
   [[nodiscard]] const practice::Configuration &configuration() const {
     return currentConfiguration;
@@ -71,6 +72,7 @@ private:
   std::vector<DropdownView *> dropdowns;
   TextView *rangeText = nullptr;
   TextView *diagnosticText = nullptr;
+  TextView *presetMessageText = nullptr;
   TextInputBox *presetNameInput = nullptr;
   Button *startButton = nullptr;
   Button *updateButton = nullptr;

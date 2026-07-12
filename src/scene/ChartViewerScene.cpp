@@ -3892,8 +3892,10 @@ void ChartViewerScene::onPracticeRangeChanged(
     std::string error;
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
-        statusText != nullptr) {
-      statusText->setText("Practice save failed: " + error);
+        practicePanel != nullptr) {
+      practicePanel->setPresetMessage("Could not save practice settings: " +
+                                          error,
+                                      true);
     }
   }
   refreshPracticePanel();
@@ -3919,8 +3921,10 @@ void ChartViewerScene::onPracticeConfigurationChanged(
     std::string error;
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
-        statusText != nullptr) {
-      statusText->setText("Practice save failed: " + error);
+        practicePanel != nullptr) {
+      practicePanel->setPresetMessage("Could not save practice settings: " +
+                                          error,
+                                      true);
     }
   }
   refreshPracticePanel();
@@ -3949,8 +3953,8 @@ bool ChartViewerScene::applyPracticePresetLoad(
   const bool usable = practice::installPresetLoadState(
       std::move(loaded), applyLastUsed, practiceConfiguration,
       practiceNamedPresets, selectedPracticePresetId);
-  if (notice && statusText != nullptr) {
-    statusText->setText("Practice presets: " + *notice);
+  if (notice && practicePanel != nullptr) {
+    practicePanel->setPresetMessage(*notice, true);
   }
   return usable;
 }
@@ -4070,8 +4074,10 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     std::string error;
     if (!practicePresetStore->saveLastUsed(practiceConfiguration.chartSha256,
                                            practiceConfiguration, error) &&
-        statusText != nullptr) {
-      statusText->setText("Practice save failed: " + error);
+        practicePanel != nullptr) {
+      practicePanel->setPresetMessage("Could not save practice settings: " +
+                                          error,
+                                      true);
       refreshPracticePanel();
       updateSelectionText();
       return;
@@ -4108,8 +4114,8 @@ void ChartViewerScene::savePracticeAs(std::string name) {
       practiceConfiguration.chartSha256, std::move(name),
       practiceConfiguration, error);
   if (!id) {
-    if (statusText != nullptr) {
-      statusText->setText("Preset save failed: " + error);
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
     }
     return;
   }
@@ -4119,6 +4125,9 @@ void ChartViewerScene::savePracticeAs(std::string name) {
     selectedPracticePresetId = *id;
   }
   refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset saved.");
+  }
 }
 
 void ChartViewerScene::renamePracticePreset(std::string name) {
@@ -4129,8 +4138,8 @@ void ChartViewerScene::renamePracticePreset(std::string name) {
   if (!practicePresetStore->renameNamed(practiceConfiguration.chartSha256,
                                         *selectedPracticePresetId,
                                         std::move(name), error)) {
-    if (statusText != nullptr) {
-      statusText->setText("Preset rename failed: " + error);
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
     }
     return;
   }
@@ -4138,6 +4147,9 @@ void ChartViewerScene::renamePracticePreset(std::string name) {
                                           practiceChartEndMicros);
   (void)applyPracticePresetLoad(std::move(loaded), false);
   refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset renamed.");
+  }
 }
 
 void ChartViewerScene::updatePracticePreset() {
@@ -4148,8 +4160,8 @@ void ChartViewerScene::updatePracticePreset() {
   if (!practicePresetStore->updateNamed(
           practiceConfiguration.chartSha256, *selectedPracticePresetId,
           practiceConfiguration, error)) {
-    if (statusText != nullptr) {
-      statusText->setText("Preset update failed: " + error);
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
     }
     return;
   }
@@ -4157,6 +4169,9 @@ void ChartViewerScene::updatePracticePreset() {
                                           practiceChartEndMicros);
   (void)applyPracticePresetLoad(std::move(loaded), false);
   refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset updated.");
+  }
 }
 
 void ChartViewerScene::deletePracticePreset() {
@@ -4166,8 +4181,8 @@ void ChartViewerScene::deletePracticePreset() {
   std::string error;
   if (!practicePresetStore->deleteNamed(practiceConfiguration.chartSha256,
                                         *selectedPracticePresetId, error)) {
-    if (statusText != nullptr) {
-      statusText->setText("Preset delete failed: " + error);
+    if (practicePanel != nullptr) {
+      practicePanel->setPresetMessage(error, true);
     }
     return;
   }
@@ -4177,6 +4192,9 @@ void ChartViewerScene::deletePracticePreset() {
     selectedPracticePresetId.reset();
   }
   refreshPracticePanel();
+  if (practicePanel != nullptr) {
+    practicePanel->setPresetMessage("Preset deleted.");
+  }
 }
 
 void ChartViewerScene::retainLoadedListenResourcesForChartChange() {
