@@ -616,6 +616,9 @@ private:
 void MusicPlayerScene::init() {
   context.jukebox.stop();
   applySystemPlaybackPrivacy(false);
+  std::string clubModeStatus;
+  context.musicPlayer.SetClubMode(
+      context.settings.musicPlayerClubModeEnabled, clubModeStatus);
   std::string playbackRateError;
   context.musicPlayer.SetPlaybackRate(
       {.percent = context.settings.musicPlayerPlaybackRatePercent,
@@ -785,6 +788,8 @@ void MusicPlayerScene::cleanupScene() {
   playPauseButtonText = nullptr;
   playbackModeDropdown = nullptr;
   playbackRateDropdown = nullptr;
+  clubModeButton = nullptr;
+  clubModeButtonText = nullptr;
   deletePlaylistButtonText = nullptr;
   clearPlaylistButtonText = nullptr;
   seekProgressTrack = nullptr;
@@ -1721,7 +1726,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   nowColumn->addView(seekProgressTrack);
 
   auto *transport = new View();
-  transport->setHeight(247)
+  transport->setHeight(308)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(9);
   auto *transportRow = new View();
@@ -1743,6 +1748,8 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(10);
+  auto *clubModeRow = new View();
+  clubModeRow->setHeight(52)->setFlexDirection(FlexDirection::Row);
 
   TextView *previousText = nullptr;
   auto *previousButton = makeIconButton(kIconBackwardStep, 28, &previousText);
@@ -1857,6 +1864,10 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
       overlayPortal);
   playbackRateDropdown->setFlex(1.0f)->setMinWidth(0);
 
+  clubModeButton = makeButton("☐ Club Beat", 17, &clubModeButtonText);
+  clubModeButton->setFlex(1.0f);
+  clubModeButton->setOnClickListener([this]() { toggleClubMode(); });
+
   transportRow->addView(previousButton);
   transportRow->addView(back10Button);
   transportRow->addView(playPauseButton);
@@ -1869,11 +1880,14 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowB->addView(stopButton);
   playbackRateRow->addView(playbackModeDropdown);
   playbackRateRow->addView(playbackRateDropdown);
+  clubModeRow->addView(clubModeButton);
   transport->addView(transportRow);
   transport->addView(actionRowA);
   transport->addView(actionRowB);
   transport->addView(playbackRateRow);
+  transport->addView(clubModeRow);
   refreshPlaybackRateControl();
+  refreshClubModeControl();
   nowColumn->addView(transport);
   workspace->addView(nowColumn);
 
@@ -2567,7 +2581,10 @@ void MusicPlayerScene::refreshUi() {
                                     context.musicPlayer.PlaybackRate().percent) +
                                 "% " +
                                 playbackModeLabel(
-                                    context.musicPlayer.PlaybackRate().mode));
+                                    context.musicPlayer.PlaybackRate().mode) +
+                                (context.musicPlayer.ClubMode()
+                                     ? " | Club Beat"
+                                     : ""));
   }
   if (queueTitleText != nullptr) {
     queueTitleText->setText(queueDisplayName(displayedQueueName));
@@ -2671,6 +2688,7 @@ void MusicPlayerScene::refreshUi() {
   }
   refreshSleepTimerUi();
   refreshSystemPlaybackPrivacyButtons();
+  refreshClubModeControl();
   refreshNavigation();
   refreshLibraryArtwork(selectedLibraryTrack());
   refreshTrackBrowserArtwork(
@@ -4092,6 +4110,41 @@ void MusicPlayerScene::refreshPlaybackRateControl() {
       .maxVisibleItems = 6,
       .menuWidth = 400.0f,
   });
+}
+
+void MusicPlayerScene::toggleClubMode() {
+  const bool enabled = !context.musicPlayer.ClubMode();
+  std::string status;
+  if (!context.musicPlayer.SetClubMode(enabled, status)) {
+    setStatus(status);
+    refreshClubModeControl();
+    return;
+  }
+
+  context.settings.musicPlayerClubModeEnabled = enabled;
+  if (!context.saveSettings()) {
+    setStatus("Club Beat changed, but could not save it.");
+  } else {
+    setStatus(status);
+  }
+  refreshClubModeControl();
+}
+
+void MusicPlayerScene::refreshClubModeControl() {
+  if (clubModeButton == nullptr || clubModeButtonText == nullptr) {
+    return;
+  }
+  const bool enabled = context.musicPlayer.ClubMode();
+  clubModeButtonText->setText(enabled ? "☑ Club Beat" : "☐ Club Beat");
+  if (enabled) {
+    styleButton(clubModeButton, clubModeButtonText, ui_theme::primaryAction,
+                ui_theme::primaryActionHover,
+                ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
+  } else {
+    styleButton(clubModeButton, clubModeButtonText, ui_theme::control,
+                ui_theme::controlHover, ui_theme::controlPressed,
+                ui_theme::hairlineStrong);
+  }
 }
 
 void MusicPlayerScene::setSleepTimerFromInput() {

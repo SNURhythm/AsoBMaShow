@@ -174,6 +174,8 @@ private:
   void setPlaybackRate(const std::string &id);
   void setPlaybackMode(const std::string &id);
   void refreshPlaybackRateControl();
+  void toggleClubMode();
+  void refreshClubModeControl();
   void setSleepTimerFromInput();
   void clearSleepTimer();
   void toggleSystemPlaybackJacket();
@@ -279,6 +281,8 @@ private:
   TextView *playPauseButtonText = nullptr;
   DropdownView *playbackModeDropdown = nullptr;
   DropdownView *playbackRateDropdown = nullptr;
+  Button *clubModeButton = nullptr;
+  TextView *clubModeButtonText = nullptr;
   TextView *deletePlaylistButtonText = nullptr;
   TextView *clearPlaylistButtonText = nullptr;
   View *seekProgressTrack = nullptr;

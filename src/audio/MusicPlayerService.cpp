@@ -1018,7 +1018,7 @@ bool MusicPlayerService::AppendToQueue(
 
   if (loadedTrack) {
     StopAdjacentPreloadWorker();
-    StartAdjacentPreloadWorker(AdjacentTracksLocked());
+    StartAdjacentPreloadWorker(AdjacentTracksLocked(), clubMode);
   }
   return true;
 }
@@ -1076,7 +1076,7 @@ bool MusicPlayerService::ShuffleQueue(std::string &errorMessage) {
   SyncNativeQueueLocked();
   if (loadedTrack) {
     StopAdjacentPreloadWorker();
-    StartAdjacentPreloadWorker(AdjacentTracksLocked());
+    StartAdjacentPreloadWorker(AdjacentTracksLocked(), clubMode);
   }
   return true;
 }
@@ -1193,6 +1193,48 @@ bool MusicPlayerService::SetPlaybackRate(audio::PlaybackRate rate,
 audio::PlaybackRate MusicPlayerService::PlaybackRate() const {
   std::lock_guard<std::mutex> lock(stateMutex);
   return playbackRate;
+}
+
+bool MusicPlayerService::SetClubMode(bool enabled,
+                                     std::string &statusMessage) {
+  std::optional<music_playlist::MusicTrack> track;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    if (clubMode == enabled) {
+      statusMessage = enabled ? "Club Beat is on." : "Club Beat is off.";
+      return true;
+    }
+    clubMode = enabled;
+    track = loadedTrack;
+  }
+
+  StopPlaybackWorker();
+  StopAdjacentPreloadWorker();
+  if (!track) {
+    statusMessage = enabled ? "Club Beat on." : "Club Beat off.";
+    return true;
+  }
+
+  const std::uint64_t requestRevision =
+      playbackRequestRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
+  renderCancelled.store(false, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lock(playbackThreadMutex);
+    playbackThread = std::jthread(
+        [this, track = std::move(*track), requestRevision,
+         enabled](const std::stop_token &stopToken) mutable {
+          ClubModeSwitchWorker(std::move(track), requestRevision, enabled,
+                               stopToken);
+        });
+  }
+  statusMessage = enabled ? "Preparing Club Beat..."
+                          : "Preparing original mix...";
+  return true;
+}
+
+bool MusicPlayerService::ClubMode() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return clubMode;
 }
 
 bool MusicPlayerService::SetSleepTimer(long long durationMicros,
@@ -1343,8 +1385,10 @@ MusicPlayerService::PlaybackCacheKeepPathsLocked(
     if (track == nullptr) {
       return;
     }
-    paths.push_back(
-        chart_music_cache::CachedAudioPathForChart(track->representativeChart));
+    paths.push_back(chart_music_cache::CachedAudioPathForChart(
+        track->representativeChart, false));
+    paths.push_back(chart_music_cache::CachedAudioPathForChart(
+        track->representativeChart, true));
   };
 
   if (!currentResult.audioPath.empty()) {
@@ -1372,7 +1416,7 @@ bool MusicPlayerService::PlayTrackLocked(
   StopAdjacentPreloadWorker();
   renderCancelled.store(false, std::memory_order_release);
   lastCacheResult = chart_music_cache::EnsureRenderedMusicFile(
-      track.representativeChart, renderCancelled);
+      track.representativeChart, renderCancelled, clubMode);
   if (!lastCacheResult.success) {
     errorMessage = lastCacheResult.message.empty()
                        ? "Could not render music track."
@@ -1403,7 +1447,7 @@ bool MusicPlayerService::PlayTrackLocked(
     const auto keepPaths = PlaybackCacheKeepPathsLocked(lastCacheResult);
     auto adjacentTracks = AdjacentTracksLocked();
     chart_music_cache::PruneCacheExcept(keepPaths);
-    StartAdjacentPreloadWorker(std::move(adjacentTracks));
+    StartAdjacentPreloadWorker(std::move(adjacentTracks), clubMode);
     EnsureNativeControlEventPump();
   }
   return playing;
@@ -1419,6 +1463,7 @@ bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
   }
 
   music_playlist::MusicTrack track;
+  bool requestedClubMode = false;
   {
     std::lock_guard<std::mutex> lock(stateMutex);
     const music_playlist::MusicTrack *selectedTrack = nullptr;
@@ -1451,6 +1496,7 @@ bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
       PersistQueueCursorLocked();
     }
     track = *selectedTrack;
+    requestedClubMode = clubMode;
     lastCacheResult = {};
   }
 
@@ -1464,10 +1510,10 @@ bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
   {
     std::lock_guard<std::mutex> lock(playbackThreadMutex);
     playbackThread = std::jthread(
-        [this, track = std::move(track), requestRevision,
+        [this, track = std::move(track), requestRevision, requestedClubMode,
          successMessage = std::move(successMessage)](
             const std::stop_token &stopToken) mutable {
-          PlaybackWorker(std::move(track), requestRevision,
+          PlaybackWorker(std::move(track), requestRevision, requestedClubMode,
                          std::move(successMessage), stopToken);
         });
   }
@@ -1478,7 +1524,8 @@ bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
 
 void MusicPlayerService::PlaybackWorker(
     music_playlist::MusicTrack track, std::uint64_t requestRevision,
-    std::string successMessage, const std::stop_token &stopToken) {
+    bool requestedClubMode, std::string successMessage,
+    const std::stop_token &stopToken) {
   const auto isCurrentRequest = [this, requestRevision, &stopToken]() {
     return !stopToken.stop_requested() &&
            playbackRequestRevision.load(std::memory_order_acquire) ==
@@ -1492,7 +1539,7 @@ void MusicPlayerService::PlaybackWorker(
   chart_music_cache::CacheResult cacheResult;
   try {
     cacheResult = chart_music_cache::EnsureRenderedMusicFile(
-        track.representativeChart, renderCancelled);
+        track.representativeChart, renderCancelled, requestedClubMode);
   } catch (const std::exception &e) {
     cacheResult = {.success = false,
                    .message = std::string("Could not render music track: ") +
@@ -1552,7 +1599,7 @@ void MusicPlayerService::PlaybackWorker(
 
   if (playing) {
     chart_music_cache::PruneCacheExcept(keepCachePaths);
-    StartAdjacentPreloadWorker(std::move(adjacentTracks));
+    StartAdjacentPreloadWorker(std::move(adjacentTracks), requestedClubMode);
     EnsureNativeControlEventPump();
   }
   if (isCurrentRequest() && !statusMessage.empty()) {
@@ -1560,8 +1607,84 @@ void MusicPlayerService::PlaybackWorker(
   }
 }
 
+void MusicPlayerService::ClubModeSwitchWorker(
+    music_playlist::MusicTrack track, std::uint64_t requestRevision,
+    bool requestedClubMode, const std::stop_token &stopToken) {
+  const auto isCurrentRequest = [this, requestRevision, &stopToken]() {
+    return !stopToken.stop_requested() &&
+           playbackRequestRevision.load(std::memory_order_acquire) ==
+               requestRevision;
+  };
+
+  chart_music_cache::CacheResult cacheResult;
+  try {
+    cacheResult = chart_music_cache::EnsureRenderedMusicFile(
+        track.representativeChart, renderCancelled, requestedClubMode);
+  } catch (const std::exception &e) {
+    cacheResult = {.success = false,
+                   .message = std::string("Could not switch Club Beat: ") +
+                              e.what()};
+  } catch (...) {
+    cacheResult = {.success = false,
+                   .message = "Could not switch Club Beat."};
+  }
+  if (!isCurrentRequest()) {
+    return;
+  }
+
+  std::string statusMessage;
+  bool switched = false;
+  std::vector<music_playlist::MusicTrack> adjacentTracks;
+  std::vector<std::filesystem::path> keepCachePaths;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    if (!isCurrentRequest() || clubMode != requestedClubMode || !loadedTrack ||
+        !music_playlist::SameTrackIdentity(*loadedTrack, track)) {
+      return;
+    }
+    if (!cacheResult.success) {
+      statusMessage = cacheResult.message.empty()
+                          ? "Could not switch Club Beat."
+                          : cacheResult.message;
+    } else {
+      const auto previousState = native_music_player::GetState();
+      auto metadata = music_playlist::MakeNativeMetadata(track);
+      metadata.durationMicros = cacheResult.durationMicros;
+      std::string errorMessage;
+      if (!native_music_player::Load(cacheResult.audioPath, metadata,
+                                     errorMessage) ||
+          !native_music_player::SetPlaybackRate(playbackRate, errorMessage) ||
+          (previousState.positionMicros > 0 &&
+           !native_music_player::Seek(previousState.positionMicros,
+                                      errorMessage)) ||
+          (previousState.playing && !native_music_player::Play(errorMessage))) {
+        statusMessage = errorMessage;
+      } else {
+        lastCacheResult = cacheResult;
+        if (cacheResult.durationMicros > 0) {
+          loadedTrack->durationMicros = cacheResult.durationMicros;
+        }
+        SyncNativeQueueLocked();
+        keepCachePaths = PlaybackCacheKeepPathsLocked(cacheResult);
+        adjacentTracks = AdjacentTracksLocked();
+        switched = true;
+        statusMessage = requestedClubMode ? "Club Beat on."
+                                          : "Club Beat off.";
+      }
+    }
+  }
+
+  if (switched) {
+    chart_music_cache::PruneCacheExcept(keepCachePaths);
+    StartAdjacentPreloadWorker(std::move(adjacentTracks), requestedClubMode);
+  }
+  if (isCurrentRequest() && !statusMessage.empty()) {
+    PublishNativeControlStatus(statusMessage);
+  }
+}
+
 void MusicPlayerService::StartAdjacentPreloadWorker(
-    std::vector<music_playlist::MusicTrack> tracks) {
+    std::vector<music_playlist::MusicTrack> tracks, bool requestedClubMode) {
   StopAdjacentPreloadWorker();
   if (tracks.empty()) {
     return;
@@ -1573,9 +1696,10 @@ void MusicPlayerService::StartAdjacentPreloadWorker(
 
   std::lock_guard<std::mutex> lock(preloadThreadMutex);
   preloadThread = std::jthread(
-      [this, tracks = std::move(tracks),
+      [this, tracks = std::move(tracks), requestedClubMode,
        preloadRevision](const std::stop_token &stopToken) mutable {
-        AdjacentPreloadWorker(std::move(tracks), preloadRevision, stopToken);
+        AdjacentPreloadWorker(std::move(tracks), preloadRevision,
+                              requestedClubMode, stopToken);
       });
 }
 
@@ -1600,7 +1724,8 @@ void MusicPlayerService::StopAdjacentPreloadWorker() {
 
 void MusicPlayerService::AdjacentPreloadWorker(
     std::vector<music_playlist::MusicTrack> tracks,
-    std::uint64_t preloadRevision, const std::stop_token &stopToken) {
+    std::uint64_t preloadRevision, bool requestedClubMode,
+    const std::stop_token &stopToken) {
   const auto isCurrentPreload = [this, preloadRevision, &stopToken]() {
     return !stopToken.stop_requested() &&
            preloadRequestRevision.load(std::memory_order_acquire) ==
@@ -1614,7 +1739,7 @@ void MusicPlayerService::AdjacentPreloadWorker(
 
     try {
       auto result = chart_music_cache::EnsureRenderedMusicFile(
-          track.representativeChart, preloadCancelled);
+          track.representativeChart, preloadCancelled, requestedClubMode);
       if (!result.success && isCurrentPreload()) {
         std::cerr << "Could not preload adjacent music track: "
                   << (result.message.empty() ? "Unknown error"
