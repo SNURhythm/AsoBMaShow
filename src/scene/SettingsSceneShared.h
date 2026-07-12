@@ -434,9 +434,11 @@ static View *makeCard(const LayoutMetrics &metrics, const std::string &title,
   auto *titleText =
       makeWrappedText(title, metrics.sectionTitleSize, ui_theme::textPrimary());
   header->addView(titleText);
-  auto *descriptionText = makeWrappedText(description, metrics.bodyTextSize,
-                                          ui_theme::textSecondary());
-  header->addView(descriptionText);
+  if (!description.empty()) {
+    auto *descriptionText = makeWrappedText(description, metrics.bodyTextSize,
+                                            ui_theme::textSecondary());
+    header->addView(descriptionText);
+  }
   card->addView(header);
   card->addView(body);
   return card;
