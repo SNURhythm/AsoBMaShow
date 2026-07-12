@@ -2,6 +2,7 @@
 
 #include "../practice/PracticeResultModel.h"
 #include "../view/View.h"
+#include "PracticeAnalyticsPresentation.h"
 
 #include <cstddef>
 #include <functional>
@@ -9,8 +10,6 @@
 #include <vector>
 
 class TextView;
-
-enum class PracticeAnalyticsMode { Histogram, Lanes, Sections };
 
 class PracticeAnalyticsView : public View {
 public:

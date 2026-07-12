@@ -10,6 +10,8 @@
 #include "rendering/RenderPlan.h"
 #include "rendering/SimpleBatchRenderer.h"
 #include "rendering/common.h"
+#include "scene/PracticeAnalyticsPresentation.h"
+#include "scene/PracticeAnalyticsView.h"
 #include "skin/DefaultSkin.h"
 #include "targets.h"
 #include "view/UiTheme.h"
@@ -29,6 +31,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
@@ -474,9 +477,19 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                               &headerDifficultyLabelOverride,
                                           const std::optional<ResultPacemakerData>
                                               &pacemaker,
+                                          const std::optional<practice::ResultModel>
+                                              &analyticsModel,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
-  const int height = rendering::render_height;
+  const int analyticsExtraHeight =
+      analyticsModel.has_value()
+          ? static_cast<int>(std::lround(
+                2.0f *
+                practice_analytics_presentation::kPreferredAnalyticsHeight *
+                static_cast<float>(width) /
+                static_cast<float>(std::max(1, rendering::window_width))))
+          : 0;
+  const int height = rendering::render_height + analyticsExtraHeight;
   if (width <= 0 || height <= 0 || width > UINT16_MAX || height > UINT16_MAX) {
     return {.success = false,
             .outputPath = path,
@@ -489,6 +502,10 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
     restoreResultImageRenderGeometry(geometry);
     restorePrimaryRenderViews(context);
   });
+
+  if (analyticsModel.has_value()) {
+    rendering::updateUIScale(width, height);
+  }
 
   const auto outputTexture = bgfx::createTexture2D(
       static_cast<uint16_t>(width), static_cast<uint16_t>(height), false, 1,
@@ -550,9 +567,27 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   resultSkinData.pacemaker = pacemaker;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
-  if (auto *analytics = resultRoot->findViewByName("timingAnalytics");
-      analytics != nullptr) {
-    analytics->setDisplay(YGDisplayNone);
+  if (analyticsModel.has_value()) {
+    constexpr float kAnalyticsGap = 12.0f;
+    constexpr float kAnalyticsStackHeight =
+        practice_analytics_presentation::kPreferredAnalyticsHeight * 3.0f +
+        kAnalyticsGap * 2.0f;
+    auto *analyticsStack = new View();
+    analyticsStack->setName("timingAnalyticsExport");
+    analyticsStack->setWidthPercent(100.0f);
+    analyticsStack->setHeight(kAnalyticsStackHeight);
+    analyticsStack->setMinHeight(kAnalyticsStackHeight);
+    analyticsStack->setFlexShrink(0.0f);
+    analyticsStack->setFlexDirection(FlexDirection::Column);
+    analyticsStack->setAlignItems(YGAlignStretch);
+    analyticsStack->setGap(kAnalyticsGap);
+    for (const auto mode :
+         practice_analytics_presentation::exportAnalyticsModes()) {
+      auto *analyticsView = new PracticeAnalyticsView(*analyticsModel);
+      analyticsView->setMode(mode);
+      analyticsStack->addView(analyticsView);
+    }
+    resultRoot->addView(analyticsStack);
   }
   resultRoot->applyYogaLayout();
 
@@ -617,7 +652,9 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::optional<std::string>
                                 &headerDifficultyLabelOverride,
                             const std::optional<ResultPacemakerData>
-                                &pacemaker) {
+                                &pacemaker,
+                            const std::optional<practice::ResultModel>
+                                &analyticsModel) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
   if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
@@ -641,6 +678,7 @@ ResultImageExporter::Export(ApplicationContext &context,
                            difficultyLabel, previousBest,
                            currentClearLabelOverride, currentClearRankOverride,
                            headerDifficultyLabelOverride, pacemaker,
+                           analyticsModel,
                            outputPath);
 }
 
@@ -664,9 +702,12 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
       result_presentation::difficultyLabelForChart(chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
+  const std::span<const ReplayData> attempts(&replay, 1);
+  const std::optional<practice::ResultModel> analyticsModel(
+      std::in_place, chart, attempts, 0);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
                 difficultyLabel, previousBest, std::nullopt, std::nullopt,
-                std::nullopt, pacemaker);
+                std::nullopt, pacemaker, analyticsModel);
 }
 
 ResultImageExportResult
@@ -724,12 +765,16 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
     const std::string filename =
         "stage_" + std::to_string(i + 1) + "_" +
         sanitizeFileNamePart(chart->Meta.Title) + ".png";
+    const std::span<const ReplayData> attempts(&stageReplay, 1);
+    const std::optional<practice::ResultModel> analyticsModel(
+        std::in_place, *chart, attempts, 0);
     const auto result = renderResultImage(
         context, chart->Meta, state, display.mode, display.laneOrder,
         result_presentation::difficultyLabelForChart(chart->Meta),
         result_presentation::previousBestForReplayChart(chart->Meta,
                                                         stageReplay),
         "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,
+        analyticsModel,
         outputDir / filename);
     if (!result.success) {
       return result;
@@ -757,7 +802,7 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
       "Course", std::nullopt, clearLabelOverride, clearRankOverride, "COURSE",
-      std::nullopt, outputDir / "course_result.png");
+      std::nullopt, std::nullopt, outputDir / "course_result.png");
   if (!courseResult.success) {
     return courseResult;
   }

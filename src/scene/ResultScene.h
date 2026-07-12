@@ -1,6 +1,7 @@
 #pragma once
 #include "../ReplayData.h"
 #include "../practice/PracticeLaunchRequest.h"
+#include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
 #include "Scene.h"
 #include "play/RhythmState.h"
@@ -102,6 +103,8 @@ private:
   [[nodiscard]] bool isCourseFinalResult() const;
   [[nodiscard]] std::optional<ResultPacemakerData>
   pacemakerDataForCurrentResult() const;
+  [[nodiscard]] std::optional<practice::ResultModel>
+  makeTimingAnalyticsModel() const;
   [[nodiscard]] std::optional<practice::LaunchRequest>
   selectedPracticeLaunchRequest() const;
   [[nodiscard]] practice::LaunchRequest

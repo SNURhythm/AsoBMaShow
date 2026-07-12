@@ -2,11 +2,14 @@
 
 #include "../practice/PracticeAnalytics.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
+
+enum class PracticeAnalyticsMode { Histogram, Lanes, Sections };
 
 namespace practice_analytics_presentation {
 
@@ -66,5 +69,11 @@ private:
 };
 
 [[nodiscard]] float resolvedAnalyticsHeight(float availableHeight) noexcept;
+
+[[nodiscard]] constexpr std::array<PracticeAnalyticsMode, 3>
+exportAnalyticsModes() noexcept {
+  return {PracticeAnalyticsMode::Histogram, PracticeAnalyticsMode::Lanes,
+          PracticeAnalyticsMode::Sections};
+}
 
 } // namespace practice_analytics_presentation

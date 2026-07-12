@@ -3,6 +3,7 @@
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 #include "context.h"
+#include "practice/PracticeResultModel.h"
 #include "scene/play/RhythmState.h"
 #include "skin/SkinTypes.h"
 
@@ -37,7 +38,9 @@ public:
                                             &headerDifficultyLabelOverride =
                                                 std::nullopt,
                                         const std::optional<ResultPacemakerData>
-                                            &pacemaker = std::nullopt);
+                                            &pacemaker = std::nullopt,
+                                        const std::optional<practice::ResultModel>
+                                            &analyticsModel = std::nullopt);
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay,

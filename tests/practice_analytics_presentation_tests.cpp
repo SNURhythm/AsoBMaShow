@@ -100,6 +100,16 @@ void testBaselineLayoutHasShrinkRoomWithoutClippingControls() {
           "1080 result layout shrinks analytics without clipping controls");
 }
 
+void testResultPhotoExportsEveryAnalyticsModeInDisplayOrder() {
+  using practice_analytics_presentation::exportAnalyticsModes;
+  const auto modes = exportAnalyticsModes();
+  require(modes.size() == 3 &&
+              modes[0] == PracticeAnalyticsMode::Histogram &&
+              modes[1] == PracticeAnalyticsMode::Lanes &&
+              modes[2] == PracticeAnalyticsMode::Sections,
+          "result photo includes all analytics modes in tab order");
+}
+
 } // namespace
 
 int main() {
@@ -107,5 +117,6 @@ int main() {
   testExactSectionHitMappingIgnoresVisualGrouping();
   testPointerCaptureSeparatesMouseTouchAndCancelsReliably();
   testBaselineLayoutHasShrinkRoomWithoutClippingControls();
+  testResultPhotoExportsEveryAnalyticsModeInDisplayOrder();
   return 0;
 }

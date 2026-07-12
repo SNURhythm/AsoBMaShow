@@ -477,19 +477,12 @@ void ResultScene::saveReplay() {
   }
 }
 
-void ResultScene::addTimingAnalytics() {
-  View *host =
-      rootLayout == nullptr
-          ? nullptr
-          : rootLayout->findViewByName("timingAnalytics");
-  if (rootLayout == nullptr || reusableRetryChart == nullptr ||
-      isCourseStageResult() || isCourseFinalResult()) {
-    if (host != nullptr) {
-      host->setDisplay(YGDisplayNone);
-    }
-    return;
+std::optional<practice::ResultModel>
+ResultScene::makeTimingAnalyticsModel() const {
+  if (reusableRetryChart == nullptr || isCourseStageResult() ||
+      isCourseFinalResult()) {
+    return std::nullopt;
   }
-
   std::span<const ReplayData> completedAttempts;
   std::size_t abandonedAttempts = 0;
   std::array<ReplayData, 1> singleAttempt;
@@ -511,6 +504,20 @@ void ResultScene::addTimingAnalytics() {
     completedAttempts = singleAttempt;
   }
   if (completedAttempts.empty()) {
+    return std::nullopt;
+  }
+
+  return practice::ResultModel(*reusableRetryChart, completedAttempts,
+                               abandonedAttempts);
+}
+
+void ResultScene::addTimingAnalytics() {
+  View *host =
+      rootLayout == nullptr
+          ? nullptr
+          : rootLayout->findViewByName("timingAnalytics");
+  auto analyticsModel = makeTimingAnalyticsModel();
+  if (rootLayout == nullptr || !analyticsModel.has_value()) {
     if (host != nullptr) {
       host->setDisplay(YGDisplayNone);
     }
@@ -544,8 +551,8 @@ void ResultScene::addTimingAnalytics() {
     }
   }
 
-  timingAnalyticsView = new PracticeAnalyticsView(practice::ResultModel(
-      *reusableRetryChart, completedAttempts, abandonedAttempts));
+  timingAnalyticsView =
+      new PracticeAnalyticsView(std::move(*analyticsModel));
   host->addView(timingAnalyticsView);
 }
 
@@ -877,10 +884,12 @@ void ResultScene::exportPhoto() {
   exportPhotoButtonText->setText("Saving...");
   const std::optional<ResultPacemakerData> pacemaker =
       pacemakerDataForCurrentResult();
+  const auto analyticsModel = makeTimingAnalyticsModel();
   const auto result = ResultImageExporter::Export(
       context, meta, resultState, playModeLabel, laneOrderLabel,
       difficultyLabel, previousBest, currentClearLabelOverride,
-      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker);
+      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker,
+      analyticsModel);
   resultPhotoExportInProgress = false;
 
   if (result.success) {
