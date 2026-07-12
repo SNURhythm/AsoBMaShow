@@ -24,6 +24,7 @@ enum class GaugeProfile {
 enum class ClearType {
   Failed,
   AssistedEasyClear,
+  LightAssistedEasyClear,
   EasyClear,
   NormalClear,
   HardClear,
@@ -33,6 +34,7 @@ enum class ClearType {
 inline constexpr int kNoClearTypeRank = -1;
 inline constexpr int kClearTypeFailedRank = 0;
 inline constexpr int kClearTypeAssistedEasyClearRank = 100;
+inline constexpr int kClearTypeLightAssistedEasyClearRank = 150;
 inline constexpr int kClearTypeEasyClearRank = 200;
 inline constexpr int kClearTypeNormalClearRank = 300;
 inline constexpr int kClearTypeHardClearRank = 400;
@@ -141,7 +143,7 @@ inline const char *gaugeTypeToShortLabel(GaugeType gaugeType) {
 inline int gaugeTypeToClearRank(GaugeType gaugeType) {
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
-    return kClearTypeAssistedEasyClearRank;
+    return kClearTypeLightAssistedEasyClearRank;
   case GaugeType::Easy:
     return kClearTypeEasyClearRank;
   case GaugeType::Normal:
@@ -643,7 +645,7 @@ inline ClearType clearTypeForGauge(GaugeType gaugeType, float gaugeValue,
   }
   switch (gaugeClearTypeForProfile(gaugeType, profile)) {
   case GaugeType::AssistedEasy:
-    return ClearType::AssistedEasyClear;
+    return ClearType::LightAssistedEasyClear;
   case GaugeType::Easy:
     return ClearType::EasyClear;
   case GaugeType::Hard:
@@ -660,6 +662,8 @@ inline int clearTypeToRank(ClearType clearType) {
   switch (clearType) {
   case ClearType::AssistedEasyClear:
     return kClearTypeAssistedEasyClearRank;
+  case ClearType::LightAssistedEasyClear:
+    return kClearTypeLightAssistedEasyClearRank;
   case ClearType::EasyClear:
     return kClearTypeEasyClearRank;
   case ClearType::NormalClear:
@@ -677,7 +681,9 @@ inline int clearTypeToRank(ClearType clearType) {
 inline const char *clearTypeToLabel(ClearType clearType) {
   switch (clearType) {
   case ClearType::AssistedEasyClear:
-    return "ASSISTED EASY CLEAR";
+    return "ASSIST EASY CLEAR";
+  case ClearType::LightAssistedEasyClear:
+    return "LIGHT ASSIST EASY CLEAR";
   case ClearType::EasyClear:
     return "EASY CLEAR";
   case ClearType::NormalClear:
@@ -708,8 +714,11 @@ inline const char *clearTypeRankToLabel(int rank) {
   if (rank >= kClearTypeEasyClearRank) {
     return "EASY CLEAR";
   }
+  if (rank >= kClearTypeLightAssistedEasyClearRank) {
+    return "LIGHT ASSIST EASY CLEAR";
+  }
   if (rank >= kClearTypeAssistedEasyClearRank) {
-    return "ASSISTED EASY CLEAR";
+    return "ASSIST EASY CLEAR";
   }
   if (rank == kNoClearTypeRank) {
     return "NO PLAY";
