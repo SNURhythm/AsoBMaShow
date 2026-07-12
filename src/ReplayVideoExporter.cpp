@@ -1175,7 +1175,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   const float graphW = std::max(1.0f, w - padding * 2.0f);
   const float graphH = std::max(1.0f, h - padding * 2.0f);
   const float gaugeMaximum =
-      gaugeMaximumValue(GaugeType::Normal, resultState.gaugeProfile);
+      gaugeMaximumValue(resultState.gaugeType, resultState.gaugeProfile);
   auto clampedValue = [gaugeMaximum](float value) {
     return std::clamp(value, 0.0f, gaugeMaximum);
   };
