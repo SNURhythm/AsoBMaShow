@@ -38,6 +38,7 @@
 
 class Button;
 class DropdownView;
+class OverlayPortal;
 class ScrollView;
 struct CoursePlaySession;
 struct ResultImageExportResult;
@@ -232,6 +233,7 @@ private:
   };
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
+  OverlayPortal *overlayPortal = nullptr;
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   ChartFilterPanelView *chartFilterPanel = nullptr;
@@ -347,7 +349,6 @@ private:
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;
   TextView *readyPacemakerText = nullptr;
-  TextView *readyPlaybackText = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
   ReplaySummaryListView *replayListView = nullptr;
@@ -548,7 +549,7 @@ private:
   Button *playbackRateDecreaseButton = nullptr;
   Button *playbackRateIncreaseButton = nullptr;
   TextView *playbackRateText = nullptr;
-  TextView *playbackClearCapText = nullptr;
+  TextView *assistOptionLabelText = nullptr;
   DropdownView *playbackModeDropdown = nullptr;
   Button *gameplayClubModeButton = nullptr;
   TextView *gameplayClubModeButtonText = nullptr;

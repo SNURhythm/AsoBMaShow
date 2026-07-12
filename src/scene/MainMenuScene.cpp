@@ -21,6 +21,7 @@
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
+#include "../view/OverlayPortal.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
 #include "../Utils.h"
@@ -2409,6 +2410,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
   rootLayout = nullptr;
+  overlayPortal = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
   chartFilterPanel = nullptr;
@@ -2524,11 +2526,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
-  readyPlaybackText = nullptr;
   playbackRateDecreaseButton = nullptr;
   playbackRateIncreaseButton = nullptr;
   playbackRateText = nullptr;
-  playbackClearCapText = nullptr;
+  assistOptionLabelText = nullptr;
   playbackModeDropdown = nullptr;
   gameplayClubModeButton = nullptr;
   gameplayClubModeButtonText = nullptr;
@@ -2865,6 +2866,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
 
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                    rendering::window_height);
+  overlayPortal->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal->setPosition(Edge::Left, 0);
+  overlayPortal->setPosition(Edge::Top, 0);
+  overlayPortal->setZIndex(2000);
+
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
   nav->setAlignItems(YGAlignStretch);
@@ -3161,14 +3169,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->addView(readyGaugeLabelText);
   readyGaugeRow->addView(readyGaugeText);
   readyPlayOptionText = makeReadyStatusText();
-  readyAssistOptionText = makeReadyStatusText();
+  readyAssistOptionText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  readyAssistOptionText->setHeight(28);
+  readyAssistOptionText->setThemedColor(ui_theme::textPrimary);
+  readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
   readyPacemakerText = makeReadyStatusText();
-  readyPlaybackText = makeReadyStatusText();
   readySettings->addView(readyGaugeRow);
   readySettings->addView(readyPlayOptionText);
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
-  readySettings->addView(readyPlaybackText);
 
   auto *playOptionsButton = new Button(0, 0, 220, 54);
   auto *playOptionsButtonText =
@@ -3184,7 +3194,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
   readySettings->addView(playOptionsButton);
   right->addView(readySettings);
-  refreshReadySettingsSummary();
+  refreshPlaybackSelectionControls();
 
   startButton = new Button(0, 0, 220, 86);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
@@ -3380,6 +3390,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildTasksModal();
   buildFindBmsModal();
   buildUnzipProgressModal();
+  rootLayout->addView(overlayPortal);
   reloadProfileSelectionsFromSettings();
   reloadScoreClearRanks();
   reloadFolderItems();
@@ -4798,7 +4809,7 @@ void MainMenuScene::refreshAssistOptionButtons() {
       styleOptionButton(item.button, item.text, selected);
     }
   }
-  refreshReadySettingsSummary();
+  refreshPlaybackSelectionControls();
 }
 
 void MainMenuScene::setPacemakerTargetSelection(const std::string &target) {
@@ -4879,10 +4890,14 @@ void MainMenuScene::refreshPlaybackSelectionControls() {
   if (playbackRateIncreaseButton != nullptr) {
     playbackRateIncreaseButton->setEnabled(!locked && percent < 200);
   }
-  if (playbackClearCapText != nullptr) {
-    const bool assisted = percent != 100;
-    playbackClearCapText->setVisible(assisted);
-    playbackClearCapText->setHeight(assisted ? 26.0f : 0.0f);
+  const EffectivePlayOptionSelection effective =
+      currentEffectivePlayOptionSelection();
+  const bool assistedEasyEnabled =
+      percent != 100 || assist_options::isEnabled(effective.assistOption);
+  if (assistOptionLabelText != nullptr) {
+    assistOptionLabelText->setText(
+        assistedEasyEnabled ? "Assist Option - A-EASY enabled"
+                            : "Assist Option");
   }
   if (playbackModeDropdown != nullptr) {
     playbackModeDropdown->refresh({
@@ -4929,22 +4944,32 @@ void MainMenuScene::refreshReadySettingsSummary() {
                                  effective.longNoteMode);
   }
   if (readyAssistOptionText != nullptr) {
-    readyAssistOptionText->setText("Assist: " + effective.assistOption);
+    const int percent =
+        playbackSelectionLockedForCourse()
+            ? course_rules::kRequiredPlaybackRate.percent
+            : context.settings.selectedPlaybackRatePercent;
+    const bool optionEnabled =
+        assist_options::isEnabled(effective.assistOption);
+    if (!optionEnabled && percent == 100) {
+      readyAssistOptionText->setText("Assist: OFF");
+    } else {
+      std::string reasons;
+      if (optionEnabled) {
+        reasons = effective.assistOption;
+      }
+      if (percent != 100) {
+        if (!reasons.empty()) {
+          reasons += "/";
+        }
+        reasons += std::to_string(percent) + "%";
+      }
+      readyAssistOptionText->setText("Assist: A-EASY (" + reasons + ")");
+    }
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
         "Target: " +
         pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
-  }
-  if (readyPlaybackText != nullptr) {
-    const int percent =
-        playbackSelectionLockedForCourse()
-            ? course_rules::kRequiredPlaybackRate.percent
-            : context.settings.selectedPlaybackRatePercent;
-    readyPlaybackText->setText(
-        "Rate: " + std::to_string(percent) + "%" +
-        (percent == 100 ? " / Pitch Shift"
-                        : " / Assisted Easy maximum"));
   }
 }
 
@@ -7641,7 +7666,8 @@ void MainMenuScene::buildPlayOptionsModal() {
   }
   optionsContent->addView(longNoteModeRow);
 
-  optionsContent->addView(makeModalLabel("Assist Option"));
+  assistOptionLabelText = makeModalLabel("Assist Option");
+  optionsContent->addView(assistOptionLabelText);
 
   auto makeAssistOptionButton = [this](std::string option) {
     TextView *text = nullptr;
@@ -7701,12 +7727,6 @@ void MainMenuScene::buildPlayOptionsModal() {
   playbackRateRow->addView(playbackRateIncreaseButton);
   playbackAssistGroup->addView(playbackRateRow);
 
-  playbackClearCapText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  playbackClearCapText->setText("Assisted Easy maximum");
-  playbackClearCapText->setAlign(TextView::CENTER);
-  playbackClearCapText->setThemedColor(ui_theme::textSecondary);
-  playbackAssistGroup->addView(playbackClearCapText);
-
   playbackModeDropdown = new DropdownView({
       .onOpenChanged =
           [this](bool open) {
@@ -7715,7 +7735,7 @@ void MainMenuScene::buildPlayOptionsModal() {
           },
       .onOptionSelected =
           [this](const std::string &mode) { setPlaybackModeSelection(mode); },
-  });
+  }, overlayPortal);
   playbackModeDropdown->setWidthPercent(100.0f);
   playbackAssistGroup->addView(playbackModeDropdown);
   optionsContent->addView(playbackAssistGroup);
@@ -10008,6 +10028,9 @@ void MainMenuScene::renderScene() {
     playOptionsModalRoot->setSize(rendering::window_width,
                                   rendering::window_height);
   }
+  if (overlayPortal != nullptr) {
+    overlayPortal->setSize(rendering::window_width, rendering::window_height);
+  }
   if (parseLogModalRoot != nullptr) {
     parseLogModalRoot->setSize(rendering::window_width,
                                rendering::window_height);
@@ -10096,6 +10119,7 @@ void MainMenuScene::cleanupScene() {
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
   rootLayout = nullptr;
+  overlayPortal = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
   startButton = nullptr;
@@ -10204,11 +10228,10 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
-  readyPlaybackText = nullptr;
   playbackRateDecreaseButton = nullptr;
   playbackRateIncreaseButton = nullptr;
   playbackRateText = nullptr;
-  playbackClearCapText = nullptr;
+  assistOptionLabelText = nullptr;
   playbackModeDropdown = nullptr;
   gameplayClubModeButton = nullptr;
   gameplayClubModeButtonText = nullptr;

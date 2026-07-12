@@ -226,6 +226,8 @@ void DropdownView::rebuildOptions() {
   for (const auto &option : current.options) {
     auto *button = new Button(0, 0, 160, static_cast<int>(kOptionHeight));
     button->setHeight(kOptionHeight);
+    button->setWidthPercent(100.0f);
+    button->setMinWidth(0);
     button->setFlexGrow(0.0f);
     button->setFlexShrink(0.0f);
 
