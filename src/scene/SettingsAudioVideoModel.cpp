@@ -146,10 +146,9 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   model.devices.enabled =
       capabilities.canSelectOutputDevice && !capabilities.outputDevices.empty();
   if (!capabilities.canSelectOutputDevice) {
-    model.devices.explanation =
-        "Output device is fixed by this platform's audio system.";
+    model.devices.explanation = "Managed by the system.";
   } else if (capabilities.outputDevices.empty()) {
-    model.devices.explanation = "No output device is currently available.";
+    model.devices.explanation = "No output available.";
   }
 
   const auto *selectedDevice =
@@ -163,12 +162,10 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   std::string sampleRateExplanation;
   bool sampleRateEnabled = capabilities.canSelectSampleRate;
   if (!capabilities.canSelectSampleRate) {
-    sampleRateExplanation =
-        "Sample rate is fixed by this platform's audio system.";
+    sampleRateExplanation = "Managed by the system.";
   } else if (selectedDevice == nullptr) {
     sampleRateEnabled = false;
-    sampleRateExplanation =
-        "Select an available output device before choosing a sample rate.";
+    sampleRateExplanation = "Choose an output first.";
   }
   model.sampleRates = buildUnsignedChoices(
       intent.requestedSampleRate, sampleRates, sampleRateEnabled,
@@ -177,11 +174,10 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   std::string bufferExplanation;
   bool bufferEnabled = capabilities.canSelectBufferFrames;
   if (!capabilities.canSelectBufferFrames) {
-    bufferExplanation = "Buffer size is fixed by this platform's audio system.";
+    bufferExplanation = "Managed by the system.";
   } else if (selectedDevice == nullptr) {
     bufferEnabled = false;
-    bufferExplanation =
-        "Select an available output device before choosing a buffer size.";
+    bufferExplanation = "Choose an output first.";
   }
   model.bufferFrames = buildUnsignedChoices(
       intent.requestedBufferFrames, bufferFrames, bufferEnabled,
@@ -215,8 +211,7 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   };
   model.modes.enabled = capabilities.canChangeMode;
   if (!model.modes.enabled) {
-    model.modes.explanation =
-        "Display mode is managed by the operating system on this platform.";
+    model.modes.explanation = "Managed by the system.";
   }
 
   model.displays.selectedValue = std::to_string(intent.displayIndex);
@@ -240,10 +235,9 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   model.displays.enabled =
       capabilities.canSelectDisplay && !capabilities.displays.empty();
   if (!capabilities.canSelectDisplay) {
-    model.displays.explanation =
-        "The active display is managed by the operating system.";
+    model.displays.explanation = "Managed by the system.";
   } else if (capabilities.displays.empty()) {
-    model.displays.explanation = "No display is currently available.";
+    model.displays.explanation = "No display available.";
   }
 
   model.resolutions.selectedValue =
@@ -277,11 +271,9 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   model.resolutions.enabled =
       capabilities.canSelectResolution && selectedDisplay != nullptr;
   if (!capabilities.canSelectResolution) {
-    model.resolutions.explanation =
-        "Resolution is managed by the operating system on this platform.";
+    model.resolutions.explanation = "Managed by the system.";
   } else if (selectedDisplay == nullptr) {
-    model.resolutions.explanation =
-        "Select an available display before choosing a resolution.";
+    model.resolutions.explanation = "Choose a display first.";
   }
 
   model.vsync.selectedValue = intent.vsync ? "on" : "off";
@@ -289,8 +281,7 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
                          {.persistedValue = "on", .label = "On"}};
   model.vsync.enabled = capabilities.canChangeVsync;
   if (!model.vsync.enabled) {
-    model.vsync.explanation =
-        "VSync is fixed by the renderer on this platform.";
+    model.vsync.explanation = "Managed by the system.";
   }
 
   model.frameCaps.selectedValue = std::to_string(intent.frameCap);
@@ -311,8 +302,7 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   }
   model.frameCaps.enabled = capabilities.canSetFrameCap;
   if (!model.frameCaps.enabled) {
-    model.frameCaps.explanation =
-        "Frame limiting is unavailable on this platform.";
+    model.frameCaps.explanation = "Unavailable on this platform.";
   }
   return model;
 }
