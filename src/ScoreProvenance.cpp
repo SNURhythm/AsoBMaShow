@@ -567,6 +567,7 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   root["inputDevices"] = std::move(devices);
   root["autoPlay"] = canonical.autoPlay;
   root["practice"] = canonical.practice;
+  root["clubMode"] = canonical.clubMode;
   root["playback"] = playbackToJson(canonical.playback);
   root["judgeWindowScalePercent"] = canonical.judgeWindowScalePercent;
   writeOptional(root, "startingGaugePercent", canonical.startingGaugePercent);
@@ -637,6 +638,7 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
 
     result.autoPlay = root.value("autoPlay", result.autoPlay);
     result.practice = root.value("practice", result.practice);
+    result.clubMode = root.value("clubMode", result.clubMode);
     if (schemaVersion >= 3) {
       if (const auto playback = root.find("playback"); playback != root.end()) {
         result.playback = playbackFromJson(*playback);
@@ -719,6 +721,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   canonicalizeDevices(result.inputDevices);
   result.autoPlay = input.autoPlay;
   result.practice = input.practice;
+  result.clubMode = input.clubMode;
   result.playback = input.playback;
   result.judgeWindowScalePercent = input.judgeWindowScalePercent;
   result.startingGaugePercent = input.startingGaugePercent;
@@ -741,6 +744,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
   result.inputDevices.clear();
   result.autoPlay = false;
   result.practice = false;
+  result.clubMode = false;
 
   ScoreEligibility eligibility = ScoreEligibility::Verified;
   bool inconsistent = false;
@@ -752,6 +756,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
                                stage.inputDevices.end());
     result.autoPlay = result.autoPlay || stage.autoPlay;
     result.practice = result.practice || stage.practice;
+    result.clubMode = result.clubMode || stage.clubMode;
     eligibility = worseEligibility(eligibility, stage.eligibility);
 
     inconsistent =

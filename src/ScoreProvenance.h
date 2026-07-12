@@ -96,6 +96,7 @@ struct ScoreProvenance {
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;
   bool practice = false;
+  bool clubMode = false;
   audio::PlaybackRate playback;
   int judgeWindowScalePercent = 100;
   std::optional<int> startingGaugePercent;
@@ -132,6 +133,7 @@ struct ScoreProvenanceBuildInput {
   std::vector<InputDeviceCategory> inputDevices;
   bool autoPlay = false;
   bool practice = false;
+  bool clubMode = false;
   audio::PlaybackRate playback;
   int judgeWindowScalePercent = 100;
   std::optional<int> startingGaugePercent;

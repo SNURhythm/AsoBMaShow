@@ -162,6 +162,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   expected.musicPlayerPlaybackRatePercent = 135;
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
+  expected.gameplayClubModeEnabled = true;
+  expected.musicPlayerClubModeEnabled = true;
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -183,6 +185,12 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"musicPlayerPlaybackMode\": 1") !=
              std::string::npos,
          "saved JSON includes the music player mode");
+  expect(readFile(path).find("\"gameplayClubModeEnabled\": true") !=
+             std::string::npos,
+         "saved JSON includes gameplay Club mode");
+  expect(readFile(path).find("\"musicPlayerClubModeEnabled\": true") !=
+             std::string::npos,
+         "saved JSON includes music-player Club mode");
 }
 
 void testPlaybackSelectionSanitizationAndLegacyDefaults() {
@@ -228,6 +236,9 @@ void testPlaybackSelectionSanitizationAndLegacyDefaults() {
   expect(legacy.settings.musicPlayerPlaybackMode ==
              audio::PlaybackMode::PitchShift,
          "legacy settings default to pitch-shift music-player mode");
+  expect(!legacy.settings.gameplayClubModeEnabled &&
+             !legacy.settings.musicPlayerClubModeEnabled,
+         "legacy settings default both Club modes off");
 }
 
 void testVersionFixturesAndNoRewrite() {

@@ -550,6 +550,8 @@ private:
   TextView *playbackRateText = nullptr;
   TextView *playbackClearCapText = nullptr;
   DropdownView *playbackModeDropdown = nullptr;
+  Button *gameplayClubModeButton = nullptr;
+  TextView *gameplayClubModeButtonText = nullptr;
   bool playbackModeDropdownOpen = false;
   bool profileSelectionsInitialized = false;
   struct EffectivePlayOptionSelection {
@@ -666,6 +668,7 @@ private:
   void refreshPacemakerTargetButtons();
   void setPlaybackRateSelection(int percent);
   void setPlaybackModeSelection(const std::string &mode);
+  void toggleGameplayClubMode();
   void refreshPlaybackSelectionControls();
   [[nodiscard]] bool playbackSelectionLockedForCourse() const;
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;

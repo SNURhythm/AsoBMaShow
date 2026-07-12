@@ -84,6 +84,7 @@ struct StartOptions {
   bool practiceMode = false;
   unsigned long long practiceLeadInMicros = 0;
   audio::PlaybackRate playback;
+  bool clubMode = false;
   int judgeWindowScalePercent = 100;
   std::optional<int> startingGaugePercent;
   Scene *returnScene = nullptr;
@@ -177,6 +178,7 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options,
 inline void applyReplayProvenanceToStartOptions(StartOptions &options,
                                                 const ReplayData &replay) {
   options.playback = replay.provenance.playback;
+  options.clubMode = replay.provenance.clubMode;
   options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
   options.startingGaugePercent = replay.provenance.startingGaugePercent;
   options.replayJudgeOverride = play_start_detail::replayJudgeOverrideForChart(
@@ -212,6 +214,7 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   input.inputDevices = options.inputDeviceCategories;
   input.autoPlay = options.autoPlay;
   input.practice = options.practiceMode;
+  input.clubMode = options.clubMode;
   input.playback = options.playback;
   input.judgeWindowScalePercent = options.judgeWindowScalePercent;
   input.startingGaugePercent = options.startingGaugePercent;

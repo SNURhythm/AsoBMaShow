@@ -162,6 +162,8 @@ json settingsToJson(const AppSettings &settings) {
        settings.musicPlayerPlaybackRatePercent},
       {"musicPlayerPlaybackMode",
        static_cast<int>(settings.musicPlayerPlaybackMode)},
+      {"gameplayClubModeEnabled", settings.gameplayClubModeEnabled},
+      {"musicPlayerClubModeEnabled", settings.musicPlayerClubModeEnabled},
       {"selectedGaugeType", settings.selectedGaugeType},
       {"selectedPlayOption", settings.selectedPlayOption},
       {"selectedLnMode", settings.selectedLnMode},
@@ -264,6 +266,10 @@ AppSettings settingsFromJson(const json &document,
             settings.musicPlayerPlaybackRatePercent, diagnostics);
   readEnum(document, "musicPlayerPlaybackMode",
            settings.musicPlayerPlaybackMode, diagnostics);
+  readValue(document, "gameplayClubModeEnabled",
+            settings.gameplayClubModeEnabled, diagnostics);
+  readValue(document, "musicPlayerClubModeEnabled",
+            settings.musicPlayerClubModeEnabled, diagnostics);
   readValue(document, "selectedGaugeType", settings.selectedGaugeType,
             diagnostics);
   readValue(document, "selectedPlayOption", settings.selectedPlayOption,

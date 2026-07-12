@@ -21,6 +21,7 @@ int main() {
       .percent = 75,
       .mode = audio::PlaybackMode::TimeStretch,
   };
+  replay.provenance.clubMode = true;
   StartOptions replayOptions{.replayData = std::make_shared<ReplayData>(replay)};
   applyReplayProvenanceToStartOptions(replayOptions, replay);
 
@@ -34,6 +35,8 @@ int main() {
   }
   if (!expect(replayOptions.playback.mode == audio::PlaybackMode::TimeStretch,
               "replay provenance retains the unsupported playback mode") ||
+      !expect(replayOptions.clubMode,
+              "replay provenance restores Club audio independently") ||
       !expect(!failure.mayStartAttempt,
               "failed playback initialization blocks attempt startup") ||
       !expect(failure.visibleStatus.find("TimeStretch") != std::string::npos,

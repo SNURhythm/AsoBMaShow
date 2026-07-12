@@ -1,6 +1,7 @@
 #pragma once
 #include "../bms_parser.hpp"
 #include "../PrepMetronome.h"
+#include "ClubBeat.h"
 #include "AudioWrapper.h"
 #include <algorithm>
 #include <array>
@@ -44,13 +45,16 @@ enum class JukeboxAudioSource : std::uint8_t {
   DirectKeysound,
   ReplayKeysound,
   PrepMetronome,
+  ClubBeat,
   SettingsTestTone,
 };
 
 constexpr audio::Bus
 audioBusForJukeboxSource(JukeboxAudioSource source) noexcept {
-  return source == JukeboxAudioSource::BackgroundNote ? audio::Bus::Bgm
-                                                      : audio::Bus::Keysound;
+  return source == JukeboxAudioSource::BackgroundNote ||
+                 source == JukeboxAudioSource::ClubBeat
+             ? audio::Bus::Bgm
+             : audio::Bus::Keysound;
 }
 
 constexpr ScheduledAudioEvent
@@ -130,7 +134,8 @@ public:
                 std::optional<long long> noteScheduleCutoffMicros =
                     std::nullopt,
                 const prep_metronome::PrepMetronomePlan *prepMetronomePlan =
-                    nullptr);
+                    nullptr,
+                bool clubMode = false);
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
@@ -241,6 +246,7 @@ private:
   audio::playback::BackendOperationResult
   playWithClockState(long long startMicros, bool paused);
   void ensurePrepMetronomeSoundsLoaded();
+  void ensureClubBeatSoundsLoaded();
   void wakeScheduler();
   void syncVisualClockToAudio();
   [[nodiscard]] long long getBgaOffsetMicros() const;

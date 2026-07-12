@@ -112,6 +112,7 @@ void testDeterministicRoundTrip() {
 
 void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
   auto input = sampleInput();
+  input.clubMode = true;
   input.playback = {.percent = 75, .mode = audio::PlaybackMode::PitchShift};
   input.judgeWindowScalePercent = 80;
   input.startingGaugePercent = 37;
@@ -121,6 +122,7 @@ void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
   assert(modified.playback.mode == audio::PlaybackMode::PitchShift);
   assert(modified.judgeWindowScalePercent == 80);
   assert(modified.startingGaugePercent == 37);
+  assert(modified.clubMode);
 
   const std::string serialized = serializeScoreProvenance(modified);
   assert(serialized.find("\"mode\":\"pitch-shift\"") != std::string::npos);
@@ -146,12 +148,14 @@ void testPlaybackAndJudgeProvenanceRoundTripAndMigration() {
   legacyRoot.erase("playback");
   legacyRoot.erase("judgeWindowScalePercent");
   legacyRoot.erase("startingGaugePercent");
+  legacyRoot.erase("clubMode");
   const auto migrated = deserializeScoreProvenance(legacyRoot.dump(), error);
   assert(error.empty());
   assert(migrated.has_value());
   assert(migrated->playback == audio::PlaybackRate{});
   assert(migrated->judgeWindowScalePercent == 100);
   assert(!migrated->startingGaugePercent.has_value());
+  assert(!migrated->clubMode);
 }
 
 void testPlaybackAndJudgeProvenanceValidation() {
@@ -210,6 +214,11 @@ void testPlaybackAndJudgeProvenanceValidation() {
 
 void testEligibilityClassification() {
   assert(sampleVerifiedProvenance().eligibility == ScoreEligibility::Verified);
+
+  auto clubMode = sampleInput();
+  clubMode.clubMode = true;
+  assert(makeScoreProvenance(clubMode).eligibility ==
+         ScoreEligibility::Verified);
 
   auto slowed = sampleInput();
   slowed.playback.percent = 75;

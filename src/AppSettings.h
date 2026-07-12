@@ -154,6 +154,8 @@ public:
   int musicPlayerPlaybackRatePercent = 100;
   audio::PlaybackMode musicPlayerPlaybackMode =
       audio::PlaybackMode::PitchShift;
+  bool gameplayClubModeEnabled = false;
+  bool musicPlayerClubModeEnabled = false;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;

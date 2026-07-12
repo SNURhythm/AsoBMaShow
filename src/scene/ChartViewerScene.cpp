@@ -4429,6 +4429,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .practiceLeadInMicros =
                         static_cast<unsigned long long>(kPracticeLeadInMicros),
                     .playback = launchConfiguration.playback,
+                    .clubMode = context.settings.gameplayClubModeEnabled,
                     .judgeWindowScalePercent =
                         autoPlay ? 100
                                  : launchConfiguration.judge.scalePercent,

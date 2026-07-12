@@ -738,12 +738,16 @@ void testJukeboxSourceClassificationAndSeekOverlap() {
       makeScheduledAudioEvent(1000, 11, JukeboxAudioSource::BackgroundNote);
   const auto metronome =
       makeScheduledAudioEvent(1000, 12, JukeboxAudioSource::PrepMetronome);
+  const auto clubBeat =
+      makeScheduledAudioEvent(1000, 13, JukeboxAudioSource::ClubBeat);
   require(chartNote.bus == audio::Bus::Keysound,
           "chart notes classify as keysounds");
   require(background.bus == audio::Bus::Bgm,
           "background notes classify as BGM");
   require(metronome.bus == audio::Bus::Keysound,
           "preparation metronome clicks classify as keysounds");
+  require(clubBeat.bus == audio::Bus::Bgm,
+          "Club kick and clap classify as BGM");
   require(audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound) ==
                   audio::Bus::Keysound &&
               audioBusForJukeboxSource(JukeboxAudioSource::ReplayKeysound) ==

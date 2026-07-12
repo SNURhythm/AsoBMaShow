@@ -765,7 +765,8 @@ bool GamePlayScene::reset() {
   }
   context.jukebox.schedule(
       *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,
-      practiceCountInPlan.enabled ? &practiceCountInPlan : nullptr);
+      practiceCountInPlan.enabled ? &practiceCountInPlan : nullptr,
+      options.clubMode);
   context.jukebox.play(practiceCountInPlan.enabled
                            ? practiceCountInPlan.startTimeMicros
                            : audioSeekPosition);
@@ -1389,6 +1390,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.longNoteMode = options.longNoteMode;
   nextOptions.assistOption = session->assistOption;
   nextOptions.playback = options.playback;
+  nextOptions.clubMode = options.clubMode;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;
   nextOptions.ownsChart = true;

@@ -2530,6 +2530,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playbackRateText = nullptr;
   playbackClearCapText = nullptr;
   playbackModeDropdown = nullptr;
+  gameplayClubModeButton = nullptr;
+  gameplayClubModeButtonText = nullptr;
   playbackModeDropdownOpen = false;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
@@ -4852,6 +4854,15 @@ void MainMenuScene::setPlaybackModeSelection(const std::string &mode) {
   refreshPlaybackSelectionControls();
 }
 
+void MainMenuScene::toggleGameplayClubMode() {
+  context.settings.gameplayClubModeEnabled =
+      !context.settings.gameplayClubModeEnabled;
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save gameplay Club mode selection");
+  }
+  refreshPlaybackSelectionControls();
+}
+
 void MainMenuScene::refreshPlaybackSelectionControls() {
   const bool locked = playbackSelectionLockedForCourse();
   const int percent =
@@ -4885,6 +4896,14 @@ void MainMenuScene::refreshPlaybackSelectionControls() {
         .enabled = !locked,
         .maxVisibleItems = 2,
     });
+  }
+  if (gameplayClubModeButton != nullptr &&
+      gameplayClubModeButtonText != nullptr) {
+    const bool enabled = context.settings.gameplayClubModeEnabled;
+    gameplayClubModeButtonText->setText(enabled ? "☑ Club Beat"
+                                                 : "☐ Club Beat");
+    styleOptionButton(gameplayClubModeButton, gameplayClubModeButtonText,
+                      enabled);
   }
   refreshReadySettingsSummary();
 }
@@ -5169,6 +5188,7 @@ void MainMenuScene::startCourseDirect(
         options.longNoteMode = selectedLongNoteMode;
         options.assistOption = session->assistOption;
         options.playback = {};
+        options.clubMode = context.settings.gameplayClubModeEnabled;
         options.courseSession = session;
         options.courseConstraints = session->constraints;
         options.ownsChart = true;
@@ -7699,6 +7719,14 @@ void MainMenuScene::buildPlayOptionsModal() {
   playbackAssistGroup->addView(playbackModeDropdown);
   optionsContent->addView(playbackAssistGroup);
 
+  optionsContent->addView(makeModalLabel("Club Mode"));
+  gameplayClubModeButton =
+      makeModalButton("☐ Club Beat", 18, &gameplayClubModeButtonText);
+  gameplayClubModeButton->setHeight(58)->setWidthPercent(100.0f);
+  gameplayClubModeButton->setOnClickListener(
+      [this]() { toggleGameplayClubMode(); });
+  optionsContent->addView(gameplayClubModeButton);
+
   optionsContent->addView(makeModalLabel("Pacemaker"));
 
   auto makePacemakerTargetButton = [this](std::string target) {
@@ -9555,6 +9583,9 @@ void MainMenuScene::resetReplayWatchLoadingUi() {
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
+  if (options.replayData == nullptr) {
+    options.clubMode = context.settings.gameplayClubModeEnabled;
+  }
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, chart, std::move(options)),
       true);
@@ -10178,6 +10209,8 @@ void MainMenuScene::cleanupScene() {
   playbackRateText = nullptr;
   playbackClearCapText = nullptr;
   playbackModeDropdown = nullptr;
+  gameplayClubModeButton = nullptr;
+  gameplayClubModeButtonText = nullptr;
   playbackModeDropdownOpen = false;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
