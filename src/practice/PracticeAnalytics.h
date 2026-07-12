@@ -38,6 +38,7 @@ struct SectionAnalysis {
   long long endMicros;
   TimingStatistics timing;
   double badMissRate = 0.0;
+  std::optional<double> accuracy;
 };
 
 struct Analysis {

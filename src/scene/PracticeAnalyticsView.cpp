@@ -304,21 +304,20 @@ private:
     }
   }
 
-  static Color sectionColor(practice_analytics_presentation::SectionTone tone) {
-    using practice_analytics_presentation::SectionTone;
-    if (tone == SectionTone::Danger) {
-      return ui_theme::coral();
-    }
-    if (tone == SectionTone::Neutral) {
+  static Color sectionColor(const std::optional<double> &accuracy) {
+    if (!accuracy.has_value()) {
       return ui_theme::control();
     }
-    if (tone == SectionTone::Early) {
-      return ui_theme::cyan();
-    }
-    if (tone == SectionTone::Late) {
-      return ui_theme::amber();
-    }
-    return ui_theme::lime();
+    const double amount = std::clamp(*accuracy, 0.0, 1.0);
+    const Color low = ui_theme::coral();
+    const Color high = ui_theme::lime();
+    const auto channel = [amount](uint8_t from, uint8_t to) {
+      return static_cast<uint8_t>(std::lround(
+          static_cast<double>(from) +
+          (static_cast<double>(to) - static_cast<double>(from)) * amount));
+    };
+    return Color(channel(low.r, high.r), channel(low.g, high.g),
+                 channel(low.b, high.b), channel(low.a, high.a));
   }
 
   void renderSections() {
@@ -340,7 +339,7 @@ private:
       const float groupEnd =
           x + exactWidth * static_cast<float>(group.lastSection + 1);
       batch.addRect(groupX, y + 2.0f, std::max(1.0f, groupEnd - groupX - 1.0f),
-                    height - 4.0f, sectionColor(group.tone).toABGR());
+                    height - 4.0f, sectionColor(group.accuracy).toABGR());
     }
     if (const auto selected = model.selectedRange(); selected.has_value()) {
       const auto first = std::find_if(

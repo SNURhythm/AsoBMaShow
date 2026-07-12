@@ -93,6 +93,24 @@ TimingStatistics summarize(const Accumulator &accumulator) {
   return result;
 }
 
+double accuracyFor(const Accumulator &accumulator) {
+  const std::size_t opportunities =
+      accumulator.samples.size() + accumulator.misses;
+  if (opportunities == 0) {
+    return 0.0;
+  }
+  std::size_t points = 0;
+  for (const auto &sample : accumulator.samples) {
+    if (sample.judgement == PGreat) {
+      points += 2;
+    } else if (sample.judgement == Great) {
+      points += 1;
+    }
+  }
+  return static_cast<double>(points) /
+         static_cast<double>(opportunities * 2);
+}
+
 long long chartEndMicros(const bms_parser::Chart &chart) {
   long long result = std::max(chart.Meta.PlayLength, chart.Meta.TotalLength);
   for (const auto *measure : chart.Measures) {
@@ -275,6 +293,9 @@ Analysis analyzeAttempts(const bms_parser::Chart &chart,
             ? 0.0
             : static_cast<double>(accumulator.bad + accumulator.misses) /
                   static_cast<double>(opportunities);
+    if (opportunities > 0) {
+      section.accuracy = accuracyFor(accumulator);
+    }
   }
   return result;
 }

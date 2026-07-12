@@ -192,6 +192,10 @@ void testTimingAndBreakdowns() {
           "an event on a measure boundary maps to the next measure");
   requireNear(0.5, analysis.sections[1].badMissRate, 0.000001,
               "bad and miss rate includes bad judgements");
+  requireNear(0.75, *analysis.sections[0].accuracy, 0.000001,
+              "section accuracy uses EX-score weighting");
+  requireNear(0.0, *analysis.sections[1].accuracy, 0.000001,
+              "good and bad judgements earn no EX-score points");
   require(analysis.sections[0].timing.misses == 0 &&
               analysis.sections[1].timing.misses == 0,
           "invalid miss judgements do not affect section miss counts");
@@ -202,6 +206,8 @@ void testTimingAndBreakdowns() {
           "last measure uses chart end and receives boundary miss");
   requireNear(1.0, analysis.sections[2].badMissRate, 0.000001,
               "miss-only section has a finite rate");
+  requireNear(0.0, *analysis.sections[2].accuracy, 0.000001,
+              "miss-only section has zero accuracy");
 }
 
 void testEmptyAnalysisHasNullStatistics() {
@@ -217,6 +223,7 @@ void testEmptyAnalysisHasNullStatistics() {
           "empty replay has no bins or lanes");
   for (const auto &section : analysis.sections) {
     require(!section.timing.meanMillis.has_value() &&
+                !section.accuracy.has_value() &&
                 std::isfinite(section.badMissRate) &&
                 section.badMissRate == 0.0,
             "empty sections never expose NaN");

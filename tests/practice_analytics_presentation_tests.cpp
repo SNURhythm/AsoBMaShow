@@ -13,42 +13,33 @@ void require(bool condition, const char *message) {
   }
 }
 
-practice::SectionAnalysis section(double badMissRate, double meanMillis,
-                                  std::size_t samples = 1) {
+practice::SectionAnalysis section(double accuracy, std::size_t samples = 1,
+                                  std::size_t misses = 0) {
   practice::SectionAnalysis result;
   result.timing.samples = samples;
-  result.timing.meanMillis = meanMillis;
-  result.badMissRate = badMissRate;
+  result.timing.misses = misses;
+  result.accuracy = accuracy;
   return result;
 }
 
-void testVisualGroupsPoolStatisticsAndKeepLaterTimingSeverity() {
+void testVisualGroupsPoolSectionAccuracy() {
   const std::vector<practice::SectionAnalysis> sections = {
-      section(0.10, 2.0),
-      section(0.10, -40.0),
-      section(0.00, 3.0),
-      section(0.40, 7.0),
+      section(1.00, 3),
+      section(0.50, 1),
+      section(0.25, 1),
+      section(0.00, 1, 2),
   };
   const auto groups = practice_analytics_presentation::visualSectionGroups(
       sections, 12.0f, 6.0f);
   require(groups.size() == 2 && groups[0].firstSection == 0 &&
               groups[0].lastSection == 1,
           "narrow measures are grouped into stable adjacent ranges");
-  require(groups[0].pooledBadMissRate == 0.10,
-          "visual group pools bad/miss opportunities");
-  require(groups[0].pooledMeanMillis.has_value() &&
-              *groups[0].pooledMeanMillis == -19.0,
-          "visual group pools signed timing samples");
-  require(groups[0].dominantMeanMillis.has_value() &&
-              *groups[0].dominantMeanMillis == -40.0 &&
-              groups[0].tone ==
-                  practice_analytics_presentation::SectionTone::Early,
-          "later severe timing offset cannot be hidden by a bad-rate tie");
-  require(groups[0].severity == 8.0 && groups[1].pooledBadMissRate == 0.20 &&
-              groups[1].maximumBadMissRate == 0.40 &&
-              groups[1].tone ==
-                  practice_analytics_presentation::SectionTone::Danger,
-          "visual severity preserves pooled and peak bad/miss evidence");
+  require(groups[0].accuracy.has_value() &&
+              *groups[0].accuracy == 0.875,
+          "visual group pools accuracy by judgement opportunities");
+  require(groups[1].accuracy.has_value() &&
+              *groups[1].accuracy == 0.0625,
+          "misses contribute zero accuracy with their full weight");
 }
 
 void testExactSectionHitMappingIgnoresVisualGrouping() {
@@ -150,7 +141,7 @@ void testResultVideoSlidesAnalyticsInEqualThirds() {
 } // namespace
 
 int main() {
-  testVisualGroupsPoolStatisticsAndKeepLaterTimingSeverity();
+  testVisualGroupsPoolSectionAccuracy();
   testExactSectionHitMappingIgnoresVisualGrouping();
   testPointerCaptureSeparatesMouseTouchAndCancelsReliably();
   testBaselineLayoutHasShrinkRoomWithoutClippingControls();

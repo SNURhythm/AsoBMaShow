@@ -13,59 +13,24 @@ makeVisualGroup(std::span<const practice::SectionAnalysis> sections,
       .firstSection = firstSection,
       .lastSection = lastSection,
   };
-  long double badMissTotal = 0.0L;
+  long double accuracyTotal = 0.0L;
   std::size_t opportunityTotal = 0;
-  long double timingTotal = 0.0L;
-  std::size_t timingSamples = 0;
-  double dominantAbsoluteMean = -1.0;
 
   for (std::size_t index = firstSection; index <= lastSection; ++index) {
     const auto &section = sections[index];
     const std::size_t opportunities =
         section.timing.samples + section.timing.misses;
-    badMissTotal += static_cast<long double>(section.badMissRate) *
-                    static_cast<long double>(opportunities);
-    opportunityTotal += opportunities;
-    result.maximumBadMissRate =
-        std::max(result.maximumBadMissRate, section.badMissRate);
-
-    if (!section.timing.meanMillis.has_value() || section.timing.samples == 0) {
+    if (!section.accuracy.has_value() || opportunities == 0) {
       continue;
     }
-    timingTotal += static_cast<long double>(*section.timing.meanMillis) *
-                   static_cast<long double>(section.timing.samples);
-    timingSamples += section.timing.samples;
-    const double absoluteMean = std::abs(*section.timing.meanMillis);
-    if (absoluteMean >= dominantAbsoluteMean) {
-      dominantAbsoluteMean = absoluteMean;
-      result.dominantMeanMillis = section.timing.meanMillis;
-    }
+    accuracyTotal += static_cast<long double>(*section.accuracy) *
+                     static_cast<long double>(opportunities);
+    opportunityTotal += opportunities;
   }
 
   if (opportunityTotal > 0) {
-    result.pooledBadMissRate = static_cast<double>(
-        badMissTotal / static_cast<long double>(opportunityTotal));
-  }
-  if (timingSamples > 0) {
-    result.pooledMeanMillis = static_cast<double>(
-        timingTotal / static_cast<long double>(timingSamples));
-  }
-
-  const double badMissSeverity = result.maximumBadMissRate / 0.25;
-  const double timingSeverity = result.dominantMeanMillis.has_value()
-                                    ? std::abs(*result.dominantMeanMillis) / 5.0
-                                    : 0.0;
-  result.severity = std::max(badMissSeverity, timingSeverity);
-  if (result.maximumBadMissRate >= 0.25) {
-    result.tone = SectionTone::Danger;
-  } else if (!result.dominantMeanMillis.has_value()) {
-    result.tone = SectionTone::Neutral;
-  } else if (*result.dominantMeanMillis < -5.0) {
-    result.tone = SectionTone::Early;
-  } else if (*result.dominantMeanMillis > 5.0) {
-    result.tone = SectionTone::Late;
-  } else {
-    result.tone = SectionTone::Stable;
+    result.accuracy = static_cast<double>(
+        accuracyTotal / static_cast<long double>(opportunityTotal));
   }
   return result;
 }

@@ -21,23 +21,10 @@ inline constexpr float kPhotoAnalyticsExtraHeight =
     kPhotoSharedAnalyticsHeight + kPhotoCompactAnalyticsHeight * 2.0f -
     kPreferredAnalyticsHeight;
 
-enum class SectionTone : std::uint8_t {
-  Neutral,
-  Stable,
-  Early,
-  Late,
-  Danger,
-};
-
 struct VisualSectionGroup {
   std::size_t firstSection = 0;
   std::size_t lastSection = 0;
-  double pooledBadMissRate = 0.0;
-  double maximumBadMissRate = 0.0;
-  std::optional<double> pooledMeanMillis;
-  std::optional<double> dominantMeanMillis;
-  double severity = 0.0;
-  SectionTone tone = SectionTone::Neutral;
+  std::optional<double> accuracy;
 };
 
 [[nodiscard]] std::vector<VisualSectionGroup>
