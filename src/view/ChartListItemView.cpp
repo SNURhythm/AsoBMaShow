@@ -15,6 +15,7 @@ constexpr int kBottomGap = 8;
 constexpr int kArtworkFramePadding = 3;
 constexpr int kArtworkFrameBorderWidth = 1;
 constexpr uint32_t kIconStar = 0xf005;
+constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
 
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
@@ -54,11 +55,13 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   textLayout = new View();
   detailsLayout = new View();
   scoreRankColumn = new View();
-  titleView = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  artistView = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  levelView = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  keyModeView = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
-  scoreRankView = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
+  titleView = new TextView(kUiFont, 26);
+  artistView = new TextView(kUiFont, 17);
+  levelView = new TextView(kUiFont, 18);
+  keyModeView = new TextView(kUiFont, 14);
+  scoreRankShadowView = new TextView(kUiFont, 40);
+  scoreRankWeightView = new TextView(kUiFont, 40);
+  scoreRankView = new TextView(kUiFont, 40);
   favoriteButton = new Button();
   favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
 
@@ -127,7 +130,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   detailsLayout->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignFlexEnd)
       ->setJustifyContent(YGJustifyCenter)
-      ->setWidth(150)
+      ->setWidth(112)
       ->setHeight(84)
       ->setFlexShrink(0)
       ->setGap(6);
@@ -135,26 +138,44 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
   levelView->setOverflow(TextView::TextOverflow::Marquee);
-  levelView->setWidth(150)->setHeight(32);
+  levelView->setWidth(112)->setHeight(32);
   detailsLayout->addView(levelView);
 
   keyModeView->setAlign(TextView::TextAlign::RIGHT);
   keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
   keyModeView->setOverflow(TextView::TextOverflow::Hidden);
-  keyModeView->setWidth(150)->setHeight(24);
+  keyModeView->setWidth(112)->setHeight(24);
   detailsLayout->addView(keyModeView);
 
-  scoreRankColumn->setWidth(112)
-      ->setHeight(84)
+  scoreRankColumn->setWidth(96)
+      ->setHeight(72)
       ->setFlexShrink(0)
       ->setAlignItems(YGAlignStretch)
-      ->setJustifyContent(YGJustifyCenter);
+      ->setJustifyContent(YGJustifyCenter)
+      ->setCornerRadius(12.0f)
+      ->setBorderWidth(1);
   scoreRankColumn->setDisplay(YGDisplayNone);
   scoreRankColumn->setVisible(false);
+  scoreRankShadowView->setPositionType(YGPositionTypeAbsolute);
+  scoreRankShadowView->setPosition(Edge::Left, 1);
+  scoreRankShadowView->setPosition(Edge::Top, 2);
+  scoreRankShadowView->setAlign(TextView::TextAlign::CENTER);
+  scoreRankShadowView->setVAlign(TextView::TextVAlign::MIDDLE);
+  scoreRankShadowView->setOverflow(TextView::TextOverflow::Hidden);
+  scoreRankShadowView->setWidth(96)->setHeight(72);
+  scoreRankWeightView->setPositionType(YGPositionTypeAbsolute);
+  scoreRankWeightView->setPosition(Edge::Left, 1);
+  scoreRankWeightView->setPosition(Edge::Top, 0);
+  scoreRankWeightView->setAlign(TextView::TextAlign::CENTER);
+  scoreRankWeightView->setVAlign(TextView::TextVAlign::MIDDLE);
+  scoreRankWeightView->setOverflow(TextView::TextOverflow::Hidden);
+  scoreRankWeightView->setWidth(96)->setHeight(72);
   scoreRankView->setAlign(TextView::TextAlign::CENTER);
   scoreRankView->setVAlign(TextView::TextVAlign::MIDDLE);
   scoreRankView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankView->setWidth(112)->setHeight(84);
+  scoreRankView->setWidth(96)->setHeight(72);
+  scoreRankColumn->addView(scoreRankShadowView);
+  scoreRankColumn->addView(scoreRankWeightView);
   scoreRankColumn->addView(scoreRankView);
   contentCard->addView(scoreRankColumn);
   contentCard->addView(detailsLayout);
@@ -209,6 +230,8 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   titleView->setText(title);
   artistView->setText(meta.Artist);
   scoreRank.clear();
+  scoreRankShadowView->setText("");
+  scoreRankWeightView->setText("");
   scoreRankView->setText("");
   scoreRankColumn->setDisplay(YGDisplayNone);
   scoreRankColumn->setVisible(false);
@@ -251,6 +274,8 @@ void ChartListItemView::setClearRank(int clearRank) {
 void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   if (currentRecord.courseStart || solidArchive || unavailable ||
       maxScore <= 0 || score <= 0) {
+    scoreRankShadowView->setText("");
+    scoreRankWeightView->setText("");
     scoreRankView->setText("");
     scoreRank.clear();
     scoreRankColumn->setDisplay(YGDisplayNone);
@@ -259,7 +284,10 @@ void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   }
 
   scoreRank = score_rank::labelForScore(score, maxScore);
-  scoreRankView->setText(score_rank::displayLabel(scoreRank));
+  const std::string displayRank = score_rank::displayLabel(scoreRank);
+  scoreRankShadowView->setText(displayRank);
+  scoreRankWeightView->setText(displayRank);
+  scoreRankView->setText(displayRank);
   const bool visible = !scoreRank.empty();
   scoreRankColumn->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
   scoreRankColumn->setVisible(visible);
@@ -296,6 +324,23 @@ void ChartListItemView::refreshScoreRankColor() {
   const std::string rank = score_rank::displayLabel(scoreRank);
   scoreRankView->setThemedColor(
       [rank] { return ui_theme::scoreRankColor(rank); });
+  scoreRankWeightView->setThemedColor(
+      [rank] { return ui_theme::scoreRankColor(rank); });
+  scoreRankShadowView->setThemedColor([] {
+    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+               ? Color(0, 0, 0, 92)
+               : Color(0, 0, 0, 184);
+  });
+  scoreRankColumn->setThemedBackgroundColor([rank] {
+    return ui_theme::withAlpha(
+        ui_theme::scoreRankColor(rank),
+        ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 22 : 30);
+  });
+  scoreRankColumn->setThemedBorderColor([rank] {
+    return ui_theme::withAlpha(
+        ui_theme::scoreRankColor(rank),
+        ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 92 : 112);
+  });
 }
 
 void ChartListItemView::onSelected() {

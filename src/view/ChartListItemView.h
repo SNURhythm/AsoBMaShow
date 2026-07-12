@@ -45,6 +45,8 @@ private:
   TextView *artistView;
   TextView *levelView;
   TextView *keyModeView;
+  TextView *scoreRankShadowView;
+  TextView *scoreRankWeightView;
   TextView *scoreRankView;
   std::string scoreRank;
   Button *favoriteButton;
