@@ -641,7 +641,7 @@ inline float beatorajaDamageMultiplier(double total, int totalNotes) {
   float noteMultiplier = 1.0f;
   int note = 1000;
   float scale = 0.002f;
-  while (note > totalNotes || note > 1) {
+  while (note > totalNotes && note > 1) {
     noteMultiplier +=
         scale * static_cast<float>(
                     note - std::max(totalNotes, note / 2));
@@ -945,13 +945,13 @@ public:
       for (int i = 0; i < static_cast<int>(kGaugeTypeCount); ++i) {
         const GaugeType type = gaugeTypeAtIndex(i);
         gaugeValues[i] =
-            std::clamp(value, gaugeMinimumValue(type, gaugeProfile),
+            std::clamp(value, 0.0f,
                        gaugeMaximumValue(type, gaugeProfile));
       }
       gaugeType = bestAdmittedGaugeType();
     } else {
       gaugeValues[gaugeTypeIndex(gaugeType)] =
-          std::clamp(value, gaugeMinimumValue(gaugeType, gaugeProfile),
+          std::clamp(value, 0.0f,
                      gaugeMaximumValue(gaugeType, gaugeProfile));
     }
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
@@ -1074,8 +1074,7 @@ public:
 
   [[nodiscard]] bool activeGaugeFailed() const {
     const int index = gaugeTypeIndex(gaugeType);
-    if (gaugeAutoShift == GaugeAutoShiftMode::Continue ||
-        gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove) {
+    if (gaugeAutoShift == GaugeAutoShiftMode::Continue) {
       return false;
     }
     return gaugeIsSurvival(gaugeType, gaugeProfile) &&

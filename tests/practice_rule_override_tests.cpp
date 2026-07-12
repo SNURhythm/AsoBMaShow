@@ -34,7 +34,7 @@ void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState state(&chart, false);
-  state.configureGauge(GaugeType::Hard, false);
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
 
   state.setStartingGaugePercent(37);
   assert(state.currentGauge == 37.0f);
@@ -54,7 +54,7 @@ void testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState state(&chart, false);
-  state.configureGauge(GaugeType::Hard, true);
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
 
   state.setStartingGaugePercent(37);
   for (const float value : state.gaugeValues) {
@@ -73,7 +73,7 @@ void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   practice::Configuration configuration;
   configuration.startMicros = 2'000'000;
   configuration.gaugeType = GaugeType::ExHard;
-  configuration.gaugeAutoShift = true;
+  configuration.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   configuration.playback.percent = 75;
   configuration.judge.scalePercent = 80;
   configuration.startingGaugePercent = 37;
@@ -82,7 +82,7 @@ void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   applyPracticeConfigurationToStartOptions(options, configuration);
   assert(options.startPosition == 2'000'000);
   assert(options.gaugeType == GaugeType::ExHard);
-  assert(options.gaugeAutoShift);
+  assert(options.gaugeAutoShift == GaugeAutoShiftMode::BestClear);
   assert(options.playback.percent == 75);
   assert(options.judgeWindowScalePercent == 80);
   assert(options.startingGaugePercent == 37);
@@ -139,7 +139,8 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState restoredState(&chart, false);
-  restoredState.configureGauge(replay.initialGaugeType, false);
+  restoredState.configureGauge(replay.initialGaugeType,
+                               GaugeAutoShiftMode::None);
   assert(replayOptions.startingGaugePercent.has_value());
   restoredState.setStartingGaugePercent(*replayOptions.startingGaugePercent);
   assert(restoredState.currentGauge == 37.0f);
