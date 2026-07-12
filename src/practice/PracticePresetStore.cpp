@@ -150,6 +150,8 @@ const char *gaugeTypeName(GaugeType value) {
     return "hard";
   case GaugeType::ExHard:
     return "exhard";
+  case GaugeType::Hazard:
+    return "hazard";
   }
   return "normal";
 }
@@ -169,6 +171,9 @@ std::optional<GaugeType> gaugeTypeFromName(std::string_view value) {
   }
   if (value == "exhard") {
     return GaugeType::ExHard;
+  }
+  if (value == "hazard") {
+    return GaugeType::Hazard;
   }
   return std::nullopt;
 }

@@ -317,6 +317,9 @@ std::string parseGaugeTypeId(const std::string &value,
   if (value == "exhard") {
     return "exhard";
   }
+  if (value == "hazard") {
+    return "hazard";
+  }
   if (value == "gas") {
     return "gas";
   }

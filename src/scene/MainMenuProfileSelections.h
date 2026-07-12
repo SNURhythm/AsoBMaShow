@@ -25,6 +25,8 @@ inline const char *gaugeSettingId(GaugeType gaugeType, bool autoShift) {
     return "hard";
   case GaugeType::ExHard:
     return "exhard";
+  case GaugeType::Hazard:
+    return "hazard";
   default:
     return "normal";
   }
@@ -56,6 +58,8 @@ struct Selections {
       gaugeType = GaugeType::Hard;
     } else if (settings.selectedGaugeType == "exhard") {
       gaugeType = GaugeType::ExHard;
+    } else if (settings.selectedGaugeType == "hazard") {
+      gaugeType = GaugeType::Hazard;
     } else {
       gaugeType = GaugeType::Normal;
     }

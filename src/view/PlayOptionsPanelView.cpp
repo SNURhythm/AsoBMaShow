@@ -104,6 +104,8 @@ std::string gaugeLabel(GaugeType type, bool autoShift) {
     return "HARD";
   case GaugeType::ExHard:
     return "EX-HARD";
+  case GaugeType::Hazard:
+    return "HAZARD";
   case GaugeType::Normal:
   default:
     return "NORMAL";
@@ -146,6 +148,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     auto *gaugeRowB = makeRow();
     addGaugeButton(gaugeRowB, GaugeType::Hard, false);
     addGaugeButton(gaugeRowB, GaugeType::ExHard, false);
+    addGaugeButton(gaugeRowB, GaugeType::Hazard, false);
     addGaugeButton(gaugeRowB, GaugeType::ExHard, true);
     addView(gaugeRowB);
   }

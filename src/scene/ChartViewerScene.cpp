@@ -108,6 +108,9 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   if (id == "exhard") {
     return {.type = GaugeType::ExHard};
   }
+  if (id == "hazard") {
+    return {.type = GaugeType::Hazard};
+  }
   return {.type = GaugeType::Normal};
 }
 

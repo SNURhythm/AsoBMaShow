@@ -267,6 +267,8 @@ const char *gaugeTypeName(GaugeType value) {
     return "hard";
   case GaugeType::ExHard:
     return "ex-hard";
+  case GaugeType::Hazard:
+    return "hazard";
   }
   throw std::invalid_argument("Unknown gauge type value.");
 }
@@ -286,6 +288,9 @@ std::optional<GaugeType> gaugeTypeFromName(std::string_view value) {
   }
   if (value == "ex-hard") {
     return GaugeType::ExHard;
+  }
+  if (value == "hazard") {
+    return GaugeType::Hazard;
   }
   return std::nullopt;
 }

@@ -909,6 +909,8 @@ int clearRankForGaugeType(GaugeType gaugeType) {
     return kClearTypeHardClearRank;
   case GaugeType::ExHard:
     return kClearTypeExHardClearRank;
+  case GaugeType::Hazard:
+    return kClearTypeFullComboRank;
   case GaugeType::Normal:
   default:
     return kClearTypeNormalClearRank;
@@ -930,6 +932,8 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
     return "HARD";
   case GaugeType::ExHard:
     return "EX-HARD";
+  case GaugeType::Hazard:
+    return "HAZARD";
   default:
     return "NORMAL";
   }

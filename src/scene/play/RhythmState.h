@@ -6,7 +6,7 @@
 #include <array>
 #include <string>
 
-enum class GaugeType { AssistedEasy, Easy, Normal, Hard, ExHard };
+enum class GaugeType { AssistedEasy, Easy, Normal, Hard, ExHard, Hazard };
 
 enum class GaugeProfile {
   Standard,
@@ -29,6 +29,7 @@ enum class ClearType {
   NormalClear,
   HardClear,
   ExHardClear,
+  FullCombo,
 };
 
 inline constexpr int kNoClearTypeRank = -1;
@@ -40,7 +41,7 @@ inline constexpr int kClearTypeNormalClearRank = 300;
 inline constexpr int kClearTypeHardClearRank = 400;
 inline constexpr int kClearTypeExHardClearRank = 500;
 inline constexpr int kClearTypeFullComboRank = 600;
-inline constexpr size_t kGaugeTypeCount = 5;
+inline constexpr size_t kGaugeTypeCount = 6;
 
 namespace clear_policy {
 [[nodiscard]] inline bool
@@ -84,6 +85,8 @@ inline int gaugeTypeIndex(GaugeType gaugeType) {
     return 3;
   case GaugeType::ExHard:
     return 4;
+  case GaugeType::Hazard:
+    return 5;
   default:
     return 2;
   }
@@ -101,6 +104,8 @@ inline GaugeType gaugeTypeAtIndex(int index) {
     return GaugeType::Hard;
   case 4:
     return GaugeType::ExHard;
+  case 5:
+    return GaugeType::Hazard;
   default:
     return GaugeType::Normal;
   }
@@ -118,6 +123,8 @@ inline const char *gaugeTypeToLabel(GaugeType gaugeType) {
     return "HARD";
   case GaugeType::ExHard:
     return "EX-HARD";
+  case GaugeType::Hazard:
+    return "HAZARD";
   default:
     return "NORMAL";
   }
@@ -135,6 +142,8 @@ inline const char *gaugeTypeToShortLabel(GaugeType gaugeType) {
     return "HARD";
   case GaugeType::ExHard:
     return "EX-HARD";
+  case GaugeType::Hazard:
+    return "HAZARD";
   default:
     return "NORMAL";
   }
@@ -152,6 +161,8 @@ inline int gaugeTypeToClearRank(GaugeType gaugeType) {
     return kClearTypeHardClearRank;
   case GaugeType::ExHard:
     return kClearTypeExHardClearRank;
+  case GaugeType::Hazard:
+    return kClearTypeFullComboRank;
   default:
     return kClearTypeNormalClearRank;
   }
@@ -210,6 +221,8 @@ inline const char *courseGaugeTypeToShortLabel(GaugeType gaugeType) {
     return "EX-CLASS";
   case GaugeType::ExHard:
     return "EXH-CLASS";
+  case GaugeType::Hazard:
+    return "EXH-CLASS";
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
   case GaugeType::Normal:
@@ -237,6 +250,7 @@ inline float gaugeInitialValue(GaugeType gaugeType,
       return 30.0f;
     case GaugeType::Hard:
     case GaugeType::ExHard:
+    case GaugeType::Hazard:
     default:
       return 100.0f;
     }
@@ -248,6 +262,7 @@ inline float gaugeInitialValue(GaugeType gaugeType,
   switch (gaugeType) {
   case GaugeType::Hard:
   case GaugeType::ExHard:
+  case GaugeType::Hazard:
     return 100.0f;
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
@@ -275,6 +290,7 @@ inline float gaugeMinimumValue(GaugeType gaugeType,
   switch (gaugeType) {
   case GaugeType::Hard:
   case GaugeType::ExHard:
+  case GaugeType::Hazard:
     return 0.0f;
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
@@ -334,7 +350,8 @@ inline bool gaugeIsSurvival(GaugeType gaugeType,
   if (gaugeProfileIsCourse(profile)) {
     return true;
   }
-  return gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard;
+  return gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard ||
+         gaugeType == GaugeType::Hazard;
 }
 
 inline int gaugeJudgementIndex(Judgement judgement) {
@@ -371,6 +388,7 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -3.0f, -6.0f, -2.0f},
       std::array<float, 6>{0.15f, 0.12f, 0.03f, -5.0f, -10.0f, -5.0f},
       std::array<float, 6>{0.15f, 0.06f, 0.0f, -8.0f, -16.0f, -8.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -100.0f, -100.0f, -10.0f},
   };
   constexpr GaugeTable fiveKeysTable = {
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -1.5f, -3.0f, -0.5f},
@@ -378,6 +396,7 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -3.0f, -6.0f, -2.0f},
       std::array<float, 6>{0.0f, 0.0f, 0.0f, -5.0f, -10.0f, -5.0f},
       std::array<float, 6>{0.0f, 0.0f, 0.0f, -10.0f, -20.0f, -10.0f},
+      std::array<float, 6>{0.0f, 0.0f, 0.0f, -100.0f, -100.0f, -100.0f},
   };
   constexpr GaugeTable pmsTable = {
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -1.0f, -2.0f, -2.0f},
@@ -385,6 +404,7 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -2.0f, -6.0f, -6.0f},
       std::array<float, 6>{0.15f, 0.12f, 0.03f, -5.0f, -10.0f, -10.0f},
       std::array<float, 6>{0.15f, 0.06f, 0.0f, -10.0f, -15.0f, -15.0f},
+      std::array<float, 6>{0.15f, 0.06f, 0.0f, -100.0f, -100.0f, -100.0f},
   };
   constexpr GaugeTable keyboardTable = {
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -1.0f, -2.0f, -1.0f},
@@ -392,6 +412,7 @@ inline float gaugeBaseDeltaForJudgement(
       std::array<float, 6>{1.0f, 1.0f, 0.5f, -2.0f, -4.0f, -2.0f},
       std::array<float, 6>{0.2f, 0.2f, 0.1f, -4.0f, -8.0f, -4.0f},
       std::array<float, 6>{0.2f, 0.1f, 0.0f, -6.0f, -12.0f, -6.0f},
+      std::array<float, 6>{0.2f, 0.1f, 0.0f, -100.0f, -100.0f, -100.0f},
   };
 
   const GaugeTable *table = &sevenKeysTable;
@@ -416,6 +437,7 @@ inline int courseGaugeClassIndexForType(GaugeType gaugeType) {
   case GaugeType::Hard:
     return 1;
   case GaugeType::ExHard:
+  case GaugeType::Hazard:
     return 2;
   case GaugeType::AssistedEasy:
   case GaugeType::Easy:
@@ -427,9 +449,15 @@ inline int courseGaugeClassIndexForType(GaugeType gaugeType) {
 
 inline GaugeType gaugeClearTypeForProfile(GaugeType gaugeType,
                                           GaugeProfile profile) {
-  if (gaugeProfileIsCourse(profile) &&
-      courseGaugeClassIndexForType(gaugeType) == 0) {
-    return GaugeType::Normal;
+  if (gaugeProfileIsCourse(profile)) {
+    switch (courseGaugeClassIndexForType(gaugeType)) {
+    case 1:
+      return GaugeType::Hard;
+    case 2:
+      return GaugeType::ExHard;
+    default:
+      return GaugeType::Normal;
+    }
   }
   return gaugeType;
 }
@@ -621,9 +649,9 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
     delta *= beatorajaDamageMultiplier(total, totalNotes);
   }
   if (delta > 0.0f) {
-    if (gaugeIsSurvival(gaugeType)) {
+    if (gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard) {
       delta *= beatorajaHardRecoveryMultiplier(total, totalNotes);
-    } else {
+    } else if (gaugeType != GaugeType::Hazard) {
       delta *= static_cast<float>(total) /
                static_cast<float>(std::max(1, totalNotes));
     }
@@ -652,6 +680,8 @@ inline ClearType clearTypeForGauge(GaugeType gaugeType, float gaugeValue,
     return ClearType::HardClear;
   case GaugeType::ExHard:
     return ClearType::ExHardClear;
+  case GaugeType::Hazard:
+    return ClearType::FullCombo;
   case GaugeType::Normal:
   default:
     return ClearType::NormalClear;
@@ -672,6 +702,8 @@ inline int clearTypeToRank(ClearType clearType) {
     return kClearTypeHardClearRank;
   case ClearType::ExHardClear:
     return kClearTypeExHardClearRank;
+  case ClearType::FullCombo:
+    return kClearTypeFullComboRank;
   case ClearType::Failed:
   default:
     return kClearTypeFailedRank;
@@ -692,6 +724,8 @@ inline const char *clearTypeToLabel(ClearType clearType) {
     return "HARD CLEAR";
   case ClearType::ExHardClear:
     return "EX-HARD CLEAR";
+  case ClearType::FullCombo:
+    return "FULL COMBO";
   case ClearType::Failed:
   default:
     return "FAILED";
@@ -981,7 +1015,7 @@ private:
     }
 
     ClearType best = ClearType::Failed;
-    for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
+    for (int i = gaugeTypeIndex(GaugeType::ExHard); i >= 0; i--) {
       const ClearType clearType =
           clearTypeForGauge(gaugeTypeAtIndex(i), gaugeValues[i],
                             gaugeSurvivalFailed[i], gaugeProfile);
@@ -993,7 +1027,7 @@ private:
   }
 
   [[nodiscard]] GaugeType bestAdmittedGaugeType() const {
-    for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
+    for (int i = gaugeTypeIndex(GaugeType::ExHard); i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (clearTypeForGauge(type, gaugeValues[i], gaugeSurvivalFailed[i],
                             gaugeProfile) !=
@@ -1005,7 +1039,7 @@ private:
   }
 
   [[nodiscard]] GaugeType bestSurvivingGaugeType() const {
-    for (int i = static_cast<int>(kGaugeTypeCount) - 1; i >= 0; i--) {
+    for (int i = gaugeTypeIndex(GaugeType::ExHard); i >= 0; i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (!gaugeIsSurvival(type, gaugeProfile) || !gaugeSurvivalFailed[i]) {
         return type;

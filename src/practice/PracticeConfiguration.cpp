@@ -7,12 +7,13 @@
 
 namespace practice {
 namespace {
-constexpr std::array<GaugeOption, 6> kGaugeOptions = {{
+constexpr std::array<GaugeOption, 7> kGaugeOptions = {{
     {.id = "0", .label = "Assisted Easy", .gaugeType = GaugeType::AssistedEasy},
     {.id = "1", .label = "Easy", .gaugeType = GaugeType::Easy},
     {.id = "2", .label = "Normal", .gaugeType = GaugeType::Normal},
     {.id = "3", .label = "Hard", .gaugeType = GaugeType::Hard},
     {.id = "4", .label = "Ex-Hard", .gaugeType = GaugeType::ExHard},
+    {.id = "5", .label = "Hazard", .gaugeType = GaugeType::Hazard},
     {.id = "gas",
      .label = "Gauge Auto Shift (GAS)",
      .gaugeType = GaugeType::ExHard,
@@ -45,6 +46,7 @@ bool validGaugeType(GaugeType value) {
   case GaugeType::Normal:
   case GaugeType::Hard:
   case GaugeType::ExHard:
+  case GaugeType::Hazard:
     return true;
   }
   return false;
