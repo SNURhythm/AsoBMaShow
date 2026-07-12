@@ -139,12 +139,12 @@ inline std::string bestScoreUpsertSql() {
          "created_at = excluded.created_at WHERE "
          "excluded.score > score_sha256_best_score_cache.score OR "
          "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_type > score_sha256_best_score_cache.clear_type) OR "
+         "excluded.clear_rank > score_sha256_best_score_cache.clear_rank) OR "
          "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_type = score_sha256_best_score_cache.clear_type AND "
+         "excluded.clear_rank = score_sha256_best_score_cache.clear_rank AND "
          "excluded.created_at > score_sha256_best_score_cache.created_at) OR "
          "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_type = score_sha256_best_score_cache.clear_type AND "
+         "excluded.clear_rank = score_sha256_best_score_cache.clear_rank AND "
          "excluded.created_at = score_sha256_best_score_cache.created_at AND "
          "excluded.score_id > score_sha256_best_score_cache.score_id);";
 }
@@ -408,11 +408,14 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
     return error;
   }
 
+  const std::string effectiveClearRank =
+      detail::fullComboClearRankExpr("i", "i.playback_percent");
   const std::string insertBest =
       "WITH identities AS (" + identityCte +
       "), ranked AS ("
       "SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.chart_sha256, i.ln_mode "
-      "ORDER BY i.score DESC, i.clear_type DESC, i.created_at DESC, "
+      "ORDER BY i.score DESC, " + effectiveClearRank +
+      " DESC, i.created_at DESC, "
       "i.score_id DESC) AS row_number FROM identities i"
       ") INSERT INTO " +
       bestTable +

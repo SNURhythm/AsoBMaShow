@@ -237,6 +237,11 @@ int main() {
   insertScore(db, "assisted", "md5-assisted", "", 0, 200, 200, 100, 0,
               kClearTypeHardClearRank, "2026-01-03 00:00:00",
               R"({"playback":{"percent":75}})");
+  insertScore(db, "effective-tie", "md5-effective-tie", "", 0, 180, 200,
+              90, 1, kClearTypeEasyClearRank, "2026-01-01 00:00:00");
+  insertScore(db, "effective-tie", "md5-effective-tie", "", 0, 180, 200,
+              90, 1, kClearTypeHardClearRank, "2026-01-02 00:00:00",
+              R"({"playback":{"percent":75}})");
 
   ASSERT_EQ(180,
             queryInt(db,
@@ -270,6 +275,12 @@ int main() {
             queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                          "'assisted'", "0")),
             "rate-assisted zero-break score cache remains capped");
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT clear_type FROM "
+                     "score_db.score_sha256_best_score_cache WHERE "
+                     "chart_sha256 = 'effective-tie' AND ln_mode = 0"),
+            "equal score keeps the higher effective clear rank");
   ASSERT_EQ(0,
             queryInt(db,
                      "SELECT COUNT(*) FROM "
@@ -312,6 +323,12 @@ int main() {
             queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                          "'assisted'", "0")),
             "rebuilt rate-assisted clear rank remains capped");
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT clear_type FROM "
+                     "score_db.score_sha256_best_score_cache WHERE "
+                     "chart_sha256 = 'effective-tie' AND ln_mode = 0"),
+            "rebuilt equal score keeps the higher effective clear rank");
 
   sqlite3_close(db);
 
