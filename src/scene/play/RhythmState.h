@@ -826,6 +826,7 @@ inline const char *clearTypeRankToLabel(int rank) {
 struct GaugeStateSnapshot {
   GaugeType gaugeType = GaugeType::Normal;
   GaugeType selectedGaugeType = GaugeType::Normal;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   float currentGauge = 0.0f;
@@ -871,6 +872,7 @@ public:
   float currentGauge = 100.0f;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeType selectedGaugeType = GaugeType::Normal;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   bool assistClearMark = false;
@@ -916,9 +918,12 @@ public:
   void configureGauge(GaugeType newSelectedGaugeType,
                       GaugeAutoShiftMode autoShift,
                       GaugeProfile selectedGaugeProfile =
-                          GaugeProfile::Standard) {
+                          GaugeProfile::Standard,
+                      GaugeType autoShiftLowerBound =
+                          GaugeType::AssistedEasy) {
     gaugeAutoShift = autoShift;
     selectedGaugeType = newSelectedGaugeType;
+    gaugeAutoShiftLowerBound = autoShiftLowerBound;
     gaugeType = selectedGaugeType;
     gaugeProfile = resolveGaugeProfile(selectedGaugeProfile, gaugeKeyMode);
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
@@ -956,6 +961,7 @@ public:
     gaugeAutoShift = snapshot.gaugeAutoShift;
     gaugeType = snapshot.gaugeType;
     selectedGaugeType = snapshot.selectedGaugeType;
+    gaugeAutoShiftLowerBound = snapshot.gaugeAutoShiftLowerBound;
     gaugeProfile = snapshot.gaugeProfile;
     gaugeValues = snapshot.gaugeValues;
     gaugeSurvivalFailed = snapshot.gaugeSurvivalFailed;
@@ -973,6 +979,7 @@ public:
     return GaugeStateSnapshot{
         .gaugeType = gaugeType,
         .selectedGaugeType = selectedGaugeType,
+        .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
         .gaugeProfile = gaugeProfile,
         .gaugeAutoShift = gaugeAutoShift,
         .currentGauge = currentGauge,
@@ -1087,7 +1094,7 @@ private:
     }
 
     ClearType best = ClearType::Failed;
-    for (int i = autoShiftUpperIndex(); i >= 0; i--) {
+    for (int i = autoShiftUpperIndex(); i >= autoShiftLowerIndex(); i--) {
       const ClearType clearType =
           clearTypeForGauge(gaugeTypeAtIndex(i), gaugeValues[i],
                             gaugeSurvivalFailed[i], gaugeProfile);
@@ -1099,7 +1106,7 @@ private:
   }
 
   [[nodiscard]] GaugeType bestAdmittedGaugeType() const {
-    for (int i = autoShiftUpperIndex(); i >= 0; i--) {
+    for (int i = autoShiftUpperIndex(); i >= autoShiftLowerIndex(); i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (clearTypeForGauge(type, gaugeValues[i], gaugeSurvivalFailed[i],
                             gaugeProfile) !=
@@ -1111,13 +1118,21 @@ private:
   }
 
   [[nodiscard]] GaugeType bestSurvivingGaugeType() const {
-    for (int i = autoShiftUpperIndex(); i >= 0; i--) {
+    for (int i = autoShiftUpperIndex(); i >= autoShiftLowerIndex(); i--) {
       const GaugeType type = gaugeTypeAtIndex(i);
       if (!gaugeIsSurvival(type, gaugeProfile) || !gaugeSurvivalFailed[i]) {
         return type;
       }
     }
-    return GaugeType::AssistedEasy;
+    return gaugeTypeAtIndex(autoShiftLowerIndex());
+  }
+
+  [[nodiscard]] int autoShiftLowerIndex() const {
+    if (gaugeProfileIsCourse(gaugeProfile)) {
+      return gaugeTypeIndex(GaugeType::Normal);
+    }
+    return std::min(gaugeTypeIndex(gaugeAutoShiftLowerBound),
+                    autoShiftUpperIndex());
   }
 
   [[nodiscard]] int autoShiftUpperIndex() const {

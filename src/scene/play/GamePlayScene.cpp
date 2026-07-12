@@ -796,7 +796,8 @@ bool GamePlayScene::reset() {
           ? options.gaugeAutoShift
           : (isReplayPlayback() ? options.replayData->gaugeAutoShift
                                 : options.gaugeAutoShift);
-  state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile);
+  state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile,
+                        options.gaugeAutoShiftLowerBound);
   if (options.startingGaugePercent.has_value()) {
     state->setStartingGaugePercent(*options.startingGaugePercent);
   }
@@ -1388,6 +1389,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.gaugeType = session->gaugeType;
   nextOptions.gaugeProfile = session->gaugeProfile;
   nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+  nextOptions.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
   nextOptions.playOption = playInfo.option;
   nextOptions.playOptionSeed = playInfo.seed;
   nextOptions.playOption2 = playInfo.option2;
@@ -1453,6 +1455,8 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.provenance = attemptProvenance;
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
+  recordedReplay.gaugeAutoShiftLowerBound =
+      options.gaugeAutoShiftLowerBound;
   recordedReplay.finalScore = 0;
   recordedReplay.finalGauge = state != nullptr ? state->currentGauge : 0.0f;
   recordedReplay.clearType = kClearTypeFailedRank;
@@ -1742,6 +1746,8 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
           practiceResultOptions.autoKeySound = options.autoKeySound;
           practiceResultOptions.autoPlay = options.autoPlay;
           practiceResultOptions.gaugeAutoShift = options.gaugeAutoShift;
+          practiceResultOptions.gaugeAutoShiftLowerBound =
+              options.gaugeAutoShiftLowerBound;
           practiceResultOptions.playOption = options.playOption;
           practiceResultOptions.playOptionSeed = options.playOptionSeed;
           practiceResultOptions.playOption2 = options.playOption2;

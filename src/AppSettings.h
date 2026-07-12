@@ -157,6 +157,8 @@ public:
   bool gameplayClubModeEnabled = false;
   bool musicPlayerClubModeEnabled = false;
   std::string selectedGaugeType = kDefaultGaugeType;
+  std::string selectedGaugeAutoShiftMode = "none";
+  std::string selectedGaugeAutoShiftLowerBound = "assisted_easy";
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;

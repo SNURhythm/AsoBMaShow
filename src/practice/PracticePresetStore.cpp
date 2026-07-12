@@ -73,10 +73,10 @@ bool validPresetId(std::string_view id) {
 }
 
 bool strictConfigurationShape(const Json &document) {
-  static constexpr std::array<std::string_view, 10> allowed = {
+  static constexpr std::array<std::string_view, 11> allowed = {
       "chartSha256",  "startMicros", "endMicros",      "loop",
       "countInBeats", "gaugeType",   "gaugeAutoShift", "startingGaugePercent",
-      "judge",        "playback"};
+      "gaugeAutoShiftLowerBound", "judge", "playback"};
   static constexpr std::array<std::string_view, 9> required = {
       "chartSha256",
       "startMicros",
@@ -102,9 +102,8 @@ bool strictConfigurationShape(const Json &document) {
       !hasOnlyKeys(document.at("playback"), playbackKeys)) {
     return false;
   }
-  return document.size() == allowed.size() ||
-         (document.size() + 1 == allowed.size() &&
-          !document.contains("gaugeAutoShift"));
+  return document.size() >= required.size() &&
+         document.size() <= allowed.size();
 }
 
 bool strictPortableDocumentShape(const Json &document) {
@@ -187,6 +186,8 @@ Json configurationJson(const Configuration &value) {
               {"gaugeType", gaugeTypeName(value.gaugeType)},
               {"gaugeAutoShift",
                gaugeAutoShiftModeValue(value.gaugeAutoShift)},
+              {"gaugeAutoShiftLowerBound",
+               gaugeTypeName(value.gaugeAutoShiftLowerBound)},
               {"judge",
                {{"kind", static_cast<int>(value.judge.kind)},
                 {"scalePercent", value.judge.scalePercent}}},
@@ -228,6 +229,12 @@ std::optional<Configuration> configurationFromJson(const Json &document,
               ? (mode->get<bool>() ? GaugeAutoShiftMode::BestClear
                                    : GaugeAutoShiftMode::None)
               : gaugeAutoShiftModeFromValue(mode->get<int>());
+    }
+    if (const auto lower = document.find("gaugeAutoShiftLowerBound");
+        lower != document.end()) {
+      value.gaugeAutoShiftLowerBound =
+          gaugeTypeFromName(lower->get<std::string>())
+              .value_or(GaugeType::AssistedEasy);
     }
     if (!document.at("startingGaugePercent").is_null()) {
       value.startingGaugePercent =

@@ -89,7 +89,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
   const auto lookup = buildReplayNoteLookup(chart);
   RhythmState state(&chart, false);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
-                       gaugeProfile);
+                       gaugeProfile, replay.gaugeAutoShiftLowerBound);
   if (replay.provenance.startingGaugePercent.has_value()) {
     state.setStartingGaugePercent(*replay.provenance.startingGaugePercent);
   }

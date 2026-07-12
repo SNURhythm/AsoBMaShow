@@ -131,6 +131,18 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   return {.type = GaugeType::Normal};
 }
 
+GaugeAutoShiftMode gaugeAutoShiftFromSettingId(const std::string &id) {
+  if (id == "continue") return GaugeAutoShiftMode::Continue;
+  if (id == "survival_to_groove") {
+    return GaugeAutoShiftMode::SurvivalToGroove;
+  }
+  if (id == "best_clear") return GaugeAutoShiftMode::BestClear;
+  if (id == "select_to_under") {
+    return GaugeAutoShiftMode::SelectToUnder;
+  }
+  return GaugeAutoShiftMode::None;
+}
+
 ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
                                       int summaryId,
                                       const std::string &createdAt) {
@@ -3984,7 +3996,15 @@ void ChartViewerScene::loadPracticeConfiguration(
     const GaugeSelection gaugeSelection =
         gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
     practiceConfiguration.gaugeType = gaugeSelection.type;
-    practiceConfiguration.gaugeAutoShift = gaugeSelection.autoShift;
+    const GaugeAutoShiftMode storedAutoShift = gaugeAutoShiftFromSettingId(
+        context.settings.selectedGaugeAutoShiftMode);
+    practiceConfiguration.gaugeAutoShift =
+        storedAutoShift != GaugeAutoShiftMode::None ? storedAutoShift
+                                                   : gaugeSelection.autoShift;
+    practiceConfiguration.gaugeAutoShiftLowerBound =
+        gaugeSelectionFromSettingId(
+            context.settings.selectedGaugeAutoShiftLowerBound)
+            .type;
     practiceConfiguration.countInBeats =
         practice::defaultCountInBeatsForChart(
             chart->Meta.GuessedBeatsPerMeasure);

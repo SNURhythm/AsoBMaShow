@@ -618,6 +618,7 @@ private:
   void selectFolder(LibraryFolderItem item);
   bool toggleChartFavorite(const ChartMetaRecord &record, bool favorite);
   void setGaugeSelection(GaugeType gaugeType, GaugeAutoShiftMode autoShift);
+  void setGaugeAutoShiftLowerBound(GaugeType gaugeType);
   void refreshGaugeSelectionButtons();
   void setPlayOptionSelection(const std::string &option);
   void refreshPlayOptionButtons();

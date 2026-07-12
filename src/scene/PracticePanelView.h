@@ -53,7 +53,14 @@ public:
   [[nodiscard]] bool isEditingPresetName() const;
 
 private:
-  enum class DropDownIndex : int { Preset, Gauge, Mode, Count };
+  enum class DropDownIndex : int {
+    Preset,
+    Gauge,
+    GaugeAutoShift,
+    GaugeLowerBound,
+    Mode,
+    Count
+  };
 
   long long chartEndMicros = 0;
   int startingGaugeMaximum = 100;
@@ -69,6 +76,7 @@ private:
   TextView *diagnosticText = nullptr;
   TextView *presetMessageText = nullptr;
   TextView *presetMessageSecondLine = nullptr;
+  View *gaugeLowerBoundRow = nullptr;
   TextInputBox *presetNameInput = nullptr;
   Button *loopButton = nullptr;
   TextView *loopButtonText = nullptr;

@@ -423,7 +423,8 @@ RhythmState courseResultStateForReplay(
     const std::vector<RhythmState> &stageStates) {
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
-                           replay.gaugeProfile);
+                           replay.gaugeProfile,
+                           replay.gaugeAutoShiftLowerBound);
   aggregate.resetJudgeCounts();
   aggregate.comboBreak = 0;
   aggregate.maxCombo = 0;

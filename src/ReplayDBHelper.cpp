@@ -2471,6 +2471,8 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
       return std::nullopt;
     }
     loaded.provenance = std::move(*provenance);
+    loaded.gaugeAutoShiftLowerBound =
+        loaded.provenance.gaugeAutoShiftLowerBound;
     replay = std::move(loaded);
   }
   stmt.reset();
@@ -2674,6 +2676,8 @@ ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
     return std::nullopt;
   }
   courseReplay.provenance = std::move(*provenance);
+  courseReplay.gaugeAutoShiftLowerBound =
+      courseReplay.provenance.gaugeAutoShiftLowerBound;
   stmt.reset();
 
   SqliteStatementHandle stageStmt;

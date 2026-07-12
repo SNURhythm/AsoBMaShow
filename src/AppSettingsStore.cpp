@@ -165,6 +165,9 @@ json settingsToJson(const AppSettings &settings) {
       {"gameplayClubModeEnabled", settings.gameplayClubModeEnabled},
       {"musicPlayerClubModeEnabled", settings.musicPlayerClubModeEnabled},
       {"selectedGaugeType", settings.selectedGaugeType},
+      {"selectedGaugeAutoShiftMode", settings.selectedGaugeAutoShiftMode},
+      {"selectedGaugeAutoShiftLowerBound",
+       settings.selectedGaugeAutoShiftLowerBound},
       {"selectedPlayOption", settings.selectedPlayOption},
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
@@ -272,6 +275,10 @@ AppSettings settingsFromJson(const json &document,
             settings.musicPlayerClubModeEnabled, diagnostics);
   readValue(document, "selectedGaugeType", settings.selectedGaugeType,
             diagnostics);
+  readValue(document, "selectedGaugeAutoShiftMode",
+            settings.selectedGaugeAutoShiftMode, diagnostics);
+  readValue(document, "selectedGaugeAutoShiftLowerBound",
+            settings.selectedGaugeAutoShiftLowerBound, diagnostics);
   readValue(document, "selectedPlayOption", settings.selectedPlayOption,
             diagnostics);
   readValue(document, "selectedLnMode", settings.selectedLnMode, diagnostics);

@@ -4616,6 +4616,16 @@ void MainMenuScene::setGaugeSelection(GaugeType gaugeType,
   refreshGaugeSelectionButtons();
 }
 
+void MainMenuScene::setGaugeAutoShiftLowerBound(GaugeType gaugeType) {
+  profileSelections.gaugeAutoShiftLowerBound = gaugeType;
+  profileSelections.applyTo(context.settings);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save gauge auto shift lower bound");
+  }
+  refreshGaugeSelectionButtons();
+}
+
 void MainMenuScene::refreshGaugeSelectionButtons() {
   refreshPlayOptionsPanel();
   refreshReadySettingsSummary();
@@ -4746,6 +4756,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
   playOptionsPanel->refresh(
       {.gaugeType = profileSelections.gaugeType,
        .gaugeAutoShift = profileSelections.gaugeAutoShift,
+       .gaugeAutoShiftLowerBound =
+           profileSelections.gaugeAutoShiftLowerBound,
        .playOption = effective.playOption,
        .defaultLaneOrder = {},
        .laneOrderEnabled = false,
@@ -4951,6 +4963,8 @@ void MainMenuScene::startSelectedCourse() {
   session->gaugeType = profileSelections.gaugeType;
   session->gaugeProfile = constraintSettings.gaugeProfile;
   session->gaugeAutoShift = profileSelections.gaugeAutoShift;
+  session->gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   session->longNoteMode = courseLongNoteMode;
   session->constraints = constraintSettings.rules;
   session->requestedPlayOption = coursePlayOptionForConstraints(
@@ -5043,6 +5057,8 @@ void MainMenuScene::startCourseDirect(
         options.gaugeType = session->gaugeType;
         options.gaugeProfile = session->gaugeProfile;
         options.gaugeAutoShift = session->gaugeAutoShift;
+        options.gaugeAutoShiftLowerBound =
+            session->gaugeAutoShiftLowerBound;
         options.playOption = playInfo.option;
         options.playOptionSeed = playInfo.seed;
         options.playOption2 = playInfo.option2;
@@ -5100,6 +5116,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
   const GaugeType gaugeType = profileSelections.gaugeType;
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeType gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = profileSelections.playOption;
   int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
@@ -5122,8 +5140,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   defer(
-      [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       selectedLongNoteMode, assistOption, pacemakerTarget, playback,
+      [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
+       autoKeySound, playOption, selectedLongNoteMode, assistOption,
+       pacemakerTarget, playback,
        canReusePreviewForStart, chartRandomInfo]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
@@ -5155,6 +5174,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .autoPlay = false,
                                     .gaugeType = gaugeType,
                                     .gaugeAutoShift = gaugeAutoShift,
+                                    .gaugeAutoShiftLowerBound =
+                                        gaugeAutoShiftLowerBound,
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
@@ -5203,6 +5224,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .autoPlay = false,
                                       .gaugeType = gaugeType,
                                       .gaugeAutoShift = gaugeAutoShift,
+                                      .gaugeAutoShiftLowerBound =
+                                          gaugeAutoShiftLowerBound,
                                       .playOption = playInfo.option,
                                       .playOptionSeed = playInfo.seed,
                                       .playOption2 = playInfo.option2,
@@ -5229,6 +5252,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .autoPlay = false,
                                          .gaugeType = gaugeType,
                                          .gaugeAutoShift = gaugeAutoShift,
+                                         .gaugeAutoShiftLowerBound =
+                                             gaugeAutoShiftLowerBound,
                                          .longNoteMode = selectedLongNoteMode,
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
@@ -7369,6 +7394,9 @@ void MainMenuScene::buildPlayOptionsModal() {
                                  GaugeAutoShiftMode autoShift) {
          setGaugeSelection(type, autoShift);
        },
+       .onGaugeLowerBoundSelected = [this](GaugeType type) {
+         setGaugeAutoShiftLowerBound(type);
+       },
        .onPlayOptionSelected = [this](const std::string &option) {
          setPlayOptionSelection(option);
        },
@@ -8705,6 +8733,8 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                          .autoPlay = true,
                          .gaugeType = profileSelections.gaugeType,
                          .gaugeAutoShift = profileSelections.gaugeAutoShift,
+                         .gaugeAutoShiftLowerBound =
+                             profileSelections.gaugeAutoShiftLowerBound,
                          .playOption = playInfo.option,
                          .playOptionSeed = playInfo.seed,
                          .playOption2 = playInfo.option2,
@@ -8785,6 +8815,8 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
 
   const GaugeType gaugeType = profileSelections.gaugeType;
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeType gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const audio::PlaybackRate playback{
       .percent = context.settings.selectedPlaybackRatePercent,
@@ -8792,8 +8824,8 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
   };
 
   defer(
-      [this, record, replayId, gaugeType, gaugeAutoShift, autoKeySound,
-       playback]() {
+      [this, record, replayId, gaugeType, gaugeAutoShift,
+       gaugeAutoShiftLowerBound, autoKeySound, playback]() {
         auto failGBattleLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -8840,6 +8872,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
                        .autoPlay = false,
                        .gaugeType = gaugeType,
                        .gaugeAutoShift = gaugeAutoShift,
+                       .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
                        .gbattleRecordData = recordData,
                        .playOption = recordData->playOption,
                        .playOptionSeed = recordData->playOptionSeed,
@@ -8905,6 +8938,8 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         session->gaugeType = replayData->initialGaugeType;
         session->gaugeProfile = replayData->gaugeProfile;
         session->gaugeAutoShift = replayData->gaugeAutoShift;
+        session->gaugeAutoShiftLowerBound =
+            replayData->gaugeAutoShiftLowerBound;
         session->longNoteMode = replayData->longNoteMode;
         session->constraints = constraintSettings.rules;
         session->requestedPlayOption = replayData->requestedPlayOption;

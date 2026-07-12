@@ -588,6 +588,8 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   root["gaugeProfile"] = gaugeProfileName(canonical.gaugeProfile);
   root["gaugeAutoShift"] =
       gaugeAutoShiftModeValue(canonical.gaugeAutoShift);
+  root["gaugeAutoShiftLowerBound"] =
+      gaugeTypeName(canonical.gaugeAutoShiftLowerBound);
   root["player1"] = playerOptionToJson(canonical.player1);
   root["player2"] = playerOptionToJson(canonical.player2);
   root["assistOption"] = canonical.assistOption;
@@ -648,6 +650,12 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
         "Unknown gauge profile in score provenance.");
     if (const auto mode = root.find("gaugeAutoShift"); mode != root.end()) {
       result.gaugeAutoShift = gaugeAutoShiftFromJson(*mode);
+    }
+    if (const auto lower = root.find("gaugeAutoShiftLowerBound");
+        lower != root.end()) {
+      result.gaugeAutoShiftLowerBound = enumOrThrow(
+          gaugeTypeFromName(lower->get<std::string>()),
+          "Unknown gauge auto shift lower bound in score provenance.");
     }
     if (const auto player = root.find("player1"); player != root.end()) {
       result.player1 = playerOptionFromJson(*player);
@@ -748,6 +756,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.gaugeType = input.gaugeType;
   result.gaugeProfile = input.gaugeProfile;
   result.gaugeAutoShift = input.gaugeAutoShift;
+  result.gaugeAutoShiftLowerBound = input.gaugeAutoShiftLowerBound;
   result.player1 = input.player1;
   result.player2 = input.player2;
   result.assistOption = assist_options::normalize(input.assistOption);
@@ -800,6 +809,8 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
         stage.gaugeType != stages.front().gaugeType ||
         stage.gaugeProfile != stages.front().gaugeProfile ||
         stage.gaugeAutoShift != stages.front().gaugeAutoShift ||
+        stage.gaugeAutoShiftLowerBound !=
+            stages.front().gaugeAutoShiftLowerBound ||
         stage.player1 != stages.front().player1 ||
         stage.player2 != stages.front().player2 ||
         stage.assistOption != stages.front().assistOption ||

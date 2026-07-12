@@ -201,6 +201,14 @@ void PracticePanelView::build(OverlayPortal *portal) {
 
   content->addView(
       makeRow("Gauge", dropdowns[static_cast<size_t>(DropDownIndex::Gauge)]));
+  content->addView(makeRow(
+      "Auto Shift",
+      dropdowns[static_cast<size_t>(DropDownIndex::GaugeAutoShift)]));
+  gaugeLowerBoundRow = makeRow(
+      "Auto Shift Lower Bound",
+      dropdowns[static_cast<size_t>(DropDownIndex::GaugeLowerBound)]);
+  gaugeLowerBoundRow->setDisplay(YGDisplayNone);
+  content->addView(gaugeLowerBoundRow);
 
   startingGaugeSlider = new SnappedSlider([this](int value) {
     currentConfiguration.startingGaugePercent = value;
@@ -403,6 +411,18 @@ void PracticePanelView::selectDropdownOption(DropDownIndex index,
       publishConfiguration();
     }
     break;
+  case DropDownIndex::GaugeAutoShift:
+    if (practice::applyPracticeGaugeAutoShiftOption(currentConfiguration,
+                                                    id)) {
+      publishConfiguration();
+    }
+    break;
+  case DropDownIndex::GaugeLowerBound:
+    if (practice::applyPracticeGaugeLowerBoundOption(currentConfiguration,
+                                                     id)) {
+      publishConfiguration();
+    }
+    break;
   case DropDownIndex::Mode:
     if (id == "pitch") {
       currentConfiguration.playback.mode = audio::PlaybackMode::PitchShift;
@@ -464,6 +484,30 @@ void PracticePanelView::refreshControls() {
   refresh(DropDownIndex::Gauge, "Gauge",
           practice::practiceGaugeOptionId(currentConfiguration),
           std::move(practiceGaugeOptions));
+  std::vector<DropdownView::Option> autoShiftOptions;
+  for (const auto &option : practice::practiceGaugeAutoShiftOptions()) {
+    autoShiftOptions.push_back(
+        {.id = std::string(option.id), .label = std::string(option.label)});
+  }
+  refresh(DropDownIndex::GaugeAutoShift, "Auto Shift",
+          practice::practiceGaugeAutoShiftOptionId(currentConfiguration),
+          std::move(autoShiftOptions));
+  std::vector<DropdownView::Option> lowerBoundOptions;
+  for (const auto &option : practice::practiceGaugeOptions()) {
+    lowerBoundOptions.push_back(
+        {.id = std::string(option.id), .label = std::string(option.label)});
+  }
+  refresh(DropDownIndex::GaugeLowerBound, "Auto Shift Lower Bound",
+          practice::practiceGaugeLowerBoundOptionId(currentConfiguration),
+          std::move(lowerBoundOptions));
+  if (gaugeLowerBoundRow != nullptr) {
+    const bool visible =
+        currentConfiguration.gaugeAutoShift ==
+            GaugeAutoShiftMode::BestClear ||
+        currentConfiguration.gaugeAutoShift ==
+            GaugeAutoShiftMode::SelectToUnder;
+    gaugeLowerBoundRow->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+  }
   const std::string modeId =
       currentConfiguration.playback.mode == audio::PlaybackMode::TimeStretch
           ? "stretch"

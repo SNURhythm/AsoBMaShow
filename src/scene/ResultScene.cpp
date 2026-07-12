@@ -174,7 +174,8 @@ void appendMissingCourseGaugeHistory(RhythmState &state,
 RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(session.gaugeType, session.gaugeAutoShift,
-                           session.gaugeProfile);
+                           session.gaugeProfile,
+                           session.gaugeAutoShiftLowerBound);
   if (session.carriedGauge.has_value()) {
     aggregate.restoreGaugeState(*session.carriedGauge);
   }
@@ -250,6 +251,7 @@ courseReplayDataForSession(const CoursePlaySession &session,
   replay.initialGaugeType = session.gaugeType;
   replay.gaugeProfile = session.gaugeProfile;
   replay.gaugeAutoShift = session.gaugeAutoShift;
+  replay.gaugeAutoShiftLowerBound = session.gaugeAutoShiftLowerBound;
   replay.longNoteMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   replay.finalScore = resultState.getScore();
   replay.maxCombo = session.maxCombo;
@@ -998,6 +1000,7 @@ void ResultScene::continueCourse() {
   nextOptions.gaugeType = session->gaugeType;
   nextOptions.gaugeProfile = session->gaugeProfile;
   nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+  nextOptions.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
   nextOptions.playOption = playInfo.option;
   nextOptions.playOptionSeed = playInfo.seed;
   nextOptions.playOption2 = playInfo.option2;
@@ -1062,6 +1065,8 @@ void ResultScene::startRetry(bool samePattern) {
             ? practiceConfiguration->gaugeType
             : practiceOptions.gaugeType;
     retrySource.gaugeAutoShift = practiceOptions.gaugeAutoShift;
+    retrySource.gaugeAutoShiftLowerBound =
+        practiceOptions.gaugeAutoShiftLowerBound;
   }
 
   context.jukebox.stop();
@@ -1112,6 +1117,10 @@ void ResultScene::startRetry(bool samePattern) {
             practiceConfiguration.has_value()
                 ? practiceConfiguration->gaugeAutoShift
                 : retrySource.gaugeAutoShift;
+        options.gaugeAutoShiftLowerBound =
+            practiceConfiguration.has_value()
+                ? practiceConfiguration->gaugeAutoShiftLowerBound
+                : retrySource.gaugeAutoShiftLowerBound;
         options.longNoteMode = normalizeChartLongNoteModeValue(
             retrySource.chartMeta.LnMode);
         options.assistOption = retrySource.assistOption;

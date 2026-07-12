@@ -90,6 +90,7 @@ struct ScoreProvenance {
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
   std::string assistOption = assist_options::kOff;
@@ -127,6 +128,7 @@ struct ScoreProvenanceBuildInput {
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
   std::string assistOption = assist_options::kOff;

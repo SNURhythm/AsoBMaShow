@@ -1292,7 +1292,8 @@ RhythmState courseResultStateForReplayVideo(
     const std::vector<CourseReplayVideoStage> &stages) {
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
-                           replay.gaugeProfile);
+                           replay.gaugeProfile,
+                           replay.gaugeAutoShiftLowerBound);
   aggregate.resetJudgeCounts();
   aggregate.comboBreak = 0;
   aggregate.maxCombo = 0;
@@ -2800,7 +2801,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           chart, replay, selectedPacemakerTarget, previousBest);
   RhythmState pacemakerState(&chart, false);
   pacemakerState.configureGauge(replay.initialGaugeType,
-                                replay.gaugeAutoShift);
+                                replay.gaugeAutoShift,
+                                GaugeProfile::Standard,
+                                replay.gaugeAutoShiftLowerBound);
   renderer.setPacemakerTarget(activePacemakerTarget);
   renderer.setPacemakerStatus(
       pacemaker::snapshotForState(activePacemakerTarget, pacemakerState));
