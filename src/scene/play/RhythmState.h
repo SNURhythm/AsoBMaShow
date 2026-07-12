@@ -55,6 +55,22 @@ inline const char *gaugeAutoShiftShortLabel(GaugeAutoShiftMode mode) {
   }
 }
 
+inline const char *gaugeAutoShiftMenuLabel(GaugeAutoShiftMode mode) {
+  switch (mode) {
+  case GaugeAutoShiftMode::SelectToUnder:
+    return "Select to Under (GAS)";
+  case GaugeAutoShiftMode::Continue:
+    return "Continue at 0%";
+  case GaugeAutoShiftMode::SurvivalToGroove:
+    return "Survival to Groove";
+  case GaugeAutoShiftMode::BestClear:
+    return "Best Clear";
+  case GaugeAutoShiftMode::None:
+  default:
+    return "Off";
+  }
+}
+
 enum class GaugeProfile {
   Standard,
   CourseDefault,

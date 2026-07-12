@@ -93,7 +93,7 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
 
 std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
   if (gaugeAutoShiftEnabled(autoShift)) {
-    return gaugeAutoShiftShortLabel(autoShift);
+    return gaugeAutoShiftMenuLabel(autoShift);
   }
   switch (type) {
   case GaugeType::AssistedEasy:

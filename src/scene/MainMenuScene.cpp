@@ -920,7 +920,7 @@ int clearRankForGaugeType(GaugeType gaugeType) {
 std::string gaugeButtonLabel(GaugeType gaugeType,
                              GaugeAutoShiftMode autoShift) {
   if (gaugeAutoShiftEnabled(autoShift)) {
-    return gaugeAutoShiftShortLabel(autoShift);
+    return gaugeAutoShiftMenuLabel(autoShift);
   }
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
