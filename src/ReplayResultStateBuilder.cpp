@@ -99,7 +99,11 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
 
   for (const auto &event : replay.events) {
     if (event.action == ReplayEventAction::Gauge) {
-      state.gaugeHistory.push_back(event.gauge);
+      if (event.judgement == Great || event.judgement == Bad) {
+        state.applyGaugeJudgementRate(event.judgement, 0.5f);
+      } else {
+        state.gaugeHistory.push_back(event.gauge);
+      }
       syncReplayResultGaugeSnapshot(state, event);
       continue;
     }

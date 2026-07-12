@@ -2597,7 +2597,11 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     applyReplayGauge(event);
     break;
   case ReplayEventAction::Gauge:
-    state->gaugeHistory.push_back(event.gauge);
+    if (event.judgement == Great || event.judgement == Bad) {
+      state->applyGaugeJudgementRate(event.judgement, 0.5f);
+    } else {
+      state->gaugeHistory.push_back(event.gauge);
+    }
     applyReplayGauge(event);
     break;
   }
@@ -2643,7 +2647,14 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     return;
   }
 
-  bool gaugeUpdated = false;
+  const auto applyGaugeTick = [&](Judgement judgement) {
+    state->applyGaugeJudgementRate(judgement, 0.5f);
+    updateGaugeStatusText();
+    appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr,
+                      gameplayTimeMicros, gameplayTimeMicros,
+                      JudgeResult(judgement, 0));
+    return state->isEnding;
+  };
   std::vector<bms_parser::LongNote *> activeHellChargeNotes;
   for (const auto *measure : chart->Measures) {
     if (measure == nullptr) {
@@ -2689,14 +2700,16 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
                              options.autoPlay;
         balance += gaining ? activeDelta : -activeDelta;
         while (balance > kHellChargeGaugeTickMicros) {
-          state->applyGaugeJudgementRate(Great, 0.5f);
           balance -= kHellChargeGaugeTickMicros;
-          gaugeUpdated = true;
+          if (applyGaugeTick(Great)) {
+            return;
+          }
         }
         while (balance < -kHellChargeGaugeTickMicros) {
-          state->applyGaugeJudgementRate(Bad, 0.5f);
           balance += kHellChargeGaugeTickMicros;
-          gaugeUpdated = true;
+          if (applyGaugeTick(Bad)) {
+            return;
+          }
         }
       }
     }
@@ -2710,13 +2723,6 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     } else {
       ++it;
     }
-  }
-
-  if (gaugeUpdated) {
-    updateGaugeStatusText();
-    appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr,
-                      gameplayTimeMicros, gameplayTimeMicros,
-                      JudgeResult(None, 0));
   }
 }
 
