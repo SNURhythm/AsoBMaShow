@@ -511,14 +511,10 @@ ScoreStageProvenance stageFromJson(const Json &value) {
 }
 
 bool buildIsModified(const ScoreProvenanceBuildInput &input) {
-  const bool noFailAutoShift =
-      input.gaugeAutoShift == GaugeAutoShiftMode::Continue ||
-      input.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove;
   return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
          input.practice || assist_options::isEnabled(input.assistOption) ||
          input.judgeRankSource != JudgeRankSource::Chart ||
          gaugeProfileIsCourse(input.gaugeProfile) ||
-         noFailAutoShift ||
          !input.playback.neutral() || input.judgeWindowScalePercent != 100 ||
          input.startingGaugePercent.has_value();
 }
