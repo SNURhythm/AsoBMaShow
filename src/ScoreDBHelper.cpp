@@ -1935,17 +1935,19 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScoreOnConnection(
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
   const bool legacyLongNoteModeFallback = longNoteMode == 1;
+  const auto bestOrder = score_cache_queries::detail::bestScoreOrderKey(
+      "s", score_cache_queries::detail::fullComboClearRankExpr("s"), "id");
 
   std::string query =
       "SELECT score, max_score, max_combo, combo_break, final_gauge,"
       "clear_type, created_at "
-      "FROM scores WHERE ";
+      "FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
            "AND (? = '' OR created_at < ?) "
            "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, "
-           "score DESC, clear_type DESC, created_at DESC, id DESC "
-           "LIMIT 1";
+           + score_cache_queries::detail::bestScoreOrderBySql(bestOrder) +
+           " LIMIT 1";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt, "loading best score",

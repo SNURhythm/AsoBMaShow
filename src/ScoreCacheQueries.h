@@ -4,6 +4,7 @@
 #include "SqliteRAII.h"
 #include "scene/play/RhythmState.h"
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -82,6 +83,28 @@ inline std::string scoreRankLabelExpr(std::string_view alias) {
          "ELSE 'F' END)";
 }
 
+using BestScoreOrderKey = std::array<std::string, 4>;
+
+inline BestScoreOrderKey
+bestScoreOrderKey(std::string_view alias, std::string clearRankExpression,
+                  std::string_view idColumn) {
+  const std::string prefix(alias);
+  return {prefix + ".score", clearRankExpression,
+          prefix + ".created_at", prefix + "." + std::string(idColumn)};
+}
+
+inline std::string bestScoreOrderBySql(const BestScoreOrderKey &key) {
+  return key[0] + " DESC, " + key[1] + " DESC, " + key[2] + " DESC, " +
+         key[3] + " DESC";
+}
+
+inline std::string bestScoreCandidateWinsSql(
+    const BestScoreOrderKey &candidate, const BestScoreOrderKey &incumbent) {
+  return "(" + candidate[0] + ", " + candidate[1] + ", " + candidate[2] +
+         ", " + candidate[3] + ") > (" + incumbent[0] + ", " +
+         incumbent[1] + ", " + incumbent[2] + ", " + incumbent[3] + ")";
+}
+
 inline std::string scoreColumnExpr(const std::string &column) {
   if (column == "clear_rank") {
     return "s.clear_rank";
@@ -122,6 +145,11 @@ inline std::string clearRankUpsertSql() {
 }
 
 inline std::string bestScoreUpsertSql() {
+  const auto candidate =
+      bestScoreOrderKey("excluded", "excluded.clear_rank", "score_id");
+  const auto incumbent = bestScoreOrderKey(
+      "score_sha256_best_score_cache",
+      "score_sha256_best_score_cache.clear_rank", "score_id");
   return "INSERT INTO score_sha256_best_score_cache("
          "chart_sha256, ln_mode, score_id, score, max_score, max_combo, "
          "combo_break, final_gauge, clear_type, clear_rank, score_rank, "
@@ -136,17 +164,8 @@ inline std::string bestScoreUpsertSql() {
          "combo_break = excluded.combo_break, "
          "final_gauge = excluded.final_gauge, clear_type = excluded.clear_type, "
          "clear_rank = excluded.clear_rank, score_rank = excluded.score_rank, "
-         "created_at = excluded.created_at WHERE "
-         "excluded.score > score_sha256_best_score_cache.score OR "
-         "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_rank > score_sha256_best_score_cache.clear_rank) OR "
-         "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_rank = score_sha256_best_score_cache.clear_rank AND "
-         "excluded.created_at > score_sha256_best_score_cache.created_at) OR "
-         "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_rank = score_sha256_best_score_cache.clear_rank AND "
-         "excluded.created_at = score_sha256_best_score_cache.created_at AND "
-         "excluded.score_id > score_sha256_best_score_cache.score_id);";
+         "created_at = excluded.created_at WHERE " +
+         bestScoreCandidateWinsSql(candidate, incumbent) + ";";
 }
 
 inline std::string scoreIdentityCte(std::string_view schema,
@@ -408,15 +427,15 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
     return error;
   }
 
-  const std::string effectiveClearRank =
-      detail::fullComboClearRankExpr("i", "i.playback_percent");
+  const auto bestOrder = detail::bestScoreOrderKey(
+      "i", detail::fullComboClearRankExpr("i", "i.playback_percent"),
+      "score_id");
   const std::string insertBest =
       "WITH identities AS (" + identityCte +
       "), ranked AS ("
       "SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.chart_sha256, i.ln_mode "
-      "ORDER BY i.score DESC, " + effectiveClearRank +
-      " DESC, i.created_at DESC, "
-      "i.score_id DESC) AS row_number FROM identities i"
+      "ORDER BY " + detail::bestScoreOrderBySql(bestOrder) +
+      ") AS row_number FROM identities i"
       ") INSERT INTO " +
       bestTable +
       "(chart_sha256, ln_mode, score_id, score, max_score, max_combo, "

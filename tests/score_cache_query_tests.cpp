@@ -281,6 +281,16 @@ int main() {
                      "score_db.score_sha256_best_score_cache WHERE "
                      "chart_sha256 = 'effective-tie' AND ln_mode = 0"),
             "equal score keeps the higher effective clear rank");
+  const auto directBestOrder = score_cache_queries::detail::bestScoreOrderBySql(
+      score_cache_queries::detail::bestScoreOrderKey(
+          "s", score_cache_queries::detail::fullComboClearRankExpr("s"),
+          "id"));
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT clear_type FROM score_db.scores s WHERE "
+                     "chart_sha256 = 'effective-tie' AND ln_mode = 0 ORDER BY " +
+                         directBestOrder + " LIMIT 1"),
+            "direct best score uses the shared effective-rank ordering");
   ASSERT_EQ(0,
             queryInt(db,
                      "SELECT COUNT(*) FROM "
