@@ -27,7 +27,7 @@ constexpr std::array<GaugeOption, 5> kGaugeAutoShiftOptions = {{
      .label = "Best Clear",
      .gaugeAutoShift = GaugeAutoShiftMode::BestClear},
     {.id = "select_to_under",
-     .label = "Select to Under (GAS)",
+     .label = "Select to Under",
      .gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder},
 }};
 

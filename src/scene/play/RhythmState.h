@@ -58,7 +58,7 @@ inline const char *gaugeAutoShiftShortLabel(GaugeAutoShiftMode mode) {
 inline const char *gaugeAutoShiftMenuLabel(GaugeAutoShiftMode mode) {
   switch (mode) {
   case GaugeAutoShiftMode::SelectToUnder:
-    return "Select to Under (GAS)";
+    return "Select to Under";
   case GaugeAutoShiftMode::Continue:
     return "Continue at 0%";
   case GaugeAutoShiftMode::SurvivalToGroove:
