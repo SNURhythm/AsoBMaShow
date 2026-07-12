@@ -696,6 +696,13 @@ void MusicPlayerScene::update(float) {
     if (!nativeStatus.empty()) {
       setStatus(nativeStatus);
     }
+    const bool appliedClubMode = context.musicPlayer.ClubMode();
+    if (context.settings.musicPlayerClubModeEnabled != appliedClubMode) {
+      context.settings.musicPlayerClubModeEnabled = appliedClubMode;
+      if (!context.saveSettings()) {
+        SDL_Log("Failed to save Music Player Club Beat setting");
+      }
+    }
   }
   if (queueMayHaveChanged) {
     refreshActiveQueueList(true);
@@ -4121,11 +4128,12 @@ void MusicPlayerScene::toggleClubMode() {
     return;
   }
 
-  context.settings.musicPlayerClubModeEnabled = enabled;
-  if (!context.saveSettings()) {
-    setStatus("Club Beat changed, but could not save it.");
-  } else {
-    setStatus(status);
+  setStatus(status);
+  if (context.musicPlayer.ClubMode() == enabled) {
+    context.settings.musicPlayerClubModeEnabled = enabled;
+    if (!context.saveSettings()) {
+      setStatus("Club Beat changed, but could not save it.");
+    }
   }
   refreshClubModeControl();
 }

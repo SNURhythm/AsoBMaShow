@@ -1198,19 +1198,23 @@ audio::PlaybackRate MusicPlayerService::PlaybackRate() const {
 bool MusicPlayerService::SetClubMode(bool enabled,
                                      std::string &statusMessage) {
   std::optional<music_playlist::MusicTrack> track;
+  bool appliedImmediately = false;
   {
     std::lock_guard<std::mutex> lock(stateMutex);
     if (clubMode == enabled) {
       statusMessage = enabled ? "Club Beat is on." : "Club Beat is off.";
       return true;
     }
-    clubMode = enabled;
     track = loadedTrack;
+    if (!track) {
+      clubMode = enabled;
+      appliedImmediately = true;
+    }
   }
 
   StopPlaybackWorker();
   StopAdjacentPreloadWorker();
-  if (!track) {
+  if (appliedImmediately) {
     statusMessage = enabled ? "Club Beat on." : "Club Beat off.";
     return true;
   }
@@ -1638,7 +1642,7 @@ void MusicPlayerService::ClubModeSwitchWorker(
   std::vector<std::filesystem::path> keepCachePaths;
   {
     std::lock_guard<std::mutex> lock(stateMutex);
-    if (!isCurrentRequest() || clubMode != requestedClubMode || !loadedTrack ||
+    if (!isCurrentRequest() || !loadedTrack ||
         !music_playlist::SameTrackIdentity(*loadedTrack, track)) {
       return;
     }
@@ -1660,6 +1664,7 @@ void MusicPlayerService::ClubModeSwitchWorker(
           (previousState.playing && !native_music_player::Play(errorMessage))) {
         statusMessage = errorMessage;
       } else {
+        clubMode = requestedClubMode;
         lastCacheResult = cacheResult;
         if (cacheResult.durationMicros > 0) {
           loadedTrack->durationMicros = cacheResult.durationMicros;
