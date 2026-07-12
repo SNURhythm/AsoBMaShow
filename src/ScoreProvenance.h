@@ -152,6 +152,9 @@ serializeValidatedScoreProvenance(const ScoreProvenance &provenance,
 [[nodiscard]] std::optional<ScoreProvenance>
 deserializeScoreProvenance(std::string_view serialized, std::string &error);
 
+[[nodiscard]] ScoreEligibility
+scoreEligibilityForProvenance(const ScoreProvenance &provenance);
+
 [[nodiscard]] ScoreProvenance
 makeScoreProvenance(const ScoreProvenanceBuildInput &input);
 

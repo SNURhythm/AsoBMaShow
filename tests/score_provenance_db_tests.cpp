@@ -716,7 +716,8 @@ void testVersion4MigrationPreservesOutcomesAndRows(
   assert(helper.EnsureSchema());
 
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 7);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") ==
+         ScoreDBHelper::kCurrentSchemaVersion);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   assert(chartOutcome(migrated.get()) == chartBefore);
@@ -764,7 +765,8 @@ void testVersion5MigrationPreservesRawCourseEvidence(
   ScoreDBHelper helper(path);
   assert(helper.EnsureSchema());
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 7);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") ==
+         ScoreDBHelper::kCurrentSchemaVersion);
   assert(columnExists(migrated.get(), "course_scores", "legacy_course_key"));
   assert(columnExists(migrated.get(), "course_scores", "ln_mode"));
   assert(indexExists(migrated.get(),
@@ -822,12 +824,14 @@ void testVersion6MigrationIsSavepointSafeAndAtomic(
     ScoreDBHelper helper(commitPath);
     assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-commit"),
                               sampleState(1, 1)));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
     execOrAbort(db.get(), "COMMIT");
   }
   auto committed = openDatabase(commitPath);
-  assert(queryInt(committed.get(), "PRAGMA user_version") == 7);
+  assert(queryInt(committed.get(), "PRAGMA user_version") ==
+         ScoreDBHelper::kCurrentSchemaVersion);
   assert(columnExists(committed.get(), "course_scores", "ln_mode"));
   committed.reset();
 
@@ -839,7 +843,8 @@ void testVersion6MigrationIsSavepointSafeAndAtomic(
     ScoreDBHelper helper(rollbackPath);
     assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-rollback"),
                               sampleState(1, 1)));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
     execOrAbort(db.get(), "ROLLBACK");
   }
@@ -900,16 +905,15 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
     auto migrated = openDatabase(path);
     assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 2);
     assert(queryInt(migrated.get(),
-                    "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                    "SELECT COUNT(*) FROM score_sha256_clear_rank_cache WHERE "
                     "chart_sha256='" +
-                        std::string(kShaA) + "'") ==
-           kClearTypeAssistedEasyClearRank);
-    assert(queryInt(migrated.get(), "PRAGMA user_version") == 7);
+                        std::string(kShaA) + "'") == 0);
+    assert(queryInt(migrated.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(migrated.get(),
-                    "SELECT clear_rank FROM score_sha256_best_score_cache "
+                    "SELECT COUNT(*) FROM score_sha256_best_score_cache "
                     "WHERE chart_sha256='" +
-                        std::string(kShaA) + "'") ==
-           kClearTypeAssistedEasyClearRank);
+                        std::string(kShaA) + "'") == 0);
     assert(queryInt(migrated.get(),
                     "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
                     "chart_sha256='" +
@@ -932,13 +936,13 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
     assert(reopened.EnsureSchema());
   }
   auto idempotent = openDatabase(path);
-  assert(queryInt(idempotent.get(), "PRAGMA user_version") == 7);
+  assert(queryInt(idempotent.get(), "PRAGMA user_version") ==
+         ScoreDBHelper::kCurrentSchemaVersion);
   assert(schemaSnapshot(idempotent.get()) == schemaAfterMigration);
   assert(queryInt(idempotent.get(),
-                  "SELECT rank FROM score_sha256_clear_rank_cache WHERE "
+                  "SELECT COUNT(*) FROM score_sha256_clear_rank_cache WHERE "
                   "chart_sha256='" +
-                      std::string(kShaA) + "'") ==
-         kClearTypeAssistedEasyClearRank);
+                      std::string(kShaA) + "'") == 0);
 
   const auto failurePath =
       root / "migration-v7-summary-semantics-failure" / "score.db";
@@ -1332,13 +1336,13 @@ void testIgnoredRecoveryUpdateDoesNotAdvanceRevision(
          course_identity::makeCourseKey(md5Charts, "[]"));
 }
 
-void testExactFutureVersionEightRejectsScoreRecovery(
+void testExactFutureVersionNineRejectsScoreRecovery(
     const std::filesystem::path &root) {
-  const auto path = root / "future-v8-recovery" / "score.db";
+  const auto path = root / "future-v9-recovery" / "score.db";
   createFutureSentinelDatabase(path);
   {
     auto db = openDatabase(path);
-    execOrAbort(db.get(), "PRAGMA user_version=8");
+    execOrAbort(db.get(), "PRAGMA user_version=9");
   }
   const auto before = rawDatabaseFamilySnapshot(path);
   ScoreDBHelper helper(path);
@@ -1348,7 +1352,7 @@ void testExactFutureVersionEightRejectsScoreRecovery(
   session.courseKey = course_identity::makeCourseKey(
       std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaA)}},
       "[]");
-  session.entries.push_back({.meta = sampleMeta(root, "future-v8")});
+  session.entries.push_back({.meta = sampleMeta(root, "future-v9")});
   assert(!helper.SaveCourseScore(session, sampleState(1, 0), 1, 1));
   const CourseScoreRecoveryResult result = helper.RecoverCourseRecords({});
   assert(!result.ok());
@@ -1403,7 +1407,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(retargetable.GetRevision() > revisionBefore);
 }
 
-void testAssistedPlaybackCapsScoreAndCourseClearRanks(
+void testModifiedPlaybackDoesNotUpdateBestScores(
     const std::filesystem::path &root) {
   const auto path = root / "assisted-clear-cap" / "score.db";
   ScoreDBHelper helper(path);
@@ -1439,10 +1443,73 @@ void testAssistedPlaybackCapsScoreAndCourseClearRanks(
   db.reset();
 
   const ScoreClearRankCache cache = helper.LoadBestClearRanks();
-  assert(cache.bestRankFor(meta) == kClearTypeAssistedEasyClearRank);
+  assert(cache.bestRankFor(meta) == kNoClearTypeRank);
   assert(cache.bestCourseRankFor(session.courseKey, session.courseId,
                                  meta.LnMode) ==
-         kClearTypeAssistedEasyClearRank);
+         kNoClearTypeRank);
+  assert(!helper.LoadBestScore(meta).has_value());
+  assert(!helper.LoadBestCourseScore(session).has_value());
+}
+
+void testVersion8MigrationReclassifiesBeatorajaValidScores(
+    const std::filesystem::path &root) {
+  const auto path = root / "migration-v8-beatoraja-eligibility" / "score.db";
+  ScoreDBHelper initial(path);
+  assert(initial.EnsureSchema());
+
+  const auto meta = sampleMeta(root, "migration-v8-beatoraja-eligibility");
+  const auto state = sampleState(20, 5);
+
+  ScoreProvenance chartProvenance = sampleProvenance("migration-v8-chart");
+  chartProvenance.gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove;
+  chartProvenance.gaugeAutoShiftLowerBound = GaugeType::Hard;
+  chartProvenance.judgeWindowScalePercent = 80;
+  chartProvenance.eligibility = ScoreEligibility::Modified;
+  assert(initial.SaveScore(meta, state, chartProvenance));
+
+  CoursePlaySession session;
+  session.courseId = 92;
+  session.courseName = "Beatoraja-valid course";
+  session.constraintJson = "{}";
+  session.longNoteMode = meta.LnMode;
+  session.entries.push_back({.meta = meta});
+  session.courseKey = course_identity::makeCourseKey(session);
+
+  ScoreProvenance courseProvenance =
+      sampleProvenance("migration-v8-course");
+  courseProvenance.gaugeProfile = GaugeProfile::CourseDefault;
+  courseProvenance.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  courseProvenance.stages.front().judgeRankSource =
+      JudgeRankSource::CourseConstraint;
+  courseProvenance.eligibility = ScoreEligibility::Modified;
+  assert(initial.SaveCourseScore(session, state, 1, 1, courseProvenance));
+
+  assert(!initial.LoadBestScore(meta).has_value());
+  assert(!initial.LoadBestCourseScore(session).has_value());
+  initial.Shutdown();
+
+  {
+    auto db = openDatabase(path);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+    execOrAbort(db.get(), "PRAGMA user_version = 7");
+  }
+
+  ScoreDBHelper migrated(path);
+  assert(migrated.EnsureSchema());
+  assert(migrated.LoadBestScore(meta).has_value());
+  assert(migrated.LoadBestCourseScore(session).has_value());
+
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ScoreDBHelper::kCurrentSchemaVersion);
+  for (const std::string table : {"scores", "course_scores"}) {
+    assert(queryInt(db.get(),
+                    "SELECT eligibility FROM " + table + " WHERE id=1") ==
+           static_cast<int>(ScoreEligibility::Verified));
+    assert(readStoredProvenance(db.get(), table, 1).eligibility ==
+           ScoreEligibility::Verified);
+  }
 }
 
 void testFutureVersionRejectsWithoutSchemaMutation(
@@ -1484,7 +1551,8 @@ void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
 
   assert(helper.InsertScore(db.get(), meta, state));
   assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ScoreDBHelper::kCurrentSchemaVersion);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
 }
@@ -1597,10 +1665,12 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
     execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   }
 
@@ -1609,7 +1679,8 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
     execOrAbort(db.get(), "ROLLBACK");
     assert(queryInt(db.get(), "PRAGMA user_version") == 4);
@@ -1622,10 +1693,12 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
     execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   }
 
@@ -1634,7 +1707,8 @@ void testPublicWritesNestInsideCallerTransactions(
     auto db = prepareLegacySchema(helper);
     execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
     assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(db.get(), "PRAGMA user_version") ==
+           ScoreDBHelper::kCurrentSchemaVersion);
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
     execOrAbort(db.get(), "ROLLBACK");
     assert(queryInt(db.get(), "PRAGMA user_version") == 4);
@@ -1939,7 +2013,7 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const auto path = root / "required-pragma-error" / "score.db";
     auto db = openDatabase(path);
     execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT)");
-    execOrAbort(db.get(), "PRAGMA user_version=7");
+    execOrAbort(db.get(), "PRAGMA user_version=8");
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
     ScopedDenyJournalModeAutoExtension denyJournalMode;
@@ -2104,9 +2178,10 @@ int main() {
   testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(root);
   testCourseRecoveryFailsClosedOnAmbiguityAndFailure(root);
   testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
-  testExactFutureVersionEightRejectsScoreRecovery(root);
+  testExactFutureVersionNineRejectsScoreRecovery(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
-  testAssistedPlaybackCapsScoreAndCourseClearRanks(root);
+  testModifiedPlaybackDoesNotUpdateBestScores(root);
+  testVersion8MigrationReclassifiesBeatorajaValidScores(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
   testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(root);
   testFutureVersionRejectsDirectScoreWrites(root);

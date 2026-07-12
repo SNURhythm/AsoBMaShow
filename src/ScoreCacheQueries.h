@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProfileDatabaseActivity.h"
+#include "ScoreProvenance.h"
 #include "SqliteRAII.h"
 #include "scene/play/RhythmState.h"
 
@@ -119,6 +120,11 @@ inline std::string keyHasValueExpr(std::string_view keyExpr) {
   return "NULLIF(trim(" + std::string(keyExpr) + "), '') IS NOT NULL";
 }
 
+inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
+  return std::string(alias) + ".eligibility <> " +
+         std::to_string(static_cast<int>(ScoreEligibility::Modified));
+}
+
 inline std::string rankLookupForMode(const std::string &sha256Expr,
                                      const std::string &lnModeExpr) {
   return "(SELECT s.rank FROM " + clearRankSummaryTable(kScoreDatabaseSchema) +
@@ -139,7 +145,8 @@ inline std::string clearRankUpsertSql() {
   return "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, "
          "rank) SELECT lower(trim(NEW.chart_sha256)), NEW.ln_mode, " +
          fullComboClearRankExpr("NEW") + " WHERE " +
-         keyHasValueExpr("NEW.chart_sha256") +
+         keyHasValueExpr("NEW.chart_sha256") + " AND " +
+         scoreParticipatesInBestExpr("NEW") +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET rank = "
          "max(score_sha256_clear_rank_cache.rank, excluded.rank);";
 }
@@ -158,6 +165,7 @@ inline std::string bestScoreUpsertSql() {
          "NEW.final_gauge, NEW.clear_type, " +
          fullComboClearRankExpr("NEW") + ", " + scoreRankLabelExpr("NEW") +
          ", NEW.created_at WHERE " + keyHasValueExpr("NEW.chart_sha256") +
+         " AND " + scoreParticipatesInBestExpr("NEW") +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET "
          "score_id = excluded.score_id, score = excluded.score, "
          "max_score = excluded.max_score, max_combo = excluded.max_combo, "
@@ -173,11 +181,13 @@ inline std::string scoreIdentityCte(std::string_view schema,
   const std::string scores = qualifiedName(schema, "scores");
   const std::string playbackPercent =
       hasProvenance ? playbackPercentExpr("s") : "100";
+  const std::string eligibilityFilter =
+      hasProvenance ? " AND " + scoreParticipatesInBestExpr("s") : "";
   return "SELECT lower(trim(chart_sha256)) AS chart_sha256, ln_mode, "
          "id AS score_id, score, max_score, max_combo, combo_break, "
          "final_gauge, clear_type, " +
          playbackPercent + " AS playback_percent, created_at FROM " + scores +
-         " s WHERE " + keyHasValueExpr("chart_sha256");
+         " s WHERE " + keyHasValueExpr("chart_sha256") + eligibilityFilter;
 }
 
 inline bool scoreTableHasProvenance(sqlite3 *db, std::string_view schema) {

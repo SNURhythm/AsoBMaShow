@@ -34,6 +34,7 @@ constexpr int kLegacyScoreDatabaseSchemaVersion = 4;
 constexpr int kScoreProvenanceSchemaVersion = 5;
 constexpr int kScoreCourseIdentitySchemaVersion = 6;
 constexpr int kScoreSummarySemanticsSchemaVersion = 7;
+constexpr int kScoreBestEligibilitySchemaVersion = 8;
 constexpr int kScoreDatabaseSchemaVersion =
     ScoreDBHelper::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
@@ -490,6 +491,149 @@ bool migrateScoreDatabaseToVersion7(sqlite3 *db) {
   return true;
 }
 
+bool reclassifyStoredScoreEligibility(sqlite3 *db, const char *tableName) {
+  struct StoredProvenance {
+    sqlite3_int64 id = 0;
+    int eligibility = static_cast<int>(ScoreEligibility::LegacyUnverified);
+    ScoreProvenance provenance;
+  };
+
+  std::vector<StoredProvenance> rows;
+  const std::string selectQuery =
+      "SELECT id, eligibility, provenance_json FROM " +
+      std::string(tableName) + " ORDER BY id";
+  SqliteStatementHandle selectStmt;
+  if (!prepareSqliteStatementLogged(db, selectQuery, selectStmt,
+                                    "reading stored score eligibility",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(selectStmt.get())) == SQLITE_ROW) {
+    std::string error;
+    auto provenance = deserializeScoreProvenance(
+        sqliteColumnString(selectStmt.get(), 2), error);
+    if (!provenance.has_value()) {
+      SDL_Log("Leaving unreadable %s provenance eligibility unchanged: %s",
+              tableName, error.c_str());
+      continue;
+    }
+    rows.push_back({.id = sqlite3_column_int64(selectStmt.get(), 0),
+                    .eligibility = sqlite3_column_int(selectStmt.get(), 1),
+                    .provenance = std::move(*provenance)});
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading stored score eligibility", db);
+    return false;
+  }
+  selectStmt.reset();
+
+  const std::string updateQuery =
+      "UPDATE " + std::string(tableName) +
+      " SET eligibility = ?1, provenance_json = ?2 WHERE id = ?3";
+  SqliteStatementHandle updateStmt;
+  if (!prepareSqliteStatementLogged(db, updateQuery, updateStmt,
+                                    "preparing score eligibility update",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  for (auto &row : rows) {
+    if (row.provenance.ruleset.version <= 0) {
+      continue;
+    }
+    const ScoreEligibility eligibility =
+        scoreEligibilityForProvenance(row.provenance);
+    if (row.eligibility == static_cast<int>(eligibility) &&
+        row.provenance.eligibility == eligibility) {
+      continue;
+    }
+    row.provenance.eligibility = eligibility;
+    std::string error;
+    const auto serialized =
+        serializeValidatedScoreProvenance(row.provenance, error);
+    if (!serialized.has_value()) {
+      SDL_Log("Could not reclassify %s provenance: %s", tableName,
+              error.c_str());
+      return false;
+    }
+    sqlite3_bind_int(updateStmt.get(), 1, static_cast<int>(eligibility));
+    bindSqliteText(updateStmt.get(), 2, *serialized);
+    sqlite3_bind_int64(updateStmt.get(), 3, row.id);
+    if (sqlite3_step(updateStmt.get()) != SQLITE_DONE) {
+      logSqlError("updating stored score eligibility", db);
+      return false;
+    }
+    sqlite3_reset(updateStmt.get());
+    sqlite3_clear_bindings(updateStmt.get());
+  }
+  return true;
+}
+
+bool migrateScoreDatabaseToVersion8(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading score eligibility migration version",
+                    versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScoreBestEligibilitySchemaVersion) {
+    return true;
+  }
+  if (*version < kScoreSummarySemanticsSchemaVersion) {
+    SDL_Log("Score database must reach version %d before best-score "
+            "eligibility migration",
+            kScoreSummarySemanticsSchemaVersion);
+    return false;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery =
+      callerOwnsTransaction ? "SAVEPOINT asobmashow_score_eligibility_v8"
+                            : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_score_eligibility_v8"
+                            : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_eligibility_v8; RELEASE "
+            "asobmashow_score_eligibility_v8"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting score eligibility migration", transactionError);
+    return false;
+  }
+
+  if (!reclassifyStoredScoreEligibility(db, "scores") ||
+      !reclassifyStoredScoreEligibility(db, "course_scores")) {
+    return false;
+  }
+  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("recreating eligibility-aware score summary trigger",
+                    *error);
+    return false;
+  }
+  if (const auto error = score_cache_queries::rebuildScoreSummaryTables(db)) {
+    logSqlErrorText("rebuilding eligibility-aware score summaries", *error);
+    return false;
+  }
+  if (!setDatabaseUserVersion(db, kScoreBestEligibilitySchemaVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing score eligibility migration",
+                    transactionError);
+    return false;
+  }
+  return true;
+}
+
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
   if (const auto error = querySqliteTableExists(db, tableName, exists)) {
@@ -870,11 +1014,14 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
 
 void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
                          std::string_view schema = {}) {
+  const std::string eligible =
+      score_cache_queries::detail::scoreParticipatesInBestExpr("c");
   const std::string query =
       "SELECT COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode, " +
       bestClearMarkRankExpr("c") + " FROM " +
       qualifiedScoreTable(schema, "course_scores") +
-      " c GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
+      " c WHERE " + eligible +
+      " GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "loading course score clear ranks",
@@ -1550,7 +1697,7 @@ bool ScoreDBHelper::CreateScoreTableOnConnection(sqlite3 *db) {
       return false;
     }
     ensureCurrentSummarySchema =
-        *version >= kScoreSummarySemanticsSchemaVersion;
+        *version >= kScoreBestEligibilitySchemaVersion;
   }
   if (ensureCurrentSummarySchema) {
     if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
@@ -1652,7 +1799,8 @@ bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
   }
   return migrateScoreDatabaseToVersion5(db) &&
          migrateScoreDatabaseToVersion6(db) &&
-         migrateScoreDatabaseToVersion7(db);
+         migrateScoreDatabaseToVersion7(db) &&
+         migrateScoreDatabaseToVersion8(db);
 }
 
 bool ScoreDBHelper::EnsureSchema() {
@@ -1944,7 +2092,9 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScoreOnConnection(
       "SELECT score, max_score, max_combo, combo_break, final_gauge, ";
   query += effectiveClearRank + ", created_at FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
-  query += " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
+  query += " AND " +
+           score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
+           " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
            "AND (? = '' OR created_at < ?) "
            "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, "
            + score_cache_queries::detail::bestScoreOrderBySql(bestOrder) +
@@ -1996,12 +2146,15 @@ ScoreDBHelper::LoadBestCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session) {
   const std::string courseKey = courseKeyForSession(session);
   const int lnMode = long_note_mode::normalizeValue(session.longNoteMode);
-  const char *query =
+  const std::string query =
       "SELECT score, max_score, max_combo, combo_break, final_gauge,"
       "clear_type, created_at "
-      "FROM course_scores "
+      "FROM course_scores c "
       "WHERE ((? != '' AND course_key = ?) OR "
       "(COALESCE(course_key, '') = '' AND course_id = ?)) "
+      "AND " +
+      score_cache_queries::detail::scoreParticipatesInBestExpr("c") +
+      " "
       "AND (ln_mode = ? OR ln_mode = -1) "
       "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC "
       "LIMIT 1";

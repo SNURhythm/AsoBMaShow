@@ -510,15 +510,26 @@ ScoreStageProvenance stageFromJson(const Json &value) {
   return result;
 }
 
-bool buildIsModified(const ScoreProvenanceBuildInput &input) {
-  return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
-         input.practice || assist_options::isEnabled(input.assistOption) ||
-         input.judgeRankSource == JudgeRankSource::Unknown ||
-         !input.playback.neutral() || input.judgeWindowScalePercent > 100 ||
-         input.startingGaugePercent.has_value();
-}
-
 } // namespace
+
+ScoreEligibility
+scoreEligibilityForProvenance(const ScoreProvenance &provenance) {
+  if (provenance.ruleset.version <= 0) {
+    return ScoreEligibility::LegacyUnverified;
+  }
+  const bool unknownJudgeSource =
+      std::ranges::any_of(provenance.stages, [](const auto &stage) {
+        return stage.judgeRankSource == JudgeRankSource::Unknown;
+      });
+  const bool modified =
+      provenance.ruleset != RulesetDescriptor::Current() ||
+      provenance.autoPlay || provenance.practice ||
+      assist_options::isEnabled(provenance.assistOption) ||
+      unknownJudgeSource || !provenance.playback.neutral() ||
+      provenance.judgeWindowScalePercent > 100 ||
+      provenance.startingGaugePercent.has_value();
+  return modified ? ScoreEligibility::Modified : ScoreEligibility::Verified;
+}
 
 namespace score_provenance {
 
@@ -767,12 +778,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.playback = input.playback;
   result.judgeWindowScalePercent = input.judgeWindowScalePercent;
   result.startingGaugePercent = input.startingGaugePercent;
-  if (input.ruleset.version <= 0) {
-    result.eligibility = ScoreEligibility::LegacyUnverified;
-  } else {
-    result.eligibility = buildIsModified(input) ? ScoreEligibility::Modified
-                                                : ScoreEligibility::Verified;
-  }
+  result.eligibility = scoreEligibilityForProvenance(result);
   return result;
 }
 
