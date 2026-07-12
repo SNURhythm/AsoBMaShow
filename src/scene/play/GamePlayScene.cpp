@@ -693,7 +693,7 @@ void GamePlayScene::init() {
         new TextView("assets/fonts/notosanscjkjp.ttf", 20);
     addView(practiceHudText);
     practiceHudText->setSize(620, 58);
-    practiceHudText->setPositionNoLayout(24, 34);
+    practiceHudText->setPositionNoLayout(24, 118);
     practiceHudText->setAlign(TextView::LEFT);
     practiceHudText->setVAlign(TextView::MIDDLE);
     practiceHudText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
