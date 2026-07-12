@@ -227,6 +227,11 @@ void testEligibilityClassification() {
   auto scaledJudge = sampleInput();
   scaledJudge.judgeWindowScalePercent = 80;
   assert(makeScoreProvenance(scaledJudge).eligibility ==
+         ScoreEligibility::Verified);
+
+  auto expandedJudge = sampleInput();
+  expandedJudge.judgeWindowScalePercent = 120;
+  assert(makeScoreProvenance(expandedJudge).eligibility ==
          ScoreEligibility::Modified);
 
   auto startingGauge = sampleInput();
@@ -247,6 +252,16 @@ void testEligibilityClassification() {
   auto constrained = sampleInput();
   constrained.judgeRankSource = JudgeRankSource::CourseConstraint;
   assert(makeScoreProvenance(constrained).eligibility ==
+         ScoreEligibility::Verified);
+
+  auto courseGauge = sampleInput();
+  courseGauge.gaugeProfile = GaugeProfile::CourseDefault;
+  assert(makeScoreProvenance(courseGauge).eligibility ==
+         ScoreEligibility::Verified);
+
+  auto unknownJudge = sampleInput();
+  unknownJudge.judgeRankSource = JudgeRankSource::Unknown;
+  assert(makeScoreProvenance(unknownJudge).eligibility ==
          ScoreEligibility::Modified);
 
   auto overridden = sampleInput();
@@ -340,6 +355,13 @@ void testCourseMergePreservesStagesAndWorstEligibility() {
   const std::array modifiedValues{first, second};
   assert(mergeCourseProvenance(modifiedValues).eligibility ==
          ScoreEligibility::Modified);
+
+  ScoreProvenance seededFirst = sampleVerifiedProvenance("seeded-first");
+  ScoreProvenance seededSecond = sampleVerifiedProvenance("seeded-second");
+  seededSecond.player1.seed = 67890;
+  const std::array seededValues{seededFirst, seededSecond};
+  assert(mergeCourseProvenance(seededValues).eligibility ==
+         ScoreEligibility::Verified);
 }
 
 void testPlayStartCaptureIsImmutableAndShared() {
@@ -591,7 +613,7 @@ void testPlayStartInputPlatformDefaultsAreIncluded() {
                       InputDeviceCategory::Touch}));
 }
 
-void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
+void testConstrainedPlayCapturesEffectiveWindowsAsVerified() {
   bms_parser::ChartMeta meta;
   meta.MD5 = "constrained-md5";
   meta.SHA256 = "constrained-sha256";
@@ -608,7 +630,7 @@ void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
   const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
       options, meta, effectiveJudge.timingWindows);
 
-  assert(captured.eligibility == ScoreEligibility::Modified);
+  assert(captured.eligibility == ScoreEligibility::Verified);
   assert(captured.stages.size() == 1);
   const auto &stage = captured.stages.front();
   assert(stage.judgeRankSource == JudgeRankSource::CourseConstraint);
@@ -687,7 +709,7 @@ int main() {
   testCourseReplaySelectsMatchingStageJudgeWindows();
   testMobilePlayStartInputCategoriesPreserveResolverClasses();
   testPlayStartInputPlatformDefaultsAreIncluded();
-  testConstrainedPlayCapturesEffectiveWindowsAsModified();
+  testConstrainedPlayCapturesEffectiveWindowsAsVerified();
   testCourseSessionAggregatesRecordedStagesByIndex();
   std::cout << "score provenance tests passed\n";
   return 0;

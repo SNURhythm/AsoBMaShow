@@ -513,9 +513,8 @@ ScoreStageProvenance stageFromJson(const Json &value) {
 bool buildIsModified(const ScoreProvenanceBuildInput &input) {
   return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
          input.practice || assist_options::isEnabled(input.assistOption) ||
-         input.judgeRankSource != JudgeRankSource::Chart ||
-         gaugeProfileIsCourse(input.gaugeProfile) ||
-         !input.playback.neutral() || input.judgeWindowScalePercent != 100 ||
+         input.judgeRankSource == JudgeRankSource::Unknown ||
+         !input.playback.neutral() || input.judgeWindowScalePercent > 100 ||
          input.startingGaugePercent.has_value();
 }
 
@@ -811,8 +810,8 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
         stage.gaugeAutoShift != stages.front().gaugeAutoShift ||
         stage.gaugeAutoShiftLowerBound !=
             stages.front().gaugeAutoShiftLowerBound ||
-        stage.player1 != stages.front().player1 ||
-        stage.player2 != stages.front().player2 ||
+        stage.player1.option != stages.front().player1.option ||
+        stage.player2.option != stages.front().player2.option ||
         stage.assistOption != stages.front().assistOption ||
         stage.playback != stages.front().playback ||
         stage.judgeWindowScalePercent !=
