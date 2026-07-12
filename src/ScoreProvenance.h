@@ -39,12 +39,12 @@ enum class InputDeviceCategory : int {
 };
 
 struct RulesetDescriptor {
-  static constexpr int kCurrentVersion = 1;
+  static constexpr int kCurrentVersion = 2;
 
   int version = kCurrentVersion;
   std::string scoringModel = "asobmashow-v1";
   std::string judgementModel = "bms-rank-v1";
-  std::string gaugeModel = "asobmashow-gauge-v1";
+  std::string gaugeModel = "beatoraja-profile-gauge-v2";
 
   bool operator==(const RulesetDescriptor &) const = default;
 

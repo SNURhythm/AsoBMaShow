@@ -202,7 +202,7 @@ void validatePracticePercentages(const ScoreProvenance &value) {
         "Score provenance judge window scale percentage is out of range.");
   }
   if (value.startingGaugePercent.has_value() &&
-      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 100)) {
+      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 120)) {
     throw std::runtime_error(
         "Score provenance starting gauge percentage is out of range.");
   }
@@ -511,10 +511,14 @@ ScoreStageProvenance stageFromJson(const Json &value) {
 }
 
 bool buildIsModified(const ScoreProvenanceBuildInput &input) {
+  const bool noFailAutoShift =
+      input.gaugeAutoShift == GaugeAutoShiftMode::Continue ||
+      input.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove;
   return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
          input.practice || assist_options::isEnabled(input.assistOption) ||
          input.judgeRankSource != JudgeRankSource::Chart ||
          gaugeProfileIsCourse(input.gaugeProfile) ||
+         noFailAutoShift ||
          !input.playback.neutral() || input.judgeWindowScalePercent != 100 ||
          input.startingGaugePercent.has_value();
 }

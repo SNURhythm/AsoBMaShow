@@ -215,7 +215,8 @@ enforceCoursePlaybackRules(StartOptions options) {
   input.sourceJudgeRank = chartMeta.Rank;
   input.effectiveJudgeWindows = effectiveJudgeWindows;
   input.gaugeType = options.gaugeType;
-  input.gaugeProfile = options.gaugeProfile;
+  input.gaugeProfile =
+      resolveGaugeProfile(options.gaugeProfile, chartMeta.KeyMode);
   input.gaugeAutoShift = options.gaugeAutoShift;
   input.gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound;
   input.player1 = {.option = options.playOption.value_or("NORMAL"),

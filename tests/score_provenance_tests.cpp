@@ -37,7 +37,7 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.effectiveJudgeWindows = sampleWindows();
   input.gaugeType = GaugeType::Hard;
   input.gaugeProfile = GaugeProfile::Standard;
-  input.gaugeAutoShift = true;
+  input.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   input.player1 = {.option = "RANDOM", .seed = 12345};
   input.player2 = {.option = "MIRROR", .seed = std::nullopt};
   input.assistOption = assist_options::kOff;
@@ -55,10 +55,10 @@ sampleVerifiedProvenance(const std::string &hashSuffix = "one") {
 
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
-  assert(rules.version == 1);
+  assert(rules.version == RulesetDescriptor::kCurrentVersion);
   assert(rules.scoringModel == "asobmashow-v1");
   assert(rules.judgementModel == "bms-rank-v1");
-  assert(rules.gaugeModel == "asobmashow-gauge-v1");
+  assert(rules.gaugeModel == "beatoraja-profile-gauge-v2");
 
   const RulesetDescriptor legacy = RulesetDescriptor::Legacy();
   assert(legacy.version == 0);
@@ -208,7 +208,7 @@ void testPlaybackAndJudgeProvenanceValidation() {
   assertInvalid(offStepJudgeScale);
 
   auto invalidStartingGauge = sampleVerifiedProvenance();
-  invalidStartingGauge.startingGaugePercent = 101;
+  invalidStartingGauge.startingGaugePercent = 121;
   assertInvalid(invalidStartingGauge);
 }
 
@@ -354,7 +354,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
   StartOptions options;
   options.gaugeType = GaugeType::Hard;
   options.gaugeProfile = GaugeProfile::Standard;
-  options.gaugeAutoShift = true;
+  options.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   options.playOption = "RANDOM";
   options.playOptionSeed = 1234;
   options.playOption2 = "MIRROR";
