@@ -3158,7 +3158,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyTotalRow->setFlexDirection(FlexDirection::Row);
   readyTotalRow->setAlignItems(YGAlignCenter);
   readyTotalRow->setGap(8);
+  readyTotalRow->setWidth(260);
   readyTotalRow->setHeight(28);
+  readyTotalRow->setPadding(Edge::Left, 12);
+  readyTotalRow->setPadding(Edge::Right, 12);
   readyTotalIconText =
       new TextView(ui_icons::kFontAwesomeSolidPath, 15);
   readyTotalIconText->setWidth(18);
@@ -3179,14 +3182,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
   readyPacemakerText = makeReadyStatusText();
   readySettings->addView(readyGaugeRow);
-  readySettings->addView(readyTotalRow);
   readySettings->addView(readyPlayOptionText);
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
 
-  readyPlayOptionsButton = new Button(0, 0, 260, 184);
+  readyPlayOptionsButton = new Button(0, 0, 260, 150);
   readyPlayOptionsButton->setWidth(260);
-  readyPlayOptionsButton->setHeight(184);
+  readyPlayOptionsButton->setHeight(150);
   readyPlayOptionsButton->setFlexShrink(0);
   readyPlayOptionsButton->setCornerRadius(ui_theme::controlRadius());
   readyPlayOptionsButton->setStyledBorderWidth(1);
@@ -3198,6 +3200,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton->setContentView(readySettings);
   readyPlayOptionsButton->setOnClickListener(
       [this]() { showPlayOptionsModal(); });
+  right->addView(readyTotalRow);
   right->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
@@ -4826,9 +4829,6 @@ void MainMenuScene::refreshReadySettingsSummary() {
   const auto record = selectedRecordSnapshot();
   const bool showTotal = record.has_value() && !record->courseStart &&
                          !record->solidArchive && !record->unavailable;
-  if (readyPlayOptionsButton != nullptr) {
-    readyPlayOptionsButton->setHeight(showTotal ? 184 : 150);
-  }
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(gaugeButtonLabel(profileSelections.gaugeType,
                                              profileSelections.gaugeAutoShift));
