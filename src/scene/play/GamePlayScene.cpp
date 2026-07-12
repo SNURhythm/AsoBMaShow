@@ -1574,12 +1574,15 @@ void GamePlayScene::updatePracticeHud(long long chartTimeMicros) {
       practiceCountInPlan.clicks, [chartTimeMicros](const auto &click) {
         return click.timeMicros > chartTimeMicros;
       });
-  practiceHudText->setText(
+  std::string text =
       "Loop " + std::to_string(options.practiceSession->loopNumber()) +
       "  |  " + formatPracticeTime(configuration.startMicros) + " - " +
       formatPracticeTime(configuration.endMicros) + "  |  " +
-      std::to_string(configuration.playback.percent) +
-      "%  |  Count-in " + std::to_string(remaining));
+      std::to_string(configuration.playback.percent) + "%";
+  if (remaining > 0) {
+    text += "  |  Count-in " + std::to_string(remaining);
+  }
+  practiceHudText->setText(std::move(text));
 }
 
 long long GamePlayScene::getAudioOffsetMicros() const {
