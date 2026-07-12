@@ -1378,6 +1378,7 @@ void BMSRenderer::layoutGaugeText() {
 
   if (gaugeTypeText != nullptr) {
     gaugeTypeText->setVisible(true);
+    gaugeTypeText->setRotationDegrees(left ? -90.0f : 90.0f);
     constexpr int typeWidth = 34;
     const int typeHeight = std::clamp(gaugeTypeText->textureWidth() + 24, 76,
                                       156);
