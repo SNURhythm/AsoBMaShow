@@ -208,6 +208,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
       "Auto Shift Lower Bound",
       dropdowns[static_cast<size_t>(DropDownIndex::GaugeLowerBound)]);
   gaugeLowerBoundRow->setDisplay(YGDisplayNone);
+  gaugeLowerBoundRow->setVisible(false);
   content->addView(gaugeLowerBoundRow);
 
   startingGaugeSlider = new SnappedSlider([this](int value) {
@@ -507,6 +508,7 @@ void PracticePanelView::refreshControls() {
         currentConfiguration.gaugeAutoShift ==
             GaugeAutoShiftMode::SelectToUnder;
     gaugeLowerBoundRow->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+    gaugeLowerBoundRow->setVisible(visible);
   }
   const std::string modeId =
       currentConfiguration.playback.mode == audio::PlaybackMode::TimeStretch

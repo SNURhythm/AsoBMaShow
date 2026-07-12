@@ -186,6 +186,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     gaugeAutoShiftBoundsSection->setAlignItems(YGAlignStretch);
     gaugeAutoShiftBoundsSection->setGap(12);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
+    gaugeAutoShiftBoundsSection->setVisible(false);
     gaugeAutoShiftBoundsSection->addView(makeLabel("Auto Shift Lower Bound"));
     auto addLowerBoundButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
@@ -370,6 +371,7 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   if (gaugeAutoShiftBoundsSection != nullptr) {
     gaugeAutoShiftBoundsSection->setDisplay(showsBounds ? YGDisplayFlex
                                                         : YGDisplayNone);
+    gaugeAutoShiftBoundsSection->setVisible(showsBounds);
   }
   for (const auto &item : gaugeLowerBoundButtons) {
     styleButton(item.button, item.text,
