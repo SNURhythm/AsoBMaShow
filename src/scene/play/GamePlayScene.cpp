@@ -2604,6 +2604,10 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
   if (gaugeIndex >= 0 &&
       gaugeIndex < static_cast<int>(state->gaugeValues.size())) {
     state->gaugeValues[gaugeIndex] = event.gauge;
+    if (gaugeIsSurvival(event.gaugeType, state->gaugeProfile) &&
+        event.gauge <= 0.0f) {
+      state->gaugeSurvivalFailed[gaugeIndex] = true;
+    }
   }
   if (!state->gaugeHistory.empty()) {
     state->gaugeHistory.back() = event.gauge;
