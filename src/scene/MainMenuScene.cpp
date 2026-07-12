@@ -260,13 +260,6 @@ std::string findBmsTitleSearchQuery(const ChartMetaRecord &record) {
   return query;
 }
 
-std::string compactHashForModal(const std::string &value) {
-  if (value.size() <= 24) {
-    return value;
-  }
-  return value.substr(0, 10) + "..." + value.substr(value.size() - 10);
-}
-
 std::string findBmsCandidateLabel(const BmsSearchCandidate &candidate,
                                   size_t index) {
   std::string label = std::to_string(index + 1) + ". Download ";
@@ -2513,9 +2506,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsModalTitleText = nullptr;
   findBmsStatusText = nullptr;
   findBmsDetailText = nullptr;
-  findBmsLogScrollView = nullptr;
-  findBmsLogContent = nullptr;
-  findBmsLogText = nullptr;
   findBmsCloseButton = nullptr;
   findBmsOpenButton = nullptr;
   findBmsGoogleButton = nullptr;
@@ -6585,7 +6575,7 @@ void MainMenuScene::buildTasksModal() {
 
   auto *panel = new View();
   panel->setWidth(kModalPanelWidth)
-      ->setHeight(560)
+      ->setHeight(460)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
@@ -6856,29 +6846,6 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsDetailText->setFlex(1);
   panel->addView(findBmsDetailText);
 
-  findBmsLogScrollView =
-      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 112);
-  findBmsLogScrollView->setWidth(kModalContentWidth);
-  findBmsLogScrollView->setHeight(112);
-  findBmsLogScrollView->setThemedBackgroundColor(ui_theme::insetSurface);
-  findBmsLogScrollView->setCornerRadius(ui_theme::controlRadius());
-  findBmsLogScrollView->setThemedBorderColor(ui_theme::hairline);
-  findBmsLogScrollView->setBorderWidth(1);
-  findBmsLogScrollView->setContentPadding(Edge::All, 8);
-
-  findBmsLogContent = new View();
-  findBmsLogContent->setFlexDirection(FlexDirection::Column);
-  findBmsLogContent->setAlignItems(YGAlignStretch);
-
-  findBmsLogText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  findBmsLogText->setText("Preparing lookup");
-  findBmsLogText->setThemedColor(ui_theme::textSecondary);
-  findBmsLogText->setWrap(true);
-  findBmsLogText->setOverflow(TextView::TextOverflow::Visible);
-  findBmsLogContent->addView(findBmsLogText);
-  findBmsLogScrollView->setContentView(findBmsLogContent);
-  panel->addView(findBmsLogScrollView);
-
   findBmsCandidateRecyclerView = new RecyclerView<BmsSearchCandidate>(
       [](const BmsSearchCandidate &a, const BmsSearchCandidate &b) {
         return a.source == b.source && a.id == b.id && a.name == b.name;
@@ -6931,12 +6898,10 @@ void MainMenuScene::buildFindBmsModal() {
   footer->setHeight(58);
 
   findBmsCloseButton = makeModalButton("Cancel", 20, &findBmsCloseButtonText);
-  findBmsOpenButton =
-      makeModalButton("Open BMS Search", 18, &findBmsOpenButtonText);
-  findBmsGoogleButton =
-      makeModalButton("Search BMS", 18, &findBmsGoogleButtonText);
+  findBmsOpenButton = makeModalButton("Source", 18, &findBmsOpenButtonText);
+  findBmsGoogleButton = makeModalButton("Search", 18, &findBmsGoogleButtonText);
   findBmsRefreshButton =
-      makeModalButton("Refresh List", 18, &findBmsRefreshButtonText);
+      makeModalButton("Refresh", 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
   findBmsOpenButton->setWidth(180);
@@ -7106,13 +7071,33 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsModalTitleText->setText("Find BMS");
   }
 
-  std::string statusText =
-      running ? findBmsProgressDisplayText(findBmsProgressMessage,
-                                           findBmsProgressCurrent,
-                                           findBmsProgressTotal, false)
-              : findBmsResult.message;
-  if (statusText.empty()) {
-    statusText = running ? "Searching" : "Lookup finished.";
+  std::string statusText;
+  if (running) {
+    statusText = findBmsProgressDisplayText(findBmsProgressMessage,
+                                            findBmsProgressCurrent,
+                                            findBmsProgressTotal, false);
+  } else {
+    switch (findBmsResult.status) {
+    case BmsSearchResult::Status::Downloaded:
+      statusText = "Download complete";
+      break;
+    case BmsSearchResult::Status::NoDownloadLink:
+    case BmsSearchResult::Status::UnsupportedLink:
+      statusText = "Manual download needed";
+      break;
+    case BmsSearchResult::Status::NotFound:
+      statusText = "Not found";
+      break;
+    case BmsSearchResult::Status::AmbiguousCandidates:
+      statusText = "Choose a match";
+      break;
+    case BmsSearchResult::Status::HashMismatch:
+      statusText = "Chart mismatch";
+      break;
+    case BmsSearchResult::Status::DownloadFailed:
+      statusText = "Download failed";
+      break;
+    }
   }
   if (findBmsStatusText != nullptr) {
     findBmsStatusText->setText(statusText);
@@ -7134,84 +7119,31 @@ void MainMenuScene::refreshFindBmsModal() {
   if (!findBmsModalChart.meta.Title.empty()) {
     detail += findBmsModalChart.meta.Title + "\n";
   }
-  if (!findBmsModalChart.meta.SHA256.empty()) {
-    detail +=
-        "SHA256: " + compactHashForModal(findBmsModalChart.meta.SHA256) + "\n";
-  }
-  if (!findBmsModalChart.meta.MD5.empty()) {
-    detail += "MD5: " + compactHashForModal(findBmsModalChart.meta.MD5) + "\n";
-  }
   if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += "Saved to " + fspath_to_utf8(findBmsResult.outputPath) +
-              "\nRefreshing the library will make newly found charts playable.";
-    if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
-    }
+    detail += "Refresh the library to use it.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
-    detail += "Open the BMS Search page to download manually, then refresh the "
-              "list.";
+    detail += "Download from the source, then refresh.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::UnsupportedLink) {
-    detail += "A source exists, but this app cannot safely download and "
-              "extract it yet. Download manually, then refresh the list.";
+    detail += "Download from the source, then refresh.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NotFound) {
-    const bool hasSha = !findBmsModalChart.meta.SHA256.empty();
-    detail +=
-        hasSha ? "No matching BMS Search page was available. Search by title."
-               : "Horie did not find a matching song. Search by title.";
+    detail += "Try searching by title.";
   } else if (!running && findBmsResult.status ==
                              BmsSearchResult::Status::AmbiguousCandidates) {
-    detail += "Horie found multiple matching archives. Choose one archive to "
-              "download.";
-    if (!findBmsResult.candidates.empty() &&
-        !findBmsResult.candidates.front().query.empty()) {
-      detail += "\nQuery: " + findBmsResult.candidates.front().query;
-    }
+    detail += "Choose an archive below.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::HashMismatch) {
-    detail += "The archive was extracted, but it does not contain the selected "
-              "BMS chart hash.";
-    if (!findBmsResult.outputPath.empty()) {
-      detail += "\nKept at " + fspath_to_utf8(findBmsResult.outputPath);
-    }
-    if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
-    }
+    detail += "The downloaded archive does not match this chart.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
-    detail += "Automatic download failed. Open the source page or refresh "
-              "after downloading.";
-    if (!findBmsResult.debugPath.empty()) {
-      detail += "\nDebug files: " + fspath_to_utf8(findBmsResult.debugPath);
-    }
+    detail += "Open the source or try again.";
   } else {
-    detail +=
-        "Checking package sources, BMS Search, then Horie archive if needed.";
+    detail += "Searching available sources...";
   }
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setText(detail);
-  }
-
-  if (findBmsLogScrollView != nullptr) {
-    findBmsLogScrollView->setHeight(showCandidateList ? 56.0f : 112.0f);
-  }
-  if (findBmsLogText != nullptr) {
-    std::string logText;
-    for (const auto &line : findBmsProgressLog) {
-      if (!logText.empty()) {
-        logText += "\n";
-      }
-      logText += "- " + line;
-    }
-    if (logText.empty()) {
-      logText = "- Waiting for progress";
-    }
-    findBmsLogText->setText(logText);
-  }
-  if (findBmsLogScrollView != nullptr) {
-    findBmsLogScrollView->scrollToBottom();
   }
 
   if (findBmsCandidateRecyclerView != nullptr) {
@@ -7263,8 +7195,8 @@ void MainMenuScene::refreshFindBmsModal() {
     const bool bmsSearchSource =
         manualSourceUrl.find("bmssearch.net") != std::string::npos;
     findBmsOpenButtonText->setText(
-        downloadSource ? "Open Download"
-                       : (bmsSearchSource ? "Open BMS Search" : "Open Source"));
+        downloadSource ? "Download"
+                       : (bmsSearchSource ? "BMS Search" : "Source"));
   }
   if (findBmsOpenButton != nullptr) {
     findBmsOpenButton->setVisible(!running && hasSource);
@@ -9895,9 +9827,6 @@ void MainMenuScene::cleanupScene() {
   findBmsModalTitleText = nullptr;
   findBmsStatusText = nullptr;
   findBmsDetailText = nullptr;
-  findBmsLogScrollView = nullptr;
-  findBmsLogContent = nullptr;
-  findBmsLogText = nullptr;
   findBmsCloseButton = nullptr;
   findBmsOpenButton = nullptr;
   findBmsGoogleButton = nullptr;
