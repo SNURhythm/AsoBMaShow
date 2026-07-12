@@ -522,7 +522,7 @@ std::optional<std::pair<float, float>> projectWorldToUi(float worldX,
 
 JudgementCounterLayout judgementCounterLayoutFor(
     AppSettings::JudgementCounterPosition position, float titleWidth,
-    float rightReserveLeft) {
+    float rightReserveLeft, bool compactSideCounter) {
   JudgementCounterLayout layout;
   layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
   layout.gap = layout.horizontal ? 8.0f : 6.0f;
@@ -532,7 +532,7 @@ JudgementCounterLayout judgementCounterLayoutFor(
                         layout.gap * 6.0f) /
                            7.0f,
                        92.0f, 118.0f)
-          : 118.0f;
+          : (compactSideCounter ? 96.0f : 118.0f);
   layout.itemHeight = layout.horizontal ? 58.0f : 50.0f;
 
   const float totalWidth =
@@ -1239,10 +1239,18 @@ void BMSRenderer::drawJudgementAccentBar() {
 
 void BMSRenderer::drawJudgementCounterPanels() {
   constexpr float radius = 10.0f;
+  const bool counterSharesGaugeSide =
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Left &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Left) ||
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Right &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Right);
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
                                 gameplayHudTitleWidth(),
-                                gameplayHudRightReserveLeft());
+                                gameplayHudRightReserveLeft(),
+                                counterSharesGaugeSide);
   const bool topPosition =
       judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
   if (topPosition) {
@@ -1295,10 +1303,18 @@ void BMSRenderer::layoutGameplayHud() {
   layoutGaugeText();
   layoutAutoPlayMark();
 
+  const bool counterSharesGaugeSide =
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Left &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Left) ||
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Right &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Right);
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
                                 gameplayHudTitleWidth(),
-                                gameplayHudRightReserveLeft());
+                                gameplayHudRightReserveLeft(),
+                                counterSharesGaugeSide);
   const int gap = static_cast<int>(layout.gap);
   const int itemWidth = static_cast<int>(layout.itemWidth);
   const int itemHeight = static_cast<int>(layout.itemHeight);
