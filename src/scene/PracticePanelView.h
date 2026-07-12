@@ -13,6 +13,7 @@
 class Button;
 class DropdownView;
 class OverlayPortal;
+class SnappedSlider;
 class TextInputBox;
 class TextView;
 
@@ -49,17 +50,7 @@ public:
   [[nodiscard]] bool isEditingPresetName() const;
 
 private:
-  enum class DropDownIndex : int {
-    Preset,
-    Loop,
-    CountIn,
-    Gauge,
-    StartingGauge,
-    Judge,
-    Rate,
-    Mode,
-    Count
-  };
+  enum class DropDownIndex : int { Preset, Gauge, Mode, Count };
 
   long long chartEndMicros = 0;
   PracticePanelCallbacks callbacks;
@@ -75,6 +66,18 @@ private:
   TextView *presetMessageText = nullptr;
   TextView *presetMessageSecondLine = nullptr;
   TextInputBox *presetNameInput = nullptr;
+  Button *loopButton = nullptr;
+  TextView *loopButtonText = nullptr;
+  SnappedSlider *countInSlider = nullptr;
+  SnappedSlider *startingGaugeSlider = nullptr;
+  SnappedSlider *judgeSlider = nullptr;
+  SnappedSlider *rateSlider = nullptr;
+  TextView *countInValueText = nullptr;
+  TextView *startingGaugeValueText = nullptr;
+  TextView *judgeValueText = nullptr;
+  TextView *rateValueText = nullptr;
+  Button *startingGaugeDefaultButton = nullptr;
+  TextView *startingGaugeDefaultText = nullptr;
   Button *startButton = nullptr;
   Button *updateButton = nullptr;
   Button *renameButton = nullptr;
