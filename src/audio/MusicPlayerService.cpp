@@ -1195,21 +1195,6 @@ audio::PlaybackRate MusicPlayerService::PlaybackRate() const {
   return playbackRate;
 }
 
-bool MusicPlayerService::SetPlaybackRatePercent(int percent,
-                                                std::string &errorMessage) {
-  audio::PlaybackRate rate;
-  {
-    std::lock_guard<std::mutex> lock(stateMutex);
-    rate = playbackRate;
-  }
-  rate.percent = percent;
-  return SetPlaybackRate(rate, errorMessage);
-}
-
-int MusicPlayerService::PlaybackRatePercent() const {
-  return PlaybackRate().percent;
-}
-
 bool MusicPlayerService::SetSleepTimer(long long durationMicros,
                                        std::string &statusMessage) {
   statusMessage.clear();

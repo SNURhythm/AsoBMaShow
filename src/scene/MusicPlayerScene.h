@@ -172,6 +172,7 @@ private:
   void togglePlayback();
   void cycleRepeatMode();
   void setPlaybackRate(const std::string &id);
+  void setPlaybackMode(const std::string &id);
   void refreshPlaybackRateControl();
   void setSleepTimerFromInput();
   void clearSleepTimer();
@@ -276,6 +277,7 @@ private:
   TextInputBox *playlistNameInput = nullptr;
   TextInputBox *playlistRenameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
+  DropdownView *playbackModeDropdown = nullptr;
   DropdownView *playbackRateDropdown = nullptr;
   TextView *deletePlaylistButtonText = nullptr;
   TextView *clearPlaylistButtonText = nullptr;
@@ -328,6 +330,7 @@ private:
   bool videoPreviousVisualsEnabled = true;
   bool videoRestoresVisualsEnabled = false;
   bool videoControlsVisible = false;
+  bool playbackModeDropdownOpen = false;
   bool playbackRateDropdownOpen = false;
   Uint64 videoControlsVisibleUntil = 0;
   std::string videoTrackId;

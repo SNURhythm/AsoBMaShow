@@ -135,6 +135,16 @@ std::vector<DropdownView::Option> playbackRateOptions() {
   return options;
 }
 
+std::string playbackModeId(audio::PlaybackMode mode) {
+  return mode == audio::PlaybackMode::TimeStretch ? "time-stretch"
+                                                   : "pitch-shift";
+}
+
+std::string playbackModeLabel(audio::PlaybackMode mode) {
+  return mode == audio::PlaybackMode::TimeStretch ? "Time Stretch"
+                                                   : "Pitch Shift";
+}
+
 std::string formatSleepTimerDuration(long long micros) {
   micros = std::max(0LL, micros);
   long long totalSeconds = (micros + 999999LL) / 1000000LL;
@@ -607,8 +617,10 @@ void MusicPlayerScene::init() {
   context.jukebox.stop();
   applySystemPlaybackPrivacy(false);
   std::string playbackRateError;
-  context.musicPlayer.SetPlaybackRatePercent(
-      context.settings.musicPlayerPlaybackRatePercent, playbackRateError);
+  context.musicPlayer.SetPlaybackRate(
+      {.percent = context.settings.musicPlayerPlaybackRatePercent,
+       .mode = context.settings.musicPlayerPlaybackMode},
+      playbackRateError);
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
   buildView();
@@ -771,6 +783,7 @@ void MusicPlayerScene::cleanupScene() {
   playlistNameInput = nullptr;
   playlistRenameInput = nullptr;
   playPauseButtonText = nullptr;
+  playbackModeDropdown = nullptr;
   playbackRateDropdown = nullptr;
   deletePlaylistButtonText = nullptr;
   clearPlaylistButtonText = nullptr;
@@ -792,6 +805,7 @@ void MusicPlayerScene::cleanupScene() {
   videoShowingArtwork = false;
   videoRestoresVisualsEnabled = false;
   videoControlsVisible = false;
+  playbackModeDropdownOpen = false;
   playbackRateDropdownOpen = false;
   videoControlsVisibleUntil = 0;
   videoTrackId.clear();
@@ -1727,7 +1741,8 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   auto *playbackRateRow = new View();
   playbackRateRow->setHeight(52)
       ->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter);
+      ->setAlignItems(YGAlignCenter)
+      ->setGap(10);
 
   TextView *previousText = nullptr;
   auto *previousButton = makeIconButton(kIconBackwardStep, 28, &previousText);
@@ -1810,18 +1825,37 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::accentBorder);
   stopButton->setOnClickListener([this]() { stopPlayback(); });
 
+  playbackModeDropdown = new DropdownView(
+      {
+          .onOpenChanged =
+              [this](bool open) {
+                playbackModeDropdownOpen = open;
+                if (open) {
+                  playbackRateDropdownOpen = false;
+                }
+                refreshPlaybackRateControl();
+              },
+          .onOptionSelected =
+              [this](const std::string &id) { setPlaybackMode(id); },
+      },
+      overlayPortal);
+  playbackModeDropdown->setFlex(1.0f)->setMinWidth(0);
+
   playbackRateDropdown = new DropdownView(
       {
           .onOpenChanged =
               [this](bool open) {
                 playbackRateDropdownOpen = open;
+                if (open) {
+                  playbackModeDropdownOpen = false;
+                }
                 refreshPlaybackRateControl();
               },
           .onOptionSelected =
               [this](const std::string &id) { setPlaybackRate(id); },
       },
       overlayPortal);
-  playbackRateDropdown->setWidthPercent(100.0f);
+  playbackRateDropdown->setFlex(1.0f)->setMinWidth(0);
 
   transportRow->addView(previousButton);
   transportRow->addView(back10Button);
@@ -1833,6 +1867,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowB->addView(repeatButton);
   actionRowB->addView(shuffleButton);
   actionRowB->addView(stopButton);
+  playbackRateRow->addView(playbackModeDropdown);
   playbackRateRow->addView(playbackRateDropdown);
   transport->addView(transportRow);
   transport->addView(actionRowA);
@@ -2529,8 +2564,10 @@ void MusicPlayerScene::refreshUi() {
                                 " tracks | " +
                                 repeatModeLabel(displayedRepeatMode) + " | " +
                                 std::to_string(
-                                    context.musicPlayer.PlaybackRatePercent()) +
-                                "%");
+                                    context.musicPlayer.PlaybackRate().percent) +
+                                "% " +
+                                playbackModeLabel(
+                                    context.musicPlayer.PlaybackRate().mode));
   }
   if (queueTitleText != nullptr) {
     queueTitleText->setText(queueDisplayName(displayedQueueName));
@@ -2993,6 +3030,7 @@ void MusicPlayerScene::switchTab(MusicPlayerTab tab) {
   if (activeTab != MusicPlayerTab::Player) {
     seekMouseDown = false;
     activeSeekTouchId = -1;
+    playbackModeDropdownOpen = false;
     playbackRateDropdownOpen = false;
     refreshPlaybackRateControl();
   }
@@ -3979,8 +4017,10 @@ void MusicPlayerScene::cycleRepeatMode() {
 
 void MusicPlayerScene::setPlaybackRate(const std::string &id) {
   const int percent = std::atoi(id.c_str());
+  const audio::PlaybackRate rate{
+      .percent = percent, .mode = context.musicPlayer.PlaybackRate().mode};
   std::string errorMessage;
-  if (!context.musicPlayer.SetPlaybackRatePercent(percent, errorMessage)) {
+  if (!context.musicPlayer.SetPlaybackRate(rate, errorMessage)) {
     setStatus(errorMessage);
     playbackRateDropdownOpen = false;
     refreshPlaybackRateControl();
@@ -3998,14 +4038,54 @@ void MusicPlayerScene::setPlaybackRate(const std::string &id) {
   refreshPlaybackRateControl();
 }
 
-void MusicPlayerScene::refreshPlaybackRateControl() {
-  if (playbackRateDropdown == nullptr) {
+void MusicPlayerScene::setPlaybackMode(const std::string &id) {
+  audio::PlaybackMode mode;
+  if (id == "pitch-shift") {
+    mode = audio::PlaybackMode::PitchShift;
+  } else if (id == "time-stretch") {
+    mode = audio::PlaybackMode::TimeStretch;
+  } else {
     return;
   }
+
+  audio::PlaybackRate rate = context.musicPlayer.PlaybackRate();
+  rate.mode = mode;
+  std::string errorMessage;
+  if (!context.musicPlayer.SetPlaybackRate(rate, errorMessage)) {
+    setStatus(errorMessage);
+    playbackModeDropdownOpen = false;
+    refreshPlaybackRateControl();
+    return;
+  }
+
+  context.settings.musicPlayerPlaybackMode = mode;
+  context.settings.sanitize();
+  playbackModeDropdownOpen = false;
+  if (!context.saveSettings()) {
+    setStatus("Playback mode changed, but could not save it.");
+  } else {
+    setStatus("Music playback mode: " + playbackModeLabel(mode) + ".");
+  }
+  refreshPlaybackRateControl();
+}
+
+void MusicPlayerScene::refreshPlaybackRateControl() {
+  if (playbackModeDropdown == nullptr || playbackRateDropdown == nullptr) {
+    return;
+  }
+  const audio::PlaybackRate rate = context.musicPlayer.PlaybackRate();
+  playbackModeDropdown->refresh({
+      .label = "Mode",
+      .selectedId = playbackModeId(rate.mode),
+      .options = {{.id = "pitch-shift", .label = "Pitch Shift"},
+                  {.id = "time-stretch", .label = "Time Stretch"}},
+      .open = playbackModeDropdownOpen,
+      .enabled = true,
+      .maxVisibleItems = 2,
+  });
   playbackRateDropdown->refresh({
       .label = "Playback rate",
-      .selectedId =
-          std::to_string(context.musicPlayer.PlaybackRatePercent()),
+      .selectedId = std::to_string(rate.percent),
       .options = playbackRateOptions(),
       .open = playbackRateDropdownOpen,
       .enabled = true,

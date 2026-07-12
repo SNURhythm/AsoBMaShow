@@ -118,8 +118,6 @@ public:
   bool Seek(long long positionMicros, std::string &errorMessage);
   bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
   [[nodiscard]] audio::PlaybackRate PlaybackRate() const;
-  bool SetPlaybackRatePercent(int percent, std::string &errorMessage);
-  [[nodiscard]] int PlaybackRatePercent() const;
   bool SetSleepTimer(long long durationMicros, std::string &statusMessage);
   void ClearSleepTimer();
   [[nodiscard]] long long SleepTimerRemainingMicros() const;
