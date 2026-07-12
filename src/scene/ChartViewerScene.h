@@ -16,13 +16,12 @@
 
 class Button;
 class ChartCanvasView;
-class DropdownView;
 class ReplaySummaryListItemView;
 class ReplaySummaryListView;
 class ScrollView;
 class OverlayPortal;
 class PracticePanelView;
-class PlayOptionSectionView;
+class PlayOptionsPanelView;
 class TextView;
 class View;
 
@@ -116,26 +115,7 @@ private:
   ReplaySummaryListView *ghostReplayListView = nullptr;
   View *optionsDrawerRoot = nullptr;
   TextView *viewerOptionText = nullptr;
-  PlayOptionSectionView *playOptionSection = nullptr;
-  struct ViewerOptionButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string id;
-    GaugeType gaugeType = GaugeType::Normal;
-    bool gaugeAutoShift = false;
-  };
-  std::vector<ViewerOptionButton> viewerGaugeButtons;
-  std::vector<ViewerOptionButton> viewerLongNoteModeButtons;
-  std::vector<ViewerOptionButton> viewerAssistButtons;
-  std::vector<ViewerOptionButton> viewerPacemakerButtons;
-  TextView *viewerAssistLabelText = nullptr;
-  Button *viewerPlaybackRateDecreaseButton = nullptr;
-  Button *viewerPlaybackRateIncreaseButton = nullptr;
-  TextView *viewerPlaybackRateText = nullptr;
-  DropdownView *viewerPlaybackModeDropdown = nullptr;
-  bool viewerPlaybackModeDropdownOpen = false;
-  Button *viewerClubModeButton = nullptr;
-  TextView *viewerClubModeButtonText = nullptr;
+  PlayOptionsPanelView *viewerPlayOptionsPanel = nullptr;
   View *randomDrawerRoot = nullptr;
   ScrollView *randomDrawerScroll = nullptr;
   OverlayPortal *overlayPortal = nullptr;
@@ -196,12 +176,10 @@ private:
   void refreshOptionsDrawer();
   void setViewerNamedPlayOption(const std::string &option);
   void setViewerAssistOption(const std::string &option);
-  void setViewerGaugeOption(GaugeType type, bool autoShift);
   void setViewerLongNoteMode(const std::string &mode);
   void setViewerPlaybackRate(int percent);
   void setViewerPlaybackMode(const std::string &mode);
   void toggleViewerClubMode();
-  void setViewerPacemakerTarget(const std::string &target);
   void refreshViewerOptionControls();
   void setViewerLaneAssign(const std::string &notation);
   void setViewerPlayOptions(const std::optional<std::string> &option,
