@@ -113,6 +113,19 @@ constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://stellabms.xyz/st/table.html",
 };
 
+std::string formatGaugeTotal(const bms_parser::ChartMeta &meta) {
+  const double total =
+      meta.Total > 0.0
+          ? meta.Total
+          : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(2) << total;
+  std::string value = stream.str();
+  while (!value.empty() && value.back() == '0') value.pop_back();
+  if (!value.empty() && value.back() == '.') value.pop_back();
+  return value;
+}
+
 void ensureLibraryFolderExists(const std::filesystem::path &path) {
   std::error_code error;
   if (Utils::EnsureDirectoryExists(path, error)) {
@@ -2521,6 +2534,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
+  readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
@@ -3132,6 +3146,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->addView(readyGaugeLabelText);
   readyGaugeRow->addView(readyGaugeText);
   readyPlayOptionText = makeReadyStatusText();
+  readyTotalText = makeReadyStatusText();
+  readyTotalText->setThemedColor(ui_theme::cyan);
   readyAssistOptionText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   readyAssistOptionText->setHeight(28);
@@ -3139,6 +3155,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
   readyPacemakerText = makeReadyStatusText();
   readySettings->addView(readyGaugeRow);
+  readySettings->addView(readyTotalText);
   readySettings->addView(readyPlayOptionText);
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
@@ -4790,6 +4807,19 @@ void MainMenuScene::refreshReadySettingsSummary() {
   if (readyPlayOptionText != nullptr) {
     readyPlayOptionText->setText(effective.playOption + " · " +
                                  effective.longNoteMode);
+  }
+  if (readyTotalText != nullptr) {
+    const auto record = selectedRecordSnapshot();
+    if (record.has_value() && !record->courseStart &&
+        !record->solidArchive && !record->unavailable) {
+      readyTotalText->setText("TOTAL: " + formatGaugeTotal(record->meta));
+      readyTotalText->setDisplay(YGDisplayFlex);
+      readyTotalText->setVisible(true);
+    } else {
+      readyTotalText->setText("");
+      readyTotalText->setDisplay(YGDisplayNone);
+      readyTotalText->setVisible(false);
+    }
   }
   if (readyAssistOptionText != nullptr) {
     const int percent =
@@ -9881,6 +9911,7 @@ void MainMenuScene::cleanupScene() {
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
+  readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
