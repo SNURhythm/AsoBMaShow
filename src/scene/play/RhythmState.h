@@ -1051,8 +1051,11 @@ public:
 
   [[nodiscard]] bool activeGaugeFailed() const {
     const int index = gaugeTypeIndex(gaugeType);
-    return gaugeAutoShift == GaugeAutoShiftMode::None &&
-           gaugeIsSurvival(gaugeType, gaugeProfile) &&
+    if (gaugeAutoShift == GaugeAutoShiftMode::Continue ||
+        gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove) {
+      return false;
+    }
+    return gaugeIsSurvival(gaugeType, gaugeProfile) &&
            gaugeSurvivalFailed[index];
   }
 
