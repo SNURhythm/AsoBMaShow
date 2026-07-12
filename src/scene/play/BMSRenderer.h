@@ -268,6 +268,7 @@ private:
   void layoutGameplayHud();
   void layoutAutoPlayMark();
   void layoutGaugeText();
+  void refreshGaugeTextStyle();
   std::array<float, 4> worldGaugeRect() const;
   std::array<float, 4> hudGaugeRect() const;
   float gameplayHudRightReserveLeft() const;
