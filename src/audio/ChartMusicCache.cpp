@@ -124,18 +124,19 @@ std::filesystem::path CacheDirectory() {
   return Utils::GetDocumentsPath("music_cache");
 }
 
-std::filesystem::path
-CachedAudioPathForChart(const bms_parser::ChartMeta &meta) {
+std::filesystem::path CachedAudioPathForChart(
+    const bms_parser::ChartMeta &meta, bool clubMode) {
   const std::string title =
       !meta.Title.empty() ? meta.Title : meta.BmsPath.stem().string();
   return CacheDirectory() /
          (sanitizeFileNamePart(title) + "_" + stableChartAudioKey(meta) +
+          (clubMode ? "_club" : "") +
           ".wav");
 }
 
-bool CachedAudioExists(const bms_parser::ChartMeta &meta) {
+bool CachedAudioExists(const bms_parser::ChartMeta &meta, bool clubMode) {
   std::error_code error;
-  const std::filesystem::path path = CachedAudioPathForChart(meta);
+  const std::filesystem::path path = CachedAudioPathForChart(meta, clubMode);
   const bool cached = std::filesystem::is_regular_file(path, error);
   if (error) {
     SDL_Log("Could not check cached music file %s: %s",
@@ -210,12 +211,19 @@ void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths) {
 CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
                                     std::atomic_bool &cancelled,
                                     chart_audio::LogCallback log) {
+  return EnsureRenderedMusicFile(meta, cancelled, false, std::move(log));
+}
+
+CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
+                                    std::atomic_bool &cancelled, bool clubMode,
+                                    chart_audio::LogCallback log) {
   if (meta.BmsPath.empty()) {
     return {.success = false, .message = "Chart path is empty"};
   }
 
-  const std::filesystem::path outputPath = CachedAudioPathForChart(meta);
-  if (CachedAudioExists(meta)) {
+  const std::filesystem::path outputPath =
+      CachedAudioPathForChart(meta, clubMode);
+  if (CachedAudioExists(meta, clubMode)) {
     return resultForExistingFile(outputPath);
   }
 
@@ -235,14 +243,21 @@ CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
             .audioPath = outputPath,
             .message = "Could not parse chart for music render"};
   }
-  return EnsureRenderedMusicFile(*chart, cancelled, std::move(log));
+  return EnsureRenderedMusicFile(*chart, cancelled, clubMode, std::move(log));
 }
 
 CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
                                     std::atomic_bool &cancelled,
                                     chart_audio::LogCallback log) {
-  const std::filesystem::path outputPath = CachedAudioPathForChart(chart.Meta);
-  if (CachedAudioExists(chart.Meta)) {
+  return EnsureRenderedMusicFile(chart, cancelled, false, std::move(log));
+}
+
+CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
+                                    std::atomic_bool &cancelled, bool clubMode,
+                                    chart_audio::LogCallback log) {
+  const std::filesystem::path outputPath =
+      CachedAudioPathForChart(chart.Meta, clubMode);
+  if (CachedAudioExists(chart.Meta, clubMode)) {
     return resultForExistingFile(outputPath);
   }
 
@@ -264,6 +279,7 @@ CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
 
   const chart_audio::RenderOptions options{
       .keySoundMode = chart_audio::KeySoundMode::ChartTiming,
+      .clubMode = clubMode,
       .isCancelled = &cancelled,
       .log = std::move(log),
   };

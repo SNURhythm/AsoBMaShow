@@ -49,6 +49,7 @@ struct RenderOptions {
   KeySoundMode keySoundMode = KeySoundMode::ChartTiming;
   const ReplayData *replay = nullptr;
   audio::PlaybackRate playback;
+  bool clubMode = false;
   long long keySoundOffsetMicros = 0;
   std::atomic_bool *isCancelled = nullptr;
   LogCallback log;

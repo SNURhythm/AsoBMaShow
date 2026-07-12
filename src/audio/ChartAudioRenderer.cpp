@@ -5,6 +5,7 @@
 #include "../Utils.h"
 #include "../path.h"
 #include "ChartAssetExtensions.h"
+#include "ClubBeat.h"
 #include "SoundFileIO.h"
 #include "decoder.h"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -32,6 +34,20 @@ struct DecodedSound {
   std::vector<short> pcm;
   SF_INFO info{};
 };
+
+DecodedSound decodedClubSound(const club_beat::StereoSound &sound) {
+  DecodedSound result;
+  result.info.channels = kOutputChannels;
+  result.info.samplerate = sound.sampleRate;
+  result.info.frames = static_cast<sf_count_t>(sound.samples.size() /
+                                               kOutputChannels);
+  result.pcm.reserve(sound.samples.size());
+  for (const float sample : sound.samples) {
+    result.pcm.push_back(static_cast<short>(
+        std::clamp(sample, -1.0f, 1.0f) * static_cast<float>(INT16_MAX)));
+  }
+  return result;
+}
 
 using DecodedSoundCache =
     std::unordered_map<int, std::shared_ptr<DecodedSound>>;
@@ -672,6 +688,18 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
       continue;
     }
     mixSoundAt(mix, *sound, event.timeMicros, options.playback);
+  }
+  if (options.clubMode && !isCancelled) {
+    const DecodedSound kick =
+        decodedClubSound(club_beat::synthesizeKick(kOutputSampleRate));
+    const DecodedSound clap =
+        decodedClubSound(club_beat::synthesizeClap(kOutputSampleRate));
+    for (const auto &event : club_beat::buildPlan(chart)) {
+      mixSoundAt(mix, kick, event.timeMicros, options.playback);
+      if (event.clap) {
+        mixSoundAt(mix, clap, event.timeMicros, options.playback);
+      }
+    }
   }
   if (mix.empty()) {
     ensureMixFrames(mix, 1);
