@@ -18,6 +18,7 @@ enum class ReplayEventAction {
   Release = 1,
   Miss = 2,
   Mine = 3,
+  Gauge = 4,
 };
 
 enum class ReplayTouchAction {

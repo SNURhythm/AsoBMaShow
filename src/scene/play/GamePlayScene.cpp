@@ -2596,7 +2596,12 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     }
     applyReplayGauge(event);
     break;
+  case ReplayEventAction::Gauge:
+    state->gaugeHistory.push_back(event.gauge);
+    applyReplayGauge(event);
+    break;
   }
+  (void)finishIfGaugeFailed();
 }
 
 void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
@@ -2709,6 +2714,9 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
 
   if (gaugeUpdated) {
     updateGaugeStatusText();
+    appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr,
+                      gameplayTimeMicros, gameplayTimeMicros,
+                      JudgeResult(None, 0));
   }
 }
 
@@ -2743,6 +2751,9 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             bool recordTimingSample) {
+  if (state == nullptr || state->isEnding) {
+    return;
+  }
   const int judgementCount = ++state->judgeCount[judgeResult.judgement];
   if (judgeResult.isComboBreak()) {
     state->combo = 0;
@@ -2781,37 +2792,38 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
       .replayPlayback = isReplayPlayback(),
       .coursePlayback = isCoursePlayback(),
   });
-  if ((!capturePolicy.recordReplay && !capturePolicy.captureAnalytics) ||
-      state == nullptr) {
+  if (state == nullptr || state->isEnding) {
     return;
   }
   const auto range = practiceNoteRange();
-  if (range.has_value() &&
-      (!range->contains(songTimeMicros) ||
-       (note != nullptr && !range->contains(note)))) {
-    return;
+  const bool withinPracticeRange =
+      !range.has_value() ||
+      (range->contains(songTimeMicros) &&
+       (note == nullptr || range->contains(note)));
+  if (withinPracticeRange &&
+      (capturePolicy.recordReplay || capturePolicy.captureAnalytics)) {
+    ReplayEvent event;
+    event.action = action;
+    event.lane = lane;
+    event.noteTimeMicros = note != nullptr && note->Timeline != nullptr
+                               ? note->Timeline->Timing
+                               : -1;
+    event.songTimeMicros = songTimeMicros;
+    event.judgeTimeMicros = judgeTimeMicros;
+    event.judgement = judgeResult.judgement;
+    event.diffMicros = judgeResult.Diff;
+    event.gauge = state->currentGauge;
+    event.gaugeType = state->gaugeType;
+    event.combo = state->combo;
+    event.score = state->getScore();
+    if (capturePolicy.captureAnalytics) {
+      analyticsReplay.events.push_back(event);
+    }
+    if (capturePolicy.recordReplay) {
+      recordedReplay.events.push_back(event);
+    }
   }
-
-  ReplayEvent event;
-  event.action = action;
-  event.lane = lane;
-  event.noteTimeMicros = note != nullptr && note->Timeline != nullptr
-                             ? note->Timeline->Timing
-                             : -1;
-  event.songTimeMicros = songTimeMicros;
-  event.judgeTimeMicros = judgeTimeMicros;
-  event.judgement = judgeResult.judgement;
-  event.diffMicros = judgeResult.Diff;
-  event.gauge = state->currentGauge;
-  event.gaugeType = state->gaugeType;
-  event.combo = state->combo;
-  event.score = state->getScore();
-  if (capturePolicy.captureAnalytics) {
-    analyticsReplay.events.push_back(event);
-  }
-  if (capturePolicy.recordReplay) {
-    recordedReplay.events.push_back(event);
-  }
+  (void)finishIfGaugeFailed();
 }
 
 void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,

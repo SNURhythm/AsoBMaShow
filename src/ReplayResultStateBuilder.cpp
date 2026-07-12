@@ -98,6 +98,11 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
       clear_policy::assistClearRequired(replay.provenance.playback));
 
   for (const auto &event : replay.events) {
+    if (event.action == ReplayEventAction::Gauge) {
+      state.gaugeHistory.push_back(event.gauge);
+      syncReplayResultGaugeSnapshot(state, event);
+      continue;
+    }
     if (event.action == ReplayEventAction::Mine) {
       if (auto *note = findReplayNote(lookup, event);
           note != nullptr && note->IsLandmineNote()) {

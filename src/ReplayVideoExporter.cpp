@@ -309,8 +309,7 @@ long long gameplayResultTransitionMicrosForReplay(
 
 std::optional<long long> replayImmediateGaugeFailureMicros(
     const ReplayData &replay, GaugeProfile gaugeProfile, int keyMode) {
-  if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue ||
-      replay.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove) {
+  if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
     return std::nullopt;
   }
   const GaugeProfile resolvedProfile =
@@ -840,8 +839,11 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
 bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
                                     const std::filesystem::path &outputPath,
                                     long long durationMicros,
+                                    long long contentDurationMicros,
                                     std::string &errorMessage) {
   const sf_count_t targetFrames = replayAudioFramesForMicros(durationMicros);
+  const sf_count_t contentFrames = replayAudioFramesForMicros(
+      std::min(durationMicros, contentDurationMicros));
   SF_INFO outputInfo{};
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
@@ -855,8 +857,8 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
   }
 
   sf_count_t writtenFrames = 0;
-  if (targetFrames > 0 &&
-      !appendReplayAudioFile(outputHandle.get(), inputPath, targetFrames,
+  if (contentFrames > 0 &&
+      !appendReplayAudioFile(outputHandle.get(), inputPath, contentFrames,
                              writtenFrames, errorMessage)) {
     return false;
   }
@@ -1114,6 +1116,10 @@ bool applyReplayEventForVideo(
       note->IsDead = true;
       note->PlayedTime = event.judgeTimeMicros;
     }
+    renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
+                            gaugeProfile);
+    return false;
+  case ReplayEventAction::Gauge:
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
                             gaugeProfile);
     return false;
@@ -2883,7 +2889,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     alignedAudioName += PATH("_video.wav");
     alignedAudioPath = wavPath.parent_path() / alignedAudioName;
     if (!writeReplayAudioFileAtDuration(wavPath, alignedAudioPath,
-                                        totalDurationMicros, errorMessage)) {
+                                        totalDurationMicros,
+                                        requestedAudioDurationMicros,
+                                        errorMessage)) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
