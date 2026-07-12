@@ -138,18 +138,6 @@ void PracticePanelView::build(OverlayPortal *portal) {
   diagnosticText->setHeight(42);
   content->addView(diagnosticText);
 
-  auto *shortcutLabel = makeText("Shortcuts", 13, ui_theme::textMuted());
-  shortcutLabel->setHeight(19);
-  content->addView(shortcutLabel);
-  auto *markerShortcut =
-      makeText("1/2 or LB/RB: select marker", 12, ui_theme::textMuted());
-  markerShortcut->setHeight(18);
-  content->addView(markerShortcut);
-  auto *stepShortcut = makeText("Left/Right or D-pad: step timeline", 12,
-                                ui_theme::textMuted());
-  stepShortcut->setHeight(18);
-  content->addView(stepShortcut);
-
   auto *markerRow = new View();
   markerRow->setFlexDirection(FlexDirection::Row);
   markerRow->setGap(8);
@@ -181,12 +169,12 @@ void PracticePanelView::build(OverlayPortal *portal) {
 
   const std::array<std::pair<DropDownIndex, const char *>, 7> fields = {{
       {DropDownIndex::Loop, "Loop"},
-      {DropDownIndex::CountIn, "Count-in beats"},
+      {DropDownIndex::CountIn, "Count-in"},
       {DropDownIndex::Gauge, "Gauge"},
-      {DropDownIndex::StartingGauge, "Starting gauge"},
-      {DropDownIndex::Judge, "Judge windows"},
-      {DropDownIndex::Rate, "Playback rate"},
-      {DropDownIndex::Mode, "Playback mode"},
+      {DropDownIndex::StartingGauge, "Start gauge"},
+      {DropDownIndex::Judge, "Judge"},
+      {DropDownIndex::Rate, "Rate"},
+      {DropDownIndex::Mode, "Mode"},
   }};
   for (const auto &[index, label] : fields) {
     content->addView(makeRow(label, dropdowns[static_cast<size_t>(index)]));
@@ -202,7 +190,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   presetNameInput->setPadding(Edge::Right, 12);
   presetNameInput->setHeight(44);
   presetNameInput->setOverflow(TextView::TextOverflow::Hidden);
-  content->addView(makeRow("Preset name", presetNameInput));
+  content->addView(makeRow("Name", presetNameInput));
 
   presetMessageText = makeText("", 14, ui_theme::textSecondary());
   presetMessageText->setWrap(true);
@@ -217,7 +205,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *saveRow = new View();
   saveRow->setFlexDirection(FlexDirection::Row);
   saveRow->setGap(8);
-  auto *saveButton = makeButton("Save As", 0);
+  auto *saveButton = makeButton("Save", 0);
   saveButton->setFlex(1.0f);
   saveButton->setOnClickListener([this]() {
     if (callbacks.onSaveAs && presetNameInput != nullptr) {
@@ -256,7 +244,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   mutationRow->addView(deleteButton);
   content->addView(mutationRow);
 
-  startButton = makeButton("Start Practice", 0);
+  startButton = makeButton("Start", 0);
   startButton->setWidthPercent(100.0f);
   startButton->setHeight(52);
   startButton->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
