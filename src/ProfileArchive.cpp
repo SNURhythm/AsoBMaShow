@@ -1285,8 +1285,13 @@ validateArchive(const std::filesystem::path &archivePath,
                            ? "checksum manifest is not valid UTF-8"
                            : errorMessage};
   }
-  const std::string expected =
-      canonicalChecksums(extractDirectory, memberNames, errorMessage);
+  const auto canonicalMemberNames =
+      archiveMemberNames(extractDirectory, errorMessage);
+  const std::string expected = errorMessage.empty()
+                                   ? canonicalChecksums(extractDirectory,
+                                                        canonicalMemberNames,
+                                                        errorMessage)
+                                   : std::string{};
   if (!errorMessage.empty()) {
     return {.error = ProfileError::IoFailure, .message = errorMessage};
   }
