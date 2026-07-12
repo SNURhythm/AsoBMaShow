@@ -15,6 +15,7 @@ namespace practice_analytics_presentation {
 
 inline constexpr float kPreferredAnalyticsHeight = 250.0f;
 inline constexpr float kMinimumAnalyticsHeight = 236.0f;
+inline constexpr float kPhotoCompactAnalyticsHeight = 120.0f;
 
 enum class SectionTone : std::uint8_t {
   Neutral,
@@ -79,6 +80,13 @@ exportAnalyticsModes() noexcept {
 [[nodiscard]] constexpr bool
 photoExportShowsSharedInformation(PracticeAnalyticsMode mode) noexcept {
   return mode == PracticeAnalyticsMode::Histogram;
+}
+
+[[nodiscard]] constexpr float
+photoExportAnalyticsHeight(PracticeAnalyticsMode mode) noexcept {
+  return photoExportShowsSharedInformation(mode)
+             ? kPreferredAnalyticsHeight
+             : kPhotoCompactAnalyticsHeight;
 }
 
 [[nodiscard]] constexpr PracticeAnalyticsMode

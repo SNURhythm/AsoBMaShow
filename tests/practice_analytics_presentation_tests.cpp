@@ -112,6 +112,7 @@ void testResultPhotoExportsEveryAnalyticsModeInDisplayOrder() {
 
 void testResultPhotoShowsSharedInformationOnlyOnHistogram() {
   using practice_analytics_presentation::photoExportShowsSharedInformation;
+  using practice_analytics_presentation::photoExportAnalyticsHeight;
   require(photoExportShowsSharedInformation(
               PracticeAnalyticsMode::Histogram) &&
               !photoExportShowsSharedInformation(
@@ -119,6 +120,13 @@ void testResultPhotoShowsSharedInformationOnlyOnHistogram() {
               !photoExportShowsSharedInformation(
                   PracticeAnalyticsMode::Sections),
           "photo export does not duplicate aggregate and timing information");
+  require(photoExportAnalyticsHeight(PracticeAnalyticsMode::Histogram) ==
+                  practice_analytics_presentation::kPreferredAnalyticsHeight &&
+              photoExportAnalyticsHeight(PracticeAnalyticsMode::Lanes) ==
+                  120.0f &&
+              photoExportAnalyticsHeight(PracticeAnalyticsMode::Sections) ==
+                  120.0f,
+          "photo export shrinks cards after removing their shared rows");
 }
 
 void testResultVideoSlidesAnalyticsInEqualThirds() {
