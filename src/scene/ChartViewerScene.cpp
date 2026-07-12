@@ -4458,6 +4458,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .autoPlay = autoPlay,
                     .gaugeType = gaugeSelection.type,
                     .gaugeAutoShift = gaugeSelection.autoShift,
+                    .gaugeAutoShiftLowerBound =
+                        launchConfiguration.gaugeAutoShiftLowerBound,
                     .playOption = viewerPlayOption,
                     .playOptionSeed = viewerPlayOptionSeed,
                     .playOption2 = viewerPlayOption2,
