@@ -1409,6 +1409,8 @@ void ResultScene::startCourseReplay() {
   replaySession->gaugeType = replayData->initialGaugeType;
   replaySession->gaugeProfile = replayData->gaugeProfile;
   replaySession->gaugeAutoShift = replayData->gaugeAutoShift;
+  replaySession->gaugeAutoShiftLowerBound =
+      replayData->gaugeAutoShiftLowerBound;
   replaySession->longNoteMode = replayData->longNoteMode;
   replaySession->constraints = constraintSettings.rules;
   replaySession->requestedPlayOption = replayData->requestedPlayOption;
