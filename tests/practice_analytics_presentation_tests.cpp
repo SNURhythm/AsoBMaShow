@@ -110,6 +110,24 @@ void testResultPhotoExportsEveryAnalyticsModeInDisplayOrder() {
           "result photo includes all analytics modes in tab order");
 }
 
+void testResultVideoSlidesAnalyticsInEqualThirds() {
+  using practice_analytics_presentation::analyticsModeForSlideshow;
+  constexpr long long duration = 9'000'000;
+  require(analyticsModeForSlideshow(0, duration) ==
+                  PracticeAnalyticsMode::Histogram &&
+              analyticsModeForSlideshow(2'999'999, duration) ==
+                  PracticeAnalyticsMode::Histogram &&
+              analyticsModeForSlideshow(3'000'000, duration) ==
+                  PracticeAnalyticsMode::Lanes &&
+              analyticsModeForSlideshow(5'999'999, duration) ==
+                  PracticeAnalyticsMode::Lanes &&
+              analyticsModeForSlideshow(6'000'000, duration) ==
+                  PracticeAnalyticsMode::Sections &&
+              analyticsModeForSlideshow(duration, duration) ==
+                  PracticeAnalyticsMode::Sections,
+          "result video gives each analytics mode one third of the tail");
+}
+
 } // namespace
 
 int main() {
@@ -118,5 +136,6 @@ int main() {
   testPointerCaptureSeparatesMouseTouchAndCancelsReliably();
   testBaselineLayoutHasShrinkRoomWithoutClippingControls();
   testResultPhotoExportsEveryAnalyticsModeInDisplayOrder();
+  testResultVideoSlidesAnalyticsInEqualThirds();
   return 0;
 }

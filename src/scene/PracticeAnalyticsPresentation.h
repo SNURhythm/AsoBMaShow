@@ -76,4 +76,24 @@ exportAnalyticsModes() noexcept {
           PracticeAnalyticsMode::Sections};
 }
 
+[[nodiscard]] constexpr PracticeAnalyticsMode
+analyticsModeForSlideshow(long long elapsedMicros,
+                          long long durationMicros) noexcept {
+  if (durationMicros <= 0 || elapsedMicros <= 0) {
+    return PracticeAnalyticsMode::Histogram;
+  }
+  if (elapsedMicros >= durationMicros) {
+    return PracticeAnalyticsMode::Sections;
+  }
+  const long double progress = static_cast<long double>(elapsedMicros) /
+                               static_cast<long double>(durationMicros);
+  if (progress < 1.0L / 3.0L) {
+    return PracticeAnalyticsMode::Histogram;
+  }
+  if (progress < 2.0L / 3.0L) {
+    return PracticeAnalyticsMode::Lanes;
+  }
+  return PracticeAnalyticsMode::Sections;
+}
+
 } // namespace practice_analytics_presentation

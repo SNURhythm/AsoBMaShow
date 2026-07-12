@@ -16,6 +16,8 @@
 #include "rendering/RenderPlan.h"
 #include "rendering/SimpleBatchRenderer.h"
 #include "rendering/common.h"
+#include "scene/PracticeAnalyticsPresentation.h"
+#include "scene/PracticeAnalyticsView.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/Judge.h"
 #include "skin/DefaultSkin.h"
@@ -68,6 +70,7 @@ extern "C" {
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -80,6 +83,27 @@ constexpr int kExportChannels = chart_audio::kOutputChannels;
 constexpr int kDefaultExportFps = 120;
 constexpr int kH264HighProfile = 100;
 constexpr long long kResultSceneTailMicros = 10000000;
+
+PracticeAnalyticsView *addReplayResultAnalytics(
+    View &resultRoot, const bms_parser::Chart &chart,
+    const ReplayData &replay) {
+  const std::span<const ReplayData> attempts(&replay, 1);
+  auto *host = new View();
+  host->setName("timingAnalytics");
+  host->setWidthPercent(100.0f);
+  host->setHeight(
+      practice_analytics_presentation::kPreferredAnalyticsHeight);
+  host->setMinHeight(
+      practice_analytics_presentation::kMinimumAnalyticsHeight);
+  host->setFlexShrink(1.0f);
+  host->setFlexDirection(FlexDirection::Column);
+  host->setAlignItems(YGAlignStretch);
+  auto *analytics = new PracticeAnalyticsView(
+      practice::ResultModel(chart, attempts, 0));
+  host->addView(analytics);
+  resultRoot.addView(host);
+  return analytics;
+}
 
 class ReplayVideoExportLog;
 void replayExportLog(ReplayVideoExportLog *log, const char *format, ...);
@@ -2581,8 +2605,12 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
   std::unique_ptr<View> resultRoot;
   View *resultGraphPlaceholder = nullptr;
+  PracticeAnalyticsView *resultAnalytics = nullptr;
+  PracticeAnalyticsMode resultAnalyticsMode =
+      PracticeAnalyticsMode::Histogram;
   auto cleanupBgfx = [&]() {
     resultGraphPlaceholder = nullptr;
+    resultAnalytics = nullptr;
     resultRoot.reset();
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
@@ -2779,10 +2807,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             previousBest);
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
-    if (auto *analytics = resultRoot->findViewByName("timingAnalytics");
-        analytics != nullptr) {
-      analytics->setDisplay(YGDisplayNone);
-    }
+    resultAnalytics =
+        addReplayResultAnalytics(*resultRoot, chart, replay);
     resultRoot->applyYogaLayout();
   }
   ReplayAsyncFrameEncoder encoder;
@@ -3039,6 +3065,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                fps);
     const long long songTimeMicros =
         playback.chartMicrosFromReal(videoTimeMicros);
+    const auto analyticsMode =
+        practice_analytics_presentation::analyticsModeForSlideshow(
+            videoTimeMicros - gameplayDurationMicros, resultTailMicros);
+    if (resultAnalytics != nullptr && analyticsMode != resultAnalyticsMode) {
+      resultAnalytics->setMode(analyticsMode);
+      resultAnalyticsMode = analyticsMode;
+    }
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
@@ -3197,11 +3230,15 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
   std::unique_ptr<View> stageResultRoot;
   View *stageResultGraphPlaceholder = nullptr;
+  PracticeAnalyticsView *stageResultAnalytics = nullptr;
+  PracticeAnalyticsMode stageResultAnalyticsMode =
+      PracticeAnalyticsMode::Histogram;
   std::unique_ptr<View> courseResultRoot;
   View *courseResultGraphPlaceholder = nullptr;
 
   auto cleanupBgfx = [&]() {
     stageResultGraphPlaceholder = nullptr;
+    stageResultAnalytics = nullptr;
     courseResultGraphPlaceholder = nullptr;
     stageResultRoot.reset();
     courseResultRoot.reset();
@@ -3587,10 +3624,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           chart.Meta, stageReplay);
       DefaultSkin resultSkin;
       resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
-      if (auto *analytics = stageResultRoot->findViewByName("timingAnalytics");
-          analytics != nullptr) {
-        analytics->setDisplay(YGDisplayNone);
-      }
+      stageResultAnalytics =
+          addReplayResultAnalytics(*stageResultRoot, chart, stageReplay);
+      stageResultAnalyticsMode = PracticeAnalyticsMode::Histogram;
       stageResultRoot->applyYogaLayout();
     }
 
@@ -3653,6 +3689,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           (static_cast<long double>(frame) * 1000000.0L) / fps);
       const long long stageVideoMicros =
           stage.gameplayDurationMicros + resultOffsetMicros;
+      const auto analyticsMode =
+          practice_analytics_presentation::analyticsModeForSlideshow(
+              resultOffsetMicros, stage.resultDurationMicros);
+      if (stageResultAnalytics != nullptr &&
+          analyticsMode != stageResultAnalyticsMode) {
+        stageResultAnalytics->setMode(analyticsMode);
+        stageResultAnalyticsMode = analyticsMode;
+      }
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                                [&]() {
                                  bgfx::touch(rendering::clear_view);
@@ -3688,6 +3732,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     finalStageVisualBaseMicros =
         stage.gameplayDurationMicros + stage.resultDurationMicros;
     stageResultGraphPlaceholder = nullptr;
+    stageResultAnalytics = nullptr;
     stageResultRoot.reset();
     if (stageIndex + 1 < stages.size() || courseResultFrameCount == 0) {
       context.jukebox.stop();
