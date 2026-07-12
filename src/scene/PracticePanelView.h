@@ -39,6 +39,9 @@ public:
   void setChartEndMicros(long long value) {
     chartEndMicros = std::max(0LL, value);
   }
+  void setStartingGaugeMaximum(int value) {
+    startingGaugeMaximum = std::clamp(value, 100, 120);
+  }
   void setPresetMessage(std::string message, bool error = false);
 
   [[nodiscard]] const practice::Configuration &configuration() const {
@@ -53,6 +56,7 @@ private:
   enum class DropDownIndex : int { Preset, Gauge, Mode, Count };
 
   long long chartEndMicros = 0;
+  int startingGaugeMaximum = 100;
   PracticePanelCallbacks callbacks;
   std::function<void(practice::Marker)> onMarkerSelected;
   practice::Configuration currentConfiguration;

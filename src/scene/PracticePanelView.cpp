@@ -499,15 +499,20 @@ void PracticePanelView::refreshControls() {
   if (startingGaugeSlider != nullptr) {
     startingGaugeSlider->refresh(
         {.minimum = 0,
-         .maximum = 100,
+         .maximum = startingGaugeMaximum,
          .step = 1,
-         .value = currentConfiguration.startingGaugePercent.value_or(100)});
+         .value = std::min(
+             currentConfiguration.startingGaugePercent.value_or(100),
+             startingGaugeMaximum)});
   }
   if (startingGaugeValueText != nullptr) {
     startingGaugeValueText->setText(
         usesDefaultGauge
             ? "Default"
-            : std::to_string(*currentConfiguration.startingGaugePercent) + "%");
+            : std::to_string(std::min(
+                  *currentConfiguration.startingGaugePercent,
+                  startingGaugeMaximum)) +
+                  "%");
   }
   if (startingGaugeDefaultButton != nullptr &&
       startingGaugeDefaultText != nullptr) {

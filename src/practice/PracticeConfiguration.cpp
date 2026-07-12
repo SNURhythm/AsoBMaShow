@@ -155,9 +155,9 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
   if (value.startingGaugePercent) {
     const int originalGauge = *value.startingGaugePercent;
     *value.startingGaugePercent =
-        std::clamp(*value.startingGaugePercent, 0, 100);
+        std::clamp(*value.startingGaugePercent, 0, 120);
     diagnoseChange(originalGauge != *value.startingGaugePercent,
-                   "starting gauge was clamped to 0 through 100 percent");
+                   "starting gauge was clamped to 0 through 120 percent");
   }
   if (value.gaugeAutoShift && value.gaugeType != GaugeType::ExHard) {
     value.gaugeType = GaugeType::ExHard;

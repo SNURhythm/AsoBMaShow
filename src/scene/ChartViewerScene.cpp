@@ -4082,6 +4082,11 @@ void ChartViewerScene::refreshPracticePanel() {
     return;
   }
   practicePanel->setChartEndMicros(practiceChartEndMicros);
+  const GaugeProfile gaugeProfile =
+      resolveGaugeProfile(GaugeProfile::Standard,
+                          chart != nullptr ? chart->Meta.KeyMode : 7);
+  practicePanel->setStartingGaugeMaximum(static_cast<int>(gaugeMaximumValue(
+      practiceConfiguration.gaugeType, gaugeProfile)));
   const practice::Marker active =
       canvasView == nullptr ? practice::Marker::Start
                             : canvasView->getPracticeRange().active;
