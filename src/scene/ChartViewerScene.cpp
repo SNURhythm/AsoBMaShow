@@ -2752,7 +2752,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
   if (randomOptions.empty()) {
     randomDrawerPage = 0;
     auto *empty = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-    empty->setText("No active #RANDOM in this interpretation.");
+    empty->setText("No active #RANDOM.");
     empty->setColor(ui_theme::sdl(ui_theme::textMuted()));
     empty->setWrap(true);
     empty->setHeight(84);
@@ -3093,7 +3093,7 @@ void ChartViewerScene::updateSelectionText() {
     return;
   }
   if (canvasView == nullptr || !canvasView->hasSelectedTime()) {
-    selectionText->setText("Tap the chart to place a cursor.");
+    selectionText->setText("Tap chart to set cursor.");
     return;
   }
 
@@ -3259,7 +3259,7 @@ void ChartViewerScene::rebuildGhostModal() {
 void ChartViewerScene::showGhostModal() {
   if (chart == nullptr) {
     if (statusText != nullptr) {
-      statusText->setText("Parse a chart first");
+      statusText->setText("Open a chart first");
     }
     return;
   }
@@ -3276,10 +3276,10 @@ void ChartViewerScene::showGhostModal() {
                                   !practiceGhostReplay->events.empty();
     ghostModalEmptyText->setText(
         hasPracticeGhost
-            ? "Temporary practice ghost is available above saved replays."
+            ? "Practice ghost available."
             : (ghostReplaySummaries.empty()
-                   ? "No saved replays found for this chart."
-                   : "Select a replay to draw its judgement ghost over the chart."));
+                   ? "No saved replays."
+                   : "Select a replay."));
   }
   updatePracticeGhostReplayButton();
   ghostModalRoot->setSize(rendering::window_width, rendering::window_height);
@@ -4059,7 +4059,7 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     }
   }
   if (statusText != nullptr) {
-    statusText->setText("Practice section ready");
+    statusText->setText("Section ready");
   }
   refreshPracticePanel();
   updateSelectionText();
