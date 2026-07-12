@@ -799,7 +799,7 @@ void ResultScene::buildCourseExitConfirmation() {
   panel->addView(title);
 
   auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  message->setText("Current course progress will be discarded.");
+  message->setText("Course progress will be lost.");
   message->setColor(ui_theme::sdl(ui_theme::textSecondary()));
   message->setAlign(TextView::CENTER);
   message->setHeight(32);
@@ -1277,16 +1277,19 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
       retryData.has_value()) {
     chartMeta = practice::mergeReplayLaunchChartMeta(meta, *retryData);
   }
-  return {
+  practice::LaunchRequest request{
       .chartMeta = chartMeta,
       .startMicros = startMicros,
       .endMicros = endMicros,
       .source = source,
-      .replayId = source == practice::LaunchSource::ReplayResult &&
-                          retryData.has_value()
-                      ? std::optional<int>(retryData->id)
-                      : std::nullopt,
   };
+  if (source == practice::LaunchSource::ReplayResult &&
+      retryData.has_value()) {
+    request.replayId = retryData->id;
+    request.replayPlayOptions =
+        practice::launchPlayOptionsFromReplay(*retryData);
+  }
+  return request;
 }
 
 std::optional<practice::LaunchRequest>
@@ -1329,7 +1332,7 @@ void ResultScene::updatePracticeSectionAction() {
   }
 
   practiceSectionButton->setEnabled(true);
-  practiceSectionButtonText->setText("Practice This Section");
+  practiceSectionButtonText->setText("Practice Section");
 }
 
 void ResultScene::practiceThisSection() {

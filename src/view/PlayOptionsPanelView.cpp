@@ -7,6 +7,7 @@
 #include "DropdownView.h"
 #include "OverlayPortal.h"
 #include "PlayOptionSectionView.h"
+#include "SnappedSlider.h"
 #include "TextView.h"
 #include "UiTheme.h"
 
@@ -218,26 +219,19 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       ->setCornerRadius(ui_theme::controlRadius());
   playbackGroup->addView(makeLabel("Playback Rate"));
   auto *playbackRateRow = makeRow();
-  playbackRateDecreaseButton = makeButton("-5%", 18, &playbackRateDecreaseText);
-  playbackRateDecreaseButton->setOnClickListener([this]() {
+  playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
-      callbacks.onPlaybackRateSelected(state.playbackRatePercent - 5);
+      callbacks.onPlaybackRateSelected(percent);
     }
   });
-  playbackRateRow->addView(playbackRateDecreaseButton);
+  playbackRateSlider->setFlex(1.0F)->setMinWidth(180);
+  playbackRateRow->addView(playbackRateSlider);
   playbackRateText = new TextView(kFont, 22);
-  playbackRateText->setAlign(TextView::CENTER);
+  playbackRateText->setAlign(TextView::RIGHT);
   playbackRateText->setVAlign(TextView::MIDDLE);
   playbackRateText->setThemedColor(ui_theme::textPrimary);
-  playbackRateText->setFlex(1.0f);
+  playbackRateText->setWidth(72);
   playbackRateRow->addView(playbackRateText);
-  playbackRateIncreaseButton = makeButton("+5%", 18, &playbackRateIncreaseText);
-  playbackRateIncreaseButton->setOnClickListener([this]() {
-    if (callbacks.onPlaybackRateSelected) {
-      callbacks.onPlaybackRateSelected(state.playbackRatePercent + 5);
-    }
-  });
-  playbackRateRow->addView(playbackRateIncreaseButton);
   playbackGroup->addView(playbackRateRow);
   playbackModeDropdown =
       new DropdownView({.onOpenChanged =
@@ -322,13 +316,12 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   if (playbackRateText != nullptr) {
     playbackRateText->setText(std::to_string(state.playbackRatePercent) + "%");
   }
-  if (playbackRateDecreaseButton != nullptr) {
-    styleButton(playbackRateDecreaseButton, playbackRateDecreaseText, false,
-                !state.playbackLocked && state.playbackRatePercent > 50);
-  }
-  if (playbackRateIncreaseButton != nullptr) {
-    styleButton(playbackRateIncreaseButton, playbackRateIncreaseText, false,
-                !state.playbackLocked && state.playbackRatePercent < 200);
+  if (playbackRateSlider != nullptr) {
+    playbackRateSlider->refresh({.minimum = 50,
+                                 .maximum = 200,
+                                 .step = 5,
+                                 .value = state.playbackRatePercent,
+                                 .enabled = !state.playbackLocked});
   }
   if (playbackModeDropdown != nullptr) {
     playbackModeDropdown->refresh(

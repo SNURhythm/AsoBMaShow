@@ -222,12 +222,9 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   visibleTimeControls->setAlignItems(YGAlignFlexStart);
   if (includeDescription) {
     visibleTimeControls->addView(makeWrappedText(
-        metrics.compact
-            ? "600 green = 1000 ms. This controls how long notes stay "
-              "visible."
-            : "Green Number is the legacy BMS unit for note visible time. "
-              "600 green equals 60 frames on a 60 FPS system, which is "
-              "1000 ms.",
+        metrics.compact ? "600 green = 1000 ms."
+                        : "Green Number is the legacy BMS visibility unit; "
+                          "600 green equals 1000 ms.",
         metrics.bodyTextSize, ui_theme::textSecondary()));
   }
 
@@ -987,11 +984,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   offsetControls->addView(resetOffset);
 
   cardsColumn->addView(
-      makeCard(metrics, "Audio Offset",
-               metrics.compact
-                   ? "Negative values make chart audio feel earlier."
-                   : "Negative values delay gameplay and BGA so chart audio, "
-                     "auto-timed keysounds, and replay keysounds feel earlier.",
+      makeCard(metrics, "Audio Offset", "Negative values make audio earlier.",
                offsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *visualOffsetControls = new View();
@@ -1061,24 +1054,13 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   visualOffsetControls->addView(resetVisualOffset);
 
   cardsColumn->addView(makeCard(
-      metrics, "Visual Offset",
-      metrics.compact
-          ? "Adjusts note display time only."
-          : "Adjusts note display time only. BGA timing stays on the chart "
-            "audio timeline.",
+      metrics, "Visual Offset", "Move notes without changing audio or BGA.",
       visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *judgementFeedbackControls = new View();
   judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
   judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
   judgementFeedbackControls->setAlignItems(YGAlignFlexStart);
-  judgementFeedbackControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Place judgement text and choose timing feedback thresholds."
-          : "Place the judgement/combo text and choose when FAST/SLOW and "
-            "millisecond timing feedback appear.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
-
   judgementFeedbackControls->addView(
       makeSummaryRow(metrics, "Judge Text Y", &summaryJudgementTextYValueText));
   auto *judgementTextYControls = new View();
@@ -1169,11 +1151,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementFeedbackControls->addView(timingCriteriaControls);
 
   cardsColumn->addView(makeCard(
-      metrics, "Judgement Feedback",
-      metrics.compact
-          ? "Configure judgement text and timing feedback display."
-          : "Configure judgement/combo placement and separate FAST/SLOW and "
-            "millisecond display thresholds.",
+      metrics, "Judgement Feedback", "Position text and timing details.",
       judgementFeedbackControls, metrics.visibleTimeCardHeight,
       metrics.cardsWidth));
 
@@ -1328,13 +1306,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorWidthControls);
 
   cardsColumn->addView(makeCard(
-      metrics, "Judgement Indicator",
-      metrics.compact
-          ? "Y: 0% bottom, 50% center, 100% top. Width: 100% base."
-          : "Y position is vertical placement: 0% is the "
-            "judgement-line/bottom side, 50% is center, and 100% is top. "
-            "Width percent scales the selected mode's base width; 100% is "
-            "default. 3D draws on the lane plane; HUD draws screen-flat.",
+      metrics, "Judgement Indicator", "Set position, size, and render mode.",
       judgementIndicatorControls, metrics.visibleTimeCardHeight,
       metrics.cardsWidth));
 
@@ -1347,12 +1319,6 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   keysoundControls->setFlexDirection(FlexDirection::Column);
   keysoundControls->setGap(metrics.compact ? 12.0f : 16.0f);
   keysoundControls->setAlignItems(YGAlignFlexStart);
-  keysoundControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Switch between manual hits and chart-timed playback."
-          : "Tap to switch modes. The current selection is shown on "
-            "the right.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   keysoundModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1377,24 +1343,13 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   });
   keysoundControls->addView(prepMetronomeModeButton);
   secondaryCards->addView(makeCard(
-      metrics, "Input Audio",
-      metrics.compact
-          ? "Manual hits keep classic feedback. Prep adds count-in clicks."
-          : "Keep manual key clicks for classic BMS feedback, or switch to "
-            "auto-timed playback for cleaner timing practice. Prep adds a "
-            "one-measure metronome before chart start.",
+      metrics, "Input Audio", "Choose hit sounds and the count-in.",
       keysoundControls, metrics.modeCardHeight, metrics.secondaryCardWidth));
 
   auto *notePriorityControls = new View();
   notePriorityControls->setFlexDirection(FlexDirection::Column);
   notePriorityControls->setGap(metrics.compact ? 12.0f : 16.0f);
   notePriorityControls->setAlignItems(YGAlignFlexStart);
-  notePriorityControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Choose which hittable note a lane press judges first."
-          : "Choose which hittable note a lane press judges first when "
-            "multiple notes are inside the input window.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   notePriorityModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1408,11 +1363,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   });
   notePriorityControls->addView(notePriorityModeButton);
   secondaryCards->addView(makeCard(
-      metrics, "Note Priority",
-      metrics.compact ? "Lowest keeps the original frontmost-note behavior."
-                      : "Lowest keeps the original frontmost-note behavior. "
-                        "Other modes can prefer a following note based on "
-                        "combo, timing distance, or score.",
+      metrics, "Note Priority", "Choose which nearby note a press judges.",
       notePriorityControls, metrics.modeCardHeight,
       metrics.secondaryCardWidth));
 
@@ -1426,11 +1377,6 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   bgaControls->setFlexDirection(FlexDirection::Column);
   bgaControls->setGap(metrics.compact ? 12.0f : 16.0f);
   bgaControls->setAlignItems(YGAlignFlexStart);
-  bgaControls->addView(makeWrappedText(
-      metrics.compact ? "Toggle BGA rendering for previews and gameplay."
-                      : "Tap to switch BGA rendering on or off for future "
-                        "previews and charts.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   bgaModeText = makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
   bgaModeButton = makeControlButton(metrics.actionButtonWidth,
@@ -1441,23 +1387,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   });
   bgaControls->addView(bgaModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "BGA Playback",
-      metrics.compact
-          ? "Disable background animation for lower distraction or lighter "
-            "rendering."
-          : "Disable background animation if you want lower distraction or a "
-            "lighter render path on slower hardware.",
+      metrics, "BGA Playback", "Show background animation.",
       bgaControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *invisibleNoteControls = new View();
   invisibleNoteControls->setFlexDirection(FlexDirection::Column);
   invisibleNoteControls->setGap(metrics.compact ? 12.0f : 16.0f);
   invisibleNoteControls->setAlignItems(YGAlignFlexStart);
-  invisibleNoteControls->addView(makeWrappedText(
-      metrics.compact ? "Draw hidden notes as temporary lane markers."
-                      : "Draw invisible chart notes as temporary lane "
-                        "markers. Judgement and scoring stay unchanged.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   showInvisibleNotesModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1474,23 +1410,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   });
   invisibleNoteControls->addView(showInvisibleNotesModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "Show Invisible Notes",
-      metrics.compact
-          ? "Orange rectangles are placeholders until skin art exists."
-          : "Invisible notes use orange placeholder rectangles until the "
-            "skin system exposes dedicated artwork.",
+      metrics, "Invisible Notes", "Show invisible notes as lane markers.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *touchVisualizationControls = new View();
   touchVisualizationControls->setFlexDirection(FlexDirection::Column);
   touchVisualizationControls->setGap(metrics.compact ? 12.0f : 16.0f);
   touchVisualizationControls->setAlignItems(YGAlignFlexStart);
-  touchVisualizationControls->addView(makeWrappedText(
-      metrics.compact ? "Draw active finger positions over gameplay."
-                      : "Draw active finger positions as translucent circles "
-                        "during gameplay. Replay watch and export can still "
-                        "override this per replay.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   touchVisualizationModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -1504,23 +1430,13 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   });
   touchVisualizationControls->addView(touchVisualizationModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "Touch Points",
-      metrics.compact ? "Show touch locations while playing."
-                      : "Show touch locations while playing and use the same "
-                        "default when opening replay tools.",
+      metrics, "Touch Points", "Show touch positions during play.",
       touchVisualizationControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *judgementCounterControls = new View();
   judgementCounterControls->setFlexDirection(FlexDirection::Column);
   judgementCounterControls->setGap(metrics.compact ? 12.0f : 16.0f);
   judgementCounterControls->setAlignItems(YGAlignFlexStart);
-  judgementCounterControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Enable totals and choose where they sit."
-          : "Enable realtime judgement totals and choose where they sit "
-            "during gameplay. Top uses a horizontal strip; Left and Right use "
-            "vertical stacks.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *judgementCounterModeControls = new View();
   judgementCounterModeControls->setFlexDirection(FlexDirection::Row);
   judgementCounterModeControls->setFlexWrap(YGWrapWrap);
@@ -1552,10 +1468,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   judgementCounterModeControls->addView(judgementCounterPositionButton);
   judgementCounterControls->addView(judgementCounterModeControls);
   cardsColumn->addView(makeCard(
-      metrics, "Judgement Counter",
-      metrics.compact ? "Realtime judgement counts during gameplay."
-                      : "Show realtime judgement totals in the gameplay HUD "
-                        "without changing lane rendering.",
+      metrics, "Judgement Counter", "Show live judgement totals.",
       judgementCounterControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *gaugeControls = new View();
@@ -1563,10 +1476,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   gaugeControls->setGap(metrics.compact ? 12.0f : 16.0f);
   gaugeControls->setAlignItems(YGAlignFlexStart);
   gaugeControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Choose world-space bar or side HUD bar."
-          : "World draws a horizontal gauge below the judgement line. Left "
-            "and Right draw a vertical 2D HUD gauge on that side.",
+      "World: below lanes. Left/Right: side HUD.",
       metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *gaugePositionControls = new View();
   gaugePositionControls->setFlexDirection(FlexDirection::Row);
@@ -1587,10 +1497,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   gaugePositionControls->addView(gaugeBarPositionButton);
   gaugeControls->addView(gaugePositionControls);
   cardsColumn->addView(makeCard(
-      metrics, "Gauge Bar",
-      metrics.compact ? "Gameplay gauge placement."
-                      : "Render the current gauge as a live bar instead of a "
-                        "text-only HUD line.",
+      metrics, "Gauge Bar", "Choose the gauge position.",
       gaugeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *bgaDisplayControls = new View();
@@ -1598,12 +1505,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   bgaDisplayControls->setGap(metrics.compact ? 12.0f : 16.0f);
   bgaDisplayControls->setAlignItems(YGAlignFlexStart);
   bgaDisplayControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Fit preserves the full image. Fill crops. Stretch ignores "
-            "aspect."
-          : "Fit preserves the whole BGA with letterboxing. Fill preserves "
-            "aspect and crops edges. Stretch fills the screen without "
-            "preserving aspect.",
+      "Fit shows all. Fill crops. Stretch distorts.",
       metrics.bodyTextSize, ui_theme::textSecondary()));
   bgaDisplayModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
@@ -1618,9 +1520,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   });
   bgaDisplayControls->addView(bgaDisplayModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "BGA Aspect",
-      metrics.compact ? "Choose how BGA fits the playfield."
-                      : "Choose how BGA media is fitted to the playfield.",
+      metrics, "BGA Aspect", "",
       bgaDisplayControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *brightnessControls = new View();
@@ -1667,10 +1567,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   });
   brightnessControls->addView(resetBrightness);
   cardsColumn->addView(makeCard(
-      metrics, "BGA Brightness",
-      metrics.compact ? "Dim or restore the blurred BGA behind the lane."
-                      : "Dim the BGA composite behind the lane when the "
-                        "background competes with notes.",
+      metrics, "BGA Brightness", "Dim the BGA behind lanes.",
       brightnessControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *blurControls = new View();
@@ -1714,10 +1611,7 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   });
   blurControls->addView(resetBlur);
   cardsColumn->addView(makeCard(
-      metrics, "BGA Blur Strength",
-      metrics.compact ? "Higher values soften background motion."
-                      : "Higher values soften background motion before it is "
-                        "composited behind the lane.",
+      metrics, "BGA Blur", "Soften background motion.",
       blurControls, metrics.offsetCardHeight, metrics.cardsWidth));
   return cardsColumn;
 }
@@ -1729,13 +1623,6 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   previewControls->setFlexDirection(FlexDirection::Column);
   previewControls->setGap(metrics.compact ? 12.0f : 16.0f);
   previewControls->setAlignItems(YGAlignFlexStart);
-  previewControls->addView(makeWrappedText(
-      metrics.compact
-          ? "Open a live gameplay preview with falling notes."
-          : "Open a live gameplay preview with falling notes. It uses the "
-            "same lane renderer, camera, viewport, notes, and HUD as "
-            "gameplay.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   auto *previewButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText("Preview", metrics.bodyTextSize + 4, ui_theme::textPrimary(),
@@ -1744,21 +1631,12 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   previewButton->setOnClickListener([this]() { startLanePreview(); });
   previewControls->addView(previewButton);
   cardsColumn->addView(makeCard(
-      metrics, "Gameplay Preview",
-      metrics.compact ? "Test lane and HUD setup in the gameplay renderer."
-                      : "Test lane and HUD setup in the gameplay renderer "
-                        "before entering a chart.",
+      metrics, "Gameplay Preview", "Preview the current lane and HUD.",
       previewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *visibleTimeControls = buildVisibleTimeControls(metrics, true, false);
   cardsColumn->addView(makeCard(
-      metrics, "Visible Time",
-      metrics.compact
-          ? "Controls how long notes stay on screen before the judgement "
-            "line."
-          : "Controls how long notes stay visible before reaching the "
-            "judgement line. Switch units if you prefer legacy green number "
-            "or direct milliseconds, and choose which BPM anchors that time.",
+      metrics, "Visible Time", "Set how long notes remain visible.",
       visibleTimeControls, metrics.visibleTimeCardHeight, metrics.cardsWidth));
 
   auto *noteStartPanel = new View();
@@ -1824,14 +1702,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   });
   noteStartPanel->addView(floatingLaneCoverModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "Note Start Position",
-      metrics.compact
-          ? "Higher values make notes appear lower while preserving visible "
-            "time."
-          : "Move the note appearance point downward like a HIDDEN start "
-            "position. The renderer scales scroll distance so the current "
-            "green number still describes the time from appearance to the "
-            "judgement line.",
+      metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *angleControls = new View();
@@ -1877,11 +1748,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   });
   angleControls->addView(resetAngle);
   cardsColumn->addView(makeCard(
-      metrics, "Lane Angle",
-      metrics.compact ? "Adjust visual lane tilt and touch mapping together."
-                      : "Adjust the gameplay camera pitch. Touch lane "
-                        "conversion uses the same lane plane, so this stays "
-                        "aligned for touch play.",
+      metrics, "Lane Angle", "Tilt the lane and touch plane.",
       angleControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *lengthControls = new View();
@@ -1927,10 +1794,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   });
   lengthControls->addView(resetLength);
   cardsColumn->addView(makeCard(
-      metrics, "Lane Length",
-      metrics.compact ? "Adjust how far the visible lane reaches."
-                      : "Adjust how far the visible lane reaches toward the "
-                        "top of the screen.",
+      metrics, "Lane Length", "Set how far the lane reaches.",
       lengthControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   auto *playAreaWidthControls = new View();
@@ -2009,11 +1873,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
     playAreaWidthControls->addView(makePlayAreaWidthRow(keyMode));
   }
   cardsColumn->addView(makeCard(
-      metrics, "Play Area Width",
-      metrics.compact
-          ? "Set lane width separately for each key mode."
-          : "Set the centered lane area width separately for each key mode. "
-            "Touch input uses the same width as the rendered lanes.",
+      metrics, "Play Area Width", "Set width for each key mode.",
       playAreaWidthControls, metrics.visibleTimeCardHeight,
       metrics.cardsWidth));
 
@@ -2061,12 +1921,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   });
   beamControls->addView(resetBeam);
   cardsColumn->addView(makeCard(
-      metrics, "Lane Beam Length",
-      metrics.compact
-          ? "Scale press beams from the judgement line upward."
-          : "Scale the press feedback beam height from the judgement line "
-            "toward the top of the lane. 100% keeps the original full lane "
-            "beam.",
+      metrics, "Lane Beam Length", "Set press feedback height.",
       beamControls, metrics.offsetCardHeight, metrics.cardsWidth));
 
   return cardsColumn;
@@ -2080,11 +1935,6 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   themeControls->setFlexDirection(FlexDirection::Column);
   themeControls->setGap(metrics.compact ? 12.0f : 16.0f);
   themeControls->setAlignItems(YGAlignFlexStart);
-  themeControls->addView(makeWrappedText(
-      metrics.compact ? "Switch the UI palette."
-                      : "Switch between the dark prismatic palette and a "
-                        "light high-contrast palette.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   uiThemeModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -2099,22 +1949,13 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   });
   themeControls->addView(uiThemeModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "Theme",
-      metrics.compact ? "Dark stays colorful without the old graphite panels."
-                      : "Dark keeps the stage-light rhythm-game mood without "
-                        "the old graphite panels. Light is available for "
-                        "brighter environments.",
+      metrics, "Theme", "Choose the UI palette.",
       themeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *archivePreviewControls = new View();
   archivePreviewControls->setFlexDirection(FlexDirection::Column);
   archivePreviewControls->setGap(metrics.compact ? 12.0f : 16.0f);
   archivePreviewControls->setAlignItems(YGAlignFlexStart);
-  archivePreviewControls->addView(makeWrappedText(
-      metrics.compact ? "Preview selected charts inside non-solid archives."
-                      : "Preview selected charts inside non-solid archives "
-                        "from the song select screen.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   archiveChartPreviewModeText =
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -2128,22 +1969,13 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   });
   archivePreviewControls->addView(archiveChartPreviewModeButton);
   cardsColumn->addView(makeCard(
-      metrics, "Archive Chart Preview",
-      metrics.compact ? "Disable this if archive previews make selection feel "
-                        "heavy."
-                      : "Disable this if archive previews make song selection "
-                        "feel heavy on large packs.",
+      metrics, "Archive Preview", "Preview charts inside archives.",
       archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *cacheCleanupControls = new View();
   cacheCleanupControls->setFlexDirection(FlexDirection::Column);
   cacheCleanupControls->setGap(metrics.compact ? 12.0f : 16.0f);
   cacheCleanupControls->setAlignItems(YGAlignFlexStart);
-  cacheCleanupControls->addView(makeWrappedText(
-      metrics.compact ? "Remove temporary files extracted from archives."
-                      : "Remove temporary BGA and video files extracted from "
-                        "archives. They will be recreated when needed.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
   archiveCacheCleanupButtonText =
       makeText(archiveCacheCleanupRunning.load() ? "Cleaning..." : "Clean Up",
                metrics.bodyTextSize + 4, ui_theme::textPrimary(),
@@ -2160,10 +1992,7 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   cacheCleanupControls->addView(archiveCacheCleanupStatusText);
   cardsColumn->addView(makeCard(
-      metrics, "Archive Temporary Cache",
-      metrics.compact ? "Clear extracted archive media."
-                      : "Clear temporary files made while playing media from "
-                        "archives.",
+      metrics, "Archive Cache", "Remove temporary extracted media.",
       cacheCleanupControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   return cardsColumn;
@@ -2173,10 +2002,7 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
   loadDifficultyTables();
 
-  const std::string tableCardDescription =
-      metrics.compact ? "Import a bmstable page, header, or table list URL."
-                      : "Import a bmstable page URL or a direct header JSON "
-                        "URL. Table-list JSON URLs import each listed table.";
+  const std::string tableCardDescription = "Add a bmstable URL.";
 
   auto *addControls = new View();
   addControls->setFlexDirection(FlexDirection::Column);
@@ -2382,9 +2208,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
     playNote->setThemedBorderColor(ui_theme::hairline);
     playNote->setBorderWidth(1);
     playNote->addView(makeWrappedText(
-        "Google Play builds cannot add external chart folders. You can import "
-        "archive files or folders into app storage instead. More info: "
-        "github.com/SNURhythm/AsoBMaShow",
+        "Google Play builds import folders into app storage.",
         metrics.bodyTextSize, ui_theme::textSecondary()));
 
     auto *repoButton = makeAccentButton(
@@ -2490,10 +2314,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   }
 
   cardsColumn->addView(makeCard(
-      metrics, "Chart Folders",
-      metrics.compact ? "Remove folders from library scanning."
-                      : "Remove a folder entry and cached charts under it "
-                        "from the library database.",
+      metrics, "Chart Folders", "Manage library folders.",
       folderList, metrics.modeCardHeight, metrics.cardsWidth));
   return cardsColumn;
 }
@@ -2622,12 +2443,6 @@ void SettingsScene::initView() {
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
       makeText("Settings", metrics.titleSize, ui_theme::textPrimary()));
-  headerText->addView(makeWrappedText(
-      metrics.compact
-          ? "Profiles, input, audio, and play preferences."
-          : "Portable player profiles and persistent play, input, audio, and "
-            "display preferences.",
-      metrics.subtitleSize, ui_theme::textSecondary()));
   header->addView(headerText);
 
   auto *backLabel =
@@ -2812,19 +2627,6 @@ void SettingsScene::initView() {
   if (cardsColumn != nullptr) {
     scrollContent->addView(cardsColumn);
   }
-
-  auto *footer = new View();
-  footer->setPadding(Edge::All, static_cast<float>(metrics.cardPadding - 4));
-  footer->setThemedBackgroundColor(ui_theme::panelSubtle);
-  footer->setCornerRadius(ui_theme::panelRadius());
-  footer->setThemedBorderColor(ui_theme::hairline);
-  footer->setBorderWidth(1);
-  footer->addView(makeWrappedText(
-      metrics.compact
-          ? "Settings save automatically in the app documents directory."
-          : "Settings are saved automatically in the app documents directory.",
-      metrics.bodyTextSize, ui_theme::textMuted()));
-  scrollContent->addView(footer);
 
   scrollView->setContentView(scrollContent);
   content->addView(scrollView);

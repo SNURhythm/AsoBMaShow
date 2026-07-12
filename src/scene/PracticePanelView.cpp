@@ -4,12 +4,12 @@
 #include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
+#include "../view/SnappedSlider.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 
 #include <algorithm>
-#include <array>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -38,7 +38,8 @@ TextView *makeText(std::string text, int size, Color color) {
   return view;
 }
 
-Button *makeButton(std::string label, int width = 96) {
+Button *makeButton(std::string label, int width = 96,
+                   TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, width, 44);
   button->setWidth(width);
   button->setHeight(44);
@@ -50,6 +51,9 @@ Button *makeButton(std::string label, int width = 96) {
                           ui_theme::cyan());
   auto *text = makeText(std::move(label), 16, ui_theme::textPrimary());
   text->setAlign(TextView::CENTER);
+  if (textOut != nullptr) {
+    *textOut = text;
+  }
   button->setContentView(text);
   return button;
 }
@@ -67,14 +71,27 @@ View *makeRow(std::string label, View *control) {
   return row;
 }
 
-std::vector<DropdownView::Option>
-numericOptions(int minimum, int maximum, int step, std::string suffix = {}) {
-  std::vector<DropdownView::Option> options;
-  for (int value = minimum; value <= maximum; value += step) {
-    options.push_back(
-        {.id = std::to_string(value), .label = std::to_string(value) + suffix});
-  }
-  return options;
+View *makeSliderRow(std::string label, SnappedSlider *slider,
+                    TextView **valueOut) {
+  auto *group = new View();
+  group->setFlexDirection(FlexDirection::Column);
+  group->setAlignItems(YGAlignStretch);
+  group->setGap(2);
+
+  auto *header = new View();
+  header->setHeight(20);
+  header->setFlexDirection(FlexDirection::Row);
+  header->setAlignItems(YGAlignCenter);
+  header->setJustifyContent(YGJustifySpaceBetween);
+  header->addView(makeText(std::move(label), 14, ui_theme::textMuted()));
+  auto *value = makeText("", 14, ui_theme::textPrimary());
+  value->setAlign(TextView::RIGHT);
+  header->addView(value);
+  *valueOut = value;
+  group->addView(header);
+  slider->setWidthPercent(100.0F);
+  group->addView(slider);
+  return group;
 }
 } // namespace
 
@@ -138,18 +155,6 @@ void PracticePanelView::build(OverlayPortal *portal) {
   diagnosticText->setHeight(42);
   content->addView(diagnosticText);
 
-  auto *shortcutLabel = makeText("Shortcuts", 13, ui_theme::textMuted());
-  shortcutLabel->setHeight(19);
-  content->addView(shortcutLabel);
-  auto *markerShortcut =
-      makeText("1/2 or LB/RB: select marker", 12, ui_theme::textMuted());
-  markerShortcut->setHeight(18);
-  content->addView(markerShortcut);
-  auto *stepShortcut = makeText("Left/Right or D-pad: step timeline", 12,
-                                ui_theme::textMuted());
-  stepShortcut->setHeight(18);
-  content->addView(stepShortcut);
-
   auto *markerRow = new View();
   markerRow->setFlexDirection(FlexDirection::Row);
   markerRow->setGap(8);
@@ -179,18 +184,59 @@ void PracticePanelView::build(OverlayPortal *portal) {
   markerRow->addView(endMarkerButton);
   content->addView(markerRow);
 
-  const std::array<std::pair<DropDownIndex, const char *>, 7> fields = {{
-      {DropDownIndex::Loop, "Loop"},
-      {DropDownIndex::CountIn, "Count-in beats"},
-      {DropDownIndex::Gauge, "Gauge"},
-      {DropDownIndex::StartingGauge, "Starting gauge"},
-      {DropDownIndex::Judge, "Judge windows"},
-      {DropDownIndex::Rate, "Playback rate"},
-      {DropDownIndex::Mode, "Playback mode"},
-  }};
-  for (const auto &[index, label] : fields) {
-    content->addView(makeRow(label, dropdowns[static_cast<size_t>(index)]));
-  }
+  loopButton = makeButton("Off", 0, &loopButtonText);
+  loopButton->setOnClickListener([this]() {
+    currentConfiguration.loop = !currentConfiguration.loop;
+    publishConfiguration();
+    refreshControls();
+  });
+  content->addView(makeRow("Loop", loopButton));
+
+  countInSlider = new SnappedSlider([this](int value) {
+    currentConfiguration.countInBeats = value;
+    publishConfiguration();
+    refreshControls();
+  });
+  content->addView(makeSliderRow("Count-in", countInSlider, &countInValueText));
+
+  content->addView(
+      makeRow("Gauge", dropdowns[static_cast<size_t>(DropDownIndex::Gauge)]));
+
+  startingGaugeSlider = new SnappedSlider([this](int value) {
+    currentConfiguration.startingGaugePercent = value;
+    publishConfiguration();
+    refreshControls();
+  });
+  auto *startingGaugeGroup = makeSliderRow("Start gauge", startingGaugeSlider,
+                                           &startingGaugeValueText);
+  startingGaugeDefaultButton =
+      makeButton("Use Default", 0, &startingGaugeDefaultText);
+  startingGaugeDefaultButton->setWidthPercent(100.0F);
+  startingGaugeDefaultButton->setOnClickListener([this]() {
+    currentConfiguration.startingGaugePercent.reset();
+    publishConfiguration();
+    refreshControls();
+  });
+  startingGaugeGroup->addView(startingGaugeDefaultButton);
+  content->addView(startingGaugeGroup);
+
+  judgeSlider = new SnappedSlider([this](int value) {
+    currentConfiguration.judge.kind = practice::JudgeOverrideKind::Scale;
+    currentConfiguration.judge.scalePercent = value;
+    publishConfiguration();
+    refreshControls();
+  });
+  content->addView(makeSliderRow("Judge", judgeSlider, &judgeValueText));
+
+  rateSlider = new SnappedSlider([this](int value) {
+    currentConfiguration.playback.percent = value;
+    publishConfiguration();
+    refreshControls();
+  });
+  content->addView(makeSliderRow("Rate", rateSlider, &rateValueText));
+
+  content->addView(
+      makeRow("Mode", dropdowns[static_cast<size_t>(DropDownIndex::Mode)]));
 
   presetNameInput = new TextInputBox(kFont, 17);
   presetNameInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -202,7 +248,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   presetNameInput->setPadding(Edge::Right, 12);
   presetNameInput->setHeight(44);
   presetNameInput->setOverflow(TextView::TextOverflow::Hidden);
-  content->addView(makeRow("Preset name", presetNameInput));
+  content->addView(makeRow("Name", presetNameInput));
 
   presetMessageText = makeText("", 14, ui_theme::textSecondary());
   presetMessageText->setWrap(true);
@@ -217,7 +263,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *saveRow = new View();
   saveRow->setFlexDirection(FlexDirection::Row);
   saveRow->setGap(8);
-  auto *saveButton = makeButton("Save As", 0);
+  auto *saveButton = makeButton("Save", 0);
   saveButton->setFlex(1.0f);
   saveButton->setOnClickListener([this]() {
     if (callbacks.onSaveAs && presetNameInput != nullptr) {
@@ -256,7 +302,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   mutationRow->addView(deleteButton);
   content->addView(mutationRow);
 
-  startButton = makeButton("Start Practice", 0);
+  startButton = makeButton("Start", 0);
   startButton->setWidthPercent(100.0f);
   startButton->setHeight(52);
   startButton->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
@@ -352,32 +398,10 @@ void PracticePanelView::selectDropdownOption(DropDownIndex index,
     }
     publishConfiguration();
     break;
-  case DropDownIndex::Loop:
-    currentConfiguration.loop = id == "on";
-    publishConfiguration();
-    break;
-  case DropDownIndex::CountIn:
-    currentConfiguration.countInBeats = std::stoi(id);
-    publishConfiguration();
-    break;
   case DropDownIndex::Gauge:
     if (practice::applyPracticeGaugeOption(currentConfiguration, id)) {
       publishConfiguration();
     }
-    break;
-  case DropDownIndex::StartingGauge:
-    currentConfiguration.startingGaugePercent =
-        id == "default" ? std::nullopt : std::optional<int>(std::stoi(id));
-    publishConfiguration();
-    break;
-  case DropDownIndex::Judge:
-    currentConfiguration.judge.kind = practice::JudgeOverrideKind::Scale;
-    currentConfiguration.judge.scalePercent = std::stoi(id);
-    publishConfiguration();
-    break;
-  case DropDownIndex::Rate:
-    currentConfiguration.playback.percent = std::stoi(id);
-    publishConfiguration();
     break;
   case DropDownIndex::Mode:
     if (id == "pitch") {
@@ -432,11 +456,6 @@ void PracticePanelView::refreshControls() {
   refresh(DropDownIndex::Preset, "Preset",
           selectedNamedPresetId.value_or(std::string(kLastUsedPresetId)),
           std::move(presetOptions));
-  refresh(DropDownIndex::Loop, "Loop", currentConfiguration.loop ? "on" : "off",
-          {{.id = "off", .label = "Off"}, {.id = "on", .label = "On"}});
-  refresh(DropDownIndex::CountIn, "Beats",
-          std::to_string(currentConfiguration.countInBeats),
-          numericOptions(0, 16, 1));
   std::vector<DropdownView::Option> practiceGaugeOptions;
   for (const auto &option : practice::practiceGaugeOptions()) {
     practiceGaugeOptions.push_back(
@@ -445,20 +464,6 @@ void PracticePanelView::refreshControls() {
   refresh(DropDownIndex::Gauge, "Gauge",
           practice::practiceGaugeOptionId(currentConfiguration),
           std::move(practiceGaugeOptions));
-  auto gaugeOptions = numericOptions(0, 100, 1, "%");
-  gaugeOptions.insert(gaugeOptions.begin(),
-                      {.id = "default", .label = "Default"});
-  refresh(DropDownIndex::StartingGauge, "Start",
-          currentConfiguration.startingGaugePercent
-              ? std::to_string(*currentConfiguration.startingGaugePercent)
-              : "default",
-          std::move(gaugeOptions));
-  refresh(DropDownIndex::Judge, "Judge",
-          std::to_string(currentConfiguration.judge.scalePercent),
-          numericOptions(25, 200, 5, "%"));
-  refresh(DropDownIndex::Rate, "Rate",
-          std::to_string(currentConfiguration.playback.percent),
-          numericOptions(50, 200, 5, "%"));
   const std::string modeId =
       currentConfiguration.playback.mode == audio::PlaybackMode::TimeStretch
           ? "stretch"
@@ -468,6 +473,73 @@ void PracticePanelView::refreshControls() {
            {.id = "stretch",
             .label = "Time Stretch (Unavailable)",
             .available = false}});
+
+  if (loopButton != nullptr && loopButtonText != nullptr) {
+    loopButtonText->setText(currentConfiguration.loop ? "On" : "Off");
+    loopButton->setBackgroundColors(
+        currentConfiguration.loop ? ui_theme::primaryAction()
+                                  : ui_theme::control(),
+        currentConfiguration.loop ? ui_theme::primaryActionHover()
+                                  : ui_theme::controlHover(),
+        currentConfiguration.loop ? ui_theme::primaryActionPressed()
+                                  : ui_theme::controlPressed());
+  }
+  if (countInSlider != nullptr) {
+    countInSlider->refresh({.minimum = 0,
+                            .maximum = 16,
+                            .step = 1,
+                            .value = currentConfiguration.countInBeats});
+  }
+  if (countInValueText != nullptr) {
+    countInValueText->setText(
+        std::to_string(currentConfiguration.countInBeats));
+  }
+  const bool usesDefaultGauge =
+      !currentConfiguration.startingGaugePercent.has_value();
+  if (startingGaugeSlider != nullptr) {
+    startingGaugeSlider->refresh(
+        {.minimum = 0,
+         .maximum = 100,
+         .step = 1,
+         .value = currentConfiguration.startingGaugePercent.value_or(100)});
+  }
+  if (startingGaugeValueText != nullptr) {
+    startingGaugeValueText->setText(
+        usesDefaultGauge
+            ? "Default"
+            : std::to_string(*currentConfiguration.startingGaugePercent) + "%");
+  }
+  if (startingGaugeDefaultButton != nullptr &&
+      startingGaugeDefaultText != nullptr) {
+    startingGaugeDefaultText->setText(usesDefaultGauge ? "Default ✓"
+                                                       : "Use Default");
+    startingGaugeDefaultButton->setBackgroundColors(
+        usesDefaultGauge ? ui_theme::primaryAction() : ui_theme::control(),
+        usesDefaultGauge ? ui_theme::primaryActionHover()
+                         : ui_theme::controlHover(),
+        usesDefaultGauge ? ui_theme::primaryActionPressed()
+                         : ui_theme::controlPressed());
+  }
+  if (judgeSlider != nullptr) {
+    judgeSlider->refresh({.minimum = 25,
+                          .maximum = 200,
+                          .step = 5,
+                          .value = currentConfiguration.judge.scalePercent});
+  }
+  if (judgeValueText != nullptr) {
+    judgeValueText->setText(
+        std::to_string(currentConfiguration.judge.scalePercent) + "%");
+  }
+  if (rateSlider != nullptr) {
+    rateSlider->refresh({.minimum = 50,
+                         .maximum = 200,
+                         .step = 5,
+                         .value = currentConfiguration.playback.percent});
+  }
+  if (rateValueText != nullptr) {
+    rateValueText->setText(
+        std::to_string(currentConfiguration.playback.percent) + "%");
+  }
 
   const bool hasNamedPreset = selectedNamedPresetId.has_value();
   if (updateButton != nullptr) {

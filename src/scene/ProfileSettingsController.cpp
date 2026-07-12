@@ -89,8 +89,7 @@ bool ProfileSettingsController::refresh() {
   }
   if (result.profiles.empty()) {
     setFailure(ProfileError::IntegrityFailure, {},
-               "No valid player profiles were found. The previous list was "
-               "kept visible.");
+               "No valid profiles found.");
     return false;
   }
   const bool activeExists =
@@ -99,8 +98,7 @@ bool ProfileSettingsController::refresh() {
       });
   if (!activeExists) {
     setFailure(ProfileError::IntegrityFailure, {},
-               "The active profile is missing from the profile list. The "
-               "previous list was kept visible.");
+               "The active profile is missing.");
     return false;
   }
 
@@ -138,19 +136,16 @@ bool ProfileSettingsController::select(std::string_view profileId) {
 }
 
 ProfileActionEligibility ProfileSettingsController::destructiveEligibility(
-    std::string_view profileId, std::string_view action) const {
+    std::string_view profileId) const {
   if (!contains(profileId)) {
-    return {.enabled = false, .reason = "The selected profile is unavailable."};
+    return {.enabled = false, .reason = "Profile unavailable."};
   }
   if (profileId == activeProfileId_) {
     return {.enabled = false,
-            .reason = "The active profile cannot be " + std::string(action) +
-                      ". Activate another profile first."};
+            .reason = "Activate another profile first."};
   }
   if (profiles_.size() <= 1) {
-    return {.enabled = false,
-            .reason =
-                "The last profile cannot be " + std::string(action) + "."};
+    return {.enabled = false, .reason = "Keep at least one profile."};
   }
   if (phase_ != ProfileSettingsPhase::Idle) {
     return {.enabled = false,
@@ -161,12 +156,12 @@ ProfileActionEligibility ProfileSettingsController::destructiveEligibility(
 
 ProfileActionEligibility
 ProfileSettingsController::deleteEligibility(std::string_view profileId) const {
-  return destructiveEligibility(profileId, "deleted");
+  return destructiveEligibility(profileId);
 }
 
 ProfileActionEligibility ProfileSettingsController::overwriteEligibility(
     std::string_view profileId) const {
-  return destructiveEligibility(profileId, "overwritten");
+  return destructiveEligibility(profileId);
 }
 
 ProfileResult
@@ -543,9 +538,7 @@ ProfileSettingsController::requestDelete(std::string_view profileId) {
   confirmationPriorStatus_ = status_;
   confirmationProfileId_ = selectedProfileId_;
   phase_ = ProfileSettingsPhase::ConfirmDelete;
-  status_ = {.kind = ProfileSettingsStatusKind::Info,
-             .message = "Choose Delete again to permanently remove this "
-                        "profile."};
+  status_ = {.kind = ProfileSettingsStatusKind::Info, .message = {}};
   const auto found =
       std::ranges::find_if(profiles_, [&](const PlayerProfile &candidate) {
         return candidate.id == profileId;
@@ -580,9 +573,7 @@ ProfileSettingsController::requestOverwrite(std::string_view profileId) {
   confirmationPriorStatus_ = status_;
   confirmationProfileId_ = selectedProfileId_;
   phase_ = ProfileSettingsPhase::ConfirmOverwrite;
-  status_ = {.kind = ProfileSettingsStatusKind::Info,
-             .message = "Choose Overwrite again to replace this profile from "
-                        "the selected archive."};
+  status_ = {.kind = ProfileSettingsStatusKind::Info, .message = {}};
   const auto found =
       std::ranges::find_if(profiles_, [&](const PlayerProfile &candidate) {
         return candidate.id == profileId;
@@ -633,7 +624,7 @@ bool ProfileSettingsController::beginPreparedExportPicker(
   }
   phase_ = ProfileSettingsPhase::PickingExport;
   status_ = {.kind = ProfileSettingsStatusKind::Info,
-             .message = "Choose where to save the prepared profile archive."};
+             .message = "Choose where to save the profile."};
   return true;
 }
 

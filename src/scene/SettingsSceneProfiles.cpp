@@ -28,14 +28,6 @@ View *makeProfileCardsColumn(const LayoutMetrics &metrics) {
   return column;
 }
 
-std::string abbreviatedUuid(std::string_view id) {
-  if (id.size() <= 13) {
-    return std::string(id);
-  }
-  return std::string(id.substr(0, 8)) + "…" +
-         std::string(id.substr(id.size() - 4));
-}
-
 SDL_Color statusColor(ProfileSettingsStatusKind kind) {
   switch (kind) {
   case ProfileSettingsStatusKind::Success:
@@ -186,8 +178,7 @@ bool SettingsScene::startProfileArchiveTask(
     }
     if (profileController != nullptr) {
       profileController->abandonArchive(task.generation());
-      profileController->recordError(
-          "The profile archive worker is already busy.");
+      profileController->recordError("A profile task is already running.");
     }
     invalidateProfileLayout();
     return false;
@@ -217,8 +208,7 @@ bool SettingsScene::startProfileArchiveTask(
                   "ownership cleanup will retry.");
           if (temporaryCleanupFailed && completion.result.ok()) {
             const std::string cleanupWarning =
-                "Profile imported, but cleanup of its private temporary "
-                "archive is deferred.";
+                "Profile imported; temporary cleanup is pending.";
             if (completion.result.message.empty()) {
               completion.result.message = cleanupWarning;
             } else {
@@ -245,9 +235,9 @@ bool SettingsScene::startProfileArchiveTask(
     }
     profileController->abandonArchive(profileArchiveGeneration);
     profileArchiveGeneration = 0;
-    profileController->recordError(
-        "Unable to start the profile archive worker: " +
-        std::string(error.what()));
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Unable to start profile archive worker: %s", error.what());
+    profileController->recordError("Could not start the profile task.");
     invalidateProfileLayout();
     return false;
   } catch (...) {
@@ -264,8 +254,7 @@ bool SettingsScene::startProfileArchiveTask(
     }
     profileController->abandonArchive(profileArchiveGeneration);
     profileArchiveGeneration = 0;
-    profileController->recordError(
-        "Unable to start the profile archive worker.");
+    profileController->recordError("Could not start the profile task.");
     invalidateProfileLayout();
     return false;
   }
@@ -375,9 +364,7 @@ void SettingsScene::applyPendingProfileArchiveCompletion() {
       completion->result.ok()) {
     if (!profileController->beginPreparedExportPicker(completion->generation)) {
       profileController->abandonArchive(completion->generation);
-      profileController->recordError(
-          "The profile archive was prepared, but the export picker could not "
-          "start.");
+      profileController->recordError("Could not open the save picker.");
       profileArchiveGeneration = 0;
       profileExportSourceLifetime.reset();
       profileExportStagingFile.clear();
@@ -406,12 +393,11 @@ void SettingsScene::applyPendingProfileArchiveCompletion() {
       invalidateProfileLayout();
       return;
     } catch (const std::exception &error) {
-      profileController->failPicker(
-          "Unable to open the profile export picker: " +
-          std::string(error.what()));
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Unable to open profile export picker: %s", error.what());
+      profileController->failPicker("Could not open the save picker.");
     } catch (...) {
-      profileController->failPicker(
-          "Unable to open the profile export picker.");
+      profileController->failPicker("Could not open the save picker.");
     }
     profileDocumentHandoff.close();
     profileDocumentHandoffKind = SettingsProfileDocumentHandoffKind::None;
@@ -449,17 +435,14 @@ void SettingsScene::applyPendingProfileDocumentHandoff() {
   }
 
   if (!result) {
-    profileController->failPicker(
-        "The profile document picker finished without a result.");
+    profileController->failPicker("The file picker did not return a file.");
   } else if (result->cancelled()) {
     profileController->cancelPicker();
   } else if (!result->ok()) {
     std::string message = result->message;
     if (kind == SettingsProfileDocumentHandoffKind::Export) {
-      message =
-          "The profile archive was prepared, but the selected destination "
-          "could not be confirmed." +
-          (message.empty() ? std::string{} : " " + message);
+      message = "Could not save the profile." +
+                (message.empty() ? std::string{} : " " + message);
     }
     profileController->failPicker(std::move(message));
   } else if (kind == SettingsProfileDocumentHandoffKind::Import) {
@@ -485,8 +468,7 @@ void SettingsScene::applyPendingProfileDocumentHandoff() {
       profileController->abandonArchive(generation);
     }
   } else {
-    profileController->failPicker(
-        "The profile document picker returned an unexpected result.");
+    profileController->failPicker("Unexpected file picker result.");
   }
 
   pendingProfileImportOptions = {};
@@ -633,8 +615,7 @@ void SettingsScene::activateProfile(std::string_view profileId) {
   const std::string warningText = joinWarnings(runtime.warnings);
   if (runtime.profileCommitted && !warningText.empty()) {
     profileController->recordWarning(
-        "Profile switched, but some runtime settings need attention. " +
-        warningText);
+        "Profile switched with warnings. " + warningText);
   }
   invalidateProfileLayout();
 }
@@ -645,8 +626,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   if (profileController == nullptr) {
     cardsColumn->addView(makeCard(
         metrics, "Player Profiles", "Profile services are unavailable.",
-        makeWrappedText("Restart the application after checking the profile "
-                        "data directory.",
+        makeWrappedText("Restart the app and try again.",
                         metrics.bodyTextSize, ui_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
@@ -663,11 +643,12 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   profileInlineEditor.clearIfUnavailable(editorTargetAvailable, idle);
 
   const auto &status = profileController->status();
-  profileStatusText =
-      makeWrappedText(status.message.empty() ? "Ready." : status.message,
-                      metrics.bodyTextSize, ui_theme::textSecondary());
-  profileStatusText->setColor(statusColor(status.kind));
-  cardsColumn->addView(profileStatusText);
+  if (!status.message.empty()) {
+    profileStatusText = makeWrappedText(
+        status.message, metrics.bodyTextSize, ui_theme::textSecondary());
+    profileStatusText->setColor(statusColor(status.kind));
+    cardsColumn->addView(profileStatusText);
+  }
 
   auto *manageBody = new View();
   manageBody->setFlexDirection(FlexDirection::Column);
@@ -691,34 +672,25 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       }));
   manageBody->addView(manageActions);
   cardsColumn->addView(makeCard(
-      metrics, "Player Profiles",
-      "Create isolated settings, input, score, and replay identities. New and "
-      "duplicated profiles are selected but never activated automatically.",
+      metrics, "Player Profiles", "Keep settings and records separate.",
       manageBody, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *archiveBody = new View();
   archiveBody->setFlexDirection(FlexDirection::Column);
   archiveBody->setGap(metrics.compact ? 10.0f : 14.0f);
-  archiveBody->addView(makeWrappedText(
-      "Choose an archive with the system document picker. Imported files are "
-      "copied into private temporary storage and removed after validation.",
-      metrics.smallTextSize, ui_theme::textMuted()));
-
   auto *archiveActions = new View();
   archiveActions->setFlexDirection(FlexDirection::Row);
   archiveActions->setFlexWrap(YGWrapWrap);
   archiveActions->setGap(metrics.compact ? 8.0f : 10.0f);
   archiveActions->addView(
-      makeProfileActionButton(metrics, "Import New", idle, [this]() {
+      makeProfileActionButton(metrics, "Import", idle, [this]() {
         startProfileImportDocumentPicker(
             {.mode = ProfileImportMode::CreateWithNewId});
       }));
   archiveBody->addView(archiveActions);
 
   cardsColumn->addView(makeCard(
-      metrics, "Portable Archive",
-      "Export or import the six-file allowlisted profile archive. Chart "
-      "libraries and online services are never included.",
+      metrics, "Import / Export", "Move profiles between devices.",
       archiveBody, metrics.modeCardHeight, metrics.cardsWidth));
 
   for (const PlayerProfile &profile : profileController->profiles()) {
@@ -741,7 +713,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     body->addView(makeWrappedText(
         std::string(active ? "ACTIVE  •  " : "") +
             (selected ? "SELECTED  •  " : "") + "Last used " +
-            profile.lastUsedAt + "  •  " + abbreviatedUuid(profile.id),
+            profile.lastUsedAt,
         metrics.smallTextSize,
         active ? ui_theme::lime() : ui_theme::textSecondary()));
 
@@ -765,7 +737,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
           invalidateProfileLayout();
         }));
     actions->addView(makeProfileActionButton(
-        metrics, "Duplicate", idle,
+        metrics, "Copy", idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginDuplicate(id, name);
           invalidateProfileLayout();
@@ -786,7 +758,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
         [this, id = profile.id]() { startProfileExportPreparation(id); }));
     actions->addView(makeProfileActionButton(
         metrics,
-        confirmingOverwrite ? "Confirm Overwrite" : "Overwrite from Archive",
+        confirmingOverwrite ? "Confirm Import" : "Import Over",
         confirmingOverwrite || (idle && overwriteEligibility.enabled),
         [this, id = profile.id, confirmingOverwrite]() {
           if (!confirmingOverwrite) {
@@ -802,8 +774,8 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     if (confirmingDelete || confirmingOverwrite) {
       body->addView(makeWrappedText(
           confirmingDelete
-              ? "Delete this profile permanently?"
-              : "Replace this profile from the selected archive?",
+              ? "Delete this profile?"
+              : "Replace this profile?",
           metrics.bodyTextSize, ui_theme::amber()));
       actions->addView(makeProfileActionButton(
           metrics, "Cancel", true, [this]() {
@@ -871,11 +843,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     }
 
     cardsColumn->addView(makeCard(
-        metrics, profile.displayName,
-        active ? "This profile currently owns the live settings and database "
-                 "session."
-               : "Activate to bind this profile's settings, input, scores, "
-                 "and replays.",
+        metrics, profile.displayName, "",
         body, metrics.modeCardHeight, metrics.cardsWidth));
   }
   return cardsColumn;

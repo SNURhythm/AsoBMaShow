@@ -153,8 +153,7 @@ public:
 private:
   [[nodiscard]] bool contains(std::string_view profileId) const;
   [[nodiscard]] ProfileActionEligibility
-  destructiveEligibility(std::string_view profileId,
-                         std::string_view action) const;
+  destructiveEligibility(std::string_view profileId) const;
   [[nodiscard]] ProfileResult unavailableResult(std::string message) const;
   [[nodiscard]] ProfileArchiveResult
   unavailableArchiveResult(std::string message) const;

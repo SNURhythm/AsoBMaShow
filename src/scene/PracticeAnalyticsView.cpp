@@ -583,7 +583,7 @@ void PracticeAnalyticsView::refreshText() {
   const auto &timing = analysis.overall;
   std::ostringstream summary;
   summary << (model.displayedIsAuto() ? "Auto timing" : "Timing")
-          << " · Samples " << timing.samples << " · Misses " << timing.misses
+          << " · n " << timing.samples << " · Miss " << timing.misses
           << " · Mean " << formatMetric(timing.meanMillis) << " · SD "
           << formatMetric(timing.standardDeviationMillis) << " · Median "
           << formatMetric(timing.medianMillis);
@@ -605,9 +605,9 @@ void PracticeAnalyticsView::refreshText() {
     detail << "Selected " << std::fixed << std::setprecision(3)
            << static_cast<double>(selected->startMicros) / 1'000'000.0 << "–"
            << static_cast<double>(selected->endMicros) / 1'000'000.0
-           << " s · exact measure boundaries";
+           << " s";
   } else {
-    detail << "Tap or drag measures to select an exact chart range";
+    detail << "Tap or drag to select measures";
   }
   if (model.displayedContainsAuto() && !model.displayedIsAuto()) {
     detail << " · aggregate includes Auto";

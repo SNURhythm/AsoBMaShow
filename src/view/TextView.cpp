@@ -359,15 +359,17 @@ void TextView::renderImpl(RenderContext &context) {
   }
 
   SDL_Rect drawRect = resolvedTextRect();
+  const float rotationDegrees = getRotationDegrees();
   const bool clip =
       overflow != TextOverflow::Visible && getWidth() > 0 && getHeight() > 0;
-  if (overflow == TextOverflow::Marquee && !wrapEnabled &&
+  if (rotationDegrees == 0.0f && overflow == TextOverflow::Marquee &&
+      !wrapEnabled &&
       rect.w > getWidth()) {
     drawRect.x =
         getX() - static_cast<int>(std::round(marqueeOffset(getWidth())));
   }
 
-  const auto submitText = [this, &context, &drawRect]() {
+  const auto submitText = [this, &context, &drawRect, rotationDegrees]() {
     rendering::PosTexVertex vertices[] = {
         {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},                           // Top-left
         {static_cast<float>(drawRect.w), 0.0f, 0.0f, 1.0f, 0.0f}, // Top-right
@@ -384,9 +386,58 @@ void TextView::renderImpl(RenderContext &context) {
     bx::memCopy(tvb.data, vertices, sizeof(vertices));
     bx::memCopy(tib.data, indices, sizeof(indices));
 
-    float translate[16];
-    bx::mtxTranslate(translate, drawRect.x, drawRect.y, 0.0f);
-    bgfx::setTransform(translate);
+    if (rotationDegrees == 0.0f) {
+      float translate[16];
+      bx::mtxTranslate(translate, drawRect.x, drawRect.y, 0.0f);
+      bgfx::setTransform(translate);
+    } else {
+      const float radians = bx::toRad(rotationDegrees);
+      const float cosine = std::cos(radians);
+      const float sine = std::sin(radians);
+      const float textureWidth = static_cast<float>(drawRect.w);
+      const float textureHeight = static_cast<float>(drawRect.h);
+      const float rotatedWidth = std::abs(cosine) * textureWidth +
+                                 std::abs(sine) * textureHeight;
+      const float rotatedHeight = std::abs(sine) * textureWidth +
+                                  std::abs(cosine) * textureHeight;
+
+      float left = static_cast<float>(getX());
+      if (align == TextAlign::CENTER) {
+        left += (static_cast<float>(getWidth()) - rotatedWidth) * 0.5f;
+      } else if (align == TextAlign::RIGHT) {
+        left += static_cast<float>(getWidth()) - rotatedWidth;
+      }
+      float top = static_cast<float>(getY());
+      if (valign == TextVAlign::MIDDLE) {
+        top += (static_cast<float>(getHeight()) - rotatedHeight) * 0.5f;
+      } else if (valign == TextVAlign::BOTTOM) {
+        top += static_cast<float>(getHeight()) - rotatedHeight;
+      }
+      const float centerX = left + rotatedWidth * 0.5f;
+      const float centerY = top + rotatedHeight * 0.5f;
+
+      float transform[16] = {
+          cosine,
+          sine,
+          0.0f,
+          0.0f,
+          -sine,
+          cosine,
+          0.0f,
+          0.0f,
+          0.0f,
+          0.0f,
+          1.0f,
+          0.0f,
+          centerX - cosine * textureWidth * 0.5f +
+              sine * textureHeight * 0.5f,
+          centerY - sine * textureWidth * 0.5f -
+              cosine * textureHeight * 0.5f,
+          0.0f,
+          1.0f,
+      };
+      bgfx::setTransform(transform);
+    }
     bgfx::setTexture(0, s_texColor, texture);
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setIndexBuffer(&tib);

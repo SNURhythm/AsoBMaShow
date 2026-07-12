@@ -120,6 +120,9 @@ private:
   std::unique_ptr<TextView> comboText;
   std::unique_ptr<TextView> pacemakerText;
   std::unique_ptr<TextView> gaugeText;
+  std::unique_ptr<View> gaugeTypeBadge;
+  std::unique_ptr<TextView> gaugeTypeText;
+  std::unique_ptr<TextView> gaugeAutoShiftText;
   std::unique_ptr<TextView> playOptionText;
   std::unique_ptr<TextView> autoPlayMarkText;
   std::unique_ptr<TextView> laneCoverVisibleTimeText;
@@ -268,6 +271,7 @@ private:
   void layoutGameplayHud();
   void layoutAutoPlayMark();
   void layoutGaugeText();
+  void refreshGaugeTextStyle();
   std::array<float, 4> worldGaugeRect() const;
   std::array<float, 4> hudGaugeRect() const;
   float gameplayHudRightReserveLeft() const;

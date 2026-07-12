@@ -335,9 +335,6 @@ private:
   TextView *findBmsModalTitleText = nullptr;
   TextView *findBmsStatusText = nullptr;
   TextView *findBmsDetailText = nullptr;
-  ScrollView *findBmsLogScrollView = nullptr;
-  View *findBmsLogContent = nullptr;
-  TextView *findBmsLogText = nullptr;
   Button *findBmsCloseButton = nullptr;
   Button *findBmsOpenButton = nullptr;
   Button *findBmsGoogleButton = nullptr;

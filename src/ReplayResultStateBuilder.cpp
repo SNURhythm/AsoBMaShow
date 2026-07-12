@@ -90,6 +90,9 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
   RhythmState state(&chart, false);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
                        gaugeProfile);
+  if (replay.provenance.startingGaugePercent.has_value()) {
+    state.setStartingGaugePercent(*replay.provenance.startingGaugePercent);
+  }
   state.setAssistClearMark(
       assist_options::isEnabled(replay.assistOption) ||
       clear_policy::assistClearRequired(replay.provenance.playback));

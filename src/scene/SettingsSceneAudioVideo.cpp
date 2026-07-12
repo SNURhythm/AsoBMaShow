@@ -121,13 +121,13 @@ std::string audioApplyMessage(const audio::ApplyResult &result) {
   }
   switch (result.status) {
   case audio::ApplyStatus::Applied:
-    return "Audio settings applied.";
+    return "Audio saved.";
   case audio::ApplyStatus::Unsupported:
-    return "This audio configuration is unavailable.";
+    return "Audio option unavailable.";
   case audio::ApplyStatus::FailedRolledBack:
-    return "Audio restart failed; the previous stream was restored.";
+    return "Could not apply audio. Previous settings restored.";
   case audio::ApplyStatus::FailedStopped:
-    return "Audio could not be restored and playback was stopped.";
+    return "Could not restore audio. Playback stopped.";
   }
   return "Audio settings were not applied.";
 }
@@ -143,17 +143,17 @@ std::string displayApplyMessage(const display::ApplyResult &result) {
   }
   switch (result.status) {
   case display::ApplyStatus::Applied:
-    return "Display settings applied.";
+    return "Display saved.";
   case display::ApplyStatus::PreviewPending:
-    return "Keep or revert this display preview within 15 seconds.";
+    return "Confirm within 15 seconds.";
   case display::ApplyStatus::Unsupported:
-    return "This display configuration is unavailable.";
+    return "Display option unavailable.";
   case display::ApplyStatus::FailedRolledBack:
-    return "Display apply failed; the previous configuration was restored.";
+    return "Could not apply display. Previous settings restored.";
   case display::ApplyStatus::RollbackPending:
-    return "Waiting for renderer access to restore the previous display.";
+    return "Restoring the previous display...";
   case display::ApplyStatus::FailedUnrecoverable:
-    return "The previous display configuration could not be restored.";
+    return "Could not restore the previous display.";
   }
   return "Display settings were not applied.";
 }
@@ -222,8 +222,8 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeAudioVideoCardsColumn(metrics);
   if (audioVideoSession == nullptr) {
     cardsColumn->addView(makeCard(
-        metrics, "Audio Runtime", "Audio controls are still initializing.",
-        makeWrappedText("Return to this tab after initialization completes.",
+        metrics, "Audio", "Still initializing.",
+        makeWrappedText("Try again shortly.",
                         metrics.bodyTextSize, ui_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
@@ -313,19 +313,14 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
       model.bufferFrames.enabled) {
     auto *applyButton = makeAccentButton(
         metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText("Apply Audio Stream", metrics.bodyTextSize + 2,
+        makeText("Apply", metrics.bodyTextSize + 2,
                  ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
         ui_theme::cyan());
     applyButton->setOnClickListener([this]() { applyAudioStreamDraft(); });
     streamControls->addView(applyButton);
   }
   cardsColumn->addView(makeCard(
-      metrics, "Output and Latency",
-      metrics.compact
-          ? "Stream changes restart audio safely and save only on success."
-          : "Choose an available backend configuration. Active playback is "
-            "suspended, restarted, and restored transactionally; failed "
-            "choices do not replace your working intent.",
+      metrics, "Audio Output", "Choose output and latency.",
       streamControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *volumeControls = new View();
@@ -362,13 +357,12 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     return group;
   };
   volumeControls->addView(
-      makeVolumeRow("Master volume (%)", 0, &masterVolumeInput));
-  volumeControls->addView(makeVolumeRow("BGM volume (%)", 1, &bgmVolumeInput));
+      makeVolumeRow("Master (%)", 0, &masterVolumeInput));
+  volumeControls->addView(makeVolumeRow("BGM (%)", 1, &bgmVolumeInput));
   volumeControls->addView(
-      makeVolumeRow("Keysound volume (%)", 2, &keysoundVolumeInput));
+      makeVolumeRow("Keysound (%)", 2, &keysoundVolumeInput));
   cardsColumn->addView(makeCard(
-      metrics, "Volume Groups",
-      "Volume changes apply and save immediately without restarting audio.",
+      metrics, "Volume", "",
       volumeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *diagnostics = new View();
@@ -379,14 +373,13 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   diagnostics->addView(audioEffectiveText);
   auto *testSoundButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Test Keysound", metrics.bodyTextSize + 2,
+      makeText("Test Sound", metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
   testSoundButton->setOnClickListener([this]() {
     const bool played =
         audioVideoSession != nullptr && audioVideoSession->playTestSound();
-    setAudioStatus(played ? "Keysound test played."
-                          : "The keysound test could not be played.",
+    setAudioStatus(played ? "Sound played." : "Could not play sound.",
                    played ? SDL_Color{157, 220, 176, 255}
                           : SDL_Color{255, 177, 170, 255});
   });
@@ -395,9 +388,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
       makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
   diagnostics->addView(audioStatusText);
   cardsColumn->addView(makeCard(
-      metrics, "Effective Runtime",
-      "Effective values come from the active backend, not the requested "
-      "profile intent.",
+      metrics, "Current Audio", "",
       diagnostics, metrics.modeCardHeight, metrics.cardsWidth));
 
   refreshAudioVideoControls();
@@ -410,8 +401,8 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   if (audioVideoSession == nullptr ||
       context.displaySettingsManager == nullptr) {
     cardsColumn->addView(makeCard(
-        metrics, "Display Runtime", "Display controls are still initializing.",
-        makeWrappedText("Return to this tab after initialization completes.",
+        metrics, "Display", "Still initializing.",
+        makeWrappedText("Try again shortly.",
                         metrics.bodyTextSize, ui_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
@@ -546,7 +537,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
 
   auto *applyButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Apply Display", metrics.bodyTextSize + 2,
+      makeText("Apply", metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::cyan());
   applyButton->setOnClickListener([this]() { applyDisplayDraft(); });
@@ -556,12 +547,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   controls->addView(displayStatusText);
 
   cardsColumn->addView(makeCard(
-      metrics, "Display and Frame Pacing",
-      metrics.compact
-          ? "Risky display changes require confirmation within 15 seconds."
-          : "Mode, display, resolution, and VSync changes open a reversible "
-            "15-second preview. Timeout, focus loss, tab exit, and scene "
-            "cleanup restore the previous working configuration.",
+      metrics, "Display", "Changes preview for 15 seconds.",
       controls, metrics.modeCardHeight, metrics.cardsWidth));
   refreshAudioVideoControls();
   return cardsColumn;
@@ -592,17 +578,15 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
   panel->setThemedBorderColor(ui_theme::hairline);
   panel->setBorderWidth(1);
-  panel->addView(makeWrappedText("Keep these display settings?",
+  panel->addView(makeWrappedText("Keep display changes?",
                                  metrics.sectionTitleSize,
                                  ui_theme::textPrimary()));
   displayPreviewCountdownText =
       makeWrappedText("Reverting in 15 seconds", metrics.bodyTextSize + 4,
                       ui_theme::amber(), TextView::CENTER);
   panel->addView(displayPreviewCountdownText);
-  displayPreviewStatusText = makeWrappedText(
-      "If the window is unreadable, wait—AsoBMaShow will restore the previous "
-      "configuration automatically.",
-      metrics.bodyTextSize, ui_theme::textSecondary());
+  displayPreviewStatusText =
+      makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
   panel->addView(displayPreviewStatusText);
 
   auto *actions = new View();
@@ -657,15 +641,14 @@ void SettingsScene::refreshAudioVideoControls() {
 
   if (audioEffectiveText != nullptr) {
     std::ostringstream text;
-    text << "Active output: " << audioModel.effectiveDeviceLabel << "\n";
+    text << "Output: " << audioModel.effectiveDeviceLabel << "\n";
     if (audioModel.effectiveSampleRate > 0) {
-      text << "Effective format: " << audioModel.effectiveSampleRate << " Hz, "
+      text << "Format: " << audioModel.effectiveSampleRate << " Hz · "
            << audioModel.effectiveBufferFrames << " frames\n";
       text << std::fixed << std::setprecision(2)
-           << "Effective buffer latency: " << audioModel.effectiveLatencyMs
-           << " ms";
+           << "Latency: " << audioModel.effectiveLatencyMs << " ms";
     } else {
-      text << "Effective format is not currently available.";
+      text << "Format unavailable.";
     }
     audioEffectiveText->setText(text.str());
   }

@@ -19,6 +19,7 @@ class Button;
 class DropdownView;
 class ImageView;
 class OverlayPortal;
+class SnappedSlider;
 class TextInputBox;
 class TextView;
 class View;
@@ -68,10 +69,8 @@ private:
   void applyLibraryFilterForTrackId(const std::string &preferredTrackId,
                                     bool preserveScroll = false,
                                     bool revealPreferredIfOutOfView = false);
-  void refreshTrackBrowserList(TrackBrowserKind kind,
-                               int preferredIndex = -1);
-  void applyTrackBrowserFilter(TrackBrowserKind kind,
-                               int preferredIndex = -1);
+  void refreshTrackBrowserList(TrackBrowserKind kind, int preferredIndex = -1);
+  void applyTrackBrowserFilter(TrackBrowserKind kind, int preferredIndex = -1);
   void applyTrackBrowserFilterForTrackId(
       TrackBrowserKind kind, const std::string &preferredTrackId,
       bool preserveScroll = false, bool revealPreferredIfOutOfView = false);
@@ -85,8 +84,8 @@ private:
   void refreshNavigation();
   void refreshArtwork(const std::optional<MusicTrack> &track);
   void refreshLibraryArtwork(const std::optional<MusicTrack> &track);
-  void refreshTrackBrowserArtwork(
-      TrackBrowserKind kind, const std::optional<MusicTrack> &track);
+  void refreshTrackBrowserArtwork(TrackBrowserKind kind,
+                                  const std::optional<MusicTrack> &track);
   void setStatus(std::string message);
 
   [[nodiscard]] std::vector<MusicTrack> &
@@ -109,7 +108,8 @@ private:
   trackBrowserSelectionTitleText(TrackBrowserKind kind) const;
   [[nodiscard]] TextView *
   trackBrowserSelectionDetailText(TrackBrowserKind kind) const;
-  [[nodiscard]] ImageView *trackBrowserArtworkImage(TrackBrowserKind kind) const;
+  [[nodiscard]] ImageView *
+  trackBrowserArtworkImage(TrackBrowserKind kind) const;
   [[nodiscard]] TextView *
   trackBrowserArtworkFallbackText(TrackBrowserKind kind) const;
   [[nodiscard]] std::filesystem::path &
@@ -153,8 +153,7 @@ private:
   void clearPlaylist();
   void syncActiveQueueAfterPlaylistEdit(
       bool wasActiveQueue, const std::optional<MusicTrack> &previousCurrent,
-      int fallbackIndex,
-      std::optional<int> previousQueueIndex = std::nullopt,
+      int fallbackIndex, std::optional<int> previousQueueIndex = std::nullopt,
       std::optional<int> removedIndex = std::nullopt);
   void replaceNowPlaying(std::vector<MusicTrack> tracks, int preferredIndex,
                          const std::string &statusMessage);
@@ -171,7 +170,7 @@ private:
   void shuffleQueue();
   void togglePlayback();
   void cycleRepeatMode();
-  void setPlaybackRate(const std::string &id);
+  void setPlaybackRate(int percent);
   void setPlaybackMode(const std::string &id);
   void refreshPlaybackRateControl();
   void toggleClubMode();
@@ -188,8 +187,7 @@ private:
   void seekToFraction(float fraction);
   bool handleSeekEvents(SDL_Event &event);
   bool handleProgressSeekEvents(SDL_Event &event, View *progressTrack,
-                                bool &mouseDown,
-                                SDL_FingerID &activeTouchId);
+                                bool &mouseDown, SDL_FingerID &activeTouchId);
   void watchVideo();
   bool loadVideoVisualsForTrack(const MusicTrack &track,
                                 bool showStatusMessage);
@@ -280,7 +278,8 @@ private:
   TextInputBox *playlistRenameInput = nullptr;
   TextView *playPauseButtonText = nullptr;
   DropdownView *playbackModeDropdown = nullptr;
-  DropdownView *playbackRateDropdown = nullptr;
+  SnappedSlider *playbackRateSlider = nullptr;
+  TextView *playbackRateValueText = nullptr;
   Button *clubModeButton = nullptr;
   TextView *clubModeButtonText = nullptr;
   TextView *deletePlaylistButtonText = nullptr;
@@ -335,7 +334,6 @@ private:
   bool videoRestoresVisualsEnabled = false;
   bool videoControlsVisible = false;
   bool playbackModeDropdownOpen = false;
-  bool playbackRateDropdownOpen = false;
   Uint64 videoControlsVisibleUntil = 0;
   std::string videoTrackId;
   std::unique_ptr<bms_parser::Chart> videoChart;

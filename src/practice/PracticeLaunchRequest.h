@@ -16,12 +16,20 @@ enum class LaunchSource {
   ReplayResult,
 };
 
+struct ReplayPlayOptions {
+  std::optional<std::string> playOption;
+  std::optional<long long> playOptionSeed;
+  std::optional<std::string> playOption2;
+  std::optional<long long> playOption2Seed;
+};
+
 struct LaunchRequest {
   bms_parser::ChartMeta chartMeta;
   long long startMicros = 0;
   long long endMicros = 0;
   LaunchSource source = LaunchSource::ChartViewer;
   std::optional<int> replayId;
+  std::optional<ReplayPlayOptions> replayPlayOptions;
 };
 
 struct ParsedLaunchApplication {
@@ -34,6 +42,9 @@ struct ParsedLaunchApplication {
 [[nodiscard]] bms_parser::ChartMeta
 mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
                            const ReplayData &replay);
+
+[[nodiscard]] ReplayPlayOptions
+launchPlayOptionsFromReplay(const ReplayData &replay);
 
 [[nodiscard]] std::optional<std::string>
 validateLaunchRequest(const LaunchRequest &request);

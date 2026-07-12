@@ -11,6 +11,7 @@ class Button;
 class DropdownView;
 class OverlayPortal;
 class PlayOptionSectionView;
+class SnappedSlider;
 class TextView;
 
 struct PlayOptionsPanelState {
@@ -77,10 +78,7 @@ private:
   std::vector<SelectionButton> assistOptionButtons;
   std::vector<SelectionButton> pacemakerButtons;
   TextView *assistOptionLabel = nullptr;
-  Button *playbackRateDecreaseButton = nullptr;
-  Button *playbackRateIncreaseButton = nullptr;
-  TextView *playbackRateDecreaseText = nullptr;
-  TextView *playbackRateIncreaseText = nullptr;
+  SnappedSlider *playbackRateSlider = nullptr;
   TextView *playbackRateText = nullptr;
   DropdownView *playbackModeDropdown = nullptr;
   bool playbackModeDropdownOpen = false;

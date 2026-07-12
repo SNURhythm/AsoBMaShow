@@ -450,6 +450,12 @@ std::string formatGaugeBarLabel(GaugeType gaugeType,
   return text;
 }
 
+std::string formatGaugePercent(float currentGauge) {
+  char text[16];
+  std::snprintf(text, sizeof(text), "%.1f%%", currentGauge);
+  return text;
+}
+
 Color gaugeAccentColor(GaugeType gaugeType, GaugeProfile gaugeProfile,
                        float currentGauge) {
   const float border = gaugeBorderValue(gaugeType, gaugeProfile);
@@ -484,6 +490,12 @@ Color gaugeMarkerColor() {
              : Color(244, 250, 255, 174);
 }
 
+Color gaugeReducedDamageMarkerColor() {
+  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+             ? Color(180, 112, 8, 218)
+             : Color(255, 210, 92, 228);
+}
+
 Color gaugeTextColor(const Color &accent) {
   return ui_theme::textOn(gaugeFillColor(accent));
 }
@@ -516,7 +528,7 @@ std::optional<std::pair<float, float>> projectWorldToUi(float worldX,
 
 JudgementCounterLayout judgementCounterLayoutFor(
     AppSettings::JudgementCounterPosition position, float titleWidth,
-    float rightReserveLeft) {
+    float rightReserveLeft, bool compactSideCounter) {
   JudgementCounterLayout layout;
   layout.horizontal = position == AppSettings::JudgementCounterPosition::Top;
   layout.gap = layout.horizontal ? 8.0f : 6.0f;
@@ -526,7 +538,7 @@ JudgementCounterLayout judgementCounterLayoutFor(
                         layout.gap * 6.0f) /
                            7.0f,
                        92.0f, 118.0f)
-          : 118.0f;
+          : (compactSideCounter ? 96.0f : 118.0f);
   layout.itemHeight = layout.horizontal ? 58.0f : 50.0f;
 
   const float totalWidth =
@@ -829,6 +841,18 @@ BMSRenderer::BMSRenderer(
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
   gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
+  gaugeTypeBadge = std::make_unique<View>();
+  gaugeTypeText = std::make_unique<TextView>(kHudFontPath, 15);
+  gaugeTypeText->setAlign(TextView::CENTER);
+  gaugeTypeText->setVAlign(TextView::MIDDLE);
+  gaugeTypeText->setOverflow(TextView::TextOverflow::Hidden);
+  gaugeTypeText->setRotationDegrees(90.0f);
+  gaugeAutoShiftText = std::make_unique<TextView>(kHudFontPath, 16);
+  gaugeAutoShiftText->setText("GAS");
+  gaugeAutoShiftText->setAlign(TextView::CENTER);
+  gaugeAutoShiftText->setVAlign(TextView::MIDDLE);
+  gaugeAutoShiftText->setOverflow(TextView::TextOverflow::Hidden);
+  gaugeAutoShiftText->setRotationDegrees(90.0f);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
   playOptionText->setAlign(TextView::LEFT);
@@ -954,6 +978,15 @@ void BMSRenderer::drawGauge(RenderContext &context) const {
   if (gaugeText != nullptr) {
     gaugeText->render(context);
   }
+  if (gaugeTypeBadge != nullptr) {
+    gaugeTypeBadge->render(context);
+  }
+  if (gaugeTypeText != nullptr) {
+    gaugeTypeText->render(context);
+  }
+  if (gaugeAutoShiftText != nullptr) {
+    gaugeAutoShiftText->render(context);
+  }
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
   playOptionText->render(context);
@@ -1025,8 +1058,10 @@ std::array<float, 4> BMSRenderer::hudGaugeRect() const {
   y = std::max(128.0f, y);
 
   const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
-  float x = left ? 28.0f
-                 : static_cast<float>(rendering::window_width) - 28.0f - width;
+  constexpr float kSideBadgeInset = 56.0f;
+  float x = left ? kSideBadgeInset
+                 : static_cast<float>(rendering::window_width) -
+                       kSideBadgeInset - width;
   const bool counterOnSameSide =
       judgementCounterEnabled &&
       ((left && judgementCounterPosition ==
@@ -1134,6 +1169,17 @@ void BMSRenderer::drawWorldGaugeBar() {
                                 y - height * 0.18f, markerWidth,
                                 height * 1.36f, gaugeMarkerColor().toABGR());
   }
+
+  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
+      currentGaugeType, currentGaugeProfile);
+  if (reducedDamageZone > 0.0f) {
+    const float markerX =
+        x + width * std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+    const float markerWidth = std::max(0.012f, width * 0.005f);
+    simpleBatchRenderer.addRect(
+        markerX - markerWidth * 0.5f, y - height * 0.12f, markerWidth,
+        height * 1.24f, gaugeReducedDamageMarkerColor().toABGR());
+  }
 }
 
 void BMSRenderer::drawHudGaugeBar() {
@@ -1168,6 +1214,17 @@ void BMSRenderer::drawHudGaugeBar() {
         y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
     simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
                                 gaugeMarkerColor().toABGR());
+  }
+
+  const float reducedDamageZone = gaugeReducedDamageZoneUpperBound(
+      currentGaugeType, currentGaugeProfile);
+  if (reducedDamageZone > 0.0f) {
+    const float markerProgress =
+        std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+    const float markerY = y + height * (1.0f - markerProgress);
+    simpleBatchRenderer.addRect(
+        x - 4.0f, markerY - 1.5f, width + 8.0f, 3.0f,
+        gaugeReducedDamageMarkerColor().toABGR());
   }
 }
 
@@ -1210,10 +1267,18 @@ void BMSRenderer::drawJudgementAccentBar() {
 
 void BMSRenderer::drawJudgementCounterPanels() {
   constexpr float radius = 10.0f;
+  const bool counterSharesGaugeSide =
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Left &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Left) ||
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Right &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Right);
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
                                 gameplayHudTitleWidth(),
-                                gameplayHudRightReserveLeft());
+                                gameplayHudRightReserveLeft(),
+                                counterSharesGaugeSide);
   const bool topPosition =
       judgementCounterPosition == AppSettings::JudgementCounterPosition::Top;
   if (topPosition) {
@@ -1266,10 +1331,18 @@ void BMSRenderer::layoutGameplayHud() {
   layoutGaugeText();
   layoutAutoPlayMark();
 
+  const bool counterSharesGaugeSide =
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Left &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Left) ||
+      (judgementCounterPosition ==
+           AppSettings::JudgementCounterPosition::Right &&
+       gaugeBarPosition == AppSettings::GaugeBarPosition::Right);
   const JudgementCounterLayout layout =
       judgementCounterLayoutFor(judgementCounterPosition,
                                 gameplayHudTitleWidth(),
-                                gameplayHudRightReserveLeft());
+                                gameplayHudRightReserveLeft(),
+                                counterSharesGaugeSide);
   const int gap = static_cast<int>(layout.gap);
   const int itemWidth = static_cast<int>(layout.itemWidth);
   const int itemHeight = static_cast<int>(layout.itemHeight);
@@ -1306,6 +1379,15 @@ void BMSRenderer::layoutGaugeText() {
 
   gaugeText->setVisible(true);
   if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    if (gaugeTypeBadge != nullptr) {
+      gaugeTypeBadge->setVisible(false);
+    }
+    if (gaugeTypeText != nullptr) {
+      gaugeTypeText->setVisible(false);
+    }
+    if (gaugeAutoShiftText != nullptr) {
+      gaugeAutoShiftText->setVisible(false);
+    }
     const auto rect = worldGaugeRect();
     const auto topLeft = projectWorldToUi(rect[0], rect[1] + rect[3]);
     const auto topRight =
@@ -1343,15 +1425,126 @@ void BMSRenderer::layoutGaugeText() {
   }
 
   const auto rect = hudGaugeRect();
-  constexpr int textWidth = 126;
-  constexpr int textHeight = 44;
+  constexpr int textWidth = 76;
+  constexpr int textHeight = 36;
   const bool left = gaugeBarPosition == AppSettings::GaugeBarPosition::Left;
-  const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 10.0f))
+  const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 8.0f))
                      : static_cast<int>(
-                           std::round(rect[0] - textWidth - 10.0f));
-  const int y =
-      static_cast<int>(std::round(rect[1] + rect[3] - textHeight));
+                           std::round(rect[0] - textWidth - 8.0f));
+  const float progress =
+      std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const float tipY = rect[1] + rect[3] * (1.0f - progress);
+  const int y = std::clamp(
+      static_cast<int>(std::round(tipY - textHeight * 0.5f)), 8,
+      std::max(8, rendering::window_height - textHeight - 8));
   placeText(gaugeText.get(), x, y, textWidth, textHeight);
+
+  if (gaugeTypeText != nullptr) {
+    gaugeTypeText->setVisible(true);
+    gaugeTypeText->setRotationDegrees(left ? -90.0f : 90.0f);
+    if (gaugeAutoShiftText != nullptr) {
+      gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+      gaugeAutoShiftText->setRotationDegrees(left ? -90.0f : 90.0f);
+    }
+    constexpr int typeWidth = 34;
+    constexpr int typePadding = 12;
+    constexpr int gasGap = 4;
+    const int gaugeLabelLength = gaugeTypeText->textureWidth();
+    const int gasLabelLength = currentGaugeAutoShift && gaugeAutoShiftText
+                                   ? gaugeAutoShiftText->textureWidth()
+                                   : 0;
+    const int typeHeight =
+        std::clamp(gaugeLabelLength + gasLabelLength +
+                       (currentGaugeAutoShift ? gasGap : 0) + typePadding * 2,
+                   76, 188);
+    const int typeX =
+        left ? static_cast<int>(std::round(rect[0] - typeWidth - 8.0f))
+             : static_cast<int>(std::round(rect[0] + rect[2] + 8.0f));
+    const int typeY = static_cast<int>(
+        std::round(rect[1] + (rect[3] - typeHeight) * 0.24f));
+    if (gaugeTypeBadge != nullptr) {
+      gaugeTypeBadge->setVisible(true);
+      gaugeTypeBadge->setPosition(typeX, typeY);
+      gaugeTypeBadge->setSize(typeWidth, typeHeight);
+    }
+
+    if (!currentGaugeAutoShift || gaugeAutoShiftText == nullptr) {
+      placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
+    } else {
+      const int gaugeSpan = gaugeLabelLength + typePadding;
+      const int gasSpan = typeHeight - gaugeSpan;
+      if (left) {
+        placeText(gaugeAutoShiftText.get(), typeX, typeY, typeWidth, gasSpan);
+        placeText(gaugeTypeText.get(), typeX, typeY + gasSpan, typeWidth,
+                  gaugeSpan);
+      } else {
+        placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, gaugeSpan);
+        placeText(gaugeAutoShiftText.get(), typeX, typeY + gaugeSpan,
+                  typeWidth, gasSpan);
+      }
+    }
+  }
+}
+
+void BMSRenderer::refreshGaugeTextStyle() {
+  if (gaugeText == nullptr) {
+    return;
+  }
+
+  const Color accent =
+      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
+                       currentGaugeValue);
+  if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    gaugeText->setText(formatGaugeBarLabel(
+        currentGaugeType, currentGaugeProfile, currentGaugeAutoShift,
+        currentGaugeValue));
+    gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
+    gaugeText->clearBackgroundColor();
+    gaugeText->clearBorderColor();
+    gaugeText->setBorderWidth(0);
+    gaugeText->setCornerRadius(0.0f);
+    if (gaugeTypeText != nullptr) {
+      gaugeTypeText->setVisible(false);
+    }
+    if (gaugeTypeBadge != nullptr) {
+      gaugeTypeBadge->setVisible(false);
+    }
+    if (gaugeAutoShiftText != nullptr) {
+      gaugeAutoShiftText->setVisible(false);
+    }
+    return;
+  }
+
+  gaugeText->setText(formatGaugePercent(currentGaugeValue));
+  gaugeText->setColor({250, 253, 255, 255});
+  gaugeText->setBackgroundColor(Color(4, 8, 15, 238));
+  gaugeText->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
+  gaugeText->setBorderWidth(1);
+  gaugeText->setCornerRadius(9.0f);
+  if (gaugeTypeBadge != nullptr) {
+    gaugeTypeBadge->setVisible(true);
+    gaugeTypeBadge->setBackgroundColor(Color(4, 8, 15, 238));
+    gaugeTypeBadge->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
+    gaugeTypeBadge->setBorderWidth(1);
+    gaugeTypeBadge->setCornerRadius(9.0f);
+  }
+  if (gaugeTypeText != nullptr) {
+    gaugeTypeText->setVisible(true);
+    gaugeTypeText->setText(
+        gaugeDisplayShortLabel(currentGaugeType, currentGaugeProfile));
+    gaugeTypeText->setColor({250, 253, 255, 255});
+    gaugeTypeText->clearBackgroundColor();
+    gaugeTypeText->clearBorderColor();
+    gaugeTypeText->setBorderWidth(0);
+  }
+  if (gaugeAutoShiftText != nullptr) {
+    gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+    gaugeAutoShiftText->setColor({255, 225, 112, 255});
+    gaugeAutoShiftText->setBackgroundColor(Color(255, 200, 64, 32));
+    gaugeAutoShiftText->clearBorderColor();
+    gaugeAutoShiftText->setBorderWidth(0);
+    gaugeAutoShiftText->setCornerRadius(6.0f);
+  }
 }
 
 float BMSRenderer::gameplayHudTitleWidth() const {
@@ -3039,6 +3232,7 @@ void BMSRenderer::setGaugeBarPosition(AppSettings::GaugeBarPosition position) {
   case AppSettings::GaugeBarPosition::Left:
   case AppSettings::GaugeBarPosition::Right:
     gaugeBarPosition = position;
+    refreshGaugeTextStyle();
     break;
   }
 }
@@ -3088,13 +3282,7 @@ void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
     return;
   }
 
-  const Color accent =
-      gaugeAccentColor(currentGaugeType, currentGaugeProfile,
-                       currentGaugeValue);
-  gaugeText->setText(formatGaugeBarLabel(
-      currentGaugeType, currentGaugeProfile, currentGaugeAutoShift,
-      currentGaugeValue));
-  gaugeText->setColor(ui_theme::sdl(gaugeTextColor(accent)));
+  refreshGaugeTextStyle();
 }
 
 void BMSRenderer::setPacemakerTarget(const pacemaker::Target &target) {

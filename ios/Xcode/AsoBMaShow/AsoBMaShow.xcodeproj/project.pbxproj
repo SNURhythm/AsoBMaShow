@@ -869,6 +869,7 @@
 				view/PlayOptionSectionView.cpp,
 				view/PlayOptionsPanelView.cpp,
 				view/ScrollView.cpp,
+				view/SnappedSlider.cpp,
 				view/TextInputBox.cpp,
 				view/TextView.cpp,
 				view/View.cpp,
