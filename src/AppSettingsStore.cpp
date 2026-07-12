@@ -196,6 +196,10 @@ json settingsToJson(const AppSettings &settings) {
 AppSettings settingsFromJson(const json &document,
                              std::vector<std::string> &diagnostics) {
   AppSettings settings;
+  if (!document.contains("selectedGaugeAutoShiftMode") &&
+      document.contains("selectedGaugeType")) {
+    settings.selectedGaugeAutoShiftMode = "none";
+  }
   readValue(document, "audioOffsetMs", settings.audioOffsetMs, diagnostics);
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
   readValue(document, "visibleTimeGreenNumber", settings.visibleTimeGreenNumber,
@@ -399,6 +403,7 @@ AppSettingsStore::LoadLegacyCfg(const std::filesystem::path &settingsCfg) {
     return result;
   }
   AppSettings parsed;
+  parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::loadLegacyCfg(settingsCfg, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;
     result.settings.sanitize();
@@ -423,6 +428,7 @@ AppSettingsLoadResult
 AppSettingsStore::LoadLegacyCfgStreamForTesting(std::istream &input) {
   AppSettingsLoadResult result;
   AppSettings parsed;
+  parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::parseLegacyCfg(input, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;
     result.settings.sanitize();
