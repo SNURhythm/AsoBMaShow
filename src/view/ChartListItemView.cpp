@@ -131,7 +131,6 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setHeight(84)
       ->setFlexShrink(0)
       ->setGap(6);
-  contentCard->addView(detailsLayout);
 
   levelView->setAlign(TextView::TextAlign::RIGHT);
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
@@ -158,6 +157,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankView->setWidth(112)->setHeight(84);
   scoreRankColumn->addView(scoreRankView);
   contentCard->addView(scoreRankColumn);
+  contentCard->addView(detailsLayout);
 
   favoriteButton->setWidth(52)
       ->setHeight(52)
