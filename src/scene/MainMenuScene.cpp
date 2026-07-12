@@ -2538,6 +2538,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
+  readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -3123,7 +3124,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Column);
   readySettings->setAlignItems(YGAlignStretch);
-  readySettings->setWidth(260);
+  readySettings->setPadding(Edge::Top, 10);
+  readySettings->setPadding(Edge::Bottom, 10);
+  readySettings->setPadding(Edge::Left, 12);
+  readySettings->setPadding(Edge::Right, 12);
   readySettings->setGap(6);
 
   auto makeReadyStatusText = []() {
@@ -3160,20 +3164,21 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
 
-  auto *playOptionsButton = new Button(0, 0, 260, 54);
-  auto *playOptionsButtonText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  playOptionsButtonText->setText("Options");
-  playOptionsButtonText->setAlign(TextView::CENTER);
-  playOptionsButtonText->setVAlign(TextView::MIDDLE);
-  playOptionsButton->setContentView(playOptionsButtonText);
-  styleThemedActionButton(playOptionsButton, playOptionsButtonText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
-  playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
-  readySettings->addView(playOptionsButton);
-  right->addView(readySettings);
+  readyPlayOptionsButton = new Button(0, 0, 260, 184);
+  readyPlayOptionsButton->setWidth(260);
+  readyPlayOptionsButton->setHeight(184);
+  readyPlayOptionsButton->setFlexShrink(0);
+  readyPlayOptionsButton->setCornerRadius(ui_theme::controlRadius());
+  readyPlayOptionsButton->setStyledBorderWidth(1);
+  readyPlayOptionsButton->setThemedBackgroundColors(
+      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+  readyPlayOptionsButton->setThemedBorderColors(
+      ui_theme::hairlineStrong, ui_theme::accentBorderStrong,
+      ui_theme::accentBorderStrong);
+  readyPlayOptionsButton->setContentView(readySettings);
+  readyPlayOptionsButton->setOnClickListener(
+      [this]() { showPlayOptionsModal(); });
+  right->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
   startButton = new Button(0, 0, 220, 86);
@@ -4798,6 +4803,12 @@ bool MainMenuScene::playbackSelectionLockedForCourse() const {
 void MainMenuScene::refreshReadySettingsSummary() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
+  const auto record = selectedRecordSnapshot();
+  const bool showTotal = record.has_value() && !record->courseStart &&
+                         !record->solidArchive && !record->unavailable;
+  if (readyPlayOptionsButton != nullptr) {
+    readyPlayOptionsButton->setHeight(showTotal ? 184 : 150);
+  }
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(gaugeButtonLabel(profileSelections.gaugeType,
                                              profileSelections.gaugeAutoShift));
@@ -4809,9 +4820,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
                                  effective.longNoteMode);
   }
   if (readyTotalText != nullptr) {
-    const auto record = selectedRecordSnapshot();
-    if (record.has_value() && !record->courseStart &&
-        !record->solidArchive && !record->unavailable) {
+    if (showTotal) {
       readyTotalText->setText("TOTAL: " + formatGaugeTotal(record->meta));
       readyTotalText->setDisplay(YGDisplayFlex);
       readyTotalText->setVisible(true);
@@ -9915,6 +9924,7 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
+  readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
