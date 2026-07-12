@@ -484,9 +484,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   const int analyticsExtraHeight =
       analyticsModel.has_value()
           ? static_cast<int>(std::lround(
-                2.0f *
-                practice_analytics_presentation::
-                    kPhotoCompactAnalyticsHeight *
+                practice_analytics_presentation::kPhotoAnalyticsExtraHeight *
                 static_cast<float>(width) /
                 static_cast<float>(std::max(1, rendering::window_width))))
           : 0;
@@ -571,7 +569,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   if (analyticsModel.has_value()) {
     constexpr float kAnalyticsGap = 12.0f;
     constexpr float kAnalyticsStackHeight =
-        practice_analytics_presentation::kPreferredAnalyticsHeight +
+        practice_analytics_presentation::kPhotoSharedAnalyticsHeight +
         practice_analytics_presentation::kPhotoCompactAnalyticsHeight * 2.0f +
         kAnalyticsGap * 2.0f;
     auto *analyticsStack = new View();

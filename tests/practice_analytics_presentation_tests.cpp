@@ -121,7 +121,7 @@ void testResultPhotoShowsSharedInformationOnlyOnHistogram() {
                   PracticeAnalyticsMode::Sections),
           "photo export does not duplicate aggregate and timing information");
   require(photoExportAnalyticsHeight(PracticeAnalyticsMode::Histogram) ==
-                  practice_analytics_presentation::kPreferredAnalyticsHeight &&
+                  206.0f &&
               photoExportAnalyticsHeight(PracticeAnalyticsMode::Lanes) ==
                   120.0f &&
               photoExportAnalyticsHeight(PracticeAnalyticsMode::Sections) ==

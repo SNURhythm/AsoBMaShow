@@ -505,24 +505,29 @@ void PracticeAnalyticsView::setPhotoExportPresentation(
     bool showSharedInformation) {
   for (auto *button : modeButtons) {
     button->setDisplay(YGDisplayNone);
+    button->setVisible(false);
   }
   if (previousChoiceButton != nullptr) {
     previousChoiceButton->setDisplay(YGDisplayNone);
+    previousChoiceButton->setVisible(false);
   }
   if (nextChoiceButton != nullptr) {
     nextChoiceButton->setDisplay(YGDisplayNone);
+    nextChoiceButton->setVisible(false);
   }
   if (modeControlsRow != nullptr) {
-    modeControlsRow->setDisplay(showSharedInformation ? YGDisplayFlex
-                                                      : YGDisplayNone);
+    modeControlsRow->setDisplay(YGDisplayNone);
+    modeControlsRow->setVisible(false);
   }
   if (choiceRow != nullptr) {
     choiceRow->setDisplay(showSharedInformation ? YGDisplayFlex
                                                 : YGDisplayNone);
+    choiceRow->setVisible(showSharedInformation);
   }
   if (summaryText != nullptr) {
     summaryText->setDisplay(showSharedInformation ? YGDisplayFlex
                                                   : YGDisplayNone);
+    summaryText->setVisible(showSharedInformation);
   }
 }
 
