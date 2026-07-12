@@ -209,6 +209,7 @@ public:
   std::string SubTitle;
   int Rank = 3;
   double Total = 100;
+  bool HasTotal = false;
   long long PlayLength = 0; // Timing of the last playable note, in microseconds
   long long TotalLength = 0;
   // Timing of the last timeline(including background note, bga change note,

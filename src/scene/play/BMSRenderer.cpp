@@ -1135,7 +1135,10 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float y = rect[1];
   const float width = rect[2];
   const float height = rect[3];
-  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const float maximum =
+      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float progress =
+      std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const Color accent =
       gaugeAccentColor(currentGaugeType, currentGaugeProfile,
                        currentGaugeValue);
@@ -1162,8 +1165,8 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float borderValue =
       gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
-    const float markerX = x + width * std::clamp(borderValue / 100.0f, 0.0f,
-                                                1.0f);
+    const float markerX =
+        x + width * std::clamp(borderValue / maximum, 0.0f, 1.0f);
     const float markerWidth = std::max(0.01f, width * 0.004f);
     simpleBatchRenderer.addRect(markerX - markerWidth * 0.5f,
                                 y - height * 0.18f, markerWidth,
@@ -1174,7 +1177,7 @@ void BMSRenderer::drawWorldGaugeBar() {
       currentGaugeType, currentGaugeProfile);
   if (reducedDamageZone > 0.0f) {
     const float markerX =
-        x + width * std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+        x + width * std::clamp(reducedDamageZone / maximum, 0.0f, 1.0f);
     const float markerWidth = std::max(0.012f, width * 0.005f);
     simpleBatchRenderer.addRect(
         markerX - markerWidth * 0.5f, y - height * 0.12f, markerWidth,
@@ -1188,7 +1191,10 @@ void BMSRenderer::drawHudGaugeBar() {
   const float y = rect[1];
   const float width = rect[2];
   const float height = rect[3];
-  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const float maximum =
+      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float progress =
+      std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const Color accent =
       gaugeAccentColor(currentGaugeType, currentGaugeProfile,
                        currentGaugeValue);
@@ -1211,7 +1217,7 @@ void BMSRenderer::drawHudGaugeBar() {
       gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
     const float markerY =
-        y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
+        y + height * (1.0f - std::clamp(borderValue / maximum, 0.0f, 1.0f));
     simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
                                 gaugeMarkerColor().toABGR());
   }
@@ -1220,7 +1226,7 @@ void BMSRenderer::drawHudGaugeBar() {
       currentGaugeType, currentGaugeProfile);
   if (reducedDamageZone > 0.0f) {
     const float markerProgress =
-        std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+        std::clamp(reducedDamageZone / maximum, 0.0f, 1.0f);
     const float markerY = y + height * (1.0f - markerProgress);
     simpleBatchRenderer.addRect(
         x - 4.0f, markerY - 1.5f, width + 8.0f, 3.0f,
@@ -1431,8 +1437,10 @@ void BMSRenderer::layoutGaugeText() {
   const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 8.0f))
                      : static_cast<int>(
                            std::round(rect[0] - textWidth - 8.0f));
+  const float maximum =
+      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
   const float progress =
-      std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+      std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const float tipY = rect[1] + rect[3] * (1.0f - progress);
   const int y = std::clamp(
       static_cast<int>(std::round(tipY - textHeight * 0.5f)), 8,
@@ -3277,7 +3285,9 @@ void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
   currentGaugeType = gaugeType;
   currentGaugeProfile = gaugeProfile;
   currentGaugeAutoShift = gaugeAutoShift;
-  currentGaugeValue = std::clamp(currentGauge, 0.0f, 100.0f);
+  currentGaugeValue =
+      std::clamp(currentGauge, 0.0f,
+                 gaugeMaximumValue(currentGaugeType, currentGaugeProfile));
   if (gaugeText == nullptr) {
     return;
   }

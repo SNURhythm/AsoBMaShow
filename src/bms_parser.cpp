@@ -3758,6 +3758,7 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
     auto total = std::strtod(Value.c_str(), nullptr);
     if (total > 0) {
       Chart->Meta.Total = total;
+      Chart->Meta.HasTotal = true;
     }
   } else if (MatchHeader(cmd, "VOLWAV")) {
   } else if (MatchHeader(cmd, "STAGEFILE")) {

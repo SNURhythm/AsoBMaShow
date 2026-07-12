@@ -306,6 +306,12 @@ const char *gaugeProfileName(GaugeProfile value) {
     return "course-24-keys";
   case GaugeProfile::CourseLR2:
     return "course-lr2";
+  case GaugeProfile::Standard5Keys:
+    return "standard-5-keys";
+  case GaugeProfile::Standard9Keys:
+    return "standard-9-keys";
+  case GaugeProfile::Standard24Keys:
+    return "standard-24-keys";
   }
   throw std::invalid_argument("Unknown gauge profile value.");
 }
@@ -331,6 +337,15 @@ std::optional<GaugeProfile> gaugeProfileFromName(std::string_view value) {
   }
   if (value == "course-lr2") {
     return GaugeProfile::CourseLR2;
+  }
+  if (value == "standard-5-keys") {
+    return GaugeProfile::Standard5Keys;
+  }
+  if (value == "standard-9-keys") {
+    return GaugeProfile::Standard9Keys;
+  }
+  if (value == "standard-24-keys") {
+    return GaugeProfile::Standard24Keys;
   }
   return std::nullopt;
 }
@@ -483,7 +498,7 @@ bool buildIsModified(const ScoreProvenanceBuildInput &input) {
   return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
          input.practice || assist_options::isEnabled(input.assistOption) ||
          input.judgeRankSource != JudgeRankSource::Chart ||
-         input.gaugeProfile != GaugeProfile::Standard ||
+         gaugeProfileIsCourse(input.gaugeProfile) ||
          !input.playback.neutral() || input.judgeWindowScalePercent != 100 ||
          input.startingGaugePercent.has_value();
 }

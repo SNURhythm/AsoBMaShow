@@ -802,7 +802,9 @@ bool GamePlayScene::reset() {
   }
   if (options.courseSession != nullptr &&
       options.courseSession->carriedGauge.has_value()) {
-    state->restoreGaugeState(*options.courseSession->carriedGauge);
+    GaugeStateSnapshot carriedGauge = *options.courseSession->carriedGauge;
+    carriedGauge.gaugeProfile = state->gaugeProfile;
+    state->restoreGaugeState(carriedGauge);
   }
   if (isCoursePlayback()) {
     state->combo = options.courseSession->carriedCombo;

@@ -554,6 +554,12 @@ GaugeProfile gaugeProfileFromInt(int value) {
     return GaugeProfile::Course24Keys;
   case 6:
     return GaugeProfile::CourseLR2;
+  case 7:
+    return GaugeProfile::Standard5Keys;
+  case 8:
+    return GaugeProfile::Standard9Keys;
+  case 9:
+    return GaugeProfile::Standard24Keys;
   case 0:
   default:
     return GaugeProfile::Standard;
