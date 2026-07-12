@@ -843,7 +843,7 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
                          std::string_view schema = {}) {
   const std::string query =
       "SELECT chart_sha256, ln_mode, score, max_score, max_combo, combo_break, "
-      "final_gauge, clear_type, created_at "
+      "final_gauge, clear_rank, created_at "
       "FROM " +
       qualifiedScoreTable(schema, "score_sha256_best_score_cache");
   SqliteStatementHandle stmt;
@@ -1935,13 +1935,14 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScoreOnConnection(
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
   const bool legacyLongNoteModeFallback = longNoteMode == 1;
+  const std::string effectiveClearRank =
+      score_cache_queries::detail::fullComboClearRankExpr("s");
   const auto bestOrder = score_cache_queries::detail::bestScoreOrderKey(
-      "s", score_cache_queries::detail::fullComboClearRankExpr("s"), "id");
+      "s", effectiveClearRank, "id");
 
   std::string query =
-      "SELECT score, max_score, max_combo, combo_break, final_gauge,"
-      "clear_type, created_at "
-      "FROM scores s WHERE ";
+      "SELECT score, max_score, max_combo, combo_break, final_gauge, ";
+  query += effectiveClearRank + ", created_at FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
            "AND (? = '' OR created_at < ?) "

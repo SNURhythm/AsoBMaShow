@@ -1385,7 +1385,8 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(readStoredProvenance(firstDb.get(), "course_scores", 1) == provenance);
   for (const std::string table : {"scores", "course_scores"}) {
     assert(queryInt(firstDb.get(), "SELECT ruleset_version FROM " + table +
-                                       " WHERE id=1") == 1);
+                                       " WHERE id=1") ==
+           RulesetDescriptor::kCurrentVersion);
     assert(queryInt(firstDb.get(),
                     "SELECT eligibility FROM " + table + " WHERE id=1") ==
            static_cast<int>(ScoreEligibility::Verified));
