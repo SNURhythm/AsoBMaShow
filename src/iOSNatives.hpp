@@ -153,7 +153,8 @@ bool PlayIOSNativeMusic(std::string &errorMessage);
 bool PauseIOSNativeMusic(std::string &errorMessage);
 bool StopIOSNativeMusic(std::string &errorMessage);
 bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage);
-bool SetIOSNativeMusicPlaybackRate(int percent, std::string &errorMessage);
+bool SetIOSNativeMusicPlaybackRate(int percent, bool timeStretch,
+                                   std::string &errorMessage);
 IOSNativeMusicState GetIOSNativeMusicState();
 void *CreateIOSReplayVideoWriter(const std::string &wavPath,
                                  const std::string &outputPath, int width,

@@ -4,7 +4,7 @@
 
 **Goal:** Add persistent Pitch Shift and Time Stretch modes to the mobile music player while retaining its 50–200% playback-rate control.
 
-**Architecture:** Carry the existing `audio::PlaybackRate` value from settings through `MusicPlayerScene`, `MusicPlayerService`, and `NativeMusicPlayer`. Android maps it to `PlaybackParams`; iOS uses an `AVAudioEngine` player node and time-pitch unit so both algorithms share one transport implementation.
+**Architecture:** Carry the existing `audio::PlaybackRate` value from settings through `MusicPlayerScene`, `MusicPlayerService`, and `NativeMusicPlayer`. Android maps it to `PlaybackParams`; iOS maps it to `AVPlayerItem.audioTimePitchAlgorithm` and the player rate.
 
 **Tech Stack:** C++20, Objective-C++/AVFoundation, Java/Android MediaPlayer, custom View/Dropdown UI, CTest.
 
@@ -167,29 +167,28 @@ git commit -m "feat: support music playback modes on Android"
 
 **Interfaces:**
 - Consumes: `audio::PlaybackRate`
-- Produces: native iOS load/play/pause/stop/seek/state behavior backed by `AVAudioEngine`
+- Produces: native iOS load/play/pause/stop/seek/state behavior backed by `AVPlayer`
 
-- [ ] **Step 1: Replace player globals with an engine transport**
+- [ ] **Step 1: Replace the audio-player transport with AVPlayer**
 
-Own `AVAudioEngine`, `AVAudioPlayerNode`, `AVAudioUnitTimePitch`, and `AVAudioFile`, plus source-position, monotonic-start-time, playback-state, and schedule-generation fields. Keep metadata, queue, remote-command, and audio-session state unchanged.
+Own an `AVPlayer`, its current `AVPlayerItem`, and an end-of-item observer. Keep metadata, queue, remote-command, and audio-session state unchanged.
 
-- [ ] **Step 2: Implement one scheduling path**
+- [ ] **Step 2: Map both algorithms**
 
-Schedule the remaining source frames from the current source position. Completion handlers notify `ControlEvent::Finished` only when their captured generation is still current. Pause and seek increment the generation so cancelled schedules cannot report false completion.
+Set `AVAudioTimePitchAlgorithmVarispeed` for Pitch Shift and `AVAudioTimePitchAlgorithmSpectral` for Time Stretch. The end observer notifies `ControlEvent::Finished` only when its item is still current.
 
 - [ ] **Step 3: Apply the mode live**
 
-Before changing parameters, rebase the source position using elapsed real time multiplied by the old rate. Then apply:
+Apply the mode to the current item, then restore the selected rate only when playback was active:
 
 ```objective-c++
-gIOSNativeMusicTimePitch.rate = rate;
-gIOSNativeMusicTimePitch.pitch =
-    mode == audio::PlaybackMode::PitchShift
-        ? static_cast<float>(1200.0 * std::log2(rate))
-        : 0.0f;
+item.audioTimePitchAlgorithm = timeStretch
+                                   ? AVAudioTimePitchAlgorithmSpectral
+                                   : AVAudioTimePitchAlgorithmVarispeed;
+[player playImmediatelyAtRate:rate];
 ```
 
-Use the rebased position for state and now-playing elapsed time. Playback rate in `MPNowPlayingInfoCenter` remains the selected speed.
+Playback rate in `MPNowPlayingInfoCenter` remains the selected speed.
 
 - [ ] **Step 4: Preserve transport semantics**
 
@@ -229,4 +228,3 @@ Expected: test passes, `main` links, no whitespace errors, and the tracked workt
 - [ ] **Step 2: Record the completed commit range**
 
 Append the common/UI/Android/iOS commit hashes and verification outcomes to `.superpowers/sdd/progress.md`.
-

@@ -20,7 +20,7 @@ The transport's playback row contains a mode dropdown and the existing percentag
 The native bridge accepts one `audio::PlaybackRate` instead of only a percentage.
 
 - Android maps Pitch Shift to `PlaybackParams.speed = rate` and `pitch = rate`; Time Stretch maps to `speed = rate` and `pitch = 1.0`.
-- iOS migrates native music playback to `AVAudioEngine`, `AVAudioPlayerNode`, and `AVAudioUnitTimePitch`. Both modes use the selected rate; Pitch Shift additionally applies `1200 * log2(rate)` cents, while Time Stretch applies zero pitch offset. Existing load, play, pause, stop, seek, elapsed-time, metadata, queue, and remote-control behavior remains intact.
+- iOS uses `AVPlayerItem.audioTimePitchAlgorithm`: Varispeed links pitch to rate, while Spectral preserves pitch with Apple's music-oriented time-stretch algorithm. Existing load, play, pause, stop, seek, elapsed-time, metadata, queue, and remote-control behavior remains intact.
 
 Desktop remains unchanged because the native music player is mobile-only.
 
