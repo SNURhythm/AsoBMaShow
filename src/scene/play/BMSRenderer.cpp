@@ -835,11 +835,18 @@ BMSRenderer::BMSRenderer(
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
   gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
+  gaugeTypeBadge = std::make_unique<View>();
   gaugeTypeText = std::make_unique<TextView>(kHudFontPath, 15);
   gaugeTypeText->setAlign(TextView::CENTER);
   gaugeTypeText->setVAlign(TextView::MIDDLE);
   gaugeTypeText->setOverflow(TextView::TextOverflow::Hidden);
   gaugeTypeText->setRotationDegrees(90.0f);
+  gaugeAutoShiftText = std::make_unique<TextView>(kHudFontPath, 16);
+  gaugeAutoShiftText->setText("GAS");
+  gaugeAutoShiftText->setAlign(TextView::CENTER);
+  gaugeAutoShiftText->setVAlign(TextView::MIDDLE);
+  gaugeAutoShiftText->setOverflow(TextView::TextOverflow::Hidden);
+  gaugeAutoShiftText->setRotationDegrees(90.0f);
   setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
   playOptionText->setAlign(TextView::LEFT);
@@ -965,8 +972,14 @@ void BMSRenderer::drawGauge(RenderContext &context) const {
   if (gaugeText != nullptr) {
     gaugeText->render(context);
   }
+  if (gaugeTypeBadge != nullptr) {
+    gaugeTypeBadge->render(context);
+  }
   if (gaugeTypeText != nullptr) {
     gaugeTypeText->render(context);
+  }
+  if (gaugeAutoShiftText != nullptr) {
+    gaugeAutoShiftText->render(context);
   }
 }
 void BMSRenderer::drawPlayOption(RenderContext &context) const {
@@ -1322,8 +1335,14 @@ void BMSRenderer::layoutGaugeText() {
 
   gaugeText->setVisible(true);
   if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
+    if (gaugeTypeBadge != nullptr) {
+      gaugeTypeBadge->setVisible(false);
+    }
     if (gaugeTypeText != nullptr) {
       gaugeTypeText->setVisible(false);
+    }
+    if (gaugeAutoShiftText != nullptr) {
+      gaugeAutoShiftText->setVisible(false);
     }
     const auto rect = worldGaugeRect();
     const auto topLeft = projectWorldToUi(rect[0], rect[1] + rect[3]);
@@ -1379,15 +1398,47 @@ void BMSRenderer::layoutGaugeText() {
   if (gaugeTypeText != nullptr) {
     gaugeTypeText->setVisible(true);
     gaugeTypeText->setRotationDegrees(left ? -90.0f : 90.0f);
+    if (gaugeAutoShiftText != nullptr) {
+      gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+      gaugeAutoShiftText->setRotationDegrees(left ? -90.0f : 90.0f);
+    }
     constexpr int typeWidth = 34;
-    const int typeHeight = std::clamp(gaugeTypeText->textureWidth() + 24, 76,
-                                      156);
+    constexpr int typePadding = 12;
+    constexpr int gasGap = 4;
+    const int gaugeLabelLength = gaugeTypeText->textureWidth();
+    const int gasLabelLength = currentGaugeAutoShift && gaugeAutoShiftText
+                                   ? gaugeAutoShiftText->textureWidth()
+                                   : 0;
+    const int typeHeight =
+        std::clamp(gaugeLabelLength + gasLabelLength +
+                       (currentGaugeAutoShift ? gasGap : 0) + typePadding * 2,
+                   76, 188);
     const int typeX =
         left ? static_cast<int>(std::round(rect[0] - typeWidth - 8.0f))
              : static_cast<int>(std::round(rect[0] + rect[2] + 8.0f));
     const int typeY = static_cast<int>(
         std::round(rect[1] + (rect[3] - typeHeight) * 0.24f));
-    placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
+    if (gaugeTypeBadge != nullptr) {
+      gaugeTypeBadge->setVisible(true);
+      gaugeTypeBadge->setPosition(typeX, typeY);
+      gaugeTypeBadge->setSize(typeWidth, typeHeight);
+    }
+
+    if (!currentGaugeAutoShift || gaugeAutoShiftText == nullptr) {
+      placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
+    } else {
+      const int gaugeSpan = gaugeLabelLength + typePadding;
+      const int gasSpan = typeHeight - gaugeSpan;
+      if (left) {
+        placeText(gaugeAutoShiftText.get(), typeX, typeY, typeWidth, gasSpan);
+        placeText(gaugeTypeText.get(), typeX, typeY + gasSpan, typeWidth,
+                  gaugeSpan);
+      } else {
+        placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, gaugeSpan);
+        placeText(gaugeAutoShiftText.get(), typeX, typeY + gaugeSpan,
+                  typeWidth, gasSpan);
+      }
+    }
   }
 }
 
@@ -1411,6 +1462,12 @@ void BMSRenderer::refreshGaugeTextStyle() {
     if (gaugeTypeText != nullptr) {
       gaugeTypeText->setVisible(false);
     }
+    if (gaugeTypeBadge != nullptr) {
+      gaugeTypeBadge->setVisible(false);
+    }
+    if (gaugeAutoShiftText != nullptr) {
+      gaugeAutoShiftText->setVisible(false);
+    }
     return;
   }
 
@@ -1420,17 +1477,29 @@ void BMSRenderer::refreshGaugeTextStyle() {
   gaugeText->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
   gaugeText->setBorderWidth(1);
   gaugeText->setCornerRadius(9.0f);
+  if (gaugeTypeBadge != nullptr) {
+    gaugeTypeBadge->setVisible(true);
+    gaugeTypeBadge->setBackgroundColor(Color(4, 8, 15, 238));
+    gaugeTypeBadge->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
+    gaugeTypeBadge->setBorderWidth(1);
+    gaugeTypeBadge->setCornerRadius(9.0f);
+  }
   if (gaugeTypeText != nullptr) {
     gaugeTypeText->setVisible(true);
-    gaugeTypeText->setText(currentGaugeAutoShift
-                               ? "GAS"
-                               : gaugeDisplayShortLabel(currentGaugeType,
-                                                       currentGaugeProfile));
+    gaugeTypeText->setText(
+        gaugeDisplayShortLabel(currentGaugeType, currentGaugeProfile));
     gaugeTypeText->setColor({250, 253, 255, 255});
-    gaugeTypeText->setBackgroundColor(Color(4, 8, 15, 238));
-    gaugeTypeText->setBorderColor(Color(accent.r, accent.g, accent.b, 224));
-    gaugeTypeText->setBorderWidth(1);
-    gaugeTypeText->setCornerRadius(9.0f);
+    gaugeTypeText->clearBackgroundColor();
+    gaugeTypeText->clearBorderColor();
+    gaugeTypeText->setBorderWidth(0);
+  }
+  if (gaugeAutoShiftText != nullptr) {
+    gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+    gaugeAutoShiftText->setColor({255, 225, 112, 255});
+    gaugeAutoShiftText->setBackgroundColor(Color(255, 200, 64, 32));
+    gaugeAutoShiftText->clearBorderColor();
+    gaugeAutoShiftText->setBorderWidth(0);
+    gaugeAutoShiftText->setCornerRadius(6.0f);
   }
 }
 
