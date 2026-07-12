@@ -56,6 +56,17 @@ int main() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 1;
   chart.Meta.Total = 100.0;
+  ReplayData practiceGaugeReplay;
+  practiceGaugeReplay.initialGaugeType = GaugeType::Normal;
+  practiceGaugeReplay.provenance.startingGaugePercent = 37;
+  const RhythmState practiceGaugeState =
+      replay_result::BuildResultState(chart, practiceGaugeReplay);
+  if (practiceGaugeState.currentGauge != 37.0f) {
+    std::cerr << "export result state must restore the recorded starting gauge"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData assistedReplay;
   assistedReplay.initialGaugeType = GaugeType::Hard;
   assistedReplay.maxCombo = 1;
