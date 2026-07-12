@@ -946,6 +946,12 @@ public:
     return clearTypeToLabel(getClearType());
   }
 
+  [[nodiscard]] bool activeGaugeFailed() const {
+    const int index = gaugeTypeIndex(gaugeType);
+    return !gaugeAutoShift && gaugeIsSurvival(gaugeType, gaugeProfile) &&
+           gaugeSurvivalFailed[index];
+  }
+
   ~RhythmState() {}
 
 private:

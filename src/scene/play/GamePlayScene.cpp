@@ -1801,6 +1801,39 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       delayMillis, true);
 }
 
+bool GamePlayScene::finishIfGaugeFailed() {
+  if (state == nullptr || state->isEnding || !state->activeGaugeFailed()) {
+    return false;
+  }
+
+  SDL_Log("Active survival gauge failed");
+  state->isEnding = true;
+  context.jukebox.stop();
+  if (options.practiceSession != nullptr) {
+    completePracticeAttempt();
+  } else {
+    finishReplayRecording();
+    recordedAttemptCompleted = options.practiceMode;
+    publishPracticeGhost();
+  }
+  if (isCoursePlayback()) {
+    options.courseSession->carriedGauge = state->gaugeSnapshot();
+    options.courseSession->carriedCombo = state->combo;
+    options.courseSession->maxCombo =
+        std::max(options.courseSession->maxCombo, state->maxCombo);
+    options.courseSession->recordResult(chart->Meta, *state);
+    if (!options.courseSession->courseReplayPlayback) {
+      options.courseSession->recordStageProvenance(
+          options.courseSession->currentIndex, attemptProvenance);
+    }
+    if (shouldRecordReplay()) {
+      options.courseSession->recordReplayStage(recordedReplay);
+    }
+  }
+  scheduleResultTransition(0);
+  return true;
+}
+
 void GamePlayScene::update(float dt) {
   (void)dt;
   if (inputHandler != nullptr) {
@@ -1828,7 +1861,13 @@ void GamePlayScene::update(float dt) {
     processReplayEvents(gameplayTimeMicros);
   }
   updateHellChargeGauge(gameplayTimeMicros);
+  if (finishIfGaugeFailed()) {
+    return;
+  }
   checkPassedTimeline(gameplayTimeMicros);
+  if (finishIfGaugeFailed()) {
+    return;
+  }
   if (isReplayPlayback()) {
     processReplayLaneCoverEvents(gameplayTimeMicros);
   }
