@@ -2269,12 +2269,21 @@ ChartViewerScene::ChartViewerScene(
   }
   viewerAssistOption =
       assist_options::normalize(context.settings.selectedAssistOption);
-  const std::optional<std::string> selectedPlayOption =
-      context.settings.selectedPlayOption;
-  setViewerPlayOptions(selectedPlayOption, std::nullopt,
-                       this->record.meta.IsDP ? selectedPlayOption
-                                              : std::nullopt,
-                       std::nullopt);
+  if (pendingPracticeLaunchRequest.has_value() &&
+      pendingPracticeLaunchRequest->replayPlayOptions.has_value()) {
+    const auto &replayOptions =
+        *pendingPracticeLaunchRequest->replayPlayOptions;
+    setViewerPlayOptions(
+        replayOptions.playOption, replayOptions.playOptionSeed,
+        replayOptions.playOption2, replayOptions.playOption2Seed);
+  } else {
+    const std::optional<std::string> selectedPlayOption =
+        context.settings.selectedPlayOption;
+    setViewerPlayOptions(selectedPlayOption, std::nullopt,
+                         this->record.meta.IsDP ? selectedPlayOption
+                                                : std::nullopt,
+                         std::nullopt);
+  }
 }
 
 void ChartViewerScene::init() {

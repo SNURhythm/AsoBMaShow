@@ -50,6 +50,15 @@ mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
   return result;
 }
 
+ReplayPlayOptions launchPlayOptionsFromReplay(const ReplayData &replay) {
+  return {
+      .playOption = replay.playOption,
+      .playOptionSeed = replay.playOptionSeed,
+      .playOption2 = replay.playOption2,
+      .playOption2Seed = replay.playOption2Seed,
+  };
+}
+
 std::optional<std::string> validateLaunchRequest(const LaunchRequest &request) {
   if (!isKnownSource(request.source)) {
     return "Practice source unavailable";
@@ -67,7 +76,11 @@ std::optional<std::string> validateLaunchRequest(const LaunchRequest &request) {
     if (!request.replayId.has_value() || *request.replayId <= 0) {
       return "Replay unavailable";
     }
-  } else if (request.replayId.has_value()) {
+    if (!request.replayPlayOptions.has_value()) {
+      return "Replay options unavailable";
+    }
+  } else if (request.replayId.has_value() ||
+             request.replayPlayOptions.has_value()) {
     return "Unexpected replay metadata";
   }
   return std::nullopt;

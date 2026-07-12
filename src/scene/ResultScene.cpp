@@ -1277,16 +1277,19 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
       retryData.has_value()) {
     chartMeta = practice::mergeReplayLaunchChartMeta(meta, *retryData);
   }
-  return {
+  practice::LaunchRequest request{
       .chartMeta = chartMeta,
       .startMicros = startMicros,
       .endMicros = endMicros,
       .source = source,
-      .replayId = source == practice::LaunchSource::ReplayResult &&
-                          retryData.has_value()
-                      ? std::optional<int>(retryData->id)
-                      : std::nullopt,
   };
+  if (source == practice::LaunchSource::ReplayResult &&
+      retryData.has_value()) {
+    request.replayId = retryData->id;
+    request.replayPlayOptions =
+        practice::launchPlayOptionsFromReplay(*retryData);
+  }
+  return request;
 }
 
 std::optional<practice::LaunchRequest>

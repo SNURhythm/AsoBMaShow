@@ -42,6 +42,7 @@ void testAllResultSourcesValidateWithDurableMetadata() {
 
   auto replayRequest = makeRequest(practice::LaunchSource::ReplayResult);
   replayRequest.replayId = 42;
+  replayRequest.replayPlayOptions = practice::ReplayPlayOptions{};
   require(!practice::validateLaunchRequest(replayRequest).has_value(),
           "replay launch accepts a durable replay id");
 }
@@ -97,6 +98,7 @@ void testSelectedRangeMergesWithoutChangingLastUsedOptions() {
 
   auto request = makeRequest(practice::LaunchSource::ReplayResult);
   request.replayId = 42;
+  request.replayPlayOptions = practice::ReplayPlayOptions{};
   const auto merged =
       practice::applyLaunchRequest(lastUsed, request, 40'000'000);
 
@@ -219,6 +221,21 @@ void testParsedChartIdentityGatesLaunchApplication() {
           "missing parsed identity rejects without trusting record metadata");
 }
 
+void testReplayPlayOptionsAreCarriedIntoSectionLaunch() {
+  ReplayData replay;
+  replay.playOption = "RANDOM";
+  replay.playOptionSeed = 1234;
+  replay.playOption2 = "MIRROR";
+  replay.playOption2Seed = 5678;
+
+  const auto options = practice::launchPlayOptionsFromReplay(replay);
+  require(options.playOption == replay.playOption &&
+              options.playOptionSeed == replay.playOptionSeed &&
+              options.playOption2 == replay.playOption2 &&
+              options.playOption2Seed == replay.playOption2Seed,
+          "replay section launch retains both players' options and seeds");
+}
+
 } // namespace
 
 int main() {
@@ -228,5 +245,6 @@ int main() {
   testRangeSanitizesAgainstTheParsedChartEnd();
   testReplayMetadataCannotReplaceTheCurrentPlayedChartIdentityOrPath();
   testParsedChartIdentityGatesLaunchApplication();
+  testReplayPlayOptionsAreCarriedIntoSectionLaunch();
   return 0;
 }
