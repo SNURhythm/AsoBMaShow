@@ -463,7 +463,8 @@ Color gaugeAccentColor(GaugeType gaugeType, GaugeProfile gaugeProfile,
       currentGauge < border) {
     return ui_theme::coral();
   }
-  return clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
+  return clearLampColorForRank(
+      gaugeTypeToClearRank(gaugeClearTypeForProfile(gaugeType, gaugeProfile)));
 }
 
 Color gaugeTrackFill() {

@@ -423,6 +423,15 @@ inline int courseGaugeClassIndexForType(GaugeType gaugeType) {
   }
 }
 
+inline GaugeType gaugeClearTypeForProfile(GaugeType gaugeType,
+                                          GaugeProfile profile) {
+  if (gaugeProfileIsCourse(profile) &&
+      courseGaugeClassIndexForType(gaugeType) == 0) {
+    return GaugeType::Normal;
+  }
+  return gaugeType;
+}
+
 inline float gaugeReducedDamageZoneUpperBound(
     GaugeType gaugeType,
     GaugeProfile profile = GaugeProfile::Standard) {
@@ -632,7 +641,7 @@ inline ClearType clearTypeForGauge(GaugeType gaugeType, float gaugeValue,
       gaugeValue < gaugeBorderValue(gaugeType, profile)) {
     return ClearType::Failed;
   }
-  switch (gaugeType) {
+  switch (gaugeClearTypeForProfile(gaugeType, profile)) {
   case GaugeType::AssistedEasy:
     return ClearType::AssistedEasyClear;
   case GaugeType::Easy:
