@@ -14,6 +14,7 @@
 #include "../../practice/PracticeResultFlow.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../view/TextView.h"
+#include "../../view/IconText.h"
 #include "BMSRenderer.h"
 #include "RhythmLaneInputController.h"
 #include "../../input/RhythmInputHandler.h"
@@ -35,6 +36,8 @@
 #include <vector>
 
 namespace {
+constexpr uint32_t kIconPause = 0xf04c;
+constexpr uint32_t kIconRestart = 0xf2f9;
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
 constexpr long long kHellChargeGaugeTickMicros = 200000LL;
@@ -642,8 +645,8 @@ void GamePlayScene::init() {
   /* pause button */
   pauseButton = new Button(rendering::window_width - 70, 50, 40, 40);
   addView(pauseButton);
-  auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
-  pauseText->setText("||");
+  auto pauseText = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+  pauseText->setText(ui_icons::textForCodepoint(kIconPause));
   pauseText->setAlign(TextView::CENTER);
   pauseText->setVAlign(TextView::MIDDLE);
   pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -666,11 +669,10 @@ void GamePlayScene::init() {
 
   if (options.practiceSession != nullptr) {
     practiceRestartButton =
-        new Button(rendering::window_width - 260, 50, 150, 52);
+        new Button(rendering::window_width - 70, 110, 52, 52);
     addView(practiceRestartButton);
-    auto restartText =
-        new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-    restartText->setText("Restart");
+    auto restartText = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+    restartText->setText(ui_icons::textForCodepoint(kIconRestart));
     restartText->setAlign(TextView::CENTER);
     restartText->setVAlign(TextView::MIDDLE);
     restartText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -1880,8 +1882,8 @@ void GamePlayScene::renderScene() {
     pauseButton->setPositionNoLayout(rendering::window_width - 88, 38);
   }
   if (practiceRestartButton != nullptr) {
-    practiceRestartButton->setPositionNoLayout(rendering::window_width - 260,
-                                               38);
+    practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
+                                               98);
   }
   long long gameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
