@@ -795,7 +795,7 @@ ReplayData sampleReplay(const std::filesystem::path &root,
   replay.chartMeta.TotalNotes = 50;
   replay.chartMeta.LnMode = 2;
   replay.initialGaugeType = GaugeType::Hard;
-  replay.gaugeAutoShift = true;
+  replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   replay.finalScore = 91;
   replay.maxCombo = 45;
   replay.finalGauge = 82.5f;
@@ -980,7 +980,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   db.reset();
   const auto summaries = first.ListReplays(replay.chartMeta, 0);
   assert(summaries.size() == 1);
-  assert(summaries.front().rulesetVersion == 1);
+  assert(summaries.front().rulesetVersion == 2);
   assert(summaries.front().eligibility == ScoreEligibility::Modified);
   assert(summaries.front().playback == replay.provenance.playback);
   assert(replay_clear_mark::effectiveClearRank(summaries.front()) ==
@@ -1012,7 +1012,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   const auto courseSummaries = first.ListCourseReplays(
       {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 0);
   assert(courseSummaries.size() == 1);
-  assert(courseSummaries.front().rulesetVersion == 1);
+  assert(courseSummaries.front().rulesetVersion == 2);
   assert(courseSummaries.front().eligibility == ScoreEligibility::Modified);
   assert(courseSummaries.front().playback == course.provenance.playback);
   assert(replay_clear_mark::effectiveClearRank(courseSummaries.front()) ==

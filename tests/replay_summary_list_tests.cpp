@@ -100,8 +100,9 @@ int main() {
   }
 
   const ReplayData autoExport = replay_autoplay::BuildReplayData(
-      chart, GaugeType::Normal, false, {.percent = 200}, std::nullopt,
-      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, true);
+      chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+      assist_options::kOff, true);
   if (autoExport.provenance.playback.percent != 200) {
     std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
@@ -113,8 +114,9 @@ int main() {
   }
 
   const ReplaySummary assistedAutoSummary = replay_autoplay::BuildSummary(
-      chart.Meta, GaugeType::Normal, false, std::nullopt, std::nullopt,
-      std::nullopt, std::nullopt, assist_options::kOff, {.percent = 200});
+      chart.Meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff,
+      {.percent = 200});
   if (assistedAutoSummary.playback.percent != 200 ||
       assistedAutoSummary.clearType != kClearTypeAssistedEasyClearRank) {
     std::cerr << "synthetic Auto summary must retain playback assist limits"
