@@ -142,14 +142,19 @@ StereoSound synthesizeKick(int sampleRate) {
 
 StereoSound synthesizeClap(int sampleRate) {
   sampleRate = std::max(1, sampleRate);
-  constexpr double durationSeconds = 0.14;
+  constexpr double durationSeconds = 0.18;
   const int frames =
       std::max(1, static_cast<int>(std::lround(sampleRate * durationSeconds)));
   StereoSound result{.sampleRate = sampleRate};
   result.samples.resize(static_cast<std::size_t>(frames) * 2);
 
   std::uint32_t state = 0x6d2b79f5u;
-  double previousNoise = 0.0;
+  double lowPassedHigh = 0.0;
+  double lowPassedLow = 0.0;
+  const double highAlpha =
+      1.0 - std::exp(-2.0 * kPi * 6500.0 / sampleRate);
+  const double lowAlpha =
+      1.0 - std::exp(-2.0 * kPi * 700.0 / sampleRate);
   for (int frame = 0; frame < frames; ++frame) {
     state ^= state << 13;
     state ^= state >> 17;
@@ -159,17 +164,36 @@ StereoSound synthesizeClap(int sampleRate) {
             static_cast<double>(UINT32_MAX) *
             2.0 -
         1.0;
-    const double highPassed = noise - previousNoise * 0.88;
-    previousNoise = noise;
+    lowPassedHigh += (noise - lowPassedHigh) * highAlpha;
+    lowPassedLow += (noise - lowPassedLow) * lowAlpha;
+    const double palmNoise = lowPassedHigh - lowPassedLow;
 
     const double time = static_cast<double>(frame) / sampleRate;
-    double envelope = 0.0;
-    for (const double burst : {0.0, 0.018, 0.036}) {
+    double slapEnvelope = 0.0;
+    constexpr double burstTimes[] = {0.0, 0.011, 0.023};
+    constexpr double burstLevels[] = {1.0, 0.62, 0.38};
+    for (std::size_t index = 0; index < 3; ++index) {
+      const double burst = burstTimes[index];
       if (time >= burst) {
-        envelope += std::exp(-(time - burst) * 62.0);
+        const double elapsed = time - burst;
+        const double attack = 1.0 - std::exp(-elapsed * 1800.0);
+        slapEnvelope += burstLevels[index] * attack *
+                        std::exp(-elapsed * 72.0);
       }
     }
-    const float sample = clampSample(highPassed * envelope * 0.14);
+
+    const double crack = palmNoise * std::exp(-time * 190.0) * 0.42;
+    const double body = palmNoise * slapEnvelope * 0.72;
+    const double palmResonance =
+        (std::sin(2.0 * kPi * 930.0 * time) * 0.7 +
+         std::sin(2.0 * kPi * 1460.0 * time) * 0.3) *
+        std::exp(-time * 62.0) * 0.12;
+    const double tail = time >= 0.028
+                            ? palmNoise *
+                                  std::exp(-(time - 0.028) * 31.0) * 0.11
+                            : 0.0;
+    const float sample =
+        clampSample(std::tanh(crack + body + palmResonance + tail));
     result.samples[static_cast<std::size_t>(frame) * 2] = sample;
     result.samples[static_cast<std::size_t>(frame) * 2 + 1] = sample;
   }
@@ -177,4 +201,3 @@ StereoSound synthesizeClap(int sampleRate) {
 }
 
 } // namespace club_beat
-
