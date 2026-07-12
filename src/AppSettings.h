@@ -151,6 +151,7 @@ public:
   bool systemPlaybackShowJacket = true;
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;
+  int musicPlayerPlaybackRatePercent = 100;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;

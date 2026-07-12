@@ -1180,6 +1180,21 @@ bool MusicPlayerService::Seek(long long positionMicros,
   return native_music_player::Seek(positionMicros, errorMessage);
 }
 
+bool MusicPlayerService::SetPlaybackRatePercent(int percent,
+                                                std::string &errorMessage) {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  if (!native_music_player::SetPlaybackRatePercent(percent, errorMessage)) {
+    return false;
+  }
+  playbackRatePercent = percent;
+  return true;
+}
+
+int MusicPlayerService::PlaybackRatePercent() const {
+  std::lock_guard<std::mutex> lock(stateMutex);
+  return playbackRatePercent;
+}
+
 bool MusicPlayerService::SetSleepTimer(long long durationMicros,
                                        std::string &statusMessage) {
   statusMessage.clear();
@@ -1375,6 +1390,10 @@ bool MusicPlayerService::PlayTrackLocked(
                                  errorMessage)) {
     return false;
   }
+  if (!native_music_player::SetPlaybackRatePercent(playbackRatePercent,
+                                                   errorMessage)) {
+    return false;
+  }
   const bool playing = native_music_player::Play(errorMessage);
   if (playing) {
     loadedTrack = track;
@@ -1511,6 +1530,9 @@ void MusicPlayerService::PlaybackWorker(
       std::string errorMessage;
       if (!native_music_player::Load(cacheResult.audioPath, metadata,
                                      errorMessage)) {
+        statusMessage = errorMessage;
+      } else if (!native_music_player::SetPlaybackRatePercent(
+                     playbackRatePercent, errorMessage)) {
         statusMessage = errorMessage;
       } else if (!native_music_player::Play(errorMessage)) {
         statusMessage = errorMessage;

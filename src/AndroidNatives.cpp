@@ -1429,6 +1429,22 @@ bool SeekAndroidNativeMusic(long long positionMicros,
   return parseBridgeResult(result, ignored, errorMessage);
 }
 
+bool SetAndroidNativeMusicPlaybackRate(int percent,
+                                       std::string &errorMessage) {
+  std::string callError;
+  const std::string percentText = std::to_string(percent);
+  const std::string result = callActivityStringMethod(
+      "setNativeMusicPlaybackRate",
+      "(Ljava/lang/String;)Ljava/lang/String;", percentText.c_str(),
+      callError);
+  if (!callError.empty()) {
+    errorMessage = callError;
+    return false;
+  }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
 AndroidNativeMusicState GetAndroidNativeMusicState() {
   AndroidNativeMusicState state;
   std::string callError;

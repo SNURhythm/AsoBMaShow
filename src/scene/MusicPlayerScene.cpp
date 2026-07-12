@@ -7,8 +7,10 @@
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
+#include "../view/DropdownView.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
+#include "../view/OverlayPortal.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -122,6 +124,15 @@ std::string formatMusicTime(long long micros) {
   }
   stream << seconds;
   return stream.str();
+}
+
+std::vector<DropdownView::Option> playbackRateOptions() {
+  std::vector<DropdownView::Option> options;
+  for (int percent = 50; percent <= 200; percent += 5) {
+    options.push_back({.id = std::to_string(percent),
+                       .label = std::to_string(percent) + "%"});
+  }
+  return options;
 }
 
 std::string formatSleepTimerDuration(long long micros) {
@@ -595,6 +606,9 @@ private:
 void MusicPlayerScene::init() {
   context.jukebox.stop();
   applySystemPlaybackPrivacy(false);
+  std::string playbackRateError;
+  context.musicPlayer.SetPlaybackRatePercent(
+      context.settings.musicPlayerPlaybackRatePercent, playbackRateError);
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
   buildView();
@@ -642,6 +656,10 @@ void MusicPlayerScene::update(float) {
     lastLayoutHeight = rendering::window_height;
     rootLayout->setSize(rendering::window_width, rendering::window_height);
     rootLayout->applyYogaLayout();
+    if (overlayPortal != nullptr) {
+      overlayPortal->setSize(rendering::window_width,
+                             rendering::window_height);
+    }
     if (videoOverlayRoot != nullptr) {
       videoOverlayRoot->setSize(rendering::window_width,
                                 rendering::window_height);
@@ -683,6 +701,7 @@ void MusicPlayerScene::cleanupScene() {
     context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
   }
   rootLayout = nullptr;
+  overlayPortal = nullptr;
   videoOverlayRoot = nullptr;
   videoArtworkBackdrop = nullptr;
   videoControlsPanel = nullptr;
@@ -752,6 +771,7 @@ void MusicPlayerScene::cleanupScene() {
   playlistNameInput = nullptr;
   playlistRenameInput = nullptr;
   playPauseButtonText = nullptr;
+  playbackRateDropdown = nullptr;
   deletePlaylistButtonText = nullptr;
   clearPlaylistButtonText = nullptr;
   seekProgressTrack = nullptr;
@@ -772,6 +792,7 @@ void MusicPlayerScene::cleanupScene() {
   videoShowingArtwork = false;
   videoRestoresVisualsEnabled = false;
   videoControlsVisible = false;
+  playbackRateDropdownOpen = false;
   videoControlsVisibleUntil = 0;
   videoTrackId.clear();
   videoChart.reset();
@@ -784,6 +805,13 @@ void MusicPlayerScene::buildView() {
   rootLayout->setAlignItems(YGAlignStretch);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
   addView(rootLayout);
+
+  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                    rendering::window_height);
+  overlayPortal->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal->setPosition(Edge::Left, 0);
+  overlayPortal->setPosition(Edge::Top, 0);
+  overlayPortal->setZIndex(900);
 
   auto *header = new View();
   header->setHeight(safe.top + kHeaderHeight)
@@ -908,6 +936,7 @@ void MusicPlayerScene::buildView() {
   content->addView(pageStack);
 
   rootLayout->addView(content);
+  rootLayout->addView(overlayPortal);
   refreshNavigation();
   rootLayout->applyYogaLayout();
   buildVideoOverlay();
@@ -1678,7 +1707,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   nowColumn->addView(seekProgressTrack);
 
   auto *transport = new View();
-  transport->setHeight(186)
+  transport->setHeight(247)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(9);
   auto *transportRow = new View();
@@ -1695,6 +1724,10 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowB->setHeight(52)
       ->setFlexDirection(FlexDirection::Row)
       ->setGap(10);
+  auto *playbackRateRow = new View();
+  playbackRateRow->setHeight(52)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setAlignItems(YGAlignCenter);
 
   TextView *previousText = nullptr;
   auto *previousButton = makeIconButton(kIconBackwardStep, 28, &previousText);
@@ -1777,6 +1810,19 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
               ui_theme::accentBorder);
   stopButton->setOnClickListener([this]() { stopPlayback(); });
 
+  playbackRateDropdown = new DropdownView(
+      {
+          .onOpenChanged =
+              [this](bool open) {
+                playbackRateDropdownOpen = open;
+                refreshPlaybackRateControl();
+              },
+          .onOptionSelected =
+              [this](const std::string &id) { setPlaybackRate(id); },
+      },
+      overlayPortal);
+  playbackRateDropdown->setWidthPercent(100.0f);
+
   transportRow->addView(previousButton);
   transportRow->addView(back10Button);
   transportRow->addView(playPauseButton);
@@ -1787,9 +1833,12 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   actionRowB->addView(repeatButton);
   actionRowB->addView(shuffleButton);
   actionRowB->addView(stopButton);
+  playbackRateRow->addView(playbackRateDropdown);
   transport->addView(transportRow);
   transport->addView(actionRowA);
   transport->addView(actionRowB);
+  transport->addView(playbackRateRow);
+  refreshPlaybackRateControl();
   nowColumn->addView(transport);
   workspace->addView(nowColumn);
 
@@ -2478,7 +2527,10 @@ void MusicPlayerScene::refreshUi() {
     playerSubtitleText->setText(queueDisplayName(displayedQueueName) + " | " +
                                 std::to_string(queueTracks.size()) +
                                 " tracks | " +
-                                repeatModeLabel(displayedRepeatMode));
+                                repeatModeLabel(displayedRepeatMode) + " | " +
+                                std::to_string(
+                                    context.musicPlayer.PlaybackRatePercent()) +
+                                "%");
   }
   if (queueTitleText != nullptr) {
     queueTitleText->setText(queueDisplayName(displayedQueueName));
@@ -2941,6 +2993,8 @@ void MusicPlayerScene::switchTab(MusicPlayerTab tab) {
   if (activeTab != MusicPlayerTab::Player) {
     seekMouseDown = false;
     activeSeekTouchId = -1;
+    playbackRateDropdownOpen = false;
+    refreshPlaybackRateControl();
   }
   refreshNavigation();
   refreshUi();
@@ -3921,6 +3975,43 @@ void MusicPlayerScene::cycleRepeatMode() {
   displayedRepeatMode = next;
   setStatus(repeatModeLabel(next));
   refreshUi();
+}
+
+void MusicPlayerScene::setPlaybackRate(const std::string &id) {
+  const int percent = std::atoi(id.c_str());
+  std::string errorMessage;
+  if (!context.musicPlayer.SetPlaybackRatePercent(percent, errorMessage)) {
+    setStatus(errorMessage);
+    playbackRateDropdownOpen = false;
+    refreshPlaybackRateControl();
+    return;
+  }
+
+  context.settings.musicPlayerPlaybackRatePercent = percent;
+  context.settings.sanitize();
+  playbackRateDropdownOpen = false;
+  if (!context.saveSettings()) {
+    setStatus("Playback rate changed, but could not save it.");
+  } else {
+    setStatus("Music playback rate: " + std::to_string(percent) + "%.");
+  }
+  refreshPlaybackRateControl();
+}
+
+void MusicPlayerScene::refreshPlaybackRateControl() {
+  if (playbackRateDropdown == nullptr) {
+    return;
+  }
+  playbackRateDropdown->refresh({
+      .label = "Playback rate",
+      .selectedId =
+          std::to_string(context.musicPlayer.PlaybackRatePercent()),
+      .options = playbackRateOptions(),
+      .open = playbackRateDropdownOpen,
+      .enabled = true,
+      .maxVisibleItems = 6,
+      .menuWidth = 400.0f,
+  });
 }
 
 void MusicPlayerScene::setSleepTimerFromInput() {

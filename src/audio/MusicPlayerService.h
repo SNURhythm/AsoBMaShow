@@ -116,6 +116,8 @@ public:
   bool Pause(std::string &errorMessage);
   bool Stop(std::string &errorMessage);
   bool Seek(long long positionMicros, std::string &errorMessage);
+  bool SetPlaybackRatePercent(int percent, std::string &errorMessage);
+  [[nodiscard]] int PlaybackRatePercent() const;
   bool SetSleepTimer(long long durationMicros, std::string &statusMessage);
   void ClearSleepTimer();
   [[nodiscard]] long long SleepTimerRemainingMicros() const;
@@ -185,6 +187,7 @@ private:
   std::vector<music_playlist::MusicTrack> defaultPlaylistTracks;
   std::vector<music_playlist::MusicTrack> selectedPlaylistTracks;
   std::optional<music_playlist::MusicTrack> loadedTrack;
+  int playbackRatePercent = 100;
   int defaultPlaylistId = 0;
   int selectedPlaylistId = 0;
   MusicPlayerStateRecord persistedState;

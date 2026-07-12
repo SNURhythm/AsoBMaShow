@@ -60,6 +60,7 @@ IOSNativeMusicDelegate *gIOSNativeMusicDelegate = nil;
 IOSNativeMusicMetadata gIOSNativeMusicMetadata;
 IOSNativeMusicQueue gIOSNativeMusicQueue;
 bool gIOSNativeMusicRemoteCommandsConfigured = false;
+float gIOSNativeMusicPlaybackRate = 1.0f;
 
 NSString *NSStringFromUtf8(const std::string &utf8) {
   if (utf8.empty()) {
@@ -552,7 +553,7 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
     info[MPNowPlayingInfoPropertyElapsedPlaybackTime] =
         @(std::max<NSTimeInterval>(0.0, gIOSNativeMusicPlayer.currentTime));
     info[MPNowPlayingInfoPropertyPlaybackRate] =
-        @(gIOSNativeMusicPlayer.playing ? 1.0 : 0.0);
+        @(gIOSNativeMusicPlayer.playing ? gIOSNativeMusicPlaybackRate : 0.0f);
     const NSUInteger queueCount =
         static_cast<NSUInteger>(gIOSNativeMusicQueue.items.size());
     if (queueCount > 0) {
@@ -3559,6 +3560,7 @@ bool LoadIOSNativeMusicFile(const std::string &filePath,
         return false;
       }
       player.numberOfLoops = 0;
+      player.enableRate = YES;
       if (gIOSNativeMusicDelegate == nil) {
         gIOSNativeMusicDelegate = [IOSNativeMusicDelegate new];
       }
@@ -3567,6 +3569,7 @@ bool LoadIOSNativeMusicFile(const std::string &filePath,
         errorMessage = "Could not prepare music for playback";
         return false;
       }
+      player.rate = gIOSNativeMusicPlaybackRate;
 
       gIOSNativeMusicPlayer = player;
       gIOSNativeMusicMetadata = metadata;
@@ -3688,6 +3691,22 @@ bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage) {
           0.0, duration > 0.0 ? duration : DBL_MAX);
       gIOSNativeMusicPlayer.currentTime = target;
       UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
+bool SetIOSNativeMusicPlaybackRate(int percent, std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      gIOSNativeMusicPlaybackRate =
+          std::clamp(static_cast<float>(percent) / 100.0f, 0.5f, 2.0f);
+      if (gIOSNativeMusicPlayer != nil) {
+        gIOSNativeMusicPlayer.enableRate = YES;
+        gIOSNativeMusicPlayer.rate = gIOSNativeMusicPlaybackRate;
+        UpdateIOSNativeMusicNowPlayingInfoLocked();
+      }
       return true;
     }
   }

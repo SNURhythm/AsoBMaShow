@@ -55,6 +55,7 @@ bool Play(std::string &errorMessage);
 bool Pause(std::string &errorMessage);
 bool Stop(std::string &errorMessage);
 bool Seek(long long positionMicros, std::string &errorMessage);
+bool SetPlaybackRatePercent(int percent, std::string &errorMessage);
 PlaybackState GetState();
 void NotifyControlEvent(ControlEvent event);
 std::vector<ControlEvent> DrainControlEvents();

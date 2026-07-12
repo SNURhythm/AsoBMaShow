@@ -515,6 +515,8 @@ void AppSettings::sanitize() {
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
+  musicPlayerPlaybackRatePercent =
+      ((std::clamp(musicPlayerPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
   selectedPlaybackRatePercent =
       ((std::clamp(selectedPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
   switch (selectedPlaybackMode) {
