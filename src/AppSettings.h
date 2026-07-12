@@ -152,6 +152,8 @@ public:
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;
   int musicPlayerPlaybackRatePercent = 100;
+  audio::PlaybackMode musicPlayerPlaybackMode =
+      audio::PlaybackMode::PitchShift;
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;

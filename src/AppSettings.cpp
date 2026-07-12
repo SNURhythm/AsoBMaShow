@@ -517,6 +517,14 @@ void AppSettings::sanitize() {
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
   musicPlayerPlaybackRatePercent =
       ((std::clamp(musicPlayerPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
+  switch (musicPlayerPlaybackMode) {
+  case audio::PlaybackMode::PitchShift:
+  case audio::PlaybackMode::TimeStretch:
+    break;
+  default:
+    musicPlayerPlaybackMode = audio::PlaybackMode::PitchShift;
+    break;
+  }
   selectedPlaybackRatePercent =
       ((std::clamp(selectedPlaybackRatePercent, 50, 200) + 2) / 5) * 5;
   switch (selectedPlaybackMode) {

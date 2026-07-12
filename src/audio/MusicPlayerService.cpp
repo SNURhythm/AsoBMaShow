@@ -1180,19 +1180,34 @@ bool MusicPlayerService::Seek(long long positionMicros,
   return native_music_player::Seek(positionMicros, errorMessage);
 }
 
-bool MusicPlayerService::SetPlaybackRatePercent(int percent,
-                                                std::string &errorMessage) {
+bool MusicPlayerService::SetPlaybackRate(audio::PlaybackRate rate,
+                                         std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
-  if (!native_music_player::SetPlaybackRatePercent(percent, errorMessage)) {
+  if (!native_music_player::SetPlaybackRate(rate, errorMessage)) {
     return false;
   }
-  playbackRatePercent = percent;
+  playbackRate = rate;
   return true;
 }
 
-int MusicPlayerService::PlaybackRatePercent() const {
+audio::PlaybackRate MusicPlayerService::PlaybackRate() const {
   std::lock_guard<std::mutex> lock(stateMutex);
-  return playbackRatePercent;
+  return playbackRate;
+}
+
+bool MusicPlayerService::SetPlaybackRatePercent(int percent,
+                                                std::string &errorMessage) {
+  audio::PlaybackRate rate;
+  {
+    std::lock_guard<std::mutex> lock(stateMutex);
+    rate = playbackRate;
+  }
+  rate.percent = percent;
+  return SetPlaybackRate(rate, errorMessage);
+}
+
+int MusicPlayerService::PlaybackRatePercent() const {
+  return PlaybackRate().percent;
 }
 
 bool MusicPlayerService::SetSleepTimer(long long durationMicros,
@@ -1390,8 +1405,7 @@ bool MusicPlayerService::PlayTrackLocked(
                                  errorMessage)) {
     return false;
   }
-  if (!native_music_player::SetPlaybackRatePercent(playbackRatePercent,
-                                                   errorMessage)) {
+  if (!native_music_player::SetPlaybackRate(playbackRate, errorMessage)) {
     return false;
   }
   const bool playing = native_music_player::Play(errorMessage);
@@ -1531,8 +1545,8 @@ void MusicPlayerService::PlaybackWorker(
       if (!native_music_player::Load(cacheResult.audioPath, metadata,
                                      errorMessage)) {
         statusMessage = errorMessage;
-      } else if (!native_music_player::SetPlaybackRatePercent(
-                     playbackRatePercent, errorMessage)) {
+      } else if (!native_music_player::SetPlaybackRate(playbackRate,
+                                                       errorMessage)) {
         statusMessage = errorMessage;
       } else if (!native_music_player::Play(errorMessage)) {
         statusMessage = errorMessage;

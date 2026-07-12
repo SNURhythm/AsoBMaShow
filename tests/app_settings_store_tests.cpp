@@ -161,6 +161,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.selectedPlaybackRatePercent = 75;
   expected.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   expected.musicPlayerPlaybackRatePercent = 135;
+  expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -179,6 +180,9 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"musicPlayerPlaybackRatePercent\": 135") !=
              std::string::npos,
          "saved JSON includes the music player rate");
+  expect(readFile(path).find("\"musicPlayerPlaybackMode\": 1") !=
+             std::string::npos,
+         "saved JSON includes the music player mode");
 }
 
 void testPlaybackSelectionSanitizationAndLegacyDefaults() {
@@ -200,6 +204,14 @@ void testPlaybackSelectionSanitizationAndLegacyDefaults() {
   expect(musicPlayerRounded.musicPlayerPlaybackRatePercent == 75,
          "music-player rate rounds to the nearest supported step");
 
+  AppSettings invalidMusicPlayerMode;
+  invalidMusicPlayerMode.musicPlayerPlaybackMode =
+      static_cast<audio::PlaybackMode>(99);
+  invalidMusicPlayerMode.sanitize();
+  expect(invalidMusicPlayerMode.musicPlayerPlaybackMode ==
+             audio::PlaybackMode::PitchShift,
+         "invalid music-player mode falls back to pitch shift");
+
   TempDirectory temp;
   const auto path = temp.path() / "legacy-neutral-settings.json";
   writeFile(path, R"({"schemaVersion":1,"audioOffsetMs":12})");
@@ -213,6 +225,9 @@ void testPlaybackSelectionSanitizationAndLegacyDefaults() {
          "legacy settings default to pitch-shift playback mode");
   expect(legacy.settings.musicPlayerPlaybackRatePercent == 100,
          "legacy settings default to neutral music-player rate");
+  expect(legacy.settings.musicPlayerPlaybackMode ==
+             audio::PlaybackMode::PitchShift,
+         "legacy settings default to pitch-shift music-player mode");
 }
 
 void testVersionFixturesAndNoRewrite() {
