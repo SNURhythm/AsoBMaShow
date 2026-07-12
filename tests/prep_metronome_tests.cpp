@@ -213,6 +213,15 @@ int main() {
               "exact-beat count-in preserves barline phase");
 
   plan = prep_metronome::buildPracticeCountInPlan(
+      phaseChart, 0, 4, slowPlayback);
+  ASSERT_EQ(5U, plan.clicks.size(),
+            "chart-start count-in includes the measure-zero downbeat");
+  ASSERT_EQ(0LL, plan.clicks.back().timeMicros,
+            "measure-zero downbeat stays on chart time zero");
+  ASSERT_TRUE(plan.clicks.back().accent,
+              "measure-zero downbeat uses the accented click");
+
+  plan = prep_metronome::buildPracticeCountInPlan(
       phaseChart, 12250000, 8, slowPlayback);
   ASSERT_EQ(8500000LL, plan.clicks[0].timeMicros,
             "barline phase is inherited from the chart grid");

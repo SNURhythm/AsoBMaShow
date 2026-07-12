@@ -318,6 +318,14 @@ PrepMetronomePlan buildPracticeCountInPlan(
     plan.clicks.push_back(
         {.timeMicros = beat.timeMicros, .accent = beat.accent});
   }
+  const bool startsAtMeasureZero =
+      startMicros == 0 &&
+      std::ranges::any_of(chart.Measures, [](const auto *measure) {
+        return measure != nullptr && measure->Timing == 0;
+      });
+  if (startsAtMeasureZero) {
+    plan.clicks.push_back({.timeMicros = 0, .accent = true});
+  }
   plan.startTimeMicros = plan.clicks.front().timeMicros;
   plan.leadInMicros = startMicros - plan.startTimeMicros;
 
