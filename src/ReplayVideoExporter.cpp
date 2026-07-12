@@ -2736,8 +2736,12 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
   renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
   renderer.setGaugeBarPosition(settings.gaugeBarPosition);
+  const GaugeProfile gaugeProfile =
+      resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
-                          gaugeInitialValue(replay.initialGaugeType));
+                          gaugeInitialValue(replay.initialGaugeType,
+                                            gaugeProfile),
+                          gaugeProfile);
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
   renderer.setAutoPlayMarkVisible(replay.autoPlay);
@@ -3015,7 +3019,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       const auto &event = replay.events[replayCursor];
       const bool appliedHud =
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                   visualTimeMicros, replay.gaugeAutoShift);
+                                   visualTimeMicros, replay.gaugeAutoShift,
+                                   gaugeProfile);
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
         renderer.setPacemakerStatus(pacemaker::snapshotForState(
