@@ -866,6 +866,7 @@
 				view/DropdownView.cpp,
 				view/ImageView.cpp,
 				view/LibraryFolderItemView.cpp,
+				view/PlayOptionSectionView.cpp,
 				view/ScrollView.cpp,
 				view/TextInputBox.cpp,
 				view/TextView.cpp,

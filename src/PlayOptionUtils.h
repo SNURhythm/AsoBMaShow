@@ -100,6 +100,25 @@ inline std::string makeLaneAssignOption(const std::string &notation) {
   return normalized.has_value() ? "ASSIGN:" + *normalized : "NORMAL";
 }
 
+inline std::string defaultLaneAssignNotation(
+    const bms_parser::ChartMeta &meta) {
+  constexpr std::string_view keySymbols = "123456789ABCDE";
+  const auto keyLanes = meta.GetKeyLaneIndices();
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  std::string notation;
+  if (meta.IsDP && scratchLanes.size() >= 2) {
+    notation.push_back('L');
+  } else if (!meta.IsDP && !scratchLanes.empty()) {
+    notation.push_back('S');
+  }
+  notation.append(keySymbols.substr(0, std::min(keyLanes.size(),
+                                                keySymbols.size())));
+  if (meta.IsDP && scratchLanes.size() >= 2) {
+    notation.push_back('R');
+  }
+  return notation;
+}
+
 inline bool validateLaneAssignOption(const bms_parser::ChartMeta &meta,
                                      const std::string &option,
                                      std::string *error = nullptr) {

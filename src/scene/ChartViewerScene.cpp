@@ -18,9 +18,9 @@
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/OverlayPortal.h"
+#include "../view/PlayOptionSectionView.h"
 #include "../view/ReplaySummaryListView.h"
 #include "../view/ScrollView.h"
-#include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "../view/View.h"
@@ -2431,8 +2431,7 @@ void ChartViewerScene::cleanupScene() {
   viewerAssistDragButton = nullptr;
   viewerAssistOffButtonText = nullptr;
   viewerAssistDragButtonText = nullptr;
-  laneAssignInput = nullptr;
-  laneAssignStatusText = nullptr;
+  playOptionSection = nullptr;
   randomDrawerRoot = nullptr;
   randomDrawerScroll = nullptr;
   overlayPortal = nullptr;
@@ -3529,28 +3528,15 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   currentRow->addView(viewerOptionText);
   panel->addView(currentRow);
 
-  auto makeOptionButton = [this](const std::string &option, int width) {
-    auto *button = makeButton(option, width, 16);
-    button->setOnClickListener([this, option]() {
-      setViewerNamedPlayOption(option);
-    });
-    return button;
-  };
-
-  for (int rowIndex = 0; rowIndex < 3; ++rowIndex) {
-    auto *optionRow = new View();
-    optionRow->setFlexDirection(FlexDirection::Row);
-    optionRow->setAlignItems(YGAlignCenter);
-    optionRow->setGap(10);
-    optionRow->setHeight(52);
-    const size_t start = static_cast<size_t>(rowIndex) * 4;
-    const size_t end =
-        std::min(start + 4, play_options::kPlayOptions.size());
-    for (size_t i = start; i < end; ++i) {
-      optionRow->addView(makeOptionButton(play_options::kPlayOptions[i], 136));
-    }
-    panel->addView(optionRow);
-  }
+  playOptionSection = new PlayOptionSectionView(
+      {.onOptionSelected = [this](const std::string &option) {
+         setViewerNamedPlayOption(option);
+       },
+       .onLaneOrderSubmitted = [this](const std::string &notation) {
+         setViewerLaneAssign(notation);
+       }},
+      {.columns = 4, .rowHeight = 52, .buttonFontSize = 16});
+  panel->addView(playOptionSection);
 
   auto *assistRow = new View();
   assistRow->setFlexDirection(FlexDirection::Row);
@@ -3587,58 +3573,6 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   assistRow->addView(viewerAssistDragButton);
   panel->addView(assistRow);
 
-  auto *assignRow = new View();
-  assignRow->setFlexDirection(FlexDirection::Row);
-  assignRow->setAlignItems(YGAlignCenter);
-  assignRow->setGap(12);
-  assignRow->setHeight(62);
-
-  auto *assignLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
-  assignLabel->setText("Lane");
-  assignLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-  assignLabel->setVAlign(TextView::MIDDLE);
-  assignLabel->setWidth(58);
-  assignLabel->setHeight(46);
-  assignRow->addView(assignLabel);
-
-  laneAssignInput = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 20);
-  laneAssignInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  laneAssignInput->setBackgroundColor(ui_theme::control());
-  laneAssignInput->setCornerRadius(ui_theme::controlRadius());
-  laneAssignInput->setBorderColor(ui_theme::hairline());
-  laneAssignInput->setBorderWidth(1);
-  laneAssignInput->setPadding(Edge::Left, 12);
-  laneAssignInput->setPadding(Edge::Right, 12);
-  laneAssignInput->setVAlign(TextView::MIDDLE);
-  laneAssignInput->setOverflow(TextView::TextOverflow::Hidden);
-  laneAssignInput->setFlex(1);
-  laneAssignInput->setHeight(48);
-  laneAssignInput->onSubmit(
-      [this](const std::string &text) { setViewerLaneAssign(text); });
-  assignRow->addView(laneAssignInput);
-
-  auto *applyButton = makeButton("Apply", 96, 18);
-  applyButton->setOnClickListener([this]() {
-    if (laneAssignInput != nullptr) {
-      setViewerLaneAssign(laneAssignInput->getText());
-    }
-  });
-  assignRow->addView(applyButton);
-
-  auto *resetButton = makeButton("Reset", 92, 18);
-  resetButton->setOnClickListener([this]() {
-    setViewerNamedPlayOption("NORMAL");
-  });
-  assignRow->addView(resetButton);
-  panel->addView(assignRow);
-
-  laneAssignStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  laneAssignStatusText->setText("");
-  laneAssignStatusText->setColor(ui_theme::sdl(ui_theme::textMuted()));
-  laneAssignStatusText->setOverflow(TextView::TextOverflow::Hidden);
-  laneAssignStatusText->setHeight(28);
-  panel->addView(laneAssignStatusText);
-
   optionsDrawerRoot->addView(panel);
   rootLayout->addView(optionsDrawerRoot);
   refreshOptionsDrawer();
@@ -3669,15 +3603,11 @@ void ChartViewerScene::refreshOptionsDrawer() {
     viewerAssistOptionText->setText(viewerAssistOption);
   }
   refreshViewerAssistOptionButtons();
-  if (laneAssignInput != nullptr) {
-    const auto assign = viewerPlayOption.has_value()
-                            ? play_options::laneAssignNotationFromOption(
-                                  *viewerPlayOption)
-                            : std::nullopt;
-    laneAssignInput->setEditingText(assign.value_or(defaultLaneAssignNotation()));
-  }
-  if (laneAssignStatusText != nullptr) {
-    laneAssignStatusText->setText("");
+  if (playOptionSection != nullptr) {
+    const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
+    playOptionSection->refresh(
+        viewerPlayOption.value_or("NORMAL"),
+        play_options::defaultLaneAssignNotation(meta), true);
   }
 }
 
@@ -3722,6 +3652,9 @@ void ChartViewerScene::refreshViewerAssistOptionButtons() {
 }
 
 void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {
+  if (playOptionSection != nullptr) {
+    playOptionSection->setLaneOrderMessage("");
+  }
   const std::string normalized = play_options::normalizePlayOption(option);
   if (play_options::laneAssignNotationFromOption(normalized).has_value()) {
     setViewerLaneAssign(normalized);
@@ -3750,9 +3683,9 @@ void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
   const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
   if (play_options::isNormalPlayOption(option) ||
       !play_options::validateLaneAssignOption(meta, option, &error)) {
-    if (laneAssignStatusText != nullptr) {
-      laneAssignStatusText->setText(error.empty() ? "Invalid lane assign."
-                                                 : error);
+    if (playOptionSection != nullptr) {
+      playOptionSection->setLaneOrderMessage(
+          error.empty() ? "Invalid lane order." : error, true);
     }
     return;
   }
@@ -3762,8 +3695,8 @@ void ChartViewerScene::setViewerLaneAssign(const std::string &notation) {
                       ? std::nullopt
                       : std::optional<std::vector<int>>(selectedRandomValues));
   refreshOptionsDrawer();
-  if (laneAssignStatusText != nullptr) {
-    laneAssignStatusText->setText("Applied");
+  if (playOptionSection != nullptr) {
+    playOptionSection->setLaneOrderMessage("Lane order applied.");
   }
 }
 
@@ -4684,23 +4617,4 @@ std::string ChartViewerScene::viewerPlayOptionLabel() const {
     result += " / Lane " + *viewerLaneOrderSummary;
   }
   return result;
-}
-
-std::string ChartViewerScene::defaultLaneAssignNotation() const {
-  const bms_parser::ChartMeta &meta = chart != nullptr ? chart->Meta : record.meta;
-  constexpr std::string_view keySymbols = "123456789ABCDE";
-  const auto keyLanes = meta.GetKeyLaneIndices();
-  const auto scratchLanes = meta.GetScratchLaneIndices();
-  std::string notation;
-  if (meta.IsDP && scratchLanes.size() >= 2) {
-    notation.push_back('L');
-  } else if (!meta.IsDP && !scratchLanes.empty()) {
-    notation.push_back('S');
-  }
-  const size_t keyCount = std::min(keyLanes.size(), keySymbols.size());
-  notation.append(keySymbols.substr(0, keyCount));
-  if (meta.IsDP && scratchLanes.size() >= 2) {
-    notation.push_back('R');
-  }
-  return notation;
 }

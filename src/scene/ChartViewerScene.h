@@ -21,7 +21,7 @@ class ReplaySummaryListView;
 class ScrollView;
 class OverlayPortal;
 class PracticePanelView;
-class TextInputBox;
+class PlayOptionSectionView;
 class TextView;
 class View;
 
@@ -120,8 +120,7 @@ private:
   Button *viewerAssistDragButton = nullptr;
   TextView *viewerAssistOffButtonText = nullptr;
   TextView *viewerAssistDragButtonText = nullptr;
-  TextInputBox *laneAssignInput = nullptr;
-  TextView *laneAssignStatusText = nullptr;
+  PlayOptionSectionView *playOptionSection = nullptr;
   View *randomDrawerRoot = nullptr;
   ScrollView *randomDrawerScroll = nullptr;
   OverlayPortal *overlayPortal = nullptr;
@@ -219,5 +218,4 @@ private:
       const std::vector<unsigned char> *sourceBytes = nullptr) const;
   [[nodiscard]] std::string randomSummary() const;
   [[nodiscard]] std::string viewerPlayOptionLabel() const;
-  [[nodiscard]] std::string defaultLaneAssignNotation() const;
 };

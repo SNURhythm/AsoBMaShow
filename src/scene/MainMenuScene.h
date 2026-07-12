@@ -39,6 +39,7 @@
 class Button;
 class DropdownView;
 class OverlayPortal;
+class PlayOptionSectionView;
 class ScrollView;
 struct CoursePlaySession;
 struct ResultImageExportResult;
@@ -274,6 +275,7 @@ private:
   TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
+  PlayOptionSectionView *playOptionSection = nullptr;
   View *parseLogModalRoot = nullptr;
   View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
@@ -522,12 +524,6 @@ private:
   };
   std::vector<GaugeSelectionButton> gaugeSelectionButtons;
   main_menu_profile::Selections profileSelections;
-  struct PlayOptionButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string option;
-  };
-  std::vector<PlayOptionButton> playOptionButtons;
   struct LongNoteModeButton {
     Button *button = nullptr;
     TextView *text = nullptr;

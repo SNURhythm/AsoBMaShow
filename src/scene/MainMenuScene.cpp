@@ -22,6 +22,7 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
+#include "../view/PlayOptionSectionView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
 #include "../Utils.h"
@@ -2452,6 +2453,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
+  playOptionSection = nullptr;
   musicModalRoot = nullptr;
   unzipModalRoot = nullptr;
   unzipProgressTrack = nullptr;
@@ -2629,7 +2631,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedReplayRenderGhosts = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
-  playOptionButtons.clear();
   longNoteModeButtons.clear();
   assistOptionButtons.clear();
   pacemakerTargetButtons.clear();
@@ -4689,27 +4690,8 @@ void MainMenuScene::setPlayOptionSelection(const std::string &option) {
 void MainMenuScene::refreshPlayOptionButtons() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
-  for (auto &item : playOptionButtons) {
-    if (item.button == nullptr || item.text == nullptr) {
-      continue;
-    }
-
-    const std::string normalized =
-        play_options::normalizePlayOption(item.option);
-    const bool allowed = currentPlayOptionSelectionAllowed(item.option);
-    item.text->setText(item.option);
-    if (allowed) {
-      item.button->setOnClickListener(
-          [this, option = item.option]() { setPlayOptionSelection(option); });
-    } else {
-      item.button->setOnClickListener(std::function<void()>{});
-    }
-    const bool selected = normalized == effective.playOption;
-    if (!allowed) {
-      styleLockedOptionButton(item.button, item.text, selected);
-    } else {
-      styleOptionButton(item.button, item.text, selected);
-    }
+  if (playOptionSection != nullptr) {
+    playOptionSection->refresh(effective.playOption, std::string{}, false);
   }
   refreshReadySettingsSummary();
 }
@@ -7603,35 +7585,19 @@ void MainMenuScene::buildPlayOptionsModal() {
   optionsContent->addView(gaugeRowA);
   optionsContent->addView(gaugeRowB);
 
-  optionsContent->addView(makeModalLabel("Play Option"));
-
-  auto makePlayOptionButton = [this](std::string option) {
-    TextView *text = nullptr;
-    auto *button = makeModalButton(option, 15, &text);
-    button->setFlexGrow(1.0f);
-    button->setFlexBasis(0.0f);
-    button->setFlexShrink(1.0f);
-    button->setOnClickListener(
-        [this, option]() { setPlayOptionSelection(option); });
-    playOptionButtons.push_back({
-        .button = button,
-        .text = text,
-        .option = option,
-    });
-    return button;
-  };
-
   const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
-  View *playOptionRow = nullptr;
-  for (size_t i = 0; i < play_options::kPlayOptions.size(); ++i) {
-    if (i % playOptionColumns == 0) {
-      playOptionRow = makeModalOptionRow(58);
-      optionsContent->addView(playOptionRow);
-    }
-    if (playOptionRow != nullptr) {
-      playOptionRow->addView(makePlayOptionButton(play_options::kPlayOptions[i]));
-    }
-  }
+  playOptionSection = new PlayOptionSectionView(
+      {.onOptionSelected = [this](const std::string &option) {
+         setPlayOptionSelection(option);
+       },
+       .isOptionAllowed = [this](const std::string &option) {
+         return currentPlayOptionSelectionAllowed(option);
+       }},
+      {.columns = static_cast<int>(playOptionColumns),
+       .rowHeight = 58,
+       .buttonFontSize = 15,
+       .showLaneOrder = false});
+  optionsContent->addView(playOptionSection);
 
   optionsContent->addView(makeModalLabel("Long Note Mode"));
 
@@ -10320,7 +10286,7 @@ void MainMenuScene::cleanupScene() {
   selectedReplayRenderGhosts = true;
   replayExportProgressFraction = 0.0;
   gaugeSelectionButtons.clear();
-  playOptionButtons.clear();
+  playOptionSection = nullptr;
   longNoteModeButtons.clear();
   assistOptionButtons.clear();
   pacemakerTargetButtons.clear();
