@@ -345,14 +345,12 @@ void SettingsScene::refreshInputMonitorText() {
            << inputGyroscopeAxisValue;
       inputMonitorText->setText(text.str());
     } else if (!sample.has_value()) {
-      inputMonitorText->setText("Move or press an input to monitor it.");
+      inputMonitorText->setText("Waiting for input...");
     } else {
       std::ostringstream text;
       text << deviceClassLabel(sample->control.deviceClass) << " · "
-           << (sample->control.deviceId.empty() ? "missing stable ID"
-                                                : sample->control.deviceId)
-           << " · " << controlLabel(sample->control) << " · raw " << std::fixed
-           << std::setprecision(3) << sample->rawValue << " · normalized "
+           << controlLabel(sample->control) << " · " << std::fixed
+           << std::setprecision(3) << sample->rawValue << " / "
            << sample->normalizedValue;
       inputMonitorText->setText(text.str());
     }
@@ -360,15 +358,13 @@ void SettingsScene::refreshInputMonitorText() {
   if (inputCaptureStateText != nullptr) {
     switch (inputCaptureController->state()) {
     case InputCaptureController::State::Idle:
-      inputCaptureStateText->setText("Capture idle");
+      inputCaptureStateText->setText("");
       break;
     case InputCaptureController::State::Listening:
-      inputCaptureStateText->setText(
-          "Listening — press a key/button or cross 20% on an axis.");
+      inputCaptureStateText->setText("Press a control.");
       break;
     case InputCaptureController::State::AwaitingConflictConfirmation:
-      inputCaptureStateText->setText(
-          "Conflict found — choose Replace or Keep existing.");
+      inputCaptureStateText->setText("");
       break;
     }
   }
@@ -379,7 +375,7 @@ void SettingsScene::refreshInputMonitorText() {
                 (shouldShowGyroscopeSettingsCard(inputSelectedDeviceId) &&
                  !inputGyroscopeSettingsError.empty())
             ? std::string()
-            : "Not saved: " + std::string(error));
+            : std::string(error));
   }
 }
 
@@ -546,7 +542,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   resetRow->setAlignItems(YGAlignCenter);
   auto *resetButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Reset this scope", metrics.bodyTextSize + 2,
+      makeText("Reset Scope", metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::coral());
   resetButton->setOnClickListener([this]() {
@@ -559,9 +555,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   resetRow->addView(resetButton);
   selectorBody->addView(resetRow);
   cards->addView(makeCard(
-      metrics, "Binding scope",
-      "Bindings are isolated by player and BMS key mode. The device selector "
-      "filters this editor without deleting hidden bindings.",
+      metrics, "Binding Scope", "Choose player, key mode, and device.",
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
 
   const bool showGyroscopeSettings =
@@ -634,50 +628,47 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         gyroscopeSettingsErrorLabel(inputGyroscopeSettingsError),
         metrics.smallTextSize, ui_theme::coral()));
     cards->addView(makeCard(
-        metrics, "Gyroscope Turntable",
-        "Rotate this phone or tablet as a turntable. Changes save with the "
-        "active player's input profile.",
+        metrics, "Gyroscope Turntable", "Use device rotation as a turntable.",
         gyroscopeBody, metrics.compact ? 300 : 240, metrics.cardsWidth));
   }
 
-  auto *monitorBody = new View();
-  monitorBody->setFlexDirection(FlexDirection::Column);
-  monitorBody->setGap(metrics.compact ? 8.0F : 12.0F);
-  inputCaptureStateText = makeWrappedText("Capture idle", metrics.bodyTextSize,
-                                          ui_theme::textPrimary());
-  if (!showGyroscopeSettings) {
-    inputMonitorText =
-        makeWrappedText("Move or press an input to monitor it.",
-                        metrics.smallTextSize, ui_theme::textSecondary());
+  const bool showInputMonitor =
+      !showGyroscopeSettings ||
+      inputCaptureController->state() != InputCaptureController::State::Idle;
+  if (showInputMonitor) {
+    auto *monitorBody = new View();
+    monitorBody->setFlexDirection(FlexDirection::Column);
+    monitorBody->setGap(metrics.compact ? 8.0F : 12.0F);
+    inputCaptureStateText =
+        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+    if (!showGyroscopeSettings) {
+      inputMonitorText =
+          makeWrappedText("Waiting for input...", metrics.smallTextSize,
+                          ui_theme::textSecondary());
+    }
+    inputErrorText =
+        makeWrappedText("", metrics.smallTextSize, ui_theme::coral());
+    monitorBody->addView(inputCaptureStateText);
+    if (!showGyroscopeSettings) {
+      monitorBody->addView(inputMonitorText);
+    }
+    monitorBody->addView(inputErrorText);
+    if (inputCaptureController->state() !=
+        InputCaptureController::State::Idle) {
+      auto *cancelButton = makeControlButton(
+          metrics.actionButtonWidth, metrics.actionButtonHeight,
+          makeText("Cancel", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE));
+      cancelButton->setOnClickListener([this]() {
+        inputCaptureController->cancel();
+        inputCaptureAction.reset();
+        requestInputViewRebuild();
+      });
+      monitorBody->addView(cancelButton);
+    }
+    cards->addView(makeCard(metrics, "Input Monitor", "", monitorBody,
+                            metrics.compact ? 210 : 190, metrics.cardsWidth));
   }
-  inputErrorText =
-      makeWrappedText("", metrics.smallTextSize, ui_theme::coral());
-  monitorBody->addView(inputCaptureStateText);
-  if (!showGyroscopeSettings) {
-    monitorBody->addView(inputMonitorText);
-  } else {
-    monitorBody->addView(
-        makeWrappedText("The gyroscope's live Turntable axis is shown above.",
-                        metrics.smallTextSize, ui_theme::textSecondary()));
-  }
-  monitorBody->addView(inputErrorText);
-  if (inputCaptureController->state() != InputCaptureController::State::Idle) {
-    auto *cancelButton = makeControlButton(
-        metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText("Cancel capture", metrics.bodyTextSize + 2,
-                 ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-    cancelButton->setOnClickListener([this]() {
-      inputCaptureController->cancel();
-      inputCaptureAction.reset();
-      requestInputViewRebuild();
-    });
-    monitorBody->addView(cancelButton);
-  }
-  cards->addView(makeCard(
-      metrics, "Live input monitor",
-      "Raw samples remain visible even below the binding threshold. Capture "
-      "ignores repeats and axis noise until a fresh activation crossing.",
-      monitorBody, metrics.compact ? 210 : 190, metrics.cardsWidth));
 
   auto *bindingsBody = new View();
   bindingsBody->setFlexDirection(FlexDirection::Column);
@@ -757,11 +748,10 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           inputCaptureController->isBindingDeviceMissing(binding.id);
       std::string deviceLabel;
       if (binding.control.deviceId.empty()) {
-        deviceLabel = "Missing stable ID";
+        deviceLabel = "Unknown device";
       } else if (device != devices.end() &&
                  !device->second.displayName.empty()) {
-        deviceLabel =
-            device->second.displayName + " · " + binding.control.deviceId;
+        deviceLabel = device->second.displayName;
       } else {
         deviceLabel = binding.control.deviceId;
       }
@@ -846,9 +836,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     bindingsBody->addView(actionGroup);
   }
   cards->addView(makeCard(
-      metrics, "Bindings",
-      "Press Bind, then activate a control. Threshold and inversion edits "
-      "save only when their editor is committed.",
+      metrics, "Bindings", "Select Bind, then press a control.",
       bindingsBody, metrics.compact ? 400 : 360, metrics.cardsWidth));
 
   refreshInputMonitorText();
@@ -893,13 +881,10 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 
   for (const auto &conflict : inputCaptureController->pendingConflicts()) {
     panel->addView(makeWrappedText(
-        controlLabel(conflict.control) + " is currently assigned to " +
-            actionLabel(conflict.action) + " in this scope.",
+        controlLabel(conflict.control) + " is already " +
+            actionLabel(conflict.action) + ".",
         metrics.bodyTextSize, ui_theme::amber()));
   }
-  panel->addView(makeWrappedText(
-      "The profile is unchanged until Replace is explicitly confirmed.",
-      metrics.bodyTextSize, ui_theme::textSecondary()));
 
   auto *actions = new View();
   actions->setFlexDirection(FlexDirection::Row);
@@ -923,7 +908,7 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 
   auto *keepButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Keep existing", metrics.bodyTextSize + 2,
+      makeText("Keep", metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   keepButton->setOnClickListener([this]() {
     inputCaptureController->rejectReplace();
