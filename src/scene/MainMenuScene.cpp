@@ -22,7 +22,7 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
-#include "../view/PlayOptionSectionView.h"
+#include "../view/PlayOptionsPanelView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
 #include "../Utils.h"
@@ -2453,7 +2453,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportProgressPercentText = nullptr;
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
-  playOptionSection = nullptr;
+  playOptionsPanel = nullptr;
   musicModalRoot = nullptr;
   unzipModalRoot = nullptr;
   unzipProgressTrack = nullptr;
@@ -2528,14 +2528,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
-  playbackRateDecreaseButton = nullptr;
-  playbackRateIncreaseButton = nullptr;
-  playbackRateText = nullptr;
-  assistOptionLabelText = nullptr;
-  playbackModeDropdown = nullptr;
-  gameplayClubModeButton = nullptr;
-  gameplayClubModeButtonText = nullptr;
-  playbackModeDropdownOpen = false;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -2630,10 +2622,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   selectedReplayRenderTouchPoints = true;
   selectedReplayRenderGhosts = true;
   replayExportProgressFraction = 0.0;
-  gaugeSelectionButtons.clear();
-  longNoteModeButtons.clear();
-  assistOptionButtons.clear();
-  pacemakerTargetButtons.clear();
   replayClearFilterButtons.clear();
   replayPlayOptionFilterButtons.clear();
   replayScoreRankFilterButtons.clear();
@@ -4643,34 +4631,7 @@ void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
 }
 
 void MainMenuScene::refreshGaugeSelectionButtons() {
-  for (auto &item : gaugeSelectionButtons) {
-    if (item.button == nullptr || item.text == nullptr) {
-      continue;
-    }
-
-    const bool selected =
-        item.autoShift == profileSelections.gaugeAutoShift &&
-        (item.autoShift || item.type == profileSelections.gaugeType);
-    if (selected) {
-      const Color accent =
-          item.autoShift
-              ? Color(255, 205, 37, 242)
-              : clearLampColorForRank(clearRankForGaugeType(item.type));
-      item.button->setBackgroundColors(
-          accent, accent, Color(accent.r, accent.g, accent.b, 255));
-      item.button->setBorderColors(Color(255, 255, 255, 220),
-                                   Color(255, 255, 255, 240),
-                                   Color(255, 255, 255, 255));
-      item.text->setColor(ui_theme::sdl(ui_theme::textOn(accent)));
-    } else {
-      item.button->setThemedBackgroundColors(
-          ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
-      item.button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                         ui_theme::hairlineStrong,
-                                         ui_theme::accentBorder);
-      item.text->setThemedColor(ui_theme::textPrimary);
-    }
-  }
+  refreshPlayOptionsPanel();
   refreshReadySettingsSummary();
 }
 
@@ -4688,11 +4649,7 @@ void MainMenuScene::setPlayOptionSelection(const std::string &option) {
 }
 
 void MainMenuScene::refreshPlayOptionButtons() {
-  const EffectivePlayOptionSelection effective =
-      currentEffectivePlayOptionSelection();
-  if (playOptionSection != nullptr) {
-    playOptionSection->refresh(effective.playOption, std::string{}, false);
-  }
+  refreshPlayOptionsPanel();
   refreshReadySettingsSummary();
 }
 
@@ -4715,30 +4672,7 @@ void MainMenuScene::setLongNoteModeSelection(const std::string &mode) {
 }
 
 void MainMenuScene::refreshLongNoteModeButtons() {
-  const EffectivePlayOptionSelection effective =
-      currentEffectivePlayOptionSelection();
-  for (auto &item : longNoteModeButtons) {
-    if (item.button == nullptr || item.text == nullptr) {
-      continue;
-    }
-
-    const std::string normalized =
-        long_note_mode::parseId(item.mode, AppSettings::kDefaultLnMode);
-    const bool allowed = currentLongNoteModeSelectionAllowed(item.mode);
-    item.text->setText(item.mode);
-    if (allowed && !effective.longNoteModeLocked) {
-      item.button->setOnClickListener(
-          [this, mode = item.mode]() { setLongNoteModeSelection(mode); });
-    } else {
-      item.button->setOnClickListener(std::function<void()>{});
-    }
-    const bool selected = normalized == effective.longNoteMode;
-    if (effective.longNoteModeLocked || !allowed) {
-      styleLockedOptionButton(item.button, item.text, selected);
-    } else {
-      styleOptionButton(item.button, item.text, selected);
-    }
-  }
+  refreshPlayOptionsPanel();
   refreshReadySettingsSummary();
 }
 
@@ -4756,31 +4690,8 @@ void MainMenuScene::setAssistOptionSelection(const std::string &option) {
 }
 
 void MainMenuScene::refreshAssistOptionButtons() {
-  const EffectivePlayOptionSelection effective =
-      currentEffectivePlayOptionSelection();
-  for (auto &item : assistOptionButtons) {
-    if (item.button == nullptr || item.text == nullptr) {
-      continue;
-    }
-
-    const bool allowed = currentAssistOptionSelectionAllowed(item.option);
-    item.text->setText(item.option);
-    if (allowed && !effective.assistOptionLocked) {
-      item.button->setOnClickListener(
-          [this, option = item.option]() { setAssistOptionSelection(option); });
-    } else {
-      item.button->setOnClickListener(std::function<void()>{});
-    }
-
-    const bool selected =
-        assist_options::normalize(item.option) == effective.assistOption;
-    if (effective.assistOptionLocked || !allowed) {
-      styleLockedOptionButton(item.button, item.text, selected);
-    } else {
-      styleOptionButton(item.button, item.text, selected);
-    }
-  }
-  refreshPlaybackSelectionControls();
+  refreshPlayOptionsPanel();
+  refreshReadySettingsSummary();
 }
 
 void MainMenuScene::setPacemakerTargetSelection(const std::string &target) {
@@ -4794,20 +4705,7 @@ void MainMenuScene::setPacemakerTargetSelection(const std::string &target) {
 }
 
 void MainMenuScene::refreshPacemakerTargetButtons() {
-  const std::string selected =
-      pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
-  for (auto &item : pacemakerTargetButtons) {
-    if (item.button == nullptr || item.text == nullptr) {
-      continue;
-    }
-
-    const std::string normalized = pacemaker::normalizeTargetId(item.target);
-    item.text->setText(pacemaker::displayTargetLabel(normalized));
-    item.button->setOnClickListener([this, target = item.target]() {
-      setPacemakerTargetSelection(target);
-    });
-    styleOptionButton(item.button, item.text, normalized == selected);
-  }
+  refreshPlayOptionsPanel();
   refreshReadySettingsSummary();
 }
 
@@ -4829,7 +4727,6 @@ void MainMenuScene::setPlaybackModeSelection(const std::string &mode) {
   }
   context.settings.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   context.settings.sanitize();
-  playbackModeDropdownOpen = false;
   if (!context.saveSettings()) {
     SDL_Log("Failed to save playback mode selection");
   }
@@ -4846,52 +4743,34 @@ void MainMenuScene::toggleGameplayClubMode() {
 }
 
 void MainMenuScene::refreshPlaybackSelectionControls() {
-  const bool locked = playbackSelectionLockedForCourse();
-  const int percent = locked ? course_rules::kRequiredPlaybackRate.percent
-                             : context.settings.selectedPlaybackRatePercent;
-  if (locked) {
-    playbackModeDropdownOpen = false;
-  }
-  if (playbackRateText != nullptr) {
-    playbackRateText->setText(std::to_string(percent) + "%");
-  }
-  if (playbackRateDecreaseButton != nullptr) {
-    playbackRateDecreaseButton->setEnabled(!locked && percent > 50);
-  }
-  if (playbackRateIncreaseButton != nullptr) {
-    playbackRateIncreaseButton->setEnabled(!locked && percent < 200);
+  refreshPlayOptionsPanel();
+  refreshReadySettingsSummary();
+}
+
+void MainMenuScene::refreshPlayOptionsPanel() {
+  if (playOptionsPanel == nullptr) {
+    return;
   }
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
-  const bool assistedEasyEnabled =
-      percent != 100 || assist_options::isEnabled(effective.assistOption);
-  if (assistOptionLabelText != nullptr) {
-    assistOptionLabelText->setText(
-        assistedEasyEnabled ? "Assist Option - A-EASY enabled"
-                            : "Assist Option");
-  }
-  if (playbackModeDropdown != nullptr) {
-    playbackModeDropdown->refresh({
-        .label = "Mode",
-        .selectedId = "pitch-shift",
-        .options = {{.id = "pitch-shift", .label = "Pitch Shift"},
-                    {.id = "time-stretch",
-                     .label = "Time Stretch (Unavailable)",
-                     .available = false}},
-        .open = playbackModeDropdownOpen,
-        .enabled = !locked,
-        .maxVisibleItems = 2,
-    });
-  }
-  if (gameplayClubModeButton != nullptr &&
-      gameplayClubModeButtonText != nullptr) {
-    const bool enabled = context.settings.gameplayClubModeEnabled;
-    gameplayClubModeButtonText->setText(enabled ? "☑ Club Beat"
-                                                 : "☐ Club Beat");
-    styleOptionButton(gameplayClubModeButton, gameplayClubModeButtonText,
-                      enabled);
-  }
-  refreshReadySettingsSummary();
+  const bool playbackLocked = playbackSelectionLockedForCourse();
+  const int playbackRate =
+      playbackLocked ? course_rules::kRequiredPlaybackRate.percent
+                     : context.settings.selectedPlaybackRatePercent;
+  playOptionsPanel->refresh(
+      {.gaugeType = profileSelections.gaugeType,
+       .gaugeAutoShift = profileSelections.gaugeAutoShift,
+       .playOption = effective.playOption,
+       .defaultLaneOrder = {},
+       .laneOrderEnabled = false,
+       .longNoteMode = effective.longNoteMode,
+       .longNoteModeLocked = effective.longNoteModeLocked,
+       .assistOption = effective.assistOption,
+       .assistOptionLocked = effective.assistOptionLocked,
+       .playbackRatePercent = playbackRate,
+       .playbackLocked = playbackLocked,
+       .clubMode = context.settings.gameplayClubModeEnabled,
+       .pacemakerTarget = profileSelections.pacemakerTarget});
 }
 
 bool MainMenuScene::playbackSelectionLockedForCourse() const {
@@ -7556,182 +7435,40 @@ void MainMenuScene::buildPlayOptionsModal() {
   optionsContent->setGap(12);
   optionsContent->setWidth(kOptionContentWidth);
 
-  optionsContent->addView(makeModalLabel("Gauge"));
-
-  auto makeGaugeButton = [this](GaugeType type, bool autoShift) {
-    TextView *text = nullptr;
-    auto *button =
-        makeModalButton(gaugeButtonLabel(type, autoShift), 18, &text);
-    button->setFlex(1);
-    button->setOnClickListener(
-        [this, type, autoShift]() { setGaugeSelection(type, autoShift); });
-    gaugeSelectionButtons.push_back({
-        .button = button,
-        .text = text,
-        .type = type,
-        .autoShift = autoShift,
-    });
-    return button;
-  };
-
-  auto *gaugeRowA = makeModalOptionRow(58);
-  gaugeRowA->addView(makeGaugeButton(GaugeType::AssistedEasy, false));
-  gaugeRowA->addView(makeGaugeButton(GaugeType::Easy, false));
-  gaugeRowA->addView(makeGaugeButton(GaugeType::Normal, false));
-  auto *gaugeRowB = makeModalOptionRow(58);
-  gaugeRowB->addView(makeGaugeButton(GaugeType::Hard, false));
-  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, false));
-  gaugeRowB->addView(makeGaugeButton(GaugeType::ExHard, true));
-  optionsContent->addView(gaugeRowA);
-  optionsContent->addView(gaugeRowB);
-
   const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
-  playOptionSection = new PlayOptionSectionView(
-      {.onOptionSelected = [this](const std::string &option) {
+  playOptionsPanel = new PlayOptionsPanelView(
+      {.onGaugeSelected = [this](GaugeType type, bool autoShift) {
+         setGaugeSelection(type, autoShift);
+       },
+       .onPlayOptionSelected = [this](const std::string &option) {
          setPlayOptionSelection(option);
        },
-       .isOptionAllowed = [this](const std::string &option) {
+       .isPlayOptionAllowed = [this](const std::string &option) {
          return currentPlayOptionSelectionAllowed(option);
+       },
+       .onLongNoteModeSelected = [this](const std::string &mode) {
+         setLongNoteModeSelection(mode);
+       },
+       .onAssistOptionSelected = [this](const std::string &option) {
+         setAssistOptionSelection(option);
+       },
+       .onPlaybackRateSelected = [this](int percent) {
+         setPlaybackRateSelection(percent);
+       },
+       .onPlaybackModeSelected = [this](const std::string &mode) {
+         setPlaybackModeSelection(mode);
+       },
+       .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
+       .onPacemakerSelected = [this](const std::string &target) {
+         setPacemakerTargetSelection(target);
        }},
-      {.columns = static_cast<int>(playOptionColumns),
-       .rowHeight = 58,
-       .buttonFontSize = 15,
-       .showLaneOrder = false});
-  optionsContent->addView(playOptionSection);
-
-  optionsContent->addView(makeModalLabel("Long Note Mode"));
-
-  auto makeLongNoteModeButton = [this](std::string mode) {
-    TextView *text = nullptr;
-    auto *button = makeModalButton(mode, 18, &text);
-    button->setFlex(1);
-    button->setOnClickListener(
-        [this, mode]() { setLongNoteModeSelection(mode); });
-    longNoteModeButtons.push_back({
-        .button = button,
-        .text = text,
-        .mode = mode,
-    });
-    return button;
-  };
-
-  auto *longNoteModeRow = makeModalOptionRow(58);
-  for (const char *mode : long_note_mode::kPlayableIds) {
-    longNoteModeRow->addView(makeLongNoteModeButton(mode));
-  }
-  optionsContent->addView(longNoteModeRow);
-
-  assistOptionLabelText = makeModalLabel("Assist Option");
-  optionsContent->addView(assistOptionLabelText);
-
-  auto makeAssistOptionButton = [this](std::string option) {
-    TextView *text = nullptr;
-    auto *button = makeModalButton(option, 18, &text);
-    button->setFlex(1);
-    button->setOnClickListener(
-        [this, option]() { setAssistOptionSelection(option); });
-    assistOptionButtons.push_back({
-        .button = button,
-        .text = text,
-        .option = option,
-    });
-    return button;
-  };
-
-  auto *assistOptionRow = makeModalOptionRow(58);
-  assistOptionRow->addView(makeAssistOptionButton(assist_options::kOff));
-  assistOptionRow->addView(makeAssistOptionButton(assist_options::kDrag));
-  optionsContent->addView(assistOptionRow);
-
-  auto *playbackAssistGroup = new View();
-  playbackAssistGroup->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setGap(10)
-      ->setMargin(Edge::Left, 20)
-      ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setThemedBorderColor(ui_theme::hairlineSubtle)
-      ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::controlRadius());
-  playbackAssistGroup->addView(makeModalLabel("Playback Rate"));
-
-  auto *playbackRateRow = makeModalOptionRow(58);
-  TextView *playbackRateDecreaseText = nullptr;
-  playbackRateDecreaseButton =
-      makeModalButton("-5%", 18, &playbackRateDecreaseText);
-  playbackRateDecreaseButton->setFlex(1.0f);
-  playbackRateDecreaseButton->setOnClickListener([this]() {
-    setPlaybackRateSelection(context.settings.selectedPlaybackRatePercent - 5);
-  });
-  playbackRateRow->addView(playbackRateDecreaseButton);
-
-  playbackRateText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  playbackRateText->setAlign(TextView::CENTER);
-  playbackRateText->setVAlign(TextView::MIDDLE);
-  playbackRateText->setThemedColor(ui_theme::textPrimary);
-  playbackRateText->setFlex(1.0f);
-  playbackRateRow->addView(playbackRateText);
-
-  TextView *playbackRateIncreaseText = nullptr;
-  playbackRateIncreaseButton =
-      makeModalButton("+5%", 18, &playbackRateIncreaseText);
-  playbackRateIncreaseButton->setFlex(1.0f);
-  playbackRateIncreaseButton->setOnClickListener([this]() {
-    setPlaybackRateSelection(context.settings.selectedPlaybackRatePercent + 5);
-  });
-  playbackRateRow->addView(playbackRateIncreaseButton);
-  playbackAssistGroup->addView(playbackRateRow);
-
-  playbackModeDropdown = new DropdownView({
-      .onOpenChanged =
-          [this](bool open) {
-            playbackModeDropdownOpen = open;
-            refreshPlaybackSelectionControls();
-          },
-      .onOptionSelected =
-          [this](const std::string &mode) { setPlaybackModeSelection(mode); },
-  }, overlayPortal);
-  playbackModeDropdown->setWidthPercent(100.0f);
-  playbackAssistGroup->addView(playbackModeDropdown);
-  optionsContent->addView(playbackAssistGroup);
-
-  optionsContent->addView(makeModalLabel("Club Mode"));
-  gameplayClubModeButton =
-      makeModalButton("☐ Club Beat", 18, &gameplayClubModeButtonText);
-  gameplayClubModeButton->setHeight(58)->setWidthPercent(100.0f);
-  gameplayClubModeButton->setOnClickListener(
-      [this]() { toggleGameplayClubMode(); });
-  optionsContent->addView(gameplayClubModeButton);
-
-  optionsContent->addView(makeModalLabel("Pacemaker"));
-
-  auto makePacemakerTargetButton = [this](std::string target) {
-    TextView *text = nullptr;
-    auto *button =
-        makeModalButton(pacemaker::displayTargetLabel(target), 18, &text);
-    button->setFlex(1);
-    button->setOnClickListener(
-        [this, target]() { setPacemakerTargetSelection(target); });
-    pacemakerTargetButtons.push_back({
-        .button = button,
-        .text = text,
-        .target = target,
-    });
-    return button;
-  };
-
-  const size_t pacemakerColumns = kOptionContentWidth >= 440.0f ? 3U : 2U;
-  View *pacemakerRow = nullptr;
-  for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
-    if (i % pacemakerColumns == 0) {
-      pacemakerRow = makeModalOptionRow(58);
-      optionsContent->addView(pacemakerRow);
-    }
-    if (pacemakerRow != nullptr) {
-      pacemakerRow->addView(
-          makePacemakerTargetButton(pacemaker::kSelectableTargets[i]));
-    }
-  }
+      {.width = kOptionContentWidth,
+       .playOptionColumns = static_cast<int>(playOptionColumns),
+       .showGauge = true,
+       .showLaneOrder = false,
+       .showPacemaker = true},
+      overlayPortal);
+  optionsContent->addView(playOptionsPanel);
 
   scrollView->setContentView(optionsContent);
   panel->addView(scrollView);
@@ -7782,8 +7519,9 @@ void MainMenuScene::hidePlayOptionsModal() {
   if (playOptionsModalRoot == nullptr) {
     return;
   }
-  playbackModeDropdownOpen = false;
-  refreshPlaybackSelectionControls();
+  if (playOptionsPanel != nullptr) {
+    playOptionsPanel->closeDropdowns();
+  }
   playOptionsModalRoot->setVisible(false);
 }
 
@@ -10183,14 +9921,6 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
-  playbackRateDecreaseButton = nullptr;
-  playbackRateIncreaseButton = nullptr;
-  playbackRateText = nullptr;
-  assistOptionLabelText = nullptr;
-  playbackModeDropdown = nullptr;
-  gameplayClubModeButton = nullptr;
-  gameplayClubModeButtonText = nullptr;
-  playbackModeDropdownOpen = false;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -10285,11 +10015,7 @@ void MainMenuScene::cleanupScene() {
   selectedReplayRenderTouchPoints = true;
   selectedReplayRenderGhosts = true;
   replayExportProgressFraction = 0.0;
-  gaugeSelectionButtons.clear();
-  playOptionSection = nullptr;
-  longNoteModeButtons.clear();
-  assistOptionButtons.clear();
-  pacemakerTargetButtons.clear();
+  playOptionsPanel = nullptr;
   replayClearFilterButtons.clear();
   replayPlayOptionFilterButtons.clear();
   replayScoreRankFilterButtons.clear();

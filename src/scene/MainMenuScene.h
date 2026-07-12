@@ -39,7 +39,7 @@
 class Button;
 class DropdownView;
 class OverlayPortal;
-class PlayOptionSectionView;
+class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
 struct ResultImageExportResult;
@@ -275,7 +275,7 @@ private:
   TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
-  PlayOptionSectionView *playOptionSection = nullptr;
+  PlayOptionsPanelView *playOptionsPanel = nullptr;
   View *parseLogModalRoot = nullptr;
   View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
@@ -516,40 +516,7 @@ private:
   std::vector<ReplayOptionFilterButton> replayPlayOptionFilterButtons;
   std::vector<ReplayScoreRankFilterButton> replayScoreRankFilterButtons;
   std::vector<ReplaySortButton> replaySortButtons;
-  struct GaugeSelectionButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    GaugeType type = GaugeType::Normal;
-    bool autoShift = false;
-  };
-  std::vector<GaugeSelectionButton> gaugeSelectionButtons;
   main_menu_profile::Selections profileSelections;
-  struct LongNoteModeButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string mode;
-  };
-  std::vector<LongNoteModeButton> longNoteModeButtons;
-  struct AssistOptionButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string option;
-  };
-  std::vector<AssistOptionButton> assistOptionButtons;
-  struct PacemakerTargetButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string target;
-  };
-  std::vector<PacemakerTargetButton> pacemakerTargetButtons;
-  Button *playbackRateDecreaseButton = nullptr;
-  Button *playbackRateIncreaseButton = nullptr;
-  TextView *playbackRateText = nullptr;
-  TextView *assistOptionLabelText = nullptr;
-  DropdownView *playbackModeDropdown = nullptr;
-  Button *gameplayClubModeButton = nullptr;
-  TextView *gameplayClubModeButtonText = nullptr;
-  bool playbackModeDropdownOpen = false;
   bool profileSelectionsInitialized = false;
   struct EffectivePlayOptionSelection {
     std::string playOption = "NORMAL";
@@ -667,6 +634,7 @@ private:
   void setPlaybackModeSelection(const std::string &mode);
   void toggleGameplayClubMode();
   void refreshPlaybackSelectionControls();
+  void refreshPlayOptionsPanel();
   [[nodiscard]] bool playbackSelectionLockedForCourse() const;
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;

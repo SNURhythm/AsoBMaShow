@@ -150,31 +150,39 @@ PlayOptionSectionView::PlayOptionSectionView(
     }
   });
   laneRow->addView(laneOrderInput);
+  addView(laneRow);
+
+  auto *laneActionRow = new View();
+  laneActionRow->setFlexDirection(FlexDirection::Row);
+  laneActionRow->setJustifyContent(YGJustifyFlexEnd);
+  laneActionRow->setAlignItems(YGAlignStretch);
+  laneActionRow->setGap(10);
+  laneActionRow->setHeight(46);
 
   TextView *applyText = nullptr;
   applyLaneOrderButton = makeButton("Apply", 17, &applyText);
   applyLaneOrderButton->setFlexGrow(0.0f);
-  applyLaneOrderButton->setFlexBasis(84.0f);
+  applyLaneOrderButton->setFlexBasis(96.0f);
   applyLaneOrderButton->setFlexShrink(0.0f);
   applyLaneOrderButton->setOnClickListener([this]() {
     if (this->callbacks.onLaneOrderSubmitted && laneOrderInput != nullptr) {
       this->callbacks.onLaneOrderSubmitted(laneOrderInput->getText());
     }
   });
-  laneRow->addView(applyLaneOrderButton);
+  laneActionRow->addView(applyLaneOrderButton);
 
   TextView *resetText = nullptr;
   resetLaneOrderButton = makeButton("Reset", 17, &resetText);
   resetLaneOrderButton->setFlexGrow(0.0f);
-  resetLaneOrderButton->setFlexBasis(84.0f);
+  resetLaneOrderButton->setFlexBasis(96.0f);
   resetLaneOrderButton->setFlexShrink(0.0f);
   resetLaneOrderButton->setOnClickListener([this]() {
     if (this->callbacks.onOptionSelected) {
       this->callbacks.onOptionSelected("NORMAL");
     }
   });
-  laneRow->addView(resetLaneOrderButton);
-  addView(laneRow);
+  laneActionRow->addView(resetLaneOrderButton);
+  addView(laneActionRow);
 
   laneOrderMessage = makeText("", 15);
   laneOrderMessage->setThemedColor(ui_theme::textMuted);
