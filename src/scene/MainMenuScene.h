@@ -345,6 +345,8 @@ private:
   TextView *findBmsGoogleButtonText = nullptr;
   TextView *findBmsRefreshButtonText = nullptr;
   TextView *readyGaugeText = nullptr;
+  View *readyTotalRow = nullptr;
+  TextView *readyTotalIconText = nullptr;
   TextView *readyTotalText = nullptr;
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;

@@ -106,6 +106,8 @@ constexpr int kParseLogRowHeight = 48;
 constexpr uint32_t kIconXmark = 0xf00d;
 constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr uint32_t kIconSort = 0xf0dc;
+constexpr uint32_t kIconFileLines = 0xf15c;
+constexpr uint32_t kIconCalculator = 0xf1ec;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -2534,6 +2536,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
+  readyTotalRow = nullptr;
+  readyTotalIconText = nullptr;
   readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
@@ -3150,8 +3154,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->addView(readyGaugeLabelText);
   readyGaugeRow->addView(readyGaugeText);
   readyPlayOptionText = makeReadyStatusText();
+  readyTotalRow = new View();
+  readyTotalRow->setFlexDirection(FlexDirection::Row);
+  readyTotalRow->setAlignItems(YGAlignCenter);
+  readyTotalRow->setGap(8);
+  readyTotalRow->setHeight(28);
+  readyTotalIconText =
+      new TextView(ui_icons::kFontAwesomeSolidPath, 15);
+  readyTotalIconText->setWidth(18);
+  readyTotalIconText->setHeight(28);
+  readyTotalIconText->setAlign(TextView::CENTER);
+  readyTotalIconText->setVAlign(TextView::MIDDLE);
+  readyTotalIconText->setOverflow(TextView::TextOverflow::Hidden);
+  readyTotalIconText->setThemedColor(ui_theme::cyan);
   readyTotalText = makeReadyStatusText();
+  readyTotalText->setFlex(1);
   readyTotalText->setThemedColor(ui_theme::cyan);
+  readyTotalRow->addView(readyTotalIconText);
+  readyTotalRow->addView(readyTotalText);
   readyAssistOptionText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   readyAssistOptionText->setHeight(28);
@@ -3159,7 +3179,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyAssistOptionText->setOverflow(TextView::TextOverflow::Hidden);
   readyPacemakerText = makeReadyStatusText();
   readySettings->addView(readyGaugeRow);
-  readySettings->addView(readyTotalText);
+  readySettings->addView(readyTotalRow);
   readySettings->addView(readyPlayOptionText);
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
@@ -4821,13 +4841,21 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
   if (readyTotalText != nullptr) {
     if (showTotal) {
+      const bool chartAuthored = record->meta.Total > 0.0;
+      if (readyTotalIconText != nullptr) {
+        readyTotalIconText->setText(ui_icons::textForCodepoint(
+            chartAuthored ? kIconFileLines : kIconCalculator));
+      }
       readyTotalText->setText("TOTAL: " + formatGaugeTotal(record->meta));
-      readyTotalText->setDisplay(YGDisplayFlex);
-      readyTotalText->setVisible(true);
+      readyTotalRow->setDisplay(YGDisplayFlex);
+      readyTotalRow->setVisible(true);
     } else {
       readyTotalText->setText("");
-      readyTotalText->setDisplay(YGDisplayNone);
-      readyTotalText->setVisible(false);
+      if (readyTotalIconText != nullptr) {
+        readyTotalIconText->setText("");
+      }
+      readyTotalRow->setDisplay(YGDisplayNone);
+      readyTotalRow->setVisible(false);
     }
   }
   if (readyAssistOptionText != nullptr) {
@@ -9920,6 +9948,8 @@ void MainMenuScene::cleanupScene() {
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
+  readyTotalRow = nullptr;
+  readyTotalIconText = nullptr;
   readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
