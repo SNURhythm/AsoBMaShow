@@ -644,6 +644,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(app_database_initializer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(app_database_initializer_tests PRIVATE cxx_std_23)
 
+    add_executable(application_startup_tests
+        tests/application_startup_tests.cpp
+        src/ApplicationStartup.cpp
+    )
+    target_include_directories(application_startup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(application_startup_tests PRIVATE cxx_std_23)
+
     add_executable(audio_video_settings_tests
         tests/audio_video_settings_tests.cpp
         src/AppSettings.cpp
@@ -1333,6 +1342,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_meta_index_order_tests
         score_cache_query_tests
         app_database_initializer_tests
+        application_startup_tests
         chart_filter_sort_panel_view_tests
         dropdown_view_tests
         view_layout_tests
