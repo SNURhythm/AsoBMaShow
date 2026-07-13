@@ -136,6 +136,23 @@ void testGaugeAutoShiftSanitizationPreservesSelection() {
          "sanitization preserves independent gauge and auto-shift choices");
 }
 
+void testDefaultStartingGaugeMatchesEffectiveGauge() {
+  practice::Configuration normal;
+  normal.gaugeType = GaugeType::Normal;
+  expect(practice::defaultStartingGaugePercent(
+             normal, GaugeProfile::Standard) == 20,
+         "standard Normal practice starts at twenty percent");
+  expect(practice::defaultStartingGaugePercent(
+             normal, GaugeProfile::Standard9Keys) == 30,
+         "PMS Normal practice starts at thirty percent");
+
+  practice::Configuration bestClear = normal;
+  bestClear.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  expect(practice::defaultStartingGaugePercent(
+             bestClear, GaugeProfile::Standard9Keys) == 100,
+         "Best Clear displays its active Hazard default");
+}
+
 void testEmptyConfigurationIsNotPlayable() {
   practice::Configuration input{.startMicros = -10, .endMicros = 2'000'000};
   const auto sanitized = practice::sanitize(input, 0);
@@ -197,6 +214,7 @@ int main() {
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();
   testGaugeAutoShiftSanitizationPreservesSelection();
+  testDefaultStartingGaugeMatchesEffectiveGauge();
   testEmptyConfigurationIsNotPlayable();
   testPlayabilityIssuesExplainBlockingConfiguration();
   if (failures == 0) {

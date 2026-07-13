@@ -378,11 +378,16 @@ Button *makeButton(const std::string &label, int width, int fontSize,
   return button;
 }
 
+GaugeProfile
+practiceGaugeProfileForChart(const bms_parser::Chart *chart) {
+  return resolveGaugeProfile(GaugeProfile::Standard,
+                             chart != nullptr ? chart->Meta.KeyMode : 7);
+}
+
 int practiceStartingGaugeMaximum(
     const practice::Configuration &configuration,
     const bms_parser::Chart *chart) {
-  const GaugeProfile gaugeProfile = resolveGaugeProfile(
-      GaugeProfile::Standard, chart != nullptr ? chart->Meta.KeyMode : 7);
+  const GaugeProfile gaugeProfile = practiceGaugeProfileForChart(chart);
   return static_cast<int>(gaugeStartingMaximumValue(
       configuration.gaugeType, configuration.gaugeAutoShift,
       configuration.gaugeAutoShiftLowerBound, gaugeProfile));
@@ -4151,8 +4156,10 @@ void ChartViewerScene::refreshPracticePanel() {
     return;
   }
   practicePanel->setChartEndMicros(practiceChartEndMicros);
-  practicePanel->setStartingGaugeMaximum(
-      practiceStartingGaugeMaximum(practiceConfiguration, chart.get()));
+  practicePanel->setStartingGaugeRange(
+      practiceStartingGaugeMaximum(practiceConfiguration, chart.get()),
+      practice::defaultStartingGaugePercent(
+          practiceConfiguration, practiceGaugeProfileForChart(chart.get())));
   const practice::Marker active =
       canvasView == nullptr ? practice::Marker::Start
                             : canvasView->getPracticeRange().active;

@@ -79,6 +79,9 @@ struct SanitizedConfiguration {
 
 [[nodiscard]] int
 defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept;
+[[nodiscard]] int defaultStartingGaugePercent(
+    const Configuration &configuration,
+    GaugeProfile gaugeProfile = GaugeProfile::Standard);
 SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
                                 int startingGaugeMaximumPercent = 120);
 [[nodiscard]] std::optional<std::string>

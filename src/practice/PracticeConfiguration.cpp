@@ -132,6 +132,15 @@ int defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept {
              : 4;
 }
 
+int defaultStartingGaugePercent(const Configuration &configuration,
+                                GaugeProfile gaugeProfile) {
+  RhythmState state(nullptr, false);
+  state.configureGauge(configuration.gaugeType,
+                       configuration.gaugeAutoShift, gaugeProfile,
+                       configuration.gaugeAutoShiftLowerBound);
+  return static_cast<int>(state.currentGauge);
+}
+
 void RangeSelection::placeActiveMarker(long long timeMicros,
                                        long long chartEndMicros) {
   const long long clamped =

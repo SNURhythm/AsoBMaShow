@@ -550,7 +550,8 @@ void PracticePanelView::refreshControls() {
          .maximum = startingGaugeMaximum,
          .step = 1,
          .value = std::min(
-             currentConfiguration.startingGaugePercent.value_or(100),
+             currentConfiguration.startingGaugePercent.value_or(
+                 startingGaugeDefault),
              startingGaugeMaximum)});
   }
   if (startingGaugeValueText != nullptr) {

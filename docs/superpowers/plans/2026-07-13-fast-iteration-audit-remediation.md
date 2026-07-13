@@ -62,8 +62,8 @@
 
 **Files:** `src/scene/PracticePanelView.h`, `src/scene/PracticePanelView.cpp`, `src/scene/ChartViewer.cpp`
 
-- [ ] Pass the configured gauge's real default value to the panel.
-- [ ] Use that value for the `Default` thumb while keeping the optional override and dynamic maximum intact.
+- [x] Pass the configured gauge's real default value to the panel.
+- [x] Use that value for the `Default` thumb while keeping the optional override and dynamic maximum intact.
 
 ### 6. Autoplay summary final gauge
 
@@ -93,3 +93,4 @@
 - Finding 4 — `fix: resolve zero percent survival gauge starts`
 - Finding 2 — `fix: carry effective gauge state into replay exports`
 - Finding 3 — `fix: preserve modified course eligibility precedence`
+- Finding 5 — `fix: show effective default practice gauge value`

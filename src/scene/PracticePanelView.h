@@ -39,8 +39,10 @@ public:
   void setChartEndMicros(long long value) {
     chartEndMicros = std::max(0LL, value);
   }
-  void setStartingGaugeMaximum(int value) {
-    startingGaugeMaximum = std::clamp(value, 100, 120);
+  void setStartingGaugeRange(int maximum, int defaultValue) {
+    startingGaugeMaximum = std::clamp(maximum, 100, 120);
+    startingGaugeDefault =
+        std::clamp(defaultValue, 0, startingGaugeMaximum);
   }
   void setPresetMessage(std::string message, bool error = false);
 
@@ -64,6 +66,7 @@ private:
 
   long long chartEndMicros = 0;
   int startingGaugeMaximum = 100;
+  int startingGaugeDefault = 20;
   PracticePanelCallbacks callbacks;
   std::function<void(practice::Marker)> onMarkerSelected;
   practice::Configuration currentConfiguration;
