@@ -30,9 +30,9 @@
 
 **Files:** `tests/practice_launch_tests.cpp`, `tests/practice_preset_store_tests.cpp`, `tests/profile_archive_tests.cpp`, `tests/app_settings_store_tests.cpp`
 
-- [ ] Replace stale boolean enum assignments and assertions with explicit `GaugeAutoShiftMode` values.
-- [ ] Preserve the intentional legacy-settings default of `None`; retain old pure-GAS migration to `BestClear` only where the legacy field actually requests GAS.
-- [ ] Build and run all four affected test targets.
+- [x] Replace stale boolean enum assignments and assertions with explicit `GaugeAutoShiftMode` values.
+- [x] Preserve the intentional legacy-settings default of `None`; retain old pure-GAS migration to `BestClear` only where the legacy field actually requests GAS.
+- [x] Build and run all four affected test targets.
 
 ### 2. Replay video initial and carried gauge state
 
@@ -89,5 +89,4 @@
 
 ## Commit Log
 
-This section will be filled as each item lands.
-
+- Finding 1 — `test: finish gauge auto shift enum migration`

@@ -664,7 +664,7 @@ void testPresetStoreSidecarRemainsProfilePortable() {
       .endMicros = 9'000'000,
       .loop = true,
       .gaugeType = GaugeType::ExHard,
-      .gaugeAutoShift = true,
+      .gaugeAutoShift = GaugeAutoShiftMode::BestClear,
       .playback = {.percent = 90},
   };
   std::string error;
@@ -717,8 +717,9 @@ void testPresetStoreSidecarRemainsProfilePortable() {
     const auto duplicatePreset = duplicateStore.load(kPracticeHash, 10'000'000);
     expect(duplicatePreset.status == versioned_json::LoadStatus::Loaded &&
                duplicatePreset.data.lastUsed.gaugeType == GaugeType::ExHard &&
-               duplicatePreset.data.lastUsed.gaugeAutoShift,
-           "profile duplication preserves practice GAS configuration");
+               duplicatePreset.data.lastUsed.gaugeAutoShift ==
+                   GaugeAutoShiftMode::BestClear,
+           "profile duplication preserves practice Best Clear configuration");
   }
 
   const auto archive = exchange.path() / "practice-sidecar.asobprofile";
@@ -745,8 +746,9 @@ void testPresetStoreSidecarRemainsProfilePortable() {
             ? Json()
             : Json::parse(practiceMember->contents, nullptr, false);
     expect(practiceDocument.is_object() &&
-               practiceDocument.at("lastUsed").at("gaugeAutoShift") == true,
-           "portable archive preserves GAS in practice preset JSON");
+               practiceDocument.at("lastUsed").at("gaugeAutoShift") ==
+                   gaugeAutoShiftModeValue(GaugeAutoShiftMode::BestClear),
+           "portable archive preserves Best Clear in practice preset JSON");
   }
 }
 
@@ -1535,6 +1537,12 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
     expect(database != nullptr, "older database fixture opens");
     if (!database) {
       return;
+    }
+    if (name == "scores.db") {
+      expect(execute(database.get(),
+                     "DROP TRIGGER IF EXISTS "
+                     "score_sha256_summary_after_insert"),
+             "legacy score fixture removes the current summary trigger");
     }
     const std::array<std::string_view, 2> tables =
         name == "scores.db"
