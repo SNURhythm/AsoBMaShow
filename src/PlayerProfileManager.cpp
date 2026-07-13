@@ -6,6 +6,7 @@
 #include "ProfileDatabaseTools.h"
 #include "ReplayDBHelper.h"
 #include "ScoreDBHelper.h"
+#include "Uuid.h"
 #include "VersionedJson.h"
 #include "input/InputProfileStore.h"
 #include "practice/PracticePresetStore.h"
@@ -18,7 +19,6 @@
 #include <cctype>
 #include <ctime>
 #include <iomanip>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -70,26 +70,6 @@ ProfileResult success(PlayerProfile profile, std::string message = {}) {
           .profile = std::move(profile)};
 }
 
-std::string defaultUuid() {
-  std::array<unsigned char, 16> bytes{};
-  std::random_device random;
-  for (unsigned char &value : bytes) {
-    value = static_cast<unsigned char>(random());
-  }
-  bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0fU) | 0x40U);
-  bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3fU) | 0x80U);
-
-  std::ostringstream encoded;
-  encoded << std::hex << std::setfill('0');
-  for (std::size_t index = 0; index < bytes.size(); ++index) {
-    if (index == 4 || index == 6 || index == 8 || index == 10) {
-      encoded << '-';
-    }
-    encoded << std::setw(2) << static_cast<unsigned int>(bytes[index]);
-  }
-  return encoded.str();
-}
-
 std::string defaultUtcNow() {
   const auto now = std::chrono::system_clock::now();
   const std::time_t raw = std::chrono::system_clock::to_time_t(now);
@@ -102,24 +82,6 @@ std::string defaultUtcNow() {
   std::ostringstream encoded;
   encoded << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
   return encoded.str();
-}
-
-bool isUuid(std::string_view value) {
-  if (value.size() != 36) {
-    return false;
-  }
-  for (std::size_t index = 0; index < value.size(); ++index) {
-    if (index == 8 || index == 13 || index == 18 || index == 23) {
-      if (value[index] != '-') {
-        return false;
-      }
-      continue;
-    }
-    if (std::isxdigit(static_cast<unsigned char>(value[index])) == 0) {
-      return false;
-    }
-  }
-  return true;
 }
 
 std::optional<std::string> normalizedName(std::string_view value) {
@@ -515,7 +477,7 @@ bool copyPracticeDirectory(const std::filesystem::path &applicationRoot,
 
 PlayerProfilePaths makePaths(const std::filesystem::path &applicationRoot,
                              std::string_view id) {
-  if (!isUuid(id)) {
+  if (!uuid::isStructurallyValid(id)) {
     return {};
   }
   return makePathsAtRoot(applicationRoot / "profiles" / std::string(id));
@@ -574,7 +536,7 @@ ProfileResult loadProfileMetadata(const std::filesystem::path &path,
     profile.createdAt = loaded.document.at("createdAt").get<std::string>();
     profile.lastUsedAt = loaded.document.at("lastUsedAt").get<std::string>();
     const auto validName = normalizedName(profile.displayName);
-    if (!isUuid(profile.id) || !validName.has_value() ||
+    if (!uuid::isStructurallyValid(profile.id) || !validName.has_value() ||
         *validName != profile.displayName || profile.createdAt.empty() ||
         profile.lastUsedAt.empty() ||
         (!expectedId.empty() && profile.id != expectedId)) {
@@ -614,7 +576,7 @@ BootstrapResult loadBootstrap(const std::filesystem::path &path) {
   try {
     const std::string id =
         loaded.document.at("activeProfileId").get<std::string>();
-    if (!isUuid(id)) {
+    if (!uuid::isStructurallyValid(id)) {
       return {.status = BootstrapStatus::Invalid,
               .message = "active profile bootstrap contains an invalid UUID"};
     }
@@ -1497,7 +1459,7 @@ bool cleanupAbandonedStaging(
     const std::string filename = entry.path().filename().string();
     if (filename.starts_with(".backup-")) {
       const std::string id = filename.substr(std::string(".backup-").size());
-      if (!isUuid(id)) {
+      if (!uuid::isStructurallyValid(id)) {
         errorMessage = "invalid abandoned profile backup name";
         return false;
       }
@@ -1607,7 +1569,7 @@ PlayerProfileManager::PlayerProfileManager(
     : applicationDataRoot_(std::move(applicationDataRoot)),
       dependencies_(std::move(dependencies)) {
   if (!dependencies_.generateUuid) {
-    dependencies_.generateUuid = defaultUuid;
+    dependencies_.generateUuid = uuid::generateV4;
   }
   if (!dependencies_.utcNow) {
     dependencies_.utcNow = defaultUtcNow;
@@ -1699,7 +1661,7 @@ ProfileResult PlayerProfileManager::Initialize() {
   }
   for (const auto &entry : profileIterator) {
     const std::string candidateId = entry.path().filename().string();
-    if (!isUuid(candidateId)) {
+    if (!uuid::isStructurallyValid(candidateId)) {
       continue;
     }
     const ProfileResult candidate =
@@ -1712,7 +1674,7 @@ ProfileResult PlayerProfileManager::Initialize() {
   std::string id;
   for (int attempt = 0; attempt < 64; ++attempt) {
     const std::string candidate = dependencies_.generateUuid();
-    if (!isUuid(candidate)) {
+    if (!uuid::isStructurallyValid(candidate)) {
       continue;
     }
     bool exists = false;
@@ -1785,7 +1747,7 @@ PlayerProfileManager::listProfiles(ProfileUse use) const {
   }
   for (const auto &entry : iterator) {
     const std::string id = entry.path().filename().string();
-    if (!isUuid(id)) {
+    if (!uuid::isStructurallyValid(id)) {
       continue;
     }
     const ProfileResult validated = validateProfile(id, use);
@@ -1821,7 +1783,7 @@ ProfileResult PlayerProfileManager::createProfile(std::string displayName) {
   for (int attempt = 0; attempt < 64; ++attempt) {
     const std::string candidate = dependencies_.generateUuid();
     bool exists = false;
-    if (isUuid(candidate) &&
+    if (uuid::isStructurallyValid(candidate) &&
         pathExists(pathsFor(candidate).root, exists, errorMessage) && !exists) {
       id = candidate;
       break;
@@ -1860,7 +1822,7 @@ ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
   for (int attempt = 0; attempt < 64; ++attempt) {
     const std::string candidate = dependencies_.generateUuid();
     bool exists = false;
-    if (isUuid(candidate) &&
+    if (uuid::isStructurallyValid(candidate) &&
         pathExists(pathsFor(candidate).root, exists, errorMessage) && !exists) {
       id = candidate;
       break;
@@ -1945,7 +1907,7 @@ ProfileResult
 PlayerProfileManager::validateProfile(std::string_view id,
                                       ProfileUse use) const {
   const ProfileValidationPolicy policy = validationPolicy(use);
-  if (!isUuid(id)) {
+  if (!uuid::isStructurallyValid(id)) {
     return failure(ProfileError::NotFound, "profile UUID is invalid");
   }
   const PlayerProfilePaths paths = pathsFor(id);
@@ -2122,7 +2084,7 @@ ProfileResult PlayerProfileManager::installProfile(
   } else {
     for (int attempt = 0; attempt < 64; ++attempt) {
       const std::string candidate = dependencies_.generateUuid();
-      if (!isUuid(candidate)) {
+      if (!uuid::isStructurallyValid(candidate)) {
         continue;
       }
       bool destinationExists = false;

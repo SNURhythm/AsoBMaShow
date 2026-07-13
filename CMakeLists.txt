@@ -581,6 +581,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
     endif()
 
+    add_executable(result_persistence_model_tests
+        tests/result_persistence_model_tests.cpp
+        src/ResultPersistenceModel.cpp
+        src/Uuid.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(result_persistence_model_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_persistence_model_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL2)
+    endif()
+
     add_executable(score_provenance_db_tests
         tests/score_provenance_db_tests.cpp
         src/CourseIdentity.cpp
@@ -1064,6 +1086,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/PlayerProfileManager.cpp
+        src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
@@ -1104,6 +1127,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
         src/PlayerProfileManager.cpp
+        src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
@@ -1152,6 +1176,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ProfileArchive.cpp
         src/FileChecksum.cpp
         src/PlayerProfileManager.cpp
+        src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
@@ -1337,6 +1362,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         course_identity_tests
         replay_db_helper_tests
+        result_persistence_model_tests
         chart_record_filters_tests
         main_menu_library_tests
         chart_meta_index_order_tests
