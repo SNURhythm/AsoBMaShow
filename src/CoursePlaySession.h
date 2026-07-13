@@ -414,7 +414,9 @@ struct CoursePlaySession {
     ScoreProvenance aggregate = mergeCourseProvenance(recordedStages);
     if (hasMissingStage) {
       aggregate.ruleset = RulesetDescriptor::Legacy();
-      aggregate.eligibility = ScoreEligibility::LegacyUnverified;
+      if (aggregate.eligibility != ScoreEligibility::Modified) {
+        aggregate.eligibility = ScoreEligibility::LegacyUnverified;
+      }
     }
     return aggregate;
   }

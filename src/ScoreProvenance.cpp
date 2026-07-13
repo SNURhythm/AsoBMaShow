@@ -41,8 +41,17 @@ void canonicalizeWindows(std::vector<JudgeWindowProvenance> &windows) {
                    });
 }
 
-ScoreEligibility worseEligibility(ScoreEligibility lhs, ScoreEligibility rhs) {
-  return enumValue(lhs) >= enumValue(rhs) ? lhs : rhs;
+ScoreEligibility mergeEligibility(ScoreEligibility lhs,
+                                  ScoreEligibility rhs) {
+  if (lhs == ScoreEligibility::Modified ||
+      rhs == ScoreEligibility::Modified) {
+    return ScoreEligibility::Modified;
+  }
+  if (lhs == ScoreEligibility::LegacyUnverified ||
+      rhs == ScoreEligibility::LegacyUnverified) {
+    return ScoreEligibility::LegacyUnverified;
+  }
+  return ScoreEligibility::Verified;
 }
 
 const char *eligibilityName(ScoreEligibility value) {
@@ -805,7 +814,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
     result.autoPlay = result.autoPlay || stage.autoPlay;
     result.practice = result.practice || stage.practice;
     result.clubMode = result.clubMode || stage.clubMode;
-    eligibility = worseEligibility(eligibility, stage.eligibility);
+    eligibility = mergeEligibility(eligibility, stage.eligibility);
 
     inconsistent =
         inconsistent ||
@@ -827,10 +836,10 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
 
   canonicalizeDevices(result.inputDevices);
   if (inconsistent) {
-    eligibility = worseEligibility(eligibility, ScoreEligibility::Modified);
+    eligibility = mergeEligibility(eligibility, ScoreEligibility::Modified);
   }
   if (result.autoPlay || result.practice) {
-    eligibility = worseEligibility(eligibility, ScoreEligibility::Modified);
+    eligibility = mergeEligibility(eligibility, ScoreEligibility::Modified);
   }
   if (eligibility == ScoreEligibility::LegacyUnverified) {
     result.ruleset = RulesetDescriptor::Legacy();

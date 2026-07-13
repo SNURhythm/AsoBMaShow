@@ -46,9 +46,9 @@
 
 **Files:** `src/ScoreProvenance.cpp`, `src/CoursePlaySession.cpp`, `tests/score_provenance_tests.cpp`
 
-- [ ] Make `Modified` dominate `LegacyUnverified` when aggregating course stages.
-- [ ] Keep a truly legacy-only or incomplete unmodified course `LegacyUnverified`.
-- [ ] Verify mixed Modified/Legacy courses remain excluded from best-score queries.
+- [x] Make `Modified` dominate `LegacyUnverified` when aggregating course stages.
+- [x] Keep a truly legacy-only or incomplete unmodified course `LegacyUnverified`.
+- [x] Verify mixed Modified/Legacy courses remain excluded from best-score queries.
 
 ### 4. Zero-percent survival gauge resolution
 
@@ -92,3 +92,4 @@
 - Finding 1 — `test: finish gauge auto shift enum migration`
 - Finding 4 — `fix: resolve zero percent survival gauge starts`
 - Finding 2 — `fix: carry effective gauge state into replay exports`
+- Finding 3 — `fix: preserve modified course eligibility precedence`

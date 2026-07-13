@@ -350,11 +350,15 @@ void testCourseMergePreservesStagesAndWorstEligibility() {
   assert(merged.stages[0].chartSha256 == "sha256-first");
   assert(merged.stages[1].chartSha256 == "sha256-second");
   assert(merged.stages[2].chartSha256 == "sha256-third");
-  assert(merged.eligibility == ScoreEligibility::LegacyUnverified);
+  assert(merged.eligibility == ScoreEligibility::Modified);
 
   const std::array modifiedValues{first, second};
   assert(mergeCourseProvenance(modifiedValues).eligibility ==
          ScoreEligibility::Modified);
+
+  const std::array legacyValues{first, third};
+  assert(mergeCourseProvenance(legacyValues).eligibility ==
+         ScoreEligibility::LegacyUnverified);
 
   ScoreProvenance seededFirst = sampleVerifiedProvenance("seeded-first");
   ScoreProvenance seededSecond = sampleVerifiedProvenance("seeded-second");
@@ -661,6 +665,11 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
   CoursePlaySession sparseSession;
   sparseSession.recordStageProvenance(1, second);
   assert(sparseSession.aggregateProvenance().eligibility ==
+         ScoreEligibility::Modified);
+
+  CoursePlaySession legacySparseSession;
+  legacySparseSession.recordStageProvenance(1, first);
+  assert(legacySparseSession.aggregateProvenance().eligibility ==
          ScoreEligibility::LegacyUnverified);
 
   session.recordStageProvenance(1, second);
