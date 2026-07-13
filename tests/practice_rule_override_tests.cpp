@@ -48,6 +48,10 @@ void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
   state.setStartingGaugePercent(-1);
   assert(state.currentGauge == 0.0f);
   assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] == 0.0f);
+  assert(state.activeGaugeFailed());
+
+  state.setStartingGaugePercent(37);
+  assert(!state.activeGaugeFailed());
 }
 
 void testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot() {
@@ -84,6 +88,40 @@ void testSurvivalToGrooveStartsBothGaugeCandidates() {
   assert(state.currentGauge == 100.0f);
   assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] == 100.0f);
   assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] == 110.0f);
+}
+
+void testZeroStartingGaugeResolvesAutoShiftImmediately() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 100;
+
+  RhythmState continued(&chart, false);
+  continued.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::Continue);
+  continued.setStartingGaugePercent(0);
+  assert(continued.gaugeType == GaugeType::Hard);
+  assert(continued.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)]);
+  assert(!continued.activeGaugeFailed());
+
+  RhythmState survivalToGroove(&chart, false);
+  survivalToGroove.configureGauge(
+      GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove);
+  survivalToGroove.setStartingGaugePercent(0);
+  assert(survivalToGroove.gaugeType == GaugeType::Normal);
+  assert(survivalToGroove.currentGauge == 0.0f);
+  assert(!survivalToGroove.activeGaugeFailed());
+
+  RhythmState bestClear(&chart, false);
+  bestClear.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  bestClear.setStartingGaugePercent(0);
+  assert(bestClear.gaugeType == GaugeType::Normal);
+  assert(!bestClear.activeGaugeFailed());
+
+  RhythmState survivalOnly(&chart, false);
+  survivalOnly.configureGauge(GaugeType::ExHard,
+                              GaugeAutoShiftMode::SelectToUnder,
+                              GaugeProfile::Standard, GaugeType::Hard);
+  survivalOnly.setStartingGaugePercent(0);
+  assert(survivalOnly.gaugeType == GaugeType::Hard);
+  assert(survivalOnly.activeGaugeFailed());
 }
 
 void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
@@ -170,6 +208,7 @@ int main() {
   testStartingGaugeUpdatesSelectedGaugeAndClamps();
   testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot();
   testSurvivalToGrooveStartsBothGaugeCandidates();
+  testZeroStartingGaugeResolvesAutoShiftImmediately();
   testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions();
   testSavedPracticeReplayRestoresGaugeAndExactWindows();
   std::cout << "practice rule override tests passed\n";

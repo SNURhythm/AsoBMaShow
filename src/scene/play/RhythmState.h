@@ -971,26 +971,26 @@ public:
 
   void setStartingGaugePercent(int percent) {
     const float value = static_cast<float>(std::max(0, percent));
+    const auto setStartingValue = [&](GaugeType type) {
+      const int index = gaugeTypeIndex(type);
+      gaugeValues[index] =
+          std::clamp(value, 0.0f, gaugeMaximumValue(type, gaugeProfile));
+      gaugeSurvivalFailed[index] =
+          gaugeIsSurvival(type, gaugeProfile) && gaugeValues[index] <= 0.0f;
+    };
     if (gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
         gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
       for (int i = 0; i < static_cast<int>(kGaugeTypeCount); ++i) {
-        const GaugeType type = gaugeTypeAtIndex(i);
-        gaugeValues[i] =
-            std::clamp(value, 0.0f,
-                       gaugeMaximumValue(type, gaugeProfile));
+        setStartingValue(gaugeTypeAtIndex(i));
       }
-      gaugeType = bestAdmittedGaugeType();
     } else {
-      gaugeValues[gaugeTypeIndex(gaugeType)] =
-          std::clamp(value, 0.0f,
-                     gaugeMaximumValue(gaugeType, gaugeProfile));
+      setStartingValue(gaugeType);
       if (gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
           !gaugeProfileIsCourse(gaugeProfile)) {
-        gaugeValues[gaugeTypeIndex(GaugeType::Normal)] =
-            std::clamp(value, 0.0f,
-                       gaugeMaximumValue(GaugeType::Normal, gaugeProfile));
+        setStartingValue(GaugeType::Normal);
       }
     }
+    updateAutoShiftGaugeType();
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
   }
 

@@ -54,9 +54,9 @@
 
 **Files:** `src/scene/play/RhythmState.h`, an existing focused gauge/practice test target
 
-- [ ] Synchronize survival-failure flags whenever a custom starting value is applied.
-- [ ] Resolve Best Clear, Select-to-Under, and Survival-to-Groove shifts immediately at time zero.
-- [ ] Preserve Continue behavior while making direct survival gauges fail immediately.
+- [x] Synchronize survival-failure flags whenever a custom starting value is applied.
+- [x] Resolve Best Clear, Select-to-Under, and Survival-to-Groove shifts immediately at time zero.
+- [x] Preserve Continue behavior while making direct survival gauges fail immediately.
 
 ### 5. Practice default gauge slider position
 
@@ -90,3 +90,4 @@
 ## Commit Log
 
 - Finding 1 — `test: finish gauge auto shift enum migration`
+- Finding 4 — `fix: resolve zero percent survival gauge starts`
