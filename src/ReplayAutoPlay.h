@@ -80,14 +80,15 @@ inline ReplaySummary BuildSummary(
 }
 
 inline ReplayData BuildReplayData(
-    bms_parser::Chart &chart, GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
-    audio::PlaybackRate playback = {},
+    bms_parser::Chart &chart, GaugeType gaugeType,
+    GaugeAutoShiftMode gaugeAutoShift, audio::PlaybackRate playback = {},
     const std::optional<std::string> &playOption = std::nullopt,
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
     const std::optional<long long> &playOption2Seed = std::nullopt,
     const std::string &assistOption = assist_options::kOff,
-    bool clubMode = false) {
+    bool clubMode = false,
+    GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy) {
   ReplayData replay;
   replay.id = kReplayId;
   replay.autoPlay = true;
@@ -102,6 +103,7 @@ inline ReplayData BuildReplayData(
   replay.assistOption = assist_options::normalize(assistOption);
   replay.initialGaugeType = gaugeType;
   replay.gaugeAutoShift = gaugeAutoShift;
+  replay.gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound;
   replay.provenance.playback = playback;
   replay.provenance.autoPlay = true;
   replay.provenance.clubMode = clubMode;
@@ -110,7 +112,8 @@ inline ReplayData BuildReplayData(
                         2U);
 
   RhythmState state(&chart, false);
-  state.configureGauge(gaugeType, gaugeAutoShift);
+  state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
+                       gaugeAutoShiftLowerBound);
   state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);

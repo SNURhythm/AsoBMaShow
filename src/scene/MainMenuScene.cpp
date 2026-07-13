@@ -9412,7 +9412,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
     queueReplayExportResult(result);
   };
   const GaugeType autoPlayGaugeType = profileSelections.gaugeType;
-  const GaugeAutoShiftMode autoPlayGaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode autoPlayGaugeAutoShift =
+      profileSelections.gaugeAutoShift;
+  const GaugeType autoPlayGaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   const std::string autoPlayAssistOption = profileSelections.assistOption;
   const std::string autoPlayOption = profileSelections.playOption;
   const audio::PlaybackRate autoPlayPlayback{
@@ -9427,6 +9430,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
   auto runExport = [this, record, replayId, options, complete,
                     autoPlayGaugeType, autoPlayGaugeAutoShift,
+                    autoPlayGaugeAutoShiftLowerBound,
                     autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
                     autoPlayClubMode, autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
@@ -9489,7 +9493,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         ReplayData replay = replay_autoplay::BuildReplayData(
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
             autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
-            playInfo.seed2, autoPlayAssistOption, autoPlayClubMode);
+            playInfo.seed2, autoPlayAssistOption, autoPlayClubMode,
+            autoPlayGaugeAutoShiftLowerBound);
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;
