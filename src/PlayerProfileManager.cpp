@@ -994,7 +994,8 @@ finalizeProfileDeletion(const std::filesystem::path &applicationRoot,
           warning,
           "the canonical profile is absent, but the deletion tombstone is "
           "invalid and was preserved: " +
-              validation.message);
+              validation.message +
+              "; directory durability should be rechecked");
     }
     return success(std::move(profile), std::move(warning));
   };

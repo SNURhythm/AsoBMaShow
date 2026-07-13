@@ -1150,6 +1150,39 @@ bool expectsDeletionRollback(ProfileDeletionFault fault) {
   return isDeletionCommitSyncFault(fault);
 }
 
+bool expectsRollbackParentSync(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::CommitSyncRollbackSucceeds:
+  case ProfileDeletionFault::RollbackMovesThenFails:
+  case ProfileDeletionFault::RollbackParentSyncFails:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsRetryCommitSync(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::RollbackUnavailableRetrySyncSucceeds:
+  case ProfileDeletionFault::RollbackUnavailableRetrySyncFails:
+  case ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsDurabilityRecheckWarning(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::SourceAbsentWithInvalidTombstone:
+  case ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone:
+  case ProfileDeletionFault::BothPathsAbsent:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool hasPhysicalPath(const std::filesystem::path &path) {
   std::error_code error;
   const bool exists = std::filesystem::exists(path, error);
@@ -1168,8 +1201,12 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
   bool inject = false;
   int sourceRenameCalls = 0;
   int rollbackRenameCalls = 0;
-  int profilesSyncCalls = 0;
   int tombstoneRemovalCalls = 0;
+  bool initialCommitSyncAttempted = false;
+  bool rollbackParentSyncAttempted = false;
+  bool retryCommitSyncAttempted = false;
+  bool cleanupSyncAttempted = false;
+  bool staleCleanupSyncAttempted = false;
   bool staleTombstoneRemoved = false;
   bool partialCleanupInjected = false;
   bool sourceRemovalAttempted = false;
@@ -1291,31 +1328,48 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
     if (!inject || path != profiles) {
       return atomic_file::syncDirectory(path, error);
     }
-    ++profilesSyncCalls;
+    if (sourceRenameCalls == 0) {
+      staleCleanupSyncAttempted = true;
+      if (testCase.fault ==
+          ProfileDeletionFault::StaleTombstoneCleanupSyncFails) {
+        error = "injected stale tombstone cleanup sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+    if (tombstoneRemovalCalls > 0) {
+      cleanupSyncAttempted = true;
+      if (testCase.fault == ProfileDeletionFault::FinalCleanupSyncFails) {
+        error = "injected final cleanup sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+    if (rollbackRenameCalls == 0) {
+      initialCommitSyncAttempted = true;
+      if (isDeletionCommitSyncFault(testCase.fault)) {
+        error = "injected delete commit sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+
+    std::error_code sourceError;
+    const bool sourceExists = std::filesystem::exists(source, sourceError);
+    expect(!sourceError, label + " sync-state source inspection succeeds: " +
+                             sourceError.message());
+    if (sourceExists) {
+      rollbackParentSyncAttempted = true;
+      if (testCase.fault == ProfileDeletionFault::RollbackParentSyncFails) {
+        error = "injected rollback parent sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+    retryCommitSyncAttempted = true;
     if (testCase.fault ==
-            ProfileDeletionFault::StaleTombstoneCleanupSyncFails &&
-        profilesSyncCalls == 1) {
-      error = "injected stale tombstone cleanup sync failure";
-      return false;
-    }
-    if (isDeletionCommitSyncFault(testCase.fault) && profilesSyncCalls == 1) {
-      error = "injected delete commit sync failure";
-      return false;
-    }
-    if (testCase.fault == ProfileDeletionFault::RollbackParentSyncFails &&
-        profilesSyncCalls == 2) {
-      error = "injected rollback parent sync failure";
-      return false;
-    }
-    if (testCase.fault ==
-            ProfileDeletionFault::RollbackUnavailableRetrySyncFails &&
-        profilesSyncCalls == 2) {
+        ProfileDeletionFault::RollbackUnavailableRetrySyncFails) {
       error = "injected retry commit sync failure";
-      return false;
-    }
-    if (testCase.fault == ProfileDeletionFault::FinalCleanupSyncFails &&
-        profilesSyncCalls == 2) {
-      error = "injected final cleanup sync failure";
       return false;
     }
     return atomic_file::syncDirectory(path, error);
@@ -1394,15 +1448,30 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
   if (expectsDeletionRollback(testCase.fault)) {
     expect(rollbackRenameCalls == 1,
            label + " reaches rollback reconciliation");
+    expect(initialCommitSyncAttempted,
+           label + " reaches the initial deletion commit sync");
+  }
+  if (expectsRollbackParentSync(testCase.fault)) {
+    expect(rollbackParentSyncAttempted,
+           label + " attempts the restored-source parent sync");
+    expect(!retryCommitSyncAttempted,
+           label + " does not use the absent-source retry sync");
+  }
+  if (expectsRetryCommitSync(testCase.fault)) {
+    expect(retryCommitSyncAttempted,
+           label + " attempts the absent-source retry commit sync");
+    expect(!rollbackParentSyncAttempted,
+           label + " does not use the restored-source parent sync");
   }
   if (testCase.fault == ProfileDeletionFault::StaleTombstoneCleanupSyncFails) {
     expect(staleTombstoneRemoved,
            label + " removes stale tombstone before failed cleanup sync");
+    expect(staleCleanupSyncAttempted,
+           label + " attempts the stale-tombstone cleanup sync");
   }
-  if (testCase.fault ==
-      ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone) {
-    expect(profilesSyncCalls == 2,
-           label + " retries commit sync after invalid rollback evidence");
+  if (testCase.fault == ProfileDeletionFault::FinalCleanupSyncFails) {
+    expect(cleanupSyncAttempted,
+           label + " attempts the post-commit cleanup sync");
   }
   if (testCase.fault ==
       ProfileDeletionFault::PostCommitCleanupPartiallyMutates) {
@@ -1413,6 +1482,12 @@ void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
          label + " reports the canonical outcome: " + result.message);
   if (testCase.expectedWarning) {
     expect(!result.message.empty(), label + " reports a warning");
+  }
+  if (expectsDurabilityRecheckWarning(testCase.fault)) {
+    expect(result.message.find("durability should be rechecked") !=
+               std::string::npos,
+           label +
+               " explicitly warns that directory durability is unconfirmed");
   }
 
   std::error_code sourceError;
