@@ -280,6 +280,9 @@ void testMalformedSuccessfulStageMetadataIsNotDurable() {
   assertRejected({.status = StageStatus::AlreadyStaged,
                   .receipt = receipt("attempt-a", 0, true),
                   .diagnostic = "non-positive replay id"});
+  assertRejected({.status = StageStatus::AlreadyStaged,
+                  .receipt = receipt("attempt-a", -1, true),
+                  .diagnostic = "negative replay id"});
   StageReceipt missingTimestamp = receipt();
   missingTimestamp.createdAt.clear();
   assertRejected({.status = StageStatus::AlreadyStaged,
@@ -550,6 +553,34 @@ void testRetryAfterAcknowledgementFailureResumesIdempotently() {
   assert(harness.listCalls == 0);
   assert(harness.projectCalls == 2);
   assert(harness.acknowledgeCalls == 2);
+  assert(harness.markCalls == 0);
+}
+
+void testAlreadyAcknowledgedIsIdempotentPersistSuccess() {
+  Harness harness;
+  harness.acknowledgeResult = {.status = AcknowledgeStatus::AlreadyAcknowledged,
+                               .diagnostic = {}};
+  Coordinator coordinator(harness.dependencies());
+
+  const SaveOutcome outcome = coordinator.persist(attempt());
+
+  assert(outcome.state == SaveState::Saved);
+  assert(outcome.saved());
+  assert(outcome.durable());
+  assert(outcome.receipt.has_value());
+  assert(outcome.receipt->attemptId == "attempt-a");
+  assert(outcome.receipt->replayId == 17);
+  assert(!outcome.receipt->scorePending);
+  assert(outcome.userMessage.empty());
+  assert(outcome.diagnostic.empty());
+  assert((harness.events ==
+          std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
+                                   "project:attempt-a", "ack:attempt-a:17"}));
+  assert(harness.stageCalls == 1);
+  assert(harness.loadCalls == 1);
+  assert(harness.listCalls == 0);
+  assert(harness.projectCalls == 1);
+  assert(harness.acknowledgeCalls == 1);
   assert(harness.markCalls == 0);
 }
 
@@ -894,6 +925,11 @@ void testInvalidRecoveryPayloadStopsBeforeProjection() {
                  .value = pending("recovery-row", 0),
                  .diagnostic = {}},
                 "pending recovery payload has invalid replay metadata");
+  assertInvalid({.status = PendingReadStatus::Found,
+                 .attemptId = "recovery-row",
+                 .value = pending("recovery-row", -1),
+                 .diagnostic = {}},
+                "pending recovery payload has invalid replay metadata");
   PendingChartScoreWrite missingTimestamp = pending("recovery-row", 62);
   missingTimestamp.createdAt.clear();
   assertInvalid({.status = PendingReadStatus::Found,
@@ -901,6 +937,38 @@ void testInvalidRecoveryPayloadStopsBeforeProjection() {
                  .value = std::move(missingTimestamp),
                  .diagnostic = {}},
                 "pending recovery payload has invalid replay metadata");
+}
+
+void testAlreadyAcknowledgedIsIdempotentRecoverySuccess() {
+  Harness harness;
+  harness.listResult = {
+      .storageAvailable = true,
+      .entries = {{.status = PendingReadStatus::Found,
+                   .attemptId = "already-acknowledged",
+                   .value = pending("already-acknowledged", 71),
+                   .diagnostic = {}}},
+      .diagnostic = {}};
+  harness.acknowledgeResult = {.status = AcknowledgeStatus::AlreadyAcknowledged,
+                               .diagnostic = {}};
+  Coordinator coordinator(harness.dependencies());
+
+  const RecoverySummary summary = coordinator.recoverAll();
+
+  assert(summary.attempted == 1);
+  assert(summary.saved == 1);
+  assert(summary.pending == 0);
+  assert(summary.conflicts == 0);
+  assert(summary.userMessage.empty());
+  assert(summary.diagnostic.empty());
+  assert((harness.events ==
+          std::vector<std::string>{"list:256", "project:already-acknowledged",
+                                   "ack:already-acknowledged:71"}));
+  assert(harness.stageCalls == 0);
+  assert(harness.loadCalls == 0);
+  assert(harness.listCalls == 1);
+  assert(harness.projectCalls == 1);
+  assert(harness.acknowledgeCalls == 1);
+  assert(harness.markCalls == 0);
 }
 
 void testUnknownRecoveryStatusesFailClosed() {
@@ -1171,12 +1239,14 @@ int main() {
   testAcknowledgeFailureIsDurableAndRetryable();
   testAcknowledgeConflictRetainsPendingConflict();
   testRetryAfterAcknowledgementFailureResumesIdempotently();
+  testAlreadyAcknowledgedIsIdempotentPersistSuccess();
   testRetrySkipsAlreadyConfirmedReplayAndScore();
   testUnknownPersistStatusesFailClosed();
   testRecoveryContinuesAfterMalformedAndFailedRows();
   testRecoveryMarkFailuresRemainVisibleAndContinue();
   testUnmarkedRecoveryRowIsRetriedOnNextCall();
   testInvalidRecoveryPayloadStopsBeforeProjection();
+  testAlreadyAcknowledgedIsIdempotentRecoverySuccess();
   testUnknownRecoveryStatusesFailClosed();
   testMessagesNeverContainInjectedDiagnostics();
   testRecoveryLimitIsExactly256();
