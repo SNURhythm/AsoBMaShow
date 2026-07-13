@@ -1,5 +1,6 @@
 #include "targets.h"
 #include "AppDatabaseInitializer.h"
+#include "ApplicationStartup.h"
 #include "bgfx_helper.h"
 #include "rendering/ShaderManager.h"
 #include "./audio/decoder.h"
@@ -446,11 +447,11 @@ static int runApplication(const bgfx::Init &bgfxInit) {
       // frame pacing and post-process output.
       // bgfx::setDebug(BGFX_DEBUG_TEXT);
 
-      run();
+      const int runExitCode = run();
       rendering::ShaderManager::getInstance().release();
       rendering::UniformCache::getInstance().destroyAll();
       bgfx::shutdown();
-      return EXIT_SUCCESS;
+      return runExitCode;
     }
     SDL_Log("bgfx::init failed for renderer: %s",
             rendererType == bgfx::RendererType::Count
@@ -708,23 +709,39 @@ int main(int argv, char **args) {
   return appExitCode;
 }
 
-void run() {
-  ApplicationContext context;
-  if (!context.profileReady()) {
-    SDL_Log("Application startup stopped because the active player profile "
-            "could not be initialized: %s",
-            context.profileInitializationResult.message.c_str());
-    return;
+static void reportStartupFailure(
+    const ApplicationContext &context,
+    const application_startup::Result &result) {
+  switch (result.failure) {
+  case application_startup::Failure::ProfileInitialization:
+    SDL_Log("Application profile initialization failed: %s",
+            context.profileInitializationResult.message.empty()
+                ? "no diagnostic available"
+                : context.profileInitializationResult.message.c_str());
+    break;
+  case application_startup::Failure::DatabaseInitialization:
+    if (result.databaseStatus) {
+      const auto &status = *result.databaseStatus;
+      SDL_Log("Application database initialization failed: chart=%d score=%d "
+              "replay=%d music=%d",
+              status.chart ? 1 : 0, status.score ? 1 : 0,
+              status.replay ? 1 : 0, status.music ? 1 : 0);
+    }
+    break;
+  case application_startup::Failure::None:
+    SDL_Log("Application startup reported an unspecified fatal failure");
+    break;
   }
+
+  if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                               "AsoBMaShow Startup Error",
+                               result.userMessage.c_str(), s_window) != 0) {
+    SDL_Log("Unable to show the startup error dialog: %s", SDL_GetError());
+  }
+}
+
+static void runReadyApplication(ApplicationContext &context) {
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
-  const auto databaseStatus =
-      app_database_initializer::initializeApplicationDatabases();
-  if (!databaseStatus.ok()) {
-    SDL_Log("Application database initialization failed: chart=%d score=%d "
-            "replay=%d music=%d",
-            databaseStatus.chart ? 1 : 0, databaseStatus.score ? 1 : 0,
-            databaseStatus.replay ? 1 : 0, databaseStatus.music ? 1 : 0);
-  }
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
@@ -1414,6 +1431,23 @@ void run() {
   s_postProcess.shutdown();
   // bgfx::destroy(vbh);
   // bgfx::destroy(ibh);
+}
+
+int run() {
+  ApplicationContext context;
+  return application_startup::execute(
+      context.profileReady(),
+      application_startup::Dependencies{
+          .initializeDatabases = [] {
+            return app_database_initializer::initializeApplicationDatabases();
+          },
+          .reportFatal = [&context](const application_startup::Result &result) {
+            reportStartupFailure(context, result);
+          },
+          .runReadyApplication = [&context] {
+            runReadyApplication(context);
+          },
+      });
 }
 
 void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,

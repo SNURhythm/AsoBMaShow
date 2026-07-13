@@ -710,6 +710,7 @@
 		B76AAF692DA4A1C400E8327C /* Exceptions for "../../../../src" folder in "AsoBMaShow" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				ApplicationStartup.cpp,
 				AppSettings.cpp,
 				AppSettingsStore.cpp,
 				ArchiveFile.cpp,

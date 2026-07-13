@@ -151,8 +151,6 @@ public:
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio) {
     if (!profileInitializationResult.ok()) {
-      SDL_Log("Player profile initialization failed: %s",
-              profileInitializationResult.message.c_str());
       return;
     }
 
