@@ -45,6 +45,7 @@ readChartMeta(sqlite3_stmt *stmt, AbsolutePathFromColumn absolutePathFromColumn,
   chartMeta.PlayLevel = sqlite3_column_double(stmt, idx++);
   chartMeta.Difficulty = sqlite3_column_int(stmt, idx++);
   chartMeta.Total = sqlite3_column_double(stmt, idx++);
+  chartMeta.HasTotal = sqlite3_column_int(stmt, idx++) != 0;
   chartMeta.Bpm = sqlite3_column_double(stmt, idx++);
   chartMeta.MaxBpm = sqlite3_column_double(stmt, idx++);
   chartMeta.MinBpm = sqlite3_column_double(stmt, idx++);

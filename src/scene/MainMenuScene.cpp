@@ -117,7 +117,7 @@ constexpr const char *kDefaultDifficultyTableUrls[] = {
 
 std::string formatGaugeTotal(const bms_parser::ChartMeta &meta) {
   const double total =
-      meta.Total > 0.0
+      meta.HasTotal && meta.Total > 0.0
           ? meta.Total
           : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
   std::ostringstream stream;
@@ -4842,7 +4842,8 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
   if (readyTotalText != nullptr) {
     if (showTotal) {
-      const bool chartAuthored = record->meta.Total > 0.0;
+      const bool chartAuthored =
+          record->meta.HasTotal && record->meta.Total > 0.0;
       if (readyTotalIconText != nullptr) {
         readyTotalIconText->setText(ui_icons::textForCodepoint(
             chartAuthored ? kIconFileLines : kIconCalculator));

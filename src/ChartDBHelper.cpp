@@ -80,6 +80,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.level, 0),"
     "COALESCE(cm.difficulty, 0),"
     "COALESCE(cm.total, 100),"
+    "COALESCE(cm.has_total, 0),"
     "COALESCE(cm.bpm, 0),"
     "COALESCE(cm.max_bpm, 0),"
     "COALESCE(cm.min_bpm, 0),"
@@ -125,6 +126,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "CAST(NULLIF(dce.level, '') AS REAL), 0) END,"
     "COALESCE(cm.difficulty, 0),"
     "COALESCE(cm.total, 100),"
+    "COALESCE(cm.has_total, 0),"
     "COALESCE(cm.bpm, 0),"
     "COALESCE(cm.max_bpm, 0),"
     "COALESCE(cm.min_bpm, 0),"
@@ -165,7 +167,7 @@ constexpr std::uint64_t kArchiveParseMinOuterInFlightBytes =
     4ull * 1024ull * 1024ull;
 constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
-constexpr int kChartDatabaseSchemaVersion = 2;
+constexpr int kChartDatabaseSchemaVersion = 3;
 
 struct DifficultyLabelCache {
   bool loaded = false;
@@ -1402,6 +1404,7 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "level      REAL,"
       "difficulty INTEGER,"
       "total     REAL,"
+      "has_total INTEGER NOT NULL DEFAULT 0,"
       "bpm       REAL,"
       "max_bpm     REAL,"
       "min_bpm     REAL,"
@@ -2484,6 +2487,10 @@ bool migrateChartDatabaseToVersion2(sqlite3 *db, bool &completed) {
   return true;
 }
 
+bool migrateChartDatabaseToVersion3(sqlite3 *db, bool &completed) {
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -2525,6 +2532,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
   static constexpr ChartDatabaseMigrationPass kMigrationPasses[] = {
       {1, "chart metadata rebuild", migrateChartDatabaseToVersion1},
       {2, "normalize chart identity storage", migrateChartDatabaseToVersion2},
+      {3, "persist authored TOTAL metadata", migrateChartDatabaseToVersion3},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -3655,6 +3663,7 @@ const char *insertChartMetaSql() {
          "level,"
          "difficulty,"
          "total,"
+         "has_total,"
          "bpm,"
          "max_bpm,"
          "min_bpm,"
@@ -3686,6 +3695,7 @@ const char *insertChartMetaSql() {
          "@level,"
          "@difficulty,"
          "@total,"
+         "@has_total,"
          "@bpm,"
          "@max_bpm,"
          "@min_bpm,"
@@ -3739,20 +3749,21 @@ bool insertChartMetaPrepared(
   sqlite3_bind_double(stmt, 14, chartMeta.PlayLevel);
   sqlite3_bind_int(stmt, 15, chartMeta.Difficulty);
   sqlite3_bind_double(stmt, 16, chartMeta.Total);
-  sqlite3_bind_double(stmt, 17, chartMeta.Bpm);
-  sqlite3_bind_double(stmt, 18, chartMeta.MaxBpm);
-  sqlite3_bind_double(stmt, 19, chartMeta.MinBpm);
-  sqlite3_bind_int64(stmt, 20, chartMeta.PlayLength);
-  sqlite3_bind_int(stmt, 21, chartMeta.Rank);
-  sqlite3_bind_int(stmt, 22, chartMeta.Player);
-  sqlite3_bind_int(stmt, 23, chartMeta.KeyMode);
-  sqlite3_bind_int(stmt, 24, chartMeta.TotalNotes);
-  sqlite3_bind_int(stmt, 25, chartMeta.TotalLongNotes);
-  sqlite3_bind_int(stmt, 26, chartMeta.TotalScratchNotes);
-  sqlite3_bind_int(stmt, 27, chartMeta.TotalBackSpinNotes);
-  sqlite3_bind_int(stmt, 28, chartMeta.LnMode);
-  sqlite3_bind_int(stmt, 29, sourcePreference.priority);
-  sqlite3_bind_int64(stmt, 30, clampSqlInteger(sourcePreference.archiveSize));
+  sqlite3_bind_int(stmt, 17, chartMeta.HasTotal ? 1 : 0);
+  sqlite3_bind_double(stmt, 18, chartMeta.Bpm);
+  sqlite3_bind_double(stmt, 19, chartMeta.MaxBpm);
+  sqlite3_bind_double(stmt, 20, chartMeta.MinBpm);
+  sqlite3_bind_int64(stmt, 21, chartMeta.PlayLength);
+  sqlite3_bind_int(stmt, 22, chartMeta.Rank);
+  sqlite3_bind_int(stmt, 23, chartMeta.Player);
+  sqlite3_bind_int(stmt, 24, chartMeta.KeyMode);
+  sqlite3_bind_int(stmt, 25, chartMeta.TotalNotes);
+  sqlite3_bind_int(stmt, 26, chartMeta.TotalLongNotes);
+  sqlite3_bind_int(stmt, 27, chartMeta.TotalScratchNotes);
+  sqlite3_bind_int(stmt, 28, chartMeta.TotalBackSpinNotes);
+  sqlite3_bind_int(stmt, 29, chartMeta.LnMode);
+  sqlite3_bind_int(stmt, 30, sourcePreference.priority);
+  sqlite3_bind_int64(stmt, 31, clampSqlInteger(sourcePreference.archiveSize));
   const int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", db);
