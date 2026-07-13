@@ -210,6 +210,47 @@ std::string schemaSnapshot(sqlite3 *db) {
   return result;
 }
 
+struct ScoreSchemaSnapshot {
+  int userVersion = 0;
+  std::string schema;
+  std::string sentinel;
+
+  bool operator==(const ScoreSchemaSnapshot &) const = default;
+};
+
+ScoreSchemaSnapshot scoreSchemaSnapshot(const std::filesystem::path &path) {
+  auto db = openDatabase(path);
+  return {
+      .userVersion = queryInt(db.get(), "PRAGMA user_version"),
+      .schema = schemaSnapshot(db.get()),
+      .sentinel = queryText(db.get(), "SELECT value FROM sentinel"),
+  };
+}
+
+void expectScoreSchemaRejectedWithoutMutation(
+    const std::filesystem::path &path) {
+  const ScoreSchemaSnapshot before = scoreSchemaSnapshot(path);
+  ScoreDBHelper helper(path);
+  assert(!helper.EnsureSchema());
+  assert(scoreSchemaSnapshot(path) == before);
+}
+
+struct AttemptSchemaInspectionAuthorizerState {
+  int tableInfoReads = 0;
+};
+
+int countAttemptSchemaInspection(void *context, int action, const char *first,
+                                 const char *second, const char *,
+                                 const char *) {
+  auto &state = *static_cast<AttemptSchemaInspectionAuthorizerState *>(context);
+  if (action == SQLITE_PRAGMA && first != nullptr && second != nullptr &&
+      std::string_view(first) == "table_info" &&
+      std::string_view(second) == "scores") {
+    ++state.tableInfoReads;
+  }
+  return SQLITE_OK;
+}
+
 std::string readFileBytes(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input),
@@ -841,6 +882,113 @@ void testStaleVersionRejectsPartialAttemptIdentity(
   assert(schemaSnapshot(db.get()) == partialSchema);
 }
 
+void testCurrentVersionRejectsMissingAttemptIdentityIndexWithoutMutation(
+    const std::filesystem::path &root) {
+  const auto path = root / "current-v9-missing-attempt-index" / "score.db";
+  {
+    ScoreDBHelper bootstrap(path);
+    assert(bootstrap.EnsureSchema());
+  }
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('rollback-base-repair')");
+  execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
+  execOrAbort(db.get(), "DROP INDEX idx_scores_chart_sha256");
+  db.reset();
+
+  expectScoreSchemaRejectedWithoutMutation(path);
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(!indexExists(db.get(), "idx_scores_attempt_id"));
+  assert(!indexExists(db.get(), "idx_scores_chart_sha256"));
+}
+
+void testCurrentVersionRejectsMalformedAttemptIdentityIndexes(
+    const std::filesystem::path &root) {
+  const auto assertMalformedIndexRejected =
+      [&](const std::string &name, const std::string &replacementSql) {
+        const auto path = root / name / "score.db";
+        {
+          ScoreDBHelper bootstrap(path);
+          assert(bootstrap.EnsureSchema());
+        }
+        auto db = openDatabase(path);
+        execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+        execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('" + name + "')");
+        execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
+        execOrAbort(db.get(), replacementSql);
+        db.reset();
+        expectScoreSchemaRejectedWithoutMutation(path);
+      };
+
+  assertMalformedIndexRejected(
+      "current-v9-nonunique-attempt-index",
+      "CREATE INDEX idx_scores_attempt_id ON scores(attempt_id) WHERE "
+      "attempt_id IS NOT NULL");
+  assertMalformedIndexRejected(
+      "current-v9-wrong-predicate-attempt-index",
+      "CREATE UNIQUE INDEX idx_scores_attempt_id ON scores(attempt_id) WHERE "
+      "attempt_id IS NULL");
+}
+
+void testCachedHelperRevalidatesAttemptIdentitySchema(
+    const std::filesystem::path &root) {
+  const auto path =
+      root / "cached-current-v9-missing-attempt-index" / "score.db";
+  ScoreDBHelper helper(path);
+  const auto pending =
+      samplePendingScore(root, "cached-current-v9-missing-attempt-index", 12,
+                         "2026-07-14 08:09:10");
+  assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('cached-validation')");
+  execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
+  db.reset();
+  const ScoreSchemaSnapshot before = scoreSchemaSnapshot(path);
+
+  assert(!helper.EnsureSchema());
+  std::string bindError;
+  assert(!helper.BindDatabasePath(path, bindError));
+  assert(!bindError.empty());
+  SqliteConnectionHandle connection(helper.Connect());
+  assert(!connection);
+  const auto retry = helper.SaveProjectedScore(pending);
+  assert(retry.status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(scoreSchemaSnapshot(path) == before);
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+}
+
+void testFutureVersionRejectsBeforeAttemptIdentityInspection(
+    const std::filesystem::path &root) {
+  const auto path = root / "future-v10-before-attempt-inspection" / "score.db";
+  {
+    ScoreDBHelper bootstrap(path);
+    assert(bootstrap.EnsureSchema());
+  }
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
+  execOrAbort(db.get(), "PRAGMA user_version = 10");
+  AttemptSchemaInspectionAuthorizerState authorizerState;
+  assert(sqlite3_set_authorizer(db.get(), countAttemptSchemaInspection,
+                                &authorizerState) == SQLITE_OK);
+  ScoreDBHelper helper(path);
+  assert(!helper.InsertScore(db.get(), sampleMeta(root, "future-v10"),
+                             sampleState(1, 0)));
+  assert(authorizerState.tableInfoReads == 0);
+  SqliteStatementHandle inspectionProbe;
+  assert(prepareSqliteStatement(db.get(), "PRAGMA table_info(scores)",
+                                inspectionProbe) == SQLITE_OK);
+  assert(authorizerState.tableInfoReads == 1);
+  assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(!indexExists(db.get(), "idx_scores_attempt_id"));
+}
+
 void testLegacyNullAttemptScoresRemainRepeatable(
     const std::filesystem::path &root) {
   const auto path = root / "legacy-null-score-attempt" / "score.db";
@@ -1100,6 +1248,39 @@ void testUnrelatedScoreConstraintIsStorageFailure(
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores WHERE attempt_id='" +
                                 second.attemptId + "'") == 0);
+}
+
+void testAttemptIdentityShadowConstraintIsStorageFailure(
+    const std::filesystem::path &root) {
+  const auto path =
+      root / "projected-score-attempt-shadow-constraint" / "score.db";
+  ScoreDBHelper helper(path);
+  const auto first =
+      samplePendingScore(root, "projected-score-attempt-shadow-constraint", 13,
+                         "2026-07-14 09:10:11");
+  assert(helper.SaveProjectedScore(first).status ==
+         result_persistence::ProjectionStatus::Inserted);
+  {
+    auto db = openDatabase(path);
+    execOrAbort(db.get(),
+                "ALTER TABLE scores ADD COLUMN attempt_id_shadow TEXT NOT "
+                "NULL DEFAULT 'shared'");
+    execOrAbort(db.get(),
+                "CREATE UNIQUE INDEX unique_attempt_id_shadow_for_test ON "
+                "scores(attempt_id_shadow)");
+  }
+
+  auto second = first;
+  second.attemptId = scoreAttemptId(14);
+  second.replayId = 15;
+  const auto outcome = helper.SaveProjectedScore(second);
+  assert(outcome.status ==
+         result_persistence::ProjectionStatus::StorageFailure);
+  assert(outcome.diagnostic.find(
+             "UNIQUE constraint failed: scores.attempt_id_shadow") !=
+         std::string::npos);
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
 }
 
 void testVersion4MigrationPreservesOutcomesAndRows(
@@ -2582,6 +2763,10 @@ int main() {
   testVersion8MigrationAddsAttemptIdentity(root);
   testStaleVersionRecognizesAppliedAttemptIdentity(root);
   testStaleVersionRejectsPartialAttemptIdentity(root);
+  testCurrentVersionRejectsMissingAttemptIdentityIndexWithoutMutation(root);
+  testCurrentVersionRejectsMalformedAttemptIdentityIndexes(root);
+  testCachedHelperRevalidatesAttemptIdentitySchema(root);
+  testFutureVersionRejectsBeforeAttemptIdentityInspection(root);
   testLegacyNullAttemptScoresRemainRepeatable(root);
   testProjectedScoreIsIdempotent(root);
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
@@ -2590,6 +2775,7 @@ int main() {
   testPreviousBestExcludesExactAttemptAtSameTimestamp(root);
   testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(root);
   testUnrelatedScoreConstraintIsStorageFailure(root);
+  testAttemptIdentityShadowConstraintIsStorageFailure(root);
   testVersion4MigrationPreservesOutcomesAndRows(root);
   testVersion5MigrationPreservesRawCourseEvidence(root);
   testVersion6MigrationIsSavepointSafeAndAtomic(root);

@@ -75,6 +75,9 @@ void logSqlError(const char *context, sqlite3 *db) {
   logSqlErrorText(context, sqliteDatabaseError(db));
 }
 
+bool scoreAttemptIdentitySchemaIsExact(sqlite3 *db);
+bool currentScoreAttemptIdentitySchemaIsValid(sqlite3 *db);
+
 bool ensureScoreDatabaseDirectory(const std::filesystem::path &path,
                                   std::string &errorMessage) {
   const std::filesystem::path directory = path.parent_path();
@@ -127,6 +130,10 @@ sqlite3 *openTrustedScoreDatabase(const std::filesystem::path &path,
         version.has_value()
             ? "trusted score database schema version changed"
             : "could not read trusted score database version: " + versionError;
+    return nullptr;
+  }
+  if (!scoreAttemptIdentitySchemaIsExact(connection.get())) {
+    errorMessage = "trusted score database attempt identity schema changed";
     return nullptr;
   }
   SqliteStatementHandle journalMode;
@@ -641,8 +648,8 @@ bool migrateScoreDatabaseToVersion8(sqlite3 *db) {
 
 enum class ScoreAttemptIdentitySchemaState { Absent, Exact, Malformed };
 
-bool inspectScoreAttemptIdentitySchema(
-    sqlite3 *db, ScoreAttemptIdentitySchemaState &state) {
+bool inspectScoreAttemptIdentitySchema(sqlite3 *db,
+                                       ScoreAttemptIdentitySchemaState &state) {
   bool hasAttemptIdColumn = false;
   bool hasExactAttemptIdColumn = false;
   SqliteStatementHandle columns;
@@ -710,6 +717,32 @@ bool inspectScoreAttemptIdentitySchema(
   return true;
 }
 
+bool scoreAttemptIdentitySchemaIsExact(sqlite3 *db) {
+  ScoreAttemptIdentitySchemaState state{};
+  if (!inspectScoreAttemptIdentitySchema(db, state)) {
+    return false;
+  }
+  if (state != ScoreAttemptIdentitySchemaState::Exact) {
+    SDL_Log("Refusing current score database with a partial or unexpected "
+            "attempt identity schema");
+    return false;
+  }
+  return true;
+}
+
+bool currentScoreAttemptIdentitySchemaIsValid(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading current score schema version", versionError);
+    return false;
+  }
+  if (*version != kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  return scoreAttemptIdentitySchemaIsExact(db);
+}
+
 bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -722,7 +755,7 @@ bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
     return false;
   }
   if (*version >= kScoreAttemptIdentitySchemaVersion) {
-    return true;
+    return scoreAttemptIdentitySchemaIsExact(db);
   }
   if (*version < kScoreBestEligibilitySchemaVersion) {
     SDL_Log("Score database must reach version %d before attempt identity "
@@ -1009,8 +1042,7 @@ bool bindSqliteTextView(sqlite3_stmt *stmt, int index, std::string_view value) {
 bool isAttemptIdentityUniqueConstraint(int extendedError,
                                        std::string_view diagnostic) {
   return extendedError == SQLITE_CONSTRAINT_UNIQUE &&
-         diagnostic.find("UNIQUE constraint failed: scores.attempt_id") !=
-             std::string_view::npos;
+         diagnostic == "UNIQUE constraint failed: scores.attempt_id";
 }
 
 ScoreWriteOutcome
@@ -1983,6 +2015,10 @@ bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
   }
   if (sessionDatabase_ != nullptr &&
       equivalentScoreDatabasePaths(databasePath_, databasePath)) {
+    if (!currentScoreAttemptIdentitySchemaIsValid(sessionDatabase_)) {
+      errorMessage = "score database validation failed";
+      return false;
+    }
     databasePath_ = std::move(databasePath);
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
     errorMessage.clear();
@@ -2057,7 +2093,9 @@ void ScoreDBHelper::Shutdown() {
 sqlite3 *ScoreDBHelper::EnsureSessionDatabaseLocked() {
   if (sessionDatabase_ != nullptr) {
     if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
-      return sessionDatabase_;
+      return currentScoreAttemptIdentitySchemaIsValid(sessionDatabase_)
+                 ? sessionDatabase_
+                 : nullptr;
     }
     SDL_Log("Discarding score database with an unfinished transaction");
     CloseSessionDatabaseLocked();
@@ -2242,15 +2280,41 @@ bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_score_schema_ensure"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_score_schema_ensure"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_schema_ensure; RELEASE "
+            "asobmashow_score_schema_ensure"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting score schema ensure", transactionError);
+    return false;
+  }
   if (!CreateScoreTableOnConnection(db) ||
       !CreateCourseScoreTableOnConnection(db)) {
     return false;
   }
-  return migrateScoreDatabaseToVersion5(db) &&
-         migrateScoreDatabaseToVersion6(db) &&
-         migrateScoreDatabaseToVersion7(db) &&
-         migrateScoreDatabaseToVersion8(db) &&
-         migrateScoreDatabaseToVersion9(db);
+  if (!migrateScoreDatabaseToVersion5(db) ||
+      !migrateScoreDatabaseToVersion6(db) ||
+      !migrateScoreDatabaseToVersion7(db) ||
+      !migrateScoreDatabaseToVersion8(db) ||
+      !migrateScoreDatabaseToVersion9(db)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing score schema ensure", transactionError);
+    return false;
+  }
+  return true;
 }
 
 bool ScoreDBHelper::EnsureSchema() {
