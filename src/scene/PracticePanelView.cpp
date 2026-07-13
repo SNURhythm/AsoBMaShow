@@ -439,7 +439,9 @@ void PracticePanelView::selectDropdownOption(DropDownIndex index,
 
 void PracticePanelView::publishConfiguration() {
   currentConfiguration =
-      practice::sanitize(currentConfiguration, chartEndMicros).configuration;
+      practice::sanitize(currentConfiguration, chartEndMicros,
+                         startingGaugeMaximum)
+          .configuration;
   if (callbacks.onChanged) {
     callbacks.onChanged(currentConfiguration);
   }
@@ -607,7 +609,9 @@ void PracticePanelView::refreshControls() {
         practice::firstPlayabilityIssue(currentConfiguration, chartEndMicros);
     startButton->setEnabled(
         !issue &&
-        practice::sanitize(currentConfiguration, chartEndMicros).playable());
+        practice::sanitize(currentConfiguration, chartEndMicros,
+                           startingGaugeMaximum)
+            .playable());
     if (diagnosticText != nullptr) {
       diagnosticText->setText(issue.value_or("Ready to start practice."));
       diagnosticText->setColor(

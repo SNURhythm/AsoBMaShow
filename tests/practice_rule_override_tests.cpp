@@ -69,6 +69,23 @@ void testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot() {
   }
 }
 
+void testSurvivalToGrooveStartsBothGaugeCandidates() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 9;
+  chart.Meta.TotalNotes = 100;
+  RhythmState state(&chart, false);
+  state.configureGauge(GaugeType::Hard,
+                       GaugeAutoShiftMode::SurvivalToGroove);
+
+  assert(gaugeStartingMaximumValue(
+             GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove,
+             GaugeType::AssistedEasy, state.gaugeProfile) == 120.0f);
+  state.setStartingGaugePercent(110);
+  assert(state.currentGauge == 100.0f);
+  assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] == 100.0f);
+  assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] == 110.0f);
+}
+
 void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   practice::Configuration configuration;
   configuration.startMicros = 2'000'000;
@@ -152,6 +169,7 @@ int main() {
   testJudgeScaleRoundsSignedWindowEdges();
   testStartingGaugeUpdatesSelectedGaugeAndClamps();
   testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot();
+  testSurvivalToGrooveStartsBothGaugeCandidates();
   testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions();
   testSavedPracticeReplayRestoresGaugeAndExactWindows();
   std::cout << "practice rule override tests passed\n";

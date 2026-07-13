@@ -79,7 +79,8 @@ struct SanitizedConfiguration {
 
 [[nodiscard]] int
 defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept;
-SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros);
+SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
+                                int startingGaugeMaximumPercent = 120);
 [[nodiscard]] std::optional<std::string>
 firstPlayabilityIssue(const Configuration &value, long long chartEndMicros);
 } // namespace practice

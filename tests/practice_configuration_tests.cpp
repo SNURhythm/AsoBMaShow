@@ -74,8 +74,8 @@ void testConfigurationSanitization() {
          "ordered section retains the later marker");
   expect(sanitized.configuration.countInBeats == 16,
          "count-in is clamped to sixteen beats");
-  expect(sanitized.configuration.startingGaugePercent == 100,
-         "starting gauge is clamped to one hundred percent");
+  expect(sanitized.configuration.startingGaugePercent == 120,
+         "generic practice data preserves supported 120 percent gauges");
   expect(sanitized.configuration.judge.scalePercent == 25,
          "judge scale is clamped to twenty-five percent");
   expect(sanitized.configuration.playback.percent == 75,
@@ -83,44 +83,57 @@ void testConfigurationSanitization() {
   expect(sanitized.playable(), "the sanitized ordered range is playable");
   expect(!sanitized.diagnostics.empty(),
          "configuration adjustments are reported diagnostically");
+
+  const auto hardGaugeSanitized =
+      practice::sanitize(input, 10'000'000, 100);
+  expect(hardGaugeSanitized.configuration.startingGaugePercent == 100,
+         "contextual sanitization clamps a 100 percent gauge correctly");
 }
 
 void testGaugeAutoShiftDropdownModel() {
-  const auto options = practice::practiceGaugeOptions();
-  const auto gas = std::ranges::find(options, std::string_view("gas"),
-                                     &practice::GaugeOption::id);
-  expect(gas != options.end() && gas->label == "Gauge Auto Shift (GAS)" &&
-             gas->gaugeType == GaugeType::ExHard && gas->gaugeAutoShift,
-         "practice gauge options expose GAS with a safe nonnumeric id");
+  const auto autoShiftOptions = practice::practiceGaugeAutoShiftOptions();
+  const auto bestClear =
+      std::ranges::find(autoShiftOptions, std::string_view("best_clear"),
+                        &practice::GaugeOption::id);
+  expect(bestClear != autoShiftOptions.end() &&
+             bestClear->label == "Best Clear" &&
+             bestClear->gaugeAutoShift == GaugeAutoShiftMode::BestClear,
+         "practice exposes Best Clear as an explicit auto-shift option");
 
   practice::Configuration configuration;
-  expect(practice::applyPracticeGaugeOption(configuration, "gas") &&
+  expect(practice::applyPracticeGaugeOption(configuration, "4") &&
              configuration.gaugeType == GaugeType::ExHard &&
-             configuration.gaugeAutoShift &&
-             practice::practiceGaugeOptionId(configuration) == "gas",
-         "selecting GAS uses the Ex-Hard seed and enables auto shift");
+             practice::practiceGaugeOptionId(configuration) == "4",
+         "practice gauge selection uses stable numeric gauge ids");
+  expect(practice::applyPracticeGaugeAutoShiftOption(configuration,
+                                                     "best_clear") &&
+             configuration.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
+             practice::practiceGaugeAutoShiftOptionId(configuration) ==
+                 "best_clear",
+         "practice auto shift is selected independently from the gauge");
   expect(practice::applyPracticeGaugeOption(configuration, "2") &&
              configuration.gaugeType == GaugeType::Normal &&
-             !configuration.gaugeAutoShift &&
+             configuration.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
              practice::practiceGaugeOptionId(configuration) == "2",
-         "selecting a concrete gauge disables auto shift");
+         "changing the gauge preserves the independent auto-shift mode");
   expect(!practice::applyPracticeGaugeOption(configuration, "not-a-gauge"),
          "unknown nonnumeric gauge ids are rejected without parsing");
 }
 
-void testGaugeAutoShiftSanitizationUsesExHardSeed() {
+void testGaugeAutoShiftSanitizationPreservesSelection() {
   practice::Configuration configuration{
       .chartSha256 = "0123456789abcdef0123456789abcdef"
                      "0123456789abcdef0123456789abcdef",
       .startMicros = 0,
       .endMicros = 1'000'000,
       .gaugeType = GaugeType::Normal,
-      .gaugeAutoShift = true,
+      .gaugeAutoShift = GaugeAutoShiftMode::BestClear,
   };
   const auto sanitized = practice::sanitize(configuration, 1'000'000);
-  expect(sanitized.configuration.gaugeType == GaugeType::ExHard &&
-             sanitized.configuration.gaugeAutoShift,
-         "sanitization canonicalizes GAS to the Ex-Hard seed");
+  expect(sanitized.configuration.gaugeType == GaugeType::Normal &&
+             sanitized.configuration.gaugeAutoShift ==
+                 GaugeAutoShiftMode::BestClear,
+         "sanitization preserves independent gauge and auto-shift choices");
 }
 
 void testEmptyConfigurationIsNotPlayable() {
@@ -183,7 +196,7 @@ int main() {
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();
   testConfigurationSanitization();
   testGaugeAutoShiftDropdownModel();
-  testGaugeAutoShiftSanitizationUsesExHardSeed();
+  testGaugeAutoShiftSanitizationPreservesSelection();
   testEmptyConfigurationIsNotPlayable();
   testPlayabilityIssuesExplainBlockingConfiguration();
   if (failures == 0) {

@@ -171,7 +171,8 @@ bool SanitizedConfiguration::playable() const noexcept {
          validGaugeType(configuration.gaugeType);
 }
 
-SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
+SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
+                                int startingGaugeMaximumPercent) {
   SanitizedConfiguration result;
   auto diagnoseChange = [&](bool changed, std::string message) {
     if (changed) {
@@ -210,11 +211,13 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
                  "count-in beats were clamped to 0 through 16");
 
   if (value.startingGaugePercent) {
+    const int maximum = std::clamp(startingGaugeMaximumPercent, 0, 120);
     const int originalGauge = *value.startingGaugePercent;
     *value.startingGaugePercent =
-        std::clamp(*value.startingGaugePercent, 0, 120);
+        std::clamp(*value.startingGaugePercent, 0, maximum);
     diagnoseChange(originalGauge != *value.startingGaugePercent,
-                   "starting gauge was clamped to 0 through 120 percent");
+                   "starting gauge was clamped to 0 through " +
+                       std::to_string(maximum) + " percent");
   }
   if (!validGaugeType(value.gaugeType)) {
     value.gaugeType = GaugeType::Normal;

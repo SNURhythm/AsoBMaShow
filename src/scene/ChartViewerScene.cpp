@@ -378,6 +378,25 @@ Button *makeButton(const std::string &label, int width, int fontSize,
   return button;
 }
 
+int practiceStartingGaugeMaximum(
+    const practice::Configuration &configuration,
+    const bms_parser::Chart *chart) {
+  const GaugeProfile gaugeProfile = resolveGaugeProfile(
+      GaugeProfile::Standard, chart != nullptr ? chart->Meta.KeyMode : 7);
+  return static_cast<int>(gaugeStartingMaximumValue(
+      configuration.gaugeType, configuration.gaugeAutoShift,
+      configuration.gaugeAutoShiftLowerBound, gaugeProfile));
+}
+
+practice::SanitizedConfiguration sanitizePracticeConfiguration(
+    practice::Configuration configuration, long long chartEndMicros,
+    const bms_parser::Chart *chart) {
+  const int startingGaugeMaximum =
+      practiceStartingGaugeMaximum(configuration, chart);
+  return practice::sanitize(std::move(configuration), chartEndMicros,
+                            startingGaugeMaximum);
+}
+
 } // namespace
 
 class ChartCanvasView : public View {
@@ -3902,7 +3921,8 @@ void ChartViewerScene::onPracticeRangeChanged(
   practiceConfiguration.startMicros = range.startMicros;
   practiceConfiguration.endMicros = range.endMicros;
   practiceConfiguration =
-      practice::sanitize(practiceConfiguration, practiceChartEndMicros)
+      sanitizePracticeConfiguration(practiceConfiguration,
+                                    practiceChartEndMicros, chart.get())
           .configuration;
   if (practicePresetStore != nullptr) {
     std::string error;
@@ -3926,7 +3946,9 @@ void ChartViewerScene::onPracticeConfigurationChanged(
       practicePanel == nullptr ? std::nullopt
                                : practicePanel->selectedPresetId();
   practiceConfiguration =
-      practice::sanitize(configuration, practiceChartEndMicros).configuration;
+      sanitizePracticeConfiguration(configuration, practiceChartEndMicros,
+                                    chart.get())
+          .configuration;
   if (canvasView != nullptr) {
     auto range = canvasView->getPracticeRange();
     range.startMicros = practiceConfiguration.startMicros;
@@ -4011,6 +4033,10 @@ void ChartViewerScene::loadPracticeConfiguration(
   };
   const auto refreshInstalledState = [this, &applyMissingDefaults]() {
     applyMissingDefaults();
+    practiceConfiguration =
+        sanitizePracticeConfiguration(practiceConfiguration,
+                                      practiceChartEndMicros, chart.get())
+            .configuration;
     if (canvasView != nullptr) {
       canvasView->setPracticeRange(
           {.startMicros = practiceConfiguration.startMicros,
@@ -4082,7 +4108,10 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     return;
   }
 
-  practiceConfiguration = std::move(application.configuration);
+  practiceConfiguration =
+      sanitizePracticeConfiguration(std::move(application.configuration),
+                                    practiceChartEndMicros, chart.get())
+          .configuration;
   selectedPracticePresetId.reset();
   if (canvasView != nullptr) {
     canvasView->setPracticeRange(
@@ -4122,14 +4151,8 @@ void ChartViewerScene::refreshPracticePanel() {
     return;
   }
   practicePanel->setChartEndMicros(practiceChartEndMicros);
-  const GaugeProfile gaugeProfile =
-      resolveGaugeProfile(GaugeProfile::Standard,
-                          chart != nullptr ? chart->Meta.KeyMode : 7);
   practicePanel->setStartingGaugeMaximum(
-      static_cast<int>(gaugeStartingMaximumValue(
-          practiceConfiguration.gaugeType,
-          practiceConfiguration.gaugeAutoShift,
-          practiceConfiguration.gaugeAutoShiftLowerBound, gaugeProfile)));
+      practiceStartingGaugeMaximum(practiceConfiguration, chart.get()));
   const practice::Marker active =
       canvasView == nullptr ? practice::Marker::Start
                             : canvasView->getPracticeRange().active;
@@ -4353,7 +4376,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
   }
 
   const auto sanitized =
-      practice::sanitize(practiceConfiguration, practiceChartEndMicros);
+      sanitizePracticeConfiguration(practiceConfiguration,
+                                    practiceChartEndMicros, chart.get());
   if (!sanitized.playable()) {
     if (statusText != nullptr) {
       statusText->setText(sanitized.diagnostics.empty()
