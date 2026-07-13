@@ -388,6 +388,26 @@ struct NamedSchemaObjectInspection {
   bool exact = false;
 };
 
+unsigned char sqliteAsciiIdentifierFold(unsigned char character) {
+  return character >= 'A' && character <= 'Z'
+             ? static_cast<unsigned char>(character + ('a' - 'A'))
+             : character;
+}
+
+bool sqliteAsciiIdentifiersEqual(std::string_view left,
+                                 std::string_view right) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < left.size(); ++i) {
+    if (sqliteAsciiIdentifierFold(static_cast<unsigned char>(left[i])) !=
+        sqliteAsciiIdentifierFold(static_cast<unsigned char>(right[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 enum class SchemaSqlTokenKind {
   Word,
   QuotedIdentifier,
@@ -524,7 +544,9 @@ bool inspectNamedSchemaObject(sqlite3 *db, std::string_view name,
                               const char *context) {
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
-          db, "SELECT type, tbl_name, sql FROM sqlite_master WHERE name = ?",
+          db,
+          "SELECT type, tbl_name, sql FROM sqlite_master "
+          "WHERE name = ? COLLATE NOCASE",
           stmt, context, logSqlErrorText) ||
       name.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
       sqlite3_bind_text(stmt.get(), 1, name.data(),
@@ -547,7 +569,8 @@ bool inspectNamedSchemaObject(sqlite3 *db, std::string_view name,
       sqlite3_column_type(stmt.get(), 0) == SQLITE_TEXT &&
       sqliteColumnTextView(stmt.get(), 0) == expectedType &&
       sqlite3_column_type(stmt.get(), 1) == SQLITE_TEXT &&
-      sqliteColumnTextView(stmt.get(), 1) == expectedTable &&
+      sqliteAsciiIdentifiersEqual(sqliteColumnTextView(stmt.get(), 1),
+                                  expectedTable) &&
       sqlite3_column_type(stmt.get(), 2) == SQLITE_TEXT &&
       schemaSqlIsEquivalent(sqliteColumnTextView(stmt.get(), 2), expectedSql);
 
@@ -582,7 +605,8 @@ bool inspectNamedIndexShape(
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(indexList.get())) == SQLITE_ROW) {
     if (sqlite3_column_type(indexList.get(), 1) != SQLITE_TEXT ||
-        sqliteColumnTextView(indexList.get(), 1) != indexName) {
+        !sqliteAsciiIdentifiersEqual(sqliteColumnTextView(indexList.get(), 1),
+                                     indexName)) {
       continue;
     }
     if (found) {
@@ -630,8 +654,9 @@ bool inspectNamedIndexShape(
             sqlite3_column_type(indexInfo.get(), 1) == SQLITE_INTEGER &&
             sqlite3_column_int(indexInfo.get(), 1) >= 0 &&
             sqlite3_column_type(indexInfo.get(), 2) == SQLITE_TEXT &&
-            sqliteColumnTextView(indexInfo.get(), 2) ==
-                expectedColumns[keyColumnCount] &&
+            sqliteAsciiIdentifiersEqual(
+                sqliteColumnTextView(indexInfo.get(), 2),
+                expectedColumns[keyColumnCount]) &&
             sqlite3_column_type(indexInfo.get(), 3) == SQLITE_INTEGER &&
             sqlite3_column_int(indexInfo.get(), 3) == 0 &&
             sqlite3_column_type(indexInfo.get(), 4) == SQLITE_TEXT &&
@@ -685,10 +710,10 @@ bool inspectReplayResultOutboxSchema(sqlite3 *db,
     const std::string_view name = sqliteColumnTextView(columns.get(), 1);
     bool *present = nullptr;
     bool *exact = nullptr;
-    if (name == "attempt_id") {
+    if (sqliteAsciiIdentifiersEqual(name, "attempt_id")) {
       present = &hasAttemptIdColumn;
       exact = &hasExactAttemptIdColumn;
-    } else if (name == "attempt_fingerprint") {
+    } else if (sqliteAsciiIdentifiersEqual(name, "attempt_fingerprint")) {
       present = &hasAttemptFingerprintColumn;
       exact = &hasExactAttemptFingerprintColumn;
     } else {

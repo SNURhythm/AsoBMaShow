@@ -975,6 +975,49 @@ sampleChartAttempt(const std::filesystem::path &root, const std::string &hash,
   };
 }
 
+void rewriteReplayResultOutboxWithMixedCaseIdentifiers(sqlite3 *db) {
+  execOrAbort(db, "DROP INDEX idx_replays_attempt_id");
+  execOrAbort(db, "DROP INDEX idx_pending_chart_score_created");
+
+  execOrAbort(db, "ALTER TABLE pending_chart_score_writes RENAME TO "
+                  "pending_chart_score_writes_case_tmp");
+  execOrAbort(db, "ALTER TABLE pending_chart_score_writes_case_tmp RENAME TO "
+                  "PENDING_CHART_SCORE_WRITES");
+  execOrAbort(db, "ALTER TABLE replays RENAME TO replays_case_tmp");
+  execOrAbort(db, "ALTER TABLE replays_case_tmp RENAME TO RePlAyS");
+
+  execOrAbort(db, "ALTER TABLE RePlAyS RENAME COLUMN attempt_id TO "
+                  "attempt_id_case_tmp");
+  execOrAbort(db, "ALTER TABLE RePlAyS RENAME COLUMN attempt_id_case_tmp TO "
+                  "ATTEMPT_ID");
+  execOrAbort(db, "ALTER TABLE RePlAyS RENAME COLUMN attempt_fingerprint TO "
+                  "attempt_fingerprint_case_tmp");
+  execOrAbort(db, "ALTER TABLE RePlAyS RENAME COLUMN "
+                  "attempt_fingerprint_case_tmp TO Attempt_Fingerprint");
+
+  for (const auto &[original, temporary, replacement] :
+       std::vector<std::array<const char *, 3>>{
+           {"attempt_id", "attempt_id_case_tmp", "Attempt_Id"},
+           {"replay_id", "replay_id_case_tmp", "Replay_Id"},
+           {"recovery_attempts", "recovery_attempts_case_tmp",
+            "Recovery_Attempts"},
+           {"last_recovery_at", "last_recovery_at_case_tmp",
+            "Last_Recovery_At"},
+           {"created_at", "created_at_case_tmp", "Created_At"},
+       }) {
+    execOrAbort(db, "ALTER TABLE PENDING_CHART_SCORE_WRITES RENAME COLUMN " +
+                        std::string(original) + " TO " + temporary);
+    execOrAbort(db, "ALTER TABLE PENDING_CHART_SCORE_WRITES RENAME COLUMN " +
+                        std::string(temporary) + " TO " + replacement);
+  }
+
+  execOrAbort(db, "CREATE UNIQUE INDEX IDX_REPLAYS_ATTEMPT_ID ON "
+                  "RePlAyS(ATTEMPT_ID) WHERE ATTEMPT_ID IS NOT NULL");
+  execOrAbort(db, "CREATE INDEX Idx_Pending_Chart_Score_Created ON "
+                  "PENDING_CHART_SCORE_WRITES(Recovery_Attempts, "
+                  "Last_Recovery_At, Created_At, Attempt_Id)");
+}
+
 void testVersion4MigrationAddsResultOutbox(
     const std::filesystem::path &root) {
   const auto path = root / "result-outbox-v5-migration" / "replay.db";
@@ -1094,6 +1137,87 @@ void testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(
   assert(helper.EnsureSchema());
   db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(schemaSnapshot(db.get()) == schemaBefore);
+}
+
+void testVersion4MarkerAcceptsExactMixedCaseIdentifiers(
+    const std::filesystem::path &root) {
+  const auto path = root / "mixed-case-v5-outbox-with-v4-marker" / "replay.db";
+  const auto attempt =
+      sampleChartAttempt(root, "mixed-case-v5-outbox-with-v4-marker", 54);
+  {
+    ReplayDBHelper helper(path);
+    assert(helper.StageChartResult(attempt).status ==
+           result_persistence::StageStatus::Staged);
+  }
+
+  auto db = openDatabase(path);
+  rewriteReplayResultOutboxWithMixedCaseIdentifiers(db.get());
+  execOrAbort(db.get(), "PRAGMA user_version=4");
+  const std::string schemaBefore = schemaSnapshot(db.get());
+  const std::string replayBefore = queryText(
+      db.get(), "SELECT attempt_id || '|' || attempt_fingerprint || '|' || "
+                "final_score FROM replays");
+  const std::string pendingBefore = queryText(
+      db.get(), "SELECT attempt_id || '|' || replay_id || '|' || score || "
+                "'|' || recovery_attempts FROM pending_chart_score_writes");
+  db.reset();
+
+  ReplayDBHelper reopened(path);
+  assert(reopened.EnsureSchema());
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(schemaSnapshot(db.get()) == schemaBefore);
+  assert(queryText(db.get(),
+                   "SELECT attempt_id || '|' || attempt_fingerprint || '|' "
+                   "|| final_score FROM replays") == replayBefore);
+  assert(queryText(db.get(),
+                   "SELECT attempt_id || '|' || replay_id || '|' || score "
+                   "|| '|' || recovery_attempts FROM "
+                   "pending_chart_score_writes") == pendingBefore);
+  db.reset();
+
+  const auto pending = reopened.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score == attempt.score);
+}
+
+void testCurrentVersionAcceptsExactMixedCaseIdentifiersOnCachedPaths(
+    const std::filesystem::path &root) {
+  const auto path = root / "current-v5-mixed-case-outbox" / "replay.db";
+  const auto attempt =
+      sampleChartAttempt(root, "current-v5-mixed-case-outbox", 55);
+  ReplayDBHelper helper(path);
+  assert(helper.StageChartResult(attempt).status ==
+         result_persistence::StageStatus::Staged);
+
+  auto db = openDatabase(path);
+  rewriteReplayResultOutboxWithMixedCaseIdentifiers(db.get());
+  const std::string schemaBefore = schemaSnapshot(db.get());
+  const std::string pendingBefore = queryText(
+      db.get(), "SELECT attempt_id || '|' || replay_id || '|' || score || "
+                "'|' || recovery_attempts FROM pending_chart_score_writes");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  std::string bindError;
+  assert(helper.BindDatabasePath(path, bindError));
+  assert(bindError.empty());
+  SqliteConnectionHandle trusted(helper.Connect());
+  assert(trusted);
+  assert(queryInt(trusted.get(), "PRAGMA user_version") == 5);
+  assert(queryText(trusted.get(),
+                   "SELECT attempt_id || '|' || replay_id || '|' || score "
+                   "|| '|' || recovery_attempts FROM "
+                   "pending_chart_score_writes") == pendingBefore);
+  trusted.reset();
+
+  const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score == attempt.score);
+  db = openDatabase(path);
   assert(schemaSnapshot(db.get()) == schemaBefore);
 }
 
@@ -4236,6 +4360,8 @@ int main() {
   testVersion4MigrationAddsResultOutbox(root);
   testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);
   testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(root);
+  testVersion4MarkerAcceptsExactMixedCaseIdentifiers(root);
+  testCurrentVersionAcceptsExactMixedCaseIdentifiersOnCachedPaths(root);
   testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(root);
   testCurrentVersionRejectsMalformedVersion5Artifacts(root);
   testVersion4OutboxCreationFailureRollsBackBaseRepairs(root);
