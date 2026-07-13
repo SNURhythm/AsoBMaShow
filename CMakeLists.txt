@@ -612,8 +612,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/score_provenance_db_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreDBHelper.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
