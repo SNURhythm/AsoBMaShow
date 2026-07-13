@@ -141,10 +141,12 @@ helper is the only component that decides whether deletion succeeded.
      user-visible winner, even if a duplicate staging tree also remains; clean
      staging when possible, retry the parent sync, and return success with a
      warning for deferred cleanup or unconfirmed durability;
-   - no valid destination means no usable installation occurred; remove any
-     invalid destination, clean staging when possible, and return failure;
-   - a path that cannot be inspected safely returns failure and retains
-     evidence rather than guessing.
+   - a physically absent destination means no installation occurred; clean
+     staging when possible and return failure;
+   - a present destination that cannot be deeply validated returns failure and
+     preserves both destination and staging evidence. Validation currently
+     combines corruption and OS read failures, so it must never authorize
+     destructive cleanup.
 3. If rename succeeds, sync `profiles/`. A successful sync is the ordinary
    commit point and returns success.
 4. If the commit sync fails, attempt destination-to-staging rollback.
@@ -154,10 +156,10 @@ helper is the only component that decides whether deletion succeeded.
    - a valid destination means installation remains the visible winner; clean
      duplicate staging when possible, retry the parent sync, and return
      success with a warning for any remaining cleanup or sync uncertainty;
-   - no valid destination means rollback won or no usable installation
-     exists; remove any invalid destination, clean staging when possible, and
-     return failure;
-   - an unsafe inspection returns failure while preserving evidence.
+   - an absent destination means rollback won or no installation exists; clean
+     staging when possible and return failure;
+   - a present destination that cannot be deeply validated returns failure
+     while preserving all evidence.
 
 The rule is simple: a valid canonical destination produces success; no valid
 canonical destination produces failure. A nonempty success message carries
@@ -173,13 +175,12 @@ durability or cleanup warnings through the existing controller warning UI.
    tombstone:
    - a valid canonical source means deletion did not win and returns failure;
      an extra tombstone is cleanup evidence, not a successful deletion;
-   - no valid canonical source means deletion is the sole user-visible
-     outcome; a complete tombstone proceeds to the commit sync, while a
-     missing or invalid tombstone or a physically present but invalid source
-     is cleaned when possible and returns success with an
-     integrity/durability warning;
-   - a path that cannot be inspected safely returns failure without destroying
-     evidence.
+   - a physically absent canonical source means deletion is the sole
+     user-visible outcome; a complete tombstone proceeds to the commit sync,
+     while a missing or invalid tombstone is preserved and returns success
+     with an integrity/durability warning;
+   - a physically present source that cannot be deeply validated is an
+     integrity/inspection exception: return failure and preserve every path.
 4. Sync `profiles/`. The first successful sync after source-to-tombstone rename
    is the logical deletion commit point.
 5. If that sync fails, attempt tombstone-to-source rollback and reconcile an
@@ -187,11 +188,12 @@ durability or cleanup warnings through the existing controller warning UI.
    - a valid canonical source means restoration won and returns failure after
      a rollback sync attempt; any extra tombstone is retained or cleaned as
      recovery evidence;
-   - no valid canonical source means deletion remains the sole visible
-     outcome; retry the commit sync, clean an invalid source or tombstone when
-     possible, and return success with a warning when durability or cleanup
-     still cannot be reconfirmed;
-   - an unsafe inspection returns failure and retains evidence.
+   - a physically absent canonical source means deletion remains the sole
+     visible outcome; retry the commit sync, preserve any invalid tombstone,
+     and return success with a warning when durability or cleanup still cannot
+     be reconfirmed;
+   - a physically present source that cannot be deeply validated fails closed
+     and retains evidence.
 6. After commit, remove the tombstone. Removal failure, partial cleanup, or the
    final cleanup-sync failure returns success with a warning. Startup already
    retries `.deleting-*` cleanup, and a committed deletion is never rolled
@@ -233,9 +235,10 @@ For both create and duplicate, cover:
 
 Add classification cases where an ambiguous call leaves both a valid
 destination and staging, leaves an invalid destination, or leaves neither.
-The valid destination is success with staging cleanup; invalid or absent
-destinations are failures. Inject an unsafe inspection and assert it fails
-closed without destructive cleanup.
+The valid destination is success with staging cleanup; an absent destination
+is failure with staging cleanup; a present but invalid/unreadable destination
+fails closed and preserves evidence. Inject an unsafe inspection and assert it
+does not trigger destructive cleanup.
 
 Also cover the distinct sync branches after reconciliation: an ambiguous final
 rename whose retry parent sync fails, and a successful rollback whose later
@@ -261,15 +264,17 @@ For deletion, cover:
 
 Separately cover stale-tombstone removal failure and stale-cleanup sync failure
 before mutation. Add ambiguity cases with source plus tombstone, source absent
-plus an invalid tombstone, a physically present but deeply invalid source, and
-both paths absent. A safely inspected valid canonical source produces failure;
-the absence of a valid source produces success with a warning and cleanup
-attempt; unsafe inspection fails closed. Cover rollback-parent sync failure as
-a distinct pre-commit branch.
+plus an invalid tombstone, a physically present but deeply invalid/unreadable
+source, and both paths absent. A valid canonical source produces failure;
+physical source absence produces success with a warning; a present source that
+cannot be validated fails closed without cleanup. Cover rollback-parent sync
+failure as a distinct pre-commit branch.
 
-Each point asserts `ProfileResult` matches `listProfiles()`, clean manager
-reinitialization preserves the reported logical outcome, and recoverable
-tombstones are eventually removed. Existing import/overwrite fault matrices
+Each valid-source or absent-source point asserts `ProfileResult` matches
+`listProfiles()`, clean manager reinitialization preserves the reported logical
+outcome, and recoverable tombstones are eventually removed. The explicit
+present-but-unverifiable source exception asserts failure and path preservation
+even though the catalog hides it. Existing import/overwrite fault matrices
 remain green and prove that extracting the new-profile helper did not change
 archive behavior.
 
@@ -295,13 +300,15 @@ No Firebase deployment is part of this remediation.
 - `BuildProfileResult` and its unused state are removed.
 - A valid retained canonical profile is never reported as a failed create or
   duplicate.
-- A failed create or duplicate leaves no deeply valid canonical profile; an
-  invalid directory may remain only when cleanup itself fails.
+- A failed create or duplicate leaves no confirmed valid canonical profile. A
+  present but unverifiable directory is preserved as evidence, never removed
+  based on a collapsed validation error.
 - Delete reports failure when the source is restored before commit.
 - Delete reports success with a warning when cleanup fails after commit.
-- After a safely classified ambiguous delete, result success matches the
-  absence of a valid canonical source and result failure matches a retained
-  valid source.
+- After a safely classified ambiguous delete, result success matches physical
+  canonical-source absence and result failure matches a retained valid source.
+  A present but unverifiable source is an explicit fail-closed integrity
+  exception.
 - Ambiguous rename and rollback outcomes are reconciled against filesystem
   state and deep validation.
 - Clean manager reinitialization preserves every safely classified reported
