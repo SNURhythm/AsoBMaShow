@@ -87,10 +87,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final DocumentHandoffRollbackCoordinator
             DOCUMENT_HANDOFF_ROLLBACKS =
             DocumentHandoffRollbackCoordinator.createDefault(
-                    failure -> Log.e(
+                    ignored -> Log.e(
                             TAG,
-                            "Could not restore an empty export destination.",
-                            failure));
+                            "Could not restore an empty export destination."));
     private boolean documentHandoffDestroyed = false;
     private final Object manageStorageLock = new Object();
     private CountDownLatch manageStorageLatch;

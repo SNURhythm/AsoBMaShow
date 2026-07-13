@@ -9,8 +9,10 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -83,40 +85,93 @@ public class DocumentHandoffRollbackCoordinatorTest {
                         new DocumentHandoffRestoreRegistry(),
                         rollbackTask::set,
                         failures::add);
-        CountDownLatch cancellationObserved = new CountDownLatch(1);
-        CountDownLatch releaseCancellation = new CountDownLatch(1);
+        CountDownLatch rollbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseRollback = new CountDownLatch(1);
+        CountDownLatch rollbackTaskFinished = new CountDownLatch(1);
+        CountDownLatch releaseFirstWaiterCheck = new CountDownLatch(1);
+        BlockingQueue<String> waiterEvents = new LinkedBlockingQueue<>();
+        AtomicInteger cancellationChecks = new AtomicInteger();
 
         DocumentHandoffRollbackCoordinator.Lease first =
                 coordinator.acquire(URI, () -> false);
-        coordinator.rollback(first, () -> true);
+        coordinator.rollback(first, () -> {
+            rollbackEntered.countDown();
+            if (!releaseRollback.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                throw new IOException("timed out waiting to release rollback");
+            }
+            return true;
+        });
         assertNotNull(rollbackTask.get());
 
+        Thread rollbackRunner = new Thread(() -> {
+            try {
+                rollbackTask.get().run();
+            } finally {
+                rollbackTaskFinished.countDown();
+            }
+        }, "document-rollback-test-runner");
+        rollbackRunner.setDaemon(true);
+        rollbackRunner.start();
+
+        assertTrue(
+                "rollback action never entered",
+                rollbackEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
         DaemonAcquire waiter = acquireOnDaemon(
                 coordinator,
                 URI,
-                blockingCancellationSupplier(
-                        cancellationObserved, releaseCancellation));
+                () -> {
+                    int check = cancellationChecks.incrementAndGet();
+                    waiterEvents.add("check-" + check);
+                    if (check == 1) {
+                        try {
+                            if (!releaseFirstWaiterCheck.await(
+                                    TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                                throw new AssertionError(
+                                        "timed out releasing first waiter check");
+                            }
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(failure);
+                        }
+                    }
+                    return false;
+                },
+                waiterEvents);
         try {
-            assertTrue(
-                    "waiter never entered the registry pending loop",
-                    cancellationObserved.await(
-                            TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    "waiter never checked the pending same-URI lease",
+                    "check-1",
+                    waiterEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             assertNull(waiter.lease.get());
             assertEquals(1, waiter.completed.getCount());
+            assertEquals(1, rollbackTaskFinished.getCount());
 
-            releaseCancellation.countDown();
-            rollbackTask.get().run();
+            releaseFirstWaiterCheck.countDown();
+            assertEquals(
+                    "waiter acquired before the blocked rollback action finished",
+                    "check-2",
+                    waiterEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertNull(waiter.lease.get());
+            assertEquals(1, waiter.completed.getCount());
+            assertEquals(1, rollbackTaskFinished.getCount());
 
+            releaseRollback.countDown();
+            assertTrue(
+                    "rollback task did not finish",
+                    rollbackTaskFinished.await(
+                            TIMEOUT_SECONDS, TimeUnit.SECONDS));
             assertNotNull(waiter.awaitLease());
             assertTrue(failures.isEmpty());
         } finally {
-            releaseCancellation.countDown();
-            Runnable task = rollbackTask.get();
-            if (task != null) {
-                task.run();
-            }
+            releaseFirstWaiterCheck.countDown();
+            releaseRollback.countDown();
             coordinator.finish(first);
             waiter.awaitCleanup();
+            rollbackRunner.join(
+                    TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS));
+            assertFalse(
+                    "rollback runner remained alive",
+                    rollbackRunner.isAlive());
         }
     }
 
@@ -252,6 +307,36 @@ public class DocumentHandoffRollbackCoordinatorTest {
         assertTrue(failures.isEmpty());
     }
 
+    @Test
+    public void executorRunThenThrowRunsRestoreOnlyOnce() throws Exception {
+        AtomicInteger restoreCount = new AtomicInteger();
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+        RejectedExecutionException rejection =
+                new RejectedExecutionException("ran then rejected");
+        DocumentHandoffRollbackCoordinator coordinator =
+                new DocumentHandoffRollbackCoordinator(
+                        new DocumentHandoffRestoreRegistry(),
+                        command -> {
+                            command.run();
+                            throw rejection;
+                        },
+                        failures::add);
+
+        DocumentHandoffRollbackCoordinator.Lease lease =
+                coordinator.acquire(URI, () -> false);
+        coordinator.rollback(lease, () -> {
+            restoreCount.incrementAndGet();
+            return true;
+        });
+
+        assertEquals(1, restoreCount.get());
+        DocumentHandoffRollbackCoordinator.Lease reacquired =
+                coordinator.acquire(URI, () -> false);
+        assertNotNull(reacquired);
+        coordinator.finish(reacquired);
+        assertTrue(failures.isEmpty());
+    }
+
     private static BooleanSupplier blockingCancellationSupplier(
             CountDownLatch observed, CountDownLatch release) {
         return () -> {
@@ -273,12 +358,23 @@ public class DocumentHandoffRollbackCoordinatorTest {
             DocumentHandoffRollbackCoordinator coordinator,
             String key,
             BooleanSupplier cancelled) {
+        return acquireOnDaemon(coordinator, key, cancelled, null);
+    }
+
+    private static DaemonAcquire acquireOnDaemon(
+            DocumentHandoffRollbackCoordinator coordinator,
+            String key,
+            BooleanSupplier cancelled,
+            BlockingQueue<String> events) {
         DaemonAcquire result = new DaemonAcquire();
         Thread thread = new Thread(() -> {
             try {
                 DocumentHandoffRollbackCoordinator.Lease lease =
                         coordinator.acquire(key, cancelled);
                 result.lease.set(lease);
+                if (events != null) {
+                    events.add("acquired");
+                }
                 coordinator.finish(lease);
             } catch (Throwable failure) {
                 result.failure.set(failure);
