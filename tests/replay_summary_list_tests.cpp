@@ -2,6 +2,7 @@
 #include "../src/ReplayResultStateBuilder.h"
 #include "../src/ReplayAutoPlay.h"
 
+#include <cmath>
 #include <iostream>
 
 #define ASSERT_CONTAINS(haystack, needle, label)                               \
@@ -198,6 +199,28 @@ int main() {
   if (assistedAutoSummary.playback.percent != 200 ||
       assistedAutoSummary.clearType != kClearTypeAssistedEasyClearRank) {
     std::cerr << "synthetic Auto summary must retain playback assist limits"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::ChartMeta pmsMeta;
+  pmsMeta.KeyMode = 9;
+  pmsMeta.TotalNotes = 100;
+  pmsMeta.HasTotal = true;
+  pmsMeta.Total = 100.0;
+  const ReplaySummary pmsAutoSummary = replay_autoplay::BuildSummary(
+      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  if (pmsAutoSummary.finalGauge != 120.0f) {
+    std::cerr << "synthetic Auto summary must use the PMS gauge result"
+              << std::endl;
+    return 1;
+  }
+
+  pmsMeta.Total = 10.0;
+  const ReplaySummary lowTotalAutoSummary = replay_autoplay::BuildSummary(
+      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  if (std::abs(lowTotalAutoSummary.finalGauge - 40.0f) > 0.01f) {
+    std::cerr << "synthetic Auto summary must respect authored TOTAL"
               << std::endl;
     return 1;
   }

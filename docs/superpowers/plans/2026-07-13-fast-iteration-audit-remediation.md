@@ -69,8 +69,8 @@
 
 **Files:** `src/ReplayAutoPlay.h`, `tests/replay_summary_list_tests.cpp`
 
-- [ ] Resolve the active autoplay gauge and profile instead of hardcoding `100`.
-- [ ] Represent PMS groove capacity correctly and retain survival-gauge behavior.
+- [x] Resolve the active autoplay gauge and profile instead of hardcoding `100`.
+- [x] Represent PMS groove capacity correctly and retain survival-gauge behavior.
 
 ### 7. Global `View` rotation contract
 
@@ -94,3 +94,4 @@
 - Finding 2 — `fix: carry effective gauge state into replay exports`
 - Finding 3 — `fix: preserve modified course eligibility precedence`
 - Finding 5 — `fix: show effective default practice gauge value`
+- Finding 6 — `fix: compute autoplay summary gauge result`

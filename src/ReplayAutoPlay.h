@@ -47,6 +47,19 @@ inline ReplayEvent makeAutoPlayEvent(ReplayEventAction action,
   return event;
 }
 
+inline float perfectPlayGauge(const bms_parser::ChartMeta &meta,
+                              GaugeType gaugeType,
+                              GaugeAutoShiftMode gaugeAutoShift) {
+  bms_parser::Chart chart;
+  chart.Meta = meta;
+  RhythmState state(&chart, false);
+  state.configureGauge(gaugeType, gaugeAutoShift);
+  for (int note = 0; note < std::max(0, meta.TotalNotes); ++note) {
+    state.applyGaugeJudgement(PGreat);
+  }
+  return state.currentGauge;
+}
+
 inline ReplaySummary BuildSummary(
     const bms_parser::ChartMeta &meta, GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
     const std::optional<std::string> &playOption = std::nullopt,
@@ -63,7 +76,7 @@ inline ReplaySummary BuildSummary(
   summary.finalScore = std::max(0, meta.TotalNotes) * 2;
   summary.maxScore = summary.finalScore;
   summary.maxCombo = std::max(0, meta.TotalNotes);
-  summary.finalGauge = 100.0f;
+  summary.finalGauge = perfectPlayGauge(meta, gaugeType, gaugeAutoShift);
   summary.clearType = clear_policy::fullComboRankForPlayback(
       kClearTypeFullComboRank, true, playback);
   summary.createdAt = kLabel;
