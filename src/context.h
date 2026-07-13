@@ -279,11 +279,11 @@ public:
               summary.attempted, summary.saved, summary.pending,
               summary.conflicts);
       if (!summary.diagnostic.empty()) {
-        SDL_Log("Result recovery diagnostic: %s", summary.diagnostic.c_str());
+        SDL_Log("Result recovery reported technical diagnostics");
       }
       return summary;
-    } catch (const std::exception &error) {
-      SDL_Log("Result recovery raised an exception: %s", error.what());
+    } catch (const std::exception &) {
+      SDL_Log("Result recovery raised a standard exception");
       return result_persistence::recoveryFailureSummary(
           "result recovery raised a standard exception");
     } catch (...) {

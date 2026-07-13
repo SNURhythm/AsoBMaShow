@@ -519,6 +519,29 @@ require(
     and context.count("recoveryFailureSummary(") == 2,
     "ApplicationContext must own one nonthrowing recovery adapter reused by profile activation",
 )
+context_recovery_body = unqualified_function_body(context, "recoverPendingResults")
+require(
+    context_recovery_body.count("summary.diagnostic") == 1
+    and re.search(
+        r"if\s*\(\s*!summary\.diagnostic\.empty\(\)\s*\)",
+        context_recovery_body,
+    )
+    is not None
+    and "error.what()" not in context_recovery_body,
+    "ApplicationContext recovery may inspect diagnostic presence but must not copy raw diagnostic or exception text",
+)
+for log_call in re.findall(r"SDL_Log[^;]*;", context_recovery_body, re.DOTALL):
+    require(
+        "summary.diagnostic" not in log_call
+        and "error.what()" not in log_call,
+        "ApplicationContext recovery logs must not expose raw diagnostics or exception text",
+    )
+    require(
+        "%s" not in log_call
+        and ".c_str()" not in log_call
+        and ".data()" not in log_call,
+        "ApplicationContext recovery logs must use numeric fields or constant classifications only",
+    )
 require(
     main_source.count('#include "ApplicationResultRecovery.h"') == 1
     and main_source.count("application_result_recovery::execute(") == 1,
