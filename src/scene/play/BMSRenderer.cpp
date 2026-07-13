@@ -416,6 +416,16 @@ void placeText(TextView *text, int x, int y, int width, int height) {
   text->setSize(width, height);
 }
 
+void placeQuarterTurnText(TextView *text, int x, int y, int width,
+                          int height) {
+  const float centerX = static_cast<float>(x) + width * 0.5f;
+  const float centerY = static_cast<float>(y) + height * 0.5f;
+  placeText(text,
+            static_cast<int>(std::round(centerX - height * 0.5f)),
+            static_cast<int>(std::round(centerY - width * 0.5f)), height,
+            width);
+}
+
 float baseGameplayHudTitleWidth() {
   return std::clamp(static_cast<float>(rendering::window_width) * 0.30f,
                     430.0f, 620.0f);
@@ -1487,18 +1497,21 @@ void BMSRenderer::layoutGaugeText() {
     }
 
     if (!autoShiftEnabled || gaugeAutoShiftText == nullptr) {
-      placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
+      placeQuarterTurnText(gaugeTypeText.get(), typeX, typeY, typeWidth,
+                           typeHeight);
     } else {
       const int gaugeSpan = gaugeLabelLength + typePadding;
       const int gasSpan = typeHeight - gaugeSpan;
       if (left) {
-        placeText(gaugeAutoShiftText.get(), typeX, typeY, typeWidth, gasSpan);
-        placeText(gaugeTypeText.get(), typeX, typeY + gasSpan, typeWidth,
-                  gaugeSpan);
+        placeQuarterTurnText(gaugeAutoShiftText.get(), typeX, typeY,
+                             typeWidth, gasSpan);
+        placeQuarterTurnText(gaugeTypeText.get(), typeX, typeY + gasSpan,
+                             typeWidth, gaugeSpan);
       } else {
-        placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, gaugeSpan);
-        placeText(gaugeAutoShiftText.get(), typeX, typeY + gaugeSpan,
-                  typeWidth, gasSpan);
+        placeQuarterTurnText(gaugeTypeText.get(), typeX, typeY, typeWidth,
+                             gaugeSpan);
+        placeQuarterTurnText(gaugeAutoShiftText.get(), typeX,
+                             typeY + gaugeSpan, typeWidth, gasSpan);
       }
     }
   }

@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include <bgfx/bgfx.h>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -11,7 +12,7 @@ public:
   TexBatchRenderer();
   ~TexBatchRenderer() = default;
 
-  void begin();
+  void begin(const float *modelTransform = nullptr);
   void end();
 
   // Adds a quad with texture coordinates
@@ -49,5 +50,7 @@ private:
   uint32_t flushCount = 0;
   uint32_t submitCount = 0;
   uint32_t transientBufferMissCount = 0;
+  std::array<float, 16> modelTransform{};
+  bool hasModelTransform = false;
 };
 } // namespace rendering

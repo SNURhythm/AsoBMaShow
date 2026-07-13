@@ -81,6 +81,7 @@ void submitColoredRect(const RenderContext &context, float x, float y,
   indices[5] = 0;
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  context.applyTransform();
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
@@ -148,6 +149,7 @@ void submitRoundedRect(const RenderContext &context, float x, float y,
 
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  context.applyTransform();
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
@@ -219,6 +221,7 @@ void submitShadowRect(const RenderContext &context, int x, int y, int width,
       shadowParams);
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  context.applyTransform();
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
@@ -259,6 +262,7 @@ void submitGradientRect(const RenderContext &context, float x, float y,
 
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  context.applyTransform();
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);

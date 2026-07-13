@@ -3,6 +3,8 @@
 #include "UniformCache.h"
 #include "bx/bx.h"
 
+#include <algorithm>
+
 namespace rendering {
 
 namespace {
@@ -16,13 +18,17 @@ TexBatchRenderer::TexBatchRenderer() {
   indices.reserve(6144);
 }
 
-void TexBatchRenderer::begin() {
+void TexBatchRenderer::begin(const float *transform) {
   vertices.clear();
   indices.clear();
   currentTexture = BGFX_INVALID_HANDLE;
   rectCount = 0;
   flushCount = 0;
   submitCount = 0;
+  hasModelTransform = transform != nullptr;
+  if (hasModelTransform) {
+    std::copy_n(transform, modelTransform.size(), modelTransform.begin());
+  }
 }
 
 void TexBatchRenderer::end() { flush(); }
@@ -123,6 +129,9 @@ void TexBatchRenderer::flush() {
 
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  if (hasModelTransform) {
+    bgfx::setTransform(modelTransform.data());
+  }
 
   // Bind texture
   bgfx::setTexture(0, s_texColor, currentTexture);

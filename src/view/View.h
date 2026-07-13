@@ -2,14 +2,15 @@
 
 #include <SDL2/SDL.h>
 #include <yoga/Yoga.h>
-#include <vector>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/Color.h"
@@ -40,12 +41,44 @@ struct Scissor {
   int x, y, width, height;
 };
 struct RenderContext {
-  RenderContext() { scissorStack.reserve(16); }
+  struct Point {
+    float x = 0.0f;
+    float y = 0.0f;
+  };
+
+  RenderContext() {
+    scissorStack.reserve(16);
+    transformStack.reserve(16);
+    refreshTransformMatrix();
+  }
   Scissor scissor = {0, 0, -1, -1};
   std::vector<Scissor> scissorStack;
 
   inline void pushScissor(int x, int y, int width, int height) {
     scissorStack.push_back(scissor);
+    if (!transformStack.empty()) {
+      const Point topLeft = transformPoint(static_cast<float>(x),
+                                           static_cast<float>(y));
+      const Point topRight = transformPoint(static_cast<float>(x + width),
+                                            static_cast<float>(y));
+      const Point bottomRight =
+          transformPoint(static_cast<float>(x + width),
+                         static_cast<float>(y + height));
+      const Point bottomLeft = transformPoint(static_cast<float>(x),
+                                              static_cast<float>(y + height));
+      const float minX =
+          std::min({topLeft.x, topRight.x, bottomRight.x, bottomLeft.x});
+      const float minY =
+          std::min({topLeft.y, topRight.y, bottomRight.y, bottomLeft.y});
+      const float maxX =
+          std::max({topLeft.x, topRight.x, bottomRight.x, bottomLeft.x});
+      const float maxY =
+          std::max({topLeft.y, topRight.y, bottomRight.y, bottomLeft.y});
+      x = static_cast<int>(std::floor(minX));
+      y = static_cast<int>(std::floor(minY));
+      width = std::max(0, static_cast<int>(std::ceil(maxX)) - x);
+      height = std::max(0, static_cast<int>(std::ceil(maxY)) - y);
+    }
     if (scissor.width < 0 || scissor.height < 0) {
       scissor = {x, y, width, height};
       return;
@@ -64,6 +97,89 @@ struct RenderContext {
     scissor = scissorStack.back();
     scissorStack.pop_back();
   }
+
+  inline void pushRotation(float degrees, float centerX, float centerY) {
+    transformStack.push_back(transform);
+    const float radians = degrees * 3.14159265358979323846f / 180.0f;
+    float cosine = std::cos(radians);
+    float sine = std::sin(radians);
+    if (std::abs(cosine) < 0.000001f) {
+      cosine = 0.0f;
+    }
+    if (std::abs(sine) < 0.000001f) {
+      sine = 0.0f;
+    }
+
+    const Transform local{
+        .a = cosine,
+        .b = sine,
+        .c = -sine,
+        .d = cosine,
+        .tx = centerX - cosine * centerX + sine * centerY,
+        .ty = centerY - sine * centerX - cosine * centerY,
+    };
+    transform = compose(transform, local);
+    refreshTransformMatrix();
+  }
+
+  inline void popTransform() {
+    if (transformStack.empty()) {
+      return;
+    }
+    transform = transformStack.back();
+    transformStack.pop_back();
+    refreshTransformMatrix();
+  }
+
+  [[nodiscard]] inline Point transformPoint(float x, float y) const {
+    return {.x = transform.a * x + transform.c * y + transform.tx,
+            .y = transform.b * x + transform.d * y + transform.ty};
+  }
+
+  inline void applyTransform() const {
+    if (!transformStack.empty()) {
+      bgfx::setTransform(transformMatrix.data());
+    }
+  }
+
+  [[nodiscard]] inline const float *getTransformMatrix() const {
+    return transformStack.empty() ? nullptr : transformMatrix.data();
+  }
+
+private:
+  struct Transform {
+    float a = 1.0f;
+    float b = 0.0f;
+    float c = 0.0f;
+    float d = 1.0f;
+    float tx = 0.0f;
+    float ty = 0.0f;
+  };
+
+  static inline Transform compose(const Transform &outer,
+                                  const Transform &inner) {
+    return {
+        .a = outer.a * inner.a + outer.c * inner.b,
+        .b = outer.b * inner.a + outer.d * inner.b,
+        .c = outer.a * inner.c + outer.c * inner.d,
+        .d = outer.b * inner.c + outer.d * inner.d,
+        .tx = outer.a * inner.tx + outer.c * inner.ty + outer.tx,
+        .ty = outer.b * inner.tx + outer.d * inner.ty + outer.ty,
+    };
+  }
+
+  inline void refreshTransformMatrix() {
+    transformMatrix = {
+        transform.a,  transform.b, 0.0f, 0.0f,
+        transform.c,  transform.d, 0.0f, 0.0f,
+        0.0f,         0.0f,        1.0f, 0.0f,
+        transform.tx, transform.ty, 0.0f, 1.0f,
+    };
+  }
+
+  Transform transform;
+  std::vector<Transform> transformStack;
+  std::array<float, 16> transformMatrix{};
 };
 
 struct ScissorScope {
@@ -76,6 +192,26 @@ struct ScissorScope {
 
 private:
   RenderContext &context;
+};
+
+struct RenderTransformScope {
+  RenderTransformScope(RenderContext &context, float degrees, float centerX,
+                       float centerY)
+      : context(context) {
+    active = std::abs(degrees) > 0.000001f;
+    if (active) {
+      context.pushRotation(degrees, centerX, centerY);
+    }
+  }
+  ~RenderTransformScope() {
+    if (active) {
+      context.popTransform();
+    }
+  }
+
+private:
+  RenderContext &context;
+  bool active = false;
 };
 
 class View {
@@ -136,6 +272,10 @@ public:
     if (!isVisible)
       return;
     sortChildrenIfNeeded();
+    RenderTransformScope transformScope(
+        context, rotationDegrees,
+        static_cast<float>(getX()) + static_cast<float>(getWidth()) * 0.5f,
+        static_cast<float>(getY()) + static_cast<float>(getHeight()) * 0.5f);
 #if DEBUG
     if (drawBoundingBox) {
       float x = getX();
@@ -171,6 +311,7 @@ public:
       uint64_t state =
           BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;
       bgfx::setState(state);
+      context.applyTransform();
 
       // Set the vertex and index buffers
       bgfx::setVertexBuffer(0, &tvb);

@@ -530,7 +530,7 @@ protected:
 
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
-    batch.begin();
+    batch.begin(context.getTransformMatrix());
     const float radius =
         std::min(getCornerRadius(),
                  std::min(fillWidth, static_cast<float>(getHeight())) * 0.5f);

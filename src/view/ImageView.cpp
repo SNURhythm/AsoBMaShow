@@ -498,6 +498,7 @@ void submitTexturedRoundedRect(const RenderContext &context,
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
   bgfx::setTexture(0, sampler, texture);
+  context.applyTransform();
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |

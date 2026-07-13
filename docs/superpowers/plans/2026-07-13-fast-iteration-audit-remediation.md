@@ -76,16 +76,16 @@
 
 **Files:** `src/view/View.h`, `src/view/View.cpp`, affected view renderers and focused rendering tests where available
 
-- [ ] Centralize rotation geometry in `View` so non-text renderers do not silently ignore a public base property.
-- [ ] Keep existing vertical gauge labels visually unchanged.
-- [ ] Verify ordinary zero-degree rendering remains unchanged.
+- [x] Centralize rotation geometry in `View` so non-text renderers do not silently ignore a public base property.
+- [x] Keep existing vertical gauge labels visually unchanged.
+- [x] Verify ordinary zero-degree rendering remains unchanged.
 
 ## Final Verification
 
-- [ ] `cmake --build cmake-build-debug --target main -j 6`
-- [ ] Full registered CTest suite passes.
-- [ ] `git diff --check` reports no errors.
-- [ ] Worktree contains only intentional remediation commits and the completed progress note.
+- [x] `cmake --build cmake-build-debug --target main -j 6`
+- [x] Full registered CTest suite passes (57/57).
+- [x] `git diff --check` reports no errors.
+- [x] Worktree contains only intentional remediation commits and the completed progress note.
 
 ## Commit Log
 
@@ -95,3 +95,4 @@
 - Finding 3 — `fix: preserve modified course eligibility precedence`
 - Finding 5 — `fix: show effective default practice gauge value`
 - Finding 6 — `fix: compute autoplay summary gauge result`
+- Finding 7 — `fix: apply view rotation across ui renderers`

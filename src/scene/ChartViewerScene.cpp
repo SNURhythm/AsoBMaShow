@@ -559,7 +559,7 @@ protected:
       rebuildLayout();
     }
 
-    batch.begin();
+    batch.begin(context.getTransformMatrix());
     drawGrid();
     drawPracticeRangeSpan();
     drawMarkers();
@@ -1721,7 +1721,7 @@ private:
               });
     markerTextBatch.setScissor(context.scissor.x, context.scissor.y,
                                context.scissor.width, context.scissor.height);
-    markerTextBatch.begin();
+    markerTextBatch.begin(context.getTransformMatrix());
     for (const auto &draw : visibleMarkerLabelDraws) {
       markerTextBatch.addRectUV(draw.x, draw.y, draw.width, draw.height, 0.0f,
                                 1.0f, draw.u1, 0.0f, draw.texture);

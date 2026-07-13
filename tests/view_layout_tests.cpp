@@ -73,6 +73,44 @@ private:
   std::vector<int> &eventOrder;
 };
 
+class TransformRecordingView final : public View {
+public:
+  using View::View;
+  RenderContext::Point mappedPoint;
+
+private:
+  void renderImpl(RenderContext &context) override {
+    mappedPoint = context.transformPoint(
+        static_cast<float>(getX() + getWidth()),
+        static_cast<float>(getY()) + static_cast<float>(getHeight()) * 0.5f);
+  }
+};
+
+void testViewRotationTransformsRenderingAndScissor() {
+  TransformRecordingView view(20, 30, 40, 20);
+  view.setRotationDegrees(90.0f);
+  RenderContext context;
+  view.render(context);
+  assert(std::abs(view.mappedPoint.x - 40.0f) < 0.001f);
+  assert(std::abs(view.mappedPoint.y - 60.0f) < 0.001f);
+
+  const auto unchanged = context.transformPoint(13.0f, 27.0f);
+  assert(std::abs(unchanged.x - 13.0f) < 0.001f);
+  assert(std::abs(unchanged.y - 27.0f) < 0.001f);
+
+  context.pushRotation(90.0f, 50.0f, 50.0f);
+  {
+    ScissorScope scissor(context, 40, 45, 20, 10);
+    assert(context.scissor.x == 45);
+    assert(context.scissor.y == 40);
+    assert(context.scissor.width == 10);
+    assert(context.scissor.height == 20);
+  }
+  context.popTransform();
+  assert(context.scissor.width == -1);
+  assert(context.scissor.height == -1);
+}
+
 void testOverlayPortalDispatchesPresentedViewsAboveContent() {
   View root(0, 0, 640, 480);
   auto *background = new EventRecordingView();
@@ -538,6 +576,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 } // namespace
 
 int main() {
+  testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
