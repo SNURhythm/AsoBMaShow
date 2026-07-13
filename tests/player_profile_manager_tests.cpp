@@ -530,6 +530,527 @@ void testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure() {
          "sync-failure recovery preserves the finalized profile ID");
 }
 
+void testFailedCreateCommitSyncLeavesNoVisibleProfile() {
+  TempDirectory temp("profile-create-parent-sync");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string createdId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, createdId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool finalRenameCompleted = false;
+  bool commitSyncFailed = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto staging = profiles / (".staging-" + createdId);
+  const auto destination = profiles / createdId;
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    const bool renamed = atomic_file::renameDurably(from, to, error);
+    if (inject && renamed && from == staging && to == destination) {
+      finalRenameCompleted = true;
+    }
+    return renamed;
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && finalRenameCompleted && !commitSyncFailed &&
+        path == profiles) {
+      commitSyncFailed = true;
+      error = "injected create commit sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "create parent-sync fixture initializes");
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result = manager.createProfile("Create Sync Failure");
+  inject = false;
+  expect(result.error == ProfileError::IoFailure,
+         "failed commit sync reports create failure");
+  expect(!std::filesystem::exists(manager.pathsFor(createdId).root),
+         "failed create commit leaves no visible destination");
+  expect(stagingDirectories(temp.path()).empty(),
+         "successful create rollback cleans hidden staging");
+  expect(manager.listProfiles().size() == countBefore,
+         "reported create failure does not change the visible catalog");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  expect(recovered.Initialize().ok(),
+         "create parent-sync failure reinitializes cleanly");
+  expect(!std::filesystem::exists(recovered.pathsFor(createdId).root) &&
+             recovered.listProfiles().size() == countBefore,
+         "reinitialization preserves failed create outcome");
+}
+
+void testFailedDuplicateCommitSyncLeavesNoVisibleProfile() {
+  TempDirectory temp("profile-duplicate-parent-sync");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string duplicateId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, duplicateId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool finalRenameCompleted = false;
+  bool commitSyncFailed = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto staging = profiles / (".staging-" + duplicateId);
+  const auto destination = profiles / duplicateId;
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    const bool renamed = atomic_file::renameDurably(from, to, error);
+    if (inject && renamed && from == staging && to == destination) {
+      finalRenameCompleted = true;
+    }
+    return renamed;
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && finalRenameCompleted && !commitSyncFailed &&
+        path == profiles) {
+      commitSyncFailed = true;
+      error = "injected duplicate commit sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "duplicate parent-sync fixture initializes");
+  const std::string sourceId = manager.activeProfile().id;
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result =
+      manager.duplicateProfile(sourceId, "Duplicate Sync Failure");
+  inject = false;
+  expect(result.error == ProfileError::IoFailure,
+         "failed commit sync reports duplicate failure");
+  expect(!std::filesystem::exists(manager.pathsFor(duplicateId).root),
+         "failed duplicate commit leaves no visible destination");
+  expect(stagingDirectories(temp.path()).empty(),
+         "successful duplicate rollback cleans hidden staging");
+  expect(manager.listProfiles().size() == countBefore,
+         "reported duplicate failure does not change the visible catalog");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  expect(recovered.Initialize().ok(),
+         "duplicate parent-sync failure reinitializes cleanly");
+  expect(!std::filesystem::exists(recovered.pathsFor(duplicateId).root) &&
+             recovered.listProfiles().size() == countBefore,
+         "reinitialization preserves failed duplicate outcome");
+}
+
+enum class NewProfileOperation { Create, Duplicate };
+
+enum class NewProfileFault {
+  FinalRenameFails,
+  FinalRenameMovesThenFails,
+  CommitSyncRollbackSucceeds,
+  CommitSyncRollbackUnavailable,
+  RollbackMovesThenFails,
+  RollbackCleanupFails,
+  RollbackParentSyncFails,
+  RollbackUnavailableRetrySyncFails,
+  AmbiguousFinalLeavesBoth,
+  AmbiguousFinalRetrySyncFails,
+  AmbiguousFinalLeavesInvalidDestination,
+  AmbiguousFinalLeavesNeither,
+  RollbackCleanupSyncFails,
+  UnsafeDestinationInspection,
+};
+
+struct NewProfileFaultCase {
+  NewProfileFault fault;
+  std::string_view name;
+  bool expectedSuccess;
+  bool expectedWarning = false;
+  bool expectedStagingEvidence = false;
+  bool safelyInspected = true;
+};
+
+constexpr std::array kNewProfileFaultCases{
+    NewProfileFaultCase{NewProfileFault::FinalRenameFails,
+                        "point 0 final rename fails", false},
+    NewProfileFaultCase{NewProfileFault::FinalRenameMovesThenFails,
+                        "point 1 final rename moves then fails", true},
+    NewProfileFaultCase{NewProfileFault::CommitSyncRollbackSucceeds,
+                        "point 2 commit sync rollback succeeds", false},
+    NewProfileFaultCase{NewProfileFault::CommitSyncRollbackUnavailable,
+                        "point 3 commit sync rollback unavailable", true},
+    NewProfileFaultCase{NewProfileFault::RollbackMovesThenFails,
+                        "point 4 rollback moves then fails", false},
+    NewProfileFaultCase{NewProfileFault::RollbackCleanupFails,
+                        "point 5 rollback staging cleanup fails", false, false,
+                        true},
+    NewProfileFaultCase{NewProfileFault::RollbackParentSyncFails,
+                        "point 6 rollback parent sync fails", false, false,
+                        true},
+    NewProfileFaultCase{NewProfileFault::RollbackUnavailableRetrySyncFails,
+                        "point 7 rollback unavailable retry sync fails", true,
+                        true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalLeavesBoth,
+                        "ambiguous final rename leaves destination and staging",
+                        true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalRetrySyncFails,
+                        "ambiguous final rename retry sync fails", true, true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalLeavesInvalidDestination,
+                        "ambiguous final rename leaves invalid destination",
+                        false, false, true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalLeavesNeither,
+                        "ambiguous final rename leaves neither path", false},
+    NewProfileFaultCase{NewProfileFault::RollbackCleanupSyncFails,
+                        "rollback staging cleanup sync fails", false},
+    NewProfileFaultCase{NewProfileFault::UnsafeDestinationInspection,
+                        "unsafe destination inspection", false, false, true,
+                        false},
+};
+
+std::string faultCaseLabel(NewProfileOperation operation,
+                           std::string_view name) {
+  return std::string(operation == NewProfileOperation::Create ? "create "
+                                                              : "duplicate ") +
+         std::string(name);
+}
+
+bool hasProfile(const PlayerProfileManager &manager, std::string_view id) {
+  const auto catalog = manager.listProfiles();
+  return std::ranges::find(catalog, id, &PlayerProfile::id) != catalog.end();
+}
+
+void seedDuplicateFaultPayload(const PlayerProfilePaths &source) {
+  auto loaded = AppSettingsStore::Load(source.settingsJson);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "duplicate fault source settings load");
+  if (loaded.status == AppSettingsLoadStatus::Loaded) {
+    loaded.settings.audioOffsetMs = 137;
+    loaded.settings.selectedPlayOption = "R-RANDOM";
+    std::string error;
+    expect(AppSettingsStore::Save(source.settingsJson, loaded.settings, error),
+           "duplicate fault source settings save: " + error);
+  }
+
+  Database scores = openDatabase(source.scoresDb);
+  expect(scores != nullptr, "duplicate fault source database opens");
+  if (scores) {
+    expect(execute(scores.get(),
+                   "CREATE TABLE profile_fault_marker(value TEXT);"
+                   "INSERT INTO profile_fault_marker VALUES('source-data')"),
+           "duplicate fault source database marker seeds");
+  }
+}
+
+bool isCommitSyncFault(NewProfileFault fault) {
+  switch (fault) {
+  case NewProfileFault::CommitSyncRollbackSucceeds:
+  case NewProfileFault::CommitSyncRollbackUnavailable:
+  case NewProfileFault::RollbackMovesThenFails:
+  case NewProfileFault::RollbackCleanupFails:
+  case NewProfileFault::RollbackParentSyncFails:
+  case NewProfileFault::RollbackUnavailableRetrySyncFails:
+  case NewProfileFault::RollbackCleanupSyncFails:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsRollbackAttempt(NewProfileFault fault) {
+  return isCommitSyncFault(fault);
+}
+
+bool copyTreeForFault(const std::filesystem::path &source,
+                      const std::filesystem::path &destination,
+                      std::string &errorMessage) {
+  std::error_code error;
+  std::filesystem::copy(source, destination,
+                        std::filesystem::copy_options::recursive, error);
+  if (error) {
+    errorMessage = "unable to copy fault tree: " + error.message();
+    return false;
+  }
+  return true;
+}
+
+void runNewProfileFaultCase(NewProfileOperation operation,
+                            const NewProfileFaultCase &testCase) {
+  const std::string label = faultCaseLabel(operation, testCase.name);
+  TempDirectory temp(operation == NewProfileOperation::Create
+                         ? "profile-create-fault"
+                         : "profile-duplicate-fault");
+  TempDirectory external("profile-new-fault-external");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string generatedId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, generatedId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  int finalRenameCalls = 0;
+  int rollbackRenameCalls = 0;
+  int profilesSyncCalls = 0;
+  bool rollbackCleanupFailureInjected = false;
+  bool destinationRemovalAttempted = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto staging = profiles / (".staging-" + generatedId);
+  const auto destination = profiles / generatedId;
+  const auto externalSentinel = external.path() / "sentinel.txt";
+  writeFile(externalSentinel, "external-data");
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    if (!inject) {
+      return atomic_file::renameDurably(from, to, error);
+    }
+    if (from == staging && to == destination) {
+      ++finalRenameCalls;
+      switch (testCase.fault) {
+      case NewProfileFault::FinalRenameFails:
+        error = "injected final rename failure";
+        return false;
+      case NewProfileFault::FinalRenameMovesThenFails:
+      case NewProfileFault::AmbiguousFinalRetrySyncFails:
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous final rename";
+        return false;
+      case NewProfileFault::AmbiguousFinalLeavesBoth:
+        if (!copyTreeForFault(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous final rename with both paths";
+        return false;
+      case NewProfileFault::AmbiguousFinalLeavesInvalidDestination:
+        if (!copyTreeForFault(from, to, error)) {
+          return false;
+        }
+        {
+          std::error_code removeError;
+          std::filesystem::remove(destination / "settings.json", removeError);
+          if (removeError) {
+            error =
+                "unable to invalidate destination: " + removeError.message();
+            return false;
+          }
+        }
+        error = "injected ambiguous invalid destination";
+        return false;
+      case NewProfileFault::AmbiguousFinalLeavesNeither: {
+        std::error_code removeError;
+        std::filesystem::remove_all(staging, removeError);
+        if (removeError) {
+          error =
+              "unable to remove ambiguous staging: " + removeError.message();
+          return false;
+        }
+      }
+        error = "injected ambiguous rename with neither path";
+        return false;
+      case NewProfileFault::UnsafeDestinationInspection: {
+        std::error_code linkError;
+        std::filesystem::create_directory_symlink(external.path(), destination,
+                                                  linkError);
+        if (linkError) {
+          error = "unable to create unsafe destination: " + linkError.message();
+          return false;
+        }
+      }
+        error = "injected unsafe destination";
+        return false;
+      default:
+        return atomic_file::renameDurably(from, to, error);
+      }
+    }
+    if (from == destination && to == staging) {
+      ++rollbackRenameCalls;
+      switch (testCase.fault) {
+      case NewProfileFault::CommitSyncRollbackUnavailable:
+      case NewProfileFault::RollbackUnavailableRetrySyncFails:
+        error = "injected rollback rename failure";
+        return false;
+      case NewProfileFault::RollbackMovesThenFails:
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous rollback rename";
+        return false;
+      default:
+        return atomic_file::renameDurably(from, to, error);
+      }
+    }
+    return atomic_file::renameDurably(from, to, error);
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (!inject || path != profiles) {
+      return atomic_file::syncDirectory(path, error);
+    }
+    ++profilesSyncCalls;
+    if (isCommitSyncFault(testCase.fault) && profilesSyncCalls == 1) {
+      error = "injected commit sync failure";
+      return false;
+    }
+    if (testCase.fault == NewProfileFault::RollbackParentSyncFails &&
+        profilesSyncCalls == 2) {
+      error = "injected rollback parent sync failure";
+      return false;
+    }
+    if ((testCase.fault == NewProfileFault::RollbackUnavailableRetrySyncFails &&
+         profilesSyncCalls == 2) ||
+        (testCase.fault == NewProfileFault::AmbiguousFinalRetrySyncFails &&
+         profilesSyncCalls == 1)) {
+      error = "injected reconciliation retry sync failure";
+      return false;
+    }
+    if (testCase.fault == NewProfileFault::RollbackCleanupSyncFails &&
+        profilesSyncCalls == 3) {
+      error = "injected rollback cleanup sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+  dependencies.filesystem.removeTree = [&](const std::filesystem::path &path,
+                                           std::string &error) {
+    if (inject && path == destination) {
+      destinationRemovalAttempted = true;
+    }
+    if (inject && testCase.fault == NewProfileFault::RollbackCleanupFails &&
+        path == staging && rollbackRenameCalls > 0) {
+      rollbackCleanupFailureInjected = true;
+      error = "injected rollback staging cleanup failure";
+      return false;
+    }
+    return removeTree(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  const ProfileResult initialized = manager.Initialize();
+  expect(initialized.ok(),
+         label + " fixture initializes: " + initialized.message);
+  if (!initialized.ok()) {
+    return;
+  }
+  const PlayerProfilePaths source = manager.pathsFor(activeId);
+  seedDuplicateFaultPayload(source);
+  const std::string sourceSettingsBefore = readFile(source.settingsJson);
+  const std::int64_t sourceMarkerRowsBefore =
+      rowCount(source.scoresDb, "profile_fault_marker");
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result =
+      operation == NewProfileOperation::Create
+          ? manager.createProfile("Fault Target")
+          : manager.duplicateProfile(activeId, "Fault Target");
+  inject = false;
+
+  expect(finalRenameCalls == 1, label + " reaches final rename exactly once");
+  if (expectsRollbackAttempt(testCase.fault)) {
+    expect(rollbackRenameCalls == 1,
+           label + " reaches rollback reconciliation");
+  }
+  if (testCase.fault == NewProfileFault::RollbackCleanupFails) {
+    expect(rollbackCleanupFailureInjected,
+           label + " reaches rollback staging cleanup");
+  }
+  expect(result.ok() == testCase.expectedSuccess,
+         label + " reports the canonical outcome: " + result.message);
+  if (!testCase.expectedSuccess) {
+    const ProfileError expectedError =
+        testCase.fault ==
+                NewProfileFault::AmbiguousFinalLeavesInvalidDestination
+            ? ProfileError::IntegrityFailure
+            : ProfileError::IoFailure;
+    expect(result.error == expectedError,
+           label + " reports the classified failure kind");
+  }
+  if (testCase.expectedWarning) {
+    expect(!result.message.empty(), label + " reports a warning");
+  }
+
+  if (testCase.safelyInspected) {
+    expect(result.ok() == manager.validateProfile(generatedId).ok(),
+           label + " result matches canonical profile validity");
+    expect(result.ok() == hasProfile(manager, generatedId),
+           label + " result matches canonical profile catalog membership");
+  } else {
+    expect(result.error == ProfileError::IoFailure,
+           label + " fails closed on unsafe inspection");
+    expect(!hasProfile(manager, generatedId),
+           label + " unsafe destination is not cataloged");
+  }
+  expect(manager.listProfiles().size() ==
+             countBefore + (testCase.expectedSuccess ? 1U : 0U),
+         label + " catalog count matches the reported outcome");
+  expect(stagingDirectories(temp.path()).empty() ==
+             !testCase.expectedStagingEvidence,
+         label + " preserves only required hidden staging evidence");
+
+  if (testCase.fault ==
+          NewProfileFault::AmbiguousFinalLeavesInvalidDestination ||
+      testCase.fault == NewProfileFault::UnsafeDestinationInspection) {
+    expect(!destinationRemovalAttempted,
+           label + " never removes an unsafe or invalid destination");
+    expect(std::filesystem::symlink_status(destination).type() !=
+               std::filesystem::file_type::not_found,
+           label + " preserves destination evidence");
+  }
+  if (testCase.fault == NewProfileFault::UnsafeDestinationInspection) {
+    expect(readFile(externalSentinel) == "external-data",
+           label + " leaves the external target untouched");
+  }
+
+  expect(readFile(source.settingsJson) == sourceSettingsBefore &&
+             rowCount(source.scoresDb, "profile_fault_marker") ==
+                 sourceMarkerRowsBefore,
+         label + " does not mutate source settings or database data");
+  if (operation == NewProfileOperation::Duplicate && result.ok()) {
+    const PlayerProfilePaths duplicate = manager.pathsFor(generatedId);
+    expect(readFile(duplicate.settingsJson) == sourceSettingsBefore &&
+               rowCount(duplicate.scoresDb, "profile_fault_marker") ==
+                   sourceMarkerRowsBefore,
+           label + " preserves duplicate settings and database data");
+  }
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  const ProfileResult reinitialized = recovered.Initialize();
+  expect(reinitialized.ok(),
+         label + " clean reinitialization succeeds: " + reinitialized.message);
+  expect(recovered.validateProfile(generatedId).ok() ==
+             testCase.expectedSuccess,
+         label + " clean reinitialization preserves canonical validity");
+  expect(hasProfile(recovered, generatedId) == testCase.expectedSuccess,
+         label + " clean reinitialization preserves catalog outcome");
+  expect(stagingDirectories(temp.path()).empty(),
+         label + " clean reinitialization recovers hidden staging");
+  expect(readFile(externalSentinel) == "external-data",
+         label + " recovery leaves external data untouched");
+}
+
+void testCreateAndDuplicateFaultMatrixHasFilesystemDerivedOutcomes() {
+  for (const NewProfileOperation operation :
+       {NewProfileOperation::Create, NewProfileOperation::Duplicate}) {
+    for (const NewProfileFaultCase &testCase : kNewProfileFaultCases) {
+      runNewProfileFaultCase(operation, testCase);
+    }
+  }
+}
+
 void testProfilesRootSymlinkNeverEscapesApplicationRoot() {
   TempDirectory temp("profile-confinement");
   TempDirectory external("profile-external");
@@ -1016,6 +1537,9 @@ int main() {
   testEveryPreFinalizeFailureCleansStaging();
   testFinalizedOrphanRecoversAfterBootstrapFailure();
   testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure();
+  testFailedCreateCommitSyncLeavesNoVisibleProfile();
+  testFailedDuplicateCommitSyncLeavesNoVisibleProfile();
+  testCreateAndDuplicateFaultMatrixHasFilesystemDerivedOutcomes();
   testProfilesRootSymlinkNeverEscapesApplicationRoot();
   testPartialTombstoneCleanupNeverRestoresOrExposesProfile();
   testFutureLegacyDatabaseVersionFailsClosedBeforeMigration();
