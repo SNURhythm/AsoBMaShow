@@ -1146,6 +1146,18 @@ void testMessagesNeverContainInjectedDiagnostics() {
   }
 }
 
+void testRecoveryMessageHasOnePublicSource() {
+  assert(recoveryUserMessage() == kRecoveryMessage);
+  const RecoverySummary failed =
+      recoveryFailureSummary("attempt-private: /private/profile/replays.db");
+  assert(failed.attempted == 0);
+  assert(failed.saved == 0);
+  assert(failed.pending == 1);
+  assert(failed.conflicts == 0);
+  assert(failed.userMessage == kRecoveryMessage);
+  assert(failed.userMessage.find(failed.diagnostic) == std::string::npos);
+}
+
 void testRecoveryLimitIsExactly256() {
   Harness harness;
   std::vector<std::size_t> limits;
@@ -1306,6 +1318,7 @@ int main() {
   testAlreadyAcknowledgedIsIdempotentRecoverySuccess();
   testUnknownRecoveryStatusesFailClosed();
   testMessagesNeverContainInjectedDiagnostics();
+  testRecoveryMessageHasOnePublicSource();
   testRecoveryLimitIsExactly256();
   testRecoveryIgnoresNonconformingBatchOverflow();
   testPersistentFirstBatchDoesNotStarveNewValidRow();

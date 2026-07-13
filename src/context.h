@@ -237,6 +237,9 @@ public:
               }
               return saveActiveInputProfile(inputProfile, error);
             },
+            .recoverPendingResults = [this] {
+              return recoverPendingResults();
+            },
             .beforeInputReplacement = [this]() {
               inputProfileReplacementNotifier.notifyBeforeReplacement();
             }});
@@ -264,6 +267,30 @@ public:
          .showArtist = settings.systemPlaybackShowArtist,
          .showArtwork = settings.systemPlaybackShowJacket},
         metadataVisibilityError);
+  }
+
+  [[nodiscard]] result_persistence::RecoverySummary
+  recoverPendingResults() noexcept {
+    try {
+      result_persistence::RecoverySummary summary =
+          resultPersistence.recoverAll();
+      SDL_Log("Result recovery completed: attempted=%zu saved=%zu pending=%zu "
+              "conflicts=%zu",
+              summary.attempted, summary.saved, summary.pending,
+              summary.conflicts);
+      if (!summary.diagnostic.empty()) {
+        SDL_Log("Result recovery diagnostic: %s", summary.diagnostic.c_str());
+      }
+      return summary;
+    } catch (const std::exception &error) {
+      SDL_Log("Result recovery raised an exception: %s", error.what());
+      return result_persistence::recoveryFailureSummary(
+          "result recovery raised a standard exception");
+    } catch (...) {
+      SDL_Log("Result recovery raised a non-standard exception");
+      return result_persistence::recoveryFailureSummary(
+          "result recovery raised a non-standard exception");
+    }
   }
 
   [[nodiscard]] bool profileReady() const {

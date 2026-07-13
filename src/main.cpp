@@ -1,5 +1,6 @@
 #include "targets.h"
 #include "AppDatabaseInitializer.h"
+#include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
 #include "bgfx_helper.h"
 #include "rendering/ShaderManager.h"
@@ -740,7 +741,17 @@ static void reportStartupFailure(
   }
 }
 
-static void runReadyApplication(ApplicationContext &context) {
+static void reportResultRecoveryWarning(
+    const result_persistence::RecoverySummary &recovery) {
+  if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
+                               "AsoBMaShow Result Recovery",
+                               recovery.userMessage.c_str(), s_window) != 0) {
+    SDL_Log("Unable to show the result recovery warning: %s", SDL_GetError());
+  }
+}
+
+static void
+runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
@@ -1431,6 +1442,19 @@ static void runReadyApplication(ApplicationContext &context) {
   s_postProcess.shutdown();
   // bgfx::destroy(vbh);
   // bgfx::destroy(ibh);
+}
+
+static void runReadyApplication(ApplicationContext &context) {
+  application_result_recovery::execute(
+      application_result_recovery::Dependencies{
+          .recover = [&context] { return context.recoverPendingResults(); },
+          .reportWarning = [](const auto &recovery) {
+            reportResultRecoveryWarning(recovery);
+          },
+          .runReadyRuntime = [&context] {
+            runReadyApplicationAfterResultRecovery(context);
+          },
+      });
 }
 
 int run() {

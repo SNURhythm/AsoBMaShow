@@ -78,6 +78,19 @@ std::string_view saveStateUserMessage(SaveState state) noexcept {
   return kUnstagedConflictMessage;
 }
 
+std::string_view recoveryUserMessage() noexcept { return kRecoveryMessage; }
+
+RecoverySummary recoveryFailureSummary(std::string diagnostic) {
+  return {
+      .attempted = 0,
+      .saved = 0,
+      .pending = 1,
+      .conflicts = 0,
+      .userMessage = std::string(recoveryUserMessage()),
+      .diagnostic = std::move(diagnostic),
+  };
+}
+
 bool SaveOutcome::durable() const noexcept {
   switch (state) {
   case SaveState::Saved:
@@ -286,7 +299,7 @@ RecoverySummary Coordinator::recoverAll(std::size_t limit) {
   appendDiagnostic(summary.diagnostic, batch.diagnostic);
   if (!batch.storageAvailable) {
     summary.pending = 1;
-    summary.userMessage = kRecoveryMessage;
+    summary.userMessage = recoveryUserMessage();
     return summary;
   }
 
@@ -414,7 +427,7 @@ RecoverySummary Coordinator::recoverAll(std::size_t limit) {
   }
 
   if (summary.pending != 0 || summary.conflicts != 0) {
-    summary.userMessage = kRecoveryMessage;
+    summary.userMessage = recoveryUserMessage();
   }
   return summary;
 }

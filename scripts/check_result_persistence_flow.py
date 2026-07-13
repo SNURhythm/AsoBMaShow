@@ -131,6 +131,13 @@ skin_interface = read("src/skin/ISkin.h")
 default_skin = read("src/skin/DefaultSkin.cpp")
 capture_source = read("src/practice/PracticeResultFlow.cpp")
 cmake = read("CMakeLists.txt")
+main_cmake = read("src/CMakeLists.txt")
+main_source = read("src/main.cpp")
+profile_header = read("src/ProfileSessionCoordinator.h")
+profile_source = read("src/ProfileSessionCoordinator.cpp")
+application_recovery_header = read("src/ApplicationResultRecovery.h")
+application_recovery_source = read("src/ApplicationResultRecovery.cpp")
+ios_project = read("ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj")
 
 require(
     context.count("result_persistence::Coordinator resultPersistence") == 1,
@@ -441,6 +448,122 @@ require(
     and "scripts/check_result_persistence_flow.py" in cmake
     and "scripts/check_result_persistence_flow.sh" not in cmake,
     "CTest must invoke the Python audit through CMake's cross-platform interpreter",
+)
+
+require(
+    coordinator_header.count("recoveryUserMessage()") == 1
+    and coordinator_header.count("recoveryFailureSummary(") == 1,
+    "the coordinator must expose one aggregate warning source and sanitized failure factory",
+)
+require(
+    "namespace application_result_recovery" in application_recovery_header
+    and "std::function<result_persistence::RecoverySummary()> recover" in application_recovery_header
+    and "reportWarning" in application_recovery_header
+    and "runReadyRuntime" in application_recovery_header
+    and "void execute(const Dependencies &dependencies)" in application_recovery_header,
+    "startup recovery must expose the pure three-callback orchestration contract",
+)
+application_recovery_body = unqualified_function_body(
+    application_recovery_source, "execute"
+)
+require(
+    ordered(
+        application_recovery_body,
+        "dependencies.recover()",
+        "!summary.userMessage.empty()",
+        "dependencies.reportWarning(summary)",
+        "dependencies.runReadyRuntime()",
+    ),
+    "startup recovery must recover once, optionally warn, then run runtime",
+)
+require(
+    application_recovery_body.count("dependencies.recover()") == 1
+    and application_recovery_body.count("dependencies.reportWarning(summary)") == 1
+    and application_recovery_body.count("dependencies.runReadyRuntime()") == 1,
+    "startup recovery callbacks must each have one call site",
+)
+
+require(
+    profile_header.count("recoverPendingResults") == 1
+    and "std::function<result_persistence::RecoverySummary()>" in profile_header,
+    "profile sessions must inject exactly one typed pending-result recovery callback",
+)
+switch_body = function_body(profile_source, "ProfileSessionCoordinator", "switchTo")
+score_bind = switch_body.find("dependencies_.bindScore(")
+replay_bind = switch_body.find("dependencies_.bindReplay(", score_bind + 1)
+forward_switch = switch_body[replay_bind:] if replay_bind >= 0 else ""
+require(
+    score_bind >= 0
+    and replay_bind > score_bind
+    and ordered(
+        forward_switch,
+        "dependencies_.bindReplay(",
+        "dependencies_.recoverPendingResults()",
+        "applyInput_(",
+        "refreshCaches_()",
+        "manager_.commitActiveProfile(",
+    ),
+    "profile recovery must follow both target binds and precede input, caches, and commit",
+)
+require(
+    "recoveryUserMessage()" in forward_switch
+    and "catch (const std::exception &" in forward_switch
+    and "catch (...)" in forward_switch,
+    "profile recovery callback exceptions must become the centralized sanitized warning",
+)
+
+require(
+    context.count("recoverPendingResults() noexcept") == 1
+    and context.count(".recoverPendingResults = [this]") == 1
+    and context.count("resultPersistence.recoverAll()") == 1
+    and context.count("recoveryFailureSummary(") == 2,
+    "ApplicationContext must own one nonthrowing recovery adapter reused by profile activation",
+)
+require(
+    main_source.count('#include "ApplicationResultRecovery.h"') == 1
+    and main_source.count("application_result_recovery::execute(") == 1,
+    "main must delegate post-database recovery to the pure orchestrator exactly once",
+)
+require(
+    main_source.count("runReadyApplicationAfterResultRecovery") == 2
+    and main_source.count("SceneManager sceneManager(context)") == 1,
+    "scene registration must live only in the post-recovery runtime body",
+)
+main_recovery_body = unqualified_function_body(main_source, "runReadyApplication")
+require(
+    ordered(
+        main_recovery_body,
+        "application_result_recovery::execute(",
+        ".recover = [&context]",
+        "context.recoverPendingResults()",
+        ".reportWarning",
+        ".runReadyRuntime",
+        "runReadyApplicationAfterResultRecovery(context)",
+    ),
+    "startup ready callback must bind recovery, warning, and post-recovery runtime",
+)
+warning_body = unqualified_function_body(main_source, "reportResultRecoveryWarning")
+require(
+    '"AsoBMaShow Result Recovery"' in warning_body
+    and "recovery.userMessage.c_str()" in warning_body
+    and "s_window" in warning_body
+    and "recovery.diagnostic" not in warning_body
+    and "attemptId" not in warning_body,
+    "native recovery warning must show only sanitized copy on the current window",
+)
+require(
+    cmake.count("tests/application_result_recovery_tests.cpp") == 1
+    and cmake.count("src/ApplicationResultRecovery.cpp") == 1
+    and cmake.count("application_result_recovery_tests") >= 3,
+    "CMake must build and register the pure startup recovery test once",
+)
+require(
+    main_cmake.count("ApplicationResultRecovery.cpp") == 1,
+    "the main target must compile ApplicationResultRecovery.cpp exactly once",
+)
+require(
+    len(re.findall(r"\n\s*ApplicationResultRecovery\.cpp,", ios_project)) == 1,
+    "iOS source membership must contain ApplicationResultRecovery.cpp exactly once",
 )
 
 if failures:

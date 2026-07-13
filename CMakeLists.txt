@@ -734,6 +734,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(application_startup_tests PRIVATE cxx_std_23)
 
+    add_executable(application_result_recovery_tests
+        tests/application_result_recovery_tests.cpp
+        src/ApplicationResultRecovery.cpp
+    )
+    target_include_directories(application_result_recovery_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(application_result_recovery_tests PRIVATE cxx_std_23)
+
     add_executable(audio_video_settings_tests
         tests/audio_video_settings_tests.cpp
         src/AppSettings.cpp
@@ -1206,6 +1215,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ChartDBHelper.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1433,6 +1443,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         score_cache_query_tests
         app_database_initializer_tests
         application_startup_tests
+        application_result_recovery_tests
         chart_filter_sort_panel_view_tests
         dropdown_view_tests
         view_layout_tests
@@ -1440,6 +1451,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    set_tests_properties(application_result_recovery_tests PROPERTIES
+        TIMEOUT 10
+    )
     set_tests_properties(result_persistence_integration_tests PROPERTIES
         TIMEOUT 15
     )
@@ -1475,6 +1489,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
+    set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 30)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)

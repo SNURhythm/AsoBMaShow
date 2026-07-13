@@ -5,6 +5,7 @@
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileSessionCoordinator.h"
 #include "../src/ReplayDBHelper.h"
+#include "../src/ResultPersistenceCoordinator.h"
 #include "../src/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/input/InputProfileStore.h"
@@ -361,12 +362,20 @@ struct SwitchFixture {
   bool failReplayBind = false;
   bool failInputApply = false;
   bool failRefreshOnce = false;
+  bool throwRecoveryStd = false;
+  bool throwRecoveryNonStd = false;
   std::optional<std::string> blocker;
   ProfileSwitchBlockers operationBlockers;
   int refreshCount = 0;
+  int recoveryCalls = 0;
+  bool recoveryObservedTargetBindings = false;
+  bool recoveryNestedGuardCompleted = false;
+  result_persistence::RecoverySummary recoverySummary;
+  std::vector<std::string> switchEvents;
   std::vector<std::string> inputReplacementEvents;
   std::vector<input::GyroscopeTurntableConfig> runtimeGyroscopeApplications;
   std::function<void()> refreshAction;
+  std::function<void()> recoveryAction;
   std::filesystem::path appliedInputPath;
   InputProfile currentInput = makeDefaultInputProfile();
   input::GyroscopeTurntableConfig runtimeGyroscopeConfig;
@@ -473,6 +482,7 @@ struct SwitchFixture {
     appliedInputPath = firstPaths.inputJson;
     score.SetDatabasePath(firstPaths.scoresDb);
     replay.SetDatabasePath(firstPaths.replaysDb);
+    switchEvents.clear();
   }
 
   PlayerProfileManagerDependencies makeManagerDependencies() {
@@ -481,6 +491,9 @@ struct SwitchFixture {
     dependencies.utcNow = [] { return "2026-07-11T12:34:56Z"; };
     dependencies.beforeMigrationPhase = [this](ProfileMigrationPhase phase,
                                                std::string &error) {
+      if (phase == ProfileMigrationPhase::WriteBootstrap) {
+        switchEvents.emplace_back("commit");
+      }
       if (phase == ProfileMigrationPhase::WriteBootstrap && failBootstrap) {
         error = "injected bootstrap failure";
         return false;
@@ -516,7 +529,11 @@ struct SwitchFixture {
         error = "injected score bind failure";
         return false;
       }
-      return helper.BindDatabasePath(path, error);
+      const bool bound = helper.BindDatabasePath(path, error);
+      if (bound) {
+        switchEvents.emplace_back("bind-score");
+      }
+      return bound;
     };
     dependencies.bindReplay = [this](ReplayDBHelper &helper,
                                      const std::filesystem::path &path,
@@ -525,7 +542,35 @@ struct SwitchFixture {
         error = "injected replay bind failure";
         return false;
       }
-      return helper.BindDatabasePath(path, error);
+      const bool bound = helper.BindDatabasePath(path, error);
+      if (bound) {
+        switchEvents.emplace_back("bind-replay");
+      }
+      return bound;
+    };
+    dependencies.recoverPendingResults = [this] {
+      ++recoveryCalls;
+      switchEvents.emplace_back("recover-results");
+      recoveryObservedTargetBindings =
+          score.GetDatabasePath() == secondPaths.scoresDb &&
+          replay.GetDatabasePath() == secondPaths.replaysDb;
+      {
+        profile_database_activity::WriteGuard nestedRecoveryGuard;
+        recoveryNestedGuardCompleted =
+            ScoreDBHelper::HasActiveWrites() &&
+            ReplayDBHelper::HasActiveWrites();
+      }
+      if (recoveryAction) {
+        recoveryAction();
+      }
+      if (throwRecoveryStd) {
+        throw std::runtime_error(
+            "attempt-private: /private/profile/replays.db");
+      }
+      if (throwRecoveryNonStd) {
+        throw 17;
+      }
+      return recoverySummary;
     };
     dependencies.beforeInputReplacement = [this]() {
       inputReplacementEvents.emplace_back("before");
@@ -534,6 +579,7 @@ struct SwitchFixture {
   }
 
   bool applyInput(const std::filesystem::path &path, std::string &error) {
+    switchEvents.emplace_back("apply-input");
     inputReplacementEvents.emplace_back("apply");
     const auto loaded = InputProfileStore::load(path);
     if (loaded.status != InputProfileLoadStatus::Loaded) {
@@ -563,6 +609,7 @@ struct SwitchFixture {
   }
 
   void refreshCaches() {
+    switchEvents.emplace_back("refresh-caches");
     ++refreshCount;
     if (failRefreshOnce) {
       failRefreshOnce = false;
@@ -675,6 +722,140 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   expect(savedOldInput.status == InputProfileLoadStatus::Loaded &&
              firstBindingId(savedOldInput.profile) == "unsaved-first-binding",
          "switch saves current input into the old profile first");
+}
+
+void testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  fixture.switchEvents.clear();
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok(), "ordered recovery profile switch succeeds");
+  expect(fixture.switchEvents ==
+             std::vector<std::string>{"bind-score", "bind-replay",
+                                      "recover-results", "apply-input",
+                                      "refresh-caches", "commit"},
+         "target recovery runs after both binds and before input, caches, and "
+         "commit");
+  expect(fixture.recoveryCalls == 1 &&
+             fixture.recoveryObservedTargetBindings,
+         "recovery runs exactly once against both target database bindings");
+}
+
+void testRecoveryWarningDoesNotRollbackSuccessfulSwitch() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  fixture.recoverySummary = {
+      .attempted = 2,
+      .saved = 1,
+      .pending = 1,
+      .conflicts = 0,
+      .userMessage =
+          std::string(result_persistence::recoveryUserMessage()),
+      .diagnostic = "attempt-private: /private/profile/replays.db",
+  };
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok(), "pending recovery warning keeps switch successful");
+  expect(result.message == result_persistence::recoveryUserMessage(),
+         "successful switch preserves only the aggregate recovery warning");
+  expect(fixture.manager.activeProfile().id == fixture.secondId &&
+             fixture.score.GetDatabasePath() == fixture.secondPaths.scoresDb &&
+             fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
+         "recovery warning does not roll back valid target bindings");
+}
+
+void testRecoveryExceptionBecomesSanitizedWarning() {
+  for (const bool nonStandard : {false, true}) {
+    SwitchFixture fixture;
+    if (fixture.firstId.empty() || fixture.secondId.empty()) {
+      continue;
+    }
+    fixture.throwRecoveryStd = !nonStandard;
+    fixture.throwRecoveryNonStd = nonStandard;
+
+    const ProfileSwitchResult result = fixture.coordinator.switchTo(
+        fixture.secondId, fixture.currentSettings);
+
+    expect(result.ok(),
+           "recovery callback exception does not roll back profile switch");
+    expect(result.message == result_persistence::recoveryUserMessage(),
+           "recovery callback exception becomes the sanitized aggregate "
+           "warning");
+    expect(result.message.find("attempt-private") == std::string::npos &&
+               result.message.find("/private/") == std::string::npos,
+           "recovery warning excludes raw exception details");
+    expect(fixture.manager.activeProfile().id == fixture.secondId &&
+               fixture.recoveryCalls == 1,
+           "recovery exception still leaves the target profile active");
+  }
+}
+
+void testRollbackRestoresOldBindingsAfterLaterFailure() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  const std::string bootstrapBefore =
+      readFile(fixture.temp.path() / "active-profile.json");
+  int recoveredTargetResults = 0;
+  fixture.recoveryAction = [&] { ++recoveredTargetResults; };
+  fixture.failRefreshOnce = true;
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(!result.ok(), "failure after recovery still aborts profile switch");
+  expect(fixture.recoveryCalls == 1 && recoveredTargetResults == 1,
+         "target recovery side effect remains committed after later failure");
+  expectFirstProfileState(fixture, bootstrapBefore,
+                          "post-recovery cache failure");
+}
+
+void testRecoveryRunsUnderExistingSwitchGuardWithoutDeadlock() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok(), "nested recovery guard profile switch completes");
+  expect(fixture.recoveryNestedGuardCompleted,
+         "recovery acquires its nested write guard under the switch guard");
+}
+
+void testRecoverySkipsSameProfileAndFailedDatabaseBinds() {
+  SwitchFixture sameProfile;
+  if (sameProfile.firstId.empty()) {
+    return;
+  }
+  const ProfileSwitchResult unchanged = sameProfile.coordinator.switchTo(
+      sameProfile.firstId, sameProfile.currentSettings);
+  expect(unchanged.ok() && sameProfile.recoveryCalls == 0,
+         "same-profile early return does not run recovery");
+
+  for (const bool scoreFailure : {true, false}) {
+    SwitchFixture fixture;
+    if (fixture.firstId.empty() || fixture.secondId.empty()) {
+      continue;
+    }
+    fixture.failScoreBind = scoreFailure;
+    fixture.failReplayBind = !scoreFailure;
+    const ProfileSwitchResult result = fixture.coordinator.switchTo(
+        fixture.secondId, fixture.currentSettings);
+    expect(!result.ok() && fixture.recoveryCalls == 0,
+           "failed target database bind never runs recovery");
+  }
 }
 
 void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
@@ -1848,6 +2029,12 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
+  testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
+  testRecoveryWarningDoesNotRollbackSuccessfulSwitch();
+  testRecoveryExceptionBecomesSanitizedWarning();
+  testRollbackRestoresOldBindingsAfterLaterFailure();
+  testRecoveryRunsUnderExistingSwitchGuardWithoutDeadlock();
+  testRecoverySkipsSameProfileAndFailedDatabaseBinds();
   testSupportedOlderTargetMigratesAtSchemaOwnerBoundary();
   testEveryDeclaredBlockerRejectsWithoutMutation();
   testBackgroundLibraryBlockerSurvivesSceneReplacement();

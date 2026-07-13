@@ -49,6 +49,9 @@ struct RecoverySummary {
   std::string diagnostic;
 };
 
+[[nodiscard]] std::string_view recoveryUserMessage() noexcept;
+[[nodiscard]] RecoverySummary recoveryFailureSummary(std::string diagnostic);
+
 struct Dependencies {
   std::function<StageOutcome(const ChartResultAttempt &)> stage;
   std::function<PendingReadOutcome(std::string_view)> loadPending;
