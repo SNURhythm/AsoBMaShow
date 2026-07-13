@@ -800,6 +800,7 @@ void runNewProfileFaultCase(NewProfileOperation operation,
   int rollbackRenameCalls = 0;
   int profilesSyncCalls = 0;
   bool rollbackCleanupFailureInjected = false;
+  bool rollbackCleanupSyncAttempted = false;
   bool destinationRemovalAttempted = false;
   const auto profiles = temp.path() / "profiles";
   const auto staging = profiles / (".staging-" + generatedId);
@@ -918,6 +919,7 @@ void runNewProfileFaultCase(NewProfileOperation operation,
     }
     if (testCase.fault == NewProfileFault::RollbackCleanupSyncFails &&
         profilesSyncCalls == 3) {
+      rollbackCleanupSyncAttempted = true;
       error = "injected rollback cleanup sync failure";
       return false;
     }
@@ -966,6 +968,10 @@ void runNewProfileFaultCase(NewProfileOperation operation,
   if (testCase.fault == NewProfileFault::RollbackCleanupFails) {
     expect(rollbackCleanupFailureInjected,
            label + " reaches rollback staging cleanup");
+  }
+  if (testCase.fault == NewProfileFault::RollbackCleanupSyncFails) {
+    expect(rollbackCleanupSyncAttempted,
+           label + " reaches rollback staging cleanup sync");
   }
   expect(result.ok() == testCase.expectedSuccess,
          label + " reports the canonical outcome: " + result.message);
