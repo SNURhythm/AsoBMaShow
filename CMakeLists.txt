@@ -602,6 +602,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(result_persistence_model_tests PRIVATE SDL2)
     endif()
+    if(WIN32)
+        target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(score_provenance_db_tests
         tests/score_provenance_db_tests.cpp

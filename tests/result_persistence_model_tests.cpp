@@ -368,6 +368,18 @@ void testFullComboNormalization() {
          "playback policy caps the replay full-combo rank");
 }
 
+void testVersionOneFingerprintGolden() {
+  ReplayData replay;
+  replay.id = 99;
+  replay.createdAt = "excluded database timestamp";
+  const result_persistence::ChartScoreWrite score;
+  const std::string actual =
+      result_persistence::payloadFingerprint(replay, score);
+  expect(actual ==
+             "17bc9e5a4b9907cf1e25f36bf24bc4a9c57b1a23ed6525609f7583667e989148",
+         "v1 fingerprint remains stable");
+}
+
 void testReplayFingerprintCoverage() {
   const AttemptFixture fixture;
 
@@ -799,6 +811,7 @@ int main() {
   testScoreCapture();
   testAttemptValidationAndFingerprint();
   testFullComboNormalization();
+  testVersionOneFingerprintGolden();
   testReplayFingerprintCoverage();
   testProvenanceFingerprintCoverage();
   testScoreFingerprintCoverage();
