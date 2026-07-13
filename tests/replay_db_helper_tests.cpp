@@ -879,10 +879,13 @@ ReplayData sampleReplay(const std::filesystem::path &root,
 }
 
 std::string chartAttemptId(int suffix) {
-  assert(suffix >= 0 && suffix <= 255);
+  assert(suffix >= 0 && suffix <= 4095);
   std::string value = "00000000-0000-4000-8000-000000000000";
   constexpr std::string_view digits = "0123456789abcdef";
-  value[value.size() - 2] = digits[static_cast<std::size_t>(suffix / 16)];
+  value[value.size() - 3] =
+      digits[static_cast<std::size_t>((suffix / 256) % 16)];
+  value[value.size() - 2] =
+      digits[static_cast<std::size_t>((suffix / 16) % 16)];
   value.back() = digits[static_cast<std::size_t>(suffix % 16)];
   return value;
 }
@@ -891,6 +894,9 @@ result_persistence::ChartResultAttempt
 sampleChartAttempt(const std::filesystem::path &root, const std::string &hash,
                    int idSuffix) {
   ReplayData replay = sampleReplay(root, hash);
+  replay.provenance.stages.front().chartMd5 = replay.chartMeta.MD5;
+  replay.provenance.stages.front().chartSha256 = replay.chartMeta.SHA256;
+  replay.provenance.stages.front().longNoteMode = replay.chartMeta.LnMode;
   replay.touchSamples.push_back({.action = ReplayTouchAction::Move,
                                  .fingerId = 17,
                                  .songTimeMicros = 100200,
@@ -1084,6 +1090,93 @@ void testChangedPayloadForSameAttemptConflicts(
                   "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
   assert(queryText(db.get(), "SELECT attempt_fingerprint FROM replays") ==
          original.payloadFingerprint);
+}
+
+void testStageRejectsSemanticResultConflicts(
+    const std::filesystem::path &root) {
+  const auto path = root / "stage-semantic-conflicts" / "replay.db";
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto expectConflict = [&](auto attempt) {
+    attempt.payloadFingerprint =
+        result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+    const auto outcome = helper.StageChartResult(attempt);
+    assert(outcome.status ==
+           result_persistence::StageStatus::IntegrityConflict);
+    assert(!outcome.receipt.has_value());
+    assert(!outcome.diagnostic.empty());
+  };
+
+  auto clearRankConflict = sampleChartAttempt(root, "stage-semantic-clear", 10);
+  clearRankConflict.replay.clearType = kClearTypeFailedRank;
+  expectConflict(clearRankConflict);
+
+  auto longNoteModeConflict =
+      sampleChartAttempt(root, "stage-semantic-ln-mode", 11);
+  longNoteModeConflict.score.longNoteMode = 1;
+  expectConflict(longNoteModeConflict);
+
+  auto impossibleScore =
+      sampleChartAttempt(root, "stage-semantic-impossible", 12);
+  ++impossibleScore.score.score;
+  ++impossibleScore.replay.finalScore;
+  expectConflict(impossibleScore);
+
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 0);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 0);
+}
+
+void testStageAcceptsStandard9KeysGaugeMaximum(
+    const std::filesystem::path &root) {
+  const auto path = root / "stage-pms-gauge-maximum" / "replay.db";
+  ReplayDBHelper helper(path);
+  auto attempt = sampleChartAttempt(root, "stage-pms-gauge-maximum", 13);
+  attempt.replay.initialGaugeType = GaugeType::Normal;
+  attempt.replay.finalGauge = 120.0f;
+  attempt.replay.clearType = kClearTypeNormalClearRank;
+  attempt.replay.provenance.gaugeType = GaugeType::Normal;
+  attempt.replay.provenance.gaugeProfile = GaugeProfile::Standard9Keys;
+  attempt.score.finalGauge = attempt.replay.finalGauge;
+  attempt.score.clearType = attempt.replay.clearType;
+  attempt.score.provenance = attempt.replay.provenance;
+  attempt.payloadFingerprint =
+      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+
+  const auto staged = helper.StageChartResult(attempt);
+  assert(staged.status == result_persistence::StageStatus::Staged);
+  const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score.finalGauge == 120.0f);
+}
+
+void testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(
+    const std::filesystem::path &root) {
+  const auto path = root / "stage-charge-note-tail-judgements" / "replay.db";
+  ReplayDBHelper helper(path);
+  auto attempt =
+      sampleChartAttempt(root, "stage-charge-note-tail-judgements", 14);
+  attempt.score.score = 110;
+  attempt.score.maxCombo = 55;
+  attempt.score.comboBreak = 0;
+  attempt.score.pGreat = 55;
+  attempt.score.great = 0;
+  attempt.replay.finalScore = attempt.score.score;
+  attempt.replay.maxCombo = attempt.score.maxCombo;
+  attempt.replay.clearType = kClearTypeFullComboRank;
+  attempt.payloadFingerprint =
+      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+
+  const auto staged = helper.StageChartResult(attempt);
+  assert(staged.status == result_persistence::StageStatus::Staged);
+  const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score.score > pending.value->score.maxScore);
+  assert(pending.value->score.maxCombo > pending.value->score.maxScore / 2);
 }
 
 void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
@@ -1282,6 +1375,196 @@ void testRecoverySnapshotPrioritizesNeverAttemptedRows(
                   "SELECT last_recovery_at IS NOT NULL FROM "
                   "pending_chart_score_writes WHERE attempt_id='" +
                       first.attemptId + "'") == 1);
+}
+
+void testPendingSemanticConflictsAreRetainedByAcknowledgement(
+    const std::filesystem::path &root) {
+  const auto path = root / "pending-semantic-conflicts" / "replay.db";
+  ReplayDBHelper helper(path);
+  const auto attempt =
+      sampleChartAttempt(root, "pending-semantic-conflicts", 20);
+  const auto staged = helper.StageChartResult(attempt);
+  assert(staged.status == result_persistence::StageStatus::Staged);
+  assert(staged.receipt.has_value());
+
+  const auto expectRetainedConflict = [&] {
+    const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
+    assert(pending.status ==
+           result_persistence::PendingReadStatus::IntegrityConflict);
+    assert(!pending.value.has_value());
+    assert(!pending.diagnostic.empty());
+    const auto acknowledged = helper.AcknowledgePendingChartScore(
+        attempt.attemptId, staged.receipt->replayId);
+    assert(acknowledged.status ==
+           result_persistence::AcknowledgeStatus::IntegrityConflict);
+    auto db = openDatabase(path);
+    assert(queryInt(db.get(),
+                    "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
+  };
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET final_score=final_score+1");
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET final_score=" +
+                            std::to_string(attempt.replay.finalScore));
+  execOrAbort(db.get(), "UPDATE replays SET max_combo=max_combo+1");
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET max_combo=" +
+                            std::to_string(attempt.replay.maxCombo));
+  execOrAbort(db.get(), "UPDATE replays SET final_gauge=final_gauge+1.0");
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET final_gauge=82.5");
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET clear_type=" +
+                            std::to_string(kClearTypeFailedRank));
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET clear_type=" +
+                            std::to_string(attempt.score.clearType));
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET ln_mode=1");
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET ln_mode=" +
+                            std::to_string(attempt.score.longNoteMode));
+  execOrAbort(db.get(), "UPDATE replays SET ruleset_version=ruleset_version+1");
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE replays SET ruleset_version=" +
+                  std::to_string(attempt.replay.provenance.ruleset.version));
+  execOrAbort(db.get(), "UPDATE replays SET eligibility=1");
+  db.reset();
+  expectRetainedConflict();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET eligibility=" +
+                            std::to_string(static_cast<int>(
+                                attempt.replay.provenance.eligibility)));
+
+  ScoreProvenance changedProvenance = attempt.replay.provenance;
+  changedProvenance.player1.option = "MIRROR";
+  std::string provenanceError;
+  const auto changedProvenanceJson =
+      serializeValidatedScoreProvenance(changedProvenance, provenanceError);
+  assert(changedProvenanceJson.has_value());
+  SqliteStatementHandle provenanceUpdate;
+  assert(prepareSqliteStatement(db.get(),
+                                "UPDATE replays SET provenance_json=?",
+                                provenanceUpdate) == SQLITE_OK);
+  bindSqliteText(provenanceUpdate.get(), 1, *changedProvenanceJson);
+  assert(sqlite3_step(provenanceUpdate.get()) == SQLITE_DONE);
+  provenanceUpdate.reset();
+  db.reset();
+  expectRetainedConflict();
+
+  db = openDatabase(path);
+  const auto originalProvenanceJson = serializeValidatedScoreProvenance(
+      attempt.replay.provenance, provenanceError);
+  assert(originalProvenanceJson.has_value());
+  assert(prepareSqliteStatement(db.get(),
+                                "UPDATE replays SET provenance_json=?",
+                                provenanceUpdate) == SQLITE_OK);
+  bindSqliteText(provenanceUpdate.get(), 1, *originalProvenanceJson);
+  assert(sqlite3_step(provenanceUpdate.get()) == SQLITE_DONE);
+  provenanceUpdate.reset();
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET score=score+1");
+  execOrAbort(db.get(), "UPDATE replays SET final_score=final_score+1");
+  db.reset();
+  expectRetainedConflict();
+}
+
+void testPendingBatchHardCapsAt256(const std::filesystem::path &root) {
+  const auto path = root / "pending-batch-hard-cap" / "replay.db";
+  ReplayDBHelper helper(path);
+  for (int suffix = 0; suffix < 257; ++suffix) {
+    const auto attempt = sampleChartAttempt(
+        root, "pending-cap-" + std::to_string(suffix), suffix);
+    assert(helper.StageChartResult(attempt).status ==
+           result_persistence::StageStatus::Staged);
+  }
+
+  const auto oversized = helper.ListPendingChartScores(300);
+  assert(oversized.storageAvailable);
+  assert(oversized.entries.size() == 256);
+  const auto smaller = helper.ListPendingChartScores(3);
+  assert(smaller.storageAvailable);
+  assert(smaller.entries.size() == 3);
+  const auto empty = helper.ListPendingChartScores(0);
+  assert(empty.storageAvailable);
+  assert(empty.entries.empty());
+}
+
+void testMalformedPendingIdentitiesCanRotate(
+    const std::filesystem::path &root) {
+  const auto path = root / "pending-malformed-identity-fairness" / "replay.db";
+  ReplayDBHelper helper(path);
+  const auto first = sampleChartAttempt(root, "pending-malformed-id-a", 30);
+  const auto second = sampleChartAttempt(root, "pending-malformed-id-b", 31);
+  const auto valid = sampleChartAttempt(root, "pending-malformed-id-c", 32);
+  assert(helper.StageChartResult(first).receipt.has_value());
+  assert(helper.StageChartResult(second).receipt.has_value());
+  assert(helper.StageChartResult(valid).receipt.has_value());
+
+  constexpr std::string_view firstRawId = "!malformed-attempt-a";
+  constexpr std::string_view secondRawId = "!malformed-attempt-b";
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET attempt_id='" +
+                            std::string(firstRawId) + "' WHERE attempt_id='" +
+                            first.attemptId + "'");
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET attempt_id='" +
+                            std::string(secondRawId) + "' WHERE attempt_id='" +
+                            second.attemptId + "'");
+  db.reset();
+
+  const auto firstBatch = helper.ListPendingChartScores(2);
+  assert(firstBatch.storageAvailable);
+  assert(firstBatch.entries.size() == 2);
+  assert(firstBatch.entries[0].attemptId == firstRawId);
+  assert(firstBatch.entries[1].attemptId == secondRawId);
+  for (const auto &entry : firstBatch.entries) {
+    assert(entry.status ==
+           result_persistence::PendingReadStatus::IntegrityConflict);
+    assert(!entry.value.has_value());
+    assert(helper
+               .RecordPendingChartScoreRecoveryAttempt(
+                   entry.attemptId,
+                   result_persistence::RecoveryAttemptKind::IntegrityConflict)
+               .status == result_persistence::RecoveryMarkStatus::Recorded);
+  }
+
+  db = openDatabase(path);
+  assert(
+      queryText(db.get(), "SELECT attempt_id FROM pending_chart_score_writes "
+                          "WHERE attempt_id='" +
+                              std::string(firstRawId) + "'") == firstRawId);
+  assert(
+      queryText(db.get(), "SELECT attempt_id FROM pending_chart_score_writes "
+                          "WHERE attempt_id='" +
+                              std::string(secondRawId) + "'") == secondRawId);
+  assert(queryInt(db.get(), "SELECT SUM(recovery_attempts) FROM "
+                            "pending_chart_score_writes WHERE attempt_id LIKE "
+                            "'!malformed-attempt-%'") == 2);
+  db.reset();
+
+  const auto secondBatch = helper.ListPendingChartScores(2);
+  assert(secondBatch.storageAvailable);
+  assert(secondBatch.entries.size() == 2);
+  assert(std::ranges::any_of(secondBatch.entries, [&](const auto &entry) {
+    return entry.attemptId == valid.attemptId &&
+           entry.status == result_persistence::PendingReadStatus::Found;
+  }));
+  assert(helper
+             .RecordPendingChartScoreRecoveryAttempt(
+                 "!missing-attempt",
+                 result_persistence::RecoveryAttemptKind::StorageFailure)
+             .status == result_persistence::RecoveryMarkStatus::NotFound);
 }
 
 void finalizeCourseReplay(CourseReplayData &course) {
@@ -3576,11 +3859,17 @@ int main() {
   testStageChartResultIsAtomicAndReturnsTimestamp(root);
   testIdenticalAttemptIsIdempotent(root);
   testChangedPayloadForSameAttemptConflicts(root);
+  testStageRejectsSemanticResultConflicts(root);
+  testStageAcceptsStandard9KeysGaugeMaximum(root);
+  testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(root);
   testAcknowledgedAttemptRemainsIdempotentByFingerprint(root);
   testOutboxInsertFailureRollsBackReplayAndChildren(root);
   testPendingReadsDistinguishMissingFailureAndConflict(root);
   testRecoverySnapshotKeepsMalformedRowsAndContinues(root);
   testRecoverySnapshotPrioritizesNeverAttemptedRows(root);
+  testPendingSemanticConflictsAreRetainedByAcknowledgement(root);
+  testPendingBatchHardCapsAt256(root);
+  testMalformedPendingIdentitiesCanRotate(root);
   testExistingListLimits(root);
 
   std::filesystem::remove_all(root);

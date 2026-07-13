@@ -11,6 +11,7 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -1091,6 +1092,98 @@ bool isCanonicalOptionalHash(std::string_view value, std::size_t size) {
   return value.empty() || isCanonicalLowerHex(value, size);
 }
 
+bool sameFloatBits(float left, float right) {
+  return std::bit_cast<std::uint32_t>(left) ==
+         std::bit_cast<std::uint32_t>(right);
+}
+
+bool isKnownClearRank(int clearType) {
+  switch (clearType) {
+  case kClearTypeFailedRank:
+  case kClearTypeAssistedEasyClearRank:
+  case kClearTypeLightAssistedEasyClearRank:
+  case kClearTypeEasyClearRank:
+  case kClearTypeNormalClearRank:
+  case kClearTypeHardClearRank:
+  case kClearTypeExHardClearRank:
+  case kClearTypeFullComboRank:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool validateChartScoreReplaySemantics(
+    const result_persistence::ChartScoreWrite &score,
+    const bms_parser::ChartMeta &chartMeta, int replayFinalScore,
+    int replayMaxCombo, float replayFinalGauge, int replayClearType,
+    std::optional<int> expectedTotalNotes, std::string &diagnostic) {
+  const auto reject = [&](std::string message) {
+    diagnostic = std::move(message);
+    return false;
+  };
+
+  if (score.longNoteMode <= long_note_mode::kUnknownValue ||
+      long_note_mode::normalizeValue(score.longNoteMode) !=
+          score.longNoteMode) {
+    return reject("score long-note mode is outside the playable range");
+  }
+  const ScoreStageProvenance *stage =
+      score_provenance::uniqueStageForChart(score.provenance, chartMeta);
+  if (stage == nullptr || stage->longNoteMode != score.longNoteMode) {
+    return reject(
+        "score long-note mode does not match a unique provenance stage");
+  }
+
+  if (score.score < 0 || score.maxScore < 0 || score.maxCombo < 0 ||
+      score.comboBreak < 0 || score.pGreat < 0 || score.great < 0 ||
+      score.good < 0 || score.bad < 0 || score.poor < 0 || score.kPoor < 0 ||
+      score.fast < 0 || score.slow < 0) {
+    return reject("score payload contains negative result counters");
+  }
+  if ((score.maxScore % 2) != 0) {
+    return reject("score maximum is not a whole-note score");
+  }
+  const int totalNotes = score.maxScore / 2;
+  if (expectedTotalNotes.has_value()) {
+    const std::int64_t expectedMaxScore =
+        static_cast<std::int64_t>(*expectedTotalNotes) * 2;
+    if (*expectedTotalNotes < 0 ||
+        expectedMaxScore > std::numeric_limits<int>::max() ||
+        score.maxScore != static_cast<int>(expectedMaxScore)) {
+      return reject("score maximum does not match replay chart notes");
+    }
+  }
+  const std::int64_t judgementScore =
+      static_cast<std::int64_t>(score.pGreat) * 2 + score.great;
+  if (judgementScore != score.score) {
+    return reject("score payload is inconsistent with its result counters");
+  }
+  const float maximumGauge = gaugeStartingMaximumValue(
+      score.provenance.gaugeType, score.provenance.gaugeAutoShift,
+      score.provenance.gaugeAutoShiftLowerBound, score.provenance.gaugeProfile);
+  if (!std::isfinite(score.finalGauge) || score.finalGauge < 0.0f ||
+      score.finalGauge > maximumGauge) {
+    return reject("score gauge is outside the playable range");
+  }
+  if (!isKnownClearRank(score.clearType)) {
+    return reject("score clear rank is not recognized");
+  }
+  if (score.score != replayFinalScore || score.maxCombo != replayMaxCombo ||
+      !sameFloatBits(score.finalGauge, replayFinalGauge)) {
+    return reject("score and replay result facts disagree");
+  }
+
+  const bool fullCombo =
+      totalNotes > 0 && score.comboBreak == 0 && score.maxCombo >= totalNotes;
+  const int expectedReplayClearType = clear_policy::fullComboRankForPlayback(
+      score.clearType, fullCombo, score.provenance.playback);
+  if (replayClearType != expectedReplayClearType) {
+    return reject("score and replay clear ranks disagree");
+  }
+  return true;
+}
+
 std::optional<std::string> validateChartResultAttempt(
     const result_persistence::ChartResultAttempt &attempt,
     std::string &diagnostic) {
@@ -1126,16 +1219,15 @@ std::optional<std::string> validateChartResultAttempt(
     diagnostic = "score and replay chart identities disagree";
     return std::nullopt;
   }
-  if (score.provenance != attempt.replay.provenance ||
-      score.score != attempt.replay.finalScore ||
-      score.maxCombo != attempt.replay.maxCombo ||
-      score.finalGauge != attempt.replay.finalGauge) {
-    diagnostic = "score and replay result facts disagree";
+  if (score.provenance != attempt.replay.provenance) {
+    diagnostic = "score and replay provenance disagree";
     return std::nullopt;
   }
-  if (!std::isfinite(score.finalGauge) ||
-      !std::isfinite(attempt.replay.finalGauge)) {
-    diagnostic = "result gauge is not finite";
+  if (!validateChartScoreReplaySemantics(
+          score, attempt.replay.chartMeta, attempt.replay.finalScore,
+          attempt.replay.maxCombo, attempt.replay.finalGauge,
+          attempt.replay.clearType, attempt.replay.chartMeta.TotalNotes,
+          diagnostic)) {
     return std::nullopt;
   }
 
@@ -1402,7 +1494,9 @@ constexpr const char *kPendingChartScoreSelect =
     "p.ruleset_version, p.eligibility, p.provenance_json, p.created_at,"
     "p.recovery_attempts, p.last_recovery_at, r.id, r.attempt_id,"
     "r.attempt_fingerprint, r.chart_path, r.chart_md5, r.chart_sha256,"
-    "r.chart_title, r.chart_artist, r.created_at "
+    "r.chart_title, r.chart_artist, r.created_at, r.final_score,"
+    "r.max_combo, r.final_gauge, r.clear_type, r.ruleset_version,"
+    "r.eligibility, r.provenance_json "
     "FROM pending_chart_score_writes p "
     "LEFT JOIN replays r ON r.id = p.replay_id ";
 
@@ -1559,6 +1653,62 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
       linkedMd5 != score.chartMd5 || linkedSha256 != score.chartSha256 ||
       linkedTitle != score.chartTitle || linkedArtist != score.chartArtist) {
     return conflict("pending score and staged replay linkage is malformed");
+  }
+
+  int linkedFinalScore = 0;
+  int linkedMaxCombo = 0;
+  int linkedClearType = 0;
+  int linkedRulesetVersion = 0;
+  int linkedEligibility = 0;
+  std::string linkedProvenanceJson;
+  if (!readStrictInteger(stmt, 37, linkedFinalScore) ||
+      !readStrictInteger(stmt, 38, linkedMaxCombo) ||
+      sqlite3_column_type(stmt, 39) != SQLITE_FLOAT ||
+      !readStrictInteger(stmt, 40, linkedClearType) ||
+      !readStrictInteger(stmt, 41, linkedRulesetVersion) ||
+      !readStrictInteger(stmt, 42, linkedEligibility) ||
+      linkedEligibility < static_cast<int>(ScoreEligibility::Verified) ||
+      linkedEligibility >
+          static_cast<int>(ScoreEligibility::LegacyUnverified) ||
+      !readStrictText(stmt, 43, linkedProvenanceJson, false)) {
+    return conflict("staged replay result metadata is malformed");
+  }
+  const double storedReplayGauge = sqlite3_column_double(stmt, 39);
+  if (!std::isfinite(storedReplayGauge) ||
+      storedReplayGauge <
+          -static_cast<double>(std::numeric_limits<float>::max()) ||
+      storedReplayGauge >
+          static_cast<double>(std::numeric_limits<float>::max())) {
+    return conflict("staged replay gauge is outside the finite float range");
+  }
+  const float linkedFinalGauge = static_cast<float>(storedReplayGauge);
+
+  std::string linkedProvenanceError;
+  auto linkedProvenance =
+      deserializeScoreProvenance(linkedProvenanceJson, linkedProvenanceError);
+  if (!linkedProvenance.has_value()) {
+    return conflict("staged replay provenance is malformed");
+  }
+  auto canonicalLinkedProvenance = serializeValidatedScoreProvenance(
+      *linkedProvenance, linkedProvenanceError);
+  if (!canonicalLinkedProvenance.has_value() ||
+      *canonicalLinkedProvenance != linkedProvenanceJson ||
+      linkedProvenance->ruleset.version != linkedRulesetVersion ||
+      static_cast<int>(linkedProvenance->eligibility) != linkedEligibility ||
+      *linkedProvenance != score.provenance) {
+    return conflict("staged replay provenance is not canonical or linked");
+  }
+
+  bms_parser::ChartMeta linkedChartMeta;
+  linkedChartMeta.MD5 = score.chartMd5;
+  linkedChartMeta.SHA256 = score.chartSha256;
+  std::string semanticDiagnostic;
+  if (!validateChartScoreReplaySemantics(score, linkedChartMeta,
+                                         linkedFinalScore, linkedMaxCombo,
+                                         linkedFinalGauge, linkedClearType,
+                                         std::nullopt, semanticDiagnostic)) {
+    return conflict("pending score semantics are invalid: " +
+                    semanticDiagnostic);
   }
 
   result.status = PendingReadStatus::Found;
@@ -2262,10 +2412,9 @@ ReplayDBHelper::ListPendingChartScores(std::size_t limit) {
     return {.storageAvailable = false,
             .diagnostic = "could not query pending score recovery"};
   }
-  constexpr std::size_t maxSqliteLimit =
-      static_cast<std::size_t>(std::numeric_limits<sqlite3_int64>::max());
-  const sqlite3_int64 queryLimit = static_cast<sqlite3_int64>(
-      std::min(limit, maxSqliteLimit));
+  constexpr std::size_t maxRecoveryBatchSize = 256;
+  const sqlite3_int64 queryLimit =
+      static_cast<sqlite3_int64>(std::min(limit, maxRecoveryBatchSize));
   if (sqlite3_bind_int64(stmt.get(), 1, queryLimit) != SQLITE_OK) {
     return {.storageAvailable = false,
             .diagnostic = "could not bind pending score recovery limit"};
@@ -2372,10 +2521,6 @@ ReplayDBHelper::RecordPendingChartScoreRecoveryAttempt(
   using result_persistence::RecoveryMarkStatus;
   profile_database_activity::WriteGuard writeGuard;
   (void)kind;
-  if (!uuid::isCanonicalLowerV4(attemptId)) {
-    return {.status = RecoveryMarkStatus::NotFound,
-            .diagnostic = "attempt ID is not a canonical version-4 UUID"};
-  }
   std::lock_guard lock(sessionMutex_);
   if (!EnsureSessionDatabaseLocked()) {
     return {.status = RecoveryMarkStatus::StorageFailure,
