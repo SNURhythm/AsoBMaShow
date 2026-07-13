@@ -106,12 +106,27 @@ constexpr int kParseLogRowHeight = 48;
 constexpr uint32_t kIconXmark = 0xf00d;
 constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr uint32_t kIconSort = 0xf0dc;
+constexpr uint32_t kIconFileLines = 0xf15c;
+constexpr uint32_t kIconCalculator = 0xf1ec;
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
     "https://stellabms.xyz/sl/table.html",
     "https://stellabms.xyz/st/table.html",
 };
+
+std::string formatGaugeTotal(const bms_parser::ChartMeta &meta) {
+  const double total =
+      meta.HasTotal && meta.Total > 0.0
+          ? meta.Total
+          : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(2) << total;
+  std::string value = stream.str();
+  while (!value.empty() && value.back() == '0') value.pop_back();
+  if (!value.empty() && value.back() == '.') value.pop_back();
+  return value;
+}
 
 void ensureLibraryFolderExists(const std::filesystem::path &path) {
   std::error_code error;
@@ -183,6 +198,7 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"H-CLEAR", kClearTypeHardClearRank},
     {"CLEAR", kClearTypeNormalClearRank},
     {"E-CLEAR", kClearTypeEasyClearRank},
+    {"LIGHT ASSIST", kClearTypeLightAssistedEasyClearRank},
     {"A-CLEAR", kClearTypeAssistedEasyClearRank},
     {"FAILED", kClearTypeFailedRank},
     {"NO PLAY", kNoClearTypeRank},
@@ -909,15 +925,18 @@ int clearRankForGaugeType(GaugeType gaugeType) {
     return kClearTypeHardClearRank;
   case GaugeType::ExHard:
     return kClearTypeExHardClearRank;
+  case GaugeType::Hazard:
+    return kClearTypeFullComboRank;
   case GaugeType::Normal:
   default:
     return kClearTypeNormalClearRank;
   }
 }
 
-std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
-  if (autoShift) {
-    return "GAS";
+std::string gaugeButtonLabel(GaugeType gaugeType,
+                             GaugeAutoShiftMode autoShift) {
+  if (gaugeAutoShiftEnabled(autoShift)) {
+    return gaugeAutoShiftMenuLabel(autoShift);
   }
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
@@ -930,13 +949,16 @@ std::string gaugeButtonLabel(GaugeType gaugeType, bool autoShift) {
     return "HARD";
   case GaugeType::ExHard:
     return "EX-HARD";
+  case GaugeType::Hazard:
+    return "HAZARD";
   default:
     return "NORMAL";
   }
 }
 
-SDL_Color readyGaugeTextColor(GaugeType gaugeType, bool autoShift) {
-  if (autoShift) {
+SDL_Color readyGaugeTextColor(GaugeType gaugeType,
+                              GaugeAutoShiftMode autoShift) {
+  if (gaugeAutoShiftEnabled(autoShift)) {
     return SDL_Color{255, 205, 37, 255};
   }
 
@@ -2515,9 +2537,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
+  readyTotalRow = nullptr;
+  readyTotalIconText = nullptr;
+  readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
+  readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;
@@ -3103,7 +3129,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Column);
   readySettings->setAlignItems(YGAlignStretch);
-  readySettings->setWidth(260);
+  readySettings->setPadding(Edge::Top, 10);
+  readySettings->setPadding(Edge::Bottom, 10);
+  readySettings->setPadding(Edge::Left, 12);
+  readySettings->setPadding(Edge::Right, 12);
   readySettings->setGap(6);
 
   auto makeReadyStatusText = []() {
@@ -3126,6 +3155,27 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyGaugeRow->addView(readyGaugeLabelText);
   readyGaugeRow->addView(readyGaugeText);
   readyPlayOptionText = makeReadyStatusText();
+  readyTotalRow = new View();
+  readyTotalRow->setFlexDirection(FlexDirection::Row);
+  readyTotalRow->setAlignItems(YGAlignCenter);
+  readyTotalRow->setGap(8);
+  readyTotalRow->setWidth(260);
+  readyTotalRow->setHeight(28);
+  readyTotalRow->setPadding(Edge::Left, 12);
+  readyTotalRow->setPadding(Edge::Right, 12);
+  readyTotalIconText =
+      new TextView(ui_icons::kFontAwesomeSolidPath, 15);
+  readyTotalIconText->setWidth(18);
+  readyTotalIconText->setHeight(28);
+  readyTotalIconText->setAlign(TextView::CENTER);
+  readyTotalIconText->setVAlign(TextView::MIDDLE);
+  readyTotalIconText->setOverflow(TextView::TextOverflow::Hidden);
+  readyTotalIconText->setThemedColor(ui_theme::cyan);
+  readyTotalText = makeReadyStatusText();
+  readyTotalText->setFlex(1);
+  readyTotalText->setThemedColor(ui_theme::cyan);
+  readyTotalRow->addView(readyTotalIconText);
+  readyTotalRow->addView(readyTotalText);
   readyAssistOptionText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   readyAssistOptionText->setHeight(28);
@@ -3137,20 +3187,22 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readySettings->addView(readyAssistOptionText);
   readySettings->addView(readyPacemakerText);
 
-  auto *playOptionsButton = new Button(0, 0, 260, 54);
-  auto *playOptionsButtonText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  playOptionsButtonText->setText("Options");
-  playOptionsButtonText->setAlign(TextView::CENTER);
-  playOptionsButtonText->setVAlign(TextView::MIDDLE);
-  playOptionsButton->setContentView(playOptionsButtonText);
-  styleThemedActionButton(playOptionsButton, playOptionsButtonText, true,
-                          ui_theme::primaryAction, ui_theme::primaryActionHover,
-                          ui_theme::primaryActionPressed,
-                          ui_theme::accentBorderStrong);
-  playOptionsButton->setOnClickListener([this]() { showPlayOptionsModal(); });
-  readySettings->addView(playOptionsButton);
-  right->addView(readySettings);
+  readyPlayOptionsButton = new Button(0, 0, 260, 150);
+  readyPlayOptionsButton->setWidth(260);
+  readyPlayOptionsButton->setHeight(150);
+  readyPlayOptionsButton->setFlexShrink(0);
+  readyPlayOptionsButton->setCornerRadius(ui_theme::controlRadius());
+  readyPlayOptionsButton->setStyledBorderWidth(1);
+  readyPlayOptionsButton->setThemedBackgroundColors(
+      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed);
+  readyPlayOptionsButton->setThemedBorderColors(
+      ui_theme::hairlineStrong, ui_theme::accentBorderStrong,
+      ui_theme::accentBorderStrong);
+  readyPlayOptionsButton->setContentView(readySettings);
+  readyPlayOptionsButton->setOnClickListener(
+      [this]() { showPlayOptionsModal(); });
+  right->addView(readyTotalRow);
+  right->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
   startButton = new Button(0, 0, 220, 86);
@@ -4598,13 +4650,24 @@ bool MainMenuScene::currentAssistOptionSelectionAllowed(
   return assist_options::normalize(option) == selection.assistOption;
 }
 
-void MainMenuScene::setGaugeSelection(GaugeType gaugeType, bool autoShift) {
+void MainMenuScene::setGaugeSelection(GaugeType gaugeType,
+                                      GaugeAutoShiftMode autoShift) {
   profileSelections.gaugeType = gaugeType;
   profileSelections.gaugeAutoShift = autoShift;
   profileSelections.applyTo(context.settings);
   context.settings.sanitize();
   if (!context.saveSettings()) {
     SDL_Log("Failed to save gauge selection");
+  }
+  refreshGaugeSelectionButtons();
+}
+
+void MainMenuScene::setGaugeAutoShiftLowerBound(GaugeType gaugeType) {
+  profileSelections.gaugeAutoShiftLowerBound = gaugeType;
+  profileSelections.applyTo(context.settings);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save gauge auto shift lower bound");
   }
   refreshGaugeSelectionButtons();
 }
@@ -4739,6 +4802,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
   playOptionsPanel->refresh(
       {.gaugeType = profileSelections.gaugeType,
        .gaugeAutoShift = profileSelections.gaugeAutoShift,
+       .gaugeAutoShiftLowerBound =
+           profileSelections.gaugeAutoShiftLowerBound,
        .playOption = effective.playOption,
        .defaultLaneOrder = {},
        .laneOrderEnabled = false,
@@ -4762,6 +4827,9 @@ bool MainMenuScene::playbackSelectionLockedForCourse() const {
 void MainMenuScene::refreshReadySettingsSummary() {
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
+  const auto record = selectedRecordSnapshot();
+  const bool showTotal = record.has_value() && !record->courseStart &&
+                         !record->solidArchive && !record->unavailable;
   if (readyGaugeText != nullptr) {
     readyGaugeText->setText(gaugeButtonLabel(profileSelections.gaugeType,
                                              profileSelections.gaugeAutoShift));
@@ -4771,6 +4839,26 @@ void MainMenuScene::refreshReadySettingsSummary() {
   if (readyPlayOptionText != nullptr) {
     readyPlayOptionText->setText(effective.playOption + " · " +
                                  effective.longNoteMode);
+  }
+  if (readyTotalText != nullptr) {
+    if (showTotal) {
+      const bool chartAuthored =
+          record->meta.HasTotal && record->meta.Total > 0.0;
+      if (readyTotalIconText != nullptr) {
+        readyTotalIconText->setText(ui_icons::textForCodepoint(
+            chartAuthored ? kIconFileLines : kIconCalculator));
+      }
+      readyTotalText->setText("TOTAL: " + formatGaugeTotal(record->meta));
+      readyTotalRow->setDisplay(YGDisplayFlex);
+      readyTotalRow->setVisible(true);
+    } else {
+      readyTotalText->setText("");
+      if (readyTotalIconText != nullptr) {
+        readyTotalIconText->setText("");
+      }
+      readyTotalRow->setDisplay(YGDisplayNone);
+      readyTotalRow->setVisible(false);
+    }
   }
   if (readyAssistOptionText != nullptr) {
     const int percent =
@@ -4944,6 +5032,8 @@ void MainMenuScene::startSelectedCourse() {
   session->gaugeType = profileSelections.gaugeType;
   session->gaugeProfile = constraintSettings.gaugeProfile;
   session->gaugeAutoShift = profileSelections.gaugeAutoShift;
+  session->gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   session->longNoteMode = courseLongNoteMode;
   session->constraints = constraintSettings.rules;
   session->requestedPlayOption = coursePlayOptionForConstraints(
@@ -5036,6 +5126,8 @@ void MainMenuScene::startCourseDirect(
         options.gaugeType = session->gaugeType;
         options.gaugeProfile = session->gaugeProfile;
         options.gaugeAutoShift = session->gaugeAutoShift;
+        options.gaugeAutoShiftLowerBound =
+            session->gaugeAutoShiftLowerBound;
         options.playOption = playInfo.option;
         options.playOptionSeed = playInfo.seed;
         options.playOption2 = playInfo.option2;
@@ -5092,7 +5184,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   ImageView::dropAllCache();
 
   const GaugeType gaugeType = profileSelections.gaugeType;
-  const bool gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeType gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = profileSelections.playOption;
   int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
@@ -5115,8 +5209,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
   defer(
-      [this, record, gaugeType, gaugeAutoShift, autoKeySound, playOption,
-       selectedLongNoteMode, assistOption, pacemakerTarget, playback,
+      [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
+       autoKeySound, playOption, selectedLongNoteMode, assistOption,
+       pacemakerTarget, playback,
        canReusePreviewForStart, chartRandomInfo]() {
         auto finishStart = [this]() {
           resetStartLoadingUi();
@@ -5148,6 +5243,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .autoPlay = false,
                                     .gaugeType = gaugeType,
                                     .gaugeAutoShift = gaugeAutoShift,
+                                    .gaugeAutoShiftLowerBound =
+                                        gaugeAutoShiftLowerBound,
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
@@ -5196,6 +5293,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .autoPlay = false,
                                       .gaugeType = gaugeType,
                                       .gaugeAutoShift = gaugeAutoShift,
+                                      .gaugeAutoShiftLowerBound =
+                                          gaugeAutoShiftLowerBound,
                                       .playOption = playInfo.option,
                                       .playOptionSeed = playInfo.seed,
                                       .playOption2 = playInfo.option2,
@@ -5222,6 +5321,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .autoPlay = false,
                                          .gaugeType = gaugeType,
                                          .gaugeAutoShift = gaugeAutoShift,
+                                         .gaugeAutoShiftLowerBound =
+                                             gaugeAutoShiftLowerBound,
                                          .longNoteMode = selectedLongNoteMode,
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
@@ -7358,8 +7459,12 @@ void MainMenuScene::buildPlayOptionsModal() {
 
   const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
   playOptionsPanel = new PlayOptionsPanelView(
-      {.onGaugeSelected = [this](GaugeType type, bool autoShift) {
+      {.onGaugeSelected = [this](GaugeType type,
+                                 GaugeAutoShiftMode autoShift) {
          setGaugeSelection(type, autoShift);
+       },
+       .onGaugeLowerBoundSelected = [this](GaugeType type) {
+         setGaugeAutoShiftLowerBound(type);
        },
        .onPlayOptionSelected = [this](const std::string &option) {
          setPlayOptionSelection(option);
@@ -8697,6 +8802,8 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                          .autoPlay = true,
                          .gaugeType = profileSelections.gaugeType,
                          .gaugeAutoShift = profileSelections.gaugeAutoShift,
+                         .gaugeAutoShiftLowerBound =
+                             profileSelections.gaugeAutoShiftLowerBound,
                          .playOption = playInfo.option,
                          .playOptionSeed = playInfo.seed,
                          .playOption2 = playInfo.option2,
@@ -8776,7 +8883,9 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
   }
 
   const GaugeType gaugeType = profileSelections.gaugeType;
-  const bool gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeType gaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const audio::PlaybackRate playback{
       .percent = context.settings.selectedPlaybackRatePercent,
@@ -8784,8 +8893,8 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
   };
 
   defer(
-      [this, record, replayId, gaugeType, gaugeAutoShift, autoKeySound,
-       playback]() {
+      [this, record, replayId, gaugeType, gaugeAutoShift,
+       gaugeAutoShiftLowerBound, autoKeySound, playback]() {
         auto failGBattleLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -8832,6 +8941,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
                        .autoPlay = false,
                        .gaugeType = gaugeType,
                        .gaugeAutoShift = gaugeAutoShift,
+                       .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
                        .gbattleRecordData = recordData,
                        .playOption = recordData->playOption,
                        .playOptionSeed = recordData->playOptionSeed,
@@ -8897,6 +9007,8 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         session->gaugeType = replayData->initialGaugeType;
         session->gaugeProfile = replayData->gaugeProfile;
         session->gaugeAutoShift = replayData->gaugeAutoShift;
+        session->gaugeAutoShiftLowerBound =
+            replayData->gaugeAutoShiftLowerBound;
         session->longNoteMode = replayData->longNoteMode;
         session->constraints = constraintSettings.rules;
         session->requestedPlayOption = replayData->requestedPlayOption;
@@ -9300,7 +9412,10 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
     queueReplayExportResult(result);
   };
   const GaugeType autoPlayGaugeType = profileSelections.gaugeType;
-  const bool autoPlayGaugeAutoShift = profileSelections.gaugeAutoShift;
+  const GaugeAutoShiftMode autoPlayGaugeAutoShift =
+      profileSelections.gaugeAutoShift;
+  const GaugeType autoPlayGaugeAutoShiftLowerBound =
+      profileSelections.gaugeAutoShiftLowerBound;
   const std::string autoPlayAssistOption = profileSelections.assistOption;
   const std::string autoPlayOption = profileSelections.playOption;
   const audio::PlaybackRate autoPlayPlayback{
@@ -9315,6 +9430,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 
   auto runExport = [this, record, replayId, options, complete,
                     autoPlayGaugeType, autoPlayGaugeAutoShift,
+                    autoPlayGaugeAutoShiftLowerBound,
                     autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
                     autoPlayClubMode, autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
@@ -9377,7 +9493,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         ReplayData replay = replay_autoplay::BuildReplayData(
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
             autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
-            playInfo.seed2, autoPlayAssistOption, autoPlayClubMode);
+            playInfo.seed2, autoPlayAssistOption, autoPlayClubMode,
+            autoPlayGaugeAutoShiftLowerBound);
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;
@@ -9838,9 +9955,13 @@ void MainMenuScene::cleanupScene() {
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
   readyGaugeText = nullptr;
+  readyTotalRow = nullptr;
+  readyTotalIconText = nullptr;
+  readyTotalText = nullptr;
   readyPlayOptionText = nullptr;
   readyAssistOptionText = nullptr;
   readyPacemakerText = nullptr;
+  readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
   replayListView = nullptr;

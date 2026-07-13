@@ -39,7 +39,8 @@ struct GaugeOption {
   std::string_view id;
   std::string_view label;
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
 };
 
 struct Configuration {
@@ -49,7 +50,8 @@ struct Configuration {
   bool loop = false;
   int countInBeats = 4;
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::optional<int> startingGaugePercent;
   JudgeOverride judge;
   audio::PlaybackRate playback;
@@ -59,6 +61,15 @@ struct Configuration {
 [[nodiscard]] std::span<const GaugeOption> practiceGaugeOptions();
 [[nodiscard]] std::string practiceGaugeOptionId(const Configuration &value);
 bool applyPracticeGaugeOption(Configuration &value, std::string_view optionId);
+[[nodiscard]] std::span<const GaugeOption> practiceGaugeAutoShiftOptions();
+[[nodiscard]] std::string
+practiceGaugeAutoShiftOptionId(const Configuration &value);
+bool applyPracticeGaugeAutoShiftOption(Configuration &value,
+                                       std::string_view optionId);
+[[nodiscard]] std::string
+practiceGaugeLowerBoundOptionId(const Configuration &value);
+bool applyPracticeGaugeLowerBoundOption(Configuration &value,
+                                        std::string_view optionId);
 
 struct SanitizedConfiguration {
   Configuration configuration;
@@ -68,7 +79,11 @@ struct SanitizedConfiguration {
 
 [[nodiscard]] int
 defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept;
-SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros);
+[[nodiscard]] int defaultStartingGaugePercent(
+    const Configuration &configuration,
+    GaugeProfile gaugeProfile = GaugeProfile::Standard);
+SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
+                                int startingGaugeMaximumPercent = 120);
 [[nodiscard]] std::optional<std::string>
 firstPlayabilityIssue(const Configuration &value, long long chartEndMicros);
 } // namespace practice

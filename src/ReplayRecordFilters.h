@@ -43,6 +43,9 @@ inline int clearMarkBucket(int clearTypeRank) {
   if (clearTypeRank >= kClearTypeEasyClearRank) {
     return kClearTypeEasyClearRank;
   }
+  if (clearTypeRank >= kClearTypeLightAssistedEasyClearRank) {
+    return kClearTypeLightAssistedEasyClearRank;
+  }
   if (clearTypeRank >= kClearTypeAssistedEasyClearRank) {
     return kClearTypeAssistedEasyClearRank;
   }

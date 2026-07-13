@@ -16,7 +16,8 @@ class TextView;
 
 struct PlayOptionsPanelState {
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::string playOption = "NORMAL";
   std::string defaultLaneOrder;
   bool laneOrderEnabled = false;
@@ -31,7 +32,8 @@ struct PlayOptionsPanelState {
 };
 
 struct PlayOptionsPanelCallbacks {
-  std::function<void(GaugeType, bool)> onGaugeSelected;
+  std::function<void(GaugeType, GaugeAutoShiftMode)> onGaugeSelected;
+  std::function<void(GaugeType)> onGaugeLowerBoundSelected;
   std::function<void(const std::string &)> onPlayOptionSelected;
   std::function<void(const std::string &)> onLaneOrderSubmitted;
   std::function<bool(const std::string &)> isPlayOptionAllowed;
@@ -67,13 +69,17 @@ private:
     TextView *text = nullptr;
     std::string id;
     GaugeType gaugeType = GaugeType::Normal;
-    bool gaugeAutoShift = false;
+    GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   };
 
   PlayOptionsPanelCallbacks callbacks;
   PlayOptionsPanelState state;
   PlayOptionSectionView *playOptionSection = nullptr;
   std::vector<SelectionButton> gaugeButtons;
+  std::vector<SelectionButton> gaugeAutoShiftButtons;
+  std::vector<SelectionButton> gaugeLowerBoundButtons;
+  TextView *gaugeSectionLabel = nullptr;
+  View *gaugeAutoShiftBoundsSection = nullptr;
   std::vector<SelectionButton> longNoteModeButtons;
   std::vector<SelectionButton> assistOptionButtons;
   std::vector<SelectionButton> pacemakerButtons;

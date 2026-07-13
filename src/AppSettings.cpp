@@ -317,8 +317,25 @@ std::string parseGaugeTypeId(const std::string &value,
   if (value == "exhard") {
     return "exhard";
   }
+  if (value == "hazard") {
+    return "hazard";
+  }
   if (value == "gas") {
     return "gas";
+  }
+  if (value == "gas_continue" || value == "gas_survival_to_groove" ||
+      value == "gas_best_clear" || value == "gas_select_to_under") {
+    return value;
+  }
+  return fallback;
+}
+
+std::string parseGaugeAutoShiftModeId(const std::string &value,
+                                      const std::string &fallback) {
+  if (value == "none" || value == "continue" ||
+      value == "survival_to_groove" || value == "best_clear" ||
+      value == "select_to_under") {
+    return value;
   }
   return fallback;
 }
@@ -508,6 +525,13 @@ void AppSettings::sanitize() {
     break;
   }
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
+  selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
+      selectedGaugeAutoShiftMode, "none");
+  selectedGaugeAutoShiftLowerBound = parseGaugeTypeId(
+      selectedGaugeAutoShiftLowerBound, "assisted_easy");
+  if (selectedGaugeAutoShiftLowerBound.rfind("gas", 0) == 0) {
+    selectedGaugeAutoShiftLowerBound = "assisted_easy";
+  }
   selectedPlayOption =
       parsePlayOptionId(selectedPlayOption, kDefaultPlayOption);
   selectedLnMode = long_note_mode::parseId(selectedLnMode, kDefaultLnMode);
@@ -753,6 +777,12 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);
+      } else if (key == "selected_gauge_auto_shift_mode") {
+        settings.selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
+            value, settings.selectedGaugeAutoShiftMode);
+      } else if (key == "selected_gauge_auto_shift_lower_bound") {
+        settings.selectedGaugeAutoShiftLowerBound = parseGaugeTypeId(
+            value, settings.selectedGaugeAutoShiftLowerBound);
       } else if (key == "selected_play_option") {
         settings.selectedPlayOption =
             parsePlayOptionId(value, settings.selectedPlayOption);

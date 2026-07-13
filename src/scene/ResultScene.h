@@ -22,7 +22,8 @@ struct ResultPracticeOptions {
   bool autoKeySound = false;
   bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;

@@ -13,10 +13,22 @@ constexpr std::array<GaugeOption, 6> kGaugeOptions = {{
     {.id = "2", .label = "Normal", .gaugeType = GaugeType::Normal},
     {.id = "3", .label = "Hard", .gaugeType = GaugeType::Hard},
     {.id = "4", .label = "Ex-Hard", .gaugeType = GaugeType::ExHard},
-    {.id = "gas",
-     .label = "Gauge Auto Shift (GAS)",
-     .gaugeType = GaugeType::ExHard,
-     .gaugeAutoShift = true},
+    {.id = "5", .label = "Hazard", .gaugeType = GaugeType::Hazard},
+}};
+constexpr std::array<GaugeOption, 5> kGaugeAutoShiftOptions = {{
+    {.id = "none", .label = "Off"},
+    {.id = "continue",
+     .label = "Continue at 0%",
+     .gaugeAutoShift = GaugeAutoShiftMode::Continue},
+    {.id = "survival_to_groove",
+     .label = "Survival to Groove",
+     .gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove},
+    {.id = "best_clear",
+     .label = "Best Clear",
+     .gaugeAutoShift = GaugeAutoShiftMode::BestClear},
+    {.id = "select_to_under",
+     .label = "Select to Under",
+     .gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder},
 }};
 
 bool isSha256(std::string_view value) {
@@ -45,6 +57,7 @@ bool validGaugeType(GaugeType value) {
   case GaugeType::Normal:
   case GaugeType::Hard:
   case GaugeType::ExHard:
+  case GaugeType::Hazard:
     return true;
   }
   return false;
@@ -54,8 +67,7 @@ bool validGaugeType(GaugeType value) {
 std::span<const GaugeOption> practiceGaugeOptions() { return kGaugeOptions; }
 
 std::string practiceGaugeOptionId(const Configuration &value) {
-  return value.gaugeAutoShift ? "gas"
-                              : std::to_string(gaugeTypeIndex(value.gaugeType));
+  return std::to_string(gaugeTypeIndex(value.gaugeType));
 }
 
 bool applyPracticeGaugeOption(Configuration &value, std::string_view optionId) {
@@ -65,7 +77,52 @@ bool applyPracticeGaugeOption(Configuration &value, std::string_view optionId) {
     return false;
   }
   value.gaugeType = option->gaugeType;
+  return true;
+}
+
+std::span<const GaugeOption> practiceGaugeAutoShiftOptions() {
+  return kGaugeAutoShiftOptions;
+}
+
+std::string practiceGaugeAutoShiftOptionId(const Configuration &value) {
+  switch (value.gaugeAutoShift) {
+  case GaugeAutoShiftMode::Continue:
+    return "continue";
+  case GaugeAutoShiftMode::SurvivalToGroove:
+    return "survival_to_groove";
+  case GaugeAutoShiftMode::BestClear:
+    return "best_clear";
+  case GaugeAutoShiftMode::SelectToUnder:
+    return "select_to_under";
+  case GaugeAutoShiftMode::None:
+  default:
+    return "none";
+  }
+}
+
+bool applyPracticeGaugeAutoShiftOption(Configuration &value,
+                                       std::string_view optionId) {
+  const auto option =
+      std::ranges::find(kGaugeAutoShiftOptions, optionId, &GaugeOption::id);
+  if (option == kGaugeAutoShiftOptions.end()) {
+    return false;
+  }
   value.gaugeAutoShift = option->gaugeAutoShift;
+  return true;
+}
+
+std::string practiceGaugeLowerBoundOptionId(const Configuration &value) {
+  return std::to_string(gaugeTypeIndex(value.gaugeAutoShiftLowerBound));
+}
+
+bool applyPracticeGaugeLowerBoundOption(Configuration &value,
+                                        std::string_view optionId) {
+  const auto option =
+      std::ranges::find(kGaugeOptions, optionId, &GaugeOption::id);
+  if (option == kGaugeOptions.end()) {
+    return false;
+  }
+  value.gaugeAutoShiftLowerBound = option->gaugeType;
   return true;
 }
 
@@ -73,6 +130,15 @@ int defaultCountInBeatsForChart(int effectiveBeatsPerMeasure) noexcept {
   return effectiveBeatsPerMeasure >= 1 && effectiveBeatsPerMeasure <= 16
              ? effectiveBeatsPerMeasure
              : 4;
+}
+
+int defaultStartingGaugePercent(const Configuration &configuration,
+                                GaugeProfile gaugeProfile) {
+  RhythmState state(nullptr, false);
+  state.configureGauge(configuration.gaugeType,
+                       configuration.gaugeAutoShift, gaugeProfile,
+                       configuration.gaugeAutoShiftLowerBound);
+  return static_cast<int>(state.currentGauge);
 }
 
 void RangeSelection::placeActiveMarker(long long timeMicros,
@@ -114,7 +180,8 @@ bool SanitizedConfiguration::playable() const noexcept {
          validGaugeType(configuration.gaugeType);
 }
 
-SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
+SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros,
+                                int startingGaugeMaximumPercent) {
   SanitizedConfiguration result;
   auto diagnoseChange = [&](bool changed, std::string message) {
     if (changed) {
@@ -153,19 +220,22 @@ SanitizedConfiguration sanitize(Configuration value, long long chartEndMicros) {
                  "count-in beats were clamped to 0 through 16");
 
   if (value.startingGaugePercent) {
+    const int maximum = std::clamp(startingGaugeMaximumPercent, 0, 120);
     const int originalGauge = *value.startingGaugePercent;
     *value.startingGaugePercent =
-        std::clamp(*value.startingGaugePercent, 0, 100);
+        std::clamp(*value.startingGaugePercent, 0, maximum);
     diagnoseChange(originalGauge != *value.startingGaugePercent,
-                   "starting gauge was clamped to 0 through 100 percent");
+                   "starting gauge was clamped to 0 through " +
+                       std::to_string(maximum) + " percent");
   }
-  if (value.gaugeAutoShift && value.gaugeType != GaugeType::ExHard) {
-    value.gaugeType = GaugeType::ExHard;
-    result.diagnostics.emplace_back(
-        "gauge auto shift seed was normalized to Ex-Hard");
-  } else if (!validGaugeType(value.gaugeType)) {
+  if (!validGaugeType(value.gaugeType)) {
     value.gaugeType = GaugeType::Normal;
     result.diagnostics.emplace_back("unknown gauge type was reset to Normal");
+  }
+  if (!validGaugeType(value.gaugeAutoShiftLowerBound)) {
+    value.gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+    result.diagnostics.emplace_back(
+        "unknown gauge auto shift lower bound was reset to Assisted Easy");
   }
 
   const int originalJudgeScale = value.judge.scalePercent;

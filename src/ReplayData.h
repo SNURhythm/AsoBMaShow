@@ -18,6 +18,7 @@ enum class ReplayEventAction {
   Release = 1,
   Miss = 2,
   Mine = 3,
+  Gauge = 4,
 };
 
 enum class ReplayTouchAction {
@@ -68,7 +69,8 @@ struct ReplayData {
   std::optional<long long> playOption2Seed;
   std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   int finalScore = 0;
   int maxCombo = 0;
   float finalGauge = 0.0f;
@@ -149,7 +151,8 @@ struct CourseReplayData {
   std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   int longNoteMode = 0;
   int finalScore = 0;
   int maxCombo = 0;

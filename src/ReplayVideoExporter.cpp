@@ -307,6 +307,27 @@ long long gameplayResultTransitionMicrosForReplay(
       chart, latePoorTiming);
 }
 
+ReplayData replayThroughFailure(const ReplayData &replay,
+                                std::optional<long long> failureMicros) {
+  ReplayData result = replay;
+  if (!failureMicros.has_value()) {
+    return result;
+  }
+  result.events.erase(
+      std::ranges::find_if(result.events, [&](const ReplayEvent &event) {
+        return event.songTimeMicros > *failureMicros;
+      }),
+      result.events.end());
+  result.finalGauge = 0.0f;
+  result.clearType = kClearTypeFailedRank;
+  result.finalScore = result.events.empty() ? 0 : result.events.back().score;
+  result.maxCombo = 0;
+  for (const ReplayEvent &event : result.events) {
+    result.maxCombo = std::max(result.maxCombo, event.combo);
+  }
+  return result;
+}
+
 long long courseStageGameplayDurationMicrosForReplay(
     const bms_parser::Chart &chart, long long audioDurationMicros,
     bool includeResultScreen) {
@@ -746,6 +767,7 @@ bool writeSilentAudioFrames(SNDFILE *output, sf_count_t frames) {
 struct CourseReplayAudioSegment {
   std::filesystem::path wavPath;
   long long durationMicros = 0;
+  long long contentDurationMicros = 0;
 };
 
 bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
@@ -801,8 +823,11 @@ bool appendReplayAudioFile(SNDFILE *output, const std::filesystem::path &path,
 bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
                                     const std::filesystem::path &outputPath,
                                     long long durationMicros,
+                                    long long contentDurationMicros,
                                     std::string &errorMessage) {
   const sf_count_t targetFrames = replayAudioFramesForMicros(durationMicros);
+  const sf_count_t contentFrames = replayAudioFramesForMicros(
+      std::min(durationMicros, contentDurationMicros));
   SF_INFO outputInfo{};
   outputInfo.channels = kExportChannels;
   outputInfo.samplerate = kExportSampleRate;
@@ -816,8 +841,8 @@ bool writeReplayAudioFileAtDuration(const std::filesystem::path &inputPath,
   }
 
   sf_count_t writtenFrames = 0;
-  if (targetFrames > 0 &&
-      !appendReplayAudioFile(outputHandle.get(), inputPath, targetFrames,
+  if (contentFrames > 0 &&
+      !appendReplayAudioFile(outputHandle.get(), inputPath, contentFrames,
                              writtenFrames, errorMessage)) {
     return false;
   }
@@ -854,10 +879,12 @@ ReplayAudioTrackResult writeCourseReplayAudioTrack(
   for (const auto &segment : segments) {
     const sf_count_t segmentFrames =
         replayAudioFramesForMicros(segment.durationMicros);
+    const sf_count_t contentFrames = replayAudioFramesForMicros(
+        std::min(segment.durationMicros, segment.contentDurationMicros));
     std::string errorMessage;
     const sf_count_t writtenFramesBeforeSegment = writtenFrames;
     if (!appendReplayAudioFile(outputHandle.get(), segment.wavPath,
-                               segmentFrames, writtenFrames, errorMessage)) {
+                               contentFrames, writtenFrames, errorMessage)) {
       return {.success = false, .outputPath = path, .message = errorMessage};
     }
     const sf_count_t segmentWrittenFrames =
@@ -1012,7 +1039,7 @@ bool applyReplayEventForVideo(
     BMSRenderer &renderer,
     const bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event, long long visualTimeMicros, bool gaugeAutoShift,
+    const ReplayEvent &event, long long visualTimeMicros, GaugeAutoShiftMode gaugeAutoShift,
     GaugeProfile gaugeProfile = GaugeProfile::Standard) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   auto applyHud = [&]() -> bool {
@@ -1076,6 +1103,10 @@ bool applyReplayEventForVideo(
     renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
                             gaugeProfile);
     return false;
+  case ReplayEventAction::Gauge:
+    renderer.setGaugeStatus(event.gaugeType, gaugeAutoShift, event.gauge,
+                            gaugeProfile);
+    return false;
   }
   return false;
 }
@@ -1127,9 +1158,13 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   const float graphY = y + padding;
   const float graphW = std::max(1.0f, w - padding * 2.0f);
   const float graphH = std::max(1.0f, h - padding * 2.0f);
+  const float gaugeMaximum =
+      gaugeMaximumValue(resultState.gaugeType, resultState.gaugeProfile);
+  auto clampedValue = [gaugeMaximum](float value) {
+    return std::clamp(value, 0.0f, gaugeMaximum);
+  };
   auto valueY = [&](float value) {
-    const float clamped = std::clamp(value, 0.0f, 100.0f);
-    return graphY + graphH - (clamped / 100.0f) * graphH;
+    return graphY + graphH - (clampedValue(value) / gaugeMaximum) * graphH;
   };
 
   const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
@@ -1140,17 +1175,15 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
   const size_t count = resultState.gaugeHistory.size();
   if (count == 1) {
-    const float value = std::clamp(resultState.gaugeHistory.front(), 0.0f,
-                                   100.0f);
+    const float value = clampedValue(resultState.gaugeHistory.front());
     batch.addCircle(graphX, valueY(value), 3.5f,
                     resultGaugeLineColor(value).toABGR());
     return;
   }
 
   for (size_t i = 1; i < count; ++i) {
-    const float prevValue =
-        std::clamp(resultState.gaugeHistory[i - 1], 0.0f, 100.0f);
-    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float prevValue = clampedValue(resultState.gaugeHistory[i - 1]);
+    const float value = clampedValue(resultState.gaugeHistory[i]);
     const float x0 =
         graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
                      graphW;
@@ -1163,7 +1196,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
   const size_t markerStep = std::max<size_t>(1, count / 40);
   for (size_t i = 0; i < count; i += markerStep) {
-    const float value = std::clamp(resultState.gaugeHistory[i], 0.0f, 100.0f);
+    const float value = clampedValue(resultState.gaugeHistory[i]);
     const float pointX =
         graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
                      graphW;
@@ -1197,17 +1230,21 @@ void drawReplayResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 struct CourseReplayVideoStage {
   std::unique_ptr<bms_parser::Chart> chart;
   ReplayData replay;
+  GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
   long long gameplayDurationMicros = 0;
   long long resultDurationMicros = 0;
   long long audioDurationMicros = 0;
 
   CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
-                         ReplayData replay, RhythmState resultState,
+                         ReplayData replay,
+                         GaugeStateSnapshot initialGaugeState,
+                         RhythmState resultState,
                          long long gameplayDurationMicros,
                          long long resultDurationMicros,
                          long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
+        initialGaugeState(std::move(initialGaugeState)),
         resultState(std::move(resultState)),
         gameplayDurationMicros(gameplayDurationMicros),
         resultDurationMicros(resultDurationMicros),
@@ -1251,7 +1288,8 @@ RhythmState courseResultStateForReplayVideo(
     const std::vector<CourseReplayVideoStage> &stages) {
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
-                           replay.gaugeProfile);
+                           replay.gaugeProfile,
+                           replay.gaugeAutoShiftLowerBound);
   aggregate.resetJudgeCounts();
   aggregate.comboBreak = 0;
   aggregate.maxCombo = 0;
@@ -2550,6 +2588,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                        const std::filesystem::path &outputPath,
                        long long requestedGameplayDurationMicros,
                        long long requestedAudioDurationMicros,
+                       bool stoppedOnGaugeFailure,
                        ReplayVideoExportLog *log) {
   const auto resolvedOptions = resolveReplayVideoExportOptions(options);
   const int width = resolvedOptions.width;
@@ -2736,8 +2775,14 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
   renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
   renderer.setGaugeBarPosition(settings.gaugeBarPosition);
-  renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
-                          gaugeInitialValue(replay.initialGaugeType));
+  const GaugeProfile gaugeProfile =
+      resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
+  const RhythmState initialGaugeState =
+      replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+  renderer.setGaugeStatus(initialGaugeState.gaugeType,
+                          initialGaugeState.gaugeAutoShift,
+                          initialGaugeState.currentGauge,
+                          initialGaugeState.gaugeProfile);
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
   renderer.setAutoPlayMarkVisible(replay.autoPlay);
@@ -2754,7 +2799,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           chart, replay, selectedPacemakerTarget, previousBest);
   RhythmState pacemakerState(&chart, false);
   pacemakerState.configureGauge(replay.initialGaugeType,
-                                replay.gaugeAutoShift);
+                                replay.gaugeAutoShift,
+                                GaugeProfile::Standard,
+                                replay.gaugeAutoShiftLowerBound);
   renderer.setPacemakerTarget(activePacemakerTarget);
   renderer.setPacemakerStatus(
       pacemaker::snapshotForState(activePacemakerTarget, pacemakerState));
@@ -2765,9 +2812,15 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const long long scheduledVisualEndMicros = playback.realMicrosFromChart(
       context.jukebox.getScheduledVisualEndMicros());
   const long long visualTailMicros =
-      std::max(0LL, scheduledVisualEndMicros - gameplayDurationMicros);
+      stoppedOnGaugeFailure
+          ? 0LL
+          : std::max(0LL,
+                     scheduledVisualEndMicros - gameplayDurationMicros);
   const long long audioTailMicros =
-      std::max(0LL, requestedAudioDurationMicros - gameplayDurationMicros);
+      stoppedOnGaugeFailure
+          ? 0LL
+          : std::max(0LL,
+                     requestedAudioDurationMicros - gameplayDurationMicros);
   const long long resultTailMicros =
       resolvedOptions.includeResultScreen
           ? std::max({kResultSceneTailMicros, visualTailMicros,
@@ -2782,8 +2835,13 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const size_t resultFrameCount = static_cast<size_t>(
       std::ceil(static_cast<long double>(resultTailMicros) * fps / 1000000.0L));
   const size_t frameCount = gameplayFrameCount + resultFrameCount;
+  const ReplayData resultReplay = replayThroughFailure(
+      replay, stoppedOnGaugeFailure
+                  ? replay_result::FindGaugeFailureMicros(
+                        chart, replay, GaugeProfile::Standard)
+                  : std::nullopt);
   const RhythmState replayResultState =
-      replay_result::BuildResultState(chart, replay);
+      replay_result::BuildResultState(chart, resultReplay);
   rendering::SimpleBatchRenderer resultGraphBatch;
   if (resultFrameCount > 0 && resolvedOptions.includeResultScreen) {
     resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
@@ -2809,7 +2867,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultAnalytics =
-        addReplayResultAnalytics(*resultRoot, chart, replay);
+        addReplayResultAnalytics(*resultRoot, chart, resultReplay);
     resultRoot->applyYogaLayout();
   }
   ReplayAsyncFrameEncoder encoder;
@@ -2821,7 +2879,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     alignedAudioName += PATH("_video.wav");
     alignedAudioPath = wavPath.parent_path() / alignedAudioName;
     if (!writeReplayAudioFileAtDuration(wavPath, alignedAudioPath,
-                                        totalDurationMicros, errorMessage)) {
+                                        totalDurationMicros,
+                                        requestedAudioDurationMicros,
+                                        errorMessage)) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3015,7 +3075,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       const auto &event = replay.events[replayCursor];
       const bool appliedHud =
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                   visualTimeMicros, replay.gaugeAutoShift);
+                                   visualTimeMicros, replay.gaugeAutoShift,
+                                   gaugeProfile);
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
         renderer.setPacemakerStatus(pacemaker::snapshotForState(
@@ -3580,10 +3641,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
     renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
     renderer.setGaugeBarPosition(settings.gaugeBarPosition);
-    renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
-                            gaugeInitialValue(replay.initialGaugeType,
-                                              replay.gaugeProfile),
-                            replay.gaugeProfile);
+    renderer.setGaugeStatus(stage.initialGaugeState.gaugeType,
+                            stage.initialGaugeState.gaugeAutoShift,
+                            stage.initialGaugeState.currentGauge,
+                            stage.initialGaugeState.gaugeProfile);
     renderer.setPlayOptionStatus(replayExportPlayOptionLabel(stageReplay));
     renderer.setReplayData(&stageReplay);
     renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
@@ -3949,14 +4010,32 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   fspath_to_utf8(outputPath).c_str(), resolvedOptions.width,
                   resolvedOptions.height, resolvedOptions.fps);
   const auto videoStart = std::chrono::steady_clock::now();
-  const long long gameplayDurationMicros =
+  const auto failureMicros = replay_result::FindGaugeFailureMicros(
+      *chart, replay, GaugeProfile::Standard);
+  const long long normalGameplayDurationMicros =
       replay.provenance.playback.realMicrosFromChart(
           gameplayResultTransitionMicrosForReplay(*chart));
+  const long long failureAudioMicros =
+      failureMicros.has_value()
+          ? replay.provenance.playback.realMicrosFromChart(*failureMicros)
+          : normalGameplayDurationMicros;
+  const long long failureFrameMicros =
+      (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;
+  const long long gameplayDurationMicros =
+      failureMicros.has_value()
+          ? std::min(normalGameplayDurationMicros,
+                     failureAudioMicros + failureFrameMicros)
+          : normalGameplayDurationMicros;
+  const long long requestedAudioDurationMicros =
+      failureMicros.has_value()
+          ? std::min(audioResult.durationMicros, failureAudioMicros)
+          : audioResult.durationMicros;
   auto muxResult =
       renderReplayVideoToMp4(context, *chart, replay, context.settings,
                              resolvedOptions, wavPath, outputPath,
-                             gameplayDurationMicros, audioResult.durationMicros,
-                             exportLog);
+                             gameplayDurationMicros,
+                             requestedAudioDurationMicros,
+                             failureMicros.has_value(), exportLog);
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());
@@ -4037,6 +4116,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   std::vector<CourseReplayAudioSegment> audioSegments;
   stages.reserve(replay.stages.size());
   audioSegments.reserve(replay.stages.size());
+  std::optional<GaugeStateSnapshot> carriedGauge;
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
     const ReplayData &stageReplay = replay.stages[i].replay;
@@ -4071,19 +4151,53 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
         resolvedOptions.includeResultScreen
             ? std::max(0LL, replay.stages[i].restMicrosAfterStage)
             : 0LL;
-    const long long gameplayDurationMicros =
+    ReplayData configuredStageReplay = stageReplay;
+    configuredStageReplay.initialGaugeType = replay.initialGaugeType;
+    configuredStageReplay.gaugeAutoShift = replay.gaugeAutoShift;
+    configuredStageReplay.gaugeAutoShiftLowerBound =
+        replay.gaugeAutoShiftLowerBound;
+    const GaugeStateSnapshot *carriedGaugeState =
+        carriedGauge.has_value() ? &*carriedGauge : nullptr;
+    const auto failureMicros = replay_result::FindGaugeFailureMicros(
+        *chart, configuredStageReplay, replay.gaugeProfile,
+        carriedGaugeState);
+    const long long normalGameplayDurationMicros =
         courseStageGameplayDurationMicrosForReplay(
             *chart, audioResult.durationMicros,
             resolvedOptions.includeResultScreen);
+    const long long failureFrameMicros =
+        (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;
+    const long long gameplayDurationMicros =
+        failureMicros.has_value()
+            ? std::min(normalGameplayDurationMicros,
+                       *failureMicros + failureFrameMicros)
+            : normalGameplayDurationMicros;
+    const long long audioContentDurationMicros =
+        failureMicros.has_value()
+            ? std::min(audioResult.durationMicros, *failureMicros)
+            : gameplayDurationMicros + resultDurationMicros;
+    ReplayData exportStageReplay =
+        replayThroughFailure(configuredStageReplay, failureMicros);
+    const RhythmState initialGaugeState =
+        replay_result::BuildInitialGaugeState(
+            *chart, exportStageReplay, replay.gaugeProfile,
+            carriedGaugeState);
     RhythmState resultState = replay_result::BuildResultState(
-        *chart, stageReplay, replay.gaugeProfile);
+        *chart, exportStageReplay, replay.gaugeProfile,
+        carriedGaugeState);
+    carriedGauge = resultState.gaugeSnapshot();
     audioSegments.push_back(CourseReplayAudioSegment{
         .wavPath = stageWavPath,
         .durationMicros = gameplayDurationMicros + resultDurationMicros,
+        .contentDurationMicros = audioContentDurationMicros,
     });
-    stages.emplace_back(std::move(chart), stageReplay, std::move(resultState),
-                        gameplayDurationMicros, resultDurationMicros,
-                        audioResult.durationMicros);
+    stages.emplace_back(
+        std::move(chart), std::move(exportStageReplay),
+        initialGaugeState.gaugeSnapshot(), std::move(resultState),
+        gameplayDurationMicros,
+        resultDurationMicros,
+        failureMicros.has_value() ? audioContentDurationMicros
+                                  : audioResult.durationMicros);
   }
 
   if (!audioSegments.empty()) {

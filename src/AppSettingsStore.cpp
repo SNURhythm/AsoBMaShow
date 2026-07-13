@@ -165,6 +165,9 @@ json settingsToJson(const AppSettings &settings) {
       {"gameplayClubModeEnabled", settings.gameplayClubModeEnabled},
       {"musicPlayerClubModeEnabled", settings.musicPlayerClubModeEnabled},
       {"selectedGaugeType", settings.selectedGaugeType},
+      {"selectedGaugeAutoShiftMode", settings.selectedGaugeAutoShiftMode},
+      {"selectedGaugeAutoShiftLowerBound",
+       settings.selectedGaugeAutoShiftLowerBound},
       {"selectedPlayOption", settings.selectedPlayOption},
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
@@ -193,6 +196,10 @@ json settingsToJson(const AppSettings &settings) {
 AppSettings settingsFromJson(const json &document,
                              std::vector<std::string> &diagnostics) {
   AppSettings settings;
+  if (!document.contains("selectedGaugeAutoShiftMode") &&
+      document.contains("selectedGaugeType")) {
+    settings.selectedGaugeAutoShiftMode = "none";
+  }
   readValue(document, "audioOffsetMs", settings.audioOffsetMs, diagnostics);
   readValue(document, "visualOffsetMs", settings.visualOffsetMs, diagnostics);
   readValue(document, "visibleTimeGreenNumber", settings.visibleTimeGreenNumber,
@@ -272,6 +279,10 @@ AppSettings settingsFromJson(const json &document,
             settings.musicPlayerClubModeEnabled, diagnostics);
   readValue(document, "selectedGaugeType", settings.selectedGaugeType,
             diagnostics);
+  readValue(document, "selectedGaugeAutoShiftMode",
+            settings.selectedGaugeAutoShiftMode, diagnostics);
+  readValue(document, "selectedGaugeAutoShiftLowerBound",
+            settings.selectedGaugeAutoShiftLowerBound, diagnostics);
   readValue(document, "selectedPlayOption", settings.selectedPlayOption,
             diagnostics);
   readValue(document, "selectedLnMode", settings.selectedLnMode, diagnostics);
@@ -392,6 +403,7 @@ AppSettingsStore::LoadLegacyCfg(const std::filesystem::path &settingsCfg) {
     return result;
   }
   AppSettings parsed;
+  parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::loadLegacyCfg(settingsCfg, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;
     result.settings.sanitize();
@@ -416,6 +428,7 @@ AppSettingsLoadResult
 AppSettingsStore::LoadLegacyCfgStreamForTesting(std::istream &input) {
   AppSettingsLoadResult result;
   AppSettings parsed;
+  parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::parseLegacyCfg(input, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;
     result.settings.sanitize();

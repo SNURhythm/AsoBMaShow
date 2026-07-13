@@ -61,7 +61,7 @@ practice::Configuration configuration(long long start, long long end) {
           .loop = true,
           .countInBeats = 8,
           .gaugeType = GaugeType::ExHard,
-          .gaugeAutoShift = true,
+          .gaugeAutoShift = GaugeAutoShiftMode::BestClear,
           .startingGaugePercent = 60,
           .judge = {.scalePercent = 85},
           .playback = {.percent = 90}};
@@ -108,8 +108,9 @@ void testRoundTripAndMutations() {
              loaded.data.lastUsed.chartSha256 == kNormalizedHash &&
              loaded.data.lastUsed.countInBeats == 8 &&
              loaded.data.lastUsed.gaugeType == GaugeType::ExHard &&
-             loaded.data.lastUsed.gaugeAutoShift,
-         "last-used configuration, GAS, and explicit count-in round-trip");
+             loaded.data.lastUsed.gaugeAutoShift ==
+                 GaugeAutoShiftMode::BestClear,
+         "last-used configuration, Best Clear, and explicit count-in round-trip");
   expect(loaded.data.named.size() == 2 &&
              loaded.data.named[0].configuration.chartSha256 == kNormalizedHash,
          "named presets round-trip as chart-scoped configurations");
@@ -165,8 +166,8 @@ void testLegacyPresetDefaultsGaugeAutoShiftOff() {
 
   const auto loaded = store.load(kHash, 10'000'000);
   expect(loaded.status == versioned_json::LoadStatus::Loaded &&
-             !loaded.data.lastUsed.gaugeAutoShift,
-         "version-one preset JSON without GAS defaults auto shift off");
+             loaded.data.lastUsed.gaugeAutoShift == GaugeAutoShiftMode::None,
+         "version-one preset JSON without auto shift defaults it off");
 }
 
 void testHashMismatchIsRejected() {

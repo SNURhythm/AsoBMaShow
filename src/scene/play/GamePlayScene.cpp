@@ -791,18 +791,21 @@ bool GamePlayScene::reset() {
   const GaugeProfile gaugeProfile =
       isReplayPlayback() && !isCoursePlayback() ? GaugeProfile::Standard
                                                 : options.gaugeProfile;
-  const bool gaugeAutoShift =
+  const GaugeAutoShiftMode gaugeAutoShift =
       courseReplayPlayback
           ? options.gaugeAutoShift
           : (isReplayPlayback() ? options.replayData->gaugeAutoShift
                                 : options.gaugeAutoShift);
-  state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile);
+  state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile,
+                        options.gaugeAutoShiftLowerBound);
   if (options.startingGaugePercent.has_value()) {
     state->setStartingGaugePercent(*options.startingGaugePercent);
   }
   if (options.courseSession != nullptr &&
       options.courseSession->carriedGauge.has_value()) {
-    state->restoreGaugeState(*options.courseSession->carriedGauge);
+    GaugeStateSnapshot carriedGauge = *options.courseSession->carriedGauge;
+    carriedGauge.gaugeProfile = state->gaugeProfile;
+    state->restoreGaugeState(carriedGauge);
   }
   if (isCoursePlayback()) {
     state->combo = options.courseSession->carriedCombo;
@@ -1386,6 +1389,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.gaugeType = session->gaugeType;
   nextOptions.gaugeProfile = session->gaugeProfile;
   nextOptions.gaugeAutoShift = session->gaugeAutoShift;
+  nextOptions.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
   nextOptions.playOption = playInfo.option;
   nextOptions.playOptionSeed = playInfo.seed;
   nextOptions.playOption2 = playInfo.option2;
@@ -1451,6 +1455,8 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.provenance = attemptProvenance;
   recordedReplay.initialGaugeType = options.gaugeType;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
+  recordedReplay.gaugeAutoShiftLowerBound =
+      options.gaugeAutoShiftLowerBound;
   recordedReplay.finalScore = 0;
   recordedReplay.finalGauge = state != nullptr ? state->currentGauge : 0.0f;
   recordedReplay.clearType = kClearTypeFailedRank;
@@ -1740,6 +1746,8 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
           practiceResultOptions.autoKeySound = options.autoKeySound;
           practiceResultOptions.autoPlay = options.autoPlay;
           practiceResultOptions.gaugeAutoShift = options.gaugeAutoShift;
+          practiceResultOptions.gaugeAutoShiftLowerBound =
+              options.gaugeAutoShiftLowerBound;
           practiceResultOptions.playOption = options.playOption;
           practiceResultOptions.playOptionSeed = options.playOptionSeed;
           practiceResultOptions.playOption2 = options.playOption2;
@@ -1799,6 +1807,39 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       delayMillis, true);
 }
 
+bool GamePlayScene::finishIfGaugeFailed() {
+  if (state == nullptr || state->isEnding || !state->activeGaugeFailed()) {
+    return false;
+  }
+
+  SDL_Log("Active survival gauge failed");
+  state->isEnding = true;
+  context.jukebox.stop();
+  if (options.practiceSession != nullptr) {
+    completePracticeAttempt();
+  } else {
+    finishReplayRecording();
+    recordedAttemptCompleted = options.practiceMode;
+    publishPracticeGhost();
+  }
+  if (isCoursePlayback()) {
+    options.courseSession->carriedGauge = state->gaugeSnapshot();
+    options.courseSession->carriedCombo = state->combo;
+    options.courseSession->maxCombo =
+        std::max(options.courseSession->maxCombo, state->maxCombo);
+    options.courseSession->recordResult(chart->Meta, *state);
+    if (!options.courseSession->courseReplayPlayback) {
+      options.courseSession->recordStageProvenance(
+          options.courseSession->currentIndex, attemptProvenance);
+    }
+    if (shouldRecordReplay()) {
+      options.courseSession->recordReplayStage(recordedReplay);
+    }
+  }
+  scheduleResultTransition(0);
+  return true;
+}
+
 void GamePlayScene::update(float dt) {
   (void)dt;
   if (inputHandler != nullptr) {
@@ -1826,7 +1867,13 @@ void GamePlayScene::update(float dt) {
     processReplayEvents(gameplayTimeMicros);
   }
   updateHellChargeGauge(gameplayTimeMicros);
+  if (finishIfGaugeFailed()) {
+    return;
+  }
   checkPassedTimeline(gameplayTimeMicros);
+  if (finishIfGaugeFailed()) {
+    return;
+  }
   if (isReplayPlayback()) {
     processReplayLaneCoverEvents(gameplayTimeMicros);
   }
@@ -2549,7 +2596,16 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     }
     applyReplayGauge(event);
     break;
+  case ReplayEventAction::Gauge:
+    if (event.judgement == Great || event.judgement == Bad) {
+      state->applyGaugeJudgementRate(event.judgement, 0.5f);
+    } else {
+      state->gaugeHistory.push_back(event.gauge);
+    }
+    applyReplayGauge(event);
+    break;
   }
+  (void)finishIfGaugeFailed();
 }
 
 void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
@@ -2563,6 +2619,10 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
   if (gaugeIndex >= 0 &&
       gaugeIndex < static_cast<int>(state->gaugeValues.size())) {
     state->gaugeValues[gaugeIndex] = event.gauge;
+    if (gaugeIsSurvival(event.gaugeType, state->gaugeProfile) &&
+        event.gauge <= 0.0f) {
+      state->gaugeSurvivalFailed[gaugeIndex] = true;
+    }
   }
   if (!state->gaugeHistory.empty()) {
     state->gaugeHistory.back() = event.gauge;
@@ -2587,7 +2647,14 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     return;
   }
 
-  bool gaugeUpdated = false;
+  const auto applyGaugeTick = [&](Judgement judgement) {
+    state->applyGaugeJudgementRate(judgement, 0.5f);
+    updateGaugeStatusText();
+    appendReplayEvent(ReplayEventAction::Gauge, -1, nullptr,
+                      gameplayTimeMicros, gameplayTimeMicros,
+                      JudgeResult(judgement, 0));
+    return state->isEnding;
+  };
   std::vector<bms_parser::LongNote *> activeHellChargeNotes;
   for (const auto *measure : chart->Measures) {
     if (measure == nullptr) {
@@ -2633,14 +2700,16 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
                              options.autoPlay;
         balance += gaining ? activeDelta : -activeDelta;
         while (balance > kHellChargeGaugeTickMicros) {
-          state->applyGaugeJudgementRate(Great, 0.5f);
           balance -= kHellChargeGaugeTickMicros;
-          gaugeUpdated = true;
+          if (applyGaugeTick(Great)) {
+            return;
+          }
         }
         while (balance < -kHellChargeGaugeTickMicros) {
-          state->applyGaugeJudgementRate(Bad, 0.5f);
           balance += kHellChargeGaugeTickMicros;
-          gaugeUpdated = true;
+          if (applyGaugeTick(Bad)) {
+            return;
+          }
         }
       }
     }
@@ -2654,10 +2723,6 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     } else {
       ++it;
     }
-  }
-
-  if (gaugeUpdated) {
-    updateGaugeStatusText();
   }
 }
 
@@ -2692,6 +2757,9 @@ void GamePlayScene::expireGimmickNote(bms_parser::Note *note,
 
 void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             bool recordTimingSample) {
+  if (state == nullptr || state->isEnding) {
+    return;
+  }
   const int judgementCount = ++state->judgeCount[judgeResult.judgement];
   if (judgeResult.isComboBreak()) {
     state->combo = 0;
@@ -2730,37 +2798,38 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
       .replayPlayback = isReplayPlayback(),
       .coursePlayback = isCoursePlayback(),
   });
-  if ((!capturePolicy.recordReplay && !capturePolicy.captureAnalytics) ||
-      state == nullptr) {
+  if (state == nullptr || state->isEnding) {
     return;
   }
   const auto range = practiceNoteRange();
-  if (range.has_value() &&
-      (!range->contains(songTimeMicros) ||
-       (note != nullptr && !range->contains(note)))) {
-    return;
+  const bool withinPracticeRange =
+      !range.has_value() ||
+      (range->contains(songTimeMicros) &&
+       (note == nullptr || range->contains(note)));
+  if (withinPracticeRange &&
+      (capturePolicy.recordReplay || capturePolicy.captureAnalytics)) {
+    ReplayEvent event;
+    event.action = action;
+    event.lane = lane;
+    event.noteTimeMicros = note != nullptr && note->Timeline != nullptr
+                               ? note->Timeline->Timing
+                               : -1;
+    event.songTimeMicros = songTimeMicros;
+    event.judgeTimeMicros = judgeTimeMicros;
+    event.judgement = judgeResult.judgement;
+    event.diffMicros = judgeResult.Diff;
+    event.gauge = state->currentGauge;
+    event.gaugeType = state->gaugeType;
+    event.combo = state->combo;
+    event.score = state->getScore();
+    if (capturePolicy.captureAnalytics) {
+      analyticsReplay.events.push_back(event);
+    }
+    if (capturePolicy.recordReplay) {
+      recordedReplay.events.push_back(event);
+    }
   }
-
-  ReplayEvent event;
-  event.action = action;
-  event.lane = lane;
-  event.noteTimeMicros = note != nullptr && note->Timeline != nullptr
-                             ? note->Timeline->Timing
-                             : -1;
-  event.songTimeMicros = songTimeMicros;
-  event.judgeTimeMicros = judgeTimeMicros;
-  event.judgement = judgeResult.judgement;
-  event.diffMicros = judgeResult.Diff;
-  event.gauge = state->currentGauge;
-  event.gaugeType = state->gaugeType;
-  event.combo = state->combo;
-  event.score = state->getScore();
-  if (capturePolicy.captureAnalytics) {
-    analyticsReplay.events.push_back(event);
-  }
-  if (capturePolicy.recordReplay) {
-    recordedReplay.events.push_back(event);
-  }
+  (void)finishIfGaugeFailed();
 }
 
 void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,

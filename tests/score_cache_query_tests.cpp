@@ -139,6 +139,7 @@ bool createScoreDatabase(const std::filesystem::path &path,
                    "combo_break INTEGER NOT NULL,"
                    "final_gauge REAL NOT NULL DEFAULT 0,"
                    "clear_type INTEGER NOT NULL,"
+                   "eligibility INTEGER NOT NULL DEFAULT 2,"
                    "provenance_json TEXT NOT NULL DEFAULT "
                    "'{\"playback\":{\"percent\":100}}',"
                    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
@@ -157,11 +158,13 @@ void insertScore(sqlite3 *db, const std::string &sha256, const std::string &md5,
                  const std::string &path, int lnMode, int score, int maxScore,
                  int maxCombo, int comboBreak, int clearType,
                  const std::string &createdAt,
-                 const std::string &provenanceJson = kNeutralProvenanceJson) {
+                 const std::string &provenanceJson = kNeutralProvenanceJson,
+                 int eligibility =
+                     static_cast<int>(ScoreEligibility::LegacyUnverified)) {
   std::string sql =
       "INSERT INTO score_db.scores(chart_sha256, chart_md5, chart_path, "
       "ln_mode, score, max_score, max_combo, combo_break, clear_type, "
-      "created_at, provenance_json) VALUES(";
+      "created_at, provenance_json, eligibility) VALUES(";
   sql += "'" + sha256 + "', ";
   sql += "'" + md5 + "', ";
   sql += "'" + path + "', ";
@@ -172,7 +175,8 @@ void insertScore(sqlite3 *db, const std::string &sha256, const std::string &md5,
   sql += std::to_string(comboBreak) + ", ";
   sql += std::to_string(clearType) + ", ";
   sql += "'" + createdAt + "', ";
-  sql += "'" + provenanceJson + "')";
+  sql += "'" + provenanceJson + "', ";
+  sql += std::to_string(eligibility) + ")";
   execOrAbort(db, sql);
 }
 
@@ -200,6 +204,7 @@ void attachScoreDatabaseForTest(sqlite3 *db) {
                   "slow INTEGER NOT NULL DEFAULT 0,"
                   "final_gauge REAL NOT NULL DEFAULT 0,"
                   "clear_type INTEGER NOT NULL,"
+                  "eligibility INTEGER NOT NULL DEFAULT 2,"
                   "provenance_json TEXT NOT NULL DEFAULT "
                   "'{\"playback\":{\"percent\":100}}',"
                   "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
@@ -237,6 +242,17 @@ int main() {
   insertScore(db, "assisted", "md5-assisted", "", 0, 200, 200, 100, 0,
               kClearTypeHardClearRank, "2026-01-03 00:00:00",
               R"({"playback":{"percent":75}})");
+  insertScore(db, "effective-tie", "md5-effective-tie", "", 0, 180, 200,
+              90, 1, kClearTypeEasyClearRank, "2026-01-01 00:00:00");
+  insertScore(db, "effective-tie", "md5-effective-tie", "", 0, 180, 200,
+              90, 1, kClearTypeHardClearRank, "2026-01-02 00:00:00",
+              R"({"playback":{"percent":75}})");
+  insertScore(db, "eligibility", "md5-eligibility", "", 0, 160, 200, 80, 1,
+              kClearTypeEasyClearRank, "2026-01-01 00:00:00");
+  insertScore(db, "eligibility", "md5-eligibility", "", 0, 200, 200, 100,
+              0, kClearTypeFullComboRank, "2026-01-02 00:00:00",
+              kNeutralProvenanceJson,
+              static_cast<int>(ScoreEligibility::Modified));
 
   ASSERT_EQ(180,
             queryInt(db,
@@ -270,6 +286,33 @@ int main() {
             queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                          "'assisted'", "0")),
             "rate-assisted zero-break score cache remains capped");
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT clear_type FROM "
+                     "score_db.score_sha256_best_score_cache WHERE "
+                     "chart_sha256 = 'effective-tie' AND ln_mode = 0"),
+            "equal score keeps the higher effective clear rank");
+  const auto directBestOrder = score_cache_queries::detail::bestScoreOrderBySql(
+      score_cache_queries::detail::bestScoreOrderKey(
+          "s", score_cache_queries::detail::fullComboClearRankExpr("s"),
+          "id"));
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT clear_type FROM score_db.scores s WHERE "
+                     "chart_sha256 = 'effective-tie' AND ln_mode = 0 ORDER BY " +
+                         directBestOrder + " LIMIT 1"),
+            "direct best score uses the shared effective-rank ordering");
+  ASSERT_EQ(160,
+            queryInt(db,
+                     "SELECT " +
+                         score_cache_queries::scoreBestLookupExpr(
+                             "'eligibility'", "0", "score")),
+            "modified score does not replace legacy best score");
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db, "SELECT " +
+                             score_cache_queries::scoreRankLookupExpr(
+                                 "'eligibility'", "0")),
+            "modified score does not replace legacy clear rank");
   ASSERT_EQ(0,
             queryInt(db,
                      "SELECT COUNT(*) FROM "
@@ -312,6 +355,12 @@ int main() {
             queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                          "'assisted'", "0")),
             "rebuilt rate-assisted clear rank remains capped");
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT clear_type FROM "
+                     "score_db.score_sha256_best_score_cache WHERE "
+                     "chart_sha256 = 'effective-tie' AND ln_mode = 0"),
+            "rebuilt equal score keeps the higher effective clear rank");
 
   sqlite3_close(db);
 

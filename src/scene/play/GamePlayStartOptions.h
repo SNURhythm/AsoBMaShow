@@ -67,7 +67,8 @@ struct StartOptions {
   bool autoPlay = false;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::shared_ptr<ReplayData> replayData = nullptr;
   std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
   std::optional<std::string> playOption;
@@ -138,6 +139,7 @@ inline void applyPracticeConfigurationToStartOptions(
       static_cast<unsigned long long>(std::max(0LL, configuration.startMicros));
   options.gaugeType = configuration.gaugeType;
   options.gaugeAutoShift = configuration.gaugeAutoShift;
+  options.gaugeAutoShiftLowerBound = configuration.gaugeAutoShiftLowerBound;
   options.practiceMode = true;
   options.playback = configuration.playback;
   options.judgeWindowScalePercent = configuration.judge.scalePercent;
@@ -181,6 +183,7 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.clubMode = replay.provenance.clubMode;
   options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
   options.startingGaugePercent = replay.provenance.startingGaugePercent;
+  options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
   options.replayJudgeOverride = play_start_detail::replayJudgeOverrideForChart(
       replay.provenance, replay.chartMeta);
 }
@@ -212,8 +215,12 @@ enforceCoursePlaybackRules(StartOptions options) {
   input.sourceJudgeRank = chartMeta.Rank;
   input.effectiveJudgeWindows = effectiveJudgeWindows;
   input.gaugeType = options.gaugeType;
-  input.gaugeProfile = options.gaugeProfile;
+  input.gaugeProfile =
+      options.gaugeProfile == GaugeProfile::CourseDefault
+          ? GaugeProfile::CourseDefault
+          : resolveGaugeProfile(options.gaugeProfile, chartMeta.KeyMode);
   input.gaugeAutoShift = options.gaugeAutoShift;
+  input.gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound;
   input.player1 = {.option = options.playOption.value_or("NORMAL"),
                    .seed = options.playOptionSeed};
   input.player2 = {.option = options.playOption2.value_or("NORMAL"),
@@ -245,6 +252,7 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.gaugeType = session->gaugeType;
     options.gaugeProfile = session->gaugeProfile;
     options.gaugeAutoShift = session->gaugeAutoShift;
+    options.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
     options.courseSession = session;
     options.courseConstraints = session->constraints;
     options.touchVisualizationEnabled =

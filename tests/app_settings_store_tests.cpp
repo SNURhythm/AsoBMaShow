@@ -132,6 +132,7 @@ AppSettings makeDistinctSettings() {
   value.systemPlaybackShowTitle = false;
   value.systemPlaybackShowArtist = false;
   value.selectedGaugeType = "hard";
+  value.selectedGaugeAutoShiftMode = "none";
   value.selectedPlayOption = "R-RANDOM";
   value.selectedLnMode = "CN";
   value.selectedAssistOption = "DRAG";

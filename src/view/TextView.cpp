@@ -369,13 +369,16 @@ void TextView::renderImpl(RenderContext &context) {
         getX() - static_cast<int>(std::round(marqueeOffset(getWidth())));
   }
 
-  const auto submitText = [this, &context, &drawRect, rotationDegrees]() {
+  const auto submitText = [this, &context, &drawRect]() {
+    const float left = static_cast<float>(drawRect.x);
+    const float top = static_cast<float>(drawRect.y);
+    const float right = left + static_cast<float>(drawRect.w);
+    const float bottom = top + static_cast<float>(drawRect.h);
     rendering::PosTexVertex vertices[] = {
-        {0.0f, 0.0f, 0.0f, 0.0f, 0.0f},                           // Top-left
-        {static_cast<float>(drawRect.w), 0.0f, 0.0f, 1.0f, 0.0f}, // Top-right
-        {static_cast<float>(drawRect.w), static_cast<float>(drawRect.h), 0.0f,
-         1.0f, 1.0f},                                            // Bottom-right
-        {0.0f, static_cast<float>(drawRect.h), 0.0f, 0.0f, 1.0f} // Bottom-left
+        {left, top, 0.0f, 0.0f, 0.0f},
+        {right, top, 0.0f, 1.0f, 0.0f},
+        {right, bottom, 0.0f, 1.0f, 1.0f},
+        {left, bottom, 0.0f, 0.0f, 1.0f},
     };
 
     const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
@@ -386,58 +389,7 @@ void TextView::renderImpl(RenderContext &context) {
     bx::memCopy(tvb.data, vertices, sizeof(vertices));
     bx::memCopy(tib.data, indices, sizeof(indices));
 
-    if (rotationDegrees == 0.0f) {
-      float translate[16];
-      bx::mtxTranslate(translate, drawRect.x, drawRect.y, 0.0f);
-      bgfx::setTransform(translate);
-    } else {
-      const float radians = bx::toRad(rotationDegrees);
-      const float cosine = std::cos(radians);
-      const float sine = std::sin(radians);
-      const float textureWidth = static_cast<float>(drawRect.w);
-      const float textureHeight = static_cast<float>(drawRect.h);
-      const float rotatedWidth = std::abs(cosine) * textureWidth +
-                                 std::abs(sine) * textureHeight;
-      const float rotatedHeight = std::abs(sine) * textureWidth +
-                                  std::abs(cosine) * textureHeight;
-
-      float left = static_cast<float>(getX());
-      if (align == TextAlign::CENTER) {
-        left += (static_cast<float>(getWidth()) - rotatedWidth) * 0.5f;
-      } else if (align == TextAlign::RIGHT) {
-        left += static_cast<float>(getWidth()) - rotatedWidth;
-      }
-      float top = static_cast<float>(getY());
-      if (valign == TextVAlign::MIDDLE) {
-        top += (static_cast<float>(getHeight()) - rotatedHeight) * 0.5f;
-      } else if (valign == TextVAlign::BOTTOM) {
-        top += static_cast<float>(getHeight()) - rotatedHeight;
-      }
-      const float centerX = left + rotatedWidth * 0.5f;
-      const float centerY = top + rotatedHeight * 0.5f;
-
-      float transform[16] = {
-          cosine,
-          sine,
-          0.0f,
-          0.0f,
-          -sine,
-          cosine,
-          0.0f,
-          0.0f,
-          0.0f,
-          0.0f,
-          1.0f,
-          0.0f,
-          centerX - cosine * textureWidth * 0.5f +
-              sine * textureHeight * 0.5f,
-          centerY - sine * textureWidth * 0.5f -
-              cosine * textureHeight * 0.5f,
-          0.0f,
-          1.0f,
-      };
-      bgfx::setTransform(transform);
-    }
+    context.applyTransform();
     bgfx::setTexture(0, s_texColor, texture);
     bgfx::setVertexBuffer(0, &tvb);
     bgfx::setIndexBuffer(&tib);

@@ -41,8 +41,17 @@ void canonicalizeWindows(std::vector<JudgeWindowProvenance> &windows) {
                    });
 }
 
-ScoreEligibility worseEligibility(ScoreEligibility lhs, ScoreEligibility rhs) {
-  return enumValue(lhs) >= enumValue(rhs) ? lhs : rhs;
+ScoreEligibility mergeEligibility(ScoreEligibility lhs,
+                                  ScoreEligibility rhs) {
+  if (lhs == ScoreEligibility::Modified ||
+      rhs == ScoreEligibility::Modified) {
+    return ScoreEligibility::Modified;
+  }
+  if (lhs == ScoreEligibility::LegacyUnverified ||
+      rhs == ScoreEligibility::LegacyUnverified) {
+    return ScoreEligibility::LegacyUnverified;
+  }
+  return ScoreEligibility::Verified;
 }
 
 const char *eligibilityName(ScoreEligibility value) {
@@ -202,7 +211,7 @@ void validatePracticePercentages(const ScoreProvenance &value) {
         "Score provenance judge window scale percentage is out of range.");
   }
   if (value.startingGaugePercent.has_value() &&
-      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 100)) {
+      (*value.startingGaugePercent < 0 || *value.startingGaugePercent > 120)) {
     throw std::runtime_error(
         "Score provenance starting gauge percentage is out of range.");
   }
@@ -267,6 +276,8 @@ const char *gaugeTypeName(GaugeType value) {
     return "hard";
   case GaugeType::ExHard:
     return "ex-hard";
+  case GaugeType::Hazard:
+    return "hazard";
   }
   throw std::invalid_argument("Unknown gauge type value.");
 }
@@ -287,7 +298,21 @@ std::optional<GaugeType> gaugeTypeFromName(std::string_view value) {
   if (value == "ex-hard") {
     return GaugeType::ExHard;
   }
+  if (value == "hazard") {
+    return GaugeType::Hazard;
+  }
   return std::nullopt;
+}
+
+GaugeAutoShiftMode gaugeAutoShiftFromJson(const Json &value) {
+  if (value.is_boolean()) {
+    return value.get<bool>() ? GaugeAutoShiftMode::SelectToUnder
+                             : GaugeAutoShiftMode::None;
+  }
+  if (value.is_number_integer()) {
+    return gaugeAutoShiftModeFromValue(value.get<int>());
+  }
+  throw std::runtime_error("Gauge auto shift mode must be an integer.");
 }
 
 const char *gaugeProfileName(GaugeProfile value) {
@@ -306,6 +331,12 @@ const char *gaugeProfileName(GaugeProfile value) {
     return "course-24-keys";
   case GaugeProfile::CourseLR2:
     return "course-lr2";
+  case GaugeProfile::Standard5Keys:
+    return "standard-5-keys";
+  case GaugeProfile::Standard9Keys:
+    return "standard-9-keys";
+  case GaugeProfile::Standard24Keys:
+    return "standard-24-keys";
   }
   throw std::invalid_argument("Unknown gauge profile value.");
 }
@@ -331,6 +362,15 @@ std::optional<GaugeProfile> gaugeProfileFromName(std::string_view value) {
   }
   if (value == "course-lr2") {
     return GaugeProfile::CourseLR2;
+  }
+  if (value == "standard-5-keys") {
+    return GaugeProfile::Standard5Keys;
+  }
+  if (value == "standard-9-keys") {
+    return GaugeProfile::Standard9Keys;
+  }
+  if (value == "standard-24-keys") {
+    return GaugeProfile::Standard24Keys;
   }
   return std::nullopt;
 }
@@ -479,16 +519,26 @@ ScoreStageProvenance stageFromJson(const Json &value) {
   return result;
 }
 
-bool buildIsModified(const ScoreProvenanceBuildInput &input) {
-  return input.ruleset != RulesetDescriptor::Current() || input.autoPlay ||
-         input.practice || assist_options::isEnabled(input.assistOption) ||
-         input.judgeRankSource != JudgeRankSource::Chart ||
-         input.gaugeProfile != GaugeProfile::Standard ||
-         !input.playback.neutral() || input.judgeWindowScalePercent != 100 ||
-         input.startingGaugePercent.has_value();
-}
-
 } // namespace
+
+ScoreEligibility
+scoreEligibilityForProvenance(const ScoreProvenance &provenance) {
+  if (provenance.ruleset.version <= 0) {
+    return ScoreEligibility::LegacyUnverified;
+  }
+  const bool unknownJudgeSource =
+      std::ranges::any_of(provenance.stages, [](const auto &stage) {
+        return stage.judgeRankSource == JudgeRankSource::Unknown;
+      });
+  const bool modified =
+      provenance.ruleset != RulesetDescriptor::Current() ||
+      provenance.autoPlay || provenance.practice ||
+      assist_options::isEnabled(provenance.assistOption) ||
+      unknownJudgeSource || !provenance.playback.neutral() ||
+      provenance.judgeWindowScalePercent > 100 ||
+      provenance.startingGaugePercent.has_value();
+  return modified ? ScoreEligibility::Modified : ScoreEligibility::Verified;
+}
 
 namespace score_provenance {
 
@@ -555,7 +605,10 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
   root["stages"] = std::move(stages);
   root["gaugeType"] = gaugeTypeName(canonical.gaugeType);
   root["gaugeProfile"] = gaugeProfileName(canonical.gaugeProfile);
-  root["gaugeAutoShift"] = canonical.gaugeAutoShift;
+  root["gaugeAutoShift"] =
+      gaugeAutoShiftModeValue(canonical.gaugeAutoShift);
+  root["gaugeAutoShiftLowerBound"] =
+      gaugeTypeName(canonical.gaugeAutoShiftLowerBound);
   root["player1"] = playerOptionToJson(canonical.player1);
   root["player2"] = playerOptionToJson(canonical.player2);
   root["assistOption"] = canonical.assistOption;
@@ -614,7 +667,15 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
     result.gaugeProfile = enumOrThrow(
         gaugeProfileFromName(root.value("gaugeProfile", "standard")),
         "Unknown gauge profile in score provenance.");
-    result.gaugeAutoShift = root.value("gaugeAutoShift", result.gaugeAutoShift);
+    if (const auto mode = root.find("gaugeAutoShift"); mode != root.end()) {
+      result.gaugeAutoShift = gaugeAutoShiftFromJson(*mode);
+    }
+    if (const auto lower = root.find("gaugeAutoShiftLowerBound");
+        lower != root.end()) {
+      result.gaugeAutoShiftLowerBound = enumOrThrow(
+          gaugeTypeFromName(lower->get<std::string>()),
+          "Unknown gauge auto shift lower bound in score provenance.");
+    }
     if (const auto player = root.find("player1"); player != root.end()) {
       result.player1 = playerOptionFromJson(*player);
     }
@@ -714,6 +775,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.gaugeType = input.gaugeType;
   result.gaugeProfile = input.gaugeProfile;
   result.gaugeAutoShift = input.gaugeAutoShift;
+  result.gaugeAutoShiftLowerBound = input.gaugeAutoShiftLowerBound;
   result.player1 = input.player1;
   result.player2 = input.player2;
   result.assistOption = assist_options::normalize(input.assistOption);
@@ -725,12 +787,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.playback = input.playback;
   result.judgeWindowScalePercent = input.judgeWindowScalePercent;
   result.startingGaugePercent = input.startingGaugePercent;
-  if (input.ruleset.version <= 0) {
-    result.eligibility = ScoreEligibility::LegacyUnverified;
-  } else {
-    result.eligibility = buildIsModified(input) ? ScoreEligibility::Modified
-                                                : ScoreEligibility::Verified;
-  }
+  result.eligibility = scoreEligibilityForProvenance(result);
   return result;
 }
 
@@ -757,7 +814,7 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
     result.autoPlay = result.autoPlay || stage.autoPlay;
     result.practice = result.practice || stage.practice;
     result.clubMode = result.clubMode || stage.clubMode;
-    eligibility = worseEligibility(eligibility, stage.eligibility);
+    eligibility = mergeEligibility(eligibility, stage.eligibility);
 
     inconsistent =
         inconsistent ||
@@ -766,8 +823,10 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
         stage.gaugeType != stages.front().gaugeType ||
         stage.gaugeProfile != stages.front().gaugeProfile ||
         stage.gaugeAutoShift != stages.front().gaugeAutoShift ||
-        stage.player1 != stages.front().player1 ||
-        stage.player2 != stages.front().player2 ||
+        stage.gaugeAutoShiftLowerBound !=
+            stages.front().gaugeAutoShiftLowerBound ||
+        stage.player1.option != stages.front().player1.option ||
+        stage.player2.option != stages.front().player2.option ||
         stage.assistOption != stages.front().assistOption ||
         stage.playback != stages.front().playback ||
         stage.judgeWindowScalePercent !=
@@ -777,10 +836,10 @@ ScoreProvenance mergeCourseProvenance(std::span<const ScoreProvenance> stages) {
 
   canonicalizeDevices(result.inputDevices);
   if (inconsistent) {
-    eligibility = worseEligibility(eligibility, ScoreEligibility::Modified);
+    eligibility = mergeEligibility(eligibility, ScoreEligibility::Modified);
   }
   if (result.autoPlay || result.practice) {
-    eligibility = worseEligibility(eligibility, ScoreEligibility::Modified);
+    eligibility = mergeEligibility(eligibility, ScoreEligibility::Modified);
   }
   if (eligibility == ScoreEligibility::LegacyUnverified) {
     result.ruleset = RulesetDescriptor::Legacy();

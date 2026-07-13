@@ -25,6 +25,7 @@ inline constexpr const char *kChartMetaSelectColumns =
     "cm.level,"
     "cm.difficulty,"
     "cm.total,"
+    "cm.has_total,"
     "cm.bpm,"
     "cm.max_bpm,"
     "cm.min_bpm,"
@@ -37,7 +38,7 @@ inline constexpr const char *kChartMetaSelectColumns =
     "cm.total_scratch_notes,"
     "cm.total_backspin_notes,"
     "cm.ln_mode";
-inline constexpr int kChartMetaColumnCount = 28;
+inline constexpr int kChartMetaColumnCount = 29;
 
 inline std::string chartSourcePriorityExpr(std::string_view alias) {
   const std::string aliasText(alias);

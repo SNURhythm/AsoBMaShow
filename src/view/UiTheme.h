@@ -3,6 +3,7 @@
 #include "../rendering/Color.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <string_view>
 
 namespace ui_theme {
 
@@ -306,6 +307,41 @@ inline Color warningAction() {
 inline Color warningActionHover() {
   return activeMode() == ThemeMode::Light ? Color(150, 96, 28, 250)
                                           : Color(136, 99, 42, 246);
+}
+
+inline Color scoreRankColor(std::string_view rank) {
+  const bool light = activeMode() == ThemeMode::Light;
+  if (rank == "MAX") {
+    return light ? Color(171, 108, 0, 255) : Color(255, 222, 92, 255);
+  }
+  if (rank == "MAX -") {
+    return light ? Color(190, 91, 20, 255) : Color(255, 170, 82, 255);
+  }
+  if (rank == "AAA") {
+    return light ? Color(65, 142, 18, 255) : Color(183, 246, 92, 255);
+  }
+  if (rank == "AA") {
+    return light ? Color(0, 126, 149, 255) : Color(86, 210, 232, 255);
+  }
+  if (rank == "A") {
+    return light ? Color(47, 94, 184, 255) : Color(116, 166, 255, 255);
+  }
+  if (rank == "B") {
+    return light ? Color(106, 72, 174, 255) : Color(190, 143, 255, 255);
+  }
+  if (rank == "C") {
+    return light ? Color(173, 59, 122, 255) : Color(255, 128, 190, 255);
+  }
+  if (rank == "D") {
+    return light ? Color(190, 73, 45, 255) : Color(255, 137, 99, 255);
+  }
+  if (rank == "E") {
+    return light ? Color(143, 101, 44, 255) : Color(211, 170, 100, 255);
+  }
+  if (rank == "F") {
+    return light ? Color(190, 48, 48, 255) : Color(255, 92, 92, 255);
+  }
+  return textMuted();
 }
 
 inline Color warningActionPressed() {

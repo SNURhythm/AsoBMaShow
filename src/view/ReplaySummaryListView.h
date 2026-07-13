@@ -81,8 +81,10 @@ public:
     detailText->setText(replay_summary_ui::detailLabel(summary));
     scoreText->setText(summary.autoPlay ? "AUTO"
                                         : std::to_string(summary.finalScore));
-    rankText->setText(score_rank::labelForScore(summary.finalScore,
-                                                summary.maxScore));
+    currentRank = score_rank::labelForScore(summary.finalScore,
+                                            summary.maxScore);
+    rankText->setText(score_rank::displayLabelForScore(summary.finalScore,
+                                                       summary.maxScore));
 
     const int clearRank = replay_clear_mark::effectiveClearRank(summary);
     if (hasClearLampColor(clearRank)) {
@@ -101,6 +103,7 @@ public:
     detailText->setThemedColor(ui_theme::textSecondary);
     scoreText->setThemedColor(ui_theme::lime);
     rankText->setThemedColor(ui_theme::amber);
+    applyRankColor();
   }
 
   void onUnselected() override {
@@ -114,9 +117,16 @@ public:
         [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
     rankText->setThemedColor(
         [] { return ui_theme::withAlpha(ui_theme::amber(), 218); });
+    applyRankColor();
   }
 
 private:
+  void applyRankColor() {
+    const std::string rank = score_rank::displayLabel(currentRank);
+    rankText->setThemedColor(
+        [rank] { return ui_theme::scoreRankColor(rank); });
+  }
+
   View *clearLamp = nullptr;
   View *textColumn = nullptr;
   View *scoreColumn = nullptr;
@@ -124,6 +134,7 @@ private:
   TextView *detailText = nullptr;
   TextView *scoreText = nullptr;
   TextView *rankText = nullptr;
+  std::string currentRank;
 };
 
 class ReplaySummaryListView : public RecyclerView<ReplaySummary> {

@@ -32,6 +32,7 @@ constexpr ClearMarkFilterDefinition kClearMarkFilters[] = {
     {"H-CLEAR", kClearTypeHardClearRank},
     {"CLEAR", kClearTypeNormalClearRank},
     {"E-CLEAR", kClearTypeEasyClearRank},
+    {"LIGHT ASSIST", kClearTypeLightAssistedEasyClearRank},
     {"A-CLEAR", kClearTypeAssistedEasyClearRank},
     {"FAILED", kClearTypeFailedRank},
     {"NO PLAY", kNoClearTypeRank},

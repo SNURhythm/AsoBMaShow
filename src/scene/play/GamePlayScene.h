@@ -206,5 +206,6 @@ private:
   void configurePacemakerTarget();
   void updatePacemakerStatus();
   void updateGaugeStatusText();
+  bool finishIfGaugeFailed();
   void updateLaneStateText();
 };

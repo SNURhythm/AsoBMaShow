@@ -123,7 +123,7 @@ struct CoursePlaySession;
 
 class ScoreDBHelper {
 public:
-  static constexpr int kCurrentSchemaVersion = 7;
+  static constexpr int kCurrentSchemaVersion = 8;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:

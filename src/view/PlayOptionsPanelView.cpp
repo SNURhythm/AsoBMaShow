@@ -91,9 +91,9 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   }
 }
 
-std::string gaugeLabel(GaugeType type, bool autoShift) {
-  if (autoShift) {
-    return "GAS";
+std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
+  if (gaugeAutoShiftEnabled(autoShift)) {
+    return gaugeAutoShiftMenuLabel(autoShift);
   }
   switch (type) {
   case GaugeType::AssistedEasy:
@@ -104,6 +104,8 @@ std::string gaugeLabel(GaugeType type, bool autoShift) {
     return "HARD";
   case GaugeType::ExHard:
     return "EX-HARD";
+  case GaugeType::Hazard:
+    return "HAZARD";
   case GaugeType::Normal:
   default:
     return "NORMAL";
@@ -121,33 +123,95 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   setGap(12);
 
   if (layout.showGauge) {
-    addView(makeLabel("Gauge"));
-    auto addGaugeButton = [this](View *row, GaugeType type, bool autoShift) {
+    gaugeSectionLabel = makeLabel("Gauge");
+    addView(gaugeSectionLabel);
+    auto addGaugeButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
-      const std::string label = gaugeLabel(type, autoShift);
+      const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
       auto *button = makeButton(label, 18, &text);
-      button->setOnClickListener([this, type, autoShift]() {
+      button->setOnClickListener([this, type]() {
         if (callbacks.onGaugeSelected) {
-          callbacks.onGaugeSelected(type, autoShift);
+          callbacks.onGaugeSelected(type, state.gaugeAutoShift);
         }
       });
       gaugeButtons.push_back({.button = button,
                               .text = text,
                               .id = label,
                               .gaugeType = type,
-                              .gaugeAutoShift = autoShift});
+                              .gaugeAutoShift = GaugeAutoShiftMode::None});
       row->addView(button);
     };
     auto *gaugeRowA = makeRow();
-    addGaugeButton(gaugeRowA, GaugeType::AssistedEasy, false);
-    addGaugeButton(gaugeRowA, GaugeType::Easy, false);
-    addGaugeButton(gaugeRowA, GaugeType::Normal, false);
+    addGaugeButton(gaugeRowA, GaugeType::AssistedEasy);
+    addGaugeButton(gaugeRowA, GaugeType::Easy);
+    addGaugeButton(gaugeRowA, GaugeType::Normal);
     addView(gaugeRowA);
     auto *gaugeRowB = makeRow();
-    addGaugeButton(gaugeRowB, GaugeType::Hard, false);
-    addGaugeButton(gaugeRowB, GaugeType::ExHard, false);
-    addGaugeButton(gaugeRowB, GaugeType::ExHard, true);
+    addGaugeButton(gaugeRowB, GaugeType::Hard);
+    addGaugeButton(gaugeRowB, GaugeType::ExHard);
+    addGaugeButton(gaugeRowB, GaugeType::Hazard);
     addView(gaugeRowB);
+
+    addView(makeLabel("Auto Shift"));
+    auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
+      TextView *text = nullptr;
+      const std::string label = gaugeAutoShiftMenuLabel(mode);
+      auto *button = makeButton(label, 16, &text);
+      button->setOnClickListener([this, mode]() {
+        if (callbacks.onGaugeSelected) {
+          callbacks.onGaugeSelected(state.gaugeType, mode);
+        }
+      });
+      gaugeAutoShiftButtons.push_back(
+          {.button = button,
+           .text = text,
+           .id = label,
+           .gaugeAutoShift = mode});
+      row->addView(button);
+    };
+    auto *gaugeRowC = makeRow();
+    addAutoShiftButton(gaugeRowC, GaugeAutoShiftMode::None);
+    addAutoShiftButton(gaugeRowC, GaugeAutoShiftMode::Continue);
+    addView(gaugeRowC);
+    auto *gaugeRowD = makeRow();
+    addAutoShiftButton(gaugeRowD, GaugeAutoShiftMode::SurvivalToGroove);
+    addAutoShiftButton(gaugeRowD, GaugeAutoShiftMode::BestClear);
+    addView(gaugeRowD);
+    auto *gaugeRowE = makeRow();
+    addAutoShiftButton(gaugeRowE, GaugeAutoShiftMode::SelectToUnder);
+    addView(gaugeRowE);
+
+    gaugeAutoShiftBoundsSection = new View();
+    gaugeAutoShiftBoundsSection->setFlexDirection(FlexDirection::Column);
+    gaugeAutoShiftBoundsSection->setAlignItems(YGAlignStretch);
+    gaugeAutoShiftBoundsSection->setGap(12);
+    gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
+    gaugeAutoShiftBoundsSection->setVisible(false);
+    gaugeAutoShiftBoundsSection->addView(makeLabel("Auto Shift Lower Bound"));
+    auto addLowerBoundButton = [this](View *row, GaugeType type) {
+      TextView *text = nullptr;
+      const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
+      auto *button = makeButton(label, 18, &text);
+      button->setOnClickListener([this, type]() {
+        if (callbacks.onGaugeLowerBoundSelected) {
+          callbacks.onGaugeLowerBoundSelected(type);
+        }
+      });
+      gaugeLowerBoundButtons.push_back(
+          {.button = button, .text = text, .id = label, .gaugeType = type});
+      row->addView(button);
+    };
+    auto *lowerRowA = makeRow();
+    addLowerBoundButton(lowerRowA, GaugeType::AssistedEasy);
+    addLowerBoundButton(lowerRowA, GaugeType::Easy);
+    addLowerBoundButton(lowerRowA, GaugeType::Normal);
+    gaugeAutoShiftBoundsSection->addView(lowerRowA);
+    auto *lowerRowB = makeRow();
+    addLowerBoundButton(lowerRowB, GaugeType::Hard);
+    addLowerBoundButton(lowerRowB, GaugeType::ExHard);
+    addLowerBoundButton(lowerRowB, GaugeType::Hazard);
+    gaugeAutoShiftBoundsSection->addView(lowerRowB);
+    addView(gaugeAutoShiftBoundsSection);
   }
 
   playOptionSection = new PlayOptionSectionView(
@@ -288,10 +352,30 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   state = newState;
   for (const auto &item : gaugeButtons) {
-    styleButton(item.button, item.text,
-                item.gaugeType == state.gaugeType &&
-                    item.gaugeAutoShift == state.gaugeAutoShift,
+    styleButton(item.button, item.text, item.gaugeType == state.gaugeType,
                 true);
+  }
+  for (const auto &item : gaugeAutoShiftButtons) {
+    styleButton(item.button, item.text,
+                item.gaugeAutoShift == state.gaugeAutoShift, true);
+  }
+  const bool showsBounds =
+      state.gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+      state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder;
+  if (gaugeSectionLabel != nullptr) {
+    gaugeSectionLabel->setText(
+        state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder
+            ? "Gauge / Auto Shift Upper Bound"
+            : "Gauge");
+  }
+  if (gaugeAutoShiftBoundsSection != nullptr) {
+    gaugeAutoShiftBoundsSection->setDisplay(showsBounds ? YGDisplayFlex
+                                                        : YGDisplayNone);
+    gaugeAutoShiftBoundsSection->setVisible(showsBounds);
+  }
+  for (const auto &item : gaugeLowerBoundButtons) {
+    styleButton(item.button, item.text,
+                item.gaugeType == state.gaugeAutoShiftLowerBound, true);
   }
   if (playOptionSection != nullptr) {
     playOptionSection->refresh(state.playOption, state.defaultLaneOrder,

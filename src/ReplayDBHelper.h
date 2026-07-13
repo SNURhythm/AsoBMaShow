@@ -28,7 +28,7 @@ struct ReplaySummary {
   bool courseReplay = false;
   bool autoPlay = false;
   GaugeType initialGaugeType = GaugeType::Normal;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   int finalScore = 0;
   int maxScore = 0;
   int maxCombo = 0;

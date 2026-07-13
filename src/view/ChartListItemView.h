@@ -26,6 +26,7 @@ private:
   void applyTextColors(bool selected);
   void setFavoriteState(bool favorite);
   void refreshFavoriteButton();
+  void refreshScoreRankColor();
 
   ChartMetaRecord currentRecord;
   bool unavailable = false;
@@ -39,11 +40,15 @@ private:
   ImageView *jacketImage;
   View *textLayout;
   View *detailsLayout;
+  View *scoreRankColumn;
   TextView *titleView;
   TextView *artistView;
   TextView *levelView;
   TextView *keyModeView;
+  TextView *scoreRankShadowView;
+  TextView *scoreRankWeightView;
   TextView *scoreRankView;
+  std::string scoreRank;
   Button *favoriteButton;
   TextView *favoriteIconView;
 };

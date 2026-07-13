@@ -37,7 +37,7 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.effectiveJudgeWindows = sampleWindows();
   input.gaugeType = GaugeType::Hard;
   input.gaugeProfile = GaugeProfile::Standard;
-  input.gaugeAutoShift = true;
+  input.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   input.player1 = {.option = "RANDOM", .seed = 12345};
   input.player2 = {.option = "MIRROR", .seed = std::nullopt};
   input.assistOption = assist_options::kOff;
@@ -55,10 +55,10 @@ sampleVerifiedProvenance(const std::string &hashSuffix = "one") {
 
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
-  assert(rules.version == 1);
+  assert(rules.version == RulesetDescriptor::kCurrentVersion);
   assert(rules.scoringModel == "asobmashow-v1");
   assert(rules.judgementModel == "bms-rank-v1");
-  assert(rules.gaugeModel == "asobmashow-gauge-v1");
+  assert(rules.gaugeModel == "beatoraja-profile-gauge-v2");
 
   const RulesetDescriptor legacy = RulesetDescriptor::Legacy();
   assert(legacy.version == 0);
@@ -208,7 +208,7 @@ void testPlaybackAndJudgeProvenanceValidation() {
   assertInvalid(offStepJudgeScale);
 
   auto invalidStartingGauge = sampleVerifiedProvenance();
-  invalidStartingGauge.startingGaugePercent = 101;
+  invalidStartingGauge.startingGaugePercent = 121;
   assertInvalid(invalidStartingGauge);
 }
 
@@ -227,6 +227,11 @@ void testEligibilityClassification() {
   auto scaledJudge = sampleInput();
   scaledJudge.judgeWindowScalePercent = 80;
   assert(makeScoreProvenance(scaledJudge).eligibility ==
+         ScoreEligibility::Verified);
+
+  auto expandedJudge = sampleInput();
+  expandedJudge.judgeWindowScalePercent = 120;
+  assert(makeScoreProvenance(expandedJudge).eligibility ==
          ScoreEligibility::Modified);
 
   auto startingGauge = sampleInput();
@@ -247,6 +252,16 @@ void testEligibilityClassification() {
   auto constrained = sampleInput();
   constrained.judgeRankSource = JudgeRankSource::CourseConstraint;
   assert(makeScoreProvenance(constrained).eligibility ==
+         ScoreEligibility::Verified);
+
+  auto courseGauge = sampleInput();
+  courseGauge.gaugeProfile = GaugeProfile::CourseDefault;
+  assert(makeScoreProvenance(courseGauge).eligibility ==
+         ScoreEligibility::Verified);
+
+  auto unknownJudge = sampleInput();
+  unknownJudge.judgeRankSource = JudgeRankSource::Unknown;
+  assert(makeScoreProvenance(unknownJudge).eligibility ==
          ScoreEligibility::Modified);
 
   auto overridden = sampleInput();
@@ -335,11 +350,22 @@ void testCourseMergePreservesStagesAndWorstEligibility() {
   assert(merged.stages[0].chartSha256 == "sha256-first");
   assert(merged.stages[1].chartSha256 == "sha256-second");
   assert(merged.stages[2].chartSha256 == "sha256-third");
-  assert(merged.eligibility == ScoreEligibility::LegacyUnverified);
+  assert(merged.eligibility == ScoreEligibility::Modified);
 
   const std::array modifiedValues{first, second};
   assert(mergeCourseProvenance(modifiedValues).eligibility ==
          ScoreEligibility::Modified);
+
+  const std::array legacyValues{first, third};
+  assert(mergeCourseProvenance(legacyValues).eligibility ==
+         ScoreEligibility::LegacyUnverified);
+
+  ScoreProvenance seededFirst = sampleVerifiedProvenance("seeded-first");
+  ScoreProvenance seededSecond = sampleVerifiedProvenance("seeded-second");
+  seededSecond.player1.seed = 67890;
+  const std::array seededValues{seededFirst, seededSecond};
+  assert(mergeCourseProvenance(seededValues).eligibility ==
+         ScoreEligibility::Verified);
 }
 
 void testPlayStartCaptureIsImmutableAndShared() {
@@ -354,7 +380,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
   StartOptions options;
   options.gaugeType = GaugeType::Hard;
   options.gaugeProfile = GaugeProfile::Standard;
-  options.gaugeAutoShift = true;
+  options.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   options.playOption = "RANDOM";
   options.playOptionSeed = 1234;
   options.playOption2 = "MIRROR";
@@ -591,7 +617,7 @@ void testPlayStartInputPlatformDefaultsAreIncluded() {
                       InputDeviceCategory::Touch}));
 }
 
-void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
+void testConstrainedPlayCapturesEffectiveWindowsAsVerified() {
   bms_parser::ChartMeta meta;
   meta.MD5 = "constrained-md5";
   meta.SHA256 = "constrained-sha256";
@@ -608,7 +634,7 @@ void testConstrainedPlayCapturesEffectiveWindowsAsModified() {
   const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
       options, meta, effectiveJudge.timingWindows);
 
-  assert(captured.eligibility == ScoreEligibility::Modified);
+  assert(captured.eligibility == ScoreEligibility::Verified);
   assert(captured.stages.size() == 1);
   const auto &stage = captured.stages.front();
   assert(stage.judgeRankSource == JudgeRankSource::CourseConstraint);
@@ -639,6 +665,11 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
   CoursePlaySession sparseSession;
   sparseSession.recordStageProvenance(1, second);
   assert(sparseSession.aggregateProvenance().eligibility ==
+         ScoreEligibility::Modified);
+
+  CoursePlaySession legacySparseSession;
+  legacySparseSession.recordStageProvenance(1, first);
+  assert(legacySparseSession.aggregateProvenance().eligibility ==
          ScoreEligibility::LegacyUnverified);
 
   session.recordStageProvenance(1, second);
@@ -687,7 +718,7 @@ int main() {
   testCourseReplaySelectsMatchingStageJudgeWindows();
   testMobilePlayStartInputCategoriesPreserveResolverClasses();
   testPlayStartInputPlatformDefaultsAreIncluded();
-  testConstrainedPlayCapturesEffectiveWindowsAsModified();
+  testConstrainedPlayCapturesEffectiveWindowsAsVerified();
   testCourseSessionAggregatesRecordedStagesByIndex();
   std::cout << "score provenance tests passed\n";
   return 0;

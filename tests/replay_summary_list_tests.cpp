@@ -2,6 +2,7 @@
 #include "../src/ReplayResultStateBuilder.h"
 #include "../src/ReplayAutoPlay.h"
 
+#include <cmath>
 #include <iostream>
 
 #define ASSERT_CONTAINS(haystack, needle, label)                               \
@@ -67,6 +68,79 @@ int main() {
     return 1;
   }
 
+  ReplayData bestClearReplay;
+  bestClearReplay.initialGaugeType = GaugeType::Normal;
+  bestClearReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  bestClearReplay.provenance.startingGaugePercent = 37;
+  const RhythmState bestClearInitial =
+      replay_result::BuildInitialGaugeState(chart, bestClearReplay);
+  if (bestClearInitial.gaugeType != GaugeType::Hazard ||
+      bestClearInitial.currentGauge != 37.0f) {
+    std::cerr << "export HUD must use the effective Best Clear start state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData firstCourseStage;
+  firstCourseStage.initialGaugeType = GaugeType::Hard;
+  firstCourseStage.events.push_back({.action = ReplayEventAction::Gauge,
+                                     .songTimeMicros = 500,
+                                     .gauge = 42.0f,
+                                     .gaugeType = GaugeType::Hard});
+  const RhythmState firstCourseResult =
+      replay_result::BuildResultState(chart, firstCourseStage);
+  const GaugeStateSnapshot carriedGauge = firstCourseResult.gaugeSnapshot();
+  ReplayData secondCourseStage;
+  secondCourseStage.initialGaugeType = GaugeType::Hard;
+  const RhythmState secondCourseInitial =
+      replay_result::BuildInitialGaugeState(
+          chart, secondCourseStage, GaugeProfile::Standard, &carriedGauge);
+  if (secondCourseInitial.gaugeType != GaugeType::Hard ||
+      secondCourseInitial.currentGauge != 42.0f) {
+    std::cerr << "course export HUD must start from the carried gauge state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData failedReplay;
+  failedReplay.initialGaugeType = GaugeType::Hard;
+  failedReplay.events.push_back({.action = ReplayEventAction::Gauge,
+                                 .songTimeMicros = 500,
+                                 .gauge = 0.0f,
+                                 .gaugeType = GaugeType::Hard});
+  const RhythmState failedResult =
+      replay_result::BuildResultState(chart, failedReplay);
+  const GaugeStateSnapshot failedCarry = failedResult.gaugeSnapshot();
+  if (!failedCarry.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] ||
+      replay_result::FindGaugeFailureMicros(
+          chart, failedReplay, GaugeProfile::Standard, &failedCarry) != 0) {
+    std::cerr << "course export must carry terminal survival gauge state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData continuedReplay;
+  continuedReplay.initialGaugeType = GaugeType::Hard;
+  continuedReplay.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  continuedReplay.provenance.startingGaugePercent = 0;
+  if (replay_result::FindGaugeFailureMicros(chart, continuedReplay)
+          .has_value()) {
+    std::cerr << "Continue export must not stop at a zero percent start"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData survivalOnlyReplay;
+  survivalOnlyReplay.initialGaugeType = GaugeType::ExHard;
+  survivalOnlyReplay.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
+  survivalOnlyReplay.gaugeAutoShiftLowerBound = GaugeType::Hard;
+  survivalOnlyReplay.provenance.startingGaugePercent = 0;
+  if (replay_result::FindGaugeFailureMicros(chart, survivalOnlyReplay) != 0) {
+    std::cerr << "survival-only GAS export must fail at a zero percent start"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData assistedReplay;
   assistedReplay.initialGaugeType = GaugeType::Hard;
   assistedReplay.maxCombo = 1;
@@ -100,8 +174,9 @@ int main() {
   }
 
   const ReplayData autoExport = replay_autoplay::BuildReplayData(
-      chart, GaugeType::Normal, false, {.percent = 200}, std::nullopt,
-      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, true);
+      chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+      assist_options::kOff, true, GaugeType::Hard);
   if (autoExport.provenance.playback.percent != 200) {
     std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
@@ -111,13 +186,41 @@ int main() {
     std::cerr << "synthetic Auto export retains Club Beat" << std::endl;
     return 1;
   }
+  if (autoExport.gaugeAutoShiftLowerBound != GaugeType::Hard) {
+    std::cerr << "synthetic Auto export retains the GAS lower bound"
+              << std::endl;
+    return 1;
+  }
 
   const ReplaySummary assistedAutoSummary = replay_autoplay::BuildSummary(
-      chart.Meta, GaugeType::Normal, false, std::nullopt, std::nullopt,
-      std::nullopt, std::nullopt, assist_options::kOff, {.percent = 200});
+      chart.Meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff,
+      {.percent = 200});
   if (assistedAutoSummary.playback.percent != 200 ||
       assistedAutoSummary.clearType != kClearTypeAssistedEasyClearRank) {
     std::cerr << "synthetic Auto summary must retain playback assist limits"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::ChartMeta pmsMeta;
+  pmsMeta.KeyMode = 9;
+  pmsMeta.TotalNotes = 100;
+  pmsMeta.HasTotal = true;
+  pmsMeta.Total = 100.0;
+  const ReplaySummary pmsAutoSummary = replay_autoplay::BuildSummary(
+      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  if (pmsAutoSummary.finalGauge != 120.0f) {
+    std::cerr << "synthetic Auto summary must use the PMS gauge result"
+              << std::endl;
+    return 1;
+  }
+
+  pmsMeta.Total = 10.0;
+  const ReplaySummary lowTotalAutoSummary = replay_autoplay::BuildSummary(
+      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  if (std::abs(lowTotalAutoSummary.finalGauge - 40.0f) > 0.01f) {
+    std::cerr << "synthetic Auto summary must respect authored TOTAL"
               << std::endl;
     return 1;
   }

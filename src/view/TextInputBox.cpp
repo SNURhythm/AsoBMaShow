@@ -94,6 +94,7 @@ void submitRect(RenderContext &context, bgfx::ProgramHandle program, int x,
   rendering::createRect(tvb, tib, x, y, width, height, color);
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  context.applyTransform();
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);

@@ -34,7 +34,7 @@ void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState state(&chart, false);
-  state.configureGauge(GaugeType::Hard, false);
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
 
   state.setStartingGaugePercent(37);
   assert(state.currentGauge == 37.0f);
@@ -48,13 +48,17 @@ void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
   state.setStartingGaugePercent(-1);
   assert(state.currentGauge == 0.0f);
   assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] == 0.0f);
+  assert(state.activeGaugeFailed());
+
+  state.setStartingGaugePercent(37);
+  assert(!state.activeGaugeFailed());
 }
 
 void testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState state(&chart, false);
-  state.configureGauge(GaugeType::Hard, true);
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
 
   state.setStartingGaugePercent(37);
   for (const float value : state.gaugeValues) {
@@ -69,11 +73,62 @@ void testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot() {
   }
 }
 
+void testSurvivalToGrooveStartsBothGaugeCandidates() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 9;
+  chart.Meta.TotalNotes = 100;
+  RhythmState state(&chart, false);
+  state.configureGauge(GaugeType::Hard,
+                       GaugeAutoShiftMode::SurvivalToGroove);
+
+  assert(gaugeStartingMaximumValue(
+             GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove,
+             GaugeType::AssistedEasy, state.gaugeProfile) == 120.0f);
+  state.setStartingGaugePercent(110);
+  assert(state.currentGauge == 100.0f);
+  assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] == 100.0f);
+  assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] == 110.0f);
+}
+
+void testZeroStartingGaugeResolvesAutoShiftImmediately() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 100;
+
+  RhythmState continued(&chart, false);
+  continued.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::Continue);
+  continued.setStartingGaugePercent(0);
+  assert(continued.gaugeType == GaugeType::Hard);
+  assert(continued.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)]);
+  assert(!continued.activeGaugeFailed());
+
+  RhythmState survivalToGroove(&chart, false);
+  survivalToGroove.configureGauge(
+      GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove);
+  survivalToGroove.setStartingGaugePercent(0);
+  assert(survivalToGroove.gaugeType == GaugeType::Normal);
+  assert(survivalToGroove.currentGauge == 0.0f);
+  assert(!survivalToGroove.activeGaugeFailed());
+
+  RhythmState bestClear(&chart, false);
+  bestClear.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  bestClear.setStartingGaugePercent(0);
+  assert(bestClear.gaugeType == GaugeType::Normal);
+  assert(!bestClear.activeGaugeFailed());
+
+  RhythmState survivalOnly(&chart, false);
+  survivalOnly.configureGauge(GaugeType::ExHard,
+                              GaugeAutoShiftMode::SelectToUnder,
+                              GaugeProfile::Standard, GaugeType::Hard);
+  survivalOnly.setStartingGaugePercent(0);
+  assert(survivalOnly.gaugeType == GaugeType::Hard);
+  assert(survivalOnly.activeGaugeFailed());
+}
+
 void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   practice::Configuration configuration;
   configuration.startMicros = 2'000'000;
   configuration.gaugeType = GaugeType::ExHard;
-  configuration.gaugeAutoShift = true;
+  configuration.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   configuration.playback.percent = 75;
   configuration.judge.scalePercent = 80;
   configuration.startingGaugePercent = 37;
@@ -82,7 +137,7 @@ void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
   applyPracticeConfigurationToStartOptions(options, configuration);
   assert(options.startPosition == 2'000'000);
   assert(options.gaugeType == GaugeType::ExHard);
-  assert(options.gaugeAutoShift);
+  assert(options.gaugeAutoShift == GaugeAutoShiftMode::BestClear);
   assert(options.playback.percent == 75);
   assert(options.judgeWindowScalePercent == 80);
   assert(options.startingGaugePercent == 37);
@@ -139,7 +194,8 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState restoredState(&chart, false);
-  restoredState.configureGauge(replay.initialGaugeType, false);
+  restoredState.configureGauge(replay.initialGaugeType,
+                               GaugeAutoShiftMode::None);
   assert(replayOptions.startingGaugePercent.has_value());
   restoredState.setStartingGaugePercent(*replayOptions.startingGaugePercent);
   assert(restoredState.currentGauge == 37.0f);
@@ -151,6 +207,8 @@ int main() {
   testJudgeScaleRoundsSignedWindowEdges();
   testStartingGaugeUpdatesSelectedGaugeAndClamps();
   testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot();
+  testSurvivalToGrooveStartsBothGaugeCandidates();
+  testZeroStartingGaugeResolvesAutoShiftImmediately();
   testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions();
   testSavedPracticeReplayRestoresGaugeAndExactWindows();
   std::cout << "practice rule override tests passed\n";

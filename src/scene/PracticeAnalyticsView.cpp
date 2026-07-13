@@ -97,7 +97,7 @@ protected:
     }
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
-    batch.begin();
+    batch.begin(context.getTransformMatrix());
     batch.addRect(static_cast<float>(getX()), static_cast<float>(getY()),
                   static_cast<float>(width), static_cast<float>(height),
                   ui_theme::resultPanelSubtle().toABGR());

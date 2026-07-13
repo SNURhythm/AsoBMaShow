@@ -47,8 +47,21 @@ inline ReplayEvent makeAutoPlayEvent(ReplayEventAction action,
   return event;
 }
 
+inline float perfectPlayGauge(const bms_parser::ChartMeta &meta,
+                              GaugeType gaugeType,
+                              GaugeAutoShiftMode gaugeAutoShift) {
+  bms_parser::Chart chart;
+  chart.Meta = meta;
+  RhythmState state(&chart, false);
+  state.configureGauge(gaugeType, gaugeAutoShift);
+  for (int note = 0; note < std::max(0, meta.TotalNotes); ++note) {
+    state.applyGaugeJudgement(PGreat);
+  }
+  return state.currentGauge;
+}
+
 inline ReplaySummary BuildSummary(
-    const bms_parser::ChartMeta &meta, GaugeType gaugeType, bool gaugeAutoShift,
+    const bms_parser::ChartMeta &meta, GaugeType gaugeType, GaugeAutoShiftMode gaugeAutoShift,
     const std::optional<std::string> &playOption = std::nullopt,
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
@@ -63,7 +76,7 @@ inline ReplaySummary BuildSummary(
   summary.finalScore = std::max(0, meta.TotalNotes) * 2;
   summary.maxScore = summary.finalScore;
   summary.maxCombo = std::max(0, meta.TotalNotes);
-  summary.finalGauge = 100.0f;
+  summary.finalGauge = perfectPlayGauge(meta, gaugeType, gaugeAutoShift);
   summary.clearType = clear_policy::fullComboRankForPlayback(
       kClearTypeFullComboRank, true, playback);
   summary.createdAt = kLabel;
@@ -80,14 +93,15 @@ inline ReplaySummary BuildSummary(
 }
 
 inline ReplayData BuildReplayData(
-    bms_parser::Chart &chart, GaugeType gaugeType, bool gaugeAutoShift,
-    audio::PlaybackRate playback = {},
+    bms_parser::Chart &chart, GaugeType gaugeType,
+    GaugeAutoShiftMode gaugeAutoShift, audio::PlaybackRate playback = {},
     const std::optional<std::string> &playOption = std::nullopt,
     const std::optional<long long> &playOptionSeed = std::nullopt,
     const std::optional<std::string> &playOption2 = std::nullopt,
     const std::optional<long long> &playOption2Seed = std::nullopt,
     const std::string &assistOption = assist_options::kOff,
-    bool clubMode = false) {
+    bool clubMode = false,
+    GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy) {
   ReplayData replay;
   replay.id = kReplayId;
   replay.autoPlay = true;
@@ -102,6 +116,7 @@ inline ReplayData BuildReplayData(
   replay.assistOption = assist_options::normalize(assistOption);
   replay.initialGaugeType = gaugeType;
   replay.gaugeAutoShift = gaugeAutoShift;
+  replay.gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound;
   replay.provenance.playback = playback;
   replay.provenance.autoPlay = true;
   replay.provenance.clubMode = clubMode;
@@ -110,7 +125,8 @@ inline ReplayData BuildReplayData(
                         2U);
 
   RhythmState state(&chart, false);
-  state.configureGauge(gaugeType, gaugeAutoShift);
+  state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
+                       gaugeAutoShiftLowerBound);
   state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));
   const JudgeResult perfect(PGreat, 0);
   const JudgeResult noJudge(None, 0);

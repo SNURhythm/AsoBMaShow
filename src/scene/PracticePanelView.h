@@ -39,6 +39,11 @@ public:
   void setChartEndMicros(long long value) {
     chartEndMicros = std::max(0LL, value);
   }
+  void setStartingGaugeRange(int maximum, int defaultValue) {
+    startingGaugeMaximum = std::clamp(maximum, 100, 120);
+    startingGaugeDefault =
+        std::clamp(defaultValue, 0, startingGaugeMaximum);
+  }
   void setPresetMessage(std::string message, bool error = false);
 
   [[nodiscard]] const practice::Configuration &configuration() const {
@@ -50,9 +55,18 @@ public:
   [[nodiscard]] bool isEditingPresetName() const;
 
 private:
-  enum class DropDownIndex : int { Preset, Gauge, Mode, Count };
+  enum class DropDownIndex : int {
+    Preset,
+    Gauge,
+    GaugeAutoShift,
+    GaugeLowerBound,
+    Mode,
+    Count
+  };
 
   long long chartEndMicros = 0;
+  int startingGaugeMaximum = 100;
+  int startingGaugeDefault = 20;
   PracticePanelCallbacks callbacks;
   std::function<void(practice::Marker)> onMarkerSelected;
   practice::Configuration currentConfiguration;
@@ -65,6 +79,7 @@ private:
   TextView *diagnosticText = nullptr;
   TextView *presetMessageText = nullptr;
   TextView *presetMessageSecondLine = nullptr;
+  View *gaugeLowerBoundRow = nullptr;
   TextInputBox *presetNameInput = nullptr;
   Button *loopButton = nullptr;
   TextView *loopButtonText = nullptr;

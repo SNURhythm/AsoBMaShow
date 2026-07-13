@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include <bgfx/bgfx.h>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -11,7 +12,7 @@ public:
   SimpleBatchRenderer();
   ~SimpleBatchRenderer() = default;
 
-  void begin();
+  void begin(const float *modelTransform = nullptr);
   void end();
   void addRect(float x, float y, float width, float height, uint32_t color);
   void addRectVerticalGradient(float x, float y, float width, float height,
@@ -34,5 +35,7 @@ private:
   uint32_t submitDepth = 0;
   bgfx::ViewId submitView = rendering::main_view;
   uint32_t transientBufferMissCount = 0;
+  std::array<float, 16> modelTransform{};
+  bool hasModelTransform = false;
 };
 } // namespace rendering

@@ -89,12 +89,29 @@ struct MarkerTextRasterConfig {
 
 struct GaugeSelection {
   GaugeType type = GaugeType::Normal;
-  bool autoShift = false;
+  GaugeAutoShiftMode autoShift = GaugeAutoShiftMode::None;
 };
 
 GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   if (id == "gas") {
-    return {.type = GaugeType::ExHard, .autoShift = true};
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::BestClear};
+  }
+  if (id == "gas_continue") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::Continue};
+  }
+  if (id == "gas_survival_to_groove") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::SurvivalToGroove};
+  }
+  if (id == "gas_best_clear") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::BestClear};
+  }
+  if (id == "gas_select_to_under") {
+    return {.type = GaugeType::ExHard,
+            .autoShift = GaugeAutoShiftMode::SelectToUnder};
   }
   if (id == "assisted_easy") {
     return {.type = GaugeType::AssistedEasy};
@@ -108,7 +125,22 @@ GaugeSelection gaugeSelectionFromSettingId(const std::string &id) {
   if (id == "exhard") {
     return {.type = GaugeType::ExHard};
   }
+  if (id == "hazard") {
+    return {.type = GaugeType::Hazard};
+  }
   return {.type = GaugeType::Normal};
+}
+
+GaugeAutoShiftMode gaugeAutoShiftFromSettingId(const std::string &id) {
+  if (id == "continue") return GaugeAutoShiftMode::Continue;
+  if (id == "survival_to_groove") {
+    return GaugeAutoShiftMode::SurvivalToGroove;
+  }
+  if (id == "best_clear") return GaugeAutoShiftMode::BestClear;
+  if (id == "select_to_under") {
+    return GaugeAutoShiftMode::SelectToUnder;
+  }
+  return GaugeAutoShiftMode::None;
 }
 
 ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
@@ -346,6 +378,30 @@ Button *makeButton(const std::string &label, int width, int fontSize,
   return button;
 }
 
+GaugeProfile
+practiceGaugeProfileForChart(const bms_parser::Chart *chart) {
+  return resolveGaugeProfile(GaugeProfile::Standard,
+                             chart != nullptr ? chart->Meta.KeyMode : 7);
+}
+
+int practiceStartingGaugeMaximum(
+    const practice::Configuration &configuration,
+    const bms_parser::Chart *chart) {
+  const GaugeProfile gaugeProfile = practiceGaugeProfileForChart(chart);
+  return static_cast<int>(gaugeStartingMaximumValue(
+      configuration.gaugeType, configuration.gaugeAutoShift,
+      configuration.gaugeAutoShiftLowerBound, gaugeProfile));
+}
+
+practice::SanitizedConfiguration sanitizePracticeConfiguration(
+    practice::Configuration configuration, long long chartEndMicros,
+    const bms_parser::Chart *chart) {
+  const int startingGaugeMaximum =
+      practiceStartingGaugeMaximum(configuration, chart);
+  return practice::sanitize(std::move(configuration), chartEndMicros,
+                            startingGaugeMaximum);
+}
+
 } // namespace
 
 class ChartCanvasView : public View {
@@ -503,7 +559,7 @@ protected:
       rebuildLayout();
     }
 
-    batch.begin();
+    batch.begin(context.getTransformMatrix());
     drawGrid();
     drawPracticeRangeSpan();
     drawMarkers();
@@ -1665,7 +1721,7 @@ private:
               });
     markerTextBatch.setScissor(context.scissor.x, context.scissor.y,
                                context.scissor.width, context.scissor.height);
-    markerTextBatch.begin();
+    markerTextBatch.begin(context.getTransformMatrix());
     for (const auto &draw : visibleMarkerLabelDraws) {
       markerTextBatch.addRectUV(draw.x, draw.y, draw.width, draw.height, 0.0f,
                                 1.0f, draw.u1, 0.0f, draw.texture);
@@ -3870,7 +3926,8 @@ void ChartViewerScene::onPracticeRangeChanged(
   practiceConfiguration.startMicros = range.startMicros;
   practiceConfiguration.endMicros = range.endMicros;
   practiceConfiguration =
-      practice::sanitize(practiceConfiguration, practiceChartEndMicros)
+      sanitizePracticeConfiguration(practiceConfiguration,
+                                    practiceChartEndMicros, chart.get())
           .configuration;
   if (practicePresetStore != nullptr) {
     std::string error;
@@ -3894,7 +3951,9 @@ void ChartViewerScene::onPracticeConfigurationChanged(
       practicePanel == nullptr ? std::nullopt
                                : practicePanel->selectedPresetId();
   practiceConfiguration =
-      practice::sanitize(configuration, practiceChartEndMicros).configuration;
+      sanitizePracticeConfiguration(configuration, practiceChartEndMicros,
+                                    chart.get())
+          .configuration;
   if (canvasView != nullptr) {
     auto range = canvasView->getPracticeRange();
     range.startMicros = practiceConfiguration.startMicros;
@@ -3964,13 +4023,25 @@ void ChartViewerScene::loadPracticeConfiguration(
     const GaugeSelection gaugeSelection =
         gaugeSelectionFromSettingId(context.settings.selectedGaugeType);
     practiceConfiguration.gaugeType = gaugeSelection.type;
-    practiceConfiguration.gaugeAutoShift = gaugeSelection.autoShift;
+    const GaugeAutoShiftMode storedAutoShift = gaugeAutoShiftFromSettingId(
+        context.settings.selectedGaugeAutoShiftMode);
+    practiceConfiguration.gaugeAutoShift =
+        storedAutoShift != GaugeAutoShiftMode::None ? storedAutoShift
+                                                   : gaugeSelection.autoShift;
+    practiceConfiguration.gaugeAutoShiftLowerBound =
+        gaugeSelectionFromSettingId(
+            context.settings.selectedGaugeAutoShiftLowerBound)
+            .type;
     practiceConfiguration.countInBeats =
         practice::defaultCountInBeatsForChart(
             chart->Meta.GuessedBeatsPerMeasure);
   };
   const auto refreshInstalledState = [this, &applyMissingDefaults]() {
     applyMissingDefaults();
+    practiceConfiguration =
+        sanitizePracticeConfiguration(practiceConfiguration,
+                                      practiceChartEndMicros, chart.get())
+            .configuration;
     if (canvasView != nullptr) {
       canvasView->setPracticeRange(
           {.startMicros = practiceConfiguration.startMicros,
@@ -4042,7 +4113,10 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     return;
   }
 
-  practiceConfiguration = std::move(application.configuration);
+  practiceConfiguration =
+      sanitizePracticeConfiguration(std::move(application.configuration),
+                                    practiceChartEndMicros, chart.get())
+          .configuration;
   selectedPracticePresetId.reset();
   if (canvasView != nullptr) {
     canvasView->setPracticeRange(
@@ -4082,6 +4156,10 @@ void ChartViewerScene::refreshPracticePanel() {
     return;
   }
   practicePanel->setChartEndMicros(practiceChartEndMicros);
+  practicePanel->setStartingGaugeRange(
+      practiceStartingGaugeMaximum(practiceConfiguration, chart.get()),
+      practice::defaultStartingGaugePercent(
+          practiceConfiguration, practiceGaugeProfileForChart(chart.get())));
   const practice::Marker active =
       canvasView == nullptr ? practice::Marker::Start
                             : canvasView->getPracticeRange().active;
@@ -4305,7 +4383,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
   }
 
   const auto sanitized =
-      practice::sanitize(practiceConfiguration, practiceChartEndMicros);
+      sanitizePracticeConfiguration(practiceConfiguration,
+                                    practiceChartEndMicros, chart.get());
   if (!sanitized.playable()) {
     if (statusText != nullptr) {
       statusText->setText(sanitized.diagnostics.empty()
@@ -4413,6 +4492,8 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .autoPlay = autoPlay,
                     .gaugeType = gaugeSelection.type,
                     .gaugeAutoShift = gaugeSelection.autoShift,
+                    .gaugeAutoShiftLowerBound =
+                        launchConfiguration.gaugeAutoShiftLowerBound,
                     .playOption = viewerPlayOption,
                     .playOptionSeed = viewerPlayOptionSeed,
                     .playOption2 = viewerPlayOption2,

@@ -17,9 +17,13 @@ SimpleBatchRenderer::SimpleBatchRenderer() {
   indices.reserve(6144);
 }
 
-void SimpleBatchRenderer::begin() {
+void SimpleBatchRenderer::begin(const float *transform) {
   vertices.clear();
   indices.clear();
+  hasModelTransform = transform != nullptr;
+  if (hasModelTransform) {
+    std::copy_n(transform, modelTransform.size(), modelTransform.begin());
+  }
 }
 
 void SimpleBatchRenderer::end() { flush(); }
@@ -198,6 +202,9 @@ void SimpleBatchRenderer::flush() {
 
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  if (hasModelTransform) {
+    bgfx::setTransform(modelTransform.data());
+  }
 
   uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA;

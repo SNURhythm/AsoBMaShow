@@ -416,6 +416,16 @@ void placeText(TextView *text, int x, int y, int width, int height) {
   text->setSize(width, height);
 }
 
+void placeQuarterTurnText(TextView *text, int x, int y, int width,
+                          int height) {
+  const float centerX = static_cast<float>(x) + width * 0.5f;
+  const float centerY = static_cast<float>(y) + height * 0.5f;
+  placeText(text,
+            static_cast<int>(std::round(centerX - height * 0.5f)),
+            static_cast<int>(std::round(centerY - width * 0.5f)), height,
+            width);
+}
+
 float baseGameplayHudTitleWidth() {
   return std::clamp(static_cast<float>(rendering::window_width) * 0.30f,
                     430.0f, 620.0f);
@@ -441,10 +451,15 @@ std::string formatSignedScoreDelta(int delta) {
 
 std::string formatGaugeBarLabel(GaugeType gaugeType,
                                 GaugeProfile gaugeProfile,
-                                bool gaugeAutoShift, float currentGauge) {
+                                GaugeAutoShiftMode gaugeAutoShift,
+                                float currentGauge) {
   char text[64];
-  std::snprintf(text, sizeof(text), "%s%s %.1f%%",
-                gaugeAutoShift ? "GAS " : "",
+  const std::string prefix = gaugeAutoShiftEnabled(gaugeAutoShift)
+                                 ? std::string(gaugeAutoShiftShortLabel(
+                                       gaugeAutoShift)) +
+                                       " "
+                                 : "";
+  std::snprintf(text, sizeof(text), "%s%s %.1f%%", prefix.c_str(),
                 gaugeDisplayShortLabel(gaugeType, gaugeProfile),
                 currentGauge);
   return text;
@@ -463,7 +478,8 @@ Color gaugeAccentColor(GaugeType gaugeType, GaugeProfile gaugeProfile,
       currentGauge < border) {
     return ui_theme::coral();
   }
-  return clearLampColorForRank(gaugeTypeToClearRank(gaugeType));
+  return clearLampColorForRank(
+      gaugeTypeToClearRank(gaugeClearTypeForProfile(gaugeType, gaugeProfile)));
 }
 
 Color gaugeTrackFill() {
@@ -853,7 +869,8 @@ BMSRenderer::BMSRenderer(
   gaugeAutoShiftText->setVAlign(TextView::MIDDLE);
   gaugeAutoShiftText->setOverflow(TextView::TextOverflow::Hidden);
   gaugeAutoShiftText->setRotationDegrees(90.0f);
-  setGaugeStatus(GaugeType::Normal, false, gaugeInitialValue(GaugeType::Normal));
+  setGaugeStatus(GaugeType::Normal, GaugeAutoShiftMode::None,
+                 gaugeInitialValue(GaugeType::Normal));
   playOptionText = std::make_unique<TextView>(kHudFontPath, 19);
   playOptionText->setAlign(TextView::LEFT);
   playOptionText->setVAlign(TextView::MIDDLE);
@@ -1135,7 +1152,10 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float y = rect[1];
   const float width = rect[2];
   const float height = rect[3];
-  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const float maximum =
+      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float progress =
+      std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const Color accent =
       gaugeAccentColor(currentGaugeType, currentGaugeProfile,
                        currentGaugeValue);
@@ -1162,8 +1182,8 @@ void BMSRenderer::drawWorldGaugeBar() {
   const float borderValue =
       gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
-    const float markerX = x + width * std::clamp(borderValue / 100.0f, 0.0f,
-                                                1.0f);
+    const float markerX =
+        x + width * std::clamp(borderValue / maximum, 0.0f, 1.0f);
     const float markerWidth = std::max(0.01f, width * 0.004f);
     simpleBatchRenderer.addRect(markerX - markerWidth * 0.5f,
                                 y - height * 0.18f, markerWidth,
@@ -1174,7 +1194,7 @@ void BMSRenderer::drawWorldGaugeBar() {
       currentGaugeType, currentGaugeProfile);
   if (reducedDamageZone > 0.0f) {
     const float markerX =
-        x + width * std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+        x + width * std::clamp(reducedDamageZone / maximum, 0.0f, 1.0f);
     const float markerWidth = std::max(0.012f, width * 0.005f);
     simpleBatchRenderer.addRect(
         markerX - markerWidth * 0.5f, y - height * 0.12f, markerWidth,
@@ -1188,7 +1208,10 @@ void BMSRenderer::drawHudGaugeBar() {
   const float y = rect[1];
   const float width = rect[2];
   const float height = rect[3];
-  const float progress = std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+  const float maximum =
+      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
+  const float progress =
+      std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const Color accent =
       gaugeAccentColor(currentGaugeType, currentGaugeProfile,
                        currentGaugeValue);
@@ -1211,7 +1234,7 @@ void BMSRenderer::drawHudGaugeBar() {
       gaugeBorderValue(currentGaugeType, currentGaugeProfile);
   if (borderValue > 0.0f) {
     const float markerY =
-        y + height * (1.0f - std::clamp(borderValue / 100.0f, 0.0f, 1.0f));
+        y + height * (1.0f - std::clamp(borderValue / maximum, 0.0f, 1.0f));
     simpleBatchRenderer.addRect(x - 5.0f, markerY - 1.0f, width + 10.0f, 2.0f,
                                 gaugeMarkerColor().toABGR());
   }
@@ -1220,7 +1243,7 @@ void BMSRenderer::drawHudGaugeBar() {
       currentGaugeType, currentGaugeProfile);
   if (reducedDamageZone > 0.0f) {
     const float markerProgress =
-        std::clamp(reducedDamageZone / 100.0f, 0.0f, 1.0f);
+        std::clamp(reducedDamageZone / maximum, 0.0f, 1.0f);
     const float markerY = y + height * (1.0f - markerProgress);
     simpleBatchRenderer.addRect(
         x - 4.0f, markerY - 1.5f, width + 8.0f, 3.0f,
@@ -1431,8 +1454,10 @@ void BMSRenderer::layoutGaugeText() {
   const int x = left ? static_cast<int>(std::round(rect[0] + rect[2] + 8.0f))
                      : static_cast<int>(
                            std::round(rect[0] - textWidth - 8.0f));
+  const float maximum =
+      gaugeMaximumValue(currentGaugeType, currentGaugeProfile);
   const float progress =
-      std::clamp(currentGaugeValue, 0.0f, 100.0f) / 100.0f;
+      std::clamp(currentGaugeValue, 0.0f, maximum) / maximum;
   const float tipY = rect[1] + rect[3] * (1.0f - progress);
   const int y = std::clamp(
       static_cast<int>(std::round(tipY - textHeight * 0.5f)), 8,
@@ -1443,19 +1468,22 @@ void BMSRenderer::layoutGaugeText() {
     gaugeTypeText->setVisible(true);
     gaugeTypeText->setRotationDegrees(left ? -90.0f : 90.0f);
     if (gaugeAutoShiftText != nullptr) {
-      gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+      gaugeAutoShiftText->setVisible(
+          gaugeAutoShiftEnabled(currentGaugeAutoShift));
       gaugeAutoShiftText->setRotationDegrees(left ? -90.0f : 90.0f);
     }
     constexpr int typeWidth = 34;
     constexpr int typePadding = 12;
     constexpr int gasGap = 4;
     const int gaugeLabelLength = gaugeTypeText->textureWidth();
-    const int gasLabelLength = currentGaugeAutoShift && gaugeAutoShiftText
+    const bool autoShiftEnabled =
+        gaugeAutoShiftEnabled(currentGaugeAutoShift);
+    const int gasLabelLength = autoShiftEnabled && gaugeAutoShiftText
                                    ? gaugeAutoShiftText->textureWidth()
                                    : 0;
     const int typeHeight =
         std::clamp(gaugeLabelLength + gasLabelLength +
-                       (currentGaugeAutoShift ? gasGap : 0) + typePadding * 2,
+                       (autoShiftEnabled ? gasGap : 0) + typePadding * 2,
                    76, 188);
     const int typeX =
         left ? static_cast<int>(std::round(rect[0] - typeWidth - 8.0f))
@@ -1468,19 +1496,22 @@ void BMSRenderer::layoutGaugeText() {
       gaugeTypeBadge->setSize(typeWidth, typeHeight);
     }
 
-    if (!currentGaugeAutoShift || gaugeAutoShiftText == nullptr) {
-      placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, typeHeight);
+    if (!autoShiftEnabled || gaugeAutoShiftText == nullptr) {
+      placeQuarterTurnText(gaugeTypeText.get(), typeX, typeY, typeWidth,
+                           typeHeight);
     } else {
       const int gaugeSpan = gaugeLabelLength + typePadding;
       const int gasSpan = typeHeight - gaugeSpan;
       if (left) {
-        placeText(gaugeAutoShiftText.get(), typeX, typeY, typeWidth, gasSpan);
-        placeText(gaugeTypeText.get(), typeX, typeY + gasSpan, typeWidth,
-                  gaugeSpan);
+        placeQuarterTurnText(gaugeAutoShiftText.get(), typeX, typeY,
+                             typeWidth, gasSpan);
+        placeQuarterTurnText(gaugeTypeText.get(), typeX, typeY + gasSpan,
+                             typeWidth, gaugeSpan);
       } else {
-        placeText(gaugeTypeText.get(), typeX, typeY, typeWidth, gaugeSpan);
-        placeText(gaugeAutoShiftText.get(), typeX, typeY + gaugeSpan,
-                  typeWidth, gasSpan);
+        placeQuarterTurnText(gaugeTypeText.get(), typeX, typeY, typeWidth,
+                             gaugeSpan);
+        placeQuarterTurnText(gaugeAutoShiftText.get(), typeX,
+                             typeY + gaugeSpan, typeWidth, gasSpan);
       }
     }
   }
@@ -1538,7 +1569,10 @@ void BMSRenderer::refreshGaugeTextStyle() {
     gaugeTypeText->setBorderWidth(0);
   }
   if (gaugeAutoShiftText != nullptr) {
-    gaugeAutoShiftText->setVisible(currentGaugeAutoShift);
+    gaugeAutoShiftText->setText(
+        gaugeAutoShiftShortLabel(currentGaugeAutoShift));
+    gaugeAutoShiftText->setVisible(
+        gaugeAutoShiftEnabled(currentGaugeAutoShift));
     gaugeAutoShiftText->setColor({255, 225, 112, 255});
     gaugeAutoShiftText->setBackgroundColor(Color(255, 200, 64, 32));
     gaugeAutoShiftText->clearBorderColor();
@@ -3271,13 +3305,16 @@ void BMSRenderer::setJudgementCounters(
   publishJudgementCounterSnapshot(snapshot);
 }
 
-void BMSRenderer::setGaugeStatus(GaugeType gaugeType, bool gaugeAutoShift,
+void BMSRenderer::setGaugeStatus(GaugeType gaugeType,
+                                 GaugeAutoShiftMode gaugeAutoShift,
                                  float currentGauge,
                                  GaugeProfile gaugeProfile) {
   currentGaugeType = gaugeType;
   currentGaugeProfile = gaugeProfile;
   currentGaugeAutoShift = gaugeAutoShift;
-  currentGaugeValue = std::clamp(currentGauge, 0.0f, 100.0f);
+  currentGaugeValue =
+      std::clamp(currentGauge, 0.0f,
+                 gaugeMaximumValue(currentGaugeType, currentGaugeProfile));
   if (gaugeText == nullptr) {
     return;
   }

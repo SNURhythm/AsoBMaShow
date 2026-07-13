@@ -1,9 +1,11 @@
 #pragma once
 
 #include "ProfileDatabaseActivity.h"
+#include "ScoreProvenance.h"
 #include "SqliteRAII.h"
 #include "scene/play/RhythmState.h"
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -82,6 +84,28 @@ inline std::string scoreRankLabelExpr(std::string_view alias) {
          "ELSE 'F' END)";
 }
 
+using BestScoreOrderKey = std::array<std::string, 4>;
+
+inline BestScoreOrderKey
+bestScoreOrderKey(std::string_view alias, std::string clearRankExpression,
+                  std::string_view idColumn) {
+  const std::string prefix(alias);
+  return {prefix + ".score", clearRankExpression,
+          prefix + ".created_at", prefix + "." + std::string(idColumn)};
+}
+
+inline std::string bestScoreOrderBySql(const BestScoreOrderKey &key) {
+  return key[0] + " DESC, " + key[1] + " DESC, " + key[2] + " DESC, " +
+         key[3] + " DESC";
+}
+
+inline std::string bestScoreCandidateWinsSql(
+    const BestScoreOrderKey &candidate, const BestScoreOrderKey &incumbent) {
+  return "(" + candidate[0] + ", " + candidate[1] + ", " + candidate[2] +
+         ", " + candidate[3] + ") > (" + incumbent[0] + ", " +
+         incumbent[1] + ", " + incumbent[2] + ", " + incumbent[3] + ")";
+}
+
 inline std::string scoreColumnExpr(const std::string &column) {
   if (column == "clear_rank") {
     return "s.clear_rank";
@@ -94,6 +118,11 @@ inline std::string scoreColumnExpr(const std::string &column) {
 
 inline std::string keyHasValueExpr(std::string_view keyExpr) {
   return "NULLIF(trim(" + std::string(keyExpr) + "), '') IS NOT NULL";
+}
+
+inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
+  return std::string(alias) + ".eligibility <> " +
+         std::to_string(static_cast<int>(ScoreEligibility::Modified));
 }
 
 inline std::string rankLookupForMode(const std::string &sha256Expr,
@@ -116,12 +145,18 @@ inline std::string clearRankUpsertSql() {
   return "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, "
          "rank) SELECT lower(trim(NEW.chart_sha256)), NEW.ln_mode, " +
          fullComboClearRankExpr("NEW") + " WHERE " +
-         keyHasValueExpr("NEW.chart_sha256") +
+         keyHasValueExpr("NEW.chart_sha256") + " AND " +
+         scoreParticipatesInBestExpr("NEW") +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET rank = "
          "max(score_sha256_clear_rank_cache.rank, excluded.rank);";
 }
 
 inline std::string bestScoreUpsertSql() {
+  const auto candidate =
+      bestScoreOrderKey("excluded", "excluded.clear_rank", "score_id");
+  const auto incumbent = bestScoreOrderKey(
+      "score_sha256_best_score_cache",
+      "score_sha256_best_score_cache.clear_rank", "score_id");
   return "INSERT INTO score_sha256_best_score_cache("
          "chart_sha256, ln_mode, score_id, score, max_score, max_combo, "
          "combo_break, final_gauge, clear_type, clear_rank, score_rank, "
@@ -130,23 +165,15 @@ inline std::string bestScoreUpsertSql() {
          "NEW.final_gauge, NEW.clear_type, " +
          fullComboClearRankExpr("NEW") + ", " + scoreRankLabelExpr("NEW") +
          ", NEW.created_at WHERE " + keyHasValueExpr("NEW.chart_sha256") +
+         " AND " + scoreParticipatesInBestExpr("NEW") +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET "
          "score_id = excluded.score_id, score = excluded.score, "
          "max_score = excluded.max_score, max_combo = excluded.max_combo, "
          "combo_break = excluded.combo_break, "
          "final_gauge = excluded.final_gauge, clear_type = excluded.clear_type, "
          "clear_rank = excluded.clear_rank, score_rank = excluded.score_rank, "
-         "created_at = excluded.created_at WHERE "
-         "excluded.score > score_sha256_best_score_cache.score OR "
-         "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_type > score_sha256_best_score_cache.clear_type) OR "
-         "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_type = score_sha256_best_score_cache.clear_type AND "
-         "excluded.created_at > score_sha256_best_score_cache.created_at) OR "
-         "(excluded.score = score_sha256_best_score_cache.score AND "
-         "excluded.clear_type = score_sha256_best_score_cache.clear_type AND "
-         "excluded.created_at = score_sha256_best_score_cache.created_at AND "
-         "excluded.score_id > score_sha256_best_score_cache.score_id);";
+         "created_at = excluded.created_at WHERE " +
+         bestScoreCandidateWinsSql(candidate, incumbent) + ";";
 }
 
 inline std::string scoreIdentityCte(std::string_view schema,
@@ -154,11 +181,13 @@ inline std::string scoreIdentityCte(std::string_view schema,
   const std::string scores = qualifiedName(schema, "scores");
   const std::string playbackPercent =
       hasProvenance ? playbackPercentExpr("s") : "100";
+  const std::string eligibilityFilter =
+      hasProvenance ? " AND " + scoreParticipatesInBestExpr("s") : "";
   return "SELECT lower(trim(chart_sha256)) AS chart_sha256, ln_mode, "
          "id AS score_id, score, max_score, max_combo, combo_break, "
          "final_gauge, clear_type, " +
          playbackPercent + " AS playback_percent, created_at FROM " + scores +
-         " s WHERE " + keyHasValueExpr("chart_sha256");
+         " s WHERE " + keyHasValueExpr("chart_sha256") + eligibilityFilter;
 }
 
 inline bool scoreTableHasProvenance(sqlite3 *db, std::string_view schema) {
@@ -408,12 +437,15 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
     return error;
   }
 
+  const auto bestOrder = detail::bestScoreOrderKey(
+      "i", detail::fullComboClearRankExpr("i", "i.playback_percent"),
+      "score_id");
   const std::string insertBest =
       "WITH identities AS (" + identityCte +
       "), ranked AS ("
       "SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.chart_sha256, i.ln_mode "
-      "ORDER BY i.score DESC, i.clear_type DESC, i.created_at DESC, "
-      "i.score_id DESC) AS row_number FROM identities i"
+      "ORDER BY " + detail::bestScoreOrderBySql(bestOrder) +
+      ") AS row_number FROM identities i"
       ") INSERT INTO " +
       bestTable +
       "(chart_sha256, ln_mode, score_id, score, max_score, max_combo, "

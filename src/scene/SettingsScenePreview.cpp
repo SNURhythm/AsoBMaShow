@@ -282,7 +282,8 @@ void SettingsScene::resetPreviewHudSample() {
     return;
   }
   previewRenderer->setJudgementCounters(previewJudgeCount, previewComboBreak);
-  previewRenderer->setGaugeStatus(GaugeType::Normal, false, 74.0f);
+  previewRenderer->setGaugeStatus(GaugeType::Normal,
+                                  GaugeAutoShiftMode::None, 74.0f);
   previewRenderer->onJudge(JudgeResult(Great, 50000), previewCombo,
                            previewScore, previewElapsedMicros, false);
 }

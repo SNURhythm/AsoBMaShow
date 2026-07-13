@@ -73,6 +73,10 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
   if (gaugeIndex >= 0 &&
       gaugeIndex < static_cast<int>(state.gaugeValues.size())) {
     state.gaugeValues[gaugeIndex] = event.gauge;
+    if (gaugeIsSurvival(event.gaugeType, state.gaugeProfile) &&
+        event.gauge <= 0.0f) {
+      state.gaugeSurvivalFailed[gaugeIndex] = true;
+    }
   }
   if (!state.gaugeHistory.empty()) {
     state.gaugeHistory.back() = event.gauge;
@@ -83,21 +87,45 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
 } // namespace
 
 namespace replay_result {
-RhythmState BuildResultState(bms_parser::Chart &chart,
-                             const ReplayData &replay,
-                             GaugeProfile gaugeProfile) {
-  const auto lookup = buildReplayNoteLookup(chart);
+RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
+                                   const ReplayData &replay,
+                                   GaugeProfile gaugeProfile,
+                                   const GaugeStateSnapshot *carriedGauge) {
   RhythmState state(&chart, false);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
-                       gaugeProfile);
+                       gaugeProfile, replay.gaugeAutoShiftLowerBound);
   if (replay.provenance.startingGaugePercent.has_value()) {
     state.setStartingGaugePercent(*replay.provenance.startingGaugePercent);
+  }
+  if (carriedGauge != nullptr) {
+    GaugeStateSnapshot adjustedCarry = *carriedGauge;
+    adjustedCarry.gaugeProfile = state.gaugeProfile;
+    state.restoreGaugeState(adjustedCarry);
   }
   state.setAssistClearMark(
       assist_options::isEnabled(replay.assistOption) ||
       clear_policy::assistClearRequired(replay.provenance.playback));
+  return state;
+}
+
+RhythmState BuildResultState(bms_parser::Chart &chart,
+                             const ReplayData &replay,
+                             GaugeProfile gaugeProfile,
+                             const GaugeStateSnapshot *carriedGauge) {
+  const auto lookup = buildReplayNoteLookup(chart);
+  RhythmState state =
+      BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
 
   for (const auto &event : replay.events) {
+    if (event.action == ReplayEventAction::Gauge) {
+      if (event.judgement == Great || event.judgement == Bad) {
+        state.applyGaugeJudgementRate(event.judgement, 0.5f);
+      } else {
+        state.gaugeHistory.push_back(event.gauge);
+      }
+      syncReplayResultGaugeSnapshot(state, event);
+      continue;
+    }
     if (event.action == ReplayEventAction::Mine) {
       if (auto *note = findReplayNote(lookup, event);
           note != nullptr && note->IsLandmineNote()) {
@@ -132,5 +160,26 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
     state.currentGauge = replay.finalGauge;
   }
   return state;
+}
+
+std::optional<long long>
+FindGaugeFailureMicros(bms_parser::Chart &chart, const ReplayData &replay,
+                       GaugeProfile gaugeProfile,
+                       const GaugeStateSnapshot *carriedGauge) {
+  if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
+    return std::nullopt;
+  }
+  const RhythmState initialState =
+      BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
+  if (initialState.activeGaugeFailed()) {
+    return 0LL;
+  }
+  for (const ReplayEvent &event : replay.events) {
+    if (event.gauge <= 0.0f &&
+        gaugeIsSurvival(event.gaugeType, initialState.gaugeProfile)) {
+      return std::max(0LL, event.songTimeMicros);
+    }
+  }
+  return std::nullopt;
 }
 } // namespace replay_result

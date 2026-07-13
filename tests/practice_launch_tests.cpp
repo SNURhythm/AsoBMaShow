@@ -85,7 +85,7 @@ void testSelectedRangeMergesWithoutChangingLastUsedOptions() {
   lastUsed.loop = true;
   lastUsed.countInBeats = 8;
   lastUsed.gaugeType = GaugeType::Hard;
-  lastUsed.gaugeAutoShift = false;
+  lastUsed.gaugeAutoShift = GaugeAutoShiftMode::None;
   lastUsed.startingGaugePercent = 62;
   lastUsed.playback = {
       .percent = 75,

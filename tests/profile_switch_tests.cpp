@@ -1028,7 +1028,8 @@ void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
   const ProfileSwitchResult switched =
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
   expect(switched.ok(), "retained MainMenu selection test switches to B");
-  expect(retained.gaugeType == GaugeType::Hard && !retained.gaugeAutoShift &&
+  expect(retained.gaugeType == GaugeType::Hard &&
+             retained.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
              retained.playOption == "R-RANDOM" &&
              retained.longNoteMode == "HCN" && retained.assistOption == "OFF" &&
              retained.pacemakerTarget == "MAX-",
@@ -1037,6 +1038,7 @@ void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
   AppSettings laterSave;
   retained.applyTo(laterSave);
   expect(laterSave.selectedGaugeType == "hard" &&
+             laterSave.selectedGaugeAutoShiftMode == "best_clear" &&
              laterSave.selectedPlayOption == "R-RANDOM" &&
              laterSave.selectedLnMode == "HCN" &&
              laterSave.selectedAssistOption == "OFF" &&
@@ -1058,7 +1060,8 @@ void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
       rollbackFixture.secondId, rollbackFixture.currentSettings);
   expect(!rolledBack.ok(), "retained MainMenu rollback test fails bootstrap");
   expect(rollbackSelections.gaugeType == GaugeType::ExHard &&
-             rollbackSelections.gaugeAutoShift &&
+             rollbackSelections.gaugeAutoShift ==
+                 GaugeAutoShiftMode::BestClear &&
              rollbackSelections.playOption == "MIRROR" &&
              rollbackSelections.longNoteMode == "LN" &&
              rollbackSelections.assistOption == "DRAG" &&

@@ -289,7 +289,8 @@ struct CoursePlaySession {
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   int longNoteMode = 0;
   CourseConstraintRules constraints;
   std::optional<GaugeStateSnapshot> carriedGauge;
@@ -413,7 +414,9 @@ struct CoursePlaySession {
     ScoreProvenance aggregate = mergeCourseProvenance(recordedStages);
     if (hasMissingStage) {
       aggregate.ruleset = RulesetDescriptor::Legacy();
-      aggregate.eligibility = ScoreEligibility::LegacyUnverified;
+      if (aggregate.eligibility != ScoreEligibility::Modified) {
+        aggregate.eligibility = ScoreEligibility::LegacyUnverified;
+      }
     }
     return aggregate;
   }

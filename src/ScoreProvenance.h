@@ -39,12 +39,12 @@ enum class InputDeviceCategory : int {
 };
 
 struct RulesetDescriptor {
-  static constexpr int kCurrentVersion = 1;
+  static constexpr int kCurrentVersion = 2;
 
   int version = kCurrentVersion;
   std::string scoringModel = "asobmashow-v1";
   std::string judgementModel = "bms-rank-v1";
-  std::string gaugeModel = "asobmashow-gauge-v1";
+  std::string gaugeModel = "beatoraja-profile-gauge-v2";
 
   bool operator==(const RulesetDescriptor &) const = default;
 
@@ -89,7 +89,8 @@ struct ScoreProvenance {
   std::vector<ScoreStageProvenance> stages;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
   std::string assistOption = assist_options::kOff;
@@ -126,7 +127,8 @@ struct ScoreProvenanceBuildInput {
   std::map<Judgement, std::pair<long long, long long>> effectiveJudgeWindows;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
-  bool gaugeAutoShift = false;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   PlayerOptionProvenance player1;
   PlayerOptionProvenance player2;
   std::string assistOption = assist_options::kOff;
@@ -149,6 +151,9 @@ serializeValidatedScoreProvenance(const ScoreProvenance &provenance,
 
 [[nodiscard]] std::optional<ScoreProvenance>
 deserializeScoreProvenance(std::string_view serialized, std::string &error);
+
+[[nodiscard]] ScoreEligibility
+scoreEligibilityForProvenance(const ScoreProvenance &provenance);
 
 [[nodiscard]] ScoreProvenance
 makeScoreProvenance(const ScoreProvenanceBuildInput &input);

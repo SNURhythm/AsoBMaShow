@@ -397,7 +397,7 @@ void ScrollView::renderPersistentScrollbar(RenderContext &context) const {
 
   rendering::SimpleBatchRenderer batch;
   batch.setSubmitView(rendering::ui_view);
-  batch.begin();
+  batch.begin(context.getTransformMatrix());
   batch.addRoundedRect(trackX, trackY, kScrollbarTrackWidth, trackHeight,
                        kScrollbarTrackWidth * 0.5f,
                        ui_theme::withAlpha(ui_theme::hairlineStrong(), 118)

@@ -1,4 +1,5 @@
 #include "DefaultSkin.h"
+#include "../ScoreRankUtils.h"
 #include "../scene/PracticeAnalyticsPresentation.h"
 #include <algorithm>
 #include <cmath>
@@ -28,33 +29,6 @@ std::string formatScoreRate(int score, int maxScore) {
                           static_cast<double>(maxScore),
                       2) +
          "%";
-}
-
-std::string gradeForScore(int score, int maxScore) {
-  const double percentage =
-      maxScore > 0 ? static_cast<double>(score) / maxScore : 0.0;
-  if (percentage >= 8.0 / 9.0) {
-    return "AAA";
-  }
-  if (percentage >= 7.0 / 9.0) {
-    return "AA";
-  }
-  if (percentage >= 6.0 / 9.0) {
-    return "A";
-  }
-  if (percentage >= 5.0 / 9.0) {
-    return "B";
-  }
-  if (percentage >= 4.0 / 9.0) {
-    return "C";
-  }
-  if (percentage >= 3.0 / 9.0) {
-    return "D";
-  }
-  if (percentage >= 2.0 / 9.0) {
-    return "E";
-  }
-  return "F";
 }
 
 struct BpmValueDisplay {
@@ -172,7 +146,9 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   const int totalNotes = meta.TotalNotes;
   const int maxScore = totalNotes * 2;
   const int currentScore = resultState.getScore();
-  const std::string grade = gradeForScore(currentScore, maxScore);
+  const std::string gradeDisplay =
+      score_rank::displayLabelForScore(currentScore, maxScore);
+  const Color gradeAccent = ui_theme::scoreRankColor(gradeDisplay);
   const int playLevelDecimals =
       std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
   const std::string playLevelLabel =
@@ -385,7 +361,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   summaryRow->setName("resultSummary");
 
   auto *gradePanel = makePanel(
-      ui_theme::resultPanelStrong(), ui_theme::withAlpha(ui_theme::amber(), 138));
+      ui_theme::resultPanelStrong(), ui_theme::withAlpha(gradeAccent, 138));
   gradePanel->setWidth(196);
   gradePanel->setFlexShrink(0);
   gradePanel->setFlexDirection(FlexDirection::Column);
@@ -398,8 +374,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   gradeLabel->setAlign(TextView::CENTER);
   gradePanel->addView(gradeLabel);
   auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
-  gradeText->setText(grade);
-  gradeText->setColor(ui_theme::sdl(ui_theme::amber()));
+  gradeText->setText(gradeDisplay);
+  gradeText->setColor(ui_theme::sdl(gradeAccent));
   gradeText->setAlign(TextView::CENTER);
   gradeText->setHeight(106);
   gradeText->setName("grade");
@@ -435,8 +411,10 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
       hasPacemaker
           ? (data->pacemaker->usesReplayProgression ? "PACEMAKER GHOST"
                                                     : "PACEMAKER")
-          : (hasPreviousBest ? gradeForScore(previousScore, previousMaxScore)
-                             : "");
+          : (hasPreviousBest
+                 ? score_rank::displayLabelForScore(previousScore,
+                                                    previousMaxScore)
+                 : "");
   const Color targetAccent =
       hasPacemaker ? ui_theme::cyan()
                    : (hasPreviousBest ? ui_theme::textPrimary()

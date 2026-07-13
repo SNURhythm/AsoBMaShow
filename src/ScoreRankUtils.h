@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <string_view>
 
 namespace score_rank {
 
@@ -41,6 +42,14 @@ inline std::string labelForScore(int score, int maxScore) {
     }
   }
   return "F";
+}
+
+inline std::string displayLabel(std::string_view rank) {
+  return rank == "MAX -" ? "AAA" : std::string(rank);
+}
+
+inline std::string displayLabelForScore(int score, int maxScore) {
+  return displayLabel(labelForScore(score, maxScore));
 }
 
 } // namespace score_rank

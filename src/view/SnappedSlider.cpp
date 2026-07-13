@@ -76,7 +76,7 @@ void SnappedSlider::renderImpl(RenderContext &context) {
 
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
                           context.scissor.width, context.scissor.height);
-  batch.begin();
+  batch.begin(context.getTransformMatrix());
   batch.addRoundedRect(trackX, trackY, trackWidth, kTrackHeight,
                        kTrackHeight * 0.5F, trackColor.toABGR());
   const float fillWidth = std::clamp(trackWidth * fraction, 0.0F, trackWidth);

@@ -301,8 +301,8 @@ void testEligibilityAndConfirmationStayBoundToUuid() {
   FakeServices fake;
   ProfileSettingsController controller(fake.dependencies());
   REQUIRE(!controller.deleteEligibility("alpha").enabled);
-  REQUIRE(controller.deleteEligibility("alpha").reason.find("active") !=
-          std::string::npos);
+  REQUIRE(controller.deleteEligibility("alpha").reason ==
+          "Activate another profile first.");
   REQUIRE(controller.deleteEligibility("bravo").enabled);
   REQUIRE(!controller.overwriteEligibility("alpha").enabled);
   REQUIRE(controller.overwriteEligibility("bravo").enabled);
@@ -327,8 +327,8 @@ void testEligibilityAndConfirmationStayBoundToUuid() {
 
   const auto last = controller.deleteEligibility("alpha");
   REQUIRE(!last.enabled);
-  REQUIRE(last.reason.find("last") != std::string::npos ||
-          last.reason.find("active") != std::string::npos);
+  REQUIRE(last.reason == "Activate another profile first." ||
+          last.reason == "Keep at least one profile.");
 }
 
 void testMutationResultsRefreshAndSelectWithoutActivating() {
