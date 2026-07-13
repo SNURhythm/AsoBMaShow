@@ -2121,88 +2121,9 @@ ProfileResult PlayerProfileManager::installProfile(
 
   const auto profilesRoot = applicationDataRoot_ / "profiles";
   if (!overwrite) {
-    if (!dependencies_.filesystem.durableRename(staging.root, destination.root,
-                                                errorMessage)) {
-      bool stagingStillExists = false;
-      std::string inspectError;
-      const ProfileResult committed =
-          validateProfileFiles(applicationDataRoot_, destination, id, false);
-      if (pathExists(staging.root, stagingStillExists, inspectError) &&
-          !stagingStillExists && committed.ok()) {
-        std::string syncError;
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot, syncError)) {
-          return success(
-              std::move(sourceProfile),
-              "profile import finalized despite an ambiguous rename, but "
-              "directory sync should be retried: " +
-                  syncError);
-        }
-        return success(std::move(sourceProfile));
-      }
-      return cleanStagingAndFail(ProfileError::IoFailure,
-                                 "unable to finalize imported profile: " +
-                                     errorMessage);
-    }
-    if (!dependencies_.filesystem.syncDirectory(profilesRoot, errorMessage)) {
-      std::string rollbackMessage =
-          "unable to sync imported profile: " + errorMessage;
-      std::string rollbackError;
-      if (dependencies_.filesystem.durableRename(destination.root, staging.root,
-                                                 rollbackError)) {
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot,
-                                                    rollbackError)) {
-          return failure(
-              ProfileError::IoFailure,
-              rollbackMessage +
-                  "; unable to sync create rollback: " + rollbackError);
-        }
-        if (!cleanupStaging(applicationDataRoot_, dependencies_, staging.root,
-                            rollbackMessage)) {
-          return failure(ProfileError::IoFailure, std::move(rollbackMessage));
-        }
-        rollbackError.clear();
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot,
-                                                    rollbackError)) {
-          rollbackMessage +=
-              "; unable to sync create rollback cleanup: " + rollbackError;
-        }
-        return failure(ProfileError::IoFailure, std::move(rollbackMessage));
-      }
-
-      bool stagingExistsAfterRollback = false;
-      bool destinationExistsAfterRollback = false;
-      std::string inspectError;
-      if (pathExists(staging.root, stagingExistsAfterRollback, inspectError) &&
-          pathExists(destination.root, destinationExistsAfterRollback,
-                     inspectError) &&
-          !stagingExistsAfterRollback && destinationExistsAfterRollback &&
-          validateProfileFiles(applicationDataRoot_, destination, id, false)
-              .ok()) {
-        std::string syncError;
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot, syncError)) {
-          return success(
-              std::move(sourceProfile),
-              "profile import remains installed because rollback was "
-              "unavailable; directory sync should be retried: " +
-                  syncError);
-        }
-        return success(std::move(sourceProfile));
-      }
-      if (stagingExistsAfterRollback && !destinationExistsAfterRollback) {
-        cleanupStaging(applicationDataRoot_, dependencies_, staging.root,
-                       rollbackMessage);
-        std::string cleanupSyncError;
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot,
-                                                    cleanupSyncError)) {
-          rollbackMessage +=
-              "; unable to sync ambiguous create cleanup: " + cleanupSyncError;
-        }
-      }
-      return failure(ProfileError::IoFailure,
-                     rollbackMessage + "; unable to roll back create import: " +
-                         rollbackError);
-    }
-    return success(std::move(sourceProfile));
+    return finalizeNewProfileDirectory(
+        applicationDataRoot_, dependencies_, staging, destination,
+        std::move(sourceProfile));
   }
 
   auto rollback = [&](std::string message) {
