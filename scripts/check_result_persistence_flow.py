@@ -335,6 +335,18 @@ require(
     ),
     "Retry Save must defer rebuilding visible comparison and pacemaker summary after reloading best",
 )
+require(
+    re.search(
+        r"defer\(\s*\[this\]\(\)\s*\{\s*"
+        r"refreshResultSummary\(\);\s*"
+        r"updateResultPersistencePresentation\(\);\s*"
+        r"return true;",
+        retry_body,
+        re.DOTALL,
+    )
+    is not None,
+    "normal result actions must remain blocked until the deferred summary refresh completes",
+)
 for sensitive in ("presentationReplay", "retryData", "BmsPath", "attempt->replay"):
     for log_call in re.findall(r"SDL_Log[^;]*;", retry_body, re.DOTALL):
         require(

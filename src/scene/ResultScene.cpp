@@ -682,10 +682,10 @@ void ResultScene::retryResultPersistence() {
   defer(
       [this]() {
         refreshResultSummary();
+        updateResultPersistencePresentation();
         return true;
       },
       0, true);
-  updateResultPersistencePresentation();
 }
 
 void ResultScene::continueWithoutSaving() {
