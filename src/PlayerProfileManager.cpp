@@ -926,6 +926,213 @@ ProfileResult finalizeNewProfileDirectory(
   return failure(ProfileError::IoFailure, std::move(failureMessage));
 }
 
+ProfileResult
+finalizeProfileDeletion(const std::filesystem::path &applicationRoot,
+                        const PlayerProfileManagerDependencies &dependencies,
+                        const PlayerProfilePaths &source,
+                        const std::filesystem::path &tombstone,
+                        PlayerProfile profile) {
+  struct DirectoryState {
+    bool sourceExists = false;
+    bool tombstoneExists = false;
+    std::optional<ProfileResult> sourceValidation;
+    std::optional<ProfileResult> tombstoneValidation;
+  };
+
+  const auto profilesRoot = applicationRoot / "profiles";
+  const PlayerProfilePaths tombstonePaths = makePathsAtRoot(tombstone);
+  auto appendDetail = [](std::string &message, std::string detail) {
+    if (detail.empty()) {
+      return;
+    }
+    if (!message.empty()) {
+      message += "; ";
+    }
+    message += std::move(detail);
+  };
+  auto inspectState = [&](DirectoryState &state, std::string &inspectionError) {
+    if (!ensureContainedPath(applicationRoot, source.root, inspectionError) ||
+        !ensureContainedPath(applicationRoot, tombstone, inspectionError) ||
+        !pathExists(source.root, state.sourceExists, inspectionError) ||
+        !pathExists(tombstone, state.tombstoneExists, inspectionError)) {
+      return false;
+    }
+    if (state.sourceExists) {
+      state.sourceValidation =
+          validateProfileFiles(applicationRoot, source, profile.id, false);
+    }
+    if (state.tombstoneExists) {
+      state.tombstoneValidation = validateProfileFiles(
+          applicationRoot, tombstonePaths, profile.id, false);
+    }
+    return true;
+  };
+  auto sourceRetainedFailure = [&](const DirectoryState &state,
+                                   std::string message) {
+    const ProfileResult &validation = *state.sourceValidation;
+    if (!validation.ok()) {
+      return failure(
+          validation.error == ProfileError::None
+              ? ProfileError::IntegrityFailure
+              : validation.error,
+          "profile source is present but cannot be safely retained as a "
+          "completed deletion: " +
+              validation.message);
+    }
+    appendDetail(message, "the canonical profile source remains present");
+    return failure(ProfileError::IoFailure, std::move(message));
+  };
+  auto absentWithoutValidTombstone = [&](const DirectoryState &state,
+                                         std::string warning) {
+    if (!state.tombstoneExists) {
+      appendDetail(warning,
+                   "the canonical profile is absent and no deletion "
+                   "tombstone remains; durability should be rechecked");
+    } else {
+      const ProfileResult &validation = *state.tombstoneValidation;
+      appendDetail(
+          warning,
+          "the canonical profile is absent, but the deletion tombstone is "
+          "invalid and was preserved: " +
+              validation.message);
+    }
+    return success(std::move(profile), std::move(warning));
+  };
+  auto cleanupCommittedTombstone = [&](std::string warning = {}) {
+    std::string cleanupError;
+    if (!dependencies.filesystem.removeTree(tombstone, cleanupError)) {
+      appendDetail(warning,
+                   "profile deletion committed, but tombstone cleanup should "
+                   "be retried: " +
+                       cleanupError);
+      return success(std::move(profile), std::move(warning));
+    }
+    std::string syncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, syncError)) {
+      appendDetail(warning,
+                   "profile deletion committed, but cleanup directory sync "
+                   "should be retried: " +
+                       syncError);
+    }
+    return success(std::move(profile), std::move(warning));
+  };
+
+  std::string errorMessage;
+  if (!ensureContainedPath(applicationRoot, source.root, errorMessage) ||
+      !ensureContainedPath(applicationRoot, tombstone, errorMessage)) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect profile deletion paths: " + errorMessage);
+  }
+
+  bool tombstoneExists = false;
+  if (!pathExists(tombstone, tombstoneExists, errorMessage)) {
+    return failure(ProfileError::IoFailure, errorMessage);
+  }
+  if (tombstoneExists) {
+    if (!dependencies.filesystem.removeTree(tombstone, errorMessage)) {
+      return failure(ProfileError::IoFailure,
+                     "unable to clean prior deletion tombstone: " +
+                         errorMessage);
+    }
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, errorMessage)) {
+      return failure(ProfileError::IoFailure,
+                     "unable to sync prior deletion tombstone cleanup: " +
+                         errorMessage);
+    }
+  }
+
+  errorMessage.clear();
+  const bool renameReportedSuccess = dependencies.filesystem.durableRename(
+      source.root, tombstone, errorMessage);
+  const std::string renameError = errorMessage;
+  DirectoryState afterRename;
+  std::string inspectionError;
+  if (!inspectState(afterRename, inspectionError)) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect profile deletion outcome: " +
+                       inspectionError);
+  }
+  if (afterRename.sourceExists) {
+    std::string message =
+        renameReportedSuccess
+            ? "profile deletion staging left the canonical source present"
+            : "unable to stage profile deletion: " + renameError;
+    return sourceRetainedFailure(afterRename, std::move(message));
+  }
+  if (!afterRename.tombstoneExists || !afterRename.tombstoneValidation->ok()) {
+    std::string warning;
+    if (!renameReportedSuccess && !renameError.empty()) {
+      warning = "profile rename reported failure: " + renameError;
+    }
+    return absentWithoutValidTombstone(afterRename, std::move(warning));
+  }
+
+  errorMessage.clear();
+  if (dependencies.filesystem.syncDirectory(profilesRoot, errorMessage)) {
+    return cleanupCommittedTombstone();
+  }
+
+  std::string commitFailure =
+      "unable to commit profile deletion: " + errorMessage;
+  std::string rollbackError;
+  const bool rollbackReportedSuccess = dependencies.filesystem.durableRename(
+      tombstone, source.root, rollbackError);
+  DirectoryState afterRollback;
+  inspectionError.clear();
+  if (!inspectState(afterRollback, inspectionError)) {
+    return failure(ProfileError::IoFailure,
+                   commitFailure +
+                       "; unable to inspect profile deletion rollback: " +
+                       inspectionError);
+  }
+  if (afterRollback.sourceExists) {
+    if (!afterRollback.sourceValidation->ok()) {
+      return sourceRetainedFailure(afterRollback, std::move(commitFailure));
+    }
+    if (!rollbackReportedSuccess && !rollbackError.empty()) {
+      appendDetail(commitFailure,
+                   "profile rollback reported failure: " + rollbackError);
+    }
+    std::string rollbackSyncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot,
+                                               rollbackSyncError)) {
+      appendDetail(commitFailure, "unable to sync profile deletion rollback: " +
+                                      rollbackSyncError);
+    }
+    return sourceRetainedFailure(afterRollback, std::move(commitFailure));
+  }
+
+  if (!afterRollback.tombstoneExists ||
+      !afterRollback.tombstoneValidation->ok()) {
+    if (!rollbackReportedSuccess && !rollbackError.empty()) {
+      appendDetail(commitFailure,
+                   "profile rollback reported failure: " + rollbackError);
+    }
+    std::string retrySyncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, retrySyncError)) {
+      appendDetail(commitFailure,
+                   "profile remains absent, but directory sync should be "
+                   "retried: " +
+                       retrySyncError);
+    }
+    return absentWithoutValidTombstone(afterRollback, std::move(commitFailure));
+  }
+
+  std::string retrySyncError;
+  if (!dependencies.filesystem.syncDirectory(profilesRoot, retrySyncError)) {
+    if (!rollbackReportedSuccess && !rollbackError.empty()) {
+      appendDetail(commitFailure,
+                   "profile rollback reported failure: " + rollbackError);
+    }
+    appendDetail(commitFailure,
+                 "profile remains absent, but directory sync should be "
+                 "retried: " +
+                     retrySyncError);
+    return success(std::move(profile), std::move(commitFailure));
+  }
+  return cleanupCommittedTombstone();
+}
+
 ProfileResult buildProfile(
     const std::filesystem::path &applicationRoot,
     const PlayerProfileManagerDependencies &dependencies, std::string id,
@@ -1685,8 +1892,8 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
   if (!validated.ok()) {
     return validated;
   }
-  const auto profiles = listProfiles(ValidationDepth::Deep,
-                                     DatabaseVersionPolicy::CurrentOnly);
+  const auto profiles =
+      listProfiles(ValidationDepth::Deep, DatabaseVersionPolicy::CurrentOnly);
   if (profiles.size() <= 1) {
     return failure(ProfileError::LastProfileDeletion,
                    "the last profile cannot be deleted");
@@ -1696,43 +1903,11 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
                    "the active profile cannot be deleted");
   }
 
-  const auto source = pathsFor(id).root;
+  const PlayerProfilePaths source = pathsFor(id);
   const auto tombstone =
       applicationDataRoot_ / "profiles" / (".deleting-" + std::string(id));
-  std::string errorMessage;
-  if (!ensureContainedPath(applicationDataRoot_, source, errorMessage) ||
-      !ensureContainedPath(applicationDataRoot_, tombstone, errorMessage)) {
-    return failure(ProfileError::IoFailure, errorMessage);
-  }
-  bool tombstoneExists = false;
-  if (!pathExists(tombstone, tombstoneExists, errorMessage)) {
-    return failure(ProfileError::IoFailure, errorMessage);
-  }
-  if (tombstoneExists &&
-      !dependencies_.filesystem.removeTree(tombstone, errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to clean prior deletion tombstone: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.durableRename(source, tombstone,
-                                              errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to stage profile deletion: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.syncDirectory(applicationDataRoot_ / "profiles",
-                                              errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to commit profile deletion: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.removeTree(tombstone, errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to delete profile data: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.syncDirectory(applicationDataRoot_ / "profiles",
-                                              errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to sync profile deletion cleanup: " + errorMessage);
-  }
-  return success(*validated.profile);
+  return finalizeProfileDeletion(applicationDataRoot_, dependencies_, source,
+                                 tombstone, *validated.profile);
 }
 
 ProfileResult PlayerProfileManager::validateProfile(std::string_view id) const {
@@ -1740,8 +1915,8 @@ ProfileResult PlayerProfileManager::validateProfile(std::string_view id) const {
                          DatabaseVersionPolicy::CurrentOnly);
 }
 
-ProfileResult PlayerProfileManager::validateProfileForActivation(
-    std::string_view id) const {
+ProfileResult
+PlayerProfileManager::validateProfileForActivation(std::string_view id) const {
   return validateProfile(id, ValidationDepth::Deep,
                          DatabaseVersionPolicy::AllowSupportedOlder);
 }
