@@ -2284,6 +2284,7 @@ std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
 
 result_persistence::StageOutcome ReplayDBHelper::StageChartResult(
     const result_persistence::ChartResultAttempt &attempt) {
+  using result_persistence::PendingReadStatus;
   using result_persistence::StageOutcome;
   using result_persistence::StageReceipt;
   using result_persistence::StageStatus;
@@ -2328,6 +2329,31 @@ result_persistence::StageOutcome ReplayDBHelper::StageChartResult(
       return {.status = StageStatus::IntegrityConflict,
               .diagnostic =
                   "attempt ID already names a different result payload"};
+    }
+    if (existing.value.scorePending) {
+      auto pending = loadPendingChartScoreOnConnection(sessionDatabase_,
+                                                       attempt.attemptId);
+      if (pending.status == PendingReadStatus::StorageFailure) {
+        return {.status = StageStatus::StorageFailure,
+                .diagnostic = pending.diagnostic.empty()
+                                  ? "could not validate the pending score"
+                                  : std::move(pending.diagnostic)};
+      }
+      if (pending.status != PendingReadStatus::Found ||
+          !pending.value.has_value()) {
+        return {.status = StageStatus::IntegrityConflict,
+                .diagnostic = pending.diagnostic.empty()
+                                  ? "staged result has no valid pending score"
+                                  : std::move(pending.diagnostic)};
+      }
+      if (pending.value->attemptId != attempt.attemptId ||
+          pending.value->replayId != existing.value.replayId ||
+          pending.value->createdAt != existing.value.createdAt ||
+          pending.value->score != attempt.score) {
+        return {.status = StageStatus::IntegrityConflict,
+                .diagnostic =
+                    "pending score differs from the staged result payload"};
+      }
     }
     if (!transaction.commit(transactionError)) {
       logSqlErrorText("finishing idempotent chart result staging",

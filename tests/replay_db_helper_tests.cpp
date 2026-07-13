@@ -1066,6 +1066,57 @@ void testIdenticalAttemptIsIdempotent(const std::filesystem::path &root) {
                   "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
 }
 
+void testRestageRejectsCorruptRetainedOutbox(
+    const std::filesystem::path &root) {
+  const auto path = root / "restage-corrupt-retained-outbox" / "replay.db";
+  ReplayDBHelper helper(path);
+
+  const auto pendingOnlyCorruption =
+      sampleChartAttempt(root, "restage-pending-only-corruption", 40);
+  assert(helper.StageChartResult(pendingOnlyCorruption).status ==
+         result_persistence::StageStatus::Staged);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET fast=fast+1 "
+                        "WHERE attempt_id='" +
+                            pendingOnlyCorruption.attemptId + "'");
+  db.reset();
+
+  const auto pendingOnlyRestage =
+      helper.StageChartResult(pendingOnlyCorruption);
+  assert(pendingOnlyRestage.status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  assert(!pendingOnlyRestage.receipt.has_value());
+  assert(!pendingOnlyRestage.diagnostic.empty());
+  const auto changedPending =
+      helper.LoadPendingChartScore(pendingOnlyCorruption.attemptId);
+  assert(changedPending.status == result_persistence::PendingReadStatus::Found);
+  assert(changedPending.value.has_value());
+  assert(changedPending.value->score.fast ==
+         pendingOnlyCorruption.score.fast + 1);
+
+  const auto semanticCorruption =
+      sampleChartAttempt(root, "restage-semantic-corruption", 41);
+  assert(helper.StageChartResult(semanticCorruption).status ==
+         result_persistence::StageStatus::Staged);
+  db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET score=score+1 "
+                        "WHERE attempt_id='" +
+                            semanticCorruption.attemptId + "'");
+  db.reset();
+
+  const auto semanticRestage = helper.StageChartResult(semanticCorruption);
+  assert(semanticRestage.status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  assert(!semanticRestage.receipt.has_value());
+  assert(!semanticRestage.diagnostic.empty());
+  assert(helper.LoadPendingChartScore(semanticCorruption.attemptId).status ==
+         result_persistence::PendingReadStatus::IntegrityConflict);
+
+  db = openDatabase(path);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 2);
+}
+
 void testChangedPayloadForSameAttemptConflicts(
     const std::filesystem::path &root) {
   const auto path = root / "stage-conflict" / "replay.db";
@@ -3858,6 +3909,7 @@ int main() {
   testLegacyReplayRowsRemainRepeatableWithNullAttemptId(root);
   testStageChartResultIsAtomicAndReturnsTimestamp(root);
   testIdenticalAttemptIsIdempotent(root);
+  testRestageRejectsCorruptRetainedOutbox(root);
   testChangedPayloadForSameAttemptConflicts(root);
   testStageRejectsSemanticResultConflicts(root);
   testStageAcceptsStandard9KeysGaugeMaximum(root);
