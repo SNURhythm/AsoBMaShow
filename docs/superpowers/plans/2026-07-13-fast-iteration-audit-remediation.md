@@ -38,9 +38,9 @@
 
 **Files:** `src/ReplayVideoExporter.cpp`, `src/ReplayResultStateBuilder.h`, `src/ReplayResultStateBuilder.cpp`, relevant existing replay tests
 
-- [ ] Derive the first rendered gauge from `RhythmState::configureGauge`, including Best Clear/Select-to-Under and custom starting percentage.
-- [ ] Seed each course stage from the previous stage's full gauge snapshot so the HUD and simulation agree before the first event.
-- [ ] Treat an initially failed survival gauge as immediate failure during export.
+- [x] Derive the first rendered gauge from `RhythmState::configureGauge`, including Best Clear/Select-to-Under and custom starting percentage.
+- [x] Seed each course stage from the previous stage's full gauge snapshot so the HUD and simulation agree before the first event.
+- [x] Treat an initially failed survival gauge as immediate failure during export.
 
 ### 3. Modified course eligibility precedence
 
@@ -91,3 +91,4 @@
 
 - Finding 1 — `test: finish gauge auto shift enum migration`
 - Finding 4 — `fix: resolve zero percent survival gauge starts`
+- Finding 2 — `fix: carry effective gauge state into replay exports`

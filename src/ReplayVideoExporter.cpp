@@ -307,22 +307,6 @@ long long gameplayResultTransitionMicrosForReplay(
       chart, latePoorTiming);
 }
 
-std::optional<long long> replayImmediateGaugeFailureMicros(
-    const ReplayData &replay, GaugeProfile gaugeProfile, int keyMode) {
-  if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
-    return std::nullopt;
-  }
-  const GaugeProfile resolvedProfile =
-      resolveGaugeProfile(gaugeProfile, keyMode);
-  for (const ReplayEvent &event : replay.events) {
-    if (event.gauge <= 0.0f &&
-        gaugeIsSurvival(event.gaugeType, resolvedProfile)) {
-      return std::max(0LL, event.songTimeMicros);
-    }
-  }
-  return std::nullopt;
-}
-
 ReplayData replayThroughFailure(const ReplayData &replay,
                                 std::optional<long long> failureMicros) {
   ReplayData result = replay;
@@ -1246,17 +1230,21 @@ void drawReplayResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 struct CourseReplayVideoStage {
   std::unique_ptr<bms_parser::Chart> chart;
   ReplayData replay;
+  GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
   long long gameplayDurationMicros = 0;
   long long resultDurationMicros = 0;
   long long audioDurationMicros = 0;
 
   CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
-                         ReplayData replay, RhythmState resultState,
+                         ReplayData replay,
+                         GaugeStateSnapshot initialGaugeState,
+                         RhythmState resultState,
                          long long gameplayDurationMicros,
                          long long resultDurationMicros,
                          long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
+        initialGaugeState(std::move(initialGaugeState)),
         resultState(std::move(resultState)),
         gameplayDurationMicros(gameplayDurationMicros),
         resultDurationMicros(resultDurationMicros),
@@ -2789,10 +2777,12 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setGaugeBarPosition(settings.gaugeBarPosition);
   const GaugeProfile gaugeProfile =
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
-  renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
-                          gaugeInitialValue(replay.initialGaugeType,
-                                            gaugeProfile),
-                          gaugeProfile);
+  const RhythmState initialGaugeState =
+      replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+  renderer.setGaugeStatus(initialGaugeState.gaugeType,
+                          initialGaugeState.gaugeAutoShift,
+                          initialGaugeState.currentGauge,
+                          initialGaugeState.gaugeProfile);
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
   renderer.setAutoPlayMarkVisible(replay.autoPlay);
@@ -2847,8 +2837,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const size_t frameCount = gameplayFrameCount + resultFrameCount;
   const ReplayData resultReplay = replayThroughFailure(
       replay, stoppedOnGaugeFailure
-                  ? replayImmediateGaugeFailureMicros(
-                        replay, GaugeProfile::Standard, chart.Meta.KeyMode)
+                  ? replay_result::FindGaugeFailureMicros(
+                        chart, replay, GaugeProfile::Standard)
                   : std::nullopt);
   const RhythmState replayResultState =
       replay_result::BuildResultState(chart, resultReplay);
@@ -3651,10 +3641,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
     renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
     renderer.setGaugeBarPosition(settings.gaugeBarPosition);
-    renderer.setGaugeStatus(replay.initialGaugeType, replay.gaugeAutoShift,
-                            gaugeInitialValue(replay.initialGaugeType,
-                                              replay.gaugeProfile),
-                            replay.gaugeProfile);
+    renderer.setGaugeStatus(stage.initialGaugeState.gaugeType,
+                            stage.initialGaugeState.gaugeAutoShift,
+                            stage.initialGaugeState.currentGauge,
+                            stage.initialGaugeState.gaugeProfile);
     renderer.setPlayOptionStatus(replayExportPlayOptionLabel(stageReplay));
     renderer.setReplayData(&stageReplay);
     renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
@@ -4020,8 +4010,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   fspath_to_utf8(outputPath).c_str(), resolvedOptions.width,
                   resolvedOptions.height, resolvedOptions.fps);
   const auto videoStart = std::chrono::steady_clock::now();
-  const auto failureMicros = replayImmediateGaugeFailureMicros(
-      replay, GaugeProfile::Standard, chart->Meta.KeyMode);
+  const auto failureMicros = replay_result::FindGaugeFailureMicros(
+      *chart, replay, GaugeProfile::Standard);
   const long long normalGameplayDurationMicros =
       replay.provenance.playback.realMicrosFromChart(
           gameplayResultTransitionMicrosForReplay(*chart));
@@ -4126,6 +4116,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   std::vector<CourseReplayAudioSegment> audioSegments;
   stages.reserve(replay.stages.size());
   audioSegments.reserve(replay.stages.size());
+  std::optional<GaugeStateSnapshot> carriedGauge;
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
     const ReplayData &stageReplay = replay.stages[i].replay;
@@ -4160,8 +4151,16 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
         resolvedOptions.includeResultScreen
             ? std::max(0LL, replay.stages[i].restMicrosAfterStage)
             : 0LL;
-    const auto failureMicros = replayImmediateGaugeFailureMicros(
-        stageReplay, replay.gaugeProfile, chart->Meta.KeyMode);
+    ReplayData configuredStageReplay = stageReplay;
+    configuredStageReplay.initialGaugeType = replay.initialGaugeType;
+    configuredStageReplay.gaugeAutoShift = replay.gaugeAutoShift;
+    configuredStageReplay.gaugeAutoShiftLowerBound =
+        replay.gaugeAutoShiftLowerBound;
+    const GaugeStateSnapshot *carriedGaugeState =
+        carriedGauge.has_value() ? &*carriedGauge : nullptr;
+    const auto failureMicros = replay_result::FindGaugeFailureMicros(
+        *chart, configuredStageReplay, replay.gaugeProfile,
+        carriedGaugeState);
     const long long normalGameplayDurationMicros =
         courseStageGameplayDurationMicrosForReplay(
             *chart, audioResult.durationMicros,
@@ -4178,9 +4177,15 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
             ? std::min(audioResult.durationMicros, *failureMicros)
             : gameplayDurationMicros + resultDurationMicros;
     ReplayData exportStageReplay =
-        replayThroughFailure(stageReplay, failureMicros);
+        replayThroughFailure(configuredStageReplay, failureMicros);
+    const RhythmState initialGaugeState =
+        replay_result::BuildInitialGaugeState(
+            *chart, exportStageReplay, replay.gaugeProfile,
+            carriedGaugeState);
     RhythmState resultState = replay_result::BuildResultState(
-        *chart, exportStageReplay, replay.gaugeProfile);
+        *chart, exportStageReplay, replay.gaugeProfile,
+        carriedGaugeState);
+    carriedGauge = resultState.gaugeSnapshot();
     audioSegments.push_back(CourseReplayAudioSegment{
         .wavPath = stageWavPath,
         .durationMicros = gameplayDurationMicros + resultDurationMicros,
@@ -4188,7 +4193,8 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     });
     stages.emplace_back(
         std::move(chart), std::move(exportStageReplay),
-        std::move(resultState), gameplayDurationMicros,
+        initialGaugeState.gaugeSnapshot(), std::move(resultState),
+        gameplayDurationMicros,
         resultDurationMicros,
         failureMicros.has_value() ? audioContentDurationMicros
                                   : audioResult.durationMicros);

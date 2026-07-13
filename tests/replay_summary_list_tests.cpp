@@ -67,6 +67,79 @@ int main() {
     return 1;
   }
 
+  ReplayData bestClearReplay;
+  bestClearReplay.initialGaugeType = GaugeType::Normal;
+  bestClearReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  bestClearReplay.provenance.startingGaugePercent = 37;
+  const RhythmState bestClearInitial =
+      replay_result::BuildInitialGaugeState(chart, bestClearReplay);
+  if (bestClearInitial.gaugeType != GaugeType::Hazard ||
+      bestClearInitial.currentGauge != 37.0f) {
+    std::cerr << "export HUD must use the effective Best Clear start state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData firstCourseStage;
+  firstCourseStage.initialGaugeType = GaugeType::Hard;
+  firstCourseStage.events.push_back({.action = ReplayEventAction::Gauge,
+                                     .songTimeMicros = 500,
+                                     .gauge = 42.0f,
+                                     .gaugeType = GaugeType::Hard});
+  const RhythmState firstCourseResult =
+      replay_result::BuildResultState(chart, firstCourseStage);
+  const GaugeStateSnapshot carriedGauge = firstCourseResult.gaugeSnapshot();
+  ReplayData secondCourseStage;
+  secondCourseStage.initialGaugeType = GaugeType::Hard;
+  const RhythmState secondCourseInitial =
+      replay_result::BuildInitialGaugeState(
+          chart, secondCourseStage, GaugeProfile::Standard, &carriedGauge);
+  if (secondCourseInitial.gaugeType != GaugeType::Hard ||
+      secondCourseInitial.currentGauge != 42.0f) {
+    std::cerr << "course export HUD must start from the carried gauge state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData failedReplay;
+  failedReplay.initialGaugeType = GaugeType::Hard;
+  failedReplay.events.push_back({.action = ReplayEventAction::Gauge,
+                                 .songTimeMicros = 500,
+                                 .gauge = 0.0f,
+                                 .gaugeType = GaugeType::Hard});
+  const RhythmState failedResult =
+      replay_result::BuildResultState(chart, failedReplay);
+  const GaugeStateSnapshot failedCarry = failedResult.gaugeSnapshot();
+  if (!failedCarry.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] ||
+      replay_result::FindGaugeFailureMicros(
+          chart, failedReplay, GaugeProfile::Standard, &failedCarry) != 0) {
+    std::cerr << "course export must carry terminal survival gauge state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData continuedReplay;
+  continuedReplay.initialGaugeType = GaugeType::Hard;
+  continuedReplay.gaugeAutoShift = GaugeAutoShiftMode::Continue;
+  continuedReplay.provenance.startingGaugePercent = 0;
+  if (replay_result::FindGaugeFailureMicros(chart, continuedReplay)
+          .has_value()) {
+    std::cerr << "Continue export must not stop at a zero percent start"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData survivalOnlyReplay;
+  survivalOnlyReplay.initialGaugeType = GaugeType::ExHard;
+  survivalOnlyReplay.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
+  survivalOnlyReplay.gaugeAutoShiftLowerBound = GaugeType::Hard;
+  survivalOnlyReplay.provenance.startingGaugePercent = 0;
+  if (replay_result::FindGaugeFailureMicros(chart, survivalOnlyReplay) != 0) {
+    std::cerr << "survival-only GAS export must fail at a zero percent start"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData assistedReplay;
   assistedReplay.initialGaugeType = GaugeType::Hard;
   assistedReplay.maxCombo = 1;
