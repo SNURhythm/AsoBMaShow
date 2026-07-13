@@ -2,16 +2,90 @@
 
 #include "CourseIdentity.h"
 #include "ReplayData.h"
+#include "ResultPersistenceModel.h"
 #include "ScoreDBHelper.h"
 #include "bms_parser.hpp"
 #include "sqlite3.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
+
+namespace result_persistence {
+
+enum class StageStatus {
+  Staged,
+  AlreadyStaged,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct StageOutcome {
+  StageStatus status = StageStatus::StorageFailure;
+  std::optional<StageReceipt> receipt;
+  std::string diagnostic;
+};
+
+struct PendingChartScoreWrite {
+  std::string attemptId;
+  int replayId = 0;
+  std::string createdAt;
+  ChartScoreWrite score;
+};
+
+enum class PendingReadStatus {
+  Found,
+  NotFound,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct PendingReadOutcome {
+  PendingReadStatus status = PendingReadStatus::StorageFailure;
+  std::optional<PendingChartScoreWrite> value;
+  std::string diagnostic;
+};
+
+struct PendingBatchEntry {
+  PendingReadStatus status = PendingReadStatus::IntegrityConflict;
+  std::string attemptId;
+  std::optional<PendingChartScoreWrite> value;
+  std::string diagnostic;
+};
+
+struct PendingBatchOutcome {
+  bool storageAvailable = false;
+  std::vector<PendingBatchEntry> entries;
+  std::string diagnostic;
+};
+
+enum class RecoveryAttemptKind { StorageFailure, IntegrityConflict };
+
+enum class RecoveryMarkStatus { Recorded, NotFound, StorageFailure };
+
+struct RecoveryMarkOutcome {
+  RecoveryMarkStatus status = RecoveryMarkStatus::StorageFailure;
+  std::string diagnostic;
+};
+
+enum class AcknowledgeStatus {
+  Acknowledged,
+  AlreadyAcknowledged,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct AcknowledgeOutcome {
+  AcknowledgeStatus status = AcknowledgeStatus::StorageFailure;
+  std::string diagnostic;
+};
+
+} // namespace result_persistence
 
 namespace replay_summary_scan {
 // Positive-limit summary reads inspect at most the requested rows plus this
@@ -58,7 +132,7 @@ struct CourseReplayLookup {
 
 class ReplayDBHelper {
 public:
-  static constexpr int kCurrentSchemaVersion = 4;
+  static constexpr int kCurrentSchemaVersion = 5;
 
   ReplayDBHelper() = default;
   explicit ReplayDBHelper(std::filesystem::path databasePath);
@@ -84,6 +158,18 @@ public:
   bool CreateReplayTables(sqlite3 *db);
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
+  result_persistence::StageOutcome StageChartResult(
+      const result_persistence::ChartResultAttempt &attempt);
+  result_persistence::PendingReadOutcome
+  LoadPendingChartScore(std::string_view attemptId);
+  result_persistence::PendingBatchOutcome
+  ListPendingChartScores(std::size_t limit = 256);
+  result_persistence::AcknowledgeOutcome
+  AcknowledgePendingChartScore(std::string_view attemptId, int replayId);
+  result_persistence::RecoveryMarkOutcome
+  RecordPendingChartScoreRecoveryAttempt(
+      std::string_view attemptId,
+      result_persistence::RecoveryAttemptKind kind);
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);

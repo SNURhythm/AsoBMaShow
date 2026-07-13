@@ -566,7 +566,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -1104,6 +1106,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -1149,6 +1152,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ChartDBHelper.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -1194,6 +1198,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
