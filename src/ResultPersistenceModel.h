@@ -33,6 +33,9 @@ struct ChartScoreWrite {
   bool operator==(const ChartScoreWrite &) const = default;
 };
 
+[[nodiscard]] bool
+hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept;
+
 struct ChartResultAttempt {
   std::string attemptId;
   ReplayData replay;

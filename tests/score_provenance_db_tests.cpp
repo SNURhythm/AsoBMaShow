@@ -1013,6 +1013,14 @@ void testProjectedScoreIsIdempotent(const std::filesystem::path &root) {
                                           "2026-07-14 01:02:03");
   const std::uint64_t revisionBefore = helper.GetRevision();
 
+  auto md5OnlyIdentity = pending;
+  md5OnlyIdentity.score.chartSha256.clear();
+  const auto rejected = helper.SaveProjectedScore(md5OnlyIdentity);
+  assert(rejected.status ==
+         result_persistence::ProjectionStatus::IntegrityConflict);
+  assert(!rejected.diagnostic.empty());
+  assert(helper.GetRevision() == revisionBefore);
+
   const auto first = helper.SaveProjectedScore(pending);
   const std::uint64_t revisionAfterInsert = helper.GetRevision();
   const auto second = helper.SaveProjectedScore(pending);

@@ -1051,9 +1051,10 @@ insertScoreWriteOnConnection(sqlite3 *db,
                              std::optional<std::string_view> attemptId,
                              std::optional<std::string_view> createdAt,
                              const std::string &provenanceJson) {
-  if (score.chartSha256.empty()) {
+  if (!result_persistence::hasProjectableChartIdentity(score)) {
     SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION,
-                    "Refusing to save score without chart SHA256: %s",
+                    "Refusing to save score without a projectable chart "
+                    "identity: %s",
                     score.chartPath.c_str());
     std::abort();
   }
@@ -2499,9 +2500,10 @@ result_persistence::ProjectionOutcome ScoreDBHelper::SaveProjectedScore(
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic = "score projection timestamp is empty"};
   }
-  if (pending.score.chartSha256.empty()) {
+  if (!result_persistence::hasProjectableChartIdentity(pending.score)) {
     return {.status = ProjectionStatus::IntegrityConflict,
-            .diagnostic = "score projection chart SHA256 is empty"};
+            .diagnostic =
+                "score projection chart identity is not projectable"};
   }
 
   std::string provenanceError;

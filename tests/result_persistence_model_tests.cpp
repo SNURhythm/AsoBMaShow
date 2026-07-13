@@ -315,6 +315,14 @@ void testAttemptValidationAndFingerprint() {
   expectRejected(wrongIdentity, std::string(kAttemptId),
                  "chart identity mismatch");
 
+  auto md5OnlyIdentity = fixture;
+  md5OnlyIdentity.meta.SHA256.clear();
+  md5OnlyIdentity.replay.chartMeta.SHA256.clear();
+  md5OnlyIdentity.provenance.stages.front().chartSha256.clear();
+  md5OnlyIdentity.replay.provenance = md5OnlyIdentity.provenance;
+  expectRejected(md5OnlyIdentity, std::string(kAttemptId),
+                 "chart identity is not projectable");
+
   auto wrongProvenance = fixture;
   wrongProvenance.replay.provenance.player1.option = "MIRROR";
   expectRejected(wrongProvenance, std::string(kAttemptId),

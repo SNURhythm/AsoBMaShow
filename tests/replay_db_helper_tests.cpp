@@ -1626,6 +1626,21 @@ void testStageRejectsSemanticResultConflicts(
   ++impossibleScore.replay.finalScore;
   expectConflict(impossibleScore);
 
+  auto md5OnlyIdentity =
+      sampleChartAttempt(root, "stage-semantic-md5-only", 15);
+  md5OnlyIdentity.score.chartSha256.clear();
+  md5OnlyIdentity.replay.chartMeta.SHA256.clear();
+  md5OnlyIdentity.score.provenance.stages.front().chartSha256.clear();
+  md5OnlyIdentity.replay.provenance = md5OnlyIdentity.score.provenance;
+  md5OnlyIdentity.payloadFingerprint = result_persistence::payloadFingerprint(
+      md5OnlyIdentity.replay, md5OnlyIdentity.score);
+  const auto md5OnlyOutcome = helper.StageChartResult(md5OnlyIdentity);
+  assert(md5OnlyOutcome.status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  assert(!md5OnlyOutcome.receipt.has_value());
+  assert(md5OnlyOutcome.diagnostic ==
+         "score chart identity is not projectable");
+
   auto db = openDatabase(path);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 0);
   assert(queryInt(db.get(),

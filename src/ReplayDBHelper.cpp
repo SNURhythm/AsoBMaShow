@@ -1510,10 +1510,6 @@ bool isCanonicalLowerHex(std::string_view value, std::size_t size) {
          });
 }
 
-bool isCanonicalOptionalHash(std::string_view value, std::size_t size) {
-  return value.empty() || isCanonicalLowerHex(value, size);
-}
-
 bool sameFloatBits(float left, float right) {
   return std::bit_cast<std::uint32_t>(left) ==
          std::bit_cast<std::uint32_t>(right);
@@ -1622,10 +1618,8 @@ std::optional<std::string> validateChartResultAttempt(
   }
 
   const auto &score = attempt.score;
-  if (!isCanonicalOptionalHash(score.chartMd5, 32) ||
-      !isCanonicalOptionalHash(score.chartSha256, 64) ||
-      (score.chartMd5.empty() && score.chartSha256.empty())) {
-    diagnostic = "score chart identity is not canonical";
+  if (!result_persistence::hasProjectableChartIdentity(score)) {
+    diagnostic = "score chart identity is not projectable";
     return std::nullopt;
   }
   const std::string replayMd5 = normalizedHash(attempt.replay.chartMeta.MD5);
@@ -2043,10 +2037,8 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
   }
   score.provenance = std::move(*provenance);
 
-  if (!isCanonicalOptionalHash(score.chartMd5, 32) ||
-      !isCanonicalOptionalHash(score.chartSha256, 64) ||
-      (score.chartMd5.empty() && score.chartSha256.empty())) {
-    return conflict("pending score chart identity is not canonical");
+  if (!result_persistence::hasProjectableChartIdentity(score)) {
+    return conflict("pending score chart identity is not projectable");
   }
 
   int linkedReplayId = 0;
