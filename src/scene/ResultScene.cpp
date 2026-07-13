@@ -368,6 +368,24 @@ ResultScene::pacemakerDataForCurrentResult() const {
       meta, resultState, pacemakerTarget, previousBest);
 }
 
+ResultSkinData ResultScene::makeResultSkinData() const {
+  ResultSkinData data = {&resultState, &meta, &context};
+  data.playModeLabel = playModeLabel;
+  data.laneOrderLabel = laneOrderLabel;
+  data.difficultyLabel = difficultyLabel;
+  data.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
+  if (autoPlayResult) {
+    data.currentClearLabelOverride = "AUTO PLAY";
+  }
+  if (currentClearLabelOverride.has_value()) {
+    data.currentClearLabelOverride = currentClearLabelOverride;
+  }
+  data.currentClearRankOverride = currentClearRankOverride;
+  data.previousBest = previousBest;
+  data.pacemaker = pacemakerDataForCurrentResult();
+  return data;
+}
+
 void ResultScene::saveCourseScore() {
   if (!isCourseFinalResult() || courseOptions.session == nullptr ||
       courseOptions.session->courseReplayPlayback ||
@@ -398,11 +416,12 @@ void ResultScene::loadPreviousBest() {
 
   std::optional<std::string> beforeCreatedAt;
   std::optional<std::string> excludeAttemptId;
-  const auto &receipt = persistenceOptions.outcome.receipt;
-  if (persistenceOptions.attempt != nullptr &&
-      persistenceOptions.outcome.durable() && receipt.has_value() &&
-      receipt->attemptId == persistenceOptions.attempt->attemptId &&
-      receipt->replayId > 0 && !receipt->createdAt.empty()) {
+  const auto *receipt =
+      persistenceOptions.attempt == nullptr
+          ? nullptr
+          : persistenceOptions.outcome.validatedReceiptFor(
+                *persistenceOptions.attempt);
+  if (receipt != nullptr) {
     excludeAttemptId = persistenceOptions.attempt->attemptId;
   } else if (replayResult && retryData.has_value() && !retryData->autoPlay &&
              !retryData->createdAt.empty()) {
@@ -457,14 +476,16 @@ void ResultScene::saveCourseReplay() {
 }
 
 void ResultScene::applyResultPersistenceReceipt() {
-  const auto &receipt = persistenceOptions.outcome.receipt;
-  if (persistenceOptions.attempt == nullptr || !receipt.has_value() ||
-      receipt->attemptId != persistenceOptions.attempt->attemptId ||
-      receipt->replayId <= 0 || receipt->createdAt.empty()) {
+  const auto *receipt =
+      persistenceOptions.attempt == nullptr
+          ? nullptr
+          : persistenceOptions.outcome.validatedReceiptFor(
+                *persistenceOptions.attempt);
+  if (receipt == nullptr) {
     return;
   }
 
-  const auto applyReceipt = [&receipt](std::optional<ReplayData> &replay) {
+  const auto applyReceipt = [receipt](std::optional<ReplayData> &replay) {
     if (!replay.has_value()) {
       return;
     }
@@ -476,11 +497,8 @@ void ResultScene::applyResultPersistenceReceipt() {
 }
 
 bool ResultScene::persistenceDecisionRequired() const {
-  const bool hasPersistenceResult =
-      persistenceOptions.attempt != nullptr ||
-      !persistenceOptions.outcome.userMessage.empty();
-  return hasPersistenceResult && !persistenceOptions.outcome.saved() &&
-         !persistenceContinueChosen;
+  return persistenceOptions.outcome.requiresUserDecision(
+      persistenceOptions.attempt != nullptr, persistenceContinueChosen);
 }
 
 std::optional<practice::ResultModel>
@@ -629,7 +647,8 @@ void ResultScene::addResultPersistenceStatus() {
       "Retry Save", ui_theme::primaryAction(), ui_theme::primaryActionHover(),
       ui_theme::primaryActionPressed(), ui_theme::cyan(),
       [this]() { retryResultPersistence(); });
-  persistenceRetryButton->setEnabled(persistenceOptions.attempt != nullptr);
+  persistenceRetryButton->setEnabled(persistenceOptions.attempt != nullptr &&
+                                     persistenceOptions.outcome.retryable());
   actions->addView(persistenceRetryButton);
   actions->addView(makeButton(
       "Continue Without Saving", ui_theme::warningAction(),
@@ -646,7 +665,8 @@ void ResultScene::addResultPersistenceStatus() {
 }
 
 void ResultScene::retryResultPersistence() {
-  if (persistenceOptions.attempt == nullptr) {
+  if (persistenceOptions.attempt == nullptr ||
+      !persistenceOptions.outcome.retryable()) {
     return;
   }
 
@@ -659,6 +679,12 @@ void ResultScene::retryResultPersistence() {
   applyResultPersistenceReceipt();
   previousBestLoaded = false;
   loadPreviousBest();
+  defer(
+      [this]() {
+        refreshResultSummary();
+        return true;
+      },
+      0, true);
   updateResultPersistencePresentation();
 }
 
@@ -683,11 +709,25 @@ void ResultScene::updateResultPersistencePresentation() {
     persistenceStatusMessage->setText(persistenceOptions.outcome.userMessage);
   }
   if (persistenceRetryButton != nullptr) {
-    persistenceRetryButton->setEnabled(persistenceOptions.attempt != nullptr);
+    persistenceRetryButton->setEnabled(persistenceOptions.attempt != nullptr &&
+                                       persistenceOptions.outcome.retryable());
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
+}
+
+void ResultScene::refreshResultSummary() {
+  if (rootLayout == nullptr || skin == nullptr) {
+    return;
+  }
+  View *summary = rootLayout->findViewByName("resultSummary");
+  if (summary == nullptr) {
+    return;
+  }
+  ResultSkinData data = makeResultSkinData();
+  skin->rebuildLayoutSection("ResultSummary", summary, &data);
+  rootLayout->applyYogaLayout();
 }
 
 void ResultScene::addRetryButtons() {
@@ -1609,20 +1649,7 @@ void ResultScene::init() {
       new View(0, 0, rendering::window_width, rendering::window_height);
   addView(rootLayout);
 
-  ResultSkinData data = {&resultState, &meta, &context};
-  data.playModeLabel = playModeLabel;
-  data.laneOrderLabel = laneOrderLabel;
-  data.difficultyLabel = difficultyLabel;
-  data.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
-  if (autoPlayResult) {
-    data.currentClearLabelOverride = "AUTO PLAY";
-  }
-  if (currentClearLabelOverride.has_value()) {
-    data.currentClearLabelOverride = currentClearLabelOverride;
-  }
-  data.currentClearRankOverride = currentClearRankOverride;
-  data.previousBest = previousBest;
-  data.pacemaker = pacemakerDataForCurrentResult();
+  ResultSkinData data = makeResultSkinData();
   skin->buildLayout("Result", rootLayout, &data);
   addTimingAnalytics();
   addResultPersistenceStatus();

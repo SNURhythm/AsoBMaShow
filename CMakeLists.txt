@@ -503,8 +503,11 @@ else()
 endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME result_persistence_flow_audit
-        COMMAND ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.sh)
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py
+                ${CMAKE_SOURCE_DIR})
     set_tests_properties(result_persistence_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )

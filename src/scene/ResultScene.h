@@ -95,6 +95,7 @@ private:
   void continueWithoutSaving();
   void applyResultPersistenceReceipt();
   void updateResultPersistencePresentation();
+  void refreshResultSummary();
   void addTimingAnalytics();
   void addRetryButtons();
   void addCourseButtons();
@@ -115,6 +116,7 @@ private:
   [[nodiscard]] bool isCourseStageResult() const;
   [[nodiscard]] bool isCourseFinalResult() const;
   [[nodiscard]] bool persistenceDecisionRequired() const;
+  [[nodiscard]] ResultSkinData makeResultSkinData() const;
   [[nodiscard]] std::optional<ResultPacemakerData>
   pacemakerDataForCurrentResult() const;
   [[nodiscard]] std::optional<practice::ResultModel>

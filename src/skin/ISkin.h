@@ -14,4 +14,6 @@ public:
      * @param data Pointer to a screen-specific data structure (e.g. ResultSkinData*).
      */
     virtual void buildLayout(const std::string& screenName, View* root, void* data) = 0;
+    virtual bool rebuildLayoutSection(const std::string& sectionName,
+                                      View* root, void* data) = 0;
 };

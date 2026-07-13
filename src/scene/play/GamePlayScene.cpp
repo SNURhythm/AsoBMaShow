@@ -51,6 +51,8 @@ resultPersistenceStateName(result_persistence::SaveState state) noexcept {
   switch (state) {
   case result_persistence::SaveState::Saved:
     return "Saved";
+  case result_persistence::SaveState::InvalidAttempt:
+    return "InvalidAttempt";
   case result_persistence::SaveState::Unstaged:
     return "Unstaged";
   case result_persistence::SaveState::PendingScore:
@@ -1750,15 +1752,14 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       } else {
         resultPersistenceOptions.attempt.reset();
         resultPersistenceOptions.outcome = {
-            .state = result_persistence::SaveState::Unstaged,
+            .state = result_persistence::SaveState::InvalidAttempt,
             .receipt = std::nullopt,
             .userMessage = std::string(result_persistence::saveStateUserMessage(
-                result_persistence::SaveState::Unstaged)),
+                result_persistence::SaveState::InvalidAttempt)),
             .diagnostic = constructionDiagnostic.empty()
                               ? "result attempt construction failed"
                               : std::move(constructionDiagnostic),
         };
-        resultPersistenceOptions.outcome.receipt.reset();
       }
     }
 
@@ -1766,8 +1767,12 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       resultPersistenceOptions.outcome =
           context.resultPersistence.persist(*resultPersistenceOptions.attempt);
     }
-    if (const auto &receipt = resultPersistenceOptions.outcome.receipt;
-        receipt.has_value()) {
+    const auto *receipt =
+        resultPersistenceOptions.attempt == nullptr
+            ? nullptr
+            : resultPersistenceOptions.outcome.validatedReceiptFor(
+                  *resultPersistenceOptions.attempt);
+    if (receipt != nullptr) {
       recordedReplay.id = receipt->replayId;
       recordedReplay.createdAt = receipt->createdAt;
     }

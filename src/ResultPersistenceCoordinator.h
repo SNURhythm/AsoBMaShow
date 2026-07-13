@@ -13,6 +13,7 @@ namespace result_persistence {
 
 enum class SaveState {
   Saved,
+  InvalidAttempt,
   Unstaged,
   PendingScore,
   PendingAcknowledgement,
@@ -32,6 +33,11 @@ struct SaveOutcome {
     return state == SaveState::Saved;
   }
   [[nodiscard]] bool durable() const noexcept;
+  [[nodiscard]] bool retryable() const noexcept;
+  [[nodiscard]] bool requiresUserDecision(bool attemptAvailable,
+                                          bool continueChosen) const noexcept;
+  [[nodiscard]] const StageReceipt *
+  validatedReceiptFor(const ChartResultAttempt &attempt) const noexcept;
 };
 
 struct RecoverySummary {

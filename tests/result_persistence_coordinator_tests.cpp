@@ -55,6 +55,9 @@ using namespace result_persistence;
 constexpr std::string_view kUnstagedMessage =
     "This result could not be stored. Retry before leaving to avoid losing "
     "it.";
+constexpr std::string_view kInvalidAttemptMessage =
+    "This result could not be prepared for saving and cannot be retried. "
+    "Continuing will discard it.";
 constexpr std::string_view kPendingScoreMessage =
     "The replay is safe, but the score is still pending. Retry now or it will "
     "be retried automatically later.";
@@ -188,6 +191,59 @@ void assertOnlyStageCalled(const Harness &harness,
   assert(harness.projectCalls == 0);
   assert(harness.acknowledgeCalls == 0);
   assert(harness.markCalls == 0);
+}
+
+void testSaveOutcomePresentationSemantics() {
+  const ChartResultAttempt currentAttempt = attempt();
+  const SaveOutcome invalid{
+      .state = SaveState::InvalidAttempt,
+      .receipt = std::nullopt,
+      .userMessage = std::string(saveStateUserMessage(SaveState::InvalidAttempt)),
+      .diagnostic = "deterministic validation failure",
+  };
+  assert(!invalid.saved());
+  assert(!invalid.durable());
+  assert(!invalid.retryable());
+  assert(invalid.userMessage == kInvalidAttemptMessage);
+  assert(invalid.validatedReceiptFor(currentAttempt) == nullptr);
+  assert(invalid.requiresUserDecision(false, false));
+  assert(!invalid.requiresUserDecision(false, true));
+
+  const SaveOutcome unstaged{
+      .state = SaveState::Unstaged,
+      .receipt = std::nullopt,
+      .userMessage = std::string(kUnstagedMessage),
+      .diagnostic = {},
+  };
+  assert(unstaged.retryable());
+  assert(unstaged.requiresUserDecision(true, false));
+
+  const SaveOutcome saved{
+      .state = SaveState::Saved,
+      .receipt = receipt("attempt-a", 17, false),
+      .userMessage = {},
+      .diagnostic = {},
+  };
+  assert(!saved.retryable());
+  assert(!saved.requiresUserDecision(true, false));
+  assert(saved.validatedReceiptFor(currentAttempt) == &*saved.receipt);
+
+  SaveOutcome mismatched = saved;
+  mismatched.receipt->attemptId = "different-attempt";
+  assert(mismatched.validatedReceiptFor(currentAttempt) == nullptr);
+  mismatched = saved;
+  mismatched.receipt->replayId = 0;
+  assert(mismatched.validatedReceiptFor(currentAttempt) == nullptr);
+  mismatched = saved;
+  mismatched.receipt->createdAt.clear();
+  assert(mismatched.validatedReceiptFor(currentAttempt) == nullptr);
+
+  SaveOutcome nondurable = saved;
+  nondurable.state = SaveState::Unstaged;
+  assert(nondurable.validatedReceiptFor(currentAttempt) == nullptr);
+
+  const SaveOutcome empty;
+  assert(!empty.requiresUserDecision(false, false));
 }
 
 void testPersistOrdersStageLoadProjectAcknowledge() {
@@ -1228,6 +1284,7 @@ void testPersistentFirstBatchDoesNotStarveNewValidRow() {
 } // namespace
 
 int main() {
+  testSaveOutcomePresentationSemantics();
   testPersistOrdersStageLoadProjectAcknowledge();
   testStageStorageFailureReturnsTruthfulUnstagedMessage();
   testStageConflictReturnsUnstagedConflictWithoutReceipt();

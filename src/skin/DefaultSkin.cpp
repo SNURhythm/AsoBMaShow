@@ -113,17 +113,35 @@ void DefaultSkin::buildLayout(const std::string &screenName, View *root,
   }
 }
 
-void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
+bool DefaultSkin::rebuildLayoutSection(const std::string &sectionName,
+                                       View *root, void *data) {
+  if (sectionName != "ResultSummary" || root == nullptr || data == nullptr) {
+    return false;
+  }
+  View::LayoutBatchScope layoutBatch;
+  root->clearChildren();
+  buildResultSummary(root, static_cast<ResultSkinData *>(data));
+  return true;
+}
+
+void DefaultSkin::buildResultSummary(View *root, ResultSkinData *data) {
+  buildResultLayout(root, data, true);
+}
+
+void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
+                                    bool summaryOnly) {
   const auto &meta = *data->meta;
   const auto &resultState = *data->state;
   auto &context = *data->context;
 
-  rootLayout->setFlexDirection(FlexDirection::Column);
-  rootLayout->setAlignItems(YGAlignStretch);
-  rootLayout->setJustifyContent(YGJustifyCenter);
-  rootLayout->setPadding(Edge::All, 32);
-  rootLayout->setGap(12);
-  rootLayout->setBackgroundColor(ui_theme::resultBackdrop());
+  if (!summaryOnly) {
+    rootLayout->setFlexDirection(FlexDirection::Column);
+    rootLayout->setAlignItems(YGAlignStretch);
+    rootLayout->setJustifyContent(YGJustifyCenter);
+    rootLayout->setPadding(Edge::All, 32);
+    rootLayout->setGap(12);
+    rootLayout->setBackgroundColor(ui_theme::resultBackdrop());
+  }
 
   auto makeLabel = [](const std::string &text, int size, Color color) {
     auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", size);
@@ -171,54 +189,56 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
                : it->second;
   };
 
-  auto *header = new View();
-  header->setFlexDirection(FlexDirection::Row);
-  header->setAlignItems(YGAlignCenter);
-  header->setGap(20);
-  header->setMinHeight(96);
+  if (!summaryOnly) {
+    auto *header = new View();
+    header->setFlexDirection(FlexDirection::Row);
+    header->setAlignItems(YGAlignCenter);
+    header->setGap(20);
+    header->setMinHeight(96);
 
-  auto *titleStack = new View();
-  titleStack->setFlexDirection(FlexDirection::Column);
-  titleStack->setFlex(1);
-  titleStack->setGap(4);
+    auto *titleStack = new View();
+    titleStack->setFlexDirection(FlexDirection::Column);
+    titleStack->setFlex(1);
+    titleStack->setGap(4);
 
-  auto *titleRow = new View();
-  titleRow->setFlexDirection(FlexDirection::Row);
-  titleRow->setAlignItems(YGAlignCenter);
-  titleRow->setGap(14);
-  titleRow->setHeight(58);
+    auto *titleRow = new View();
+    titleRow->setFlexDirection(FlexDirection::Row);
+    titleRow->setAlignItems(YGAlignCenter);
+    titleRow->setGap(14);
+    titleRow->setHeight(58);
 
-  auto titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
-  titleText->setText(meta.Title);
-  titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  titleText->setOverflow(TextView::TextOverflow::Marquee);
-  titleText->setHeight(58);
-  titleText->setFlex(1);
-  titleText->setMinWidth(0);
-  titleText->setName("title");
-  titleRow->addView(titleText);
+    auto titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+    titleText->setText(meta.Title);
+    titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    titleText->setOverflow(TextView::TextOverflow::Marquee);
+    titleText->setHeight(58);
+    titleText->setFlex(1);
+    titleText->setMinWidth(0);
+    titleText->setName("title");
+    titleRow->addView(titleText);
 
-  auto difficultyText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
-  difficultyText->setText(difficultyLabel);
-  difficultyText->setColor(ui_theme::sdl(ui_theme::amber()));
-  difficultyText->setOverflow(TextView::TextOverflow::Hidden);
-  difficultyText->setHeight(58);
-  difficultyText->setFlexShrink(0);
-  difficultyText->setWidth(
-      std::min(440, std::max(1, difficultyText->textureWidth() + 8)));
-  difficultyText->setName("difficulty");
-  titleRow->addView(difficultyText);
-  titleStack->addView(titleRow);
+    auto difficultyText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+    difficultyText->setText(difficultyLabel);
+    difficultyText->setColor(ui_theme::sdl(ui_theme::amber()));
+    difficultyText->setOverflow(TextView::TextOverflow::Hidden);
+    difficultyText->setHeight(58);
+    difficultyText->setFlexShrink(0);
+    difficultyText->setWidth(
+        std::min(440, std::max(1, difficultyText->textureWidth() + 8)));
+    difficultyText->setName("difficulty");
+    titleRow->addView(difficultyText);
+    titleStack->addView(titleRow);
 
-  auto artistText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  artistText->setText(meta.Artist);
-  artistText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-  artistText->setHeight(36);
-  artistText->setName("artist");
-  titleStack->addView(artistText);
+    auto artistText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+    artistText->setText(meta.Artist);
+    artistText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+    artistText->setHeight(36);
+    artistText->setName("artist");
+    titleStack->addView(artistText);
 
-  header->addView(titleStack);
-  rootLayout->addView(header);
+    header->addView(titleStack);
+    rootLayout->addView(header);
+  }
 
   const auto nextRank = nextRankTarget(currentScore, maxScore);
   const auto hasPreviousBest =
@@ -353,7 +373,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
     panel->addView(titleView);
   };
 
-  auto *summaryRow = new View();
+  auto *summaryRow = summaryOnly ? rootLayout : new View();
   summaryRow->setFlexDirection(FlexDirection::Row);
   summaryRow->setAlignItems(YGAlignStretch);
   summaryRow->setGap(12);
@@ -506,6 +526,9 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data) {
   comboPanel->addView(comboDeltaText);
   summaryRow->addView(comboPanel);
 
+  if (summaryOnly) {
+    return;
+  }
   rootLayout->addView(summaryRow);
 
   auto *infoGrid =

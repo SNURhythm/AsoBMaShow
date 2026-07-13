@@ -12,6 +12,9 @@ namespace {
 constexpr std::string_view kUnstagedMessage =
     "This result could not be stored. Retry before leaving to avoid losing "
     "it.";
+constexpr std::string_view kInvalidAttemptMessage =
+    "This result could not be prepared for saving and cannot be retried. "
+    "Continuing will discard it.";
 constexpr std::string_view kPendingScoreMessage =
     "The replay is safe, but the score is still pending. Retry now or it will "
     "be retried automatically later.";
@@ -59,6 +62,8 @@ std::string_view saveStateUserMessage(SaveState state) noexcept {
   switch (state) {
   case SaveState::Saved:
     return {};
+  case SaveState::InvalidAttempt:
+    return kInvalidAttemptMessage;
   case SaveState::Unstaged:
     return kUnstagedMessage;
   case SaveState::PendingScore:
@@ -82,9 +87,41 @@ bool SaveOutcome::durable() const noexcept {
     return true;
   case SaveState::Unstaged:
   case SaveState::UnstagedConflict:
+  case SaveState::InvalidAttempt:
     return false;
   }
   return false;
+}
+
+bool SaveOutcome::retryable() const noexcept {
+  switch (state) {
+  case SaveState::Saved:
+  case SaveState::InvalidAttempt:
+    return false;
+  case SaveState::Unstaged:
+  case SaveState::PendingScore:
+  case SaveState::PendingAcknowledgement:
+  case SaveState::UnstagedConflict:
+  case SaveState::PendingConflict:
+    return true;
+  }
+  return false;
+}
+
+bool SaveOutcome::requiresUserDecision(bool attemptAvailable,
+                                       bool continueChosen) const noexcept {
+  const bool hasPersistenceResult = attemptAvailable || !userMessage.empty();
+  return hasPersistenceResult && !saved() && !continueChosen;
+}
+
+const StageReceipt *SaveOutcome::validatedReceiptFor(
+    const ChartResultAttempt &attempt) const noexcept {
+  if (!durable() || !receipt.has_value() ||
+      receipt->attemptId != attempt.attemptId || receipt->replayId <= 0 ||
+      receipt->createdAt.empty()) {
+    return nullptr;
+  }
+  return &*receipt;
 }
 
 Coordinator::Coordinator(ScoreDBHelper &score, ReplayDBHelper &replay)
