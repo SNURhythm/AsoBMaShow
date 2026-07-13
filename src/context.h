@@ -19,6 +19,7 @@
 #include "PlayerProfileManager.h"
 #include "ProfileSessionCoordinator.h"
 #include "ReplayDBHelper.h"
+#include "ResultPersistenceCoordinator.h"
 #include "ScoreDBHelper.h"
 #include "Utils.h"
 #include "game/GameState.h"
@@ -98,6 +99,7 @@ public:
   ProfileResult profileInitializationResult;
   AppSettings settings;
   InputProfile inputProfile;
+  result_persistence::Coordinator resultPersistence;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
@@ -147,6 +149,8 @@ public:
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
+        resultPersistence(ScoreDBHelper::GetInstance(),
+                          ReplayDBHelper::GetInstance()),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio) {

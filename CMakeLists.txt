@@ -503,6 +503,12 @@ else()
 endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    add_test(NAME result_persistence_flow_audit
+        COMMAND ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.sh)
+    set_tests_properties(result_persistence_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp

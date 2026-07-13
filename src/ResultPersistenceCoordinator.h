@@ -20,6 +20,8 @@ enum class SaveState {
   PendingConflict,
 };
 
+[[nodiscard]] std::string_view saveStateUserMessage(SaveState state) noexcept;
+
 struct SaveOutcome {
   SaveState state = SaveState::Unstaged;
   std::optional<StageReceipt> receipt;

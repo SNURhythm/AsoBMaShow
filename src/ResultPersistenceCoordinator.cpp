@@ -38,23 +38,40 @@ void appendDiagnostic(std::string &destination, std::string_view diagnostic) {
   destination += diagnostic;
 }
 
-SaveOutcome unstagedOutcome(SaveState state, std::string_view message,
-                            std::string diagnostic) {
+SaveOutcome unstagedOutcome(SaveState state, std::string diagnostic) {
   return {.state = state,
           .receipt = std::nullopt,
-          .userMessage = std::string(message),
+          .userMessage = std::string(saveStateUserMessage(state)),
           .diagnostic = std::move(diagnostic)};
 }
 
 SaveOutcome durableOutcome(SaveState state, const StageReceipt &receipt,
-                           std::string_view message, std::string diagnostic) {
+                           std::string diagnostic) {
   return {.state = state,
           .receipt = receipt,
-          .userMessage = std::string(message),
+          .userMessage = std::string(saveStateUserMessage(state)),
           .diagnostic = std::move(diagnostic)};
 }
 
 } // namespace
+
+std::string_view saveStateUserMessage(SaveState state) noexcept {
+  switch (state) {
+  case SaveState::Saved:
+    return {};
+  case SaveState::Unstaged:
+    return kUnstagedMessage;
+  case SaveState::PendingScore:
+    return kPendingScoreMessage;
+  case SaveState::PendingAcknowledgement:
+    return kPendingAcknowledgementMessage;
+  case SaveState::UnstagedConflict:
+    return kUnstagedConflictMessage;
+  case SaveState::PendingConflict:
+    return kPendingConflictMessage;
+  }
+  return kUnstagedConflictMessage;
+}
 
 bool SaveOutcome::durable() const noexcept {
   switch (state) {
@@ -107,11 +124,9 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   StageOutcome staged = dependencies_.stage(attempt);
   switch (staged.status) {
   case StageStatus::StorageFailure:
-    return unstagedOutcome(SaveState::Unstaged, kUnstagedMessage,
-                           std::move(staged.diagnostic));
+    return unstagedOutcome(SaveState::Unstaged, std::move(staged.diagnostic));
   case StageStatus::IntegrityConflict:
     return unstagedOutcome(SaveState::UnstagedConflict,
-                           kUnstagedConflictMessage,
                            std::move(staged.diagnostic));
   case StageStatus::Staged:
   case StageStatus::AlreadyStaged:
@@ -119,7 +134,6 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   default:
     appendDiagnostic(staged.diagnostic, "unknown staging status");
     return unstagedOutcome(SaveState::UnstagedConflict,
-                           kUnstagedConflictMessage,
                            std::move(staged.diagnostic));
   }
   if (!staged.receipt.has_value() ||
@@ -129,13 +143,12 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
     appendDiagnostic(staged.diagnostic,
                      "staging returned inconsistent success metadata");
     return unstagedOutcome(SaveState::UnstagedConflict,
-                           kUnstagedConflictMessage,
                            std::move(staged.diagnostic));
   }
 
   StageReceipt receipt = *staged.receipt;
   if (!receipt.scorePending) {
-    return durableOutcome(SaveState::Saved, receipt, {},
+    return durableOutcome(SaveState::Saved, receipt,
                           std::move(staged.diagnostic));
   }
 
@@ -144,25 +157,22 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   switch (loaded.status) {
   case PendingReadStatus::StorageFailure:
     return durableOutcome(SaveState::PendingScore, receipt,
-                          kPendingScoreMessage, std::move(staged.diagnostic));
+                          std::move(staged.diagnostic));
   case PendingReadStatus::NotFound:
   case PendingReadStatus::IntegrityConflict:
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   case PendingReadStatus::Found:
     if (!loaded.value.has_value()) {
       appendDiagnostic(staged.diagnostic,
                        "pending read returned Found without a payload");
       return durableOutcome(SaveState::PendingConflict, receipt,
-                            kPendingConflictMessage,
                             std::move(staged.diagnostic));
     }
     break;
   default:
     appendDiagnostic(staged.diagnostic, "unknown pending read status");
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   }
 
@@ -173,14 +183,12 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
     appendDiagnostic(staged.diagnostic,
                      "pending score identity does not match its receipt");
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   }
   if (pending.createdAt != receipt.createdAt) {
     appendDiagnostic(staged.diagnostic,
                      "pending score timestamp does not match its receipt");
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   }
   if (!(pending.score == attempt.score)) {
@@ -188,7 +196,6 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
         staged.diagnostic,
         "pending score payload does not match the current attempt");
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   }
 
@@ -197,10 +204,9 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   switch (projected.status) {
   case ProjectionStatus::StorageFailure:
     return durableOutcome(SaveState::PendingScore, receipt,
-                          kPendingScoreMessage, std::move(staged.diagnostic));
+                          std::move(staged.diagnostic));
   case ProjectionStatus::IntegrityConflict:
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   case ProjectionStatus::Inserted:
   case ProjectionStatus::AlreadyPresent:
@@ -208,7 +214,6 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   default:
     appendDiagnostic(staged.diagnostic, "unknown projection status");
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   }
 
@@ -218,11 +223,9 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   switch (acknowledged.status) {
   case AcknowledgeStatus::StorageFailure:
     return durableOutcome(SaveState::PendingAcknowledgement, receipt,
-                          kPendingAcknowledgementMessage,
                           std::move(staged.diagnostic));
   case AcknowledgeStatus::IntegrityConflict:
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   case AcknowledgeStatus::Acknowledged:
   case AcknowledgeStatus::AlreadyAcknowledged:
@@ -230,12 +233,11 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   default:
     appendDiagnostic(staged.diagnostic, "unknown acknowledgement status");
     return durableOutcome(SaveState::PendingConflict, receipt,
-                          kPendingConflictMessage,
                           std::move(staged.diagnostic));
   }
 
   receipt.scorePending = false;
-  return durableOutcome(SaveState::Saved, receipt, {},
+  return durableOutcome(SaveState::Saved, receipt,
                         std::move(staged.diagnostic));
 }
 
