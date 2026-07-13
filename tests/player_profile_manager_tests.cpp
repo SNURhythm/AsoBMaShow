@@ -266,6 +266,69 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
          std::string(label) + " database version updates");
 }
 
+void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
+                               std::string_view label) {
+  Database scores = openDatabase(paths.scoresDb);
+  Database replays = openDatabase(paths.replaysDb);
+  expect(scores != nullptr && replays != nullptr,
+         std::string(label) + " marker databases open");
+  if (!scores || !replays) {
+    return;
+  }
+  expect(execute(scores.get(),
+                 "CREATE TABLE validation_policy_marker(value TEXT);"
+                 "INSERT INTO validation_policy_marker VALUES('score')"),
+         std::string(label) + " score marker is written");
+  expect(execute(replays.get(),
+                 "CREATE TABLE validation_policy_marker(value TEXT);"
+                 "INSERT INTO validation_policy_marker VALUES('replay')"),
+         std::string(label) + " replay marker is written");
+  scores.reset();
+  replays.reset();
+  setDatabaseVersion(paths.scoresDb, 5, std::string(label) + " score");
+  setDatabaseVersion(paths.replaysDb, 3, std::string(label) + " replay");
+}
+
+void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
+                                 std::string_view label) {
+  std::string error;
+  expect(sqliteDatabaseUserVersion(paths.scoresDb, error) == 5,
+         std::string(label) + " keeps score schema version 5: " + error);
+  error.clear();
+  expect(sqliteDatabaseUserVersion(paths.replaysDb, error) == 3,
+         std::string(label) + " keeps replay schema version 3: " + error);
+  expect(rowCount(paths.scoresDb, "validation_policy_marker") == 1,
+         std::string(label) + " keeps the score marker row");
+  expect(rowCount(paths.replaysDb, "validation_policy_marker") == 1,
+         std::string(label) + " keeps the replay marker row");
+}
+
+std::vector<std::filesystem::path>
+profileTransactionArtifacts(const std::filesystem::path &root) {
+  std::vector<std::filesystem::path> result;
+  const auto profiles = root / "profiles";
+  std::error_code error;
+  if (!std::filesystem::exists(profiles, error)) {
+    expect(!error, "profile transaction artifact root inspection succeeds");
+    return result;
+  }
+  std::filesystem::directory_iterator iterator(profiles, error);
+  expect(!error, "profile transaction artifact enumeration begins");
+  if (error) {
+    return result;
+  }
+  for (const auto &entry : iterator) {
+    const std::string filename = entry.path().filename().string();
+    if (filename.starts_with(".staging-") ||
+        filename.starts_with(".deleting-") ||
+        filename.starts_with(".backup-")) {
+      result.push_back(entry.path());
+    }
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
 void testSqliteSnapshotIncludesWalAndValidatesIdentifiers() {
   TempDirectory temp("sqlite-snapshot");
   const auto source = temp.path() / "source.db";
@@ -1806,6 +1869,258 @@ void testFutureLegacyDatabaseVersionFailsClosedBeforeMigration() {
   }
 }
 
+void testSupportedOlderInactiveProfileUsesManagePolicy() {
+  TempDirectory temp("profile-supported-older-manage");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string olderId = "22222222-2222-4222-8222-222222222222";
+  const std::string duplicateId = "33333333-3333-4333-8333-333333333333";
+  std::vector<std::string> uuids{activeId, olderId, duplicateId};
+  std::size_t uuidIndex = 0;
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "supported-older management fixture initializes");
+  const ProfileResult created = manager.createProfile("Older Inactive");
+  expect(created.ok() && created.profile,
+         "supported-older management target is created");
+  if (!created.profile) {
+    return;
+  }
+
+  const PlayerProfilePaths olderPaths = manager.pathsFor(olderId);
+  seedSupportedOlderProfile(olderPaths, "supported-older management target");
+  const std::string settingsBefore = readFile(olderPaths.settingsJson);
+  const std::string inputBefore = readFile(olderPaths.inputJson);
+  const std::string metadataBeforeCommit = readFile(olderPaths.profileJson);
+  const auto bootstrap = temp.path() / "active-profile.json";
+  const std::string bootstrapBefore = readFile(bootstrap);
+
+  expect(hasProfile(manager, olderId),
+         "supported-older inactive profile remains cataloged");
+  expect(manager.validateProfileForActivation(olderId).ok(),
+         "activation preflight admits the supported-older profile");
+  expect(manager.validateProfile(olderId).error == ProfileError::IntegrityFailure,
+         "strict public validation rejects the supported-older profile");
+  expect(manager.commitActiveProfile(olderId).error ==
+             ProfileError::IntegrityFailure,
+         "runtime commit rejects the supported-older profile before binding");
+  expect(manager.activeProfile().id == activeId &&
+             readFile(bootstrap) == bootstrapBefore &&
+             readFile(olderPaths.profileJson) == metadataBeforeCommit,
+         "rejected runtime commit leaves bootstrap and metadata unchanged");
+
+  const ProfileResult renamed = manager.renameProfile(olderId, "Older Renamed");
+  expect(renamed.ok() && renamed.profile &&
+             renamed.profile->displayName == "Older Renamed",
+         "supported-older inactive profile can be renamed");
+  expect(hasProfile(manager, olderId),
+         "renamed supported-older profile remains cataloged");
+  expect(readFile(olderPaths.settingsJson) == settingsBefore &&
+             readFile(olderPaths.inputJson) == inputBefore,
+         "supported-older rename changes metadata only");
+  expectSupportedOlderPayload(olderPaths,
+                              "supported-older profile after rename");
+
+  const ProfileResult duplicated =
+      manager.duplicateProfile(olderId, "Older Copy");
+  expect(duplicated.ok() && duplicated.profile &&
+             duplicated.profile->id == duplicateId,
+         "supported-older inactive profile can be duplicated");
+  expectSupportedOlderPayload(olderPaths,
+                              "supported-older source after duplication");
+  if (duplicated.profile) {
+    const PlayerProfilePaths copyPaths = manager.pathsFor(duplicateId);
+    std::string versionError;
+    expect(sqliteDatabaseUserVersion(copyPaths.scoresDb, versionError) ==
+                   ScoreDBHelper::kCurrentSchemaVersion &&
+               sqliteDatabaseUserVersion(copyPaths.replaysDb, versionError) ==
+                   ReplayDBHelper::kCurrentSchemaVersion,
+           "normal duplicate database owners migrate the copy to current");
+    expect(rowCount(copyPaths.scoresDb, "validation_policy_marker") == 1 &&
+               rowCount(copyPaths.replaysDb, "validation_policy_marker") == 1,
+           "supported-older duplicate preserves both marker rows");
+    expect(manager.validateProfile(duplicateId).ok(),
+           "migrated supported-older duplicate is runtime ready");
+    expect(manager.deleteProfile(duplicateId).ok(),
+           "current duplicate can be deleted before the older source");
+  }
+
+  expect(manager.listProfiles().size() == 2 && hasProfile(manager, activeId) &&
+             hasProfile(manager, olderId),
+         "mixed current and supported-older profiles remain manageable");
+  const ProfileResult deleted = manager.deleteProfile(olderId);
+  expect(deleted.ok() && deleted.message.empty(),
+         "supported-older inactive profile deletes without a warning");
+  expect(!std::filesystem::exists(olderPaths.root) &&
+             !std::filesystem::exists(temp.path() / "profiles" /
+                                      (".deleting-" + olderId)),
+         "supported-older deletion removes canonical and tombstone paths");
+  expect(manager.listProfiles().size() == 1 && hasProfile(manager, activeId) &&
+             profileTransactionArtifacts(temp.path()).empty(),
+         "supported-older deletion leaves only the active catalog profile");
+}
+
+void testSupportedOlderDeleteRollbackRestoresManageableSource() {
+  TempDirectory temp("profile-supported-older-delete-rollback");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string olderId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, olderId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool sourceRenameReached = false;
+  bool commitSyncFailed = false;
+  bool rollbackRenameReached = false;
+  bool rollbackSyncReached = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto source = profiles / olderId;
+  const auto tombstone = profiles / (".deleting-" + olderId);
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    if (inject && from == source && to == tombstone) {
+      sourceRenameReached = true;
+    } else if (inject && from == tombstone && to == source) {
+      rollbackRenameReached = true;
+    }
+    return atomic_file::renameDurably(from, to, error);
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && path == profiles && sourceRenameReached &&
+        !rollbackRenameReached && !commitSyncFailed) {
+      commitSyncFailed = true;
+      error = "injected supported-older deletion commit sync failure";
+      return false;
+    }
+    if (inject && path == profiles && rollbackRenameReached) {
+      rollbackSyncReached = true;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "supported-older rollback fixture initializes");
+  const ProfileResult created = manager.createProfile("Older Rollback");
+  expect(created.ok() && created.profile,
+         "supported-older rollback target is created");
+  if (!created.profile) {
+    return;
+  }
+  const PlayerProfilePaths olderPaths = manager.pathsFor(olderId);
+  seedSupportedOlderProfile(olderPaths, "supported-older rollback target");
+  const std::string settingsBefore = readFile(olderPaths.settingsJson);
+  const std::string inputBefore = readFile(olderPaths.inputJson);
+
+  inject = true;
+  const ProfileResult deleted = manager.deleteProfile(olderId);
+  inject = false;
+  expect(deleted.error == ProfileError::IoFailure,
+         "supported-older commit-sync failure reports deletion failure");
+  expect(sourceRenameReached && commitSyncFailed && rollbackRenameReached &&
+             rollbackSyncReached,
+         "supported-older deletion reaches commit failure and durable rollback");
+  expect(std::filesystem::exists(source) &&
+             !std::filesystem::exists(tombstone),
+         "supported-older deletion rollback restores only the source path");
+  expect(manager.validateProfileForActivation(olderId).ok() &&
+             hasProfile(manager, olderId) && manager.listProfiles().size() == 2,
+         "restored supported-older source is manageable and cataloged");
+  expect(!manager.validateProfile(olderId).ok(),
+         "restored supported-older source remains intentionally runtime strict");
+  expect(readFile(olderPaths.settingsJson) == settingsBefore &&
+             readFile(olderPaths.inputJson) == inputBefore,
+         "supported-older rollback preserves non-database profile data");
+  expectSupportedOlderPayload(olderPaths,
+                              "supported-older source after rollback");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  const ProfileResult initialized = recovered.Initialize();
+  expect(initialized.ok(),
+         "supported-older rollback state reinitializes: " + initialized.message);
+  expect(recovered.activeProfile().id == activeId &&
+             recovered.validateProfileForActivation(olderId).ok() &&
+             hasProfile(recovered, olderId) &&
+             recovered.listProfiles().size() == 2 &&
+             profileTransactionArtifacts(temp.path()).empty(),
+         "clean reinitialization preserves the restored manageable source");
+  expectSupportedOlderPayload(recovered.pathsFor(olderId),
+                              "reinitialized supported-older source");
+}
+
+void testFutureDatabaseProfileIsNeverManageable() {
+  for (const bool futureScoreDatabase : {true, false}) {
+    TempDirectory temp(futureScoreDatabase ? "profile-future-managed-score"
+                                            : "profile-future-managed-replay");
+    const std::string activeId = "11111111-1111-4111-8111-111111111111";
+    const std::string futureId = "22222222-2222-4222-8222-222222222222";
+    const std::string duplicateId = "33333333-3333-4333-8333-333333333333";
+    std::vector<std::string> uuids{activeId, futureId, duplicateId};
+    std::size_t uuidIndex = 0;
+    auto dependencies = dependenciesFor();
+    dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+    PlayerProfileManager manager(temp.path(), std::move(dependencies));
+    expect(manager.Initialize().ok(), "future managed fixture initializes");
+    const ProfileResult created = manager.createProfile("Future Inactive");
+    expect(created.ok() && created.profile,
+           "future managed target is created");
+    if (!created.profile) {
+      continue;
+    }
+
+    const PlayerProfilePaths paths = manager.pathsFor(futureId);
+    const auto futureDatabase =
+        futureScoreDatabase ? paths.scoresDb : paths.replaysDb;
+    const int futureVersion =
+        futureScoreDatabase ? ScoreDBHelper::kCurrentSchemaVersion + 1
+                            : ReplayDBHelper::kCurrentSchemaVersion + 1;
+    setDatabaseVersion(futureDatabase, futureVersion,
+                       futureScoreDatabase ? "future score"
+                                           : "future replay");
+    const std::string metadataBefore = readFile(paths.profileJson);
+    const auto bootstrap = temp.path() / "active-profile.json";
+    const std::string bootstrapBefore = readFile(bootstrap);
+    const auto artifactsBefore = profileTransactionArtifacts(temp.path());
+
+    expect(!hasProfile(manager, futureId),
+           "future database profile is omitted from the catalog");
+    expect(manager.renameProfile(futureId, "Rejected Future").error ==
+               ProfileError::FutureVersion,
+           "rename rejects a future database profile");
+    expect(manager.duplicateProfile(futureId, "Rejected Future Copy").error ==
+               ProfileError::FutureVersion,
+           "duplicate rejects a future database profile");
+    expect(manager.deleteProfile(futureId).error == ProfileError::FutureVersion,
+           "delete rejects a future database profile");
+    expect(manager.validateProfileForActivation(futureId).error ==
+               ProfileError::FutureVersion,
+           "activation preflight rejects a future database profile");
+    expect(manager.validateProfile(futureId).error ==
+               ProfileError::FutureVersion,
+           "runtime validation rejects a future database profile");
+    expect(manager.commitActiveProfile(futureId).error ==
+               ProfileError::FutureVersion,
+           "runtime commit rejects a future database profile");
+
+    std::string versionError;
+    expect(std::filesystem::exists(paths.root) &&
+               sqliteDatabaseUserVersion(futureDatabase, versionError) ==
+                   futureVersion,
+           "future database path and version remain unchanged: " +
+               versionError);
+    expect(readFile(paths.profileJson) == metadataBefore &&
+               readFile(bootstrap) == bootstrapBefore,
+           "future database rejection preserves metadata and bootstrap");
+    expect(profileTransactionArtifacts(temp.path()) == artifactsBefore,
+           "future database rejection creates no transaction artifacts");
+  }
+}
+
 void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
   TempDirectory temp("profile-supported-older-active");
   PlayerProfileManager creator(temp.path(), dependenciesFor());
@@ -2124,6 +2439,9 @@ int main() {
   testPartialTombstoneCleanupNeverRestoresOrExposesProfile();
   testFailedDeleteCommitSyncRestoresProfile();
   testFutureLegacyDatabaseVersionFailsClosedBeforeMigration();
+  testSupportedOlderInactiveProfileUsesManagePolicy();
+  testSupportedOlderDeleteRollbackRestoresManageableSource();
+  testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testProfileCrudConstraintsAndDataIsolation();
   testPracticeDirectoryLifecycleAndValidation();

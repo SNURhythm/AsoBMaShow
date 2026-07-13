@@ -28,11 +28,36 @@
 #include <Windows.h>
 #endif
 
+enum class ProfileUse : unsigned char {
+  Catalog,
+  Manage,
+  Activate,
+  RuntimeReady,
+};
+
 namespace {
 using Json = nlohmann::json;
 constexpr std::uintmax_t kMaximumPracticeFileBytes = 1U * 1024U * 1024U;
 
 enum class BuildMode { Migration, Create, Duplicate };
+
+struct ProfileValidationPolicy {
+  bool deep;
+  bool allowSupportedOlderDatabases;
+};
+
+constexpr ProfileValidationPolicy validationPolicy(ProfileUse use) {
+  switch (use) {
+  case ProfileUse::Catalog:
+    return {.deep = false, .allowSupportedOlderDatabases = true};
+  case ProfileUse::Manage:
+  case ProfileUse::Activate:
+    return {.deep = true, .allowSupportedOlderDatabases = true};
+  case ProfileUse::RuntimeReady:
+    return {.deep = true, .allowSupportedOlderDatabases = false};
+  }
+  return {.deep = true, .allowSupportedOlderDatabases = false};
+}
 
 ProfileResult failure(ProfileError error, std::string message) {
   return {
@@ -683,7 +708,8 @@ bool pathExists(const std::filesystem::path &path, bool &exists,
 ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
                                    const PlayerProfilePaths &paths,
                                    std::string_view expectedId,
-                                   bool allowSupportedOlderDatabases) {
+                                   ProfileUse use) {
+  const ProfileValidationPolicy policy = validationPolicy(use);
   std::string safetyError;
   if (!ensureSafeProfilesRoot(applicationRoot, false, safetyError) ||
       !ensureContainedPath(applicationRoot, paths.root, safetyError) ||
@@ -752,14 +778,15 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
-  if (!allowSupportedOlderDatabases &&
+  if (!policy.allowSupportedOlderDatabases &&
       (*scoreVersion != ScoreDBHelper::kCurrentSchemaVersion ||
        *replayVersion != ReplayDBHelper::kCurrentSchemaVersion)) {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
-  if (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
-      !sqliteIntegrityCheck(paths.replaysDb, errorMessage)) {
+  if (policy.deep &&
+      (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
+       !sqliteIntegrityCheck(paths.replaysDb, errorMessage))) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
   }
   return metadata;
@@ -796,8 +823,8 @@ ProfileResult finalizeNewProfileDirectory(
       return false;
     }
     if (state.destinationExists) {
-      state.destinationValidation =
-          validateProfileFiles(applicationRoot, destination, profile.id, false);
+      state.destinationValidation = validateProfileFiles(
+          applicationRoot, destination, profile.id, ProfileUse::RuntimeReady);
     }
     return true;
   };
@@ -958,12 +985,12 @@ finalizeProfileDeletion(const std::filesystem::path &applicationRoot,
       return false;
     }
     if (state.sourceExists) {
-      state.sourceValidation =
-          validateProfileFiles(applicationRoot, source, profile.id, false);
+      state.sourceValidation = validateProfileFiles(
+          applicationRoot, source, profile.id, ProfileUse::Manage);
     }
     if (state.tombstoneExists) {
       state.tombstoneValidation = validateProfileFiles(
-          applicationRoot, tombstonePaths, profile.id, false);
+          applicationRoot, tombstonePaths, profile.id, ProfileUse::Manage);
     }
     return true;
   };
@@ -1485,7 +1512,8 @@ bool cleanupAbandonedStaging(
       }
       if (destinationExists) {
         const ProfileResult destinationValidation =
-            validateProfileFiles(applicationRoot, destination, id, true);
+            validateProfileFiles(applicationRoot, destination, id,
+                                 ProfileUse::Manage);
         if (destinationValidation.ok()) {
           if (!dependencies.filesystem.removeTree(entry.path(), errorMessage)) {
             errorMessage =
@@ -1503,7 +1531,8 @@ bool cleanupAbandonedStaging(
             return false;
           }
           const ProfileResult backupValidation =
-              validateProfileFiles(applicationRoot, backup, id, true);
+              validateProfileFiles(applicationRoot, backup, id,
+                                   ProfileUse::Manage);
           if (!backupValidation.ok()) {
             errorMessage =
                 "profile overwrite recovery found an invalid destination (" +
@@ -1531,7 +1560,8 @@ bool cleanupAbandonedStaging(
         }
       } else {
         const ProfileResult backupValidation =
-            validateProfileFiles(applicationRoot, backup, id, true);
+            validateProfileFiles(applicationRoot, backup, id,
+                                 ProfileUse::Manage);
         if (!backupValidation.ok()) {
           errorMessage = "abandoned profile backup is invalid: " +
                          backupValidation.message;
@@ -1616,8 +1646,7 @@ ProfileResult PlayerProfileManager::Initialize() {
   }
   if (bootstrap.status == BootstrapStatus::Loaded) {
     const ProfileResult validated =
-        validateProfile(bootstrap.id, ValidationDepth::Routine,
-                        DatabaseVersionPolicy::AllowSupportedOlder);
+        validateProfile(bootstrap.id, ProfileUse::Catalog);
     if (validated.ok()) {
       activeProfile_ = validated.profile;
       return validated;
@@ -1632,9 +1661,8 @@ ProfileResult PlayerProfileManager::Initialize() {
     return failure(ProfileError::FutureVersion, backup.message);
   }
   if (backup.status == BootstrapStatus::Loaded) {
-    const ProfileResult validated = validateProfile(
-        backup.id, ValidationDepth::Deep,
-        DatabaseVersionPolicy::AllowSupportedOlder);
+    const ProfileResult validated =
+        validateProfile(backup.id, ProfileUse::Activate);
     if (validated.ok()) {
       if (!writeBootstrap(applicationDataRoot_, backup.id, errorMessage)) {
         return failure(ProfileError::IoFailure,
@@ -1649,8 +1677,7 @@ ProfileResult PlayerProfileManager::Initialize() {
     }
   }
 
-  std::vector<PlayerProfile> profiles = listProfiles(
-      ValidationDepth::Deep, DatabaseVersionPolicy::AllowSupportedOlder);
+  std::vector<PlayerProfile> profiles = listProfiles(ProfileUse::Activate);
   if (!profiles.empty()) {
     const PlayerProfile recovered = profiles.front();
     if (!writeBootstrap(applicationDataRoot_, recovered.id, errorMessage)) {
@@ -1675,9 +1702,8 @@ ProfileResult PlayerProfileManager::Initialize() {
     if (!isUuid(candidateId)) {
       continue;
     }
-    const ProfileResult candidate = validateProfile(
-        candidateId, ValidationDepth::Deep,
-        DatabaseVersionPolicy::AllowSupportedOlder);
+    const ProfileResult candidate =
+        validateProfile(candidateId, ProfileUse::Activate);
     if (candidate.error == ProfileError::FutureVersion) {
       return candidate;
     }
@@ -1741,13 +1767,11 @@ PlayerProfilePaths PlayerProfileManager::pathsFor(std::string_view id) const {
 }
 
 std::vector<PlayerProfile> PlayerProfileManager::listProfiles() const {
-  return listProfiles(ValidationDepth::Routine,
-                      DatabaseVersionPolicy::AllowSupportedOlder);
+  return listProfiles(ProfileUse::Catalog);
 }
 
 std::vector<PlayerProfile>
-PlayerProfileManager::listProfiles(ValidationDepth depth,
-                                   DatabaseVersionPolicy policy) const {
+PlayerProfileManager::listProfiles(ProfileUse use) const {
   std::vector<PlayerProfile> profiles;
   std::string safetyError;
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, safetyError)) {
@@ -1764,7 +1788,7 @@ PlayerProfileManager::listProfiles(ValidationDepth depth,
     if (!isUuid(id)) {
       continue;
     }
-    const ProfileResult validated = validateProfile(id, depth, policy);
+    const ProfileResult validated = validateProfile(id, use);
     if (validated.ok() && validated.profile) {
       profiles.push_back(*validated.profile);
     }
@@ -1823,9 +1847,7 @@ ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, rootError)) {
     return failure(ProfileError::IoFailure, rootError);
   }
-  const ProfileResult source = validateProfile(
-      sourceId, ValidationDepth::Deep,
-      DatabaseVersionPolicy::AllowSupportedOlder);
+  const ProfileResult source = validateProfile(sourceId, ProfileUse::Manage);
   if (!source.ok()) {
     return source;
   }
@@ -1864,7 +1886,7 @@ ProfileResult PlayerProfileManager::renameProfile(std::string_view id,
   if (!name) {
     return failure(ProfileError::InvalidName, "profile name is invalid");
   }
-  ProfileResult validated = validateProfile(id);
+  ProfileResult validated = validateProfile(id, ProfileUse::Manage);
   if (!validated.ok() || !validated.profile) {
     return validated;
   }
@@ -1889,12 +1911,11 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, rootError)) {
     return failure(ProfileError::IoFailure, rootError);
   }
-  const ProfileResult validated = validateProfile(id);
+  const ProfileResult validated = validateProfile(id, ProfileUse::Manage);
   if (!validated.ok()) {
     return validated;
   }
-  const auto profiles =
-      listProfiles(ValidationDepth::Deep, DatabaseVersionPolicy::CurrentOnly);
+  const auto profiles = listProfiles(ProfileUse::Manage);
   if (profiles.size() <= 1) {
     return failure(ProfileError::LastProfileDeletion,
                    "the last profile cannot be deleted");
@@ -1912,20 +1933,18 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
 }
 
 ProfileResult PlayerProfileManager::validateProfile(std::string_view id) const {
-  return validateProfile(id, ValidationDepth::Deep,
-                         DatabaseVersionPolicy::CurrentOnly);
+  return validateProfile(id, ProfileUse::RuntimeReady);
 }
 
 ProfileResult
 PlayerProfileManager::validateProfileForActivation(std::string_view id) const {
-  return validateProfile(id, ValidationDepth::Deep,
-                         DatabaseVersionPolicy::AllowSupportedOlder);
+  return validateProfile(id, ProfileUse::Activate);
 }
 
 ProfileResult
 PlayerProfileManager::validateProfile(std::string_view id,
-                                      ValidationDepth depth,
-                                      DatabaseVersionPolicy policy) const {
+                                      ProfileUse use) const {
+  const ProfileValidationPolicy policy = validationPolicy(use);
   if (!isUuid(id)) {
     return failure(ProfileError::NotFound, "profile UUID is invalid");
   }
@@ -2004,13 +2023,13 @@ PlayerProfileManager::validateProfile(std::string_view id,
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
-  if (policy == DatabaseVersionPolicy::CurrentOnly &&
+  if (!policy.allowSupportedOlderDatabases &&
       (*scoreVersion != ScoreDBHelper::kCurrentSchemaVersion ||
        *replayVersion != ReplayDBHelper::kCurrentSchemaVersion)) {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
-  if (depth == ValidationDepth::Deep &&
+  if (policy.deep &&
       (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
        !sqliteIntegrityCheck(paths.replaysDb, errorMessage))) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
@@ -2086,15 +2105,12 @@ ProfileResult PlayerProfileManager::installProfile(
   const bool overwrite = overwriteProfileId.has_value();
   std::string id;
   if (overwrite) {
-    const ProfileResult target = validateProfile(
-        *overwriteProfileId, ValidationDepth::Deep,
-        DatabaseVersionPolicy::AllowSupportedOlder);
+    const ProfileResult target =
+        validateProfile(*overwriteProfileId, ProfileUse::Manage);
     if (!target.ok()) {
       return target;
     }
-    if (listProfiles(ValidationDepth::Deep,
-                     DatabaseVersionPolicy::AllowSupportedOlder)
-            .size() <= 1) {
+    if (listProfiles(ProfileUse::Manage).size() <= 1) {
       return failure(ProfileError::LastProfileDeletion,
                      "the last profile cannot be overwritten");
     }
@@ -2256,7 +2272,8 @@ ProfileResult PlayerProfileManager::installProfile(
         "database migration changed imported row counts");
   }
   ProfileResult staged = validateProfileFiles(
-      applicationDataRoot_, staging, sourceProfile.id, false);
+      applicationDataRoot_, staging, sourceProfile.id,
+      ProfileUse::RuntimeReady);
   if (!staged.ok()) {
     return cleanStagingAndFail(
         staged.error, "staged imported profile is invalid: " + staged.message);
@@ -2311,7 +2328,8 @@ ProfileResult PlayerProfileManager::installProfile(
       message += "; rollback backup is missing; retaining replacement";
     } else {
       const ProfileResult backupValidation = validateProfileFiles(
-          applicationDataRoot_, makePathsAtRoot(backup), id, true);
+          applicationDataRoot_, makePathsAtRoot(backup), id,
+          ProfileUse::Manage);
       if (!backupValidation.ok()) {
         message += "; rollback backup is not safely recoverable (" +
                    backupValidation.message +
