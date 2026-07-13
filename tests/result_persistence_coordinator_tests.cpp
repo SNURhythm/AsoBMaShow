@@ -277,6 +277,106 @@ void testMalformedSuccessfulStageMetadataIsNotDurable() {
   assertRejected({.status = StageStatus::Staged,
                   .receipt = receipt("attempt-a", 17, false),
                   .diagnostic = "new stage cannot be confirmed already"});
+  assertRejected({.status = StageStatus::AlreadyStaged,
+                  .receipt = receipt("attempt-a", 0, true),
+                  .diagnostic = "non-positive replay id"});
+  StageReceipt missingTimestamp = receipt();
+  missingTimestamp.createdAt.clear();
+  assertRejected({.status = StageStatus::AlreadyStaged,
+                  .receipt = std::move(missingTimestamp),
+                  .diagnostic = "missing result timestamp"});
+}
+
+void testPendingReadFailuresStopBeforeProjection() {
+  const auto assertReadFailure = [](PendingReadOutcome readResult,
+                                    SaveState expectedState,
+                                    std::string_view expectedMessage,
+                                    std::string_view expectedDiagnostic) {
+    Harness harness;
+    harness.loadResult = std::move(readResult);
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == expectedState);
+    assert(!outcome.saved());
+    assert(outcome.durable());
+    assert(outcome.receipt.has_value());
+    assert(outcome.receipt->attemptId == "attempt-a");
+    assert(outcome.receipt->replayId == 17);
+    assert(outcome.userMessage == expectedMessage);
+    assert(outcome.diagnostic == expectedDiagnostic);
+    assert((harness.events ==
+            std::vector<std::string>{"stage:attempt-a", "load:attempt-a"}));
+    assert(harness.stageCalls == 1);
+    assert(harness.loadCalls == 1);
+    assert(harness.listCalls == 0);
+    assert(harness.projectCalls == 0);
+    assert(harness.acknowledgeCalls == 0);
+    assert(harness.markCalls == 0);
+  };
+
+  assertReadFailure({.status = PendingReadStatus::StorageFailure,
+                     .value = std::nullopt,
+                     .diagnostic = "pending read unavailable"},
+                    SaveState::PendingScore, kPendingScoreMessage,
+                    "pending read unavailable");
+  assertReadFailure({.status = PendingReadStatus::NotFound,
+                     .value = std::nullopt,
+                     .diagnostic = "pending row missing"},
+                    SaveState::PendingConflict, kPendingConflictMessage,
+                    "pending row missing");
+  assertReadFailure({.status = PendingReadStatus::IntegrityConflict,
+                     .value = std::nullopt,
+                     .diagnostic = "pending row corrupt"},
+                    SaveState::PendingConflict, kPendingConflictMessage,
+                    "pending row corrupt");
+  assertReadFailure({.status = PendingReadStatus::Found,
+                     .value = std::nullopt,
+                     .diagnostic = {}},
+                    SaveState::PendingConflict, kPendingConflictMessage,
+                    "pending read returned Found without a payload");
+}
+
+void testPendingPayloadMismatchStopsBeforeProjection() {
+  const auto assertMismatch = [](PendingChartScoreWrite value,
+                                 std::string_view expectedDiagnostic) {
+    Harness harness;
+    harness.loadResult = {.status = PendingReadStatus::Found,
+                          .value = std::move(value),
+                          .diagnostic = {}};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(!outcome.saved());
+    assert(outcome.durable());
+    assert(outcome.receipt.has_value());
+    assert(outcome.receipt->attemptId == "attempt-a");
+    assert(outcome.receipt->replayId == 17);
+    assert(outcome.userMessage == kPendingConflictMessage);
+    assert(outcome.diagnostic == expectedDiagnostic);
+    assert((harness.events ==
+            std::vector<std::string>{"stage:attempt-a", "load:attempt-a"}));
+    assert(harness.stageCalls == 1);
+    assert(harness.loadCalls == 1);
+    assert(harness.projectCalls == 0);
+    assert(harness.acknowledgeCalls == 0);
+  };
+
+  assertMismatch(pending("different-attempt", 17),
+                 "pending score identity does not match its receipt");
+  assertMismatch(pending("attempt-a", 18),
+                 "pending score identity does not match its receipt");
+  PendingChartScoreWrite timestampMismatch = pending();
+  timestampMismatch.createdAt = "2026-07-14 12:34:57";
+  assertMismatch(std::move(timestampMismatch),
+                 "pending score timestamp does not match its receipt");
+  PendingChartScoreWrite scoreMismatch = pending();
+  ++scoreMismatch.score.fast;
+  assertMismatch(std::move(scoreMismatch),
+                 "pending score payload does not match the current attempt");
 }
 
 void testProjectionFailureRetainsPendingScore() {
@@ -379,6 +479,80 @@ void testAcknowledgeConflictRetainsPendingConflict() {
   assert(harness.markCalls == 0);
 }
 
+void testRetryAfterAcknowledgementFailureResumesIdempotently() {
+  Harness harness;
+  std::size_t stageNumber = 0;
+  std::size_t projectNumber = 0;
+  std::size_t acknowledgeNumber = 0;
+  harness.stageHandler = [&](const ChartResultAttempt &) {
+    ++stageNumber;
+    return StageOutcome{.status = stageNumber == 1 ? StageStatus::Staged
+                                                   : StageStatus::AlreadyStaged,
+                        .receipt = receipt(),
+                        .diagnostic = {}};
+  };
+  harness.projectHandler = [&](const PendingChartScoreWrite &) {
+    ++projectNumber;
+    return ProjectionOutcome{.status = projectNumber == 1
+                                           ? ProjectionStatus::Inserted
+                                           : ProjectionStatus::AlreadyPresent,
+                             .diagnostic = {}};
+  };
+  harness.acknowledgeHandler = [&](std::string_view, int) {
+    ++acknowledgeNumber;
+    if (acknowledgeNumber == 1) {
+      return AcknowledgeOutcome{.status = AcknowledgeStatus::StorageFailure,
+                                .diagnostic = "acknowledgement unavailable"};
+    }
+    return AcknowledgeOutcome{.status = AcknowledgeStatus::Acknowledged,
+                              .diagnostic = {}};
+  };
+  Coordinator coordinator(harness.dependencies());
+  const ChartResultAttempt fixedAttempt = attempt();
+
+  const SaveOutcome first = coordinator.persist(fixedAttempt);
+
+  assert(first.state == SaveState::PendingAcknowledgement);
+  assert(!first.saved());
+  assert(first.durable());
+  assert(first.receipt.has_value());
+  assert(first.receipt->attemptId == fixedAttempt.attemptId);
+  assert(first.receipt->replayId == 17);
+  assert(first.receipt->scorePending);
+  assert(first.userMessage == kPendingAcknowledgementMessage);
+  assert(first.diagnostic == "acknowledgement unavailable");
+  assert((harness.events ==
+          std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
+                                   "project:attempt-a", "ack:attempt-a:17"}));
+  assert(harness.stageCalls == 1);
+  assert(harness.loadCalls == 1);
+  assert(harness.projectCalls == 1);
+  assert(harness.acknowledgeCalls == 1);
+
+  const SaveOutcome second = coordinator.persist(fixedAttempt);
+
+  assert(second.state == SaveState::Saved);
+  assert(second.saved());
+  assert(second.durable());
+  assert(second.receipt.has_value());
+  assert(second.receipt->attemptId == fixedAttempt.attemptId);
+  assert(second.receipt->replayId == 17);
+  assert(!second.receipt->scorePending);
+  assert(second.userMessage.empty());
+  assert(second.diagnostic.empty());
+  assert((harness.events ==
+          std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
+                                   "project:attempt-a", "ack:attempt-a:17",
+                                   "stage:attempt-a", "load:attempt-a",
+                                   "project:attempt-a", "ack:attempt-a:17"}));
+  assert(harness.stageCalls == 2);
+  assert(harness.loadCalls == 2);
+  assert(harness.listCalls == 0);
+  assert(harness.projectCalls == 2);
+  assert(harness.acknowledgeCalls == 2);
+  assert(harness.markCalls == 0);
+}
+
 void testRetrySkipsAlreadyConfirmedReplayAndScore() {
   Harness harness;
   harness.stageResult = {.status = StageStatus::AlreadyStaged,
@@ -396,6 +570,85 @@ void testRetrySkipsAlreadyConfirmedReplayAndScore() {
   assert(outcome.userMessage.empty());
   assert(outcome.diagnostic.empty());
   assertOnlyStageCalled(harness);
+}
+
+void testUnknownPersistStatusesFailClosed() {
+  {
+    Harness harness;
+    harness.stageResult = {.status = static_cast<StageStatus>(999),
+                           .receipt = receipt(),
+                           .diagnostic = {}};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::UnstagedConflict);
+    assert(!outcome.saved());
+    assert(!outcome.durable());
+    assert(!outcome.receipt.has_value());
+    assert(outcome.userMessage == kUnstagedConflictMessage);
+    assert(outcome.diagnostic == "unknown staging status");
+    assertOnlyStageCalled(harness);
+  }
+  {
+    Harness harness;
+    harness.loadResult = {.status = static_cast<PendingReadStatus>(999),
+                          .value = pending(),
+                          .diagnostic = {}};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(!outcome.saved());
+    assert(outcome.durable());
+    assert(outcome.receipt.has_value());
+    assert(outcome.userMessage == kPendingConflictMessage);
+    assert(outcome.diagnostic == "unknown pending read status");
+    assert((harness.events ==
+            std::vector<std::string>{"stage:attempt-a", "load:attempt-a"}));
+    assert(harness.projectCalls == 0);
+    assert(harness.acknowledgeCalls == 0);
+  }
+  {
+    Harness harness;
+    harness.projectResult = {.status = static_cast<ProjectionStatus>(999),
+                             .diagnostic = {}};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(!outcome.saved());
+    assert(outcome.durable());
+    assert(outcome.receipt.has_value());
+    assert(outcome.userMessage == kPendingConflictMessage);
+    assert(outcome.diagnostic == "unknown projection status");
+    assert((harness.events == std::vector<std::string>{"stage:attempt-a",
+                                                       "load:attempt-a",
+                                                       "project:attempt-a"}));
+    assert(harness.projectCalls == 1);
+    assert(harness.acknowledgeCalls == 0);
+  }
+  {
+    Harness harness;
+    harness.acknowledgeResult = {.status = static_cast<AcknowledgeStatus>(999),
+                                 .diagnostic = {}};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(!outcome.saved());
+    assert(outcome.durable());
+    assert(outcome.receipt.has_value());
+    assert(outcome.userMessage == kPendingConflictMessage);
+    assert(outcome.diagnostic == "unknown acknowledgement status");
+    assert((harness.events ==
+            std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
+                                     "project:attempt-a", "ack:attempt-a:17"}));
+    assert(harness.acknowledgeCalls == 1);
+  }
 }
 
 void testRecoveryContinuesAfterMalformedAndFailedRows() {
@@ -460,6 +713,245 @@ void testRecoveryContinuesAfterMalformedAndFailedRows() {
   assert(harness.listCalls == 1);
   assert(harness.projectCalls == 3);
   assert(harness.acknowledgeCalls == 2);
+  assert(harness.markCalls == 3);
+}
+
+void testRecoveryMarkFailuresRemainVisibleAndContinue() {
+  Harness harness;
+  harness.listResult = {
+      .storageAvailable = true,
+      .entries =
+          {
+              {.status = PendingReadStatus::Found,
+               .attemptId = "mark-not-found",
+               .value = pending("mark-not-found", 31),
+               .diagnostic = {}},
+              {.status = PendingReadStatus::Found,
+               .attemptId = "mark-storage",
+               .value = pending("mark-storage", 32),
+               .diagnostic = {}},
+              {.status = PendingReadStatus::Found,
+               .attemptId = "mark-unknown",
+               .value = pending("mark-unknown", 33),
+               .diagnostic = {}},
+              {.status = PendingReadStatus::Found,
+               .attemptId = "saved-after-mark-failures",
+               .value = pending("saved-after-mark-failures", 34),
+               .diagnostic = {}},
+          },
+      .diagnostic = {}};
+  harness.projectHandler = [](const PendingChartScoreWrite &value) {
+    if (value.attemptId == "saved-after-mark-failures") {
+      return ProjectionOutcome{.status = ProjectionStatus::Inserted,
+                               .diagnostic = {}};
+    }
+    return ProjectionOutcome{.status = ProjectionStatus::StorageFailure,
+                             .diagnostic =
+                                 "projection failed for " + value.attemptId};
+  };
+  harness.markHandler = [](std::string_view attemptId, RecoveryAttemptKind) {
+    if (attemptId == "mark-not-found") {
+      return RecoveryMarkOutcome{.status = RecoveryMarkStatus::NotFound,
+                                 .diagnostic = "marker row missing"};
+    }
+    if (attemptId == "mark-storage") {
+      return RecoveryMarkOutcome{.status = RecoveryMarkStatus::StorageFailure,
+                                 .diagnostic = "marker write failed"};
+    }
+    return RecoveryMarkOutcome{.status = static_cast<RecoveryMarkStatus>(999),
+                               .diagnostic = "future marker status"};
+  };
+  Coordinator coordinator(harness.dependencies());
+
+  const RecoverySummary summary = coordinator.recoverAll();
+
+  assert(summary.attempted == 4);
+  assert(summary.saved == 1);
+  assert(summary.pending == 1);
+  assert(summary.conflicts == 2);
+  assert(summary.userMessage == kRecoveryMessage);
+  assert(summary.diagnostic == "projection failed for mark-not-found\n"
+                               "marker row missing\n"
+                               "recovery marker did not find the pending row\n"
+                               "projection failed for mark-storage\n"
+                               "marker write failed\n"
+                               "recovery marker could not be recorded\n"
+                               "projection failed for mark-unknown\n"
+                               "future marker status\n"
+                               "unknown recovery marker status");
+  assert((harness.events ==
+          std::vector<std::string>{
+              "list:256", "project:mark-not-found",
+              "mark:mark-not-found:storage", "project:mark-storage",
+              "mark:mark-storage:storage", "project:mark-unknown",
+              "mark:mark-unknown:storage", "project:saved-after-mark-failures",
+              "ack:saved-after-mark-failures:34"}));
+  assert(harness.listCalls == 1);
+  assert(harness.projectCalls == 4);
+  assert(harness.acknowledgeCalls == 1);
+  assert(harness.markCalls == 3);
+}
+
+void testUnmarkedRecoveryRowIsRetriedOnNextCall() {
+  Harness harness;
+  std::size_t listNumber = 0;
+  harness.listHandler = [&](std::size_t limit) {
+    assert(limit == 256);
+    ++listNumber;
+    const std::string savedId = listNumber == 1
+                                    ? "saved-after-first-marker-failure"
+                                    : "saved-after-second-marker-failure";
+    return PendingBatchOutcome{
+        .storageAvailable = true,
+        .entries =
+            {
+                {.status = PendingReadStatus::Found,
+                 .attemptId = "unmarked-pending",
+                 .value = pending("unmarked-pending", 51),
+                 .diagnostic = {}},
+                {.status = PendingReadStatus::Found,
+                 .attemptId = savedId,
+                 .value = pending(savedId, listNumber == 1 ? 52 : 53),
+                 .diagnostic = {}},
+            },
+        .diagnostic = {}};
+  };
+  harness.projectHandler = [](const PendingChartScoreWrite &value) {
+    return ProjectionOutcome{.status = value.attemptId == "unmarked-pending"
+                                           ? ProjectionStatus::StorageFailure
+                                           : ProjectionStatus::Inserted,
+                             .diagnostic = value.attemptId == "unmarked-pending"
+                                               ? "projection still unavailable"
+                                               : std::string{}};
+  };
+  harness.markHandler = [](std::string_view attemptId, RecoveryAttemptKind) {
+    assert(attemptId == "unmarked-pending");
+    return RecoveryMarkOutcome{.status = RecoveryMarkStatus::StorageFailure,
+                               .diagnostic = "marker still unavailable"};
+  };
+  Coordinator coordinator(harness.dependencies());
+
+  const RecoverySummary first = coordinator.recoverAll();
+  const RecoverySummary second = coordinator.recoverAll();
+
+  for (const RecoverySummary *summary : {&first, &second}) {
+    assert(summary->attempted == 2);
+    assert(summary->saved == 1);
+    assert(summary->pending == 1);
+    assert(summary->conflicts == 0);
+    assert(summary->userMessage == kRecoveryMessage);
+    assert(summary->diagnostic ==
+           "projection still unavailable\nmarker still unavailable\n"
+           "recovery marker could not be recorded");
+  }
+  assert((harness.events == std::vector<std::string>{
+                                "list:256", "project:unmarked-pending",
+                                "mark:unmarked-pending:storage",
+                                "project:saved-after-first-marker-failure",
+                                "ack:saved-after-first-marker-failure:52",
+                                "list:256", "project:unmarked-pending",
+                                "mark:unmarked-pending:storage",
+                                "project:saved-after-second-marker-failure",
+                                "ack:saved-after-second-marker-failure:53"}));
+  assert(harness.listCalls == 2);
+  assert(harness.projectCalls == 4);
+  assert(harness.acknowledgeCalls == 2);
+  assert(harness.markCalls == 2);
+}
+
+void testInvalidRecoveryPayloadStopsBeforeProjection() {
+  const auto assertInvalid = [](PendingBatchEntry entry,
+                                std::string_view expectedDiagnostic) {
+    Harness harness;
+    harness.listResult = {.storageAvailable = true,
+                          .entries = {std::move(entry)},
+                          .diagnostic = {}};
+    Coordinator coordinator(harness.dependencies());
+
+    const RecoverySummary summary = coordinator.recoverAll();
+
+    assert(summary.attempted == 1);
+    assert(summary.saved == 0);
+    assert(summary.pending == 0);
+    assert(summary.conflicts == 1);
+    assert(summary.userMessage == kRecoveryMessage);
+    assert(summary.diagnostic == expectedDiagnostic);
+    assert((harness.events == std::vector<std::string>{
+                                  "list:256", "mark:recovery-row:conflict"}));
+    assert(harness.listCalls == 1);
+    assert(harness.projectCalls == 0);
+    assert(harness.acknowledgeCalls == 0);
+    assert(harness.markCalls == 1);
+  };
+
+  assertInvalid({.status = PendingReadStatus::Found,
+                 .attemptId = "recovery-row",
+                 .value = pending("different-attempt", 61),
+                 .diagnostic = {}},
+                "pending recovery entry identity does not match its payload");
+  assertInvalid({.status = PendingReadStatus::Found,
+                 .attemptId = "recovery-row",
+                 .value = pending("recovery-row", 0),
+                 .diagnostic = {}},
+                "pending recovery payload has invalid replay metadata");
+  PendingChartScoreWrite missingTimestamp = pending("recovery-row", 62);
+  missingTimestamp.createdAt.clear();
+  assertInvalid({.status = PendingReadStatus::Found,
+                 .attemptId = "recovery-row",
+                 .value = std::move(missingTimestamp),
+                 .diagnostic = {}},
+                "pending recovery payload has invalid replay metadata");
+}
+
+void testUnknownRecoveryStatusesFailClosed() {
+  Harness harness;
+  harness.listResult = {.storageAvailable = true,
+                        .entries =
+                            {
+                                {.status = static_cast<PendingReadStatus>(999),
+                                 .attemptId = "future-read",
+                                 .value = std::nullopt,
+                                 .diagnostic = {}},
+                                {.status = PendingReadStatus::Found,
+                                 .attemptId = "future-project",
+                                 .value = pending("future-project", 41),
+                                 .diagnostic = {}},
+                                {.status = PendingReadStatus::Found,
+                                 .attemptId = "future-ack",
+                                 .value = pending("future-ack", 42),
+                                 .diagnostic = {}},
+                            },
+                        .diagnostic = {}};
+  harness.projectHandler = [](const PendingChartScoreWrite &value) {
+    return ProjectionOutcome{.status = value.attemptId == "future-project"
+                                           ? static_cast<ProjectionStatus>(999)
+                                           : ProjectionStatus::AlreadyPresent,
+                             .diagnostic = {}};
+  };
+  harness.acknowledgeHandler = [](std::string_view, int) {
+    return AcknowledgeOutcome{.status = static_cast<AcknowledgeStatus>(999),
+                              .diagnostic = {}};
+  };
+  Coordinator coordinator(harness.dependencies());
+
+  const RecoverySummary summary = coordinator.recoverAll();
+
+  assert(summary.attempted == 3);
+  assert(summary.saved == 0);
+  assert(summary.pending == 0);
+  assert(summary.conflicts == 3);
+  assert(summary.userMessage == kRecoveryMessage);
+  assert(summary.diagnostic ==
+         "unknown pending read status\nunknown projection status\n"
+         "unknown acknowledgement status");
+  assert((harness.events ==
+          std::vector<std::string>{
+              "list:256", "mark:future-read:conflict", "project:future-project",
+              "mark:future-project:conflict", "project:future-ack",
+              "ack:future-ack:42", "mark:future-ack:conflict"}));
+  assert(harness.listCalls == 1);
+  assert(harness.projectCalls == 2);
+  assert(harness.acknowledgeCalls == 1);
   assert(harness.markCalls == 3);
 }
 
@@ -556,6 +1048,53 @@ void testRecoveryLimitIsExactly256() {
   assert(harness.markCalls == 0);
 }
 
+void testRecoveryIgnoresNonconformingBatchOverflow() {
+  Harness harness;
+  harness.listHandler = [](std::size_t) {
+    PendingBatchOutcome outcome{
+        .storageAvailable = true, .entries = {}, .diagnostic = {}};
+    for (std::size_t index = 0; index < 300; ++index) {
+      const std::string id = "overflow-" + std::to_string(index);
+      outcome.entries.push_back(
+          {.status = PendingReadStatus::Found,
+           .attemptId = id,
+           .value = pending(id, static_cast<int>(index + 1)),
+           .diagnostic = {}});
+    }
+    return outcome;
+  };
+  Coordinator coordinator(harness.dependencies());
+
+  const RecoverySummary requested = coordinator.recoverAll(3);
+  const RecoverySummary capped = coordinator.recoverAll(999);
+
+  assert(requested.attempted == 3);
+  assert(requested.saved == 3);
+  assert(requested.pending == 0);
+  assert(requested.conflicts == 0);
+  assert(capped.attempted == 256);
+  assert(capped.saved == 256);
+  assert(capped.pending == 0);
+  assert(capped.conflicts == 0);
+  std::vector<std::string> expected{"list:3"};
+  for (std::size_t index = 0; index < 3; ++index) {
+    expected.push_back("project:overflow-" + std::to_string(index));
+    expected.push_back("ack:overflow-" + std::to_string(index) + ":" +
+                       std::to_string(index + 1));
+  }
+  expected.push_back("list:256");
+  for (std::size_t index = 0; index < 256; ++index) {
+    expected.push_back("project:overflow-" + std::to_string(index));
+    expected.push_back("ack:overflow-" + std::to_string(index) + ":" +
+                       std::to_string(index + 1));
+  }
+  assert(harness.events == expected);
+  assert(harness.listCalls == 2);
+  assert(harness.projectCalls == 259);
+  assert(harness.acknowledgeCalls == 259);
+  assert(harness.markCalls == 0);
+}
+
 void testPersistentFirstBatchDoesNotStarveNewValidRow() {
   Harness harness;
   std::set<std::string> marked;
@@ -625,14 +1164,23 @@ int main() {
   testStageStorageFailureReturnsTruthfulUnstagedMessage();
   testStageConflictReturnsUnstagedConflictWithoutReceipt();
   testMalformedSuccessfulStageMetadataIsNotDurable();
+  testPendingReadFailuresStopBeforeProjection();
+  testPendingPayloadMismatchStopsBeforeProjection();
   testProjectionFailureRetainsPendingScore();
   testProjectionConflictReturnsDurablePendingConflict();
   testAcknowledgeFailureIsDurableAndRetryable();
   testAcknowledgeConflictRetainsPendingConflict();
+  testRetryAfterAcknowledgementFailureResumesIdempotently();
   testRetrySkipsAlreadyConfirmedReplayAndScore();
+  testUnknownPersistStatusesFailClosed();
   testRecoveryContinuesAfterMalformedAndFailedRows();
+  testRecoveryMarkFailuresRemainVisibleAndContinue();
+  testUnmarkedRecoveryRowIsRetriedOnNextCall();
+  testInvalidRecoveryPayloadStopsBeforeProjection();
+  testUnknownRecoveryStatusesFailClosed();
   testMessagesNeverContainInjectedDiagnostics();
   testRecoveryLimitIsExactly256();
+  testRecoveryIgnoresNonconformingBatchOverflow();
   testPersistentFirstBatchDoesNotStarveNewValidRow();
   std::cout << "result persistence coordinator tests passed\n";
   return 0;

@@ -647,6 +647,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL2)
         target_link_libraries(result_persistence_integration_tests PRIVATE SDL2)
     endif()
+    if(WIN32)
+        target_link_libraries(result_persistence_integration_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(score_provenance_db_tests
         tests/score_provenance_db_tests.cpp
@@ -1428,6 +1431,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    set_tests_properties(result_persistence_integration_tests PROPERTIES
+        TIMEOUT 15
+    )
     add_test(NAME foundation_provenance_contract
         COMMAND $<TARGET_FILE:score_provenance_tests>)
     set_tests_properties(foundation_provenance_contract PROPERTIES

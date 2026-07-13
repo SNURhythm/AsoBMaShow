@@ -350,19 +350,23 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
   std::optional<SaveOutcome> saveOutcome;
   std::thread persistThread([&] { saveOutcome = coordinator.persist(fixed); });
 
+  bool projectionReached = false;
   {
     std::unique_lock lock(mutex);
-    condition.wait(lock, [&] { return projectionEntered; });
+    projectionReached = condition.wait_for(lock, std::chrono::seconds(5),
+                                           [&] { return projectionEntered; });
   }
 
   bool switchOwnedDuringPersist = true;
-  std::thread switchThread([&] {
-    profile_database_activity::SwitchGuard switchGuard;
-    switchOwnedDuringPersist = switchGuard.ownsLock();
-  });
-  switchThread.join();
-  assert(stageObservedWriteLease);
-  assert(!switchOwnedDuringPersist);
+  bool switchProbeRan = false;
+  if (projectionReached) {
+    std::thread switchThread([&] {
+      profile_database_activity::SwitchGuard switchGuard;
+      switchOwnedDuringPersist = switchGuard.ownsLock();
+    });
+    switchThread.join();
+    switchProbeRan = true;
+  }
 
   {
     std::lock_guard lock(mutex);
@@ -371,10 +375,15 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
   condition.notify_all();
   persistThread.join();
 
+  profile_database_activity::SwitchGuard afterPersist;
+  const bool switchOwnedAfterPersist = afterPersist.ownsLock();
+  assert(projectionReached);
+  assert(switchProbeRan);
+  assert(stageObservedWriteLease);
+  assert(!switchOwnedDuringPersist);
   assert(saveOutcome.has_value());
   assert(saveOutcome->state == SaveState::Saved);
-  profile_database_activity::SwitchGuard afterPersist;
-  assert(afterPersist.ownsLock());
+  assert(switchOwnedAfterPersist);
 }
 
 void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
