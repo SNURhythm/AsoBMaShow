@@ -608,6 +608,46 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(result_persistence_coordinator_tests
+        tests/result_persistence_coordinator_tests.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ScoreProvenance.cpp
+    )
+    target_include_directories(result_persistence_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_persistence_coordinator_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(result_persistence_integration_tests
+        tests/result_persistence_integration_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ReplayDBHelper.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(result_persistence_integration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_persistence_integration_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2)
+    endif()
+
     add_executable(score_provenance_db_tests
         tests/score_provenance_db_tests.cpp
         src/CourseIdentity.cpp
@@ -1373,6 +1413,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_identity_tests
         replay_db_helper_tests
         result_persistence_model_tests
+        result_persistence_coordinator_tests
+        result_persistence_integration_tests
         chart_record_filters_tests
         main_menu_library_tests
         chart_meta_index_order_tests

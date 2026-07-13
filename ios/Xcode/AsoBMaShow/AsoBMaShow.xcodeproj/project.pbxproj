@@ -845,6 +845,7 @@
 				SDL_uikit_main.c,
 				ReplayDBHelper.cpp,
 				ReplayResultStateBuilder.cpp,
+				ResultPersistenceCoordinator.cpp,
 				ResultPersistenceModel.cpp,
 				ReplayVideoExporter.cpp,
 				ResultImageExporter.cpp,
