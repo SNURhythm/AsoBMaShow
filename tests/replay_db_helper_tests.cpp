@@ -153,6 +153,42 @@ std::string schemaSnapshot(sqlite3 *db) {
   return result;
 }
 
+struct ReplayMigrationSnapshot {
+  int userVersion = 0;
+  std::string schema;
+  std::string sentinel;
+
+  bool operator==(const ReplayMigrationSnapshot &) const = default;
+};
+
+ReplayMigrationSnapshot
+replayMigrationSnapshot(const std::filesystem::path &path) {
+  auto db = openDatabase(path);
+  return {
+      .userVersion = queryInt(db.get(), "PRAGMA user_version"),
+      .schema = schemaSnapshot(db.get()),
+      .sentinel = queryText(db.get(), "SELECT value FROM sentinel"),
+  };
+}
+
+void expectReplayMigrationRejectedWithoutMutation(
+    const std::filesystem::path &path) {
+  const auto before = replayMigrationSnapshot(path);
+  ReplayDBHelper helper(path);
+  assert(!helper.EnsureSchema());
+  const auto after = replayMigrationSnapshot(path);
+  assert(after == before);
+}
+
+int denyPendingOutboxCreationAuthorizer(void *, int action, const char *first,
+                                        const char *, const char *,
+                                        const char *) {
+  return action == SQLITE_CREATE_TABLE && first != nullptr &&
+                 std::string_view(first) == "pending_chart_score_writes"
+             ? SQLITE_DENY
+             : SQLITE_OK;
+}
+
 std::string readFileBytes(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input),
@@ -982,6 +1018,298 @@ void testVersion4MigrationAddsResultOutbox(
                   "OR attempt_fingerprint IS NOT NULL") == 0);
   assert(queryInt(db.get(),
                   "SELECT COUNT(*) FROM pending_chart_score_writes") == 0);
+}
+
+void testVersion4MarkerAcceptsExactVersion5ResultOutbox(
+    const std::filesystem::path &root) {
+  const auto path = root / "exact-v5-outbox-with-v4-marker" / "replay.db";
+  const auto attempt =
+      sampleChartAttempt(root, "exact-v5-outbox-with-v4-marker", 50);
+  {
+    ReplayDBHelper helper(path);
+    assert(helper.StageChartResult(attempt).status ==
+           result_persistence::StageStatus::Staged);
+  }
+
+  auto db = openDatabase(path);
+  const std::string schemaBefore = schemaSnapshot(db.get());
+  const std::string replayBefore = queryText(
+      db.get(), "SELECT attempt_id || '|' || attempt_fingerprint || '|' || "
+                "final_score || '|' || max_combo FROM replays");
+  const std::string pendingBefore = queryText(
+      db.get(),
+      "SELECT attempt_id || '|' || replay_id || '|' || score || '|' || "
+      "fast || '|' || provenance_json FROM pending_chart_score_writes");
+  execOrAbort(db.get(), "PRAGMA user_version=4");
+  db.reset();
+
+  ReplayDBHelper reopened(path);
+  assert(reopened.EnsureSchema());
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(schemaSnapshot(db.get()) == schemaBefore);
+  assert(queryText(db.get(),
+                   "SELECT attempt_id || '|' || attempt_fingerprint || '|' "
+                   "|| final_score || '|' || max_combo FROM replays") ==
+         replayBefore);
+  assert(queryText(db.get(),
+                   "SELECT attempt_id || '|' || replay_id || '|' || score "
+                   "|| '|' || fast || '|' || provenance_json FROM "
+                   "pending_chart_score_writes") == pendingBefore);
+  db.reset();
+
+  const auto pending = reopened.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score == attempt.score);
+}
+
+void testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(
+    const std::filesystem::path &root) {
+  const auto path = root / "formatted-v5-outbox-with-v4-marker" / "replay.db";
+  {
+    ReplayDBHelper helper(path);
+    assert(helper.EnsureSchema());
+  }
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "ALTER TABLE pending_chart_score_writes RENAME TO "
+                        "pending_chart_score_writes_formatted");
+  execOrAbort(db.get(),
+              "ALTER TABLE pending_chart_score_writes_formatted RENAME TO "
+              "pending_chart_score_writes");
+  execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+  execOrAbort(db.get(),
+              "create unique index \"idx_replays_attempt_id\" on \"replays\" "
+              "(\"attempt_id\") where \"attempt_id\" is not null");
+  execOrAbort(db.get(), "DROP INDEX idx_pending_chart_score_created");
+  execOrAbort(db.get(),
+              "create index \"idx_pending_chart_score_created\" on "
+              "\"pending_chart_score_writes\" (\"recovery_attempts\", "
+              "\"last_recovery_at\", \"created_at\", \"attempt_id\")");
+  execOrAbort(db.get(), "PRAGMA user_version=4");
+  const std::string schemaBefore = schemaSnapshot(db.get());
+  db.reset();
+
+  ReplayDBHelper helper(path);
+  assert(helper.EnsureSchema());
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(schemaSnapshot(db.get()) == schemaBefore);
+}
+
+void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "partial-v5-outbox-column" / "replay.db";
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('partial-column')");
+    execOrAbort(db.get(), "DROP TABLE pending_chart_score_writes");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+    execOrAbort(db.get(),
+                "ALTER TABLE replays DROP COLUMN attempt_fingerprint");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path = root / "partial-v5-outbox-missing-index" / "replay.db";
+    const auto attempt =
+        sampleChartAttempt(root, "partial-v5-outbox-missing-index", 51);
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.StageChartResult(attempt).status ==
+             result_persistence::StageStatus::Staged);
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('missing-index')");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path =
+        root / "partial-v5-outbox-missing-recovery-index" / "replay.db";
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(),
+                "INSERT INTO sentinel VALUES ('missing-recovery-index')");
+    execOrAbort(db.get(), "DROP INDEX idx_pending_chart_score_created");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path = root / "malformed-v5-outbox-attempt-index" / "replay.db";
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(),
+                "INSERT INTO sentinel VALUES ('malformed-attempt-index')");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+    execOrAbort(db.get(),
+                "CREATE INDEX idx_replays_attempt_id ON replays(attempt_id)");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path =
+        root / "malformed-v5-outbox-collapsed-predicate" / "replay.db";
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(),
+                "INSERT INTO sentinel VALUES ('collapsed-predicate')");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+    execOrAbort(db.get(), "CREATE UNIQUE INDEX idx_replays_attempt_id ON "
+                          "replays(attempt_id) WHERE \"attempt_idisnotnull\"");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path = root / "partial-v5-outbox-with-base-repair" / "replay.db";
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('rollback-repair')");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_chart_sha256");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path = root / "malformed-v5-outbox-table" / "replay.db";
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('malformed-table')");
+    execOrAbort(db.get(), "DROP TABLE pending_chart_score_writes");
+    execOrAbort(db.get(), "CREATE TABLE pending_chart_score_writes("
+                          "attempt_id TEXT PRIMARY KEY NOT NULL,"
+                          "replay_id INTEGER NOT NULL)");
+    execOrAbort(db.get(), "PRAGMA user_version=4");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+}
+
+void testCurrentVersionRejectsMalformedVersion5Artifacts(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "current-v5-outbox-missing-index" / "replay.db";
+    const auto attempt =
+        sampleChartAttempt(root, "current-v5-outbox-missing-index", 52);
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.StageChartResult(attempt).status ==
+             result_persistence::StageStatus::Staged);
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(),
+                "INSERT INTO sentinel VALUES ('current-missing-index')");
+    execOrAbort(db.get(), "DROP INDEX idx_replays_attempt_id");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path = root / "current-v5-malformed-outbox" / "replay.db";
+    const auto attempt =
+        sampleChartAttempt(root, "current-v5-malformed-outbox", 53);
+    {
+      ReplayDBHelper helper(path);
+      assert(helper.StageChartResult(attempt).status ==
+             result_persistence::StageStatus::Staged);
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(),
+                "INSERT INTO sentinel VALUES ('current-malformed-outbox')");
+    execOrAbort(db.get(), "DROP TABLE pending_chart_score_writes");
+    execOrAbort(db.get(), "CREATE TABLE pending_chart_score_writes("
+                          "attempt_id TEXT PRIMARY KEY NOT NULL,"
+                          "replay_id INTEGER NOT NULL)");
+    db.reset();
+    expectReplayMigrationRejectedWithoutMutation(path);
+  }
+
+  {
+    const auto path = root / "current-v5-cached-helper-malformed" / "replay.db";
+    ReplayDBHelper helper(path);
+    assert(helper.EnsureSchema());
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(db.get(),
+                "INSERT INTO sentinel VALUES ('cached-malformed-outbox')");
+    execOrAbort(db.get(), "DROP INDEX idx_pending_chart_score_created");
+    db.reset();
+
+    const auto before = replayMigrationSnapshot(path);
+    assert(!helper.EnsureSchema());
+    std::string bindError;
+    assert(!helper.BindDatabasePath(path, bindError));
+    assert(!bindError.empty());
+    SqliteConnectionHandle connection(helper.Connect());
+    assert(!connection);
+    assert(replayMigrationSnapshot(path) == before);
+  }
+}
+
+void testVersion4OutboxCreationFailureRollsBackBaseRepairs(
+    const std::filesystem::path &root) {
+  const auto path = root / "v5-outbox-create-failure" / "replay.db";
+  createVersion4ReplayFixture(path);
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('ddl-rollback')");
+  const ReplayMigrationSnapshot before{
+      .userVersion = queryInt(db.get(), "PRAGMA user_version"),
+      .schema = schemaSnapshot(db.get()),
+      .sentinel = queryText(db.get(), "SELECT value FROM sentinel"),
+  };
+  assert(sqlite3_set_authorizer(db.get(), denyPendingOutboxCreationAuthorizer,
+                                nullptr) == SQLITE_OK);
+  ReplayDBHelper helper(path);
+  assert(!helper.CreateReplayTables(db.get()));
+  assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+  const ReplayMigrationSnapshot after{
+      .userVersion = queryInt(db.get(), "PRAGMA user_version"),
+      .schema = schemaSnapshot(db.get()),
+      .sentinel = queryText(db.get(), "SELECT value FROM sentinel"),
+  };
+  assert(after == before);
 }
 
 void testLegacyReplayRowsRemainRepeatableWithNullAttemptId(
@@ -3906,6 +4234,11 @@ int main() {
   testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(root);
   testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(root);
   testVersion4MigrationAddsResultOutbox(root);
+  testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);
+  testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(root);
+  testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(root);
+  testCurrentVersionRejectsMalformedVersion5Artifacts(root);
+  testVersion4OutboxCreationFailureRollsBackBaseRepairs(root);
   testLegacyReplayRowsRemainRepeatableWithNullAttemptId(root);
   testStageChartResultIsAtomicAndReturnsTimestamp(root);
   testIdenticalAttemptIsIdempotent(root);

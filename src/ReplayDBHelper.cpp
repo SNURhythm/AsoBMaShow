@@ -339,6 +339,424 @@ bool backfillCompleteCourseReplayKeys(sqlite3 *db) {
   return true;
 }
 
+constexpr const char *kReplayAttemptIdIndexSql =
+    "CREATE UNIQUE INDEX idx_replays_attempt_id ON "
+    "replays(attempt_id) WHERE attempt_id IS NOT NULL";
+
+constexpr const char *kPendingChartScoreWritesTableSql =
+    "CREATE TABLE pending_chart_score_writes ("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,"
+    "replay_id INTEGER NOT NULL UNIQUE,"
+    "chart_path TEXT NOT NULL,"
+    "chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,"
+    "chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,"
+    "ln_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,"
+    "max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,"
+    "combo_break INTEGER NOT NULL,"
+    "pgreat INTEGER NOT NULL,"
+    "great INTEGER NOT NULL,"
+    "good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,"
+    "poor INTEGER NOT NULL,"
+    "kpoor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,"
+    "slow INTEGER NOT NULL,"
+    "final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,"
+    "ruleset_version INTEGER NOT NULL,"
+    "eligibility INTEGER NOT NULL,"
+    "provenance_json TEXT NOT NULL,"
+    "created_at TEXT NOT NULL,"
+    "recovery_attempts INTEGER NOT NULL DEFAULT 0,"
+    "last_recovery_at TEXT,"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kPendingChartScoreRecoveryIndexSql =
+    "CREATE INDEX idx_pending_chart_score_created ON "
+    "pending_chart_score_writes("
+    "recovery_attempts, last_recovery_at, created_at, attempt_id)";
+
+enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
+
+struct NamedSchemaObjectInspection {
+  bool present = false;
+  bool exact = false;
+};
+
+enum class SchemaSqlTokenKind {
+  Word,
+  QuotedIdentifier,
+  Number,
+  String,
+  Symbol,
+};
+
+struct SchemaSqlToken {
+  SchemaSqlTokenKind kind{};
+  std::string text;
+};
+
+std::optional<std::vector<SchemaSqlToken>>
+tokenizeSchemaSql(std::string_view sql) {
+  std::vector<SchemaSqlToken> result;
+  for (std::size_t i = 0; i < sql.size();) {
+    const unsigned char character = static_cast<unsigned char>(sql[i]);
+    if (std::isspace(character) != 0) {
+      ++i;
+      continue;
+    }
+    if (character == '"' || character == '`' || character == '[') {
+      const char openingQuote = static_cast<char>(character);
+      const char closingQuote = openingQuote == '[' ? ']' : openingQuote;
+      std::string identifier;
+      bool closed = false;
+      for (++i; i < sql.size(); ++i) {
+        if (sql[i] == closingQuote) {
+          if (openingQuote != '[' && i + 1 < sql.size() &&
+              sql[i + 1] == closingQuote) {
+            identifier.push_back(closingQuote);
+            ++i;
+            continue;
+          }
+          ++i;
+          closed = true;
+          break;
+        }
+        identifier.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(sql[i]))));
+      }
+      if (!closed) {
+        return std::nullopt;
+      }
+      result.push_back({.kind = SchemaSqlTokenKind::QuotedIdentifier,
+                        .text = std::move(identifier)});
+      continue;
+    }
+    if (character == '\'') {
+      std::string value;
+      bool closed = false;
+      for (++i; i < sql.size(); ++i) {
+        if (sql[i] == '\'') {
+          if (i + 1 < sql.size() && sql[i + 1] == '\'') {
+            value.push_back('\'');
+            ++i;
+            continue;
+          }
+          ++i;
+          closed = true;
+          break;
+        }
+        value.push_back(sql[i]);
+      }
+      if (!closed) {
+        return std::nullopt;
+      }
+      result.push_back(
+          {.kind = SchemaSqlTokenKind::String, .text = std::move(value)});
+      continue;
+    }
+    if (std::isdigit(character) != 0) {
+      const std::size_t begin = i++;
+      while (i < sql.size() &&
+             std::isdigit(static_cast<unsigned char>(sql[i])) != 0) {
+        ++i;
+      }
+      result.push_back({.kind = SchemaSqlTokenKind::Number,
+                        .text = std::string(sql.substr(begin, i - begin))});
+      continue;
+    }
+    if (std::isalpha(character) != 0 || character == '_' || character == '$') {
+      std::string word;
+      do {
+        word.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(sql[i++]))));
+      } while (i < sql.size() &&
+               (std::isalnum(static_cast<unsigned char>(sql[i])) != 0 ||
+                sql[i] == '_' || sql[i] == '$'));
+      result.push_back(
+          {.kind = SchemaSqlTokenKind::Word, .text = std::move(word)});
+      continue;
+    }
+    result.push_back({.kind = SchemaSqlTokenKind::Symbol,
+                      .text = std::string(1, static_cast<char>(character))});
+    ++i;
+  }
+  return result;
+}
+
+bool schemaSqlIsEquivalent(std::string_view actual, std::string_view expected) {
+  const auto actualTokens = tokenizeSchemaSql(actual);
+  const auto expectedTokens = tokenizeSchemaSql(expected);
+  if (!actualTokens.has_value() || !expectedTokens.has_value() ||
+      actualTokens->size() != expectedTokens->size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < actualTokens->size(); ++i) {
+    const SchemaSqlToken &actualToken = (*actualTokens)[i];
+    const SchemaSqlToken &expectedToken = (*expectedTokens)[i];
+    if (actualToken.text != expectedToken.text) {
+      return false;
+    }
+    if (actualToken.kind == expectedToken.kind) {
+      continue;
+    }
+    if (expectedToken.kind != SchemaSqlTokenKind::Word ||
+        actualToken.kind != SchemaSqlTokenKind::QuotedIdentifier ||
+        sqlite3_keyword_check(expectedToken.text.c_str(),
+                              static_cast<int>(expectedToken.text.size())) !=
+            0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool inspectNamedSchemaObject(sqlite3 *db, std::string_view name,
+                              std::string_view expectedType,
+                              std::string_view expectedTable,
+                              std::string_view expectedSql,
+                              NamedSchemaObjectInspection &inspection,
+                              const char *context) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, "SELECT type, tbl_name, sql FROM sqlite_master WHERE name = ?",
+          stmt, context, logSqlErrorText) ||
+      name.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+      sqlite3_bind_text(stmt.get(), 1, name.data(),
+                        static_cast<int>(name.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK) {
+    logSqlError(context, db);
+    return false;
+  }
+
+  int rc = sqlite3_step(stmt.get());
+  if (rc == SQLITE_DONE) {
+    return true;
+  }
+  if (rc != SQLITE_ROW) {
+    logSqlError(context, db);
+    return false;
+  }
+  inspection.present = true;
+  inspection.exact =
+      sqlite3_column_type(stmt.get(), 0) == SQLITE_TEXT &&
+      sqliteColumnTextView(stmt.get(), 0) == expectedType &&
+      sqlite3_column_type(stmt.get(), 1) == SQLITE_TEXT &&
+      sqliteColumnTextView(stmt.get(), 1) == expectedTable &&
+      sqlite3_column_type(stmt.get(), 2) == SQLITE_TEXT &&
+      schemaSqlIsEquivalent(sqliteColumnTextView(stmt.get(), 2), expectedSql);
+
+  rc = sqlite3_step(stmt.get());
+  while (rc == SQLITE_ROW) {
+    inspection.exact = false;
+    rc = sqlite3_step(stmt.get());
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError(context, db);
+    return false;
+  }
+  return true;
+}
+
+bool inspectNamedIndexShape(
+    sqlite3 *db, std::string_view tableName, std::string_view indexName,
+    bool expectedUnique, bool expectedPartial,
+    const std::vector<std::string_view> &expectedColumns, bool &exact,
+    const char *context) {
+  exact = false;
+  const std::string indexListQuery =
+      "PRAGMA index_list(\"" + std::string(tableName) + "\")";
+  SqliteStatementHandle indexList;
+  if (!prepareSqliteStatementLogged(db, indexListQuery, indexList, context,
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  bool found = false;
+  bool shapeExact = true;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(indexList.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(indexList.get(), 1) != SQLITE_TEXT ||
+        sqliteColumnTextView(indexList.get(), 1) != indexName) {
+      continue;
+    }
+    if (found) {
+      shapeExact = false;
+    }
+    found = true;
+    shapeExact =
+        shapeExact &&
+        sqlite3_column_type(indexList.get(), 2) == SQLITE_INTEGER &&
+        (sqlite3_column_int(indexList.get(), 2) != 0) == expectedUnique &&
+        sqlite3_column_type(indexList.get(), 3) == SQLITE_TEXT &&
+        sqliteColumnTextView(indexList.get(), 3) == "c" &&
+        sqlite3_column_type(indexList.get(), 4) == SQLITE_INTEGER &&
+        (sqlite3_column_int(indexList.get(), 4) != 0) == expectedPartial;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError(context, db);
+    return false;
+  }
+  if (!found) {
+    return true;
+  }
+
+  const std::string indexInfoQuery =
+      "PRAGMA index_xinfo(\"" + std::string(indexName) + "\")";
+  SqliteStatementHandle indexInfo;
+  if (!prepareSqliteStatementLogged(db, indexInfoQuery, indexInfo, context,
+                                    logSqlErrorText)) {
+    return false;
+  }
+  std::size_t keyColumnCount = 0;
+  std::size_t auxiliaryColumnCount = 0;
+  while ((rc = sqlite3_step(indexInfo.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(indexInfo.get(), 5) != SQLITE_INTEGER) {
+      shapeExact = false;
+      continue;
+    }
+    if (sqlite3_column_int(indexInfo.get(), 5) != 0) {
+      bool columnExact = false;
+      if (keyColumnCount < expectedColumns.size()) {
+        columnExact =
+            sqlite3_column_type(indexInfo.get(), 0) == SQLITE_INTEGER &&
+            sqlite3_column_int64(indexInfo.get(), 0) ==
+                static_cast<sqlite3_int64>(keyColumnCount) &&
+            sqlite3_column_type(indexInfo.get(), 1) == SQLITE_INTEGER &&
+            sqlite3_column_int(indexInfo.get(), 1) >= 0 &&
+            sqlite3_column_type(indexInfo.get(), 2) == SQLITE_TEXT &&
+            sqliteColumnTextView(indexInfo.get(), 2) ==
+                expectedColumns[keyColumnCount] &&
+            sqlite3_column_type(indexInfo.get(), 3) == SQLITE_INTEGER &&
+            sqlite3_column_int(indexInfo.get(), 3) == 0 &&
+            sqlite3_column_type(indexInfo.get(), 4) == SQLITE_TEXT &&
+            sqliteColumnTextView(indexInfo.get(), 4) == "BINARY";
+      }
+      shapeExact = shapeExact && columnExact;
+      ++keyColumnCount;
+      continue;
+    }
+    const bool auxiliaryExact =
+        sqlite3_column_type(indexInfo.get(), 0) == SQLITE_INTEGER &&
+        sqlite3_column_int64(indexInfo.get(), 0) ==
+            static_cast<sqlite3_int64>(expectedColumns.size()) &&
+        sqlite3_column_type(indexInfo.get(), 1) == SQLITE_INTEGER &&
+        sqlite3_column_int(indexInfo.get(), 1) == -1 &&
+        sqlite3_column_type(indexInfo.get(), 2) == SQLITE_NULL &&
+        sqlite3_column_type(indexInfo.get(), 3) == SQLITE_INTEGER &&
+        sqlite3_column_int(indexInfo.get(), 3) == 0 &&
+        sqlite3_column_type(indexInfo.get(), 4) == SQLITE_TEXT &&
+        sqliteColumnTextView(indexInfo.get(), 4) == "BINARY";
+    shapeExact = shapeExact && auxiliaryExact;
+    ++auxiliaryColumnCount;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError(context, db);
+    return false;
+  }
+  exact = shapeExact && keyColumnCount == expectedColumns.size() &&
+          auxiliaryColumnCount == 1;
+  return true;
+}
+
+bool inspectReplayResultOutboxSchema(sqlite3 *db,
+                                     ReplayResultOutboxSchemaState &state) {
+  bool hasAttemptIdColumn = false;
+  bool hasExactAttemptIdColumn = false;
+  bool hasAttemptFingerprintColumn = false;
+  bool hasExactAttemptFingerprintColumn = false;
+  SqliteStatementHandle columns;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA table_info(replays)", columns,
+                                    "reading replay result outbox columns",
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(columns.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(columns.get(), 1) != SQLITE_TEXT) {
+      continue;
+    }
+    const std::string_view name = sqliteColumnTextView(columns.get(), 1);
+    bool *present = nullptr;
+    bool *exact = nullptr;
+    if (name == "attempt_id") {
+      present = &hasAttemptIdColumn;
+      exact = &hasExactAttemptIdColumn;
+    } else if (name == "attempt_fingerprint") {
+      present = &hasAttemptFingerprintColumn;
+      exact = &hasExactAttemptFingerprintColumn;
+    } else {
+      continue;
+    }
+    *present = true;
+    *exact =
+        sqlite3_column_type(columns.get(), 2) == SQLITE_TEXT &&
+        schemaSqlIsEquivalent(sqliteColumnTextView(columns.get(), 2), "TEXT") &&
+        sqlite3_column_type(columns.get(), 3) == SQLITE_INTEGER &&
+        sqlite3_column_int(columns.get(), 3) == 0 &&
+        sqlite3_column_type(columns.get(), 4) == SQLITE_NULL &&
+        sqlite3_column_type(columns.get(), 5) == SQLITE_INTEGER &&
+        sqlite3_column_int(columns.get(), 5) == 0;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading replay result outbox columns", db);
+    return false;
+  }
+
+  NamedSchemaObjectInspection attemptIndex;
+  NamedSchemaObjectInspection pendingTable;
+  NamedSchemaObjectInspection recoveryIndex;
+  bool attemptIndexShapeExact = false;
+  bool recoveryIndexShapeExact = false;
+  if (!inspectNamedSchemaObject(db, "idx_replays_attempt_id", "index",
+                                "replays", kReplayAttemptIdIndexSql,
+                                attemptIndex,
+                                "reading replay attempt identity index") ||
+      !inspectNamedSchemaObject(db, "pending_chart_score_writes", "table",
+                                "pending_chart_score_writes",
+                                kPendingChartScoreWritesTableSql, pendingTable,
+                                "reading pending chart score outbox schema") ||
+      !inspectNamedSchemaObject(
+          db, "idx_pending_chart_score_created", "index",
+          "pending_chart_score_writes", kPendingChartScoreRecoveryIndexSql,
+          recoveryIndex, "reading pending chart score recovery index") ||
+      !inspectNamedIndexShape(db, "replays", "idx_replays_attempt_id", true,
+                              true, {"attempt_id"}, attemptIndexShapeExact,
+                              "reading replay attempt identity index shape") ||
+      !inspectNamedIndexShape(
+          db, "pending_chart_score_writes", "idx_pending_chart_score_created",
+          false, false,
+          {"recovery_attempts", "last_recovery_at", "created_at", "attempt_id"},
+          recoveryIndexShapeExact,
+          "reading pending chart score recovery index shape")) {
+    return false;
+  }
+
+  const bool entirelyAbsent =
+      !hasAttemptIdColumn && !hasAttemptFingerprintColumn &&
+      !attemptIndex.present && !pendingTable.present && !recoveryIndex.present;
+  const bool exact =
+      hasAttemptIdColumn && hasExactAttemptIdColumn &&
+      hasAttemptFingerprintColumn && hasExactAttemptFingerprintColumn &&
+      attemptIndex.present && attemptIndex.exact && attemptIndexShapeExact &&
+      pendingTable.present && pendingTable.exact && recoveryIndex.present &&
+      recoveryIndex.exact && recoveryIndexShapeExact;
+  if (entirelyAbsent) {
+    state = ReplayResultOutboxSchemaState::Absent;
+  } else if (exact) {
+    state = ReplayResultOutboxSchemaState::Exact;
+  } else {
+    state = ReplayResultOutboxSchemaState::Malformed;
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -350,6 +768,15 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
   if (*version >= kReplayDatabaseSchemaVersion) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState)) {
+      return false;
+    }
+    if (resultOutboxState != ReplayResultOutboxSchemaState::Exact) {
+      SDL_Log("Refusing current replay database with a partial or unexpected "
+              "result outbox schema");
+      return false;
+    }
     return true;
   }
 
@@ -397,59 +824,29 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
                 "creating course replay content key index"))) {
     return false;
   }
-  if (*version < 5 &&
-      (!ensureTableColumn(db, "replays", "attempt_id",
-                          "ALTER TABLE replays ADD COLUMN attempt_id TEXT",
-                          "adding replay attempt ID column") ||
-       !ensureTableColumn(
-           db, "replays", "attempt_fingerprint",
-           "ALTER TABLE replays ADD COLUMN attempt_fingerprint TEXT",
-           "adding replay attempt fingerprint column") ||
-       !execSql(db,
-                "CREATE UNIQUE INDEX idx_replays_attempt_id ON "
-                "replays(attempt_id) WHERE attempt_id IS NOT NULL",
-                "creating replay attempt ID index") ||
-       !execSql(
-           db,
-           "CREATE TABLE pending_chart_score_writes ("
-           "attempt_id TEXT PRIMARY KEY NOT NULL,"
-           "replay_id INTEGER NOT NULL UNIQUE,"
-           "chart_path TEXT NOT NULL,"
-           "chart_md5 TEXT NOT NULL,"
-           "chart_sha256 TEXT NOT NULL,"
-           "chart_title TEXT NOT NULL,"
-           "chart_artist TEXT NOT NULL,"
-           "ln_mode INTEGER NOT NULL,"
-           "score INTEGER NOT NULL,"
-           "max_score INTEGER NOT NULL,"
-           "max_combo INTEGER NOT NULL,"
-           "combo_break INTEGER NOT NULL,"
-           "pgreat INTEGER NOT NULL,"
-           "great INTEGER NOT NULL,"
-           "good INTEGER NOT NULL,"
-           "bad INTEGER NOT NULL,"
-           "poor INTEGER NOT NULL,"
-           "kpoor INTEGER NOT NULL,"
-           "fast INTEGER NOT NULL,"
-           "slow INTEGER NOT NULL,"
-           "final_gauge REAL NOT NULL,"
-           "clear_type INTEGER NOT NULL,"
-           "ruleset_version INTEGER NOT NULL,"
-           "eligibility INTEGER NOT NULL,"
-           "provenance_json TEXT NOT NULL,"
-           "created_at TEXT NOT NULL,"
-           "recovery_attempts INTEGER NOT NULL DEFAULT 0,"
-           "last_recovery_at TEXT,"
-           "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
-           ")",
-           "creating pending chart score outbox") ||
-       !execSql(
-           db,
-           "CREATE INDEX idx_pending_chart_score_created ON "
-           "pending_chart_score_writes("
-           "recovery_attempts, last_recovery_at, created_at, attempt_id)",
-           "creating pending chart score recovery index"))) {
-    return false;
+  if (*version < 5) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState)) {
+      return false;
+    }
+    if (resultOutboxState == ReplayResultOutboxSchemaState::Malformed) {
+      SDL_Log("Refusing replay result outbox migration from a partial or "
+              "unexpected schema");
+      return false;
+    }
+    if (resultOutboxState == ReplayResultOutboxSchemaState::Absent &&
+        (!execSql(db, "ALTER TABLE replays ADD COLUMN attempt_id TEXT",
+                  "adding replay attempt ID column") ||
+         !execSql(db, "ALTER TABLE replays ADD COLUMN attempt_fingerprint TEXT",
+                  "adding replay attempt fingerprint column") ||
+         !execSql(db, kReplayAttemptIdIndexSql,
+                  "creating replay attempt ID index") ||
+         !execSql(db, kPendingChartScoreWritesTableSql,
+                  "creating pending chart score outbox") ||
+         !execSql(db, kPendingChartScoreRecoveryIndexSql,
+                  "creating pending chart score recovery index"))) {
+      return false;
+    }
   }
   if (!setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
     return false;
@@ -1846,6 +2243,12 @@ sqlite3 *openTrustedReplayDatabase(const std::filesystem::path &path,
                              versionError;
     return nullptr;
   }
+  ReplayResultOutboxSchemaState resultOutboxState{};
+  if (!inspectReplayResultOutboxSchema(database.get(), resultOutboxState) ||
+      resultOutboxState != ReplayResultOutboxSchemaState::Exact) {
+    errorMessage = "trusted replay database result outbox schema changed";
+    return nullptr;
+  }
   SqliteStatementHandle journalMode;
   if (prepareSqliteStatement(database.get(), "PRAGMA journal_mode",
                              journalMode) != SQLITE_OK ||
@@ -1918,8 +2321,12 @@ bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
   if (sessionDatabase_ != nullptr &&
       equivalentReplayDatabasePaths(databasePath_, databasePath)) {
     databasePath_ = std::move(databasePath);
-    errorMessage.clear();
-    return true;
+    if (migrateReplayDatabaseSchema(sessionDatabase_)) {
+      errorMessage.clear();
+      return true;
+    }
+    errorMessage = "replay database validation failed";
+    return false;
   }
 
   const std::filesystem::path resolvedPath =
@@ -1968,7 +2375,7 @@ void ReplayDBHelper::ShutdownLocked() {
 bool ReplayDBHelper::EnsureSessionDatabaseLocked() {
   if (sessionDatabase_ != nullptr) {
     if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
-      return true;
+      return migrateReplayDatabaseSchema(sessionDatabase_);
     }
     SDL_Log("Discarding replay database with an unfinished transaction");
     ShutdownLocked();
@@ -2021,6 +2428,25 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
 
 bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
+    return false;
+  }
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_replay_schema_ensure"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_replay_schema_ensure"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_replay_schema_ensure; RELEASE "
+            "asobmashow_replay_schema_ensure"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting replay schema ensure", transactionError);
     return false;
   }
   const char *replayQuery = "CREATE TABLE IF NOT EXISTS replays ("
@@ -2228,10 +2654,17 @@ bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (!migrateReplayDatabaseSchema(db)) {
     return false;
   }
-  return execSql(db,
-                 "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
-                 "course_replays(course_key, id)",
-                 "ensuring course replay content key index");
+  if (!execSql(db,
+               "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
+               "course_replays(course_key, id)",
+               "ensuring course replay content key index")) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing replay schema ensure", transactionError);
+    return false;
+  }
+  return true;
 }
 
 bool ReplayDBHelper::EnsureSchema() {
