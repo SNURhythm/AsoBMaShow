@@ -134,6 +134,41 @@ std::string queryString(sqlite3 *database, const std::string &sql) {
   return value;
 }
 
+void setDatabaseVersion(const std::filesystem::path &path, int version,
+                        std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(database.get(),
+                 "PRAGMA user_version=" + std::to_string(version)),
+         std::string(label) + " database version updates");
+}
+
+void seedValidationPolicyMarker(const std::filesystem::path &path,
+                                std::string_view value,
+                                std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " marker database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(database.get(),
+                 "CREATE TABLE profile_use_marker(value TEXT);"
+                 "INSERT INTO profile_use_marker(value) VALUES ('" +
+                     std::string(value) + "')"),
+         std::string(label) + " marker row inserts");
+}
+
+std::string queryDatabaseString(const std::filesystem::path &path,
+                                const std::string &sql,
+                                std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " database opens");
+  return database ? queryString(database.get(), sql) : std::string{};
+}
+
 std::filesystem::path attachedDatabasePath(sqlite3 *database,
                                            std::string_view schema) {
   sqlite3_stmt *statement = nullptr;
@@ -640,6 +675,63 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   expect(savedOldInput.status == InputProfileLoadStatus::Loaded &&
              firstBindingId(savedOldInput.profile) == "unsaved-first-binding",
          "switch saves current input into the old profile first");
+}
+
+void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+
+  seedValidationPolicyMarker(fixture.secondPaths.scoresDb, "score-marker",
+                             "supported-older score");
+  seedValidationPolicyMarker(fixture.secondPaths.replaysDb, "replay-marker",
+                             "supported-older replay");
+  setDatabaseVersion(fixture.secondPaths.scoresDb, 5,
+                     "supported-older score");
+  setDatabaseVersion(fixture.secondPaths.replaysDb, 3,
+                     "supported-older replay");
+
+  expect(fixture.manager.validateProfileForActivation(fixture.secondId).ok(),
+         "activation preflight admits supported-older databases");
+  expect(fixture.manager.validateProfile(fixture.secondId).error ==
+             ProfileError::IntegrityFailure,
+         "runtime-ready validation rejects supported-older databases before "
+         "binding");
+
+  const ProfileSwitchResult switched =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(switched.ok(),
+         "supported-older profile switch completes: " + switched.message);
+
+  std::string versionError;
+  expect(sqliteDatabaseUserVersion(fixture.secondPaths.scoresDb,
+                                   versionError) ==
+             ScoreDBHelper::kCurrentSchemaVersion,
+         "score database owner migrates the supported-older target: " +
+             versionError);
+  versionError.clear();
+  expect(sqliteDatabaseUserVersion(fixture.secondPaths.replaysDb,
+                                   versionError) ==
+             ReplayDBHelper::kCurrentSchemaVersion,
+         "replay database owner migrates the supported-older target: " +
+             versionError);
+  expect(fixture.manager.activeProfile().id == fixture.secondId &&
+             fixture.score.GetDatabasePath() == fixture.secondPaths.scoresDb &&
+             fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
+         "switch commits the migrated target active after both owners bind");
+  expect(fixture.currentClearRank() == kClearTypeHardClearRank &&
+             fixture.currentReplayCount() == 2,
+         "schema-owner migration preserves target scores and replays");
+  expect(queryDatabaseString(fixture.secondPaths.scoresDb,
+                             "SELECT value FROM profile_use_marker",
+                             "migrated score marker") == "score-marker" &&
+             queryDatabaseString(fixture.secondPaths.replaysDb,
+                                 "SELECT value FROM profile_use_marker",
+                                 "migrated replay marker") == "replay-marker",
+         "schema-owner migration preserves unrelated marker rows");
+  expect(fixture.manager.validateProfile(fixture.secondId).ok(),
+         "migrated switched profile is runtime ready");
 }
 
 void testEveryDeclaredBlockerRejectsWithoutMutation() {
@@ -1756,6 +1848,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
+  testSupportedOlderTargetMigratesAtSchemaOwnerBoundary();
   testEveryDeclaredBlockerRejectsWithoutMutation();
   testBackgroundLibraryBlockerSurvivesSceneReplacement();
   testEveryTransactionalFailureRollsBackAllVisibleState();

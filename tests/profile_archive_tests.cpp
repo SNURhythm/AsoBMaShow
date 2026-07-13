@@ -233,6 +233,18 @@ Database openDatabase(const std::filesystem::path &path) {
   return Database(raw);
 }
 
+void setDatabaseVersion(const std::filesystem::path &path, int version,
+                        std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(database.get(),
+                 "PRAGMA user_version=" + std::to_string(version)),
+         std::string(label) + " database version updates");
+}
+
 std::int64_t rowCount(const std::filesystem::path &path,
                       std::string_view table) {
   std::string error;
@@ -642,6 +654,54 @@ void testExportIsDeterministicAndStrict() {
   }
 }
 
+void testExportRejectsSupportedOlderSourceBeforeWritingArchive() {
+  Fixture fixture;
+  const PlayerProfilePaths source =
+      fixture.manager.pathsFor(fixture.sourceId);
+  setDatabaseVersion(source.scoresDb, 5, "supported-older export score");
+  setDatabaseVersion(source.replaysDb, 3, "supported-older export replay");
+
+  expect(fixture.manager.validateProfileForActivation(fixture.sourceId).ok(),
+         "supported-older export source remains activatable");
+  expect(fixture.manager.validateProfile(fixture.sourceId).error ==
+             ProfileError::IntegrityFailure,
+         "supported-older export source is not runtime ready");
+
+  const auto destination =
+      fixture.exchange.path() / "supported-older-export.asobprofile";
+  bool temporaryArchiveWritten = false;
+  ProfileArchiveDependencies dependencies;
+  dependencies.beforeExportPhase = [&](ProfileArchiveExportPhase,
+                                       std::string &) {
+    temporaryArchiveWritten = true;
+    return true;
+  };
+  ProfileArchiveService service(fixture.manager, std::move(dependencies));
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(exported.error == ProfileError::IntegrityFailure &&
+             !temporaryArchiveWritten &&
+             !std::filesystem::exists(destination),
+         "RuntimeReady export rejects supported-older databases before "
+         "writing an archive");
+
+  std::string versionError;
+  expect(sqliteDatabaseUserVersion(source.scoresDb, versionError) == 5,
+         "rejected export preserves the older score version: " +
+             versionError);
+  versionError.clear();
+  expect(sqliteDatabaseUserVersion(source.replaysDb, versionError) == 3 &&
+             scalarText(source.scoresDb,
+                        "SELECT value FROM archive_marker") ==
+                 "score-source" &&
+             scalarText(source.replaysDb,
+                        "SELECT value FROM archive_marker") ==
+                 "replay-source" &&
+             transactionArtifacts(fixture.temp.path()).empty(),
+         "rejected export neither migrates the source nor creates profile "
+         "artifacts: " +
+             versionError);
+}
+
 void testPresetStoreSidecarRemainsProfilePortable() {
   TempDirectory temp{"profile-practice-integration"};
   TempDirectory exchange{"profile-practice-integration-exchange"};
@@ -1037,6 +1097,123 @@ void testOverwriteIsRestrictedAndReplacesInactiveProfile() {
          "overwrite refuses an invalid existing profile");
   expect(transactionArtifacts(invalidFixture.temp.path()).empty(),
          "invalid overwrite target creates no transaction artifacts");
+}
+
+void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
+  Fixture fixture;
+  const auto archive =
+      exportFixture(fixture, "supported-older-overwrite.asobprofile");
+  const PlayerProfilePaths target =
+      fixture.manager.pathsFor(fixture.targetId);
+  setDatabaseVersion(target.scoresDb, 5,
+                     "supported-older overwrite score");
+  setDatabaseVersion(target.replaysDb, 3,
+                     "supported-older overwrite replay");
+  expect(fixture.manager.validateProfileForActivation(fixture.targetId).ok() &&
+             fixture.manager.validateProfile(fixture.targetId).error ==
+                 ProfileError::IntegrityFailure,
+         "supported-older overwrite target is manageable but not runtime "
+         "ready");
+
+  std::filesystem::path observedWorkspace;
+  ProfileArchiveDependencies dependencies;
+  dependencies.importWorkspaceCreated =
+      [&](const std::filesystem::path &workspace) {
+        observedWorkspace = workspace;
+      };
+  ProfileArchiveService service(fixture.manager, std::move(dependencies));
+  ProfileImportOptions options{.mode = ProfileImportMode::Overwrite,
+                               .overwriteProfileId = fixture.targetId};
+  const auto imported = service.Import(archive, options);
+  expect(imported.ok() && imported.profile &&
+             imported.profile->id == fixture.targetId &&
+             imported.profile->displayName == "Portable Profile",
+         "Manage admits a supported-older inactive overwrite target: " +
+             imported.message);
+
+  std::string versionError;
+  expect(sqliteDatabaseUserVersion(target.scoresDb, versionError) ==
+                 ScoreDBHelper::kCurrentSchemaVersion &&
+             sqliteDatabaseUserVersion(target.replaysDb, versionError) ==
+                 ReplayDBHelper::kCurrentSchemaVersion &&
+             fixture.manager.validateProfile(fixture.targetId).ok(),
+         "overwrite installs a current RuntimeReady target: " + versionError);
+  expect(scalarText(target.scoresDb,
+                    "SELECT value FROM archive_marker") == "score-source" &&
+             scalarText(target.replaysDb,
+                        "SELECT value FROM archive_marker") ==
+                 "replay-source" &&
+             readFile(target.settingsJson) ==
+                 readFile(fixture.manager.pathsFor(fixture.sourceId)
+                              .settingsJson),
+         "overwrite installs the imported database and settings payload");
+  expect(!observedWorkspace.empty() &&
+             !std::filesystem::exists(observedWorkspace) &&
+             transactionArtifacts(fixture.temp.path()).empty(),
+         "supported-older overwrite cleans workspace, staging, and backup "
+         "artifacts");
+}
+
+void testOverwriteRejectsFutureTargetWithoutMutation() {
+  for (const bool futureScoreDatabase : {true, false}) {
+    Fixture fixture;
+    const auto archive = exportFixture(
+        fixture, futureScoreDatabase ? "future-score-overwrite.asobprofile"
+                                     : "future-replay-overwrite.asobprofile");
+    const PlayerProfilePaths target =
+        fixture.manager.pathsFor(fixture.targetId);
+    const std::filesystem::path futureDatabase =
+        futureScoreDatabase ? target.scoresDb : target.replaysDb;
+    const int futureVersion =
+        futureScoreDatabase ? ScoreDBHelper::kCurrentSchemaVersion + 1
+                            : ReplayDBHelper::kCurrentSchemaVersion + 1;
+    setDatabaseVersion(futureDatabase, futureVersion,
+                       futureScoreDatabase ? "future overwrite score"
+                                           : "future overwrite replay");
+
+    const std::string metadataBefore = readFile(target.profileJson);
+    const std::string settingsBefore = readFile(target.settingsJson);
+    const std::string inputBefore = readFile(target.inputJson);
+    const std::string scoresBefore = readFile(target.scoresDb);
+    const std::string replaysBefore = readFile(target.replaysDb);
+    std::filesystem::path observedWorkspace;
+    ProfileArchiveDependencies dependencies;
+    dependencies.importWorkspaceCreated =
+        [&](const std::filesystem::path &workspace) {
+          observedWorkspace = workspace;
+        };
+    ProfileArchiveService service(fixture.manager, std::move(dependencies));
+    ProfileImportOptions options{.mode = ProfileImportMode::Overwrite,
+                                 .overwriteProfileId = fixture.targetId};
+    const auto imported = service.Import(archive, options);
+    const std::string label = futureScoreDatabase ? "future score"
+                                                  : "future replay";
+    expect(imported.error == ProfileError::FutureVersion,
+           label + " overwrite target fails closed");
+
+    std::string versionError;
+    expect(std::filesystem::is_directory(target.root) &&
+               sqliteDatabaseUserVersion(futureDatabase, versionError) ==
+                   futureVersion &&
+               readFile(target.profileJson) == metadataBefore &&
+               readFile(target.settingsJson) == settingsBefore &&
+               readFile(target.inputJson) == inputBefore &&
+               readFile(target.scoresDb) == scoresBefore &&
+               readFile(target.replaysDb) == replaysBefore,
+           label + " overwrite rejection preserves target versions, metadata, "
+                   "and component bytes: " +
+               versionError);
+    expect(scalarText(target.scoresDb,
+                      "SELECT value FROM archive_marker") == "score-target" &&
+               scalarText(target.replaysDb,
+                          "SELECT value FROM archive_marker") ==
+                   "replay-target" &&
+               !observedWorkspace.empty() &&
+               !std::filesystem::exists(observedWorkspace) &&
+               transactionArtifacts(fixture.temp.path()).empty(),
+           label + " overwrite rejection preserves target payload and cleans "
+                   "all transaction artifacts");
+  }
 }
 
 void testOverwriteRefusesTheLastProfile() {
@@ -2414,6 +2591,7 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testExportRejectsSupportedOlderSourceBeforeWritingArchive();
   testPresetStoreSidecarRemainsProfilePortable();
   testMalformedOptionalPracticeRemainsVisibleButCannotExport();
   testArchiveUsesNativeUnicodeFilesystemPaths();
@@ -2421,6 +2599,8 @@ int main() {
   testVersionOneArchiveImportsWithEmptyPracticeDirectory();
   testCreateImportRetriesUnsafeAndOccupiedGeneratedIds();
   testOverwriteIsRestrictedAndReplacesInactiveProfile();
+  testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile();
+  testOverwriteRejectsFutureTargetWithoutMutation();
   testOverwriteRefusesTheLastProfile();
   testOverwriteRollbackRestoresOriginalProfile();
   testStrictMemberAllowlistAndTypes();
