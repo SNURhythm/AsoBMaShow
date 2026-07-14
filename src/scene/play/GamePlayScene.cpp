@@ -2223,18 +2223,6 @@ void GamePlayScene::cleanupScene() {
   context.profileGameplayActive.store(false, std::memory_order_release);
   profileGameplayBlockerActive = false;
   context.jukebox.removeOnTick();
-  const auto stopped = context.jukebox.stop();
-  if (!stopped.success) {
-    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
-                 "Gameplay cleanup could not stop audio: %s",
-                 stopped.diagnostic.c_str());
-  }
-  std::string playbackRateError;
-  if (!context.jukebox.setPlaybackRate({}, playbackRateError)) {
-    SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
-                 "Gameplay cleanup could not restore normal playback rate: %s",
-                 playbackRateError.c_str());
-  }
   SDL_Log("Stopping input handler");
   if (inputHandler != nullptr) {
     inputHandler->stopListen();
