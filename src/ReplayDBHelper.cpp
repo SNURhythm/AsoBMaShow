@@ -1535,22 +1535,54 @@ bool validateChartScoreReplaySemantics(
     const result_persistence::ChartScoreWrite &score,
     const bms_parser::ChartMeta &chartMeta, int replayFinalScore,
     int replayMaxCombo, float replayFinalGauge, int replayClearType,
-    std::optional<int> expectedTotalNotes, std::string &diagnostic) {
+    std::optional<int> expectedTotalNotes,
+    std::optional<int> storedReplayChartLongNoteMode,
+    std::string &diagnostic) {
   const auto reject = [&](std::string message) {
     diagnostic = std::move(message);
     return false;
   };
 
-  if (score.longNoteMode <= long_note_mode::kUnknownValue ||
-      long_note_mode::normalizeValue(score.longNoteMode) !=
-          score.longNoteMode) {
-    return reject("score long-note mode is outside the playable range");
+  if (long_note_mode::normalizeValue(score.longNoteMode) !=
+      score.longNoteMode) {
+    return reject("score long-note mode is outside the canonical range");
   }
   const ScoreStageProvenance *stage =
       score_provenance::uniqueStageForChart(score.provenance, chartMeta);
-  if (stage == nullptr || stage->longNoteMode != score.longNoteMode) {
+  if (stage == nullptr || stage->longNoteMode <= long_note_mode::kUnknownValue ||
+      long_note_mode::normalizeValue(stage->longNoteMode) !=
+          stage->longNoteMode) {
     return reject(
         "score long-note mode does not match a unique provenance stage");
+  }
+  if (storedReplayChartLongNoteMode.has_value()) {
+    const int replayChartLongNoteMode = *storedReplayChartLongNoteMode;
+    if (long_note_mode::normalizeValue(replayChartLongNoteMode) !=
+            replayChartLongNoteMode ||
+        (score.longNoteMode > long_note_mode::kUnknownValue &&
+         (stage->longNoteMode != score.longNoteMode ||
+          (replayChartLongNoteMode > long_note_mode::kUnknownValue &&
+           replayChartLongNoteMode != score.longNoteMode)))) {
+      return reject(
+          "score long-note mode does not match staged replay metadata");
+    }
+  } else {
+    const int chartLongNoteMode =
+        long_note_mode::normalizeValue(chartMeta.LnMode);
+    const int expectedLongNoteMode =
+        std::max(0, chartMeta.TotalLongNotes) +
+                    std::max(0, chartMeta.TotalBackSpinNotes) <=
+                0
+            ? long_note_mode::kUnknownValue
+            : (chartLongNoteMode > long_note_mode::kUnknownValue
+                   ? chartLongNoteMode
+                   : stage->longNoteMode);
+    if (score.longNoteMode != expectedLongNoteMode ||
+        (expectedLongNoteMode > long_note_mode::kUnknownValue &&
+         stage->longNoteMode != expectedLongNoteMode)) {
+      return reject(
+          "score long-note mode does not match a unique provenance stage");
+    }
   }
 
   if (score.score < 0 || score.maxScore < 0 || score.maxCombo < 0 ||
@@ -1643,7 +1675,7 @@ std::optional<std::string> validateChartResultAttempt(
           score, attempt.replay.chartMeta, attempt.replay.finalScore,
           attempt.replay.maxCombo, attempt.replay.finalGauge,
           attempt.replay.clearType, attempt.replay.chartMeta.TotalNotes,
-          diagnostic)) {
+          std::nullopt, diagnostic)) {
     return std::nullopt;
   }
 
@@ -1912,7 +1944,7 @@ constexpr const char *kPendingChartScoreSelect =
     "r.attempt_fingerprint, r.chart_path, r.chart_md5, r.chart_sha256,"
     "r.chart_title, r.chart_artist, r.created_at, r.final_score,"
     "r.max_combo, r.final_gauge, r.clear_type, r.ruleset_version,"
-    "r.eligibility, r.provenance_json "
+    "r.eligibility, r.provenance_json, r.ln_mode "
     "FROM pending_chart_score_writes p "
     "LEFT JOIN replays r ON r.id = p.replay_id ";
 
@@ -2074,6 +2106,7 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
   int linkedClearType = 0;
   int linkedRulesetVersion = 0;
   int linkedEligibility = 0;
+  int linkedLongNoteMode = 0;
   std::string linkedProvenanceJson;
   if (!readStrictInteger(stmt, 37, linkedFinalScore) ||
       !readStrictInteger(stmt, 38, linkedMaxCombo) ||
@@ -2084,7 +2117,8 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
       linkedEligibility < static_cast<int>(ScoreEligibility::Verified) ||
       linkedEligibility >
           static_cast<int>(ScoreEligibility::LegacyUnverified) ||
-      !readStrictText(stmt, 43, linkedProvenanceJson, false)) {
+      !readStrictText(stmt, 43, linkedProvenanceJson, false) ||
+      !readStrictInteger(stmt, 44, linkedLongNoteMode)) {
     return conflict("staged replay result metadata is malformed");
   }
   const double storedReplayGauge = sqlite3_column_double(stmt, 39);
@@ -2120,7 +2154,8 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
   if (!validateChartScoreReplaySemantics(score, linkedChartMeta,
                                          linkedFinalScore, linkedMaxCombo,
                                          linkedFinalGauge, linkedClearType,
-                                         std::nullopt, semanticDiagnostic)) {
+                                         std::nullopt, linkedLongNoteMode,
+                                         semanticDiagnostic)) {
     return conflict("pending score semantics are invalid: " +
                     semanticDiagnostic);
   }

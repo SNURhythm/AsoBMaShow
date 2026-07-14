@@ -3,6 +3,7 @@
 #include "../src/ResultPersistenceModel.h"
 #include "../src/CourseIdentity.h"
 #include "../src/FileChecksum.h"
+#include "../src/LongNoteModeUtils.h"
 #include "../src/ScoreProvenance.h"
 #include "../src/SqliteRAII.h"
 #include "../src/Utils.h"
@@ -890,6 +891,7 @@ ReplayData sampleReplay(const std::filesystem::path &root,
   replay.chartMeta.Title = "Title " + hash;
   replay.chartMeta.Artist = "Artist";
   replay.chartMeta.TotalNotes = 50;
+  replay.chartMeta.TotalLongNotes = 1;
   replay.chartMeta.LnMode = 2;
   replay.initialGaugeType = GaugeType::Hard;
   replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
@@ -1669,6 +1671,48 @@ void testStageAcceptsStandard9KeysGaugeMaximum(
   assert(pending.status == result_persistence::PendingReadStatus::Found);
   assert(pending.value.has_value());
   assert(pending.value->score.finalGauge == 120.0f);
+}
+
+void testStageAcceptsNonLongNoteChartMode(
+    const std::filesystem::path &root) {
+  const auto path = root / "stage-non-long-note-chart" / "replay.db";
+  ReplayDBHelper helper(path);
+  auto attempt = sampleChartAttempt(root, "stage-non-long-note-chart", 16);
+  attempt.replay.chartMeta.TotalLongNotes = 0;
+  attempt.replay.chartMeta.LnMode = long_note_mode::kUnknownValue;
+  attempt.score.longNoteMode = long_note_mode::kUnknownValue;
+  attempt.score.provenance = attempt.replay.provenance;
+  attempt.payloadFingerprint =
+      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+
+  const auto staged = helper.StageChartResult(attempt);
+  assert(staged.status == result_persistence::StageStatus::Staged);
+  const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score.longNoteMode ==
+         long_note_mode::kUnknownValue);
+}
+
+void testStageAcceptsUnforcedLongNoteChartMode(
+    const std::filesystem::path &root) {
+  const auto path = root / "stage-unforced-long-note-chart" / "replay.db";
+  ReplayDBHelper helper(path);
+  auto attempt = sampleChartAttempt(root, "stage-unforced-long-note-chart", 17);
+  attempt.replay.chartMeta.LnMode = long_note_mode::kUnknownValue;
+  attempt.replay.provenance.stages.front().longNoteMode =
+      long_note_mode::kCnValue;
+  attempt.score.longNoteMode = long_note_mode::kCnValue;
+  attempt.score.provenance = attempt.replay.provenance;
+  attempt.payloadFingerprint =
+      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+
+  const auto staged = helper.StageChartResult(attempt);
+  assert(staged.status == result_persistence::StageStatus::Staged);
+  const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
+  assert(pending.status == result_persistence::PendingReadStatus::Found);
+  assert(pending.value.has_value());
+  assert(pending.value->score.longNoteMode == long_note_mode::kCnValue);
 }
 
 void testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(
@@ -4387,6 +4431,8 @@ int main() {
   testChangedPayloadForSameAttemptConflicts(root);
   testStageRejectsSemanticResultConflicts(root);
   testStageAcceptsStandard9KeysGaugeMaximum(root);
+  testStageAcceptsNonLongNoteChartMode(root);
+  testStageAcceptsUnforcedLongNoteChartMode(root);
   testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(root);
   testAcknowledgedAttemptRemainsIdempotentByFingerprint(root);
   testOutboxInsertFailureRollsBackReplayAndChildren(root);

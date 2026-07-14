@@ -1616,6 +1616,27 @@ void testCourseWritesUseAuthoritativeKeysAndExactMode(
   assert(!std::filesystem::exists(rejectedPath));
 }
 
+void testLegacyClassicLongNoteLampFallback() {
+  ScoreRankByLongNoteMode ranks;
+  ranks.ranks[long_note_mode::kLnValue] = kClearTypeHardClearRank;
+
+  assert(ranks.bestRankForMode(long_note_mode::kCnValue) ==
+         kClearTypeHardClearRank);
+  assert(ranks.bestRankForMode(long_note_mode::kHcnValue) ==
+         kClearTypeHardClearRank);
+  assert(ranks.bestRankForMode(long_note_mode::kUnknownValue) ==
+         kNoClearTypeRank);
+
+  ranks.ranks[long_note_mode::kCnValue] = kClearTypeEasyClearRank;
+  assert(ranks.bestRankForMode(long_note_mode::kCnValue) ==
+         kClearTypeEasyClearRank);
+
+  ScoreBestByLongNoteMode bestScores;
+  bestScores.snapshots[long_note_mode::kLnValue] =
+      ScoreBestSnapshot{.score = 1234};
+  assert(!bestScores.bestForMode(long_note_mode::kCnValue).has_value());
+}
+
 void testCourseReadsAreKeyAndModeAuthoritative(
     const std::filesystem::path &root) {
   const auto path = root / "course-read-v6" / "score.db";
@@ -2788,6 +2809,7 @@ int main() {
   testVersion5MigrationPreservesRawCourseEvidence(root);
   testVersion6MigrationIsSavepointSafeAndAtomic(root);
   testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(root);
+  testLegacyClassicLongNoteLampFallback();
   testCourseWritesUseAuthoritativeKeysAndExactMode(root);
   testCourseReadsAreKeyAndModeAuthoritative(root);
   testCourseLampCacheSeparatesKeysIdsAndModes(root);

@@ -8,6 +8,7 @@
 #include "../src/ResultPersistenceCoordinator.h"
 #include "../src/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
+#include "../src/Utils.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/scene/MainMenuProfileSelections.h"
 #include "../src/sqlite3.h"
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -67,6 +69,30 @@ public:
 private:
   std::filesystem::path path_;
 };
+
+#if !TARGET_OS_WINDOWS
+class ScopedHomeOverride {
+public:
+  explicit ScopedHomeOverride(const std::filesystem::path &path) {
+    if (const char *home = std::getenv("HOME")) {
+      previousHome_ = home;
+    }
+    expect(setenv("HOME", path.string().c_str(), 1) == 0,
+           "temporary HOME override installs");
+  }
+
+  ~ScopedHomeOverride() {
+    if (previousHome_.has_value()) {
+      setenv("HOME", previousHome_->c_str(), 1);
+    } else {
+      unsetenv("HOME");
+    }
+  }
+
+private:
+  std::optional<std::string> previousHome_;
+};
+#endif
 
 std::string readFile(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
@@ -1593,6 +1619,91 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   activeScore.SetDatabasePath(previousScorePath);
 }
 
+void testLegacyForcedLongNoteScoreMigrationPreservesLamp() {
+#if !TARGET_OS_WINDOWS
+  TempDirectory temp;
+  ScopedHomeOverride home(temp.path());
+  const std::filesystem::path chartDirectory =
+      Utils::GetDocumentsPath("db");
+  std::filesystem::create_directories(chartDirectory);
+  Database chartDatabase = openDatabase(chartDirectory / "chart.db");
+  expect(chartDatabase != nullptr,
+         "legacy forced-LN migration chart database opens");
+  if (!chartDatabase) {
+    return;
+  }
+  expect(ChartDBHelper::GetInstance().CreateChartMetaTable(chartDatabase.get()),
+         "legacy forced-LN migration chart schema creates");
+  expect(execute(chartDatabase.get(),
+                 "INSERT INTO chart_meta "
+                 "(path, md5, sha256, title, ln_mode, total_long_notes, "
+                 "total_backspin_notes, source_priority, source_archive_size) "
+                 "VALUES ('forced.bms', '" +
+                     std::string(kChartMd5) + "', '" +
+                     std::string(kChartSha) +
+                     "', 'Forced CN', 2, 1, 0, 0, 0)"),
+         "legacy forced-LN migration chart metadata inserts");
+  chartDatabase.reset();
+
+  const std::filesystem::path scorePath = temp.path() / "legacy-score.db";
+  Database scoreDatabase = openDatabase(scorePath);
+  expect(scoreDatabase != nullptr,
+         "legacy forced-LN migration score database opens");
+  if (!scoreDatabase) {
+    return;
+  }
+  expect(execute(scoreDatabase.get(),
+                 "CREATE TABLE scores ("
+                 "id INTEGER PRIMARY KEY AUTOINCREMENT, chart_path TEXT, "
+                 "chart_md5 TEXT, chart_sha256 TEXT NOT NULL, "
+                 "ln_mode INTEGER NOT NULL DEFAULT 0, chart_title TEXT, "
+                 "chart_artist TEXT, score INTEGER NOT NULL, "
+                 "max_score INTEGER NOT NULL, max_combo INTEGER NOT NULL, "
+                 "combo_break INTEGER NOT NULL, pgreat INTEGER NOT NULL, "
+                 "great INTEGER NOT NULL, good INTEGER NOT NULL, "
+                 "bad INTEGER NOT NULL, poor INTEGER NOT NULL, "
+                 "kpoor INTEGER NOT NULL, fast INTEGER NOT NULL, "
+                 "slow INTEGER NOT NULL, final_gauge REAL NOT NULL, "
+                 "clear_type INTEGER NOT NULL, "
+                 "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
+                 "INSERT INTO scores (chart_path, chart_md5, chart_sha256, "
+                 "ln_mode, chart_title, chart_artist, score, max_score, "
+                 "max_combo, combo_break, pgreat, great, good, bad, poor, "
+                 "kpoor, fast, slow, final_gauge, clear_type) VALUES "
+                 "('forced.bms', '" +
+                     std::string(kChartMd5) + "', '" +
+                     std::string(kChartSha) +
+                     "', 0, 'Forced CN', 'Artist', 1500, 2000, 500, 2, "
+                     "700, 100, 10, 2, 3, 4, 5, 6, 75.0, " +
+                     std::to_string(kClearTypeHardClearRank) +
+                     "); PRAGMA user_version=1;"),
+         "legacy forced-LN score fixture creates");
+  scoreDatabase.reset();
+
+  ScoreDBHelper helper(scorePath);
+  expect(helper.EnsureSchema(),
+         "legacy forced-LN score database migrates");
+  scoreDatabase = openDatabase(scorePath);
+  expect(scoreDatabase != nullptr &&
+             queryInt(scoreDatabase.get(), "SELECT COUNT(*) FROM scores") ==
+                 1,
+         "forced-LN migration retains the historical score row");
+  expect(scoreDatabase != nullptr &&
+             queryInt(scoreDatabase.get(), "SELECT ln_mode FROM scores") ==
+                 long_note_mode::kLnValue,
+         "forced-LN migration classifies the historical score as classic LN");
+  scoreDatabase.reset();
+
+  bms_parser::ChartMeta meta;
+  meta.SHA256 = std::string(kChartSha);
+  meta.LnMode = long_note_mode::kCnValue;
+  meta.TotalLongNotes = 1;
+  expect(helper.LoadBestClearRanks().bestRankFor(
+             meta, long_note_mode::kHcnValue) == kClearTypeHardClearRank,
+         "forced-CN chart inherits its preserved historical classic-LN lamp");
+#endif
+}
+
 void testDifficultyCourseKeysTrackCanonicalDefinitions() {
   Database chartDatabase = openDatabase(":memory:");
   expect(chartDatabase != nullptr, "difficulty course key database opens");
@@ -2049,6 +2160,7 @@ int main() {
   testScoreAttachmentPreparationOwnsActivePathSnapshot();
   testPreparedScoreQueryGuardLivesThroughDependentQuery();
   testRealChartDbScoreQueryRetainsPreparedAttachmentGuard();
+  testLegacyForcedLongNoteScoreMigrationPreservesLamp();
   testDifficultyCourseKeysTrackCanonicalDefinitions();
   testDifficultyCourseImportRejectsAmbiguousCounterpartHashes();
   testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence();

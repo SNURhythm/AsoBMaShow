@@ -69,7 +69,15 @@ int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
     return kNoClearTypeRank;
   }
   const int mode = long_note_mode::normalizeValue(longNoteMode);
-  return it->second.ranks[static_cast<std::size_t>(mode)];
+  const int rank = it->second.ranks[static_cast<std::size_t>(mode)];
+  if (rank != kNoClearTypeRank || mode == long_note_mode::kUnknownValue) {
+    return rank;
+  }
+  const int classicLongNoteRank =
+      it->second.ranks[long_note_mode::kLnValue];
+  return classicLongNoteRank != kNoClearTypeRank
+             ? classicLongNoteRank
+             : it->second.ranks[long_note_mode::kUnknownValue];
 }
 
 int CourseScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
@@ -151,8 +159,13 @@ int main() {
               "INSERT INTO chart_meta(path, md5, sha256) "
               "VALUES('charts/md5-only.bms', 'md5-local', 'sha-local')");
   execOrAbort(db,
+              "INSERT INTO chart_meta(path, md5, sha256, ln_mode, "
+              "total_long_notes) VALUES('charts/forced-cn.bms', "
+              "'md5-forced-cn', 'sha-forced-cn', 2, 1)");
+  execOrAbort(db,
               "INSERT INTO difficulty_table_entries(table_id, level, sha256, "
-              "md5) VALUES(1, '12', '', 'md5-local')");
+              "md5) VALUES(1, '12', '', 'md5-local'),"
+              "(2, '13', 'sha-forced-cn', 'md5-forced-cn')");
   execOrAbort(db,
               "INSERT INTO difficulty_courses(id, course_key, name, table_id, "
               "group_name) VALUES(10, "
@@ -169,6 +182,8 @@ int main() {
 
   ScoreClearRankCache scoreRanks;
   scoreRanks.rankBySha256["sha-local"].ranks[0] = kClearTypeHardClearRank;
+  scoreRanks.rankBySha256["sha-forced-cn"]
+      .ranks[long_note_mode::kLnValue] = kClearTypeHardClearRank;
   auto &courseRanks = scoreRanks.rankByCourseKey[
       "course:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       "aaaa"];
@@ -203,6 +218,16 @@ int main() {
                 data, main_menu_library::folderKeyForLevel(1, "12"),
                 kClearTypeHardClearRank),
             "difficulty level clear mark count uses matched chart sha");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForTable(2),
+                              long_note_mode::kCnValue),
+            "forced-CN folder inherits a historical classic-LN lamp");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForMode(data,
+                              main_menu_library::folderKeyForTable(2),
+                              long_note_mode::kHcnValue),
+            "forced-CN folder keeps its historical lamp for every selection");
   ASSERT_EQ(kClearTypeHardClearRank,
             folderRankForLn(data,
                             main_menu_library::folderKeyForCourseTable(1)),

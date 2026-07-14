@@ -114,6 +114,7 @@ ReplayData sampleReplay(const std::filesystem::path &root,
   replay.chartMeta.Title = "Title " + hash;
   replay.chartMeta.Artist = "Artist";
   replay.chartMeta.TotalNotes = 50;
+  replay.chartMeta.TotalLongNotes = 1;
   replay.chartMeta.LnMode = 2;
   replay.initialGaugeType = GaugeType::Hard;
   replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;

@@ -1657,20 +1657,10 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
       " AND cm_better.path < cm.path)))))))";
   const std::string bestMatchPredicate =
       matchPredicate + " AND " + betterMatchPredicate;
-  const std::string matchedLnModeExpr = "COALESCE(cm.ln_mode, 0)";
-  const std::string matchedForcedModeExpr =
-      "(SELECT CASE WHEN COALESCE(cm.total_long_notes, 0) + "
-      "COALESCE(cm.total_backspin_notes, 0) > 0 "
-      "AND " +
-      long_note_mode::sqlValidValuePredicate(matchedLnModeExpr) +
-      " THEN cm.ln_mode ELSE 0 END FROM " + chartTable + " cm WHERE " +
-      bestMatchPredicate + " ORDER BY cm.path LIMIT 1)";
   const std::string effectiveModeExpr =
       "CASE WHEN COALESCE(cm.total_long_notes, 0) + "
       "COALESCE(cm.total_backspin_notes, 0) <= 0 THEN 0 ELSE " +
       std::to_string(long_note_mode::kLnValue) + " END";
-  const std::string purgeQuery = "DELETE FROM scores WHERE COALESCE(" +
-                                 matchedForcedModeExpr + ", 0) IN (2, 3)";
   const std::string updateQuery =
       "UPDATE scores SET ln_mode = COALESCE((SELECT " + effectiveModeExpr +
       " FROM " + chartTable + " cm WHERE " + bestMatchPredicate +
@@ -1679,13 +1669,6 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   bool ok = execSql(db, "SAVEPOINT score_lnmode_migration",
                     "starting score ln_mode migration");
   int changedRows = 0;
-  if (ok) {
-    ok = execSql(db, purgeQuery.c_str(),
-                 "purging legacy scores with incompatible long note modes");
-    if (ok) {
-      changedRows += sqlite3_changes(db);
-    }
-  }
   if (ok) {
     ok = execSql(db, updateQuery.c_str(), "migrating score long note modes");
     if (ok) {
@@ -1829,8 +1812,12 @@ TransparentStringHash::operator()(std::string_view value) const noexcept {
 int ScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
   const int mode = long_note_mode::normalizeValue(lnMode);
   const int rank = ranks[static_cast<size_t>(mode)];
-  if (rank != kNoClearTypeRank || mode != 1) {
+  if (rank != kNoClearTypeRank || mode == long_note_mode::kUnknownValue) {
     return rank;
+  }
+  const int classicLongNoteRank = ranks[long_note_mode::kLnValue];
+  if (classicLongNoteRank != kNoClearTypeRank) {
+    return classicLongNoteRank;
   }
   return ranks[0];
 }
