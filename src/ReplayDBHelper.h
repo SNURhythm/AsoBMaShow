@@ -61,6 +61,7 @@ struct PendingBatchEntry {
 struct PendingBatchOutcome {
   bool storageAvailable = false;
   std::vector<PendingBatchEntry> entries;
+  std::size_t remaining = 0;
   std::string diagnostic;
 };
 

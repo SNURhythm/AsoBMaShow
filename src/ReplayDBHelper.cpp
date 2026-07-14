@@ -2913,6 +2913,28 @@ ReplayDBHelper::ListPendingChartScores(std::size_t limit) {
             .diagnostic = "replay storage is unavailable"};
   }
 
+  SqliteStatementHandle countStmt;
+  if (!prepareSqliteStatementLogged(
+          sessionDatabase_,
+          "SELECT COUNT(*) FROM pending_chart_score_writes", countStmt,
+          "counting pending chart score recovery", logSqlErrorText) ||
+      sqlite3_step(countStmt.get()) != SQLITE_ROW ||
+      sqlite3_column_type(countStmt.get(), 0) != SQLITE_INTEGER) {
+    return {.storageAvailable = false,
+            .diagnostic = "could not count pending score recovery"};
+  }
+  const sqlite3_int64 storedPendingCount =
+      sqlite3_column_int64(countStmt.get(), 0);
+  if (storedPendingCount < 0 ||
+      static_cast<std::uint64_t>(storedPendingCount) >
+          std::numeric_limits<std::size_t>::max() ||
+      sqlite3_step(countStmt.get()) != SQLITE_DONE) {
+    return {.storageAvailable = false,
+            .diagnostic = "pending score recovery count is invalid"};
+  }
+  const std::size_t pendingCount =
+      static_cast<std::size_t>(storedPendingCount);
+
   std::string query = kPendingChartScoreSelect;
   query += "ORDER BY p.recovery_attempts, p.last_recovery_at, p.created_at, "
            "p.attempt_id LIMIT ?";
@@ -2941,6 +2963,12 @@ ReplayDBHelper::ListPendingChartScores(std::size_t limit) {
     outcome.storageAvailable = false;
     outcome.entries.clear();
     outcome.diagnostic = "pending score recovery query did not complete";
+  } else if (outcome.entries.size() > pendingCount) {
+    outcome.storageAvailable = false;
+    outcome.entries.clear();
+    outcome.diagnostic = "pending score recovery count changed unexpectedly";
+  } else {
+    outcome.remaining = pendingCount - outcome.entries.size();
   }
   return outcome;
 }

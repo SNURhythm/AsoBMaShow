@@ -2055,12 +2055,15 @@ void testPendingBatchHardCapsAt256(const std::filesystem::path &root) {
   const auto oversized = helper.ListPendingChartScores(300);
   assert(oversized.storageAvailable);
   assert(oversized.entries.size() == 256);
+  assert(oversized.remaining == 1);
   const auto smaller = helper.ListPendingChartScores(3);
   assert(smaller.storageAvailable);
   assert(smaller.entries.size() == 3);
+  assert(smaller.remaining == 254);
   const auto empty = helper.ListPendingChartScores(0);
   assert(empty.storageAvailable);
   assert(empty.entries.empty());
+  assert(empty.remaining == 257);
 }
 
 void testMalformedPendingIdentitiesCanRotate(

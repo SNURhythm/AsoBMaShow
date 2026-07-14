@@ -387,6 +387,41 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
   assert(switchOwnedAfterPersist);
 }
 
+void testSuccessfulBoundedRecoveryReportsRemainingBacklog() {
+  TemporaryDirectory temporary("bounded-recovery-backlog");
+  const auto replayPath = temporary.path() / "replay.db";
+  const auto scorePath = temporary.path() / "score.db";
+  ReplayDBHelper replay(replayPath);
+  ScoreDBHelper score(scorePath);
+  assert(score.EnsureSchema());
+
+  for (int suffix = 0; suffix < 3; ++suffix) {
+    const ChartResultAttempt attempt =
+        sampleAttempt(temporary.path(),
+                      "bounded-backlog-" + std::to_string(suffix), suffix);
+    assert(replay.StageChartResult(attempt).status == StageStatus::Staged);
+  }
+  assertDatabaseCounts(replayPath, scorePath, 3, 0, 3);
+
+  Coordinator coordinator(score, replay);
+  const RecoverySummary first = coordinator.recoverAll(2);
+
+  assert(first.attempted == 2);
+  assert(first.saved == 2);
+  assert(first.pending == 1);
+  assert(first.conflicts == 0);
+  assert(!first.userMessage.empty());
+  assertDatabaseCounts(replayPath, scorePath, 3, 2, 1);
+
+  const RecoverySummary second = coordinator.recoverAll(2);
+  assert(second.attempted == 1);
+  assert(second.saved == 1);
+  assert(second.pending == 0);
+  assert(second.conflicts == 0);
+  assert(second.userMessage.empty());
+  assertDatabaseCounts(replayPath, scorePath, 3, 3, 0);
+}
+
 void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
   TemporaryDirectory temporary("recovery-fairness");
   const auto replayPath = temporary.path() / "replay.db";
@@ -424,12 +459,12 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
 
   assert(first.attempted == 256);
   assert(first.saved == 0);
-  assert(first.pending == 0);
+  assert(first.pending == 1);
   assert(first.conflicts == 256);
   assert(!first.userMessage.empty());
   assert(second.attempted == 256);
   assert(second.saved == 1);
-  assert(second.pending == 0);
+  assert(second.pending == 1);
   assert(second.conflicts == 255);
   assert(!second.userMessage.empty());
   assertDatabaseCounts(replayPath, scorePath, 257, 257, 256);
@@ -454,6 +489,7 @@ int main() {
   testCrashAfterStageRecoversExactlyOneScore();
   testCommittedScoreBeforeAckRecoversWithoutDuplicate();
   testProfileSwitchCannotAcquireGateMidPersist();
+  testSuccessfulBoundedRecoveryReportsRemainingBacklog();
   testRecoveryRetainsConflictAndProcessesLaterValidRow();
   std::cout << "result persistence integration tests passed\n";
   return 0;

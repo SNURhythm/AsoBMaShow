@@ -302,6 +302,13 @@ RecoverySummary Coordinator::recoverAll(std::size_t limit) {
     summary.userMessage = recoveryUserMessage();
     return summary;
   }
+  summary.pending = batch.remaining;
+  if (batch.remaining != 0) {
+    appendDiagnostic(summary.diagnostic,
+                     std::to_string(batch.remaining) +
+                         " pending result rows remain beyond the recovery "
+                         "batch");
+  }
 
   const auto retain = [&](const PendingBatchEntry &entry,
                           RecoveryAttemptKind kind,

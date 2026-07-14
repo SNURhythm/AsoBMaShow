@@ -275,8 +275,10 @@ changing its payload. This durable fair rotation prevents a fixed set of bad
 oldest rows from starving newer valid work. Each row is independently attempted
 so one bad row does not prevent later valid rows. The coordinator returns
 aggregate attempted/saved/pending/conflict counts and never deletes a failed or
-conflicting row. Later startup/profile-activation/result-save invocations
-continue the backlog.
+conflicting row. The pending count also includes rows omitted by the bounded
+batch, so startup and profile activation still warn when more recovery work
+remains. Later startup/profile-activation/result-save invocations continue the
+backlog.
 
 ## Gameplay and Result Flow
 
