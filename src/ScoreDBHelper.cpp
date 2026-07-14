@@ -1547,6 +1547,12 @@ bool attachChartDatabaseForScoreMigration(sqlite3 *db) {
 }
 
 void detachChartDatabaseForScoreMigration(sqlite3 *db) {
+  // SQLite cannot detach a database while the caller's schema transaction is
+  // active. The attachment is connection-local and is released with the
+  // migration connection, so avoid reporting a false migration failure.
+  if (sqlite3_get_autocommit(db) == 0) {
+    return;
+  }
   const std::string query =
       std::string("DETACH DATABASE ") + kScoreMigrationChartSchema;
   execSql(db, query.c_str(), "detaching chart database after score migration");
@@ -1625,13 +1631,16 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
   const int scoreCount = selectScalarInt(db, "SELECT COUNT(*) FROM scores", 0);
   if (scoreCount > 0 && chartDatabaseRebuildRequiredForScoreMigration(db)) {
     detachChartDatabaseForScoreMigration(db);
-    SDL_Log("Deferred score ln_mode migration because chart metadata is "
-            "scheduled for rebuild");
+    SDL_Log("Preserving unclassified legacy score ln_mode values because "
+            "chart metadata is scheduled for rebuild");
+    completed = true;
     return true;
   }
   if (scoreCount > 0 && !chartDatabaseHasRowsForScoreMigration(db)) {
     detachChartDatabaseForScoreMigration(db);
-    SDL_Log("Deferred score ln_mode migration because chart metadata is empty");
+    SDL_Log("Preserving unclassified legacy score ln_mode values because "
+            "chart metadata is empty");
+    completed = true;
     return true;
   }
 

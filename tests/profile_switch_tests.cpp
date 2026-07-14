@@ -1704,6 +1704,114 @@ void testLegacyForcedLongNoteScoreMigrationPreservesLamp() {
 #endif
 }
 
+void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
+#if !TARGET_OS_WINDOWS
+  struct Case {
+    const char *label;
+    bool rebuildRequired;
+  };
+  for (const Case testCase : {
+           Case{"empty chart metadata", false},
+           Case{"chart metadata rebuild", true},
+       }) {
+    TempDirectory temp;
+    ScopedHomeOverride home(temp.path());
+    const std::filesystem::path chartDirectory =
+        Utils::GetDocumentsPath("db");
+    std::filesystem::create_directories(chartDirectory);
+    Database chartDatabase = openDatabase(chartDirectory / "chart.db");
+    expect(chartDatabase != nullptr,
+           std::string(testCase.label) + " chart database opens");
+    if (!chartDatabase) {
+      continue;
+    }
+    expect(ChartDBHelper::GetInstance().CreateChartMetaTable(
+               chartDatabase.get()),
+           std::string(testCase.label) + " chart schema creates");
+    if (testCase.rebuildRequired) {
+      expect(execute(chartDatabase.get(),
+                     "INSERT INTO chart_meta "
+                     "(path, md5, sha256, title, ln_mode, total_long_notes, "
+                     "total_backspin_notes, source_priority, "
+                     "source_archive_size) VALUES ('stale.bms', '" +
+                         std::string(kChartMd5) + "', '" +
+                         std::string(kChartSha) +
+                         "', 'Stale', 2, 1, 0, 0, 0);"
+                         "CREATE TABLE chart_meta_rebuild_state ("
+                         "id INTEGER PRIMARY KEY CHECK(id=1), "
+                         "required INTEGER NOT NULL DEFAULT 0, "
+                         "updated_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+                         "INSERT INTO chart_meta_rebuild_state "
+                         "(id, required) VALUES (1, 1);"),
+             "rebuild fixture marks chart metadata unavailable");
+    }
+    chartDatabase.reset();
+
+    const std::filesystem::path scorePath =
+        temp.path() / "legacy-unclassified-score.db";
+    Database scoreDatabase = openDatabase(scorePath);
+    expect(scoreDatabase != nullptr,
+           std::string(testCase.label) + " score database opens");
+    if (!scoreDatabase) {
+      continue;
+    }
+    expect(execute(scoreDatabase.get(),
+                   "CREATE TABLE scores ("
+                   "id INTEGER PRIMARY KEY AUTOINCREMENT, chart_path TEXT, "
+                   "chart_md5 TEXT, chart_sha256 TEXT NOT NULL, "
+                   "ln_mode INTEGER NOT NULL DEFAULT 0, chart_title TEXT, "
+                   "chart_artist TEXT, score INTEGER NOT NULL, "
+                   "max_score INTEGER NOT NULL, max_combo INTEGER NOT NULL, "
+                   "combo_break INTEGER NOT NULL, pgreat INTEGER NOT NULL, "
+                   "great INTEGER NOT NULL, good INTEGER NOT NULL, "
+                   "bad INTEGER NOT NULL, poor INTEGER NOT NULL, "
+                   "kpoor INTEGER NOT NULL, fast INTEGER NOT NULL, "
+                   "slow INTEGER NOT NULL, final_gauge REAL NOT NULL, "
+                   "clear_type INTEGER NOT NULL, "
+                   "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
+                   "INSERT INTO scores (chart_path, chart_md5, chart_sha256, "
+                   "ln_mode, chart_title, chart_artist, score, max_score, "
+                   "max_combo, combo_break, pgreat, great, good, bad, poor, "
+                   "kpoor, fast, slow, final_gauge, clear_type) VALUES "
+                   "('legacy.bms', '" +
+                       std::string(kChartMd5) + "', '" +
+                       std::string(kChartSha) +
+                       "', 0, 'Legacy', 'Artist', 1500, 2000, 500, 2, "
+                       "700, 100, 10, 2, 3, 4, 5, 6, 75.0, " +
+                       std::to_string(kClearTypeHardClearRank) +
+                       "); PRAGMA user_version=1;"),
+           std::string(testCase.label) + " legacy score fixture creates");
+    scoreDatabase.reset();
+
+    ScoreDBHelper helper(scorePath);
+    expect(helper.EnsureSchema(),
+           std::string(testCase.label) +
+               " does not strand the legacy score migration");
+    scoreDatabase = openDatabase(scorePath);
+    expect(scoreDatabase != nullptr &&
+               queryInt(scoreDatabase.get(), "PRAGMA user_version") ==
+                   ScoreDBHelper::kCurrentSchemaVersion &&
+               queryInt(scoreDatabase.get(), "SELECT COUNT(*) FROM scores") ==
+                   1 &&
+               queryInt(scoreDatabase.get(),
+                        "SELECT ln_mode FROM scores") ==
+                   long_note_mode::kUnknownValue,
+           std::string(testCase.label) +
+               " keeps the unclassified row and completes the schema");
+    scoreDatabase.reset();
+
+    bms_parser::ChartMeta meta;
+    meta.SHA256 = std::string(kChartSha);
+    meta.LnMode = long_note_mode::kCnValue;
+    meta.TotalLongNotes = 1;
+    expect(helper.LoadBestClearRanks().bestRankFor(
+               meta, long_note_mode::kHcnValue) == kClearTypeHardClearRank,
+           std::string(testCase.label) +
+               " retains the historical lamp through legacy fallback");
+  }
+#endif
+}
+
 void testDifficultyCourseKeysTrackCanonicalDefinitions() {
   Database chartDatabase = openDatabase(":memory:");
   expect(chartDatabase != nullptr, "difficulty course key database opens");
@@ -2161,6 +2269,7 @@ int main() {
   testPreparedScoreQueryGuardLivesThroughDependentQuery();
   testRealChartDbScoreQueryRetainsPreparedAttachmentGuard();
   testLegacyForcedLongNoteScoreMigrationPreservesLamp();
+  testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata();
   testDifficultyCourseKeysTrackCanonicalDefinitions();
   testDifficultyCourseImportRejectsAmbiguousCounterpartHashes();
   testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence();
