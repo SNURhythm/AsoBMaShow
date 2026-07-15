@@ -4285,9 +4285,6 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
       !CreateDifficultyTableTables(db)) {
     return -1;
   }
-  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
-    return -1;
-  }
 
   const std::string targetPath = StoredChartPathText(path);
   if (targetPath.empty()) {
@@ -4305,6 +4302,10 @@ int ChartDBHelper::FindChartMetaIndex(sqlite3 *db,
         return static_cast<int>(i);
       }
     }
+    return -1;
+  }
+
+  if (!ensureScoreQueryDatabase(db, chartQuery, preparedScoreQuery)) {
     return -1;
   }
 
