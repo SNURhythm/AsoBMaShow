@@ -1142,14 +1142,10 @@ std::string musicPlaylistTextSnapshot(
 
 } // namespace
 
-void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
-                                              ScoreRepository &scoreRepository,
-                                              const ChartMetaQuery &chartQuery,
-                                              int count,
-                                              std::optional<ChartMetaRecord>
-                                                  leading) {
-  db = database;
-  scores = &scoreRepository;
+void MainMenuScene::ChartListPageCache::reset(
+    ChartRepository::Session &chartSession, const ChartMetaQuery &chartQuery,
+    int count, std::optional<ChartMetaRecord> leading) {
+  session = &chartSession;
   query = chartQuery;
   query.limit = 0;
   query.offset = 0;
@@ -1164,7 +1160,7 @@ void MainMenuScene::ChartListPageCache::clear() {
 }
 
 const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
-  if (db == nullptr || scores == nullptr || index < 0 || index >= totalCount) {
+  if (session == nullptr || index < 0 || index >= totalCount) {
     return fallbackRecord;
   }
   if (leadingRecord.has_value()) {
@@ -1183,8 +1179,7 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 
     std::vector<ChartMetaRecord> records;
     records.reserve(pageSize);
-    ChartRepository::GetInstance().QueryChartMeta(db, *scores, pageQuery,
-                                                  records);
+    session->QueryChartMeta(pageQuery, records);
     pageIt = pages.emplace(pageIndex, std::move(records)).first;
   }
   touchPage(pageIndex);
@@ -1214,7 +1209,8 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 
 void MainMenuScene::init() {
   // Initialize the scene
-  db = ChartRepository::GetInstance().Connect();
+  chartSession =
+      context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
     if (libraryActiveTaskCount.load(std::memory_order_acquire) > 0 ||
         androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
@@ -1276,14 +1272,7 @@ void MainMenuScene::init() {
 }
 
 void MainMenuScene::onPause() {
-  if (db == nullptr) {
-    return;
-  }
-  if (const auto error =
-          score_cache_queries::detachScoreDatabaseIfAttached(db)) {
-    SDL_Log("SQL error while releasing score query database: %s",
-            error->c_str());
-  }
+  chartListCache.clear();
 }
 
 void MainMenuScene::onResume() {
@@ -2665,17 +2654,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
         return a.key == b.key;
       });
-  auto &dbHelper = ChartRepository::GetInstance();
-  dbHelper.CreateChartMetaTable(db);
-  dbHelper.CreateSolidArchiveTable(db);
-  dbHelper.CreateFavoritesTable(db);
-  dbHelper.CreateEntriesTable(db);
+  if (!chartSession.has_value()) {
+    SDL_Log("Chart repository session is unavailable");
+    return;
+  }
+  chartSession->EnsureSchema();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  RefreshIOSFolderAccess(dbHelper.SelectEffectiveEntries(db));
+  RefreshIOSFolderAccess(chartSession->SelectEffectiveEntries());
 #elif TARGET_OS_ANDROID
-  (void)dbHelper.SelectEffectiveEntries(db);
+  (void)chartSession->SelectEffectiveEntries();
 #endif
-  dbHelper.CreateDifficultyTableTables(db);
 
   static constexpr int kChartListItemHeight = 108;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
@@ -3407,28 +3395,29 @@ void MainMenuScene::initView(ApplicationContext &context) {
   reloadScoreClearRanks();
   reloadFolderItems();
   reloadChartList();
-  libraryRevision = ChartRepository::GetInstance().GetLibraryRevision();
+  libraryRevision = context.chartRepository.GetLibraryRevision();
   rootLayout->applyYogaLayout();
 }
 
 void MainMenuScene::reloadFolderItems(bool preserveViewState) {
-  if (folderRecyclerView == nullptr) {
+  if (folderRecyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
 
   const float previousScrollOffset =
       preserveViewState ? folderRecyclerView->scrollOffset : 0.0f;
-  auto &dbHelper = ChartRepository::GetInstance();
-  const std::uint64_t currentLibraryRevision = dbHelper.GetLibraryRevision();
+  const std::uint64_t currentLibraryRevision =
+      context.chartRepository.GetLibraryRevision();
   if (!folderMetadataCache.valid ||
       folderMetadataCache.libraryRevision != currentLibraryRevision) {
     folderMetadataCache = LibraryFolderMetadataCache{};
     folderMetadataCache.libraryRevision = currentLibraryRevision;
-    folderMetadataCache.allSongCount = dbHelper.CountAllChartMeta(db);
-    folderMetadataCache.favoriteCount = dbHelper.CountFavoriteCharts(db);
-    folderMetadataCache.solidArchiveCount = dbHelper.CountSolidArchives(db);
-    folderMetadataCache.tables = dbHelper.SelectDifficultyTables(db);
-    folderMetadataCache.courseTables = dbHelper.SelectDifficultyCourseTables(db);
+    folderMetadataCache.allSongCount = chartSession->CountAllChartMeta();
+    folderMetadataCache.favoriteCount = chartSession->CountFavoriteCharts();
+    folderMetadataCache.solidArchiveCount = chartSession->CountSolidArchives();
+    folderMetadataCache.tables = chartSession->SelectDifficultyTables();
+    folderMetadataCache.courseTables =
+        chartSession->SelectDifficultyCourseTables();
     folderMetadataCache.valid = true;
   }
   std::vector<LibraryFolderItem> folders;
@@ -3517,7 +3506,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     if (levelsIt == folderMetadataCache.levelsByTable.end()) {
       levelsIt =
           folderMetadataCache.levelsByTable
-              .emplace(table.id, dbHelper.SelectDifficultyLevels(db, table.id))
+              .emplace(table.id,
+                       chartSession->SelectDifficultyLevels(table.id))
               .first;
     }
     const auto &levels = levelsIt->second;
@@ -3603,8 +3593,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         if (groupsIt == folderMetadataCache.courseGroupsByTable.end()) {
           groupsIt = folderMetadataCache.courseGroupsByTable
                          .emplace(table.tableId,
-                                  dbHelper.SelectDifficultyCourseGroups(
-                                      db, table.tableId))
+                              chartSession->SelectDifficultyCourseGroups(
+                                  table.tableId))
                          .first;
         }
         for (const auto &group : groupsIt->second) {
@@ -3645,8 +3635,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
           if (coursesIt == folderMetadataCache.coursesByGroup.end()) {
             coursesIt = folderMetadataCache.coursesByGroup
                             .emplace(groupKey,
-                                     dbHelper.SelectDifficultyCourses(
-                                         db, group.tableId, group.groupName))
+                                     chartSession->SelectDifficultyCourses(
+                                         group.tableId, group.groupName))
                             .first;
           }
           for (const auto &course : coursesIt->second) {
@@ -3703,7 +3693,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 }
 
 void MainMenuScene::refreshFavoriteFolderCount() {
-  if (folderRecyclerView == nullptr) {
+  if (folderRecyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
 
@@ -3713,11 +3703,11 @@ void MainMenuScene::refreshFavoriteFolderCount() {
     return;
   }
 
-  auto &dbHelper = ChartRepository::GetInstance();
-  const int favoriteCount = dbHelper.CountFavoriteCharts(db);
+  const int favoriteCount = chartSession->CountFavoriteCharts();
   if (folderMetadataCache.valid) {
     folderMetadataCache.favoriteCount = favoriteCount;
-    folderMetadataCache.libraryRevision = dbHelper.GetLibraryRevision();
+    folderMetadataCache.libraryRevision =
+        context.chartRepository.GetLibraryRevision();
   }
   const float previousScrollOffset = folderRecyclerView->scrollOffset;
   int activeIndex = std::clamp(folderRecyclerView->selectedIndex, 0,
@@ -4115,7 +4105,7 @@ void MainMenuScene::setChartSortCriterion(
 }
 
 void MainMenuScene::reloadChartList(bool preserveViewState) {
-  if (recyclerView == nullptr) {
+  if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
 
@@ -4162,11 +4152,10 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     leadingRecord = std::move(courseRecord);
   }
 
-  int dbCount = ChartRepository::GetInstance().CountChartMeta(
-      db, context.scoreRepository, query);
+  const int dbCount = chartSession->CountChartMeta(query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
-  chartListCache.reset(db, context.scoreRepository, query, dbCount,
+  chartListCache.reset(*chartSession, query, dbCount,
                        std::move(leadingRecord));
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
@@ -4203,8 +4192,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int dbIndex = ChartRepository::GetInstance().FindChartMetaIndex(
-        db, context.scoreRepository, query, std::filesystem::path(path));
+    const int dbIndex = chartSession->FindChartMetaIndex(
+        query, std::filesystem::path(path));
     if (dbIndex < 0) {
       return -1;
     }
@@ -4234,20 +4223,12 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
 }
 
 std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
-  if (db == nullptr) {
+  if (!chartSession.has_value()) {
     return "chart database is unavailable";
   }
 
   profile_database_activity::WriteGuard profileDatabaseOperation;
-  if (const auto error =
-          score_cache_queries::detachScoreDatabaseIfAttached(db)) {
-    SDL_Log("SQL error while releasing score query database: %s",
-            error->c_str());
-    return error;
-  }
-
-  const auto definitions =
-      ChartRepository::GetInstance().SelectDifficultyCourseDefinitions(db);
+  const auto definitions = chartSession->SelectDifficultyCourseDefinitions();
   const CourseScoreRecoveryResult scoreRecovery =
       context.scoreRepository.RecoverCourseRecords(definitions);
   if (!scoreRecovery.ok()) {
@@ -4262,28 +4243,30 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
             replayRecoveryError.c_str());
   }
 
-  auto prepared = context.scoreRepository.PrepareScoreQueryDatabase(db);
+  auto prepared =
+      context.scoreRepository.PrepareScoreQueryDatabase(*chartSession);
   if (const auto &error = prepared.error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
     return error;
   }
   scoreClearRanks = context.scoreRepository.LoadBestClearRanks(
-      db, score_cache_queries::kScoreDatabaseSchema);
+      *chartSession, score_cache_queries::kScoreDatabaseSchema);
   scoreBestScores = context.scoreRepository.LoadBestScores(
-      db, score_cache_queries::kScoreDatabaseSchema);
+      *chartSession, score_cache_queries::kScoreDatabaseSchema);
   scoreClearRanksRevision = context.scoreRepository.GetRevision();
-  folderClearData = main_menu_library::LoadFolderClearDataByLongNoteMode(
-      db, scoreClearRanks);
+  folderClearData =
+      chartSession->LoadFolderClearDataByLongNoteMode(scoreClearRanks);
   return std::nullopt;
 }
 
 std::optional<std::string> MainMenuScene::prepareScoreQueryDatabase() {
-  if (db == nullptr) {
+  if (!chartSession.has_value()) {
     return "chart database is unavailable";
   }
 
-  auto prepared = context.scoreRepository.PrepareScoreQueryDatabase(db);
+  auto prepared =
+      context.scoreRepository.PrepareScoreQueryDatabase(*chartSession);
   if (const auto &error = prepared.error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
@@ -4339,7 +4322,7 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
 
 void MainMenuScene::refreshLibraryIfNeeded() {
   const std::uint64_t revision =
-      ChartRepository::GetInstance().GetLibraryRevision();
+      context.chartRepository.GetLibraryRevision();
   if (libraryRevision == 0) {
     libraryRevision = revision;
     return;
@@ -4406,7 +4389,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   }
   if (shouldReloadFolders || shouldReloadCharts) {
     reloadChartList(true);
-    libraryRevision = ChartRepository::GetInstance().GetLibraryRevision();
+    libraryRevision = context.chartRepository.GetLibraryRevision();
   }
   if ((shouldReloadFolders || shouldReloadCharts) &&
       pendingSelectChartPath.has_value()) {
@@ -4418,13 +4401,12 @@ void MainMenuScene::applyPendingUiUpdates() {
 
 void MainMenuScene::selectChartByPathAfterReload(
     const std::filesystem::path &path) {
-  if (recyclerView == nullptr || path.empty()) {
+  if (recyclerView == nullptr || path.empty() || !chartSession.has_value()) {
     return;
   }
   const path_t target = fspath_to_path_t(path);
   const ChartMetaQuery query = chartQueryForActiveFolder();
-  int index = ChartRepository::GetInstance().FindChartMetaIndex(
-      db, context.scoreRepository, query, path);
+  int index = chartSession->FindChartMetaIndex(query, path);
   if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
       activeFolder.courseId > 0) {
     index += 1;
@@ -4512,8 +4494,8 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
-  auto &dbHelper = ChartRepository::GetInstance();
-  if (!dbHelper.SetFavorite(db, record.meta, favorite)) {
+  if (!chartSession.has_value() ||
+      !chartSession->SetFavorite(record.meta, favorite)) {
     return false;
   }
 
@@ -4524,7 +4506,7 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     chartListCache.clear();
     recyclerView->rebindVisibleItems();
   }
-  libraryRevision = dbHelper.GetLibraryRevision();
+  libraryRevision = context.chartRepository.GetLibraryRevision();
   return true;
 }
 
@@ -4899,7 +4881,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
 const MainMenuScene::CourseValidationCache &
 MainMenuScene::courseValidationForActiveFolder() {
   const std::uint64_t currentLibraryRevision =
-      ChartRepository::GetInstance().GetLibraryRevision();
+      context.chartRepository.GetLibraryRevision();
   if (courseValidationCache.valid &&
       courseValidationCache.libraryRevision == currentLibraryRevision &&
       courseValidationCache.courseId == activeFolder.courseId) {
@@ -4912,14 +4894,13 @@ MainMenuScene::courseValidationForActiveFolder() {
   courseValidationCache.courseId = activeFolder.courseId;
 
   if (activeFolder.type != LibraryFolderItem::Type::Course ||
-      activeFolder.courseId <= 0) {
+      activeFolder.courseId <= 0 || !chartSession.has_value()) {
     return courseValidationCache;
   }
 
   ChartMetaQuery query;
   query.courseId = activeFolder.courseId;
-  ChartRepository::GetInstance().QueryChartMeta(
-      db, context.scoreRepository, query, courseValidationCache.records);
+  chartSession->QueryChartMeta(query, courseValidationCache.records);
   courseValidationCache.empty = courseValidationCache.records.empty();
   for (int i = 0;
        i < static_cast<int>(courseValidationCache.records.size()); ++i) {
@@ -4987,9 +4968,11 @@ void MainMenuScene::startSelectedCourse() {
     const auto &missingRecord =
         records[static_cast<std::size_t>(firstMissingIndex)];
     if (!missingRecord.meta.BmsPath.empty()) {
-      const int dbIndex = ChartRepository::GetInstance().FindChartMetaIndex(
-          db, context.scoreRepository, chartQueryForActiveFolder(),
-          missingRecord.meta.BmsPath);
+      const int dbIndex = chartSession.has_value()
+                              ? chartSession->FindChartMetaIndex(
+                                    chartQueryForActiveFolder(),
+                                    missingRecord.meta.BmsPath)
+                              : -1;
       if (dbIndex >= 0) {
         visibleMissingIndex = dbIndex + 1;
       }
@@ -6013,16 +5996,17 @@ void MainMenuScene::openFindBmsForSelection() {
 }
 
 std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
-  auto &dbHelper = ChartRepository::GetInstance();
-  dbHelper.CreateEntriesTable(db);
-  auto entries = dbHelper.SelectEffectiveEntries(db);
+  if (!chartSession.has_value()) {
+    return ChartRepository::DefaultBmsFolderPath();
+  }
+  auto entries = chartSession->SelectEffectiveEntries();
   if (entries.empty()) {
     const auto path = ChartRepository::DefaultBmsFolderPath();
     const bool pathReady =
         ensureDirectoryExistsLogged(path, "BMS download root");
 #if !(TARGET_OS_ANDROID)
     if (pathReady) {
-      dbHelper.InsertEntry(db, path);
+      chartSession->InsertEntry(path);
     }
 #endif
     return path;
@@ -9854,8 +9838,9 @@ void MainMenuScene::cleanupScene() {
 #endif
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
-  ChartRepository::GetInstance().Close(db);
-  db = nullptr;
+  chartListCache.clear();
+  chartListCache.session = nullptr;
+  chartSession.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
   rootLayout = nullptr;

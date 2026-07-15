@@ -616,6 +616,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
+        src/repositories/ChartRepositoryFolderQueries.cpp
+        src/repositories/ChartRepositoryFolderSession.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/ResultPersistenceModel.cpp
@@ -743,6 +745,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(main_menu_library_tests
         tests/main_menu_library_tests.cpp
+        src/repositories/ChartRepositoryFolderQueries.cpp
         src/scene/MainMenuLibrary.cpp
         src/sqlite3.c
     )

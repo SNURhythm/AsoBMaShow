@@ -3,7 +3,7 @@
 #include "../CourseIdentity.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
-#include "ScoreRepository.h"
+#include "ScoreRepositoryModels.h"
 #include "../bms_parser.hpp"
 #include "../sqlite3.h"
 

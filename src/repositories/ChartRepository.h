@@ -3,10 +3,12 @@
 #pragma once
 
 #include "../CourseIdentity.h"
+#include "../LibraryFolderClearData.h"
 #include "../ThreadCompat.h"
 #include "../bms_parser.hpp"
 #include "../path.h"
 #include "../sqlite3.h"
+#include "ScoreRepositoryModels.h"
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -232,12 +234,15 @@ public:
     SelectDifficultyCourseDefinitions();
     std::string
     DifficultyTableLabelsForChart(const bms_parser::ChartMeta &meta);
+    chart_library::FolderClearDataByLongNoteMode
+    LoadFolderClearDataByLongNoteMode(const ScoreClearRankCache &scoreRanks);
 
   private:
     friend class ChartRepository;
     friend class ScoreRepository;
     struct Impl;
     explicit Session(std::unique_ptr<Impl> impl);
+    sqlite3 *NativeHandleForScoreRepository() const;
     std::unique_ptr<Impl> impl_;
   };
 

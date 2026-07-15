@@ -1,4 +1,5 @@
 #include "../src/scene/MainMenuLibrary.h"
+#include "../src/repositories/ChartRepositoryFolderQueries.h"
 #include "../src/LongNoteModeUtils.h"
 #include "RepositorySqliteTestSupport.h"
 
@@ -28,7 +29,7 @@ void execOrAbort(sqlite3 *db, const std::string &sql) {
   }
 }
 
-int folderRankForLn(const main_menu_library::FolderClearDataByLongNoteMode &data,
+int folderRankForLn(const chart_library::FolderClearDataByLongNoteMode &data,
                     const std::string &folderKey) {
   const auto &ranks = data.clearRanks[long_note_mode::kLnValue];
   const auto it = ranks.find(folderKey);
@@ -36,7 +37,7 @@ int folderRankForLn(const main_menu_library::FolderClearDataByLongNoteMode &data
 }
 
 int folderRankForMode(
-    const main_menu_library::FolderClearDataByLongNoteMode &data,
+    const chart_library::FolderClearDataByLongNoteMode &data,
     const std::string &folderKey, int longNoteMode) {
   const auto &ranks =
       data.clearRanks[long_note_mode::normalizeValue(longNoteMode)];
@@ -45,7 +46,7 @@ int folderRankForMode(
 }
 
 int folderClearCountForLn(
-    const main_menu_library::FolderClearDataByLongNoteMode &data,
+    const chart_library::FolderClearDataByLongNoteMode &data,
     const std::string &folderKey, int clearRank) {
   const auto &countsByFolder = data.clearMarkCounts[long_note_mode::kLnValue];
   const auto folderIt = countsByFolder.find(folderKey);
@@ -200,11 +201,11 @@ int main() {
       .ranks[long_note_mode::kLnValue] = kClearTypeFullComboRank;
 
   repository_test::StatementTrace trace;
-  main_menu_library::FolderClearDataByLongNoteMode data;
+  chart_library::FolderClearDataByLongNoteMode data;
   {
     repository_test::ScopedStatementTrace observation(db, trace);
-    data =
-        main_menu_library::LoadFolderClearDataByLongNoteMode(db, scoreRanks);
+    data = chart_repository_detail::LoadFolderClearDataByLongNoteMode(
+        db, scoreRanks);
   }
   ASSERT_EQ(4, trace.count,
             "folder clear aggregation keeps four streaming SELECTs");

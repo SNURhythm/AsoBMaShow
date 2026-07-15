@@ -3480,6 +3480,10 @@ ChartRepository::Session::Session(Session &&) noexcept = default;
 ChartRepository::Session &
 ChartRepository::Session::operator=(Session &&) noexcept = default;
 
+sqlite3 *ChartRepository::Session::NativeHandleForScoreRepository() const {
+  return impl_->connection.get();
+}
+
 bool ChartRepository::Session::EnsureSchema() {
   sqlite3 *db = impl_->connection.get();
   bool ok = true;
