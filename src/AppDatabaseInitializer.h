@@ -51,9 +51,8 @@ inline bool initializeChartDatabase() {
   return ok;
 }
 
-inline bool initializeScoreDatabase() {
-  ScoreRepository &helper = ScoreRepository::GetInstance();
-  return helper.EnsureSchema();
+inline bool initializeScoreDatabase(ScoreRepository &repository) {
+  return repository.EnsureSchema();
 }
 
 inline bool initializeScoreDatabase(const std::filesystem::path &databasePath) {
@@ -61,9 +60,8 @@ inline bool initializeScoreDatabase(const std::filesystem::path &databasePath) {
   return helper.EnsureSchema();
 }
 
-inline bool initializeReplayDatabase() {
-  ReplayRepository &helper = ReplayRepository::GetInstance();
-  return helper.EnsureSchema();
+inline bool initializeReplayDatabase(ReplayRepository &repository) {
+  return repository.EnsureSchema();
 }
 
 inline bool initializeReplayDatabase(
@@ -81,10 +79,13 @@ inline bool initializeMusicDatabase() {
   return helper.CreateTables(db.get());
 }
 
-inline DatabaseInitializationStatus initializeApplicationDatabases() {
+inline DatabaseInitializationStatus
+initializeApplicationDatabases(ScoreRepository &scores,
+                               ReplayRepository &replays) {
   return initializeApplicationDatabasesWith(
-      initializeChartDatabase, [] { return initializeScoreDatabase(); },
-      [] { return initializeReplayDatabase(); }, initializeMusicDatabase);
+      initializeChartDatabase, [&] { return initializeScoreDatabase(scores); },
+      [&] { return initializeReplayDatabase(replays); },
+      initializeMusicDatabase);
 }
 
 } // namespace app_database_initializer

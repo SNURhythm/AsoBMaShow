@@ -99,6 +99,8 @@ public:
   ProfileResult profileInitializationResult;
   AppSettings settings;
   InputProfile inputProfile;
+  ScoreRepository scoreRepository;
+  ReplayRepository replayRepository;
   result_persistence::Coordinator resultPersistence;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
@@ -149,8 +151,7 @@ public:
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
-        resultPersistence(ScoreRepository::GetInstance(),
-                          ReplayRepository::GetInstance()),
+        resultPersistence(scoreRepository, replayRepository),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio) {
@@ -162,8 +163,8 @@ public:
         inputProfile.gyroscopeTurntable);
 
     const PlayerProfilePaths activePaths = profileManager.activePaths();
-    ScoreRepository::GetInstance().SetDatabasePath(activePaths.scoresDb);
-    ReplayRepository::GetInstance().SetDatabasePath(activePaths.replaysDb);
+    scoreRepository.SetDatabasePath(activePaths.scoresDb);
+    replayRepository.SetDatabasePath(activePaths.replaysDb);
     saveActiveInputProfile = [this](const InputProfile &candidate,
                                     std::string &error) {
       if (!profileInitializationResult.ok()) {
@@ -184,8 +185,7 @@ public:
           error);
     };
     profileSessionCoordinator = std::make_unique<ProfileSessionCoordinator>(
-        profileManager, ScoreRepository::GetInstance(),
-        ReplayRepository::GetInstance(),
+        profileManager, scoreRepository, replayRepository,
         [this]() -> std::optional<std::string> {
           if (profileGameplayActive.load(std::memory_order_acquire)) {
             return "A profile cannot be switched during gameplay.";
@@ -335,8 +335,8 @@ public:
         thread.second.join();
       }
     }
-    ScoreRepository::GetInstance().Shutdown();
-    ReplayRepository::GetInstance().Shutdown();
+    scoreRepository.Shutdown();
+    replayRepository.Shutdown();
     std::cout << "Main function is quitting..." << std::endl;
   }
 };
