@@ -2789,14 +2789,16 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
   renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
   const std::optional<ResultPreviousBestData> previousBest =
-      result_presentation::previousBestForReplayChart(chart.Meta, replay);
+      result_presentation::previousBestForReplayChart(
+          context.scoreRepository, chart.Meta, replay);
   const std::string selectedPacemakerTarget =
       resolvedOptions.pacemakerTarget.empty()
           ? settings.selectedPacemakerTarget
           : resolvedOptions.pacemakerTarget;
   const pacemaker::Target activePacemakerTarget =
       result_presentation::pacemakerTargetForReplay(
-          chart, replay, selectedPacemakerTarget, previousBest);
+          context.replayRepository, chart, replay, selectedPacemakerTarget,
+          previousBest);
   RhythmState pacemakerState(&chart, false);
   pacemakerState.configureGauge(replay.initialGaugeType,
                                 replay.gaugeAutoShift,
@@ -2862,8 +2864,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.previousBest = previousBest;
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
-            chart, replayResultState, replay, selectedPacemakerTarget,
-            previousBest);
+            context.replayRepository, chart, replayResultState, replay,
+            selectedPacemakerTarget, previousBest);
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
     resultAnalytics =
@@ -3683,7 +3685,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.currentClearLabelOverride = "NO PLAY";
       data.currentClearRankOverride = kNoClearTypeRank;
       data.previousBest = result_presentation::previousBestForReplayChart(
-          chart.Meta, stageReplay);
+          context.scoreRepository, chart.Meta, stageReplay);
       DefaultSkin resultSkin;
       resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
       stageResultAnalytics =

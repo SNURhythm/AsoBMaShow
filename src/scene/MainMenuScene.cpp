@@ -1143,11 +1143,13 @@ std::string musicPlaylistTextSnapshot(
 } // namespace
 
 void MainMenuScene::ChartListPageCache::reset(sqlite3 *database,
+                                              ScoreRepository &scoreRepository,
                                               const ChartMetaQuery &chartQuery,
                                               int count,
                                               std::optional<ChartMetaRecord>
                                                   leading) {
   db = database;
+  scores = &scoreRepository;
   query = chartQuery;
   query.limit = 0;
   query.offset = 0;
@@ -1162,7 +1164,7 @@ void MainMenuScene::ChartListPageCache::clear() {
 }
 
 const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
-  if (db == nullptr || index < 0 || index >= totalCount) {
+  if (db == nullptr || scores == nullptr || index < 0 || index >= totalCount) {
     return fallbackRecord;
   }
   if (leadingRecord.has_value()) {
@@ -1181,7 +1183,8 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 
     std::vector<ChartMetaRecord> records;
     records.reserve(pageSize);
-    ChartRepository::GetInstance().QueryChartMeta(db, pageQuery, records);
+    ChartRepository::GetInstance().QueryChartMeta(db, *scores, pageQuery,
+                                                  records);
     pageIt = pages.emplace(pageIndex, std::move(records)).first;
   }
   touchPage(pageIndex);
@@ -4159,10 +4162,12 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     leadingRecord = std::move(courseRecord);
   }
 
-  int dbCount = ChartRepository::GetInstance().CountChartMeta(db, query);
+  int dbCount = ChartRepository::GetInstance().CountChartMeta(
+      db, context.scoreRepository, query);
   const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
-  chartListCache.reset(db, query, dbCount, std::move(leadingRecord));
+  chartListCache.reset(db, context.scoreRepository, query, dbCount,
+                       std::move(leadingRecord));
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
@@ -4199,7 +4204,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       return preferredIndex;
     }
     const int dbIndex = ChartRepository::GetInstance().FindChartMetaIndex(
-        db, query, std::filesystem::path(path));
+        db, context.scoreRepository, query, std::filesystem::path(path));
     if (dbIndex < 0) {
       return -1;
     }
@@ -4244,30 +4249,30 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
   const auto definitions =
       ChartRepository::GetInstance().SelectDifficultyCourseDefinitions(db);
   const CourseScoreRecoveryResult scoreRecovery =
-      ScoreRepository::GetInstance().RecoverCourseRecords(definitions);
+      context.scoreRepository.RecoverCourseRecords(definitions);
   if (!scoreRecovery.ok()) {
     SDL_Log("SQL error while recovering course scores: %s",
             scoreRecovery.errorMessage.c_str());
   }
 
   std::string replayRecoveryError;
-  if (!ReplayRepository::GetInstance().RecoverCourseRecords(
+  if (!context.replayRepository.RecoverCourseRecords(
           definitions, scoreRecovery.evidence, replayRecoveryError)) {
     SDL_Log("SQL error while recovering course replays: %s",
             replayRecoveryError.c_str());
   }
 
-  auto prepared = ScoreRepository::GetInstance().PrepareScoreQueryDatabase(db);
+  auto prepared = context.scoreRepository.PrepareScoreQueryDatabase(db);
   if (const auto &error = prepared.error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
     return error;
   }
-  scoreClearRanks = ScoreRepository::GetInstance().LoadBestClearRanks(
+  scoreClearRanks = context.scoreRepository.LoadBestClearRanks(
       db, score_cache_queries::kScoreDatabaseSchema);
-  scoreBestScores = ScoreRepository::GetInstance().LoadBestScores(
+  scoreBestScores = context.scoreRepository.LoadBestScores(
       db, score_cache_queries::kScoreDatabaseSchema);
-  scoreClearRanksRevision = ScoreRepository::GetInstance().GetRevision();
+  scoreClearRanksRevision = context.scoreRepository.GetRevision();
   folderClearData = main_menu_library::LoadFolderClearDataByLongNoteMode(
       db, scoreClearRanks);
   return std::nullopt;
@@ -4278,7 +4283,7 @@ std::optional<std::string> MainMenuScene::prepareScoreQueryDatabase() {
     return "chart database is unavailable";
   }
 
-  auto prepared = ScoreRepository::GetInstance().PrepareScoreQueryDatabase(db);
+  auto prepared = context.scoreRepository.PrepareScoreQueryDatabase(db);
   if (const auto &error = prepared.error()) {
     SDL_Log("SQL error while preparing score query database: %s",
             error->c_str());
@@ -4315,7 +4320,7 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
 }
 
 void MainMenuScene::refreshScoreClearRanksIfNeeded() {
-  const std::uint64_t revision = ScoreRepository::GetInstance().GetRevision();
+  const std::uint64_t revision = context.scoreRepository.GetRevision();
   if (revision == scoreClearRanksRevision) {
     return;
   }
@@ -4418,7 +4423,8 @@ void MainMenuScene::selectChartByPathAfterReload(
   }
   const path_t target = fspath_to_path_t(path);
   const ChartMetaQuery query = chartQueryForActiveFolder();
-  int index = ChartRepository::GetInstance().FindChartMetaIndex(db, query, path);
+  int index = ChartRepository::GetInstance().FindChartMetaIndex(
+      db, context.scoreRepository, query, path);
   if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
       activeFolder.courseId > 0) {
     index += 1;
@@ -4912,8 +4918,8 @@ MainMenuScene::courseValidationForActiveFolder() {
 
   ChartMetaQuery query;
   query.courseId = activeFolder.courseId;
-  ChartRepository::GetInstance().QueryChartMeta(db, query,
-                                              courseValidationCache.records);
+  ChartRepository::GetInstance().QueryChartMeta(
+      db, context.scoreRepository, query, courseValidationCache.records);
   courseValidationCache.empty = courseValidationCache.records.empty();
   for (int i = 0;
        i < static_cast<int>(courseValidationCache.records.size()); ++i) {
@@ -4982,7 +4988,8 @@ void MainMenuScene::startSelectedCourse() {
         records[static_cast<std::size_t>(firstMissingIndex)];
     if (!missingRecord.meta.BmsPath.empty()) {
       const int dbIndex = ChartRepository::GetInstance().FindChartMetaIndex(
-          db, chartQueryForActiveFolder(), missingRecord.meta.BmsPath);
+          db, context.scoreRepository, chartQueryForActiveFolder(),
+          missingRecord.meta.BmsPath);
       if (dbIndex >= 0) {
         visibleMissingIndex = dbIndex + 1;
       }
@@ -5414,7 +5421,7 @@ void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
   if (record != nullptr && record->courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
       (!activeFolder.courseKey.empty() || activeFolder.courseId > 0)) {
-    const auto courseReplays = ReplayRepository::GetInstance().ListCourseReplays(
+    const auto courseReplays = context.replayRepository.ListCourseReplays(
         {.courseKey = activeFolder.courseKey,
          .legacyCourseId = activeFolder.courseId});
     setReplayButtonVisible(!courseReplays.empty());
@@ -8210,12 +8217,12 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
       activeFolder.type == LibraryFolderItem::Type::Course &&
       (!activeFolder.courseKey.empty() || activeFolder.courseId > 0);
   if (courseReplayList) {
-    replaySummaries = ReplayRepository::GetInstance().ListCourseReplays(
+    replaySummaries = context.replayRepository.ListCourseReplays(
         {.courseKey = activeFolder.courseKey,
          .legacyCourseId = activeFolder.courseId},
         0);
   } else {
-    replaySummaries = ReplayRepository::GetInstance().ListReplays(record.meta, 0);
+    replaySummaries = context.replayRepository.ListReplays(record.meta, 0);
     replaySummaries.insert(replaySummaries.begin(),
                            autoPlayReplaySummary(record));
   }
@@ -8820,7 +8827,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return true;
         }
 
-        auto replay = ReplayRepository::GetInstance().LoadReplay(
+        auto replay = context.replayRepository.LoadReplay(
             replayId, replayLoadMetaForRecord(record));
         if (!replay.has_value()) {
           resetReplayWatchLoadingUi();
@@ -8904,7 +8911,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
         }
         joinRetiredPreviewLoadThreads();
 
-        auto replay = ReplayRepository::GetInstance().LoadReplay(
+        auto replay = context.replayRepository.LoadReplay(
             replayId, replayLoadMetaForRecord(record));
         if (!replay.has_value() || replay->autoPlay) {
           resetReplayWatchLoadingUi();
@@ -8984,7 +8991,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         }
         joinRetiredPreviewLoadThreads();
 
-        auto replay = ReplayRepository::GetInstance().LoadCourseReplay(replayId);
+        auto replay = context.replayRepository.LoadCourseReplay(replayId);
         if (!replay.has_value() || replay->stages.empty()) {
           return failReplayLoad();
         }
@@ -9446,7 +9453,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       }
 
       if (record.courseStart) {
-        auto replay = ReplayRepository::GetInstance().LoadCourseReplay(replayId);
+        auto replay = context.replayRepository.LoadCourseReplay(replayId);
         if (!replay.has_value()) {
           complete({.success = false, .message = "No Replay"});
           return;
@@ -9504,7 +9511,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         return;
       }
 
-      auto replay = ReplayRepository::GetInstance().LoadReplay(
+      auto replay = context.replayRepository.LoadReplay(
           replayId, replayLoadMetaForRecord(record));
       if (!replay.has_value()) {
         complete({.success = false, .message = "No Replay"});
@@ -9566,7 +9573,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
 
     if (record.courseStart) {
       updateReplayExportProgressUi(0.20, "Loading course replay");
-      auto replay = ReplayRepository::GetInstance().LoadCourseReplay(replayId);
+      auto replay = context.replayRepository.LoadCourseReplay(replayId);
       if (!replay.has_value()) {
         complete({.success = false, .message = "No Replay"});
         applyReplayExportResult();
@@ -9580,7 +9587,7 @@ void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
       return;
     }
 
-    auto replay = ReplayRepository::GetInstance().LoadReplay(
+    auto replay = context.replayRepository.LoadReplay(
         replayId, replayLoadMetaForRecord(record));
     if (!replay.has_value()) {
       complete({.success = false, .message = "No Replay"});

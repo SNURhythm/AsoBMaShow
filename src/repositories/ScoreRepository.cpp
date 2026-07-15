@@ -1930,11 +1930,6 @@ ScoreBestCache::bestForStoredKey(std::string_view sha256,
   return std::nullopt;
 }
 
-ScoreRepository &ScoreRepository::GetInstance() {
-  static ScoreRepository instance;
-  return instance;
-}
-
 ScoreRepository::ScoreRepository(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
@@ -2052,10 +2047,6 @@ bool ScoreRepository::HasActiveWrites() {
 }
 
 sqlite3 *ScoreRepository::Connect() {
-  if (this == &GetInstance()) {
-    SDL_Log("Raw score connections are unavailable on the runtime singleton");
-    return nullptr;
-  }
   std::filesystem::path path;
   bool trustedSessionPath = false;
   {

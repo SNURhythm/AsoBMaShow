@@ -167,8 +167,6 @@ public:
   ScoreRepository(const ScoreRepository &) = delete;
   ScoreRepository &operator=(const ScoreRepository &) = delete;
 
-  static ScoreRepository &GetInstance();
-
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
@@ -180,8 +178,7 @@ public:
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
   void Shutdown();
-  // Compatibility API for standalone helpers. The runtime singleton keeps its
-  // connection private so raw handles cannot outlive a profile switch.
+  // Compatibility API for standalone migration and test helpers.
   sqlite3 *Connect();
   void Close(sqlite3 *db);
   bool CreateScoreTable(sqlite3 *db);

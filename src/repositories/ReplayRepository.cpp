@@ -2320,11 +2320,6 @@ sqlite3 *openTrustedReplayDatabase(const std::filesystem::path &path,
 }
 } // namespace
 
-ReplayRepository &ReplayRepository::GetInstance() {
-  static ReplayRepository instance;
-  return instance;
-}
-
 ReplayRepository::ReplayRepository(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
@@ -2449,10 +2444,6 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
 }
 
 sqlite3 *ReplayRepository::Connect() {
-  if (this == &GetInstance()) {
-    SDL_Log("Raw replay connections are unavailable on the runtime singleton");
-    return nullptr;
-  }
   std::filesystem::path path;
   bool trustedSession = false;
   {
@@ -3635,7 +3626,7 @@ bool ReplayRepository::RecoverCourseRecords(
     std::span<const CourseScoreEvidence> scoreEvidence,
     std::string &errorMessage) {
   profile_database_activity::WriteGuard operation;
-  if (this == &GetInstance() || db == nullptr) {
+  if (db == nullptr) {
     errorMessage = "external replay recovery connection is unavailable";
     return false;
   }

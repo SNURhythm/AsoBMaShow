@@ -369,26 +369,6 @@ void seedChartScore(const std::filesystem::path &path,
       "chart-matrix score row inserts");
 }
 
-class ScopedActiveScoreDatabasePath {
-public:
-  explicit ScopedActiveScoreDatabasePath(std::filesystem::path path)
-      : helper_(ScoreRepository::GetInstance()),
-        previous_(helper_.GetDatabasePath()) {
-    helper_.SetDatabasePath(std::move(path));
-  }
-
-  ~ScopedActiveScoreDatabasePath() { helper_.SetDatabasePath(previous_); }
-
-  ScopedActiveScoreDatabasePath(const ScopedActiveScoreDatabasePath &) =
-      delete;
-  ScopedActiveScoreDatabasePath &
-  operator=(const ScopedActiveScoreDatabasePath &) = delete;
-
-private:
-  ScoreRepository &helper_;
-  std::filesystem::path previous_;
-};
-
 ReplayData sampleReplay(const std::filesystem::path &root, int score) {
   ReplayData replay;
   replay.chartMeta.BmsPath = root / "BMS" / "chart.bms";
@@ -1596,9 +1576,7 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
     return;
   }
 
-  ScoreRepository &activeScore = ScoreRepository::GetInstance();
-  const std::filesystem::path previousScorePath = activeScore.GetDatabasePath();
-  activeScore.SetDatabasePath(fixture.firstPaths.scoresDb);
+  ScoreRepository &activeScore = fixture.score;
 
   ScopedBlockingStatementTrace blockedQuery(
       "FROM score_db.score_sha256_clear_rank_cache");
@@ -1606,7 +1584,6 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   Database chartDatabase = openDatabase(":memory:");
   expect(chartDatabase != nullptr, "real ChartDB score query connection opens");
   if (!chartDatabase) {
-    activeScore.SetDatabasePath(previousScorePath);
     return;
   }
   expect(ChartRepository::GetInstance().CreateChartMetaTable(chartDatabase.get()),
@@ -1626,7 +1603,7 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   int firstCount = -1;
   std::thread query([&]() {
     firstCount = ChartRepository::GetInstance().CountChartMeta(
-        chartDatabase.get(), firstQuery);
+        chartDatabase.get(), activeScore, firstQuery);
   });
   const bool queryEntered = blockedQuery.waitUntilEntered();
   expect(queryEntered,
@@ -1634,7 +1611,6 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   if (!queryEntered) {
     blockedQuery.release();
     query.join();
-    activeScore.SetDatabasePath(previousScorePath);
     return;
   }
 
@@ -1657,11 +1633,10 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   }
   ChartMetaQuery secondQuery = firstQuery;
   secondQuery.clearMarkRank = kClearTypeHardClearRank;
-  expect(ChartRepository::GetInstance().CountChartMeta(chartDatabase.get(),
-                                                     secondQuery) == 1,
+  expect(ChartRepository::GetInstance().CountChartMeta(
+             chartDatabase.get(), activeScore, secondQuery) == 1,
          "next real ChartDB score-backed count reattaches and reads profile "
          "B");
-  activeScore.SetDatabasePath(previousScorePath);
 }
 
 void testChartQueryBehaviorMatrix() {
@@ -1686,8 +1661,6 @@ void testChartQueryBehaviorMatrix() {
                  300);
   seedChartScore(fixture.firstPaths.scoresDb, "gamma.bms", md5C, shaC, 1, 2,
                  200);
-  ScopedActiveScoreDatabasePath activeScorePath(fixture.firstPaths.scoresDb);
-
   Database chartDatabase = openDatabase(":memory:");
   expect(chartDatabase != nullptr, "chart query matrix database opens");
   if (!chartDatabase) {
@@ -1723,7 +1696,7 @@ void testChartQueryBehaviorMatrix() {
                               int expectedCount, int expectedStartIndex,
                               std::string_view label) {
     std::vector<ChartMetaRecord> records;
-    charts.QueryChartMeta(chartDatabase.get(), query, records);
+    charts.QueryChartMeta(chartDatabase.get(), fixture.score, query, records);
     std::vector<std::string> actualPaths;
     actualPaths.reserve(records.size());
     for (const auto &record : records) {
@@ -1732,10 +1705,12 @@ void testChartQueryBehaviorMatrix() {
     }
     expect(actualPaths == expectedPaths,
            std::string(label) + " preserves ordered chart paths");
-    expect(charts.CountChartMeta(chartDatabase.get(), query) == expectedCount,
+    expect(charts.CountChartMeta(chartDatabase.get(), fixture.score, query) ==
+               expectedCount,
            std::string(label) + " preserves unpaginated count");
     for (std::size_t i = 0; i < records.size(); ++i) {
-      expect(charts.FindChartMetaIndex(chartDatabase.get(), query,
+      expect(charts.FindChartMetaIndex(chartDatabase.get(), fixture.score,
+                                       query,
                                        records[i].meta.BmsPath) ==
                  expectedStartIndex + static_cast<int>(i),
              std::string(label) + " preserves chart index " +

@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+class ScoreRepository;
+
 enum class ChartRecordSortCriterion {
   Default,
   ClearMark,
@@ -202,10 +204,13 @@ public:
   int CountFavoriteCharts(sqlite3 *db);
   bool SetFavorite(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
                    bool favorite);
-  void QueryChartMeta(sqlite3 *db, const ChartMetaQuery &query,
+  void QueryChartMeta(sqlite3 *db, ScoreRepository &scores,
+                      const ChartMetaQuery &query,
                       std::vector<ChartMetaRecord> &chartMetas);
-  int CountChartMeta(sqlite3 *db, const ChartMetaQuery &query);
-  int FindChartMetaIndex(sqlite3 *db, const ChartMetaQuery &query,
+  int CountChartMeta(sqlite3 *db, ScoreRepository &scores,
+                     const ChartMetaQuery &query);
+  int FindChartMetaIndex(sqlite3 *db, ScoreRepository &scores,
+                         const ChartMetaQuery &query,
                          const std::filesystem::path &path);
   bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
   int DeleteChartMetaInDirectory(sqlite3 *db,

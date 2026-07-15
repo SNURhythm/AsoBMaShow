@@ -701,14 +701,15 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   const std::string &pacemakerTarget) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
-      result_presentation::previousBestForReplayChart(chart.Meta, replay);
+      result_presentation::previousBestForReplayChart(
+          context.scoreRepository, chart.Meta, replay);
   std::optional<ResultPacemakerData> pacemaker;
   if (!replay.autoPlay) {
     const std::string target =
         pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                                 : pacemakerTarget;
     pacemaker = result_presentation::pacemakerDataForReplayResult(
-        chart, state, replay, target, previousBest);
+        context.replayRepository, chart, state, replay, target, previousBest);
   }
   std::string difficultyLabel =
       result_presentation::difficultyLabelForChart(chart.Meta);
@@ -783,8 +784,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
     const auto result = renderResultImage(
         context, chart->Meta, state, display.mode, display.laneOrder,
         result_presentation::difficultyLabelForChart(chart->Meta),
-        result_presentation::previousBestForReplayChart(chart->Meta,
-                                                        stageReplay),
+        result_presentation::previousBestForReplayChart(
+            context.scoreRepository, chart->Meta, stageReplay),
         "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,
         analyticsModel,
         outputDir / filename);

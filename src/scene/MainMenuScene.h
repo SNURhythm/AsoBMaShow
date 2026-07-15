@@ -215,6 +215,7 @@ private:
   };
   struct ChartListPageCache {
     sqlite3 *db = nullptr;
+    ScoreRepository *scores = nullptr;
     ChartMetaQuery query;
     int totalCount = 0;
     int pageSize = 128;
@@ -224,7 +225,8 @@ private:
     mutable ChartMetaRecord fallbackRecord;
     std::optional<ChartMetaRecord> leadingRecord;
 
-    void reset(sqlite3 *database, const ChartMetaQuery &chartQuery, int count,
+    void reset(sqlite3 *database, ScoreRepository &scoreRepository,
+               const ChartMetaQuery &chartQuery, int count,
                std::optional<ChartMetaRecord> leading = std::nullopt);
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;

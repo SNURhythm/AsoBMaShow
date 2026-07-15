@@ -141,8 +141,6 @@ public:
   ReplayRepository(const ReplayRepository &) = delete;
   ReplayRepository &operator=(const ReplayRepository &) = delete;
 
-  static ReplayRepository &GetInstance();
-
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
@@ -152,8 +150,7 @@ public:
   [[nodiscard]] static bool HasActiveWrites();
   void Shutdown();
   bool EnsureSchema();
-  // Compatibility API for standalone helpers. The runtime singleton keeps its
-  // connection private so raw handles cannot outlive a profile switch.
+  // Compatibility API for standalone migration and test helpers.
   sqlite3 *Connect();
   void Close(sqlite3 *db);
   bool CreateReplayTables(sqlite3 *db);
@@ -183,8 +180,7 @@ public:
       std::span<const course_identity::Definition> definitions,
       std::span<const CourseScoreEvidence> scoreEvidence,
       std::string &errorMessage);
-  // Standalone-helper compatibility path for caller-owned transactions. The
-  // runtime singleton never accepts an external/raw connection.
+  // Standalone-helper compatibility path for caller-owned transactions.
   bool RecoverCourseRecords(
       sqlite3 *db,
       std::span<const course_identity::Definition> definitions,
