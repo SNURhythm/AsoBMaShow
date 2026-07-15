@@ -18,6 +18,7 @@
 #include "AppSettingsStore.h"
 #include "PlayerProfileManager.h"
 #include "ProfileSessionCoordinator.h"
+#include "repositories/ChartRepository.h"
 #include "repositories/ReplayRepository.h"
 #include "ResultPersistenceCoordinator.h"
 #include "repositories/ScoreRepository.h"
@@ -99,6 +100,7 @@ public:
   ProfileResult profileInitializationResult;
   AppSettings settings;
   InputProfile inputProfile;
+  ChartRepository chartRepository;
   ScoreRepository scoreRepository;
   ReplayRepository replayRepository;
   result_persistence::Coordinator resultPersistence;

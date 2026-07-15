@@ -1464,7 +1464,8 @@ int run() {
       application_startup::Dependencies{
           .initializeDatabases = [&context] {
             return app_database_initializer::initializeApplicationDatabases(
-                context.scoreRepository, context.replayRepository,
+                context.chartRepository, context.scoreRepository,
+                context.replayRepository,
                 context.musicPlaylistRepository);
           },
           .reportFatal = [&context](const application_startup::Result &result) {

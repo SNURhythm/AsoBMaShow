@@ -1526,18 +1526,8 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
   }
 }
 
-bool ensureChartDatabaseReadyForScoreMigration() {
-  ChartRepository &chartDbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle chartConnection(chartDbHelper.Connect());
-  if (chartConnection.get() == nullptr) {
-    return false;
-  }
-  return chartDbHelper.CreateChartMetaTable(chartConnection.get());
-}
-
-bool attachChartDatabaseForScoreMigration(sqlite3 *db) {
-  const std::filesystem::path chartPath =
-      Utils::GetDocumentsPath("db") / "chart.db";
+bool attachChartDatabaseForScoreMigration(
+    sqlite3 *db, const std::filesystem::path &chartPath) {
   if (const auto error =
           attachSqliteDatabase(db, chartPath, kScoreMigrationChartSchema)) {
     logSqlErrorText("attaching chart database for score migration", *error);
@@ -1619,12 +1609,11 @@ std::string scoreMigrationChartMatchRankExpr(std::string_view chartAlias) {
          " THEN 2 ELSE 3 END)";
 }
 
-bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
+bool migrateLegacyScoreLongNoteModes(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath,
+    bool &completed) {
   completed = false;
-  if (!ensureChartDatabaseReadyForScoreMigration()) {
-    return false;
-  }
-  if (!attachChartDatabaseForScoreMigration(db)) {
+  if (!attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
     return false;
   }
 
@@ -1704,7 +1693,8 @@ bool migrateLegacyScoreLongNoteModes(sqlite3 *db, bool &completed) {
 
 class ScoreDatabaseMigrationPass {
 public:
-  using RunFunction = bool (*)(sqlite3 *, bool &completed);
+  using RunFunction = bool (*)(sqlite3 *, const std::filesystem::path &,
+                               bool &completed);
 
   constexpr ScoreDatabaseMigrationPass(int targetVersion, const char *name,
                                        RunFunction run)
@@ -1713,7 +1703,10 @@ public:
   int targetVersion() const { return targetVersion_; }
   const char *name() const { return name_; }
 
-  bool run(sqlite3 *db, bool &completed) const { return run_(db, completed); }
+  bool run(sqlite3 *db, const std::filesystem::path &chartDatabasePath,
+           bool &completed) const {
+    return run_(db, chartDatabasePath, completed);
+  }
 
 private:
   int targetVersion_;
@@ -1721,7 +1714,9 @@ private:
   RunFunction run_;
 };
 
-bool migrateScoreDatabaseToVersion1(sqlite3 *db, bool &completed) {
+bool migrateScoreDatabaseToVersion1(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath,
+    bool &completed) {
   completed = false;
   if (!execSqlAllowDuplicateColumn(
           db,
@@ -1729,19 +1724,25 @@ bool migrateScoreDatabaseToVersion1(sqlite3 *db, bool &completed) {
           "migrating score long note mode")) {
     return false;
   }
-  return migrateLegacyScoreLongNoteModes(db, completed);
+  return migrateLegacyScoreLongNoteModes(db, chartDatabasePath, completed);
 }
 
-bool migrateScoreDatabaseToVersion2(sqlite3 *db, bool &completed) {
-  return migrateLegacyScoreLongNoteModes(db, completed);
+bool migrateScoreDatabaseToVersion2(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath,
+    bool &completed) {
+  return migrateLegacyScoreLongNoteModes(db, chartDatabasePath, completed);
 }
 
-bool migrateScoreDatabaseToVersion3(sqlite3 *db, bool &completed) {
+bool migrateScoreDatabaseToVersion3(sqlite3 *db,
+                                    const std::filesystem::path &,
+                                    bool &completed) {
   completed = normalizeScoreChartIdentityHashes(db);
   return completed;
 }
 
-bool migrateScoreDatabaseToVersion4(sqlite3 *db, bool &completed) {
+bool migrateScoreDatabaseToVersion4(sqlite3 *db,
+                                    const std::filesystem::path &,
+                                    bool &completed) {
   completed = false;
   if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
     logSqlErrorText("creating score identity summary schema", *error);
@@ -1757,7 +1758,9 @@ bool migrateScoreDatabaseToVersion4(sqlite3 *db, bool &completed) {
 
 bool runScoreDatabaseMigrationPasses(sqlite3 *db,
                                      const ScoreDatabaseMigrationPass *passes,
-                                     std::size_t passCount, int latestVersion) {
+                                     std::size_t passCount, int latestVersion,
+                                     const std::filesystem::path
+                                         &chartDatabasePath) {
   std::string versionError;
   const auto storedVersion = readSqliteUserVersion(db, versionError);
   if (!storedVersion.has_value()) {
@@ -1776,7 +1779,7 @@ bool runScoreDatabaseMigrationPasses(sqlite3 *db,
     }
 
     bool completed = false;
-    if (!pass.run(db, completed)) {
+    if (!pass.run(db, chartDatabasePath, completed)) {
       SDL_Log("Score database migration failed for version %d (%s)",
               pass.targetVersion(), pass.name());
       return false;
@@ -1798,7 +1801,8 @@ bool runScoreDatabaseMigrationPasses(sqlite3 *db,
   return true;
 }
 
-bool migrateScoreDatabaseSchema(sqlite3 *db) {
+bool migrateScoreDatabaseSchema(
+    sqlite3 *db, const std::filesystem::path &chartDatabasePath) {
   static constexpr ScoreDatabaseMigrationPass kMigrationPasses[] = {
       {1, "score long note modes", migrateScoreDatabaseToVersion1},
       {2, "repair legacy score long note modes",
@@ -1809,7 +1813,8 @@ bool migrateScoreDatabaseSchema(sqlite3 *db) {
   return runScoreDatabaseMigrationPasses(db, kMigrationPasses,
                                          sizeof(kMigrationPasses) /
                                              sizeof(kMigrationPasses[0]),
-                                         kLegacyScoreDatabaseSchemaVersion);
+                                         kLegacyScoreDatabaseSchemaVersion,
+                                         chartDatabasePath);
 }
 } // namespace
 
@@ -1930,8 +1935,12 @@ ScoreBestCache::bestForStoredKey(std::string_view sha256,
   return std::nullopt;
 }
 
+ScoreRepository::ScoreRepository()
+    : chartDatabasePath_(Utils::GetDocumentsPath("db") / "chart.db") {}
+
 ScoreRepository::ScoreRepository(std::filesystem::path databasePath)
-    : databasePath_(std::move(databasePath)) {}
+    : databasePath_(std::move(databasePath)),
+      chartDatabasePath_(Utils::GetDocumentsPath("db") / "chart.db") {}
 
 ScoreRepository::~ScoreRepository() {
   std::lock_guard lock(sessionMutex_);
@@ -1946,6 +1955,16 @@ void ScoreRepository::SetDatabasePath(std::filesystem::path databasePath) {
   }
   databasePath_ = std::move(databasePath);
   gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ScoreRepository::SetChartDatabasePath(
+    std::filesystem::path chartDatabasePath) {
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(sessionMutex_);
+  if (chartDatabasePath_ != chartDatabasePath) {
+    CloseSessionDatabaseLocked();
+    chartDatabasePath_ = std::move(chartDatabasePath);
+  }
 }
 
 std::filesystem::path ScoreRepository::GetDatabasePath() const {
@@ -2130,7 +2149,7 @@ bool ScoreRepository::CreateScoreTableOnConnection(sqlite3 *db) {
   }
 
   if (existingScoreTable) {
-    if (!migrateScoreDatabaseSchema(db)) {
+    if (!migrateScoreDatabaseSchema(db, chartDatabasePath_)) {
       return false;
     }
   }

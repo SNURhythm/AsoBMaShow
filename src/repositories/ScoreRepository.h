@@ -161,13 +161,14 @@ public:
     std::unique_ptr<State> state_;
   };
 
-  ScoreRepository() = default;
+  ScoreRepository();
   explicit ScoreRepository(std::filesystem::path databasePath);
   ~ScoreRepository();
   ScoreRepository(const ScoreRepository &) = delete;
   ScoreRepository &operator=(const ScoreRepository &) = delete;
 
   void SetDatabasePath(std::filesystem::path databasePath);
+  void SetChartDatabasePath(std::filesystem::path chartDatabasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
   [[nodiscard]] PreparedScoreQueryDatabase
@@ -240,5 +241,6 @@ private:
 
   mutable std::mutex sessionMutex_;
   std::filesystem::path databasePath_;
+  std::filesystem::path chartDatabasePath_;
   sqlite3 *sessionDatabase_ = nullptr;
 };
