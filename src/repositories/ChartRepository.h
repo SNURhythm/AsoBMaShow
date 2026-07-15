@@ -3,6 +3,7 @@
 #pragma once
 
 #include "../CourseIdentity.h"
+#include "../DifficultyTableModel.h"
 #include "../LibraryFolderClearData.h"
 #include "../bms_parser.hpp"
 #include "../path.h"
@@ -11,7 +12,6 @@
 #include "ScoreRepositoryModels.h"
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -139,15 +139,6 @@ struct DifficultyCourseInfo {
   std::string constraintJson;
 };
 
-struct DifficultyTableImportProgress {
-  int current = 0;
-  int total = 0;
-  std::string tableName;
-};
-
-using DifficultyTableImportProgressCallback =
-    std::function<void(const DifficultyTableImportProgress &)>;
-
 /**
  *
  */
@@ -221,17 +212,8 @@ public:
     std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();
-    bool ImportDifficultyTable(const std::string &headerJson,
-                               const std::string &dataJson,
-                               const std::string &sourceUrl = "");
-    bool ImportDifficultyTableFromUrl(
-        const std::string &pageUrl, std::string *errorMessage = nullptr,
-        DifficultyTableImportProgressCallback progressCallback = nullptr);
-    bool UpdateDifficultyTableFromSourceUrl(
-        int tableId, std::string *errorMessage = nullptr);
+    bool ReplaceDifficultyTable(const difficulty_table::Document &document);
     bool DeleteDifficultyTable(int tableId);
-    int ImportDifficultyTablesFromDirectory(
-        const std::filesystem::path &directory);
     std::vector<DifficultyTableInfo> SelectDifficultyTables();
     std::vector<DifficultyLevelInfo> SelectDifficultyLevels(int tableId);
     std::vector<DifficultyCourseTableInfo> SelectDifficultyCourseTables();
@@ -283,17 +265,6 @@ private:
   std::vector<ChartEntry> SelectEffectiveEntries(sqlite3 *db);
   bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
   bool ClearEntries(sqlite3 *db);
-  bool ImportDifficultyTable(sqlite3 *db, const std::string &headerJson,
-                             const std::string &dataJson,
-                             const std::string &sourceUrl = "");
-  bool ImportDifficultyTableFromUrl(sqlite3 *db, const std::string &pageUrl,
-                                    std::string *errorMessage = nullptr,
-                                    DifficultyTableImportProgressCallback
-                                        progressCallback = nullptr);
-  bool UpdateDifficultyTableFromSourceUrl(sqlite3 *db, int tableId,
-                                          std::string *errorMessage = nullptr);
-  int ImportDifficultyTablesFromDirectory(
-      sqlite3 *db, const std::filesystem::path &directory);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

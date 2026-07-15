@@ -24,9 +24,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
-#include <fstream>
 #include <iostream>
-#include "../../yoga/lib/nlohmann/json.hpp"
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -38,15 +36,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include "../targets.h"
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-#include "../iOSNatives.hpp"
-#elif TARGET_OS_ANDROID
-#include "../AndroidNatives.h"
-#include "../CurlRAII.h"
-#else
-#include "../CurlRAII.h"
-#endif
 
 namespace {
 using asobmshow::bms_metadata::normalizedHash;
@@ -415,6 +404,8 @@ bool chart_repository_detail::EnsureDifficultySchema(sqlite3 *database) {
 }
 
 namespace {
+bool replaceDifficultyTable(sqlite3 *database,
+                            const difficulty_table::Document &document);
 bool deleteDifficultyTable(sqlite3 *database, int tableId);
 std::vector<DifficultyTableInfo> selectDifficultyTables(sqlite3 *database);
 std::vector<DifficultyLevelInfo> selectDifficultyLevels(sqlite3 *database,
@@ -429,6 +420,11 @@ selectDifficultyCourses(sqlite3 *database, int tableId,
 std::vector<course_identity::Definition>
 selectDifficultyCourseDefinitions(sqlite3 *database);
 } // namespace
+
+bool ChartRepository::Session::ReplaceDifficultyTable(
+    const difficulty_table::Document &document) {
+  return replaceDifficultyTable(impl_->database(), document);
+}
 
 bool ChartRepository::Session::DeleteDifficultyTable(int tableId) {
   return deleteDifficultyTable(impl_->database(), tableId);
@@ -466,6 +462,336 @@ ChartRepository::Session::SelectDifficultyCourseDefinitions() {
 }
 
 namespace {
+using RetainedDifficultyCourses = std::vector<course_identity::Definition>;
+
+std::vector<course_identity::ChartIdentity> courseChartIdentities(
+    const std::vector<difficulty_table::Chart> &charts) {
+  std::vector<course_identity::ChartIdentity> identities;
+  identities.reserve(charts.size());
+  for (const auto &chart : charts) {
+    identities.push_back({.sha256 = chart.sha256, .md5 = chart.md5});
+  }
+  return identities;
+}
+
+std::optional<course_identity::Definition> takeRetainedDifficultyCourse(
+    RetainedDifficultyCourses &retainedCourses,
+    const course_identity::Definition &definition) {
+  const auto retained = std::find_if(
+      retainedCourses.begin(), retainedCourses.end(),
+      [&](const course_identity::Definition &candidate) {
+        return course_identity::sameDefinition(candidate, definition);
+      });
+  if (retained == retainedCourses.end()) {
+    return std::nullopt;
+  }
+  course_identity::Definition retainedDefinition = std::move(*retained);
+  retainedCourses.erase(retained);
+  return retainedDefinition;
+}
+
+int findDifficultyTable(sqlite3 *database, const std::string &name,
+                        const std::string &symbol,
+                        const std::string &sourceUrl) {
+  const char *query =
+      "SELECT id FROM difficulty_tables WHERE name = @name AND symbol = "
+      "@symbol AND source_url = @source_url";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "looking up difficulty table",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+  bindSqliteText(statement.get(), 1, name);
+  bindSqliteText(statement.get(), 2, symbol);
+  bindSqliteText(statement.get(), 3, sourceUrl);
+  return sqlite3_step(statement.get()) == SQLITE_ROW
+             ? sqlite3_column_int(statement.get(), 0)
+             : 0;
+}
+
+int findDifficultyTableBySourceUrl(sqlite3 *database,
+                                   const std::string &sourceUrl) {
+  if (sourceUrl.empty()) {
+    return 0;
+  }
+  const char *query =
+      "SELECT id FROM difficulty_tables WHERE source_url = @source_url "
+      "ORDER BY id LIMIT 1";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "looking up difficulty table source URL",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+  bindSqliteText(statement.get(), 1, sourceUrl);
+  return sqlite3_step(statement.get()) == SQLITE_ROW
+             ? sqlite3_column_int(statement.get(), 0)
+             : 0;
+}
+
+bool readRetainedDifficultyCourses(sqlite3 *database, int tableId,
+                                   RetainedDifficultyCourses &courses) {
+  const char *query =
+      "SELECT dc.id, dc.course_key, dc.name, dc.group_name, "
+      "dc.constraint_json, dce.id, dce.md5, dce.sha256 "
+      "FROM difficulty_courses dc "
+      "LEFT JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
+      "WHERE dc.table_id = @table_id "
+      "ORDER BY dc.sort_order, dc.id, dce.sort_order, dce.id";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "reading difficulty course identities",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  sqlite3_bind_int(statement.get(), 1, tableId);
+
+  course_identity::Definition current;
+  const auto retainCurrentCourse = [&]() {
+    if (current.courseId > 0) {
+      courses.push_back(std::move(current));
+      current = {};
+    }
+  };
+  int result = SQLITE_OK;
+  while ((result = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    const int courseId = sqlite3_column_int(statement.get(), 0);
+    if (courseId != current.courseId) {
+      retainCurrentCourse();
+      current.courseId = courseId;
+      current.courseKey = columnString(statement.get(), 1);
+      current.name = columnString(statement.get(), 2);
+      current.groupName = columnString(statement.get(), 3);
+      current.constraintJson = columnString(statement.get(), 4);
+    }
+    if (sqlite3_column_type(statement.get(), 5) != SQLITE_NULL) {
+      current.charts.push_back({.sha256 = columnString(statement.get(), 7),
+                                .md5 = columnString(statement.get(), 6)});
+    }
+  }
+  if (result != SQLITE_DONE) {
+    return false;
+  }
+  retainCurrentCourse();
+  return true;
+}
+
+int upsertDifficultyTable(sqlite3 *database,
+                          const difficulty_table::Document &document,
+                          RetainedDifficultyCourses &retainedCourses) {
+  int tableId =
+      findDifficultyTableBySourceUrl(database, document.sourceUrl);
+  if (tableId <= 0) {
+    tableId = findDifficultyTable(database, document.name, document.symbol,
+                                  document.sourceUrl);
+  }
+  if (tableId > 0) {
+    if (!readRetainedDifficultyCourses(database, tableId, retainedCourses)) {
+      return 0;
+    }
+    const char *query =
+        "UPDATE difficulty_tables SET name = @name, symbol = @symbol, "
+        "data_url = @data_url, updated_at = CURRENT_TIMESTAMP WHERE id = @id";
+    SqliteStatementHandle statement;
+    if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+      return 0;
+    }
+    bindSqliteText(statement.get(), 1, document.name);
+    bindSqliteText(statement.get(), 2, document.symbol);
+    bindSqliteText(statement.get(), 3, document.dataUrl);
+    sqlite3_bind_int(statement.get(), 4, tableId);
+    if (sqlite3_step(statement.get()) != SQLITE_DONE ||
+        !clearDifficultyTableContent(database, tableId)) {
+      return 0;
+    }
+    return tableId;
+  }
+
+  const char *query =
+      "INSERT INTO difficulty_tables "
+      "(name, symbol, data_url, source_url, updated_at) "
+      "VALUES (@name, @symbol, @data_url, @source_url, CURRENT_TIMESTAMP)";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "inserting difficulty table",
+                                    logSqlErrorText)) {
+    return 0;
+  }
+  bindSqliteText(statement.get(), 1, document.name);
+  bindSqliteText(statement.get(), 2, document.symbol);
+  bindSqliteText(statement.get(), 3, document.dataUrl);
+  bindSqliteText(statement.get(), 4, document.sourceUrl);
+  return sqlite3_step(statement.get()) == SQLITE_DONE
+             ? static_cast<int>(sqlite3_last_insert_rowid(database))
+             : 0;
+}
+
+bool insertDifficultyTableEntry(sqlite3 *database, int tableId,
+                                const difficulty_table::Chart &chart,
+                                int sortOrder) {
+  const char *query =
+      "INSERT INTO difficulty_table_entries "
+      "(table_id, level, md5, sha256, title, subtitle, artist, subartist, "
+      "url, url_diff, sort_order) "
+      "VALUES (@table_id, @level, @md5, @sha256, @title, @subtitle, "
+      "@artist, @subartist, @url, @url_diff, @sort_order)";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(statement.get(), 1, tableId);
+  bindSqliteText(statement.get(), 2, chart.level);
+  bindSqliteText(statement.get(), 3, chart.md5);
+  bindSqliteText(statement.get(), 4, chart.sha256);
+  bindSqliteText(statement.get(), 5, chart.title);
+  bindSqliteText(statement.get(), 6, chart.subtitle);
+  bindSqliteText(statement.get(), 7, chart.artist);
+  bindSqliteText(statement.get(), 8, chart.subartist);
+  bindSqliteText(statement.get(), 9, chart.url);
+  bindSqliteText(statement.get(), 10, chart.urlDiff);
+  sqlite3_bind_int(statement.get(), 11, sortOrder);
+  return sqlite3_step(statement.get()) == SQLITE_DONE;
+}
+
+int insertDifficultyCourse(sqlite3 *database, int tableId,
+                           const difficulty_table::Course &course,
+                           const std::string &courseKey, int sortOrder,
+                           int retainedCourseId) {
+  const bool retainId = retainedCourseId > 0;
+  const char *query =
+      retainId
+          ? "INSERT INTO difficulty_courses "
+            "(id, table_id, name, group_name, level, constraint_json, "
+            "course_key, sort_order) VALUES (@id, @table_id, @name, "
+            "@group_name, @level, @constraint_json, @course_key, @sort_order)"
+          : "INSERT INTO difficulty_courses "
+            "(table_id, name, group_name, level, constraint_json, course_key, "
+            "sort_order) VALUES (@table_id, @name, @group_name, @level, "
+            "@constraint_json, @course_key, @sort_order)";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return 0;
+  }
+  int parameter = 1;
+  if (retainId) {
+    sqlite3_bind_int(statement.get(), parameter++, retainedCourseId);
+  }
+  sqlite3_bind_int(statement.get(), parameter++, tableId);
+  bindSqliteText(statement.get(), parameter++, course.name);
+  bindSqliteText(statement.get(), parameter++, course.groupName);
+  bindSqliteText(statement.get(), parameter++, course.level);
+  bindSqliteText(statement.get(), parameter++, course.constraintJson);
+  bindSqliteText(statement.get(), parameter++, courseKey);
+  sqlite3_bind_int(statement.get(), parameter, sortOrder);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return 0;
+  }
+  return retainId ? retainedCourseId
+                  : static_cast<int>(sqlite3_last_insert_rowid(database));
+}
+
+bool insertDifficultyCourseEntry(sqlite3 *database, int courseId,
+                                 const difficulty_table::Chart &chart,
+                                 int sortOrder) {
+  const char *query =
+      "INSERT INTO difficulty_course_entries "
+      "(course_id, level, md5, sha256, title, subtitle, artist, subartist, "
+      "url, url_diff, sort_order) "
+      "VALUES (@course_id, @level, @md5, @sha256, @title, @subtitle, "
+      "@artist, @subartist, @url, @url_diff, @sort_order)";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    return false;
+  }
+  sqlite3_bind_int(statement.get(), 1, courseId);
+  bindSqliteText(statement.get(), 2, chart.level);
+  bindSqliteText(statement.get(), 3, chart.md5);
+  bindSqliteText(statement.get(), 4, chart.sha256);
+  bindSqliteText(statement.get(), 5, chart.title);
+  bindSqliteText(statement.get(), 6, chart.subtitle);
+  bindSqliteText(statement.get(), 7, chart.artist);
+  bindSqliteText(statement.get(), 8, chart.subartist);
+  bindSqliteText(statement.get(), 9, chart.url);
+  bindSqliteText(statement.get(), 10, chart.urlDiff);
+  sqlite3_bind_int(statement.get(), 11, sortOrder);
+  return sqlite3_step(statement.get()) == SQLITE_DONE;
+}
+
+bool replaceDifficultyTable(sqlite3 *database,
+                            const difficulty_table::Document &document) {
+  if (!chart_repository_detail::EnsureDifficultySchema(database)) {
+    return false;
+  }
+  if (document.name.empty() || document.symbol.empty()) {
+    return false;
+  }
+
+  chart_repository_detail::InvalidateDifficultyLabelCache();
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    SDL_Log("Failed to start difficulty table import transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
+
+  RetainedDifficultyCourses retainedCourses;
+  const int tableId =
+      upsertDifficultyTable(database, document, retainedCourses);
+  if (tableId <= 0) {
+    return false;
+  }
+  int sortOrder = 0;
+  for (const auto &chart : document.charts) {
+    if (!insertDifficultyTableEntry(database, tableId, chart, sortOrder++)) {
+      return false;
+    }
+  }
+
+  int courseSortOrder = 0;
+  for (const auto &course : document.courses) {
+    course_identity::Definition importedDefinition{
+        .name = course.name,
+        .groupName = course.groupName,
+        .constraintJson = course.constraintJson,
+        .charts = courseChartIdentities(course.charts),
+    };
+    const auto retainedCourse =
+        takeRetainedDifficultyCourse(retainedCourses, importedDefinition);
+    const int retainedCourseId =
+        retainedCourse.has_value() ? retainedCourse->courseId : 0;
+    std::string courseKey = course_identity::makeCourseKey(
+        importedDefinition.charts, importedDefinition.constraintJson);
+    if (retainedCourse.has_value() && !retainedCourse->courseKey.empty()) {
+      courseKey = retainedCourse->courseKey;
+    }
+    const int courseId = insertDifficultyCourse(
+        database, tableId, course, courseKey, courseSortOrder++,
+        retainedCourseId);
+    if (courseId <= 0) {
+      return false;
+    }
+    int chartSortOrder = 0;
+    for (const auto &chart : course.charts) {
+      if (!insertDifficultyCourseEntry(database, courseId, chart,
+                                       chartSortOrder++)) {
+        return false;
+      }
+    }
+  }
+
+  if (!transaction.commit(transactionError)) {
+    SDL_Log("Failed to commit difficulty table import transaction: %s",
+            transactionError.c_str());
+    return false;
+  }
+  chart_repository_detail::BumpLibraryRevision();
+  SDL_Log("Imported difficulty table %s (%s) from %s", document.name.c_str(),
+          document.symbol.c_str(), document.sourceUrl.c_str());
+  return true;
+}
+
 bool deleteDifficultyTable(sqlite3 *db, int tableId) {
   if (tableId <= 0 ||
       !chart_repository_detail::EnsureDifficultySchema(db)) {

@@ -25,9 +25,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
-#include <fstream>
 #include <iostream>
-#include "../../yoga/lib/nlohmann/json.hpp"
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -39,19 +37,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include "../targets.h"
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-#include "../iOSNatives.hpp"
-#elif TARGET_OS_ANDROID
-#include "../AndroidNatives.h"
-#include "../CurlRAII.h"
-#else
-#include "../CurlRAII.h"
-#endif
 
 #if !defined(ASOBMASHOW_FOLDER_QUERY_ONLY)
 namespace {
-using json = nlohmann::json;
 using asobmshow::chart_sql::chartArtworkOrderBy;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::defaultChartMetaBeforeTargetPredicate;

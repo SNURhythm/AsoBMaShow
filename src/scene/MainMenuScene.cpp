@@ -2,6 +2,7 @@
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
 #include "../BmsChartFile.h"
+#include "../DifficultyTableImporter.h"
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
@@ -1842,6 +1843,7 @@ void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
                        sizeof(kDefaultDifficultyTableUrls[0]));
   int successfulTables = 0;
   bool allSucceeded = true;
+  DifficultyTableImporter importer;
 
   for (int i = 0; i < totalTables; ++i) {
     if (stopToken.stop_requested()) {
@@ -1853,8 +1855,8 @@ void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
                         totalTables, "Adding default difficulty tables");
 
     std::string errorMessage;
-    const bool ok = chartSession.ImportDifficultyTableFromUrl(
-        url, &errorMessage,
+    const bool ok = importer.ImportFromUrl(
+        chartSession, url, &errorMessage,
         [this, taskId, i, totalTables,
          url](const DifficultyTableImportProgress &progress) {
           std::string detail = progress.tableName.empty()
@@ -1926,8 +1928,9 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (stopToken.stop_requested() || !pauseTask()) {
     return;
   }
-  const int importedTables = taskSession->ImportDifficultyTablesFromDirectory(
-      Utils::GetDocumentsPath("tables"));
+  DifficultyTableImporter importer;
+  const int importedTables = importer.ImportFromDirectory(
+      *taskSession, Utils::GetDocumentsPath("tables"));
   if (importedTables > 0 && !stopToken.stop_requested()) {
     requestLibraryReload(true);
   }

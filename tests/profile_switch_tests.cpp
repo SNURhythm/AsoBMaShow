@@ -48,6 +48,20 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
+bool replaceDifficultyTableJson(ChartRepository::Session &session,
+                                const std::string &headerJson,
+                                const std::string &dataJson,
+                                const std::string &sourceUrl) {
+  std::string errorMessage;
+  const auto document =
+      difficulty_table::Parse(headerJson, dataJson, sourceUrl, errorMessage);
+  if (!document.has_value()) {
+    std::cerr << "Difficulty table parse failure: " << errorMessage << '\n';
+    return false;
+  }
+  return session.ReplaceDifficultyTable(*document);
+}
+
 class TempDirectory {
 public:
   TempDirectory() {
@@ -1919,10 +1933,11 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
            "]";
   };
 
-  expect(chartSession->ImportDifficultyTable(
-             makeHeader("Original Table", "Original Group L1", "[]",
-                        "initial", false),
-             makeData("initial", false), sourceUrl),
+  expect(replaceDifficultyTableJson(*chartSession,
+                                    makeHeader("Original Table",
+                                               "Original Group L1", "[]",
+                                               "initial", false),
+                                    makeData("initial", false), sourceUrl),
          "initial difficulty table import succeeds");
   const int initialCourseId = queryInt(
       chartDatabase.get(), "SELECT id FROM difficulty_courses LIMIT 1");
@@ -1968,11 +1983,11 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
   for (const std::string gradeConstraint :
        {"grade", "grade_mirror", "grade_random"}) {
     const std::string displayToken = "renamed-" + gradeConstraint;
-    expect(chartSession->ImportDifficultyTable(
+    expect(replaceDifficultyTableJson(
+               *chartSession,
                makeHeader("Renamed " + gradeConstraint,
                           "Renamed " + gradeConstraint + " L9",
-                          "[\"" + gradeConstraint + "\"]", displayToken,
-                          true),
+                          "[\"" + gradeConstraint + "\"]", displayToken, true),
                makeData(displayToken, true), sourceUrl),
            gradeConstraint + " difficulty course refresh succeeds");
     expect(queryInt(chartDatabase.get(),
@@ -2010,9 +2025,10 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
              selectedSession.courseKey == initialCourseKey,
          "course play session carries a selected key independently of id");
 
-  expect(chartSession->ImportDifficultyTable(
-             makeHeader("Order Change", "Order Change L1",
-                        "[\"grade_random\"]", "order", true, true),
+  expect(replaceDifficultyTableJson(
+             *chartSession,
+             makeHeader("Order Change", "Order Change L1", "[\"grade_random\"]",
+                        "order", true, true),
              makeData("order", true), sourceUrl),
          "reordered difficulty course import succeeds");
   std::vector<course_identity::ChartIdentity> reversedDefinition =
@@ -2033,15 +2049,15 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
       {"forced-LN", "[\"ln\"]"},
   };
   for (const auto &[label, constraintJson] : identityConstraints) {
-    expect(chartSession->ImportDifficultyTable(
-               makeHeader("Constraint " + label, "Constraint " + label +
-                                                     " L1",
-                          constraintJson, label, true),
-               makeData(label, true), sourceUrl),
+    expect(replaceDifficultyTableJson(*chartSession,
+                                      makeHeader("Constraint " + label,
+                                                 "Constraint " + label + " L1",
+                                                 constraintJson, label, true),
+                                      makeData(label, true), sourceUrl),
            label + " constrained difficulty course import succeeds");
-    const std::string constrainedCourseKey = queryString(
-        chartDatabase.get(),
-        "SELECT course_key FROM difficulty_courses LIMIT 1");
+    const std::string constrainedCourseKey =
+        queryString(chartDatabase.get(),
+                    "SELECT course_key FROM difficulty_courses LIMIT 1");
     expect(constrainedCourseKey == course_identity::makeCourseKey(
                                        enrichedDefinition, constraintJson) &&
                constrainedCourseKey != enrichedUnconstrainedKey,
@@ -2094,10 +2110,10 @@ void testDifficultyCourseImportRejectsAmbiguousCounterpartHashes() {
       "\"},{\"md5\":\"" + std::string(md5E) +
       "\",\"sha256\":\"" + std::string(sharedSha) + "\"}]";
 
-  expect(chartSession->ImportDifficultyTable(
-             header, data,
-             "https://example.test/ambiguous-import.json"),
-         "ambiguous counterpart table imports without inventing identity");
+  expect(
+      replaceDifficultyTableJson(*chartSession, header, data,
+                                 "https://example.test/ambiguous-import.json"),
+      "ambiguous counterpart table imports without inventing identity");
 
   expect(queryString(chartDatabase.get(),
                      "SELECT dce.md5 FROM difficulty_course_entries dce JOIN "
@@ -2185,10 +2201,10 @@ void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
       "[{\"md5\":\"" + std::string(sharedMd5) +
       "\"},{\"sha256\":\"" + std::string(sharedSha) + "\"}]";
 
-  expect(chartSession->ImportDifficultyTable(
-             header, data,
-             "https://example.test/ambiguous-local.json"),
-         "direct-only local evidence fixture imports");
+  expect(
+      replaceDifficultyTableJson(*chartSession, header, data,
+                                 "https://example.test/ambiguous-local.json"),
+      "direct-only local evidence fixture imports");
   expect(chartSession->EnsureSchema(),
          "ambiguous local chart metadata schema opens");
   expect(execute(chartDatabase.get(),

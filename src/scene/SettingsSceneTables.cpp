@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 #include "../ChartLibraryScanner.h"
+#include "../DifficultyTableImporter.h"
 #include "../Utils.h"
 
 #include <memory>
@@ -414,8 +415,9 @@ void SettingsScene::addDifficultyTableFromUrl() {
           progress.current, progress.total, progress.tableName,
           "Downloading and importing tables...", false);
     };
-    const bool imported = session->ImportDifficultyTableFromUrl(
-        url, &errorMessage, progressCallback);
+    DifficultyTableImporter importer;
+    const bool imported = importer.ImportFromUrl(
+        *session, url, &errorMessage, progressCallback);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -468,8 +470,9 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     }
 
     std::string errorMessage;
+    DifficultyTableImporter importer;
     const bool updated =
-        session->UpdateDifficultyTableFromSourceUrl(tableId, &errorMessage);
+        importer.UpdateFromSourceUrl(*session, tableId, &errorMessage);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
