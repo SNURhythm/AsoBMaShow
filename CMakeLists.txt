@@ -616,6 +616,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
         src/repositories/ChartRepositoryDifficulty.cpp
         src/repositories/ChartRepositoryQueries.cpp
@@ -1284,6 +1285,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
         src/repositories/ChartRepositoryDifficulty.cpp
         src/repositories/ChartRepositoryQueries.cpp

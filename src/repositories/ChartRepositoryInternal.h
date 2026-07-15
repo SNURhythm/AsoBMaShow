@@ -17,13 +17,22 @@ struct ChartRepository::Impl {
   bool ready = false;
 };
 
+struct ChartSessionStorage {
+  explicit ChartSessionStorage(sqlite3 *database);
+
+  sqlite3 *database() const;
+
+  SqliteConnectionHandle connection;
+};
+
 struct ChartRepository::Session::Impl {
   Impl(ChartRepository &owner, sqlite3 *database, ScoreRepository *scoresValue);
 
   ScoreRepository &scoreRepository();
+  sqlite3 *database() const;
 
   ChartRepository *repository;
-  SqliteConnectionHandle connection;
+  std::shared_ptr<ChartSessionStorage> storage;
   ScoreRepository *scores;
   ScoreRepository fallbackScores;
 };

@@ -8,6 +8,7 @@
 #include "../bms_parser.hpp"
 #include "../path.h"
 #include "../sqlite3.h"
+#include "ChartScanStore.h"
 #include "ScoreRepositoryModels.h"
 #include <cstdint>
 #include <filesystem>
@@ -176,6 +177,37 @@ class ChartRepository {
 public:
   class Session {
   public:
+    class ScanBatch {
+    public:
+      ~ScanBatch();
+      ScanBatch(ScanBatch &&) noexcept;
+      ScanBatch &operator=(ScanBatch &&) noexcept;
+      ScanBatch(const ScanBatch &) = delete;
+      ScanBatch &operator=(const ScanBatch &) = delete;
+
+      bool UpsertChart(
+          const bms_parser::ChartMeta &meta,
+          std::optional<ChartSourcePreference> sourcePreference);
+      bool DeleteChart(const std::filesystem::path &path);
+      bool DeleteChartsInArchive(const std::filesystem::path &path);
+      bool DeleteSolidArchive(const std::filesystem::path &path);
+      bool DeleteArchiveCache(const std::filesystem::path &path);
+      bool UpsertSolidArchive(const SolidArchiveUpdate &update);
+      bool UpsertArchiveCache(const ArchiveScanCacheUpdate &update);
+      bool UpdateSourcePreference(
+          const ChartSourcePreferenceUpdate &update);
+      int CountChartsInArchive(const std::filesystem::path &path);
+      bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
+      bool Commit();
+      int ChangedCount() const;
+
+    private:
+      friend class Session;
+      struct Impl;
+      explicit ScanBatch(std::unique_ptr<Impl> impl);
+      std::unique_ptr<Impl> impl_;
+    };
+
     ~Session();
     Session(Session &&) noexcept;
     Session &operator=(Session &&) noexcept;
@@ -207,6 +239,10 @@ public:
     bool DeleteEntryAndChartMetaInDirectory(
         const std::filesystem::path &path, int &removedChartCount);
     bool ClearEntries();
+    ChartScanSnapshot LoadScanSnapshot();
+    std::optional<ScanBatch> BeginScanBatch();
+    bool ClearScanCheckpoint();
+    bool ClearChartMetadataRebuildRequired();
     int ScanChartRoots(
         const std::vector<std::filesystem::path> &roots,
         const std::stop_token *stopToken = nullptr,
@@ -276,7 +312,7 @@ private:
   std::vector<ChartEntry> SelectEffectiveEntries(sqlite3 *db);
   bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
   bool ClearEntries(sqlite3 *db);
-  int ScanChartRoots(sqlite3 *db,
+  int ScanChartRoots(Session &session,
                      const std::vector<std::filesystem::path> &roots,
                      const std::stop_token *stopToken = nullptr,
                      ChartScanProgressCallback progressCallback = nullptr,

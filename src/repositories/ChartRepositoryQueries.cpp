@@ -1194,30 +1194,30 @@ void chart_repository_detail::BumpLibraryRevision() {
 }
 
 int ChartRepository::Session::CountAllChartMeta() {
-  return countAllChartMeta(impl_->connection.get());
+  return countAllChartMeta(impl_->database());
 }
 
 int ChartRepository::Session::CountSolidArchives() {
-  return countSolidArchives(impl_->connection.get());
+  return countSolidArchives(impl_->database());
 }
 
 void ChartRepository::Session::SelectAllChartMeta(
     std::vector<bms_parser::ChartMeta> &chartMetas) {
-  selectAllChartMeta(impl_->connection.get(), chartMetas);
+  selectAllChartMeta(impl_->database(), chartMetas);
 }
 
 void ChartRepository::Session::SelectFavoriteMusicTracks(
     std::vector<MusicTrackRecord> &tracks) {
-  selectFavoriteMusicTracks(impl_->connection.get(), tracks);
+  selectFavoriteMusicTracks(impl_->database(), tracks);
 }
 
 int ChartRepository::Session::CountFavoriteCharts() {
-  return countFavoriteCharts(impl_->connection.get());
+  return countFavoriteCharts(impl_->database());
 }
 
 bool ChartRepository::Session::SetFavorite(
     const bms_parser::ChartMeta &chartMeta, bool favorite) {
-  return setFavorite(impl_->connection.get(), chartMeta, favorite);
+  return setFavorite(impl_->database(), chartMeta, favorite);
 }
 
 void ChartRepository::Session::QueryChartMeta(
@@ -1231,7 +1231,7 @@ void ChartRepository::Session::QueryChartMeta(
       return;
     }
   }
-  queryChartMeta(impl_->connection.get(), query, chartMetas);
+  queryChartMeta(impl_->database(), query, chartMetas);
 }
 
 int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
@@ -1244,7 +1244,7 @@ int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
       return 0;
     }
   }
-  return countChartMeta(impl_->connection.get(), query);
+  return countChartMeta(impl_->database(), query);
 }
 
 int ChartRepository::Session::FindChartMetaIndex(
@@ -1258,13 +1258,13 @@ int ChartRepository::Session::FindChartMetaIndex(
       return -1;
     }
   }
-  return findChartMetaIndex(impl_->connection.get(), query,
+  return findChartMetaIndex(impl_->database(), query,
                                                 path);
 }
 std::string ChartRepository::Session::DifficultyTableLabelsForChart(
     const bms_parser::ChartMeta &meta) {
   return difficultyTableLabelsForChart(
-      impl_->connection.get(), meta);
+      impl_->database(), meta);
 }
 
 namespace {

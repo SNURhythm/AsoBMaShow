@@ -743,6 +743,8 @@
 				bms_search/PackageSourceDrivers.cpp,
 				BmsSearchService.cpp,
 				repositories/ChartRepository.cpp,
+				repositories/ChartScanStore.cpp,
+				repositories/ChartScanStore.h,
 				repositories/ChartRepositoryDifficulty.cpp,
 				repositories/ChartRepositoryInternal.h,
 				repositories/ChartRepositoryQueries.cpp,

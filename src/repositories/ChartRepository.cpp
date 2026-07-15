@@ -409,16 +409,6 @@ ArchiveScanResult scanArchiveForChartsOrSolid(
   return result;
 }
 
-struct ArchiveScanCacheRecord {
-  bool found = false;
-  sqlite3_int64 archiveSize = 0;
-  sqlite3_int64 mtimeNs = 0;
-  bool solid = false;
-  std::uint64_t uncompressedSize = 0;
-  int fileCount = 0;
-  int chartCount = -1;
-};
-
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
 std::once_flag curlInitFlag;
 
@@ -1156,18 +1146,6 @@ bool execSqlAllowDuplicateColumn(sqlite3 *db, const char *query,
                              "duplicate column name");
 }
 
-void beginSqliteTransaction(sqlite3 *db, const char *context) {
-  if (const auto error = executeSqlite(db, "BEGIN")) {
-    SDL_Log("Failed to begin %s transaction: %s", context, error->c_str());
-  }
-}
-
-void commitSqliteTransaction(sqlite3 *db, const char *context) {
-  if (const auto error = executeSqlite(db, "COMMIT")) {
-    SDL_Log("Failed to commit %s transaction: %s", context, error->c_str());
-  }
-}
-
 int databaseUserVersion(sqlite3 *db) {
   SqliteStatementHandle stmt;
   const int rc = prepareSqliteStatement(db, "PRAGMA user_version", stmt);
@@ -1624,46 +1602,6 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       kChartDatabaseSchemaVersion);
 }
 
-bool updateChartSourcePreferenceValues(sqlite3 *db,
-                                       const std::filesystem::path &chartPath,
-                                       int priority,
-                                       sqlite3_int64 archiveSize) {
-  const std::string storedPathText =
-      chart_storage_identity::StoredPathText(chartPath);
-
-  const char *query =
-      "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
-      "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
-      "OR source_archive_size IS NULL OR source_archive_size != ?)";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "preparing chart source preference update",
-                                    logSqlErrorText)) {
-    return false;
-  }
-  sqlite3_bind_int(stmt.get(), 1, priority);
-  sqlite3_bind_int64(stmt.get(), 2, archiveSize);
-  bindSqliteText(stmt.get(), 3, storedPathText);
-  sqlite3_bind_int(stmt.get(), 4, priority);
-  sqlite3_bind_int64(stmt.get(), 5, archiveSize);
-  int rc = sqlite3_step(stmt.get());
-  if (rc != SQLITE_DONE) {
-    logSqlError("updating chart source preference", db);
-    return false;
-  }
-  const bool changed = sqlite3_changes(db) > 0;
-  return changed;
-}
-
-bool updateChartSourcePreference(sqlite3 *db,
-                                 const std::filesystem::path &chartPath) {
-  const archive_file::SourcePreference preference =
-      archive_file::sourcePreferenceForPath(chartPath);
-  return updateChartSourcePreferenceValues(
-      db, chartPath, preference.priority,
-      clampSqlInteger(preference.archiveSize));
-}
-
 sqlite3_int64 fileTimeToSqlNs(std::filesystem::file_time_type time) {
   const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          time.time_since_epoch())
@@ -1711,14 +1649,6 @@ std::string checkpointPathTextForDb(const std::filesystem::path &path) {
   return chart_storage_identity::StoredPathText(path);
 }
 
-std::filesystem::path checkpointPathFromDbText(const std::string &text) {
-  std::filesystem::path path(utf8_to_path_t(text));
-  if (!path.empty()) {
-    chart_storage_identity::ToAbsolutePath(path);
-  }
-  return path;
-}
-
 std::string checkpointInnerPathText(const std::filesystem::path &path) {
   return path.lexically_normal().generic_string();
 }
@@ -1743,19 +1673,6 @@ std::string stableHashHex(std::uint64_t value) {
   return text;
 }
 
-struct ChartScanCheckpoint {
-  bool found = false;
-  std::string scanSignature;
-  std::string phase;
-  int nextIndex = 0;
-  int subIndex = 0;
-  std::filesystem::path lastPath;
-  std::filesystem::path archivePath;
-  sqlite3_int64 archiveSize = 0;
-  sqlite3_int64 archiveMtimeNs = 0;
-  std::string lastInnerPath;
-};
-
 bool createChartScanCheckpointTable(sqlite3 *db) {
   const char *query =
       "CREATE TABLE IF NOT EXISTS chart_scan_checkpoint ("
@@ -1772,76 +1689,6 @@ bool createChartScanCheckpointTable(sqlite3 *db) {
       "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
       ")";
   if (!execSql(db, query, "creating chart scan checkpoint table")) {
-    return false;
-  }
-  return true;
-}
-
-ChartScanCheckpoint selectChartScanCheckpoint(sqlite3 *db) {
-  ChartScanCheckpoint checkpoint;
-  const char *query =
-      "SELECT scan_signature, phase, next_index, sub_index, last_path, "
-      "archive_path, archive_size, archive_mtime_ns, last_inner_path "
-      "FROM chart_scan_checkpoint WHERE id = 1";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "selecting chart scan checkpoint",
-                                    logSqlErrorText)) {
-    return checkpoint;
-  }
-  if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    checkpoint.found = true;
-    checkpoint.scanSignature = columnString(stmt.get(), 0);
-    checkpoint.phase = columnString(stmt.get(), 1);
-    checkpoint.nextIndex = std::max(0, sqlite3_column_int(stmt.get(), 2));
-    checkpoint.subIndex = std::max(0, sqlite3_column_int(stmt.get(), 3));
-    checkpoint.lastPath = checkpointPathFromDbText(columnString(stmt.get(), 4));
-    checkpoint.archivePath =
-        checkpointPathFromDbText(columnString(stmt.get(), 5));
-    checkpoint.archiveSize = sqlite3_column_int64(stmt.get(), 6);
-    checkpoint.archiveMtimeNs = sqlite3_column_int64(stmt.get(), 7);
-    checkpoint.lastInnerPath = columnString(stmt.get(), 8);
-  }
-  return checkpoint;
-}
-
-bool upsertChartScanCheckpoint(sqlite3 *db,
-                               const ChartScanCheckpoint &checkpoint) {
-  const char *query =
-      "INSERT INTO chart_scan_checkpoint "
-      "(id, scan_signature, phase, next_index, sub_index, last_path, "
-      "archive_path, archive_size, archive_mtime_ns, last_inner_path, "
-      "updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-      "CURRENT_TIMESTAMP) "
-      "ON CONFLICT(id) DO UPDATE SET "
-      "scan_signature = excluded.scan_signature,"
-      "phase = excluded.phase,"
-      "next_index = excluded.next_index,"
-      "sub_index = excluded.sub_index,"
-      "last_path = excluded.last_path,"
-      "archive_path = excluded.archive_path,"
-      "archive_size = excluded.archive_size,"
-      "archive_mtime_ns = excluded.archive_mtime_ns,"
-      "last_inner_path = excluded.last_inner_path,"
-      "updated_at = CURRENT_TIMESTAMP";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(
-          db, query, stmt, "preparing chart scan checkpoint upsert",
-          logSqlErrorText)) {
-    return false;
-  }
-  bindSqliteText(stmt.get(), 1, checkpoint.scanSignature);
-  bindSqliteText(stmt.get(), 2, checkpoint.phase);
-  sqlite3_bind_int(stmt.get(), 3, std::max(0, checkpoint.nextIndex));
-  sqlite3_bind_int(stmt.get(), 4, std::max(0, checkpoint.subIndex));
-  bindSqliteText(stmt.get(), 5, checkpointPathTextForDb(checkpoint.lastPath));
-  bindSqliteText(stmt.get(), 6, checkpointPathTextForDb(checkpoint.archivePath));
-  sqlite3_bind_int64(stmt.get(), 7, checkpoint.archiveSize);
-  sqlite3_bind_int64(stmt.get(), 8, checkpoint.archiveMtimeNs);
-  bindSqliteText(stmt.get(), 9, checkpoint.lastInnerPath);
-  int rc = sqlite3_step(stmt.get());
-  if (rc != SQLITE_DONE) {
-    logSqlError("upserting chart scan checkpoint", db);
     return false;
   }
   return true;
@@ -1892,33 +1739,6 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
   return true;
 }
 
-ArchiveScanCacheRecord selectArchiveScanCache(
-    sqlite3 *db, const std::filesystem::path &archivePath) {
-  ArchiveScanCacheRecord record;
-  const std::string pathText = archivePathTextForDb(archivePath);
-  const char *query =
-      "SELECT archive_size, mtime_ns, solid, uncompressed_size, file_count, "
-      "chart_count FROM archive_scan_cache WHERE path = ?";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "selecting archive scan cache",
-                                    logSqlErrorText)) {
-    return record;
-  }
-  bindSqliteText(stmt.get(), 1, pathText);
-  if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    record.found = true;
-    record.archiveSize = sqlite3_column_int64(stmt.get(), 0);
-    record.mtimeNs = sqlite3_column_int64(stmt.get(), 1);
-    record.solid = sqlite3_column_int(stmt.get(), 2) != 0;
-    record.uncompressedSize = static_cast<std::uint64_t>(
-        std::max<sqlite3_int64>(0, sqlite3_column_int64(stmt.get(), 3)));
-    record.fileCount = std::max(0, sqlite3_column_int(stmt.get(), 4));
-    record.chartCount = sqlite3_column_int(stmt.get(), 5);
-  }
-  return record;
-}
-
 std::vector<std::filesystem::path> selectArchiveScanCachePaths(sqlite3 *db) {
   std::vector<std::filesystem::path> paths;
   SqliteStatementHandle stmt;
@@ -1940,65 +1760,6 @@ std::vector<std::filesystem::path> selectArchiveScanCachePaths(sqlite3 *db) {
   return paths;
 }
 
-bool archiveScanCacheMatches(const ArchiveScanCacheRecord &record,
-                             sqlite3_int64 archiveSize,
-                             sqlite3_int64 mtimeNs) {
-  return record.found && record.archiveSize == archiveSize &&
-         record.mtimeNs == mtimeNs && record.chartCount >= 0;
-}
-
-bool upsertArchiveScanCache(sqlite3 *db,
-                            const std::filesystem::path &archivePath,
-                            bool solid, std::uint64_t uncompressedSize,
-                            int fileCount, int chartCount) {
-  sqlite3_int64 archiveSize = 0;
-  sqlite3_int64 mtimeNs = 0;
-  if (!archiveFileStateForDb(archivePath, archiveSize, mtimeNs)) {
-    return false;
-  }
-
-  const std::string pathText = archivePathTextForDb(archivePath);
-  const char *query =
-      "INSERT INTO archive_scan_cache "
-      "(path, archive_size, mtime_ns, solid, uncompressed_size, file_count, "
-      "chart_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, "
-      "CURRENT_TIMESTAMP) "
-      "ON CONFLICT(path) DO UPDATE SET "
-      "archive_size = excluded.archive_size,"
-      "mtime_ns = excluded.mtime_ns,"
-      "solid = excluded.solid,"
-      "uncompressed_size = excluded.uncompressed_size,"
-      "file_count = excluded.file_count,"
-      "chart_count = excluded.chart_count,"
-      "updated_at = CURRENT_TIMESTAMP "
-      "WHERE archive_scan_cache.archive_size != excluded.archive_size "
-      "OR archive_scan_cache.mtime_ns != excluded.mtime_ns "
-      "OR archive_scan_cache.solid != excluded.solid "
-      "OR archive_scan_cache.uncompressed_size != excluded.uncompressed_size "
-      "OR archive_scan_cache.file_count != excluded.file_count "
-      "OR archive_scan_cache.chart_count != excluded.chart_count";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "preparing archive scan cache upsert",
-                                    logSqlErrorText)) {
-    return false;
-  }
-  bindSqliteText(stmt.get(), 1, pathText);
-  sqlite3_bind_int64(stmt.get(), 2, archiveSize);
-  sqlite3_bind_int64(stmt.get(), 3, mtimeNs);
-  sqlite3_bind_int(stmt.get(), 4, solid ? 1 : 0);
-  sqlite3_bind_int64(stmt.get(), 5, clampSqlInteger(uncompressedSize));
-  sqlite3_bind_int(stmt.get(), 6, std::max(0, fileCount));
-  sqlite3_bind_int(stmt.get(), 7, std::max(0, chartCount));
-  int rc = sqlite3_step(stmt.get());
-  if (rc != SQLITE_DONE) {
-    logSqlError("upserting archive scan cache", db);
-    return false;
-  }
-  const bool changed = sqlite3_changes(db) > 0;
-  return changed;
-}
-
 bool deleteArchiveScanCache(sqlite3 *db,
                             const std::filesystem::path &archivePath) {
   const std::string pathText = archivePathTextForDb(archivePath);
@@ -2012,60 +1773,6 @@ bool deleteArchiveScanCache(sqlite3 *db,
   int rc = sqlite3_step(stmt.get());
   if (rc != SQLITE_DONE) {
     logSqlError("deleting archive scan cache", db);
-    return false;
-  }
-  const bool changed = sqlite3_changes(db) > 0;
-  return changed;
-}
-
-std::string solidArchiveNameForPath(const std::filesystem::path &path) {
-  const std::string name = path.filename().generic_string();
-  return name.empty() ? path.generic_string() : name;
-}
-
-bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
-                        std::uint64_t uncompressedSize, int fileCount) {
-  sqlite3_int64 archiveSize = 0;
-  sqlite3_int64 mtimeNs = 0;
-  if (!archiveFileStateForDb(archivePath, archiveSize, mtimeNs)) {
-    return false;
-  }
-
-  const std::string pathText =
-      chart_storage_identity::StoredPathText(archivePath);
-  const std::string name = solidArchiveNameForPath(archivePath);
-
-  const char *query =
-      "INSERT INTO solid_archives "
-      "(path, name, archive_size, uncompressed_size, file_count, mtime_ns, "
-      "updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) "
-      "ON CONFLICT(path) DO UPDATE SET "
-      "name = excluded.name,"
-      "archive_size = excluded.archive_size,"
-      "uncompressed_size = excluded.uncompressed_size,"
-      "file_count = excluded.file_count,"
-      "mtime_ns = excluded.mtime_ns,"
-      "updated_at = CURRENT_TIMESTAMP "
-      "WHERE solid_archives.name != excluded.name "
-      "OR solid_archives.archive_size != excluded.archive_size "
-      "OR solid_archives.uncompressed_size != excluded.uncompressed_size "
-      "OR solid_archives.file_count != excluded.file_count "
-      "OR solid_archives.mtime_ns != excluded.mtime_ns";
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "preparing solid archive insert",
-                                    logSqlErrorText)) {
-    return false;
-  }
-  bindSqliteText(stmt.get(), 1, pathText);
-  bindSqliteText(stmt.get(), 2, name);
-  sqlite3_bind_int64(stmt.get(), 3, archiveSize);
-  sqlite3_bind_int64(stmt.get(), 4, clampSqlInteger(uncompressedSize));
-  sqlite3_bind_int(stmt.get(), 5, std::max(0, fileCount));
-  sqlite3_bind_int64(stmt.get(), 6, mtimeNs);
-  int rc = sqlite3_step(stmt.get());
-  if (rc != SQLITE_DONE) {
-    logSqlError("inserting solid archive", db);
     return false;
   }
   const bool changed = sqlite3_changes(db) > 0;
@@ -2089,31 +1796,6 @@ bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
   }
   const bool changed = sqlite3_changes(db) > 0;
   return changed;
-}
-
-int countChartMetaInArchive(sqlite3 *db,
-                            const std::filesystem::path &archivePath) {
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, "SELECT path FROM chart_meta", stmt,
-                                    "counting archive chart rows",
-                                    logSqlErrorText)) {
-    return 0;
-  }
-
-  int count = 0;
-  const std::filesystem::path targetArchive = archivePath.lexically_normal();
-  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    const std::string pathText = sqliteColumnString(stmt.get(), 0);
-    if (pathText.empty()) {
-      continue;
-    }
-    std::filesystem::path path(utf8_to_path_t(pathText));
-    chart_storage_identity::ToAbsolutePath(path);
-    if (pathIsInsideDirectory(path, targetArchive)) {
-      ++count;
-    }
-  }
-  return count;
 }
 
 bool deleteChartMetaInArchive(sqlite3 *db,
@@ -2502,12 +2184,22 @@ std::string columnString(sqlite3_stmt *stmt, int idx) {
 ChartRepository::Impl::Impl(std::filesystem::path path)
     : databasePath(std::move(path)) {}
 
+ChartSessionStorage::ChartSessionStorage(sqlite3 *database)
+    : connection(database) {}
+
+sqlite3 *ChartSessionStorage::database() const { return connection.get(); }
+
 ChartRepository::Session::Impl::Impl(
     ChartRepository &owner, sqlite3 *database, ScoreRepository *scoresValue)
-    : repository(&owner), connection(database), scores(scoresValue) {}
+    : repository(&owner), storage(std::make_shared<ChartSessionStorage>(database)),
+      scores(scoresValue) {}
 
 ScoreRepository &ChartRepository::Session::Impl::scoreRepository() {
   return scores != nullptr ? *scores : fallbackScores;
+}
+
+sqlite3 *ChartRepository::Session::Impl::database() const {
+  return storage->database();
 }
 
 ChartRepository::Session::Session(std::unique_ptr<Impl> impl)
@@ -2519,81 +2211,81 @@ ChartRepository::Session &
 ChartRepository::Session::operator=(Session &&) noexcept = default;
 
 sqlite3 *ChartRepository::Session::NativeHandleForScoreRepository() const {
-  return impl_->connection.get();
+  return impl_->database();
 }
 
 bool ChartRepository::Session::EnsureSchema() {
-  sqlite3 *db = impl_->connection.get();
+  sqlite3 *db = impl_->database();
   return chart_repository_detail::EnsureCoreSchema(db) &&
          chart_repository_detail::EnsureDifficultySchema(db);
 }
 
 bool ChartRepository::Session::InsertChartMeta(
     bms_parser::ChartMeta &chartMeta) {
-  return impl_->repository->InsertChartMeta(impl_->connection.get(), chartMeta);
+  return impl_->repository->InsertChartMeta(impl_->database(), chartMeta);
 }
 
 bool ChartRepository::Session::DeleteChartMeta(std::filesystem::path path) {
-  return impl_->repository->DeleteChartMeta(impl_->connection.get(),
+  return impl_->repository->DeleteChartMeta(impl_->database(),
                                              std::move(path));
 }
 
 int ChartRepository::Session::DeleteChartMetaInDirectory(
     const std::filesystem::path &directory) {
-  return impl_->repository->DeleteChartMetaInDirectory(impl_->connection.get(),
+  return impl_->repository->DeleteChartMetaInDirectory(impl_->database(),
                                                         directory);
 }
 
 bool ChartRepository::Session::DeleteArchiveRecords(
     const std::filesystem::path &archivePath) {
-  return impl_->repository->DeleteArchiveRecords(impl_->connection.get(),
+  return impl_->repository->DeleteArchiveRecords(impl_->database(),
                                                   archivePath);
 }
 
 bool ChartRepository::Session::ClearChartMeta() {
-  return impl_->repository->ClearChartMeta(impl_->connection.get());
+  return impl_->repository->ClearChartMeta(impl_->database());
 }
 
 bool ChartRepository::Session::InsertEntry(
     const std::filesystem::path &path, const std::string &iosBookmark) {
-  return impl_->repository->InsertEntry(impl_->connection.get(), path,
+  return impl_->repository->InsertEntry(impl_->database(), path,
                                         iosBookmark);
 }
 
 std::vector<ChartEntry> ChartRepository::Session::SelectAllEntries() {
-  return impl_->repository->SelectAllEntries(impl_->connection.get());
+  return impl_->repository->SelectAllEntries(impl_->database());
 }
 
 std::vector<ChartEntry> ChartRepository::Session::SelectEffectiveEntries() {
-  return impl_->repository->SelectEffectiveEntries(impl_->connection.get());
+  return impl_->repository->SelectEffectiveEntries(impl_->database());
 }
 
 bool ChartRepository::Session::DeleteEntry(
     const std::filesystem::path &path) {
-  return impl_->repository->DeleteEntry(impl_->connection.get(), path);
+  return impl_->repository->DeleteEntry(impl_->database(), path);
 }
 
 bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
     const std::filesystem::path &path, int &removedChartCount) {
   removedChartCount = -1;
   std::string transactionError;
-  SqliteTransactionHandle transaction(impl_->connection.get(), "BEGIN",
+  SqliteTransactionHandle transaction(impl_->database(), "BEGIN",
                                       transactionError);
   if (!transaction.active()) {
     return false;
   }
   removedChartCount =
-      impl_->repository->DeleteChartMetaInDirectory(impl_->connection.get(),
+      impl_->repository->DeleteChartMetaInDirectory(impl_->database(),
                                                      path);
   if (removedChartCount < 0 ||
-      !impl_->repository->DeleteEntry(impl_->connection.get(), path)) {
+      !impl_->repository->DeleteEntry(impl_->database(), path)) {
     return false;
   }
   return transaction.commit(transactionError);
 }
 
 bool ChartRepository::Session::ClearEntries() {
-  return impl_->repository->ClearEntries(impl_->connection.get());
+  return impl_->repository->ClearEntries(impl_->database());
 }
 
 int ChartRepository::Session::ScanChartRoots(
@@ -2604,7 +2296,7 @@ int ChartRepository::Session::ScanChartRoots(
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
   return impl_->repository->ScanChartRoots(
-      impl_->connection.get(), roots, stopToken, std::move(progressCallback),
+      *this, roots, stopToken, std::move(progressCallback),
       std::move(pauseCallback), std::move(flushRequestCallback),
       std::move(flushCompleteCallback));
 }
@@ -2613,27 +2305,27 @@ bool ChartRepository::Session::ImportDifficultyTable(
     const std::string &headerJson, const std::string &dataJson,
     const std::string &sourceUrl) {
   return impl_->repository->ImportDifficultyTable(
-      impl_->connection.get(), headerJson, dataJson, sourceUrl);
+      impl_->database(), headerJson, dataJson, sourceUrl);
 }
 
 bool ChartRepository::Session::ImportDifficultyTableFromUrl(
     const std::string &pageUrl, std::string *errorMessage,
     DifficultyTableImportProgressCallback progressCallback) {
   return impl_->repository->ImportDifficultyTableFromUrl(
-      impl_->connection.get(), pageUrl, errorMessage,
+      impl_->database(), pageUrl, errorMessage,
       std::move(progressCallback));
 }
 
 bool ChartRepository::Session::UpdateDifficultyTableFromSourceUrl(
     int tableId, std::string *errorMessage) {
   return impl_->repository->UpdateDifficultyTableFromSourceUrl(
-      impl_->connection.get(), tableId, errorMessage);
+      impl_->database(), tableId, errorMessage);
 }
 
 int ChartRepository::Session::ImportDifficultyTablesFromDirectory(
     const std::filesystem::path &directory) {
   return impl_->repository->ImportDifficultyTablesFromDirectory(
-      impl_->connection.get(), directory);
+      impl_->database(), directory);
 }
 
 bool ChartRepository::EnsureReady() {
@@ -3358,13 +3050,13 @@ bool ChartRepository::ClearEntries(sqlite3 *db) {
 }
 
 int ChartRepository::ScanChartRoots(
-    sqlite3 *db, const std::vector<std::filesystem::path> &roots,
+    Session &session, const std::vector<std::filesystem::path> &roots,
     const std::stop_token *stopToken,
     ChartScanProgressCallback progressCallback,
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
-  if (db == nullptr || stopRequested(stopToken)) {
+  if (stopRequested(stopToken)) {
     return 0;
   }
   auto pauseIfNeeded = [&]() {
@@ -3391,14 +3083,11 @@ int ChartRepository::ScanChartRoots(
     return 0;
   }
 
-  createChartMetaTable(db);
-  createSolidArchiveTable(db);
-  createArchiveScanCacheTable(db);
-  createChartScanCheckpointTable(db);
-  const ChartScanCheckpoint checkpoint = selectChartScanCheckpoint(db);
-
-  std::vector<bms_parser::ChartMeta> chartMetas;
-  chart_repository_detail::SelectAllChartMeta(db, chartMetas);
+  ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot();
+  const ChartScanCheckpoint checkpoint =
+      scanSnapshot.checkpoint.value_or(ChartScanCheckpoint{});
+  std::vector<bms_parser::ChartMeta> chartMetas =
+      std::move(scanSnapshot.charts);
 
   struct ScanDiff {
     std::filesystem::path path;
@@ -3409,7 +3098,7 @@ int ChartRepository::ScanChartRoots(
   struct CachedSourcePreferenceUpdate {
     std::filesystem::path path;
     int priority = 0;
-    sqlite3_int64 archiveSize = 0;
+    std::uint64_t archiveSize = 0;
   };
   std::vector<CachedSourcePreferenceUpdate> cachedSourcePreferenceUpdates;
   struct SolidArchiveDiff {
@@ -3442,11 +3131,18 @@ int ChartRepository::ScanChartRoots(
     return fspath_to_path_t(archivePath.lexically_normal());
   };
 
+  std::unordered_map<path_t, const ArchiveScanCacheRecord *> archiveCacheByPath;
+  archiveCacheByPath.reserve(scanSnapshot.archiveCache.size());
+  for (const auto &record : scanSnapshot.archiveCache) {
+    archiveCacheByPath.emplace(archiveScanKey(record.path), &record);
+  }
+
   struct ArchiveKnownState {
     bool checked = false;
     bool fileAvailable = false;
     sqlite3_int64 archiveSize = 0;
     sqlite3_int64 mtimeNs = 0;
+    bool cacheFound = false;
     ArchiveScanCacheRecord cache;
   };
   std::unordered_map<path_t, ArchiveKnownState> archiveStates;
@@ -3460,7 +3156,11 @@ int ChartRepository::ScanChartRoots(
       state.fileAvailable =
           archiveFileStateForDb(archivePath, state.archiveSize, state.mtimeNs);
       if (state.fileAvailable) {
-        state.cache = selectArchiveScanCache(db, archivePath);
+        if (const auto cache = archiveCacheByPath.find(archiveKey);
+            cache != archiveCacheByPath.end()) {
+          state.cacheFound = true;
+          state.cache = *cache->second;
+        }
       }
     }
     return state;
@@ -3497,15 +3197,16 @@ int ChartRepository::ScanChartRoots(
       if (liveArchivePath || archiveState.fileAvailable) {
         const path_t archiveKey = archiveScanKey(archivePath);
         ++knownArchiveChartCounts[archiveKey];
-        if (archiveState.fileAvailable &&
-            archiveScanCacheMatches(archiveState.cache,
-                                    archiveState.archiveSize,
-                                    archiveState.mtimeNs)) {
+        if (archiveState.fileAvailable && archiveState.cacheFound &&
+            archiveState.cache.archiveSize == archiveState.archiveSize &&
+            archiveState.cache.mtimeNs == archiveState.mtimeNs &&
+            archiveState.cache.chartCount >= 0) {
           knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
           cachedSourcePreferenceUpdates.push_back({
               .path = chartMeta.BmsPath,
               .priority = archiveState.cache.solid ? 2 : 1,
-              .archiveSize = archiveState.archiveSize,
+              .archiveSize = static_cast<std::uint64_t>(
+                  std::max<sqlite3_int64>(0, archiveState.archiveSize)),
           });
         }
         continue;
@@ -3520,14 +3221,14 @@ int ChartRepository::ScanChartRoots(
     }
   }
 
-  for (const auto &solidArchivePath : selectSolidArchivePaths(db)) {
+  for (const auto &solidArchive : scanSnapshot.solidArchives) {
     if (shouldStop()) {
       return 0;
     }
     sqlite3_int64 archiveSize = 0;
     sqlite3_int64 mtimeNs = 0;
-    if (!archiveFileStateForDb(solidArchivePath, archiveSize, mtimeNs)) {
-      staleSolidArchives.push_back(solidArchivePath);
+    if (!archiveFileStateForDb(solidArchive.path, archiveSize, mtimeNs)) {
+      staleSolidArchives.push_back(solidArchive.path);
     }
   }
 
@@ -3907,9 +3608,11 @@ int ChartRepository::ScanChartRoots(
     }
 
     const std::string archiveText = fspath_to_utf8(archivePath);
-    const ArchiveScanCacheRecord cache =
-        selectArchiveScanCache(db, archivePath);
-    if (archiveScanCacheMatches(cache, archiveSize, mtimeNs)) {
+    const auto cacheIt = archiveCacheByPath.find(archiveKey);
+    const ArchiveScanCacheRecord *cache =
+        cacheIt != archiveCacheByPath.end() ? cacheIt->second : nullptr;
+    if (cache != nullptr && cache->archiveSize == archiveSize &&
+        cache->mtimeNs == mtimeNs && cache->chartCount >= 0) {
       int knownChartCount =
           knownArchiveChartCounts.contains(archiveKey)
               ? knownArchiveChartCounts.at(archiveKey)
@@ -3918,38 +3621,38 @@ int ChartRepository::ScanChartRoots(
           storedArchiveChartCounts.contains(archiveKey)
               ? storedArchiveChartCounts.at(archiveKey)
               : 0;
-      if (!cache.solid && knownChartCount < cache.chartCount &&
+      if (!cache->solid && knownChartCount < cache->chartCount &&
           storedChartCount > knownChartCount) {
         archive_file::appendDebugLogLine(
             "Recovered archive DB chart count by stored path prefix: " +
             archiveText + " splitRows=" + std::to_string(knownChartCount) +
             " storedRows=" + std::to_string(storedChartCount) +
-            " cachedCharts=" + std::to_string(cache.chartCount));
+            " cachedCharts=" + std::to_string(cache->chartCount));
         knownChartCount = storedChartCount;
       }
-      if (!cache.solid && knownChartCount < cache.chartCount) {
+      if (!cache->solid && knownChartCount < cache->chartCount) {
         archive_file::appendDebugLogLine(
             "Archive scan cache incomplete; rescanning: " +
-            archiveText + " cachedCharts=" + std::to_string(cache.chartCount) +
+            archiveText + " cachedCharts=" + std::to_string(cache->chartCount) +
             " dbCharts=" + std::to_string(knownChartCount));
       } else {
         archive_file::appendDebugLogLine(
             "Using cached archive scan: " + archiveText +
-            " files=" + std::to_string(cache.fileCount) +
-            " charts=" + std::to_string(cache.chartCount) +
-            " solid=" + std::string(cache.solid ? "yes" : "no") +
+            " files=" + std::to_string(cache->fileCount) +
+            " charts=" + std::to_string(cache->chartCount) +
+            " solid=" + std::string(cache->solid ? "yes" : "no") +
             " estimatedUnpacked=" +
-            std::to_string(cache.uncompressedSize));
+            std::to_string(cache->uncompressedSize));
         solidArchiveDiffs.push_back({
             .path = archivePath,
-            .solid = cache.solid,
-            .uncompressedSize = cache.uncompressedSize,
-            .fileCount = cache.fileCount,
+            .solid = cache->solid,
+            .uncompressedSize = cache->uncompressedSize,
+            .fileCount = cache->fileCount,
         });
         return;
       }
     }
-    if (cache.found) {
+    if (cache != nullptr) {
       archive_file::appendDebugLogLine(
           "Archive scan cache invalidated: " + archiveText);
     }
@@ -4121,8 +3824,8 @@ int ChartRepository::ScanChartRoots(
       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
       staleSolidArchives.empty() && reindexedArchives.empty();
   if (noScanWork) {
-    clearChartScanCheckpoint(db);
-    clearChartMetadataRebuildRequiredIfPresent(db);
+    session.ClearScanCheckpoint();
+    session.ClearChartMetadataRebuildRequired();
     return 0;
   }
   if (shouldStop()) {
@@ -4387,15 +4090,15 @@ int ChartRepository::ScanChartRoots(
         " nextIndex=" + std::to_string(checkpoint.nextIndex) +
         " subIndex=" + std::to_string(checkpoint.subIndex));
   } else if (checkpoint.found) {
-    clearChartScanCheckpoint(db);
+    session.ClearScanCheckpoint();
     archive_file::appendDebugLogLine(
         "Discarded stale chart scan checkpoint before parsing.");
   }
 
-  int changedCount = 0;
-  bool transactionOpen = false;
-  beginSqliteTransaction(db, "chart scan");
-  transactionOpen = true;
+  auto scanBatch = session.BeginScanBatch();
+  if (!scanBatch.has_value()) {
+    return 0;
+  }
   std::uint64_t completedFlushRequest = 0;
 
   auto makeCheckpoint = [&](const std::string &signature,
@@ -4425,19 +4128,13 @@ int ChartRepository::ScanChartRoots(
   };
 
   auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
-    if (transactionOpen) {
-      commitSqliteTransaction(db, "chart scan");
-      transactionOpen = false;
-    }
-    if (!upsertChartScanCheckpoint(db, nextCheckpoint)) {
+    if (!scanBatch->CheckpointAndContinue(nextCheckpoint)) {
       archive_file::appendDebugLogLine(
           "Failed to save chart scan checkpoint: phase=" +
           nextCheckpoint.phase +
           " nextIndex=" + std::to_string(nextCheckpoint.nextIndex) +
           " subIndex=" + std::to_string(nextCheckpoint.subIndex));
     }
-    beginSqliteTransaction(db, "chart scan");
-    transactionOpen = true;
   };
 
   auto pendingFlushRequest = [&]() -> std::uint64_t {
@@ -4486,31 +4183,31 @@ int ChartRepository::ScanChartRoots(
     if (shouldStop()) {
       break;
     }
-    if (updateChartSourcePreference(db, path)) {
-      ++changedCount;
-    }
+    const auto preference = archive_file::sourcePreferenceForPath(path);
+    scanBatch->UpdateSourcePreference({
+        .path = path,
+        .priority = preference.priority,
+        .archiveSize = preference.archiveSize,
+    });
   }
 
   for (const auto &update : cachedSourcePreferenceUpdates) {
     if (shouldStop()) {
       break;
     }
-    if (updateChartSourcePreferenceValues(db, update.path, update.priority,
-                                          update.archiveSize)) {
-      ++changedCount;
-    }
+    scanBatch->UpdateSourcePreference({
+        .path = update.path,
+        .priority = update.priority,
+        .archiveSize = update.archiveSize,
+    });
   }
 
   for (const auto &path : staleSolidArchives) {
     if (shouldStop()) {
       break;
     }
-    if (deleteSolidArchive(db, path)) {
-      ++changedCount;
-    }
-    if (deleteArchiveScanCache(db, path)) {
-      ++changedCount;
-    }
+    scanBatch->DeleteSolidArchive(path);
+    scanBatch->DeleteArchiveCache(path);
   }
 
   for (const auto &path : reindexedArchives) {
@@ -4523,20 +4220,20 @@ int ChartRepository::ScanChartRoots(
           checkpointPathTextForDb(path));
       continue;
     }
-    if (deleteChartMetaInArchive(db, path)) {
-      ++changedCount;
-    }
+    scanBatch->DeleteChartsInArchive(path);
   }
 
   for (const auto &diff : archiveCacheDiffs) {
     if (shouldStop()) {
       break;
     }
-    if (upsertArchiveScanCache(db, diff.path, diff.solid,
-                               diff.uncompressedSize, diff.fileCount,
-                               diff.chartCount)) {
-      ++changedCount;
-    }
+    scanBatch->UpsertArchiveCache({
+        .path = diff.path,
+        .solid = diff.solid,
+        .uncompressedSize = diff.uncompressedSize,
+        .fileCount = diff.fileCount,
+        .chartCount = diff.chartCount,
+    });
   }
 
   for (const auto &diff : solidArchiveDiffs) {
@@ -4544,34 +4241,20 @@ int ChartRepository::ScanChartRoots(
       break;
     }
     if (diff.solid) {
-      if (upsertSolidArchive(db, diff.path, diff.uncompressedSize,
-                             diff.fileCount)) {
-        ++changedCount;
-      }
-      if (deleteChartMetaInArchive(db, diff.path)) {
-        ++changedCount;
-      }
-    } else if (deleteSolidArchive(db, diff.path)) {
-      ++changedCount;
+      scanBatch->UpsertSolidArchive({
+          .path = diff.path,
+          .uncompressedSize = diff.uncompressedSize,
+          .fileCount = diff.fileCount,
+      });
+      scanBatch->DeleteChartsInArchive(diff.path);
+    } else {
+      scanBatch->DeleteSolidArchive(diff.path);
     }
   }
 
-  SqliteStatementHandle individualInsertStmt;
-  bool individualInsertStmtReady = false;
   auto insertIndividualChartMeta =
       [&](bms_parser::ChartMeta &meta) -> bool {
-    if (!individualInsertStmtReady) {
-      individualInsertStmtReady = prepareSqliteStatementLogged(
-          db, insertChartMetaSql(), individualInsertStmt,
-          "preparing statement to insert individual chart batch",
-          logSdlSqlErrorText);
-      if (!individualInsertStmtReady) {
-        return false;
-      }
-    }
-    sqlite3_reset(individualInsertStmt.get());
-    sqlite3_clear_bindings(individualInsertStmt.get());
-    return insertChartMetaPrepared(db, individualInsertStmt.get(), meta);
+    return scanBatch->UpsertChart(meta, std::nullopt);
   };
 
   auto individualParseWorkerCount = [](std::size_t fileCount) {
@@ -4664,9 +4347,7 @@ int ChartRepository::ScanChartRoots(
     if (diff.deleted) {
       reportProgress(parseCurrent, parseTotal,
                      ChartScanProgressStage::RemovingDeleted);
-      if (DeleteChartMeta(db, diff.path)) {
-        ++changedCount;
-      }
+      scanBatch->DeleteChart(diff.path);
       ++parseCurrent;
       const std::size_t nextIndex = diffIndex + 1;
       const auto checkpointRequest = checkpointSaveRequest(
@@ -4699,9 +4380,8 @@ int ChartRepository::ScanChartRoots(
       const std::size_t currentIndex = batchStart + offset;
       reportProgress(parseCurrent, parseTotal,
                      ChartScanProgressStage::ParsingCharts);
-      if (parsedMetas[offset].has_value() &&
-          insertIndividualChartMeta(*parsedMetas[offset])) {
-        ++changedCount;
+      if (parsedMetas[offset].has_value()) {
+        insertIndividualChartMeta(*parsedMetas[offset]);
       }
       ++parseCurrent;
       const std::size_t nextIndex = currentIndex + 1;
@@ -4743,7 +4423,7 @@ int ChartRepository::ScanChartRoots(
       return;
     }
     const ArchiveCacheDiff &diff = cacheIt->second;
-    const int parsedChartCount = countChartMetaInArchive(db, diff.path);
+    const int parsedChartCount = scanBatch->CountChartsInArchive(diff.path);
     if (parsedChartCount != diff.chartCount) {
       archive_file::appendDebugLogLine(
           "Writing archive scan cache with parsed chart count: " +
@@ -4751,11 +4431,13 @@ int ChartRepository::ScanChartRoots(
           " candidates=" + std::to_string(diff.chartCount) +
           " dbCharts=" + std::to_string(parsedChartCount));
     }
-    if (upsertArchiveScanCache(db, diff.path, diff.solid,
-                               diff.uncompressedSize, diff.fileCount,
-                               parsedChartCount)) {
-      ++changedCount;
-    }
+    scanBatch->UpsertArchiveCache({
+        .path = diff.path,
+        .solid = diff.solid,
+        .uncompressedSize = diff.uncompressedSize,
+        .fileCount = diff.fileCount,
+        .chartCount = parsedChartCount,
+    });
   };
 
   auto parseArchiveBatchStreaming =
@@ -5247,11 +4929,7 @@ int ChartRepository::ScanChartRoots(
         "Inserting streamed DB chart batch: " + archiveText +
         " requested=" + std::to_string(pendingInnerPaths.size()) +
         " files=" + std::to_string(parsedCharts.size()));
-    SqliteStatementHandle archiveInsertStmt;
-    const bool archiveInsertStmtReady = prepareSqliteStatementLogged(
-        db, insertChartMetaSql(), archiveInsertStmt,
-        "preparing statement to insert archive chart batch",
-        logSdlSqlErrorText);
+    const bool archiveInsertStmtReady = true;
     std::optional<bool> archiveSolidHint;
     if (const auto cacheIt = pendingArchiveCacheDiffs.find(archiveKey);
         cacheIt != pendingArchiveCacheDiffs.end()) {
@@ -5259,6 +4937,13 @@ int ChartRepository::ScanChartRoots(
     }
     const auto archiveSourcePreference =
         archiveBatchSourcePreference(batch.archivePath, archiveSolidHint);
+    std::optional<ChartSourcePreference> storedArchiveSourcePreference;
+    if (archiveSourcePreference.has_value()) {
+      storedArchiveSourcePreference = ChartSourcePreference{
+          .priority = archiveSourcePreference->priority,
+          .archiveSize = archiveSourcePreference->archiveSize,
+      };
+    }
     const auto insertStart = std::chrono::steady_clock::now();
     std::size_t insertedCharts = 0;
     bool parsedFullBatch = parsedCharts.size() == pendingInnerPaths.size();
@@ -5272,16 +4957,9 @@ int ChartRepository::ScanChartRoots(
       reportProgress(parseCurrent, parseTotal,
                      ChartScanProgressStage::ParsingCharts);
       if (parsed.meta.has_value()) {
-        if (!archiveInsertStmtReady) {
-          parsedFullBatch = false;
-        } else {
-          sqlite3_reset(archiveInsertStmt.get());
-          sqlite3_clear_bindings(archiveInsertStmt.get());
-          if (insertChartMetaPrepared(db, archiveInsertStmt.get(),
-                                      *parsed.meta, archiveSourcePreference)) {
-            ++changedCount;
-            ++insertedCharts;
-          }
+        if (scanBatch->UpsertChart(*parsed.meta,
+                                   storedArchiveSourcePreference)) {
+          ++insertedCharts;
         }
       }
       ++parseCurrent;
@@ -5350,18 +5028,15 @@ int ChartRepository::ScanChartRoots(
     }
   }
   waitForActiveArchiveParseJobs();
-  if (transactionOpen) {
-    commitSqliteTransaction(db, "chart scan");
-    transactionOpen = false;
+  const int changedCount = scanBatch->ChangedCount();
+  if (!scanBatch->Commit()) {
+    archive_file::appendDebugLogLine(
+        "Failed to commit final chart scan batch.");
   }
   acknowledgeFlushRequest(pendingFlushRequest());
   if (!stopRequested(stopToken)) {
-    clearChartScanCheckpoint(db);
-    clearChartMetadataRebuildRequiredIfPresent(db);
-  }
-
-  if (changedCount > 0) {
-    chart_repository_detail::BumpLibraryRevision();
+    session.ClearScanCheckpoint();
+    session.ClearChartMetadataRebuildRequired();
   }
   return changedCount;
 }

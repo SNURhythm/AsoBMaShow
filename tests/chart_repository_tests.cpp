@@ -22,6 +22,11 @@ static_assert(std::is_move_constructible_v<ChartRepository::Session>);
 static_assert(std::is_move_assignable_v<ChartRepository::Session>);
 static_assert(!std::is_copy_constructible_v<ChartRepository::Session>);
 static_assert(!std::is_copy_assignable_v<ChartRepository::Session>);
+static_assert(std::is_move_constructible_v<ChartRepository::Session::ScanBatch>);
+static_assert(std::is_move_assignable_v<ChartRepository::Session::ScanBatch>);
+static_assert(
+    !std::is_copy_constructible_v<ChartRepository::Session::ScanBatch>);
+static_assert(!std::is_copy_assignable_v<ChartRepository::Session::ScanBatch>);
 
 class TempDirectory {
 public:
@@ -97,6 +102,14 @@ void seedChartScore(const std::filesystem::path &path,
 }
 
 std::atomic<int> *connectionCount = nullptr;
+struct ScanBatchSqlObservation {
+  std::atomic<int> chartMetaInsertPrepares{0};
+  std::atomic<int> begins{0};
+  std::atomic<int> commits{0};
+  std::mutex mutex;
+  std::vector<std::string> chartMetaInsertExecutions;
+};
+ScanBatchSqlObservation *scanBatchSqlObservation = nullptr;
 std::mutex traceMutex;
 std::vector<std::string> tracedStatements;
 
@@ -105,9 +118,31 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
     return 0;
   }
   const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+  const std::string_view sqlText = sql != nullptr ? sql : "";
+  if (scanBatchSqlObservation != nullptr) {
+    if (sqlText.starts_with("BEGIN")) {
+      scanBatchSqlObservation->begins.fetch_add(1, std::memory_order_relaxed);
+    } else if (sqlText.starts_with("COMMIT")) {
+      scanBatchSqlObservation->commits.fetch_add(1,
+                                                  std::memory_order_relaxed);
+    } else if (sqlText.starts_with("REPLACE INTO chart_meta")) {
+      std::lock_guard observationLock(scanBatchSqlObservation->mutex);
+      scanBatchSqlObservation->chartMetaInsertExecutions.emplace_back(sqlText);
+    }
+  }
   std::lock_guard lock(traceMutex);
-  tracedStatements.emplace_back(sql != nullptr ? sql : "");
+  tracedStatements.emplace_back(sqlText);
   return 0;
+}
+
+int observeAuthorization(void *, int action, const char *first, const char *,
+                         const char *, const char *) {
+  if (scanBatchSqlObservation != nullptr && action == SQLITE_INSERT &&
+      first != nullptr && std::string_view(first) == "chart_meta") {
+    scanBatchSqlObservation->chartMetaInsertPrepares.fetch_add(
+        1, std::memory_order_relaxed);
+  }
+  return SQLITE_OK;
 }
 
 int observeConnection(sqlite3 *database, char **,
@@ -115,14 +150,19 @@ int observeConnection(sqlite3 *database, char **,
   assert(connectionCount != nullptr);
   connectionCount->fetch_add(1, std::memory_order_relaxed);
   sqlite3_trace_v2(database, SQLITE_TRACE_STMT, traceStatement, nullptr);
+  sqlite3_set_authorizer(database, observeAuthorization, nullptr);
   return SQLITE_OK;
 }
 
 class ScopedConnectionObserver {
 public:
-  explicit ScopedConnectionObserver(std::atomic<int> &count) {
+  explicit ScopedConnectionObserver(
+      std::atomic<int> &count,
+      ScanBatchSqlObservation *scanObservation = nullptr) {
     assert(connectionCount == nullptr);
+    assert(scanBatchSqlObservation == nullptr);
     connectionCount = &count;
+    scanBatchSqlObservation = scanObservation;
     {
       std::lock_guard lock(traceMutex);
       tracedStatements.clear();
@@ -135,6 +175,7 @@ public:
   ~ScopedConnectionObserver() {
     sqlite3_reset_auto_extension();
     connectionCount = nullptr;
+    scanBatchSqlObservation = nullptr;
   }
 };
 
@@ -159,6 +200,147 @@ bms_parser::ChartMeta chartMeta(const std::filesystem::path &root) {
   meta.Artist = "Repository Test";
   meta.TotalNotes = 100;
   return meta;
+}
+
+void testScanBatchCommitAndRollback() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto meta = chartMeta(temporary.path());
+  const ChartScanCheckpoint checkpoint{
+      .found = true,
+      .scanSignature = "repository-test",
+      .phase = "individual",
+      .nextIndex = 1,
+      .lastPath = meta.BmsPath,
+  };
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+  assert(batch->UpsertChart(meta, std::nullopt));
+  assert(batch->CheckpointAndContinue(checkpoint));
+  assert(batch->Commit());
+  assert(session->CountAllChartMeta() == 1);
+
+  auto rollback = session->BeginScanBatch();
+  assert(rollback.has_value());
+  assert(rollback->DeleteChart(meta.BmsPath));
+  rollback.reset();
+  assert(session->CountAllChartMeta() == 1);
+}
+
+void testScanBatchRetainsSessionStorage() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+  session.reset();
+
+  auto meta = chartMeta(temporary.path());
+  assert(batch->UpsertChart(meta, std::nullopt));
+  assert(batch->Commit());
+
+  auto verification = repository.OpenSession();
+  assert(verification.has_value());
+  assert(verification->CountAllChartMeta() == 1);
+}
+
+void testScanBatchReusesPreparedInsertAndTransaction() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScanBatchSqlObservation observation;
+  ScopedConnectionObserver observer(connections, &observation);
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  const int prepareBaseline =
+      observation.chartMetaInsertPrepares.load(std::memory_order_relaxed);
+  const int beginBaseline = observation.begins.load(std::memory_order_relaxed);
+  const int commitBaseline =
+      observation.commits.load(std::memory_order_relaxed);
+  std::size_t executionBaseline = 0;
+  {
+    std::lock_guard lock(observation.mutex);
+    executionBaseline = observation.chartMetaInsertExecutions.size();
+  }
+
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+  for (int i = 0; i < 100; ++i) {
+    auto meta = chartMeta(temporary.path());
+    meta.BmsPath = temporary.path() / ("batch-" + std::to_string(i) + ".bms");
+    assert(batch->UpsertChart(meta, std::nullopt));
+  }
+  assert(batch->ChangedCount() == 100);
+  assert(batch->Commit());
+
+  assert(observation.chartMetaInsertPrepares.load(std::memory_order_relaxed) -
+             prepareBaseline ==
+         1);
+  assert(observation.begins.load(std::memory_order_relaxed) - beginBaseline ==
+         1);
+  assert(observation.commits.load(std::memory_order_relaxed) -
+             commitBaseline ==
+         1);
+  {
+    std::lock_guard lock(observation.mutex);
+    assert(observation.chartMetaInsertExecutions.size() - executionBaseline ==
+           100);
+    const std::string &expected =
+        observation.chartMetaInsertExecutions[executionBaseline];
+    for (std::size_t i = executionBaseline;
+         i < observation.chartMetaInsertExecutions.size(); ++i) {
+      assert(observation.chartMetaInsertExecutions[i] == expected);
+    }
+  }
+  assert(session->CountAllChartMeta() == 100);
+}
+
+void testSessionScannerUsesRepositoryBatch() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  std::filesystem::create_directories(libraryRoot);
+  {
+    std::ofstream chart(libraryRoot / "sample.bms");
+    chart << "#PLAYER 1\n"
+             "#GENRE Test\n"
+             "#TITLE Repository Scanner\n"
+             "#ARTIST AsoBMaShow Test\n"
+             "#BPM 120\n"
+             "#PLAYLEVEL 1\n"
+             "#RANK 2\n"
+             "#TOTAL 100\n"
+             "#WAV01 sample.wav\n"
+             "#00111:01\n";
+  }
+  std::ofstream(libraryRoot / "sample.wav", std::ios::binary);
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  const std::uint64_t beforeRevision = repository.GetLibraryRevision();
+  assert(session->ScanChartRoots({libraryRoot}) == 1);
+  assert(session->CountAllChartMeta() == 1);
+  assert(repository.GetLibraryRevision() > beforeRevision);
+
+  const std::uint64_t stableRevision = repository.GetLibraryRevision();
+  assert(session->ScanChartRoots({libraryRoot}) == 0);
+  assert(repository.GetLibraryRevision() == stableRevision);
+
+  std::filesystem::remove(libraryRoot / "sample.bms");
+  assert(session->ScanChartRoots({libraryRoot}) == 1);
+  assert(session->CountAllChartMeta() == 0);
+  assert(repository.GetLibraryRevision() > stableRevision);
 }
 
 void testSessionRoundTripAndReadinessCost() {
@@ -442,6 +624,10 @@ void testChartMigrationCompatibilityMatrix() {
 } // namespace
 
 int main() {
+  testScanBatchCommitAndRollback();
+  testScanBatchRetainsSessionStorage();
+  testScanBatchReusesPreparedInsertAndTransaction();
+  testSessionScannerUsesRepositoryBatch();
   testSessionRoundTripAndReadinessCost();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();

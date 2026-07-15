@@ -433,38 +433,38 @@ selectDifficultyCourseDefinitions(sqlite3 *database);
 } // namespace
 
 bool ChartRepository::Session::DeleteDifficultyTable(int tableId) {
-  return deleteDifficultyTable(impl_->connection.get(), tableId);
+  return deleteDifficultyTable(impl_->database(), tableId);
 }
 
 std::vector<DifficultyTableInfo>
 ChartRepository::Session::SelectDifficultyTables() {
-  return selectDifficultyTables(impl_->connection.get());
+  return selectDifficultyTables(impl_->database());
 }
 
 std::vector<DifficultyLevelInfo>
 ChartRepository::Session::SelectDifficultyLevels(int tableId) {
-  return selectDifficultyLevels(impl_->connection.get(), tableId);
+  return selectDifficultyLevels(impl_->database(), tableId);
 }
 
 std::vector<DifficultyCourseTableInfo>
 ChartRepository::Session::SelectDifficultyCourseTables() {
-  return selectDifficultyCourseTables(impl_->connection.get());
+  return selectDifficultyCourseTables(impl_->database());
 }
 
 std::vector<DifficultyCourseGroupInfo>
 ChartRepository::Session::SelectDifficultyCourseGroups(int tableId) {
-  return selectDifficultyCourseGroups(impl_->connection.get(), tableId);
+  return selectDifficultyCourseGroups(impl_->database(), tableId);
 }
 
 std::vector<DifficultyCourseInfo>
 ChartRepository::Session::SelectDifficultyCourses(
     int tableId, const std::string &groupName) {
-  return selectDifficultyCourses(impl_->connection.get(), tableId, groupName);
+  return selectDifficultyCourses(impl_->database(), tableId, groupName);
 }
 
 std::vector<course_identity::Definition>
 ChartRepository::Session::SelectDifficultyCourseDefinitions() {
-  return selectDifficultyCourseDefinitions(impl_->connection.get());
+  return selectDifficultyCourseDefinitions(impl_->database());
 }
 
 namespace {
