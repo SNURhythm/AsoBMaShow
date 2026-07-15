@@ -9,7 +9,7 @@
 #include "../../GBattleMode.h"
 #include "../../PlayOptionUtils.h"
 #include "../../PrepMetronome.h"
-#include "../../ReplayDBHelper.h"
+#include "../../repositories/ReplayRepository.h"
 #include "../../ResultPresentationUtils.h"
 #include "../../Uuid.h"
 #include "../../practice/PracticeResultFlow.h"

@@ -1,19 +1,19 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
-#include "ChartDBHelper.h"
-#include "ArchiveFile.h"
-#include "BmsChartFile.h"
-#include "BmsMetadataText.h"
-#include "repositories/ChartMetaSql.h"
-#include "repositories/ChartSqlExpressions.h"
-#include "repositories/ChartStorageIdentity.h"
-#include "LongNoteModeUtils.h"
-#include "ScoreDBHelper.h"
-#include "repositories/ScoreCacheQueries.h"
-#include "repositories/SqliteRAII.h"
-#include "Utils.h"
+#include "ChartRepository.h"
+#include "../ArchiveFile.h"
+#include "../BmsChartFile.h"
+#include "../BmsMetadataText.h"
+#include "ChartMetaSql.h"
+#include "ChartSqlExpressions.h"
+#include "ChartStorageIdentity.h"
+#include "../LongNoteModeUtils.h"
+#include "ScoreRepository.h"
+#include "ScoreCacheQueries.h"
+#include "SqliteRAII.h"
+#include "../Utils.h"
 #include <SDL2/SDL.h>
-#include "path.h"
+#include "../path.h"
 
 #include <algorithm>
 #include <atomic>
@@ -27,7 +27,7 @@
 #include <future>
 #include <fstream>
 #include <iostream>
-#include "../yoga/lib/nlohmann/json.hpp"
+#include "../../yoga/lib/nlohmann/json.hpp"
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -39,14 +39,14 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include "targets.h"
+#include "../targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-#include "iOSNatives.hpp"
+#include "../iOSNatives.hpp"
 #elif TARGET_OS_ANDROID
-#include "AndroidNatives.h"
-#include "CurlRAII.h"
+#include "../AndroidNatives.h"
+#include "../CurlRAII.h"
 #else
-#include "CurlRAII.h"
+#include "../CurlRAII.h"
 #endif
 
 namespace {

@@ -2,7 +2,7 @@
 
 #include "../ThreadCompat.h"
 #include "ChartMusicCache.h"
-#include "MusicPlaylistDB.h"
+#include "../repositories/MusicPlaylistRepository.h"
 #include "MusicPlaylist.h"
 #include "NativeMusicPlayer.h"
 

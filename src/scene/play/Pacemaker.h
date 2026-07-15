@@ -2,7 +2,7 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
-#include "../../ScoreDBHelper.h"
+#include "../../repositories/ScoreRepository.h"
 #include "RhythmState.h"
 
 #include <algorithm>

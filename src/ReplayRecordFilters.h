@@ -2,7 +2,7 @@
 
 #include "PlayOptionUtils.h"
 #include "ReplayClearMarkUtils.h"
-#include "ReplayDBHelper.h"
+#include "repositories/ReplayRepository.h"
 #include "ScoreRankUtils.h"
 #include "scene/play/RhythmState.h"
 

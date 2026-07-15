@@ -5,7 +5,7 @@
 #include "../ChartPlaybackDuration.h"
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
-#include "../ReplayDBHelper.h"
+#include "../repositories/ReplayRepository.h"
 #include "../ReplayGhostUtils.h"
 #include "../path.h"
 #include "../practice/PracticeConfiguration.h"

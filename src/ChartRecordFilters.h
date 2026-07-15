@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ChartDBHelper.h"
+#include "repositories/ChartRepository.h"
 #include "scene/play/RhythmState.h"
 
 #include <algorithm>

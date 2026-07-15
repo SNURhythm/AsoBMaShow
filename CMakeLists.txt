@@ -571,10 +571,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(course_identity_tests PRIVATE cxx_std_23)
 
     add_executable(replay_db_helper_tests
-        tests/replay_db_helper_tests.cpp
+        tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ReplayRepository.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -633,10 +633,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/result_persistence_integration_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ReplayRepository.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
-        src/ScoreDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -665,7 +665,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
-        src/ScoreDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1167,8 +1167,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
-        src/ScoreDBHelper.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ReplayRepository.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1212,10 +1212,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
-        src/ChartDBHelper.cpp
+        src/repositories/ChartRepository.cpp
         src/repositories/ChartStorageIdentity.cpp
-        src/ScoreDBHelper.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ReplayRepository.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
@@ -1261,8 +1261,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
-        src/ScoreDBHelper.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ReplayRepository.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp

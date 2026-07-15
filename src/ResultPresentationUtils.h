@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ChartDBHelper.h"
-#include "ReplayDBHelper.h"
+#include "repositories/ChartRepository.h"
+#include "repositories/ReplayRepository.h"
 #include "ReplayData.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ScoreRepository.h"
 #include "scene/play/Pacemaker.h"
 #include "skin/SkinTypes.h"
 

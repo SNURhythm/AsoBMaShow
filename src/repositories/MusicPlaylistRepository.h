@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ChartDBHelper.h"
+#include "ChartRepository.h"
 #include "../sqlite3.h"
 
 #include <string>

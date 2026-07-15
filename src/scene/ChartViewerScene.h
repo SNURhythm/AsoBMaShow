@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../ChartDBHelper.h"
-#include "../ReplayDBHelper.h"
+#include "../repositories/ChartRepository.h"
+#include "../repositories/ReplayRepository.h"
 #include "../bms_parser.hpp"
 #include "../practice/PracticeConfiguration.h"
 #include "../practice/PracticeLaunchRequest.h"

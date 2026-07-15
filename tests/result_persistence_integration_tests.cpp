@@ -1,6 +1,6 @@
 #include "../src/ResultPersistenceCoordinator.h"
 
-#include "../src/ChartDBHelper.h"
+#include "../src/repositories/ChartRepository.h"
 #include "../src/FileChecksum.h"
 #include "../src/ProfileDatabaseActivity.h"
 #include "../src/repositories/SqliteRAII.h"

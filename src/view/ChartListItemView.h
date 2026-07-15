@@ -5,7 +5,7 @@
 #include <SDL2/SDL.h>
 #include <functional>
 #include <string>
-#include "../ChartDBHelper.h"
+#include "../repositories/ChartRepository.h"
 
 class Button;
 

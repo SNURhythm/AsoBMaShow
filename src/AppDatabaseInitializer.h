@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ChartDBHelper.h"
-#include "ReplayDBHelper.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ChartRepository.h"
+#include "repositories/ReplayRepository.h"
+#include "repositories/ScoreRepository.h"
 #include "repositories/SqliteRAII.h"
-#include "audio/MusicPlaylistDB.h"
+#include "repositories/MusicPlaylistRepository.h"
 
 #include <filesystem>
 #include <utility>

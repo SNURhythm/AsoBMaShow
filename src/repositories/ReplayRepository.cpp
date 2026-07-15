@@ -1,13 +1,13 @@
-#include "ReplayDBHelper.h"
+#include "ReplayRepository.h"
 
-#include "BmsMetadataText.h"
-#include "repositories/ChartSqlExpressions.h"
-#include "LongNoteModeUtils.h"
-#include "ProfileDatabaseActivity.h"
-#include "repositories/SqliteRAII.h"
-#include "Uuid.h"
-#include "Utils.h"
-#include "path.h"
+#include "../BmsMetadataText.h"
+#include "ChartSqlExpressions.h"
+#include "../LongNoteModeUtils.h"
+#include "../ProfileDatabaseActivity.h"
+#include "SqliteRAII.h"
+#include "../Uuid.h"
+#include "../Utils.h"
+#include "../path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>

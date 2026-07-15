@@ -1,10 +1,10 @@
 #pragma once
 
-#include "CourseIdentity.h"
-#include "ScoreProvenance.h"
-#include "bms_parser.hpp"
-#include "scene/play/RhythmState.h"
-#include "sqlite3.h"
+#include "../CourseIdentity.h"
+#include "../ScoreProvenance.h"
+#include "../bms_parser.hpp"
+#include "../scene/play/RhythmState.h"
+#include "../sqlite3.h"
 
 #include <array>
 #include <cstdint>

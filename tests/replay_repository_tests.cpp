@@ -1,4 +1,4 @@
-#include "../src/ReplayDBHelper.h"
+#include "../src/repositories/ReplayRepository.h"
 #include "../src/ReplayClearMarkUtils.h"
 #include "../src/ResultPersistenceModel.h"
 #include "../src/CourseIdentity.h"

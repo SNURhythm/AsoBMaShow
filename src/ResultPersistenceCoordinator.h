@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ReplayDBHelper.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ReplayRepository.h"
+#include "repositories/ScoreRepository.h"
 
 #include <cstddef>
 #include <functional>

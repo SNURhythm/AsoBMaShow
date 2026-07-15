@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayDBHelper.h"
+#include "repositories/ReplayRepository.h"
 #include "scene/play/RhythmState.h"
 
 #include <algorithm>

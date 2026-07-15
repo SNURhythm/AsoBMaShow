@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ScoreDBHelper.h"
+#include "../repositories/ScoreRepository.h"
 #include "../sqlite3.h"
 
 #include <array>

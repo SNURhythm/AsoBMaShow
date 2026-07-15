@@ -2,8 +2,8 @@
 
 #include "AppSettingsStore.h"
 #include "ProfileDatabaseActivity.h"
-#include "ReplayDBHelper.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ReplayRepository.h"
+#include "repositories/ScoreRepository.h"
 #include "input/InputProfileStore.h"
 
 #include <exception>

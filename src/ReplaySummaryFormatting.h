@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PlayOptionUtils.h"
-#include "ReplayDBHelper.h"
+#include "repositories/ReplayRepository.h"
 
 #include <iomanip>
 #include <sstream>

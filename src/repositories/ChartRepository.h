@@ -2,11 +2,11 @@
 
 #pragma once
 
-#include "CourseIdentity.h"
-#include "ThreadCompat.h"
-#include "bms_parser.hpp"
-#include "path.h"
-#include "sqlite3.h"
+#include "../CourseIdentity.h"
+#include "../ThreadCompat.h"
+#include "../bms_parser.hpp"
+#include "../path.h"
+#include "../sqlite3.h"
 #include <cstdint>
 #include <filesystem>
 #include <functional>

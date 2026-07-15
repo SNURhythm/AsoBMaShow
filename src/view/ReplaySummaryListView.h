@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ReplayDBHelper.h"
+#include "../repositories/ReplayRepository.h"
 #include "../ReplayClearMarkUtils.h"
 #include "../ReplaySummaryFormatting.h"
 #include "../ScoreRankUtils.h"

@@ -8,7 +8,7 @@
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
-#include "../ReplayDBHelper.h"
+#include "../repositories/ReplayRepository.h"
 #include "../ReplayAutoPlay.h"
 #include "../ReplayVideoExporter.h"
 #include "../ResultImageExporter.h"

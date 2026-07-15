@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
-#include "ReplayDBHelper.h"
+#include "repositories/ReplayRepository.h"
 
 #include <algorithm>
 

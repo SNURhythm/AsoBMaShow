@@ -1,10 +1,10 @@
-#include "MusicPlaylistDB.h"
+#include "MusicPlaylistRepository.h"
 
 #include "../BmsMetadataText.h"
-#include "../repositories/ChartMetaSql.h"
-#include "../repositories/ChartSqlExpressions.h"
-#include "../repositories/ChartStorageIdentity.h"
-#include "../repositories/SqliteRAII.h"
+#include "ChartMetaSql.h"
+#include "ChartSqlExpressions.h"
+#include "ChartStorageIdentity.h"
+#include "SqliteRAII.h"
 #include "../Utils.h"
 #include "../path.h"
 
