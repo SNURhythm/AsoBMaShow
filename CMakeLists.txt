@@ -617,8 +617,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
         src/repositories/ChartRepositoryQueries.cpp
-        src/repositories/ChartRepositoryFolderSession.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
@@ -760,6 +760,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(main_menu_library_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(main_menu_library_tests PRIVATE cxx_std_23)
+    target_compile_definitions(main_menu_library_tests PRIVATE
+        ASOBMASHOW_FOLDER_QUERY_ONLY=1
+    )
     if(TARGET SDL2::SDL2)
         target_link_libraries(main_menu_library_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -1282,6 +1285,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
