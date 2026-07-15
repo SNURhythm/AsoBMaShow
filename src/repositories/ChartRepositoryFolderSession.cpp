@@ -1,6 +1,6 @@
 #include "ChartRepository.h"
 
-#include "ChartRepositoryFolderQueries.h"
+#include "ChartRepositoryInternal.h"
 
 chart_library::FolderClearDataByLongNoteMode
 ChartRepository::Session::LoadFolderClearDataByLongNoteMode(

@@ -1,5 +1,5 @@
 #include "../src/scene/MainMenuLibrary.h"
-#include "../src/repositories/ChartRepositoryFolderQueries.h"
+#include "../src/repositories/ChartRepositoryInternal.h"
 #include "../src/LongNoteModeUtils.h"
 #include "RepositorySqliteTestSupport.h"
 

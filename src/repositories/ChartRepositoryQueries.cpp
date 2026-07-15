@@ -1,4 +1,4 @@
-#include "ChartRepositoryFolderQueries.h"
+#include "ChartRepositoryInternal.h"
 
 #include "ChartRepository.h"
 #include "ChartSqlExpressions.h"
