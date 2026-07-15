@@ -1,8 +1,9 @@
 #pragma once
 
 #include "ChartRepository.h"
-#include "../sqlite3.h"
 
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,42 +23,47 @@ struct MusicPlayerStateRecord {
 
 class MusicPlaylistRepository {
 public:
-  MusicPlaylistRepository() = default;
+  MusicPlaylistRepository();
+  MusicPlaylistRepository(std::filesystem::path databasePath,
+                          std::filesystem::path chartDatabasePath);
+  ~MusicPlaylistRepository();
+
   MusicPlaylistRepository(const MusicPlaylistRepository &) = delete;
-  MusicPlaylistRepository &operator=(const MusicPlaylistRepository &) = delete;
-  MusicPlaylistRepository(MusicPlaylistRepository &&) = delete;
-  MusicPlaylistRepository &operator=(MusicPlaylistRepository &&) = delete;
+  MusicPlaylistRepository &
+  operator=(const MusicPlaylistRepository &) = delete;
 
-  sqlite3 *Connect();
-  void Close(sqlite3 *db);
-
-  bool CreateTables(sqlite3 *db);
-  int EnsurePlaylist(sqlite3 *db, const std::string &name);
-  bool RenamePlaylist(sqlite3 *db, int playlistId, const std::string &name);
-  std::vector<MusicPlaylistInfo> SelectPlaylists(sqlite3 *db);
-  bool InsertTrack(sqlite3 *db, int playlistId,
+  bool EnsureReady();
+  void Shutdown();
+  int EnsurePlaylist(const std::string &name);
+  int EnsurePlaylistWithTracks(
+      const std::string &name,
+      const std::vector<bms_parser::ChartMeta> &tracks);
+  bool RenamePlaylist(int playlistId, const std::string &name);
+  std::vector<MusicPlaylistInfo> SelectPlaylists();
+  bool InsertTrack(int playlistId,
                    const bms_parser::ChartMeta &chartMeta);
-  bool DeleteTrack(sqlite3 *db, int playlistId,
+  bool DeleteTrack(int playlistId,
                    const bms_parser::ChartMeta &chartMeta,
                    int storedItemId = 0);
-  bool MoveTrack(sqlite3 *db, int playlistId,
-                 const bms_parser::ChartMeta &chartMeta, int delta,
-                 int storedItemId = 0);
-  bool ClearPlaylist(sqlite3 *db, int playlistId);
-  bool DeletePlaylist(sqlite3 *db, int playlistId);
-  MusicPlayerStateRecord SelectPlayerState(sqlite3 *db);
-  bool SavePlayerState(sqlite3 *db, const MusicPlayerStateRecord &state);
+  bool MoveTrack(int playlistId,
+                 const bms_parser::ChartMeta &chartMeta,
+                 int delta, int storedItemId = 0);
+  bool ClearPlaylist(int playlistId);
+  bool DeletePlaylist(int playlistId);
+  MusicPlayerStateRecord SelectPlayerState();
+  bool SavePlayerState(const MusicPlayerStateRecord &state);
   bool ReplaceNowPlayingTracks(
-      sqlite3 *db, const std::vector<bms_parser::ChartMeta> &tracks);
-  void SelectLibraryTracks(sqlite3 *db, std::vector<MusicTrackRecord> &tracks);
-  void SelectLibraryGroupTracks(sqlite3 *db,
-                                const bms_parser::ChartMeta &chartMeta,
-                                std::vector<MusicTrackRecord> &tracks);
-  void SelectNowPlayingTracks(sqlite3 *db,
-                              std::vector<MusicTrackRecord> &tracks);
-  void SelectTracks(sqlite3 *db, int playlistId,
-                    std::vector<MusicTrackRecord> &tracks);
+      const std::vector<bms_parser::ChartMeta> &tracks);
+  bool SaveNowPlayingState(
+      const std::vector<bms_parser::ChartMeta> &tracks,
+      const MusicPlayerStateRecord &state);
+  std::vector<MusicTrackRecord> SelectLibraryTracks();
+  std::vector<MusicTrackRecord> SelectLibraryGroupTracks(
+      const bms_parser::ChartMeta &chartMeta);
+  std::vector<MusicTrackRecord> SelectNowPlayingTracks();
+  std::vector<MusicTrackRecord> SelectTracks(int playlistId);
 
 private:
-  sqlite3 *schemaDatabase = nullptr;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };

@@ -592,6 +592,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_repository_tests PRIVATE SDL2)
     endif()
 
+    add_executable(music_playlist_repository_tests
+        tests/music_playlist_repository_tests.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/MusicPlaylistRepository.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(music_playlist_repository_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(music_playlist_repository_tests PRIVATE cxx_std_23)
+    if(WIN32)
+        target_link_libraries(music_playlist_repository_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(result_persistence_model_tests
         tests/result_persistence_model_tests.cpp
         src/ResultPersistenceModel.cpp
@@ -1435,6 +1451,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         course_identity_tests
         replay_repository_tests
+        music_playlist_repository_tests
         result_persistence_model_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests

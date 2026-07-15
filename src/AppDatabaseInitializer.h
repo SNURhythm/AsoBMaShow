@@ -70,22 +70,18 @@ inline bool initializeReplayDatabase(
   return helper.EnsureSchema();
 }
 
-inline bool initializeMusicDatabase() {
-  MusicPlaylistRepository helper;
-  SqliteConnectionHandle db(helper.Connect());
-  if (!db) {
-    return false;
-  }
-  return helper.CreateTables(db.get());
+inline bool initializeMusicDatabase(MusicPlaylistRepository &repository) {
+  return repository.EnsureReady();
 }
 
 inline DatabaseInitializationStatus
 initializeApplicationDatabases(ScoreRepository &scores,
-                               ReplayRepository &replays) {
+                               ReplayRepository &replays,
+                               MusicPlaylistRepository &music) {
   return initializeApplicationDatabasesWith(
       initializeChartDatabase, [&] { return initializeScoreDatabase(scores); },
       [&] { return initializeReplayDatabase(replays); },
-      initializeMusicDatabase);
+      [&] { return initializeMusicDatabase(music); });
 }
 
 } // namespace app_database_initializer

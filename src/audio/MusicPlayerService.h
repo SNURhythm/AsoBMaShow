@@ -21,7 +21,7 @@ namespace music_player {
 
 class MusicPlayerService {
 public:
-  MusicPlayerService() = default;
+  explicit MusicPlayerService(MusicPlaylistRepository &repository);
   ~MusicPlayerService();
   MusicPlayerService(const MusicPlayerService &) = delete;
   MusicPlayerService &operator=(const MusicPlayerService &) = delete;
@@ -130,8 +130,7 @@ public:
 private:
   enum class PlaybackRequest { Current, Next, Previous };
 
-  sqlite3 *DatabaseLocked(std::string &errorMessage);
-  void CloseDatabaseLocked();
+  bool EnsureRepositoryReadyLocked(std::string &errorMessage);
   bool PlayCurrentLocked(std::string &errorMessage);
   bool PlayNextLocked(std::string &errorMessage);
   bool PlayPreviousLocked(std::string &errorMessage);
@@ -159,11 +158,9 @@ private:
                              std::uint64_t preloadRevision,
                              bool requestedClubMode,
                              const std::stop_token &stopToken);
-  void RefreshPlaylistCachesLocked(MusicPlaylistRepository &playlistDb, sqlite3 *db,
-                                   int preferredSelectedPlaylistId);
-  void RestoreQueueFromPersistedStateLocked(MusicPlaylistRepository &playlistDb,
-                                            sqlite3 *db);
-  void PersistPlayerStateLocked(MusicPlaylistRepository &playlistDb, sqlite3 *db);
+  void RefreshPlaylistCachesLocked(int preferredSelectedPlaylistId);
+  void RestoreQueueFromPersistedStateLocked();
+  void PersistPlayerStateLocked();
   void PersistQueueTracksLocked();
   void PersistQueueTracksLocked(
       const std::vector<music_playlist::MusicTrack> &tracks,
@@ -179,9 +176,8 @@ private:
   void NativeControlEventLoop(const std::stop_token &stopToken);
   void PublishNativeControlStatus(const std::string &statusMessage);
 
+  MusicPlaylistRepository &repository;
   mutable std::mutex stateMutex;
-  MusicPlaylistRepository playlistDb;
-  sqlite3 *playlistDatabase = nullptr;
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;

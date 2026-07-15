@@ -121,6 +121,7 @@ public:
   Jukebox jukebox;
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;
+  MusicPlaylistRepository musicPlaylistRepository;
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};
@@ -154,7 +155,8 @@ public:
         resultPersistence(scoreRepository, replayRepository),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
-                           settings.audioVideo.audio) {
+                           settings.audioVideo.audio),
+        musicPlayer(musicPlaylistRepository) {
     if (!profileInitializationResult.ok()) {
       return;
     }

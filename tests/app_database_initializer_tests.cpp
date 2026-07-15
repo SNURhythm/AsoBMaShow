@@ -13,8 +13,10 @@ static_assert(!std::is_copy_constructible_v<ReplayRepository>);
 static_assert(std::is_constructible_v<result_persistence::Coordinator,
                                       ScoreRepository &,
                                       ReplayRepository &>);
-static_assert(requires(ScoreRepository &scores, ReplayRepository &replays) {
-  app_database_initializer::initializeApplicationDatabases(scores, replays);
+static_assert(requires(ScoreRepository &scores, ReplayRepository &replays,
+                       MusicPlaylistRepository &music) {
+  app_database_initializer::initializeApplicationDatabases(scores, replays,
+                                                            music);
 });
 
 #define ASSERT_TRUE(value, label)                                              \

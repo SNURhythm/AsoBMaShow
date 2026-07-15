@@ -26,10 +26,8 @@ void setEmptyPlaylistError(std::string &errorMessage) {
 }
 
 std::vector<music_playlist::MusicTrack>
-loadPlaylistTracks(MusicPlaylistRepository &playlistDb, sqlite3 *db, int playlistId) {
-  std::vector<MusicTrackRecord> records;
-  playlistDb.SelectTracks(db, playlistId, records);
-  return music_playlist::MakeTracks(records);
+loadPlaylistTracks(MusicPlaylistRepository &repository, int playlistId) {
+  return music_playlist::MakeTracks(repository.SelectTracks(playlistId));
 }
 
 std::vector<music_playlist::MusicTrack>
@@ -46,10 +44,8 @@ loadFavoriteTracks() {
 }
 
 std::vector<music_playlist::MusicTrack>
-loadNowPlayingTracks(MusicPlaylistRepository &playlistDb, sqlite3 *db) {
-  std::vector<MusicTrackRecord> records;
-  playlistDb.SelectNowPlayingTracks(db, records);
-  return music_playlist::MakeTracks(records);
+loadNowPlayingTracks(MusicPlaylistRepository &repository) {
+  return music_playlist::MakeTracks(repository.SelectNowPlayingTracks());
 }
 
 int repeatModeToRecordValue(music_playlist::QueueRepeatMode mode) {
@@ -155,57 +151,36 @@ native_music_player::QueueMetadata nativeQueueMetadataForSnapshot(
 
 } // namespace
 
+MusicPlayerService::MusicPlayerService(MusicPlaylistRepository &repository)
+    : repository(repository) {}
+
 MusicPlayerService::~MusicPlayerService() {
   StopSleepTimerWorker();
   StopPlaybackWorker();
   StopAdjacentPreloadWorker();
   StopNativeControlEventPump();
   std::lock_guard<std::mutex> lock(stateMutex);
-  CloseDatabaseLocked();
+  repository.Shutdown();
 }
 
-sqlite3 *MusicPlayerService::DatabaseLocked(std::string &errorMessage) {
-  if (playlistDatabase != nullptr) {
-    if (sqlite3_get_autocommit(playlistDatabase) != 0) {
-      return playlistDatabase;
-    }
-    std::cerr << "Discarding music playlist database with an unfinished "
-                 "transaction.\n";
-    CloseDatabaseLocked();
-  }
-
-  playlistDatabase = playlistDb.Connect();
-  if (playlistDatabase == nullptr) {
+bool MusicPlayerService::EnsureRepositoryReadyLocked(
+    std::string &errorMessage) {
+  if (!repository.EnsureReady()) {
     errorMessage = "Could not open music playlist database.";
-    return nullptr;
+    return false;
   }
-  if (!playlistDb.CreateTables(playlistDatabase)) {
-    CloseDatabaseLocked();
-    errorMessage = "Could not initialize music playlist database.";
-    return nullptr;
-  }
-  return playlistDatabase;
-}
-
-void MusicPlayerService::CloseDatabaseLocked() {
-  if (playlistDatabase == nullptr) {
-    return;
-  }
-  playlistDb.Close(playlistDatabase);
-  playlistDatabase = nullptr;
+  return true;
 }
 
 bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  std::vector<MusicTrackRecord> records;
-  playlistDb.SelectLibraryTracks(db, records);
+  const std::vector<MusicTrackRecord> records = repository.SelectLibraryTracks();
   favoriteTracks = loadFavoriteTracks();
 
   libraryTracks = music_playlist::MakeTracks(records);
@@ -217,23 +192,21 @@ bool MusicPlayerService::ReloadLibraryAndPlaylists(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  std::vector<MusicTrackRecord> records;
-  playlistDb.SelectLibraryTracks(db, records);
+  const std::vector<MusicTrackRecord> records = repository.SelectLibraryTracks();
   libraryTracks = music_playlist::MakeTracks(records);
   favoriteTracks = loadFavoriteTracks();
-  persistedState = playlistDb.SelectPlayerState(db);
+  persistedState = repository.SelectPlayerState();
 
-  RefreshPlaylistCachesLocked(playlistDb, db, preferredSelectedPlaylistId);
+  RefreshPlaylistCachesLocked(preferredSelectedPlaylistId);
   if (defaultPlaylistId <= 0) {
     errorMessage = "Could not create music playlist.";
     return false;
   }
-  RestoreQueueFromPersistedStateLocked(playlistDb, db);
+  RestoreQueueFromPersistedStateLocked();
   return true;
 }
 
@@ -267,14 +240,12 @@ bool MusicPlayerService::LoadLibraryGroupTracks(
     return false;
   }
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  std::vector<MusicTrackRecord> records;
-  playlistDb.SelectLibraryGroupTracks(db, groupTrack.representativeChart,
-                                      records);
+  const std::vector<MusicTrackRecord> records =
+      repository.SelectLibraryGroupTracks(groupTrack.representativeChart);
 
   tracks = music_playlist::MakeTracks(records);
   if (tracks.empty()) {
@@ -309,10 +280,9 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
 }
 
 void MusicPlayerService::RefreshPlaylistCachesLocked(
-    MusicPlaylistRepository &playlistDb, sqlite3 *db,
     int preferredSelectedPlaylistId) {
-  defaultPlaylistId = playlistDb.EnsurePlaylist(db, kDefaultPlaylistName);
-  playlists = playlistDb.SelectPlaylists(db);
+  defaultPlaylistId = repository.EnsurePlaylist(kDefaultPlaylistName);
+  playlists = repository.SelectPlaylists();
 
   if (preferredSelectedPlaylistId > 0 &&
       hasPlaylistId(playlists, preferredSelectedPlaylistId)) {
@@ -332,25 +302,24 @@ void MusicPlayerService::RefreshPlaylistCachesLocked(
   }
 
   defaultPlaylistTracks =
-      defaultPlaylistId > 0 ? loadPlaylistTracks(playlistDb, db, defaultPlaylistId)
+      defaultPlaylistId > 0 ? loadPlaylistTracks(repository, defaultPlaylistId)
                             : std::vector<music_playlist::MusicTrack>{};
   selectedPlaylistTracks =
       selectedPlaylistId == defaultPlaylistId
           ? defaultPlaylistTracks
           : (selectedPlaylistId > 0
-                 ? loadPlaylistTracks(playlistDb, db, selectedPlaylistId)
+                 ? loadPlaylistTracks(repository, selectedPlaylistId)
                  : std::vector<music_playlist::MusicTrack>{});
 }
 
-void MusicPlayerService::RestoreQueueFromPersistedStateLocked(
-    MusicPlaylistRepository &playlistDb, sqlite3 *db) {
+void MusicPlayerService::RestoreQueueFromPersistedStateLocked() {
   queue.SetRepeatMode(repeatModeFromRecordValue(persistedState.repeatMode));
   if (!queue.Empty()) {
     SyncNativeQueueLocked();
     return;
   }
 
-  auto nowPlayingTracks = loadNowPlayingTracks(playlistDb, db);
+  auto nowPlayingTracks = loadNowPlayingTracks(repository);
   if (nowPlayingTracks.empty()) {
     SyncNativeQueueLocked();
     return;
@@ -368,9 +337,8 @@ void MusicPlayerService::RestoreQueueFromPersistedStateLocked(
   SyncNativeQueueLocked();
 }
 
-void MusicPlayerService::PersistPlayerStateLocked(
-    MusicPlaylistRepository &playlistDb, sqlite3 *db) {
-  playlistDb.SavePlayerState(db, persistedState);
+void MusicPlayerService::PersistPlayerStateLocked() {
+  repository.SavePlayerState(persistedState);
 }
 
 void MusicPlayerService::PersistQueueTracksLocked() {
@@ -384,15 +352,7 @@ void MusicPlayerService::PersistQueueTracksLocked(
     bool preserveCursor) {
   const auto snapshot = queue.Snapshot();
   std::string databaseError;
-  sqlite3 *db = DatabaseLocked(databaseError);
-  if (db == nullptr) {
-    SyncNativeQueueLocked();
-    return;
-  }
-
-  std::string transactionError;
-  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
-  if (!transaction.active()) {
+  if (!EnsureRepositoryReadyLocked(databaseError)) {
     SyncNativeQueueLocked();
     return;
   }
@@ -417,12 +377,7 @@ void MusicPlayerService::PersistQueueTracksLocked(
     chartMetas.push_back(track.representativeChart);
   }
 
-  const bool savedTracks = playlistDb.ReplaceNowPlayingTracks(db, chartMetas);
-  const bool savedState =
-      savedTracks && playlistDb.SavePlayerState(db, nextState);
-  const bool committed = savedTracks && savedState &&
-                         transaction.commit(transactionError);
-  if (committed) {
+  if (repository.SaveNowPlayingState(chartMetas, nextState)) {
     persistedState = std::move(nextState);
   }
   SyncNativeQueueLocked();
@@ -431,8 +386,7 @@ void MusicPlayerService::PersistQueueTracksLocked(
 void MusicPlayerService::PersistQueueCursorLocked() {
   const auto snapshot = queue.Snapshot();
   std::string databaseError;
-  sqlite3 *db = DatabaseLocked(databaseError);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(databaseError)) {
     SyncNativeQueueLocked();
     return;
   }
@@ -451,7 +405,7 @@ void MusicPlayerService::PersistQueueCursorLocked() {
     nextState.queueCursorIndex = -1;
   }
 
-  const bool saved = playlistDb.SavePlayerState(db, nextState);
+  const bool saved = repository.SavePlayerState(nextState);
   if (saved) {
     persistedState = std::move(nextState);
   }
@@ -468,13 +422,12 @@ bool MusicPlayerService::ReloadPlaylists(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  persistedState = playlistDb.SelectPlayerState(db);
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  persistedState = repository.SelectPlayerState();
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (defaultPlaylistId <= 0) {
     errorMessage = "Could not create music playlist.";
     return false;
@@ -508,20 +461,19 @@ int MusicPlayerService::CreatePlaylist(const std::string &name,
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return 0;
   }
 
-  const int playlistId = playlistDb.EnsurePlaylist(db, name);
+  const int playlistId = repository.EnsurePlaylist(name);
   if (playlistId <= 0) {
     errorMessage = "Could not create music playlist.";
     return 0;
   }
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  RefreshPlaylistCachesLocked(playlistId);
   persistedState.selectedPlaylistId = selectedPlaylistId;
   persistedState.playlistCursorIndex = -1;
-  PersistPlayerStateLocked(playlistDb, db);
+  PersistPlayerStateLocked();
   return playlistId;
 }
 
@@ -537,50 +489,26 @@ int MusicPlayerService::CreatePlaylistFromTracks(
     return 0;
   }
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return 0;
   }
 
-  std::string transactionError;
-  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
-  if (!transaction.active()) {
-    std::cerr << "SQL error while beginning music playlist save: "
-              << transactionError << "\n";
-    errorMessage = "Could not start music playlist save.";
-    return 0;
-  }
-
-  const int playlistId = playlistDb.EnsurePlaylist(db, name);
-  if (playlistId <= 0) {
-    errorMessage = "Could not create music playlist.";
-    return 0;
-  }
-
-  bool insertedAll = true;
+  std::vector<bms_parser::ChartMeta> chartMetas;
+  chartMetas.reserve(tracks.size());
   for (const auto &track : tracks) {
-    if (!playlistDb.InsertTrack(db, playlistId, track.representativeChart)) {
-      insertedAll = false;
-      break;
-    }
+    chartMetas.push_back(track.representativeChart);
   }
-
-  if (!insertedAll) {
+  const int playlistId =
+      repository.EnsurePlaylistWithTracks(name, chartMetas);
+  if (playlistId <= 0) {
     errorMessage = "Could not save every Now Playing track.";
     return 0;
   }
 
-  if (!transaction.commit(transactionError)) {
-    std::cerr << "SQL error while finishing music playlist save: "
-              << transactionError << "\n";
-    errorMessage = "Could not save music playlist.";
-    return 0;
-  }
-
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  RefreshPlaylistCachesLocked(playlistId);
   persistedState.selectedPlaylistId = selectedPlaylistId;
   persistedState.playlistCursorIndex = -1;
-  PersistPlayerStateLocked(playlistDb, db);
+  PersistPlayerStateLocked();
   return playlistId;
 }
 
@@ -594,14 +522,13 @@ bool MusicPlayerService::RenameSelectedPlaylist(const std::string &name,
     return false;
   }
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
   const int playlistId = selectedPlaylistId;
-  const bool renamed = playlistDb.RenamePlaylist(db, playlistId, name);
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  const bool renamed = repository.RenamePlaylist(playlistId, name);
+  RefreshPlaylistCachesLocked(playlistId);
   if (!renamed) {
     errorMessage = "Could not rename playlist. The name may already exist.";
     return false;
@@ -619,15 +546,14 @@ bool MusicPlayerService::SelectPlaylist(int playlistId,
     return false;
   }
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  RefreshPlaylistCachesLocked(playlistId);
   persistedState.selectedPlaylistId = selectedPlaylistId;
   persistedState.playlistCursorIndex = -1;
-  PersistPlayerStateLocked(playlistDb, db);
+  PersistPlayerStateLocked();
   if (selectedPlaylistId != playlistId) {
     errorMessage = "Selected playlist no longer exists.";
     return false;
@@ -641,21 +567,19 @@ bool MusicPlayerService::AddChartToPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   const int playlistId = targetPlaylistId;
   if (!hasPlaylistId(playlists, playlistId)) {
     errorMessage = "Select a playlist first.";
     return false;
   }
   const bool inserted =
-      playlistId > 0 &&
-      playlistDb.InsertTrack(db, playlistId, chartMeta);
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+      playlistId > 0 && repository.InsertTrack(playlistId, chartMeta);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (!inserted) {
     errorMessage = "Could not add selected chart to the playlist.";
     return false;
@@ -669,17 +593,16 @@ bool MusicPlayerService::RemoveChartFromSelectedPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   const int playlistId = selectedPlaylistId;
-  const bool deleted =
-      playlistId > 0 &&
-      playlistDb.DeleteTrack(db, playlistId, chartMeta, storedItemId);
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  const bool deleted = playlistId > 0 &&
+                       repository.DeleteTrack(playlistId, chartMeta,
+                                              storedItemId);
+  RefreshPlaylistCachesLocked(playlistId);
   if (!deleted) {
     errorMessage = "Selected chart is not in this playlist.";
     return false;
@@ -693,17 +616,16 @@ bool MusicPlayerService::MoveChartInSelectedPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   const int playlistId = selectedPlaylistId;
-  const bool moved =
-      playlistId > 0 &&
-      playlistDb.MoveTrack(db, playlistId, chartMeta, delta, storedItemId);
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  const bool moved = playlistId > 0 &&
+                     repository.MoveTrack(playlistId, chartMeta, delta,
+                                          storedItemId);
+  RefreshPlaylistCachesLocked(playlistId);
   if (!moved) {
     errorMessage = delta < 0 ? "Selected track is already at the top."
                              : "Selected track is already at the bottom.";
@@ -716,16 +638,14 @@ bool MusicPlayerService::ClearSelectedPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   const int playlistId = selectedPlaylistId;
-  const bool cleared =
-      playlistId > 0 && playlistDb.ClearPlaylist(db, playlistId);
-  RefreshPlaylistCachesLocked(playlistDb, db, playlistId);
+  const bool cleared = playlistId > 0 && repository.ClearPlaylist(playlistId);
+  RefreshPlaylistCachesLocked(playlistId);
   if (!cleared) {
     errorMessage = "Could not clear the playlist.";
     return false;
@@ -737,12 +657,11 @@ bool MusicPlayerService::DeleteSelectedPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   const int playlistId = selectedPlaylistId;
   if (playlistId <= 0) {
     errorMessage = "Select a playlist first.";
@@ -753,12 +672,12 @@ bool MusicPlayerService::DeleteSelectedPlaylist(std::string &errorMessage) {
     return false;
   }
 
-  const bool deleted = playlistDb.DeletePlaylist(db, playlistId);
-  RefreshPlaylistCachesLocked(playlistDb, db, 0);
+  const bool deleted = repository.DeletePlaylist(playlistId);
+  RefreshPlaylistCachesLocked(0);
   if (persistedState.selectedPlaylistId == playlistId) {
     persistedState.selectedPlaylistId = selectedPlaylistId;
     persistedState.playlistCursorIndex = -1;
-    PersistPlayerStateLocked(playlistDb, db);
+    PersistPlayerStateLocked();
   }
   if (!deleted) {
     errorMessage = "Could not delete the playlist.";
@@ -772,14 +691,13 @@ bool MusicPlayerService::SavePlaylistCursor(int playlistId, int cursorIndex,
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
   persistedState.selectedPlaylistId = playlistId;
   persistedState.playlistCursorIndex = cursorIndex;
-  const bool saved = playlistDb.SavePlayerState(db, persistedState);
+  const bool saved = repository.SavePlayerState(persistedState);
   if (!saved) {
     errorMessage = "Could not save music player selection.";
     return false;
@@ -809,19 +727,17 @@ bool MusicPlayerService::AddChartToDefaultPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (defaultPlaylistId <= 0) {
     errorMessage = "Could not create music playlist.";
     return false;
   }
-  const bool inserted =
-      playlistDb.InsertTrack(db, defaultPlaylistId, chartMeta);
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  const bool inserted = repository.InsertTrack(defaultPlaylistId, chartMeta);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (!inserted) {
     errorMessage = "Could not add selected chart to the music playlist.";
     return false;
@@ -834,19 +750,17 @@ bool MusicPlayerService::RemoveChartFromDefaultPlaylist(
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (defaultPlaylistId <= 0) {
     errorMessage = "Could not create music playlist.";
     return false;
   }
-  const bool deleted =
-      playlistDb.DeleteTrack(db, defaultPlaylistId, chartMeta);
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  const bool deleted = repository.DeleteTrack(defaultPlaylistId, chartMeta);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (!deleted) {
     errorMessage = "Selected chart is not in My Playlist.";
     return false;
@@ -858,18 +772,17 @@ bool MusicPlayerService::ClearDefaultPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
 
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (defaultPlaylistId <= 0) {
     errorMessage = "Could not create music playlist.";
     return false;
   }
-  const bool cleared = playlistDb.ClearPlaylist(db, defaultPlaylistId);
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  const bool cleared = repository.ClearPlaylist(defaultPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   if (!cleared) {
     errorMessage = "Could not clear the music playlist.";
     return false;
@@ -897,11 +810,10 @@ bool MusicPlayerService::StartSelectedPlaylist(std::string &errorMessage) {
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
 
   if (selectedPlaylistTracks.empty()) {
     setEmptyPlaylistError(errorMessage);
@@ -921,11 +833,10 @@ bool MusicPlayerService::StartDefaultPlaylist(std::string &errorMessage) {
   errorMessage.clear();
 
   bool hasDefaultPlaylist = false;
-  sqlite3 *db = DatabaseLocked(errorMessage);
-  if (db == nullptr) {
+  if (!EnsureRepositoryReadyLocked(errorMessage)) {
     return false;
   }
-  RefreshPlaylistCachesLocked(playlistDb, db, selectedPlaylistId);
+  RefreshPlaylistCachesLocked(selectedPlaylistId);
   hasDefaultPlaylist = defaultPlaylistId > 0;
 
   if (!hasDefaultPlaylist) {
