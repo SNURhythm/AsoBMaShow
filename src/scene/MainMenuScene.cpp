@@ -2377,8 +2377,9 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   auto pauseTask = [this, &task, &stopToken]() {
     return waitForLibraryTaskResume(task.id, stopToken);
   };
-  const int changedCount = importSession->ScanChartRoots(
-      roots, &stopToken, scanProgress, pauseTask);
+  ChartLibraryScanner scanner;
+  const int changedCount = scanner.Scan(
+      *importSession, roots, &stopToken, scanProgress, pauseTask);
   if (stopToken.stop_requested()) {
     throw std::runtime_error("Import cancelled");
   }
@@ -5577,8 +5578,9 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
         std::vector<std::filesystem::path> roots{scanRoot};
         postProgress(archive_file::UnzipProgress{
             .fraction = 0.98, .message = "Refreshing library"});
-        const int changedCount =
-            unzipSession->ScanChartRoots(roots, &stopToken);
+        ChartLibraryScanner scanner;
+        const int changedCount = scanner.Scan(*unzipSession, roots,
+                                              &stopToken);
         if (!stopToken.stop_requested()) {
           std::vector<bms_parser::ChartMeta> chartMetas;
           unzipSession->SelectAllChartMeta(chartMetas);
@@ -10068,8 +10070,9 @@ void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
   }
 
   SDL_Log("Refreshing chart library");
-  const int changedCount = chartSession.ScanChartRoots(
-      roots, &stop_token, progressCallback, pauseCallback,
+  ChartLibraryScanner scanner;
+  const int changedCount = scanner.Scan(
+      chartSession, roots, &stop_token, progressCallback, pauseCallback,
       [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
       [&scene](std::uint64_t request) {
         scene.completeLibraryScanFlush(request);

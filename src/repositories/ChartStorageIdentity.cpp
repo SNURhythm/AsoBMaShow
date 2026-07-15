@@ -1,5 +1,6 @@
 #include "ChartStorageIdentity.h"
 
+#include "../ArchiveFile.h"
 #include "../Utils.h"
 #include "../targets.h"
 
@@ -102,6 +103,12 @@ void ToAbsolutePath([[maybe_unused]] std::filesystem::path &path) {
     path = Utils::GetDocumentsPath("BMS") / path;
   }
 #endif
+}
+
+void ConfigureArchiveCachePathNormalization() {
+  archive_file::setCachePathNormalizer([](std::filesystem::path &path) {
+    ToRelativePath(path);
+  });
 }
 
 } // namespace chart_storage_identity

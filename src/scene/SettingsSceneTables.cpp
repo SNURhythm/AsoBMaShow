@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../ChartLibraryScanner.h"
 #include "../Utils.h"
 
 #include <memory>
@@ -620,11 +621,12 @@ void SettingsScene::refreshChartLibrary() {
         }
 #endif
 
+        ChartLibraryScanner scanner;
         const int changedCount =
             token.stop_requested()
                 ? -1
                 : (session->ClearChartMeta()
-                       ? session->ScanChartRoots(roots, &token)
+                       ? scanner.Scan(*session, roots, &token)
                        : -1);
 
         if (token.stop_requested()) {

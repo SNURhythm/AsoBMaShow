@@ -1,5 +1,6 @@
 #pragma once
 #include "../BmsSearchService.h"
+#include "../ChartLibraryScanner.h"
 #include "../view/RecyclerView.h"
 #include "ChartFilterSortPanelView.h"
 #include "Scene.h"

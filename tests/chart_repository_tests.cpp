@@ -304,45 +304,6 @@ void testScanBatchReusesPreparedInsertAndTransaction() {
   assert(session->CountAllChartMeta() == 100);
 }
 
-void testSessionScannerUsesRepositoryBatch() {
-  TempDirectory temporary;
-  const auto libraryRoot = temporary.path() / "library";
-  std::filesystem::create_directories(libraryRoot);
-  {
-    std::ofstream chart(libraryRoot / "sample.bms");
-    chart << "#PLAYER 1\n"
-             "#GENRE Test\n"
-             "#TITLE Repository Scanner\n"
-             "#ARTIST AsoBMaShow Test\n"
-             "#BPM 120\n"
-             "#PLAYLEVEL 1\n"
-             "#RANK 2\n"
-             "#TOTAL 100\n"
-             "#WAV01 sample.wav\n"
-             "#00111:01\n";
-  }
-  std::ofstream(libraryRoot / "sample.wav", std::ios::binary);
-
-  ChartRepository repository(temporary.path() / "chart.db");
-  assert(repository.EnsureReady());
-  auto session = repository.OpenSession();
-  assert(session.has_value());
-
-  const std::uint64_t beforeRevision = repository.GetLibraryRevision();
-  assert(session->ScanChartRoots({libraryRoot}) == 1);
-  assert(session->CountAllChartMeta() == 1);
-  assert(repository.GetLibraryRevision() > beforeRevision);
-
-  const std::uint64_t stableRevision = repository.GetLibraryRevision();
-  assert(session->ScanChartRoots({libraryRoot}) == 0);
-  assert(repository.GetLibraryRevision() == stableRevision);
-
-  std::filesystem::remove(libraryRoot / "sample.bms");
-  assert(session->ScanChartRoots({libraryRoot}) == 1);
-  assert(session->CountAllChartMeta() == 0);
-  assert(repository.GetLibraryRevision() > stableRevision);
-}
-
 void testSessionRoundTripAndReadinessCost() {
   TempDirectory temporary;
   const auto path = temporary.path() / "chart.db";
@@ -627,7 +588,6 @@ int main() {
   testScanBatchCommitAndRollback();
   testScanBatchRetainsSessionStorage();
   testScanBatchReusesPreparedInsertAndTransaction();
-  testSessionScannerUsesRepositoryBatch();
   testSessionRoundTripAndReadinessCost();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();

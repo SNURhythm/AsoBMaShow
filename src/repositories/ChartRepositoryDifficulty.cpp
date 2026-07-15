@@ -2,8 +2,6 @@
 
 #include "ChartRepository.h"
 #include "ChartRepositoryInternal.h"
-#include "../ArchiveFile.h"
-#include "../BmsChartFile.h"
 #include "../BmsMetadataText.h"
 #include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"

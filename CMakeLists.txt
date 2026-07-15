@@ -650,6 +650,49 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(chart_library_scanner_tests
+        tests/chart_library_scanner_tests.cpp
+        src/ChartLibraryScanner.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_library_scanner_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_library_scanner_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(chart_library_scanner_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(chart_library_scanner_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(chart_library_scanner_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(result_persistence_model_tests
         tests/result_persistence_model_tests.cpp
         src/ResultPersistenceModel.cpp
@@ -1521,6 +1564,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests
+        chart_library_scanner_tests
         result_persistence_model_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests

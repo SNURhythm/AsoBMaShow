@@ -391,6 +391,22 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database) {
 }
 } // namespace
 
+bool ChartRepository::InsertChartMeta(sqlite3 *database,
+                                      bms_parser::ChartMeta &chartMeta) {
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          database, insertChartMetaSql(), statement,
+          "preparing statement to insert a chart", logSdlSqlErrorText)) {
+    return false;
+  }
+  if (!bindAndInsertChartMeta(database, statement.get(), chartMeta,
+                              std::nullopt)) {
+    return false;
+  }
+  chart_repository_detail::BumpLibraryRevision();
+  return true;
+}
+
 struct ChartRepository::Session::ScanBatch::Impl {
   explicit Impl(std::shared_ptr<ChartSessionStorage> storageValue)
       : storage(std::move(storageValue)) {

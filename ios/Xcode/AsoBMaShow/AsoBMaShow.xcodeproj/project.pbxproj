@@ -742,6 +742,8 @@
 				bms_search/IpfsDriver.cpp,
 				bms_search/PackageSourceDrivers.cpp,
 				BmsSearchService.cpp,
+				ChartLibraryScanner.cpp,
+				ChartLibraryScanner.h,
 				repositories/ChartRepository.cpp,
 				repositories/ChartScanStore.cpp,
 				repositories/ChartScanStore.h,

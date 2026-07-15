@@ -2,8 +2,6 @@
 
 #include "ChartRepository.h"
 #include "ChartRepositoryInternal.h"
-#include "../ArchiveFile.h"
-#include "../BmsChartFile.h"
 #include "../BmsMetadataText.h"
 #include "ChartMetaSql.h"
 #include "ChartSqlExpressions.h"
@@ -160,18 +158,6 @@ constexpr const char *kDifficultyCourseEntrySearchText =
     "COALESCE(cm.genre, '') || ' ' || dc.name || ' ' || dc.group_name)";
 constexpr const char *kSolidArchiveSelectColumns =
     "sa.path, sa.name, sa.archive_size, sa.uncompressed_size, sa.file_count";
-constexpr size_t kMaxConcurrentDifficultyTableDownloads = 4;
-constexpr int kArchiveParseCheckpointInterval = 100;
-constexpr int kIndividualParseCheckpointInterval = 1000;
-constexpr std::size_t kIndividualParseBatchSize = 512;
-constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
-constexpr std::uint64_t kArchiveParseMaxInFlightBytes = 16ull * 1024ull * 1024ull;
-constexpr std::size_t kArchiveParseMaxOuterWorkers = 4;
-constexpr std::uint64_t kArchiveParseMinOuterInFlightBytes =
-    4ull * 1024ull * 1024ull;
-constexpr const char *kScanCheckpointPhaseIndividual = "individual";
-constexpr const char *kScanCheckpointPhaseArchive = "archive";
-constexpr int kChartDatabaseSchemaVersion = 3;
 
 struct DifficultyLabelCache {
   bool loaded = false;
