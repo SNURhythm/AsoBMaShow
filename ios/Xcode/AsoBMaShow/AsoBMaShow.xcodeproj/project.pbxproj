@@ -851,6 +851,8 @@
 				SDL_uikit_main.c,
 				repositories/ReplayRepository.cpp,
 				repositories/ReplayRepositoryInternal.h,
+				repositories/ReplayRepositoryRecords.cpp,
+				repositories/ReplayRepositorySchema.cpp,
 				ReplayResultStateBuilder.cpp,
 				ResultPersistenceCoordinator.cpp,
 				ResultPersistenceModel.cpp,

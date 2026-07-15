@@ -3,7 +3,25 @@
 #include "ReplayRepository.h"
 #include "../sqlite3.h"
 
+#include <mutex>
+
+struct ReplayRepository::Impl {
+  explicit Impl(std::filesystem::path path = {});
+
+  mutable std::mutex sessionMutex;
+  std::filesystem::path databasePath;
+  sqlite3 *sessionDatabase = nullptr;
+};
+
 namespace replay_repository_detail {
+
+sqlite3 *OpenDatabase(const std::filesystem::path &path,
+                      std::string &errorMessage);
+std::filesystem::path
+ResolvedDatabasePath(const std::filesystem::path &databasePath);
+bool EquivalentDatabasePaths(const std::filesystem::path &first,
+                             const std::filesystem::path &second);
+bool MigrateSchema(sqlite3 *database);
 
 bool CreateReplayTablesOnConnection(sqlite3 *database);
 std::optional<int> SaveReplayOnConnection(
