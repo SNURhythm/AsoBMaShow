@@ -761,6 +761,22 @@ std::string columnString(sqlite3_stmt *stmt, int idx) {
 
 } // namespace
 
+static bool deleteChartMeta(sqlite3 *database, std::filesystem::path path);
+static int
+deleteChartMetaInDirectory(sqlite3 *database,
+                           const std::filesystem::path &directory);
+static bool
+deleteArchiveRecords(sqlite3 *database,
+                     const std::filesystem::path &archivePath);
+static bool clearChartMeta(sqlite3 *database);
+static bool insertEntry(sqlite3 *database, const std::filesystem::path &path,
+                        const std::string &iosBookmark);
+static std::vector<ChartEntry> selectAllEntries(sqlite3 *database);
+static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *database);
+static bool deleteEntry(sqlite3 *database,
+                        const std::filesystem::path &path);
+static bool clearEntries(sqlite3 *database);
+
 ChartRepository::Impl::Impl(std::filesystem::path path)
     : databasePath(std::move(path)) {}
 
@@ -769,9 +785,9 @@ ChartSessionStorage::ChartSessionStorage(sqlite3 *database)
 
 sqlite3 *ChartSessionStorage::database() const { return connection.get(); }
 
-ChartRepository::Session::Impl::Impl(
-    ChartRepository &owner, sqlite3 *database, ScoreRepository *scoresValue)
-    : repository(&owner), storage(std::make_shared<ChartSessionStorage>(database)),
+ChartRepository::Session::Impl::Impl(sqlite3 *database,
+                                     ScoreRepository *scoresValue)
+    : storage(std::make_shared<ChartSessionStorage>(database)),
       scores(scoresValue) {}
 
 ScoreRepository &ChartRepository::Session::Impl::scoreRepository() {
@@ -790,59 +806,46 @@ ChartRepository::Session::Session(Session &&) noexcept = default;
 ChartRepository::Session &
 ChartRepository::Session::operator=(Session &&) noexcept = default;
 
-sqlite3 *ChartRepository::Session::NativeHandleForScoreRepository() const {
-  return impl_->database();
-}
-
 bool ChartRepository::Session::EnsureSchema() {
   sqlite3 *db = impl_->database();
   return chart_repository_detail::EnsureCoreSchema(db) &&
          chart_repository_detail::EnsureDifficultySchema(db);
 }
 
-bool ChartRepository::Session::InsertChartMeta(
-    bms_parser::ChartMeta &chartMeta) {
-  return impl_->repository->InsertChartMeta(impl_->database(), chartMeta);
-}
-
 bool ChartRepository::Session::DeleteChartMeta(std::filesystem::path path) {
-  return impl_->repository->DeleteChartMeta(impl_->database(),
-                                             std::move(path));
+  return deleteChartMeta(impl_->database(), std::move(path));
 }
 
 int ChartRepository::Session::DeleteChartMetaInDirectory(
     const std::filesystem::path &directory) {
-  return impl_->repository->DeleteChartMetaInDirectory(impl_->database(),
-                                                        directory);
+  return deleteChartMetaInDirectory(impl_->database(), directory);
 }
 
 bool ChartRepository::Session::DeleteArchiveRecords(
     const std::filesystem::path &archivePath) {
-  return impl_->repository->DeleteArchiveRecords(impl_->database(),
-                                                  archivePath);
+  return deleteArchiveRecords(impl_->database(), archivePath);
 }
 
 bool ChartRepository::Session::ClearChartMeta() {
-  return impl_->repository->ClearChartMeta(impl_->database());
+  return clearChartMeta(impl_->database());
 }
 
 bool ChartRepository::Session::InsertEntry(
     const std::filesystem::path &path, const std::string &iosBookmark) {
-  return impl_->repository->InsertEntry(impl_->database(), path,
-                                        iosBookmark);
+  return insertEntry(impl_->database(), path, iosBookmark);
 }
 
 std::vector<ChartEntry> ChartRepository::Session::SelectAllEntries() {
-  return impl_->repository->SelectAllEntries(impl_->database());
+  return selectAllEntries(impl_->database());
 }
 
 std::vector<ChartEntry> ChartRepository::Session::SelectEffectiveEntries() {
-  return impl_->repository->SelectEffectiveEntries(impl_->database());
+  return selectEffectiveEntries(impl_->database());
 }
 
 bool ChartRepository::Session::DeleteEntry(
     const std::filesystem::path &path) {
-  return impl_->repository->DeleteEntry(impl_->database(), path);
+  return deleteEntry(impl_->database(), path);
 }
 
 bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
@@ -854,18 +857,15 @@ bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
   if (!transaction.active()) {
     return false;
   }
-  removedChartCount =
-      impl_->repository->DeleteChartMetaInDirectory(impl_->database(),
-                                                     path);
-  if (removedChartCount < 0 ||
-      !impl_->repository->DeleteEntry(impl_->database(), path)) {
+  removedChartCount = deleteChartMetaInDirectory(impl_->database(), path);
+  if (removedChartCount < 0 || !deleteEntry(impl_->database(), path)) {
     return false;
   }
   return transaction.commit(transactionError);
 }
 
 bool ChartRepository::Session::ClearEntries() {
-  return impl_->repository->ClearEntries(impl_->database());
+  return clearEntries(impl_->database());
 }
 
 bool ChartRepository::EnsureReady() {
@@ -949,7 +949,7 @@ ChartRepository::OpenSession(ScoreRepository *scores) {
   }
 
   sqlite3 *database = connection.release();
-  return Session(std::make_unique<Session::Impl>(*this, database, scores));
+  return Session(std::make_unique<Session::Impl>(database, scores));
 }
 
 const std::filesystem::path &ChartRepository::DatabasePath() const {
@@ -1072,7 +1072,7 @@ static bool createChartStateTables(sqlite3 *db) {
   return ok;
 }
 
-bool ChartRepository::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
+static bool deleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   // std::cout << "Deleting chart: " << path.string() << std::endl;
   chart_storage_identity::ToRelativePath(path);
   auto query = "DELETE FROM chart_meta WHERE path = @path";
@@ -1096,7 +1096,7 @@ bool ChartRepository::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   return true;
 }
 
-int ChartRepository::DeleteChartMetaInDirectory(
+static int deleteChartMetaInDirectory(
     sqlite3 *db, const std::filesystem::path &directory) {
   if (directory.empty()) {
     return -1;
@@ -1170,8 +1170,8 @@ int ChartRepository::DeleteChartMetaInDirectory(
   return deletedCount;
 }
 
-bool ChartRepository::DeleteArchiveRecords(
-    sqlite3 *db, const std::filesystem::path &archivePath) {
+static bool deleteArchiveRecords(sqlite3 *db,
+                                 const std::filesystem::path &archivePath) {
   if (db == nullptr || archivePath.empty()) {
     return false;
   }
@@ -1211,7 +1211,7 @@ bool ChartRepository::DeleteArchiveRecords(
   return changedCount > 0;
 }
 
-bool ChartRepository::ClearChartMeta(sqlite3 *db) {
+static bool clearChartMeta(sqlite3 *db) {
   createSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
   createChartScanCheckpointTable(db);
@@ -1279,9 +1279,8 @@ bool chart_repository_detail::EnsureCoreSchema(sqlite3 *database) {
   return ok;
 }
 
-bool ChartRepository::InsertEntry(sqlite3 *db,
-                                const std::filesystem::path &path,
-                                const std::string &iosBookmark) {
+static bool insertEntry(sqlite3 *db, const std::filesystem::path &path,
+                        const std::string &iosBookmark) {
   createChartScanCheckpointTable(db);
   auto query = "REPLACE INTO entries ("
                "path,"
@@ -1309,7 +1308,7 @@ bool ChartRepository::InsertEntry(sqlite3 *db,
   return true;
 }
 
-std::vector<ChartEntry> ChartRepository::SelectAllEntries(sqlite3 *db) {
+static std::vector<ChartEntry> selectAllEntries(sqlite3 *db) {
   auto query = "SELECT "
                "path,"
                "COALESCE(ios_bookmark, '')"
@@ -1353,11 +1352,11 @@ bool ChartRepository::IsDefaultBmsFolderPath(
 #endif
 }
 
-std::vector<ChartEntry> ChartRepository::SelectEffectiveEntries(sqlite3 *db) {
-  auto entries = SelectAllEntries(db);
+static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *db) {
+  auto entries = selectAllEntries(db);
 
 #if TARGET_OS_ANDROID
-  const auto defaultPath = DefaultBmsFolderPath();
+  const auto defaultPath = ChartRepository::DefaultBmsFolderPath();
   std::error_code errorCode;
   if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
     SDL_Log("Failed to create default BMS folder %s: %s",
@@ -1366,7 +1365,8 @@ std::vector<ChartEntry> ChartRepository::SelectEffectiveEntries(sqlite3 *db) {
 
   bool hasDefaultEntry = false;
   for (auto &entry : entries) {
-    if (IsDefaultBmsFolderPath(std::filesystem::path(entry.path))) {
+    if (ChartRepository::IsDefaultBmsFolderPath(
+            std::filesystem::path(entry.path))) {
       entry.removable = false;
       hasDefaultEntry = true;
     }
@@ -1384,8 +1384,7 @@ std::vector<ChartEntry> ChartRepository::SelectEffectiveEntries(sqlite3 *db) {
   return entries;
 }
 
-bool ChartRepository::DeleteEntry(sqlite3 *db,
-                                const std::filesystem::path &path) {
+static bool deleteEntry(sqlite3 *db, const std::filesystem::path &path) {
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries WHERE path = @path";
   SqliteStatementHandle stmt;
@@ -1408,7 +1407,7 @@ bool ChartRepository::DeleteEntry(sqlite3 *db,
   return true;
 }
 
-bool ChartRepository::ClearEntries(sqlite3 *db) {
+static bool clearEntries(sqlite3 *db) {
   createChartScanCheckpointTable(db);
   auto query = "DELETE FROM entries";
   SqliteStatementHandle stmt;

@@ -2220,11 +2220,22 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
 
 } // namespace chart_repository_detail
 
-#if !defined(ASOBMASHOW_FOLDER_QUERY_ONLY)
+#if defined(ASOBMASHOW_FOLDER_QUERY_ONLY)
+namespace repository_test {
+
+chart_library::FolderClearDataByLongNoteMode
+loadFolderClearDataByLongNoteMode(sqlite3 *database,
+                                  const ScoreClearRankCache &scoreRanks) {
+  return chart_repository_detail::LoadFolderClearDataByLongNoteMode(
+      database, scoreRanks);
+}
+
+} // namespace repository_test
+#else
 chart_library::FolderClearDataByLongNoteMode
 ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
     const ScoreClearRankCache &scoreRanks) {
   return chart_repository_detail::LoadFolderClearDataByLongNoteMode(
-      NativeHandleForScoreRepository(), scoreRanks);
+      impl_->database(), scoreRanks);
 }
 #endif

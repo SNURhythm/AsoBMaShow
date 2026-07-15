@@ -391,8 +391,9 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database) {
 }
 } // namespace
 
-bool ChartRepository::InsertChartMeta(sqlite3 *database,
-                                      bms_parser::ChartMeta &chartMeta) {
+bool ChartRepository::Session::InsertChartMeta(
+    bms_parser::ChartMeta &chartMeta) {
+  sqlite3 *database = impl_->database();
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(
           database, insertChartMetaSql(), statement,

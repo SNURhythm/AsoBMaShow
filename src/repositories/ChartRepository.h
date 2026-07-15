@@ -7,7 +7,6 @@
 #include "../LibraryFolderClearData.h"
 #include "../bms_parser.hpp"
 #include "../path.h"
-#include "../sqlite3.h"
 #include "ChartScanStore.h"
 #include "ScoreRepositoryModels.h"
 #include <cstdint>
@@ -233,7 +232,6 @@ public:
     friend class ScoreRepository;
     struct Impl;
     explicit Session(std::unique_ptr<Impl> impl);
-    sqlite3 *NativeHandleForScoreRepository() const;
     std::unique_ptr<Impl> impl_;
   };
 
@@ -251,20 +249,6 @@ public:
   static bool IsDefaultBmsFolderPath(const std::filesystem::path &path);
 
 private:
-  // Insert ChartMeta
-  bool InsertChartMeta(sqlite3 *db, bms_parser::ChartMeta &chartMeta);
-  bool DeleteChartMeta(sqlite3 *db, std::filesystem::path path);
-  int DeleteChartMetaInDirectory(sqlite3 *db,
-                                 const std::filesystem::path &directory);
-  bool DeleteArchiveRecords(sqlite3 *db,
-                            const std::filesystem::path &archivePath);
-  bool ClearChartMeta(sqlite3 *db);
-  bool InsertEntry(sqlite3 *db, const std::filesystem::path &path,
-                   const std::string &iosBookmark = "");
-  std::vector<ChartEntry> SelectAllEntries(sqlite3 *db);
-  std::vector<ChartEntry> SelectEffectiveEntries(sqlite3 *db);
-  bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
-  bool ClearEntries(sqlite3 *db);
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

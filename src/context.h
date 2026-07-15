@@ -103,6 +103,7 @@ public:
   ChartRepository chartRepository;
   ScoreRepository scoreRepository;
   ReplayRepository replayRepository;
+  MusicPlaylistRepository musicPlaylistRepository;
   result_persistence::Coordinator resultPersistence;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
@@ -123,7 +124,6 @@ public:
   Jukebox jukebox;
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;
-  MusicPlaylistRepository musicPlaylistRepository;
   music_player::MusicPlayerService musicPlayer;
   std::mutex bgfxRenderMutex;
   std::atomic<bool> replayVideoExportActive{false};

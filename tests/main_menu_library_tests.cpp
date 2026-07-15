@@ -1,6 +1,6 @@
 #include "../src/scene/MainMenuLibrary.h"
-#include "../src/repositories/ChartRepositoryInternal.h"
 #include "../src/LongNoteModeUtils.h"
+#include "../src/repositories/ScoreRepositoryModels.h"
 #include "RepositorySqliteTestSupport.h"
 
 #include <algorithm>
@@ -9,6 +9,14 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+
+namespace repository_test {
+
+chart_library::FolderClearDataByLongNoteMode
+loadFolderClearDataByLongNoteMode(sqlite3 *database,
+                                  const ScoreClearRankCache &scoreRanks);
+
+} // namespace repository_test
 
 #define ASSERT_EQ(expected, actual, label)                                     \
   if ((expected) != (actual)) {                                                \
@@ -204,8 +212,7 @@ int main() {
   chart_library::FolderClearDataByLongNoteMode data;
   {
     repository_test::ScopedStatementTrace observation(db, trace);
-    data = chart_repository_detail::LoadFolderClearDataByLongNoteMode(
-        db, scoreRanks);
+    data = repository_test::loadFolderClearDataByLongNoteMode(db, scoreRanks);
   }
   ASSERT_EQ(4, trace.count,
             "folder clear aggregation keeps four streaming SELECTs");

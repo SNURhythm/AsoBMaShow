@@ -146,13 +146,12 @@ require(
 require(
     len(
         re.findall(
-            r"resultPersistence\(\s*ScoreDBHelper::GetInstance\(\),\s*"
-            r"ReplayDBHelper::GetInstance\(\)\s*\)",
+            r"resultPersistence\(\s*scoreRepository,\s*replayRepository\s*\)",
             context,
         )
     )
     == 1,
-    "ApplicationContext coordinator must bind the active singleton helpers",
+    "ApplicationContext coordinator must bind its owned repositories",
 )
 require(
     "struct ResultPersistenceOptions" in result_header

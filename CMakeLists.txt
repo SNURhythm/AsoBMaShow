@@ -510,6 +510,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
+    add_executable(repository_boundary_tests
+        tests/repository_boundary_tests.cpp
+    )
+    target_compile_features(repository_boundary_tests PRIVATE cxx_std_23)
+    target_compile_definitions(repository_boundary_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -594,6 +602,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/MusicPlaylistRepository.cpp
         src/Utils.cpp
@@ -604,6 +615,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(music_playlist_repository_tests PRIVATE cxx_std_23)
+    target_link_libraries(music_playlist_repository_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(music_playlist_repository_tests PRIVATE iconv)
+    endif()
     if(WIN32)
         target_link_libraries(music_playlist_repository_tests PRIVATE shell32 ole32)
     endif()
@@ -1565,6 +1580,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
     endfunction()
+
+    asobmashow_register_test(repository_boundary_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)

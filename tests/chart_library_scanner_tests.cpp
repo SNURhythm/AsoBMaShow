@@ -1,5 +1,6 @@
 #include "../src/ChartLibraryScanner.h"
 #include "../src/repositories/ChartRepository.h"
+#include "../src/sqlite3.h"
 
 #include <atomic>
 #include <cassert>

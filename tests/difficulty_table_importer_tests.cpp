@@ -1,6 +1,7 @@
 #include "../src/DifficultyTableImporter.h"
 #include "../src/DifficultyTableModel.h"
 #include "../src/repositories/ChartRepository.h"
+#include "../src/sqlite3.h"
 
 #include <algorithm>
 #include <atomic>

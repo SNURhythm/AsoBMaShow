@@ -26,12 +26,11 @@ struct ChartSessionStorage {
 };
 
 struct ChartRepository::Session::Impl {
-  Impl(ChartRepository &owner, sqlite3 *database, ScoreRepository *scoresValue);
+  Impl(sqlite3 *database, ScoreRepository *scoresValue);
 
   ScoreRepository &scoreRepository();
   sqlite3 *database() const;
 
-  ChartRepository *repository;
   std::shared_ptr<ChartSessionStorage> storage;
   ScoreRepository *scores;
   ScoreRepository fallbackScores;
