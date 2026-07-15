@@ -17,33 +17,33 @@
 // The pure coordinator target intentionally does not link the database helper
 // implementations. These definitions satisfy the production adapter
 // constructor while every test exercises injected dependencies.
-result_persistence::StageOutcome ReplayDBHelper::StageChartResult(
+result_persistence::StageOutcome ReplayRepository::StageChartResult(
     const result_persistence::ChartResultAttempt &) {
   std::abort();
 }
 
 result_persistence::PendingReadOutcome
-ReplayDBHelper::LoadPendingChartScore(std::string_view) {
+ReplayRepository::LoadPendingChartScore(std::string_view) {
   std::abort();
 }
 
 result_persistence::PendingBatchOutcome
-ReplayDBHelper::ListPendingChartScores(std::size_t) {
+ReplayRepository::ListPendingChartScores(std::size_t) {
   std::abort();
 }
 
 result_persistence::AcknowledgeOutcome
-ReplayDBHelper::AcknowledgePendingChartScore(std::string_view, int) {
+ReplayRepository::AcknowledgePendingChartScore(std::string_view, int) {
   std::abort();
 }
 
 result_persistence::RecoveryMarkOutcome
-ReplayDBHelper::RecordPendingChartScoreRecoveryAttempt(
+ReplayRepository::RecordPendingChartScoreRecoveryAttempt(
     std::string_view, result_persistence::RecoveryAttemptKind) {
   std::abort();
 }
 
-result_persistence::ProjectionOutcome ScoreDBHelper::SaveProjectedScore(
+result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
     const result_persistence::PendingChartScoreWrite &) {
   std::abort();
 }

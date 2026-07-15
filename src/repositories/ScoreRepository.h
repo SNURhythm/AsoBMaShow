@@ -137,13 +137,13 @@ struct ProjectionOutcome {
 };
 } // namespace result_persistence
 
-class ScoreDBHelper {
+class ScoreRepository {
 public:
   static constexpr int kCurrentSchemaVersion = 9;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:
-    PreparedScoreQueryDatabase(const ScoreDBHelper &, sqlite3 *chartDatabase);
+    PreparedScoreQueryDatabase(const ScoreRepository &, sqlite3 *chartDatabase);
     ~PreparedScoreQueryDatabase();
     PreparedScoreQueryDatabase(PreparedScoreQueryDatabase &&) = delete;
     PreparedScoreQueryDatabase &
@@ -161,13 +161,13 @@ public:
     std::unique_ptr<State> state_;
   };
 
-  ScoreDBHelper() = default;
-  explicit ScoreDBHelper(std::filesystem::path databasePath);
-  ~ScoreDBHelper();
-  ScoreDBHelper(const ScoreDBHelper &) = delete;
-  ScoreDBHelper &operator=(const ScoreDBHelper &) = delete;
+  ScoreRepository() = default;
+  explicit ScoreRepository(std::filesystem::path databasePath);
+  ~ScoreRepository();
+  ScoreRepository(const ScoreRepository &) = delete;
+  ScoreRepository &operator=(const ScoreRepository &) = delete;
 
-  static ScoreDBHelper &GetInstance();
+  static ScoreRepository &GetInstance();
 
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;

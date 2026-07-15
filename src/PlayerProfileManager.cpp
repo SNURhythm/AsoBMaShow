@@ -735,14 +735,14 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
   if (!scoreVersion || !replayVersion) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
   }
-  if (*scoreVersion > ScoreDBHelper::kCurrentSchemaVersion ||
-      *replayVersion > ReplayDBHelper::kCurrentSchemaVersion) {
+  if (*scoreVersion > ScoreRepository::kCurrentSchemaVersion ||
+      *replayVersion > ReplayRepository::kCurrentSchemaVersion) {
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
   if (!policy.allowSupportedOlderDatabases &&
-      (*scoreVersion != ScoreDBHelper::kCurrentSchemaVersion ||
-       *replayVersion != ReplayDBHelper::kCurrentSchemaVersion)) {
+      (*scoreVersion != ScoreRepository::kCurrentSchemaVersion ||
+       *replayVersion != ReplayRepository::kCurrentSchemaVersion)) {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
@@ -1150,9 +1150,9 @@ ProfileResult buildProfile(
     for (const auto &[source, supportedVersion] :
          std::array<std::pair<std::filesystem::path, int>, 2>{
              std::pair{applicationRoot / "db" / "score.db",
-                       ScoreDBHelper::kCurrentSchemaVersion},
+                       ScoreRepository::kCurrentSchemaVersion},
              std::pair{applicationRoot / "db" / "replay.db",
-                       ReplayDBHelper::kCurrentSchemaVersion}}) {
+                       ReplayRepository::kCurrentSchemaVersion}}) {
       bool exists = false;
       if (!pathExists(source, exists, errorMessage)) {
         return fail(ProfileError::MigrationFailure, errorMessage);
@@ -1980,14 +1980,14 @@ PlayerProfileManager::validateProfile(std::string_view id,
   if (!scoreVersion || !replayVersion) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
   }
-  if (*scoreVersion > ScoreDBHelper::kCurrentSchemaVersion ||
-      *replayVersion > ReplayDBHelper::kCurrentSchemaVersion) {
+  if (*scoreVersion > ScoreRepository::kCurrentSchemaVersion ||
+      *replayVersion > ReplayRepository::kCurrentSchemaVersion) {
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
   if (!policy.allowSupportedOlderDatabases &&
-      (*scoreVersion != ScoreDBHelper::kCurrentSchemaVersion ||
-       *replayVersion != ReplayDBHelper::kCurrentSchemaVersion)) {
+      (*scoreVersion != ScoreRepository::kCurrentSchemaVersion ||
+       *replayVersion != ReplayRepository::kCurrentSchemaVersion)) {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
@@ -2201,8 +2201,8 @@ ProfileResult PlayerProfileManager::installProfile(
                                "unable to inspect imported databases: " +
                                    errorMessage);
   }
-  if (*scoreVersionBefore > ScoreDBHelper::kCurrentSchemaVersion ||
-      *replayVersionBefore > ReplayDBHelper::kCurrentSchemaVersion) {
+  if (*scoreVersionBefore > ScoreRepository::kCurrentSchemaVersion ||
+      *replayVersionBefore > ReplayRepository::kCurrentSchemaVersion) {
     return cleanStagingAndFail(ProfileError::FutureVersion,
                                "imported database is newer than supported");
   }

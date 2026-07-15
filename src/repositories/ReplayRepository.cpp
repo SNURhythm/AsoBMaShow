@@ -30,7 +30,7 @@
 namespace {
 constexpr int kLegacyReplayDatabaseSchemaVersion = 2;
 constexpr int kReplayDatabaseSchemaVersion =
-    ReplayDBHelper::kCurrentSchemaVersion;
+    ReplayRepository::kCurrentSchemaVersion;
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
@@ -2320,20 +2320,20 @@ sqlite3 *openTrustedReplayDatabase(const std::filesystem::path &path,
 }
 } // namespace
 
-ReplayDBHelper &ReplayDBHelper::GetInstance() {
-  static ReplayDBHelper instance;
+ReplayRepository &ReplayRepository::GetInstance() {
+  static ReplayRepository instance;
   return instance;
 }
 
-ReplayDBHelper::ReplayDBHelper(std::filesystem::path databasePath)
+ReplayRepository::ReplayRepository(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
-ReplayDBHelper::~ReplayDBHelper() {
+ReplayRepository::~ReplayRepository() {
   std::lock_guard lock(sessionMutex_);
   ShutdownLocked();
 }
 
-void ReplayDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
+void ReplayRepository::SetDatabasePath(std::filesystem::path databasePath) {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
   if (!equivalentReplayDatabasePaths(databasePath_, databasePath)) {
@@ -2342,21 +2342,21 @@ void ReplayDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
   databasePath_ = std::move(databasePath);
 }
 
-std::filesystem::path ReplayDBHelper::GetDatabasePath() const {
+std::filesystem::path ReplayRepository::GetDatabasePath() const {
   std::lock_guard lock(sessionMutex_);
   return databasePath_;
 }
 
-std::filesystem::path ReplayDBHelper::GetResolvedDatabasePath() const {
+std::filesystem::path ReplayRepository::GetResolvedDatabasePath() const {
   std::lock_guard lock(sessionMutex_);
   return GetResolvedDatabasePathLocked();
 }
 
-std::filesystem::path ReplayDBHelper::GetResolvedDatabasePathLocked() const {
+std::filesystem::path ReplayRepository::GetResolvedDatabasePathLocked() const {
   return resolvedReplayDatabasePath(databasePath_);
 }
 
-bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
+bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
                                       std::string &errorMessage) {
   profile_database_activity::WriteGuard operation;
   if (databasePath.empty()) {
@@ -2404,27 +2404,27 @@ bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
   return true;
 }
 
-bool ReplayDBHelper::HasActiveReads() {
+bool ReplayRepository::HasActiveReads() {
   return profile_database_activity::readsActive();
 }
 
-bool ReplayDBHelper::HasActiveWrites() {
+bool ReplayRepository::HasActiveWrites() {
   return profile_database_activity::writesActive();
 }
 
-void ReplayDBHelper::Shutdown() {
+void ReplayRepository::Shutdown() {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
   ShutdownLocked();
 }
 
-void ReplayDBHelper::ShutdownLocked() {
+void ReplayRepository::ShutdownLocked() {
   sqlite3 *database = sessionDatabase_;
   sessionDatabase_ = nullptr;
   closeSqliteDatabase(database);
 }
 
-bool ReplayDBHelper::EnsureSessionDatabaseLocked() {
+bool ReplayRepository::EnsureSessionDatabaseLocked() {
   if (sessionDatabase_ != nullptr) {
     if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
       return migrateReplayDatabaseSchema(sessionDatabase_);
@@ -2448,7 +2448,7 @@ bool ReplayDBHelper::EnsureSessionDatabaseLocked() {
   return true;
 }
 
-sqlite3 *ReplayDBHelper::Connect() {
+sqlite3 *ReplayRepository::Connect() {
   if (this == &GetInstance()) {
     SDL_Log("Raw replay connections are unavailable on the runtime singleton");
     return nullptr;
@@ -2471,14 +2471,14 @@ sqlite3 *ReplayDBHelper::Connect() {
   return db;
 }
 
-void ReplayDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
+void ReplayRepository::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
-bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
+bool ReplayRepository::CreateReplayTables(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
   return CreateReplayTablesOnConnection(db);
 }
 
-bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
+bool ReplayRepository::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
     return false;
   }
@@ -2719,13 +2719,13 @@ bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   return true;
 }
 
-bool ReplayDBHelper::EnsureSchema() {
+bool ReplayRepository::EnsureSchema() {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
   return EnsureSessionDatabaseLocked();
 }
 
-std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
+std::optional<int> ReplayRepository::SaveReplay(const ReplayData &replay) {
   profile_database_activity::WriteGuard writeGuard;
   if (!hasMatchableReplayChartIdentity(replay)) {
     SDL_Log("Refusing to save replay without a matchable chart identity");
@@ -2743,7 +2743,7 @@ std::optional<int> ReplayDBHelper::SaveReplay(const ReplayData &replay) {
   return SaveReplayOnConnection(sessionDatabase_, replay, *provenanceJson);
 }
 
-std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
+std::optional<int> ReplayRepository::SaveReplayOnConnection(
     sqlite3 *db, const ReplayData &replay, const std::string &provenanceJson) {
   std::string transactionError;
   SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE TRANSACTION",
@@ -2767,7 +2767,7 @@ std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
   return *replayId;
 }
 
-result_persistence::StageOutcome ReplayDBHelper::StageChartResult(
+result_persistence::StageOutcome ReplayRepository::StageChartResult(
     const result_persistence::ChartResultAttempt &attempt) {
   using result_persistence::PendingReadStatus;
   using result_persistence::StageOutcome;
@@ -2888,7 +2888,7 @@ result_persistence::StageOutcome ReplayDBHelper::StageChartResult(
 }
 
 result_persistence::PendingReadOutcome
-ReplayDBHelper::LoadPendingChartScore(std::string_view attemptId) {
+ReplayRepository::LoadPendingChartScore(std::string_view attemptId) {
   using result_persistence::PendingReadStatus;
   profile_database_activity::ReadGuard readGuard;
   if (!uuid::isCanonicalLowerV4(attemptId)) {
@@ -2904,7 +2904,7 @@ ReplayDBHelper::LoadPendingChartScore(std::string_view attemptId) {
 }
 
 result_persistence::PendingBatchOutcome
-ReplayDBHelper::ListPendingChartScores(std::size_t limit) {
+ReplayRepository::ListPendingChartScores(std::size_t limit) {
   using result_persistence::PendingBatchOutcome;
   profile_database_activity::ReadGuard readGuard;
   std::lock_guard lock(sessionMutex_);
@@ -2974,7 +2974,7 @@ ReplayDBHelper::ListPendingChartScores(std::size_t limit) {
 }
 
 result_persistence::AcknowledgeOutcome
-ReplayDBHelper::AcknowledgePendingChartScore(std::string_view attemptId,
+ReplayRepository::AcknowledgePendingChartScore(std::string_view attemptId,
                                              int replayId) {
   using result_persistence::AcknowledgeStatus;
   using result_persistence::PendingReadStatus;
@@ -3054,7 +3054,7 @@ ReplayDBHelper::AcknowledgePendingChartScore(std::string_view attemptId,
 }
 
 result_persistence::RecoveryMarkOutcome
-ReplayDBHelper::RecordPendingChartScoreRecoveryAttempt(
+ReplayRepository::RecordPendingChartScoreRecoveryAttempt(
     std::string_view attemptId,
     result_persistence::RecoveryAttemptKind kind) {
   using result_persistence::RecoveryMarkStatus;
@@ -3090,7 +3090,7 @@ ReplayDBHelper::RecordPendingChartScoreRecoveryAttempt(
 }
 
 std::optional<int>
-ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
+ReplayRepository::SaveCourseReplay(const CourseReplayData &replay) {
   profile_database_activity::WriteGuard writeGuard;
   if (!isCanonicalCourseKey(replay.courseKey) || replay.totalCharts <= 0 ||
       replay.totalCharts >
@@ -3135,7 +3135,7 @@ ReplayDBHelper::SaveCourseReplay(const CourseReplayData &replay) {
                                       stageProvenanceJson);
 }
 
-std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
+std::optional<int> ReplayRepository::SaveCourseReplayOnConnection(
     sqlite3 *db, const CourseReplayData &replay,
     const std::string &courseProvenanceJson,
     const std::vector<std::string> &stageProvenanceJson) {
@@ -3242,7 +3242,7 @@ std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
 }
 
 std::vector<ReplaySummary>
-ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
+ReplayRepository::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   if (!EnsureSessionDatabaseLocked()) {
@@ -3251,7 +3251,7 @@ ReplayDBHelper::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
   return ListReplaysOnConnection(sessionDatabase_, chartMeta, limit);
 }
 
-std::vector<ReplaySummary> ReplayDBHelper::ListReplaysOnConnection(
+std::vector<ReplaySummary> ReplayRepository::ListReplaysOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta, int limit) {
   std::vector<ReplaySummary> replays;
 
@@ -3391,7 +3391,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListReplaysOnConnection(
 }
 
 std::vector<ReplaySummary>
-ReplayDBHelper::ListCourseReplays(const CourseReplayLookup &lookup,
+ReplayRepository::ListCourseReplays(const CourseReplayLookup &lookup,
                                   int limit) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
@@ -3401,7 +3401,7 @@ ReplayDBHelper::ListCourseReplays(const CourseReplayLookup &lookup,
   return ListCourseReplaysOnConnection(sessionDatabase_, lookup, limit);
 }
 
-std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
+std::vector<ReplaySummary> ReplayRepository::ListCourseReplaysOnConnection(
     sqlite3 *db, const CourseReplayLookup &lookup, int limit) {
   std::vector<ReplaySummary> replays;
   if (lookup.courseKey.empty() && lookup.legacyCourseId <= 0) {
@@ -3616,7 +3616,7 @@ std::vector<ReplaySummary> ReplayDBHelper::ListCourseReplaysOnConnection(
   return replays;
 }
 
-bool ReplayDBHelper::RecoverCourseRecords(
+bool ReplayRepository::RecoverCourseRecords(
     std::span<const course_identity::Definition> definitions,
     std::span<const CourseScoreEvidence> scoreEvidence,
     std::string &errorMessage) {
@@ -3630,7 +3630,7 @@ bool ReplayDBHelper::RecoverCourseRecords(
                                           scoreEvidence, errorMessage);
 }
 
-bool ReplayDBHelper::RecoverCourseRecords(
+bool ReplayRepository::RecoverCourseRecords(
     sqlite3 *db, std::span<const course_identity::Definition> definitions,
     std::span<const CourseScoreEvidence> scoreEvidence,
     std::string &errorMessage) {
@@ -3652,7 +3652,7 @@ bool ReplayDBHelper::RecoverCourseRecords(
                                           errorMessage);
 }
 
-bool ReplayDBHelper::RecoverCourseRecordsOnConnection(
+bool ReplayRepository::RecoverCourseRecordsOnConnection(
     sqlite3 *db, std::span<const course_identity::Definition> definitions,
     std::span<const CourseScoreEvidence> scoreEvidence,
     std::string &errorMessage) {
@@ -4149,7 +4149,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
 }
 
 std::optional<ReplayData>
-ReplayDBHelper::LoadReplay(int replayId,
+ReplayRepository::LoadReplay(int replayId,
                            const bms_parser::ChartMeta &chartMeta) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
@@ -4159,7 +4159,7 @@ ReplayDBHelper::LoadReplay(int replayId,
   return LoadReplayOnConnection(sessionDatabase_, replayId, chartMeta);
 }
 
-std::optional<ReplayData> ReplayDBHelper::LoadReplayOnConnection(
+std::optional<ReplayData> ReplayRepository::LoadReplayOnConnection(
     sqlite3 *db, int replayId, const bms_parser::ChartMeta &chartMeta) {
   std::string snapshotError;
   SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
@@ -4178,7 +4178,7 @@ std::optional<ReplayData> ReplayDBHelper::LoadReplayOnConnection(
   return replay;
 }
 
-std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
+std::optional<CourseReplayData> ReplayRepository::LoadCourseReplay(int replayId) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   if (!EnsureSessionDatabaseLocked()) {
@@ -4188,7 +4188,7 @@ std::optional<CourseReplayData> ReplayDBHelper::LoadCourseReplay(int replayId) {
 }
 
 std::optional<CourseReplayData>
-ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
+ReplayRepository::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
   std::string snapshotError;
   SqliteTransactionHandle readSnapshot(db, "BEGIN TRANSACTION", snapshotError);
   if (!readSnapshot.active()) {
@@ -4289,7 +4289,7 @@ ReplayDBHelper::LoadCourseReplayOnConnection(sqlite3 *db, int replayId) {
 }
 
 std::optional<ReplayData>
-ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
+ReplayRepository::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   if (!EnsureSessionDatabaseLocked()) {
@@ -4298,7 +4298,7 @@ ReplayDBHelper::LoadLatestReplay(const bms_parser::ChartMeta &chartMeta) {
   return LoadLatestReplayOnConnection(sessionDatabase_, chartMeta);
 }
 
-std::optional<ReplayData> ReplayDBHelper::LoadLatestReplayOnConnection(
+std::optional<ReplayData> ReplayRepository::LoadLatestReplayOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta) {
   const auto replays = ListReplaysOnConnection(db, chartMeta, 1);
   if (replays.empty()) {

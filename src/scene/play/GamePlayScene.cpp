@@ -1282,10 +1282,10 @@ void GamePlayScene::configurePacemakerTarget() {
   std::optional<ScoreBestSnapshot> best;
   std::optional<ReplayData> bestReplay;
   if (selected == pacemaker::kTargetBest) {
-    best = ScoreDBHelper::GetInstance().LoadBestScore(chart->Meta);
+    best = ScoreRepository::GetInstance().LoadBestScore(chart->Meta);
     if (best.has_value() && best->score > 0) {
       const auto summaries =
-          ReplayDBHelper::GetInstance().ListReplays(chart->Meta, 100);
+          ReplayRepository::GetInstance().ListReplays(chart->Meta, 100);
       for (const ReplaySummary &summary : summaries) {
         if (summary.courseReplay || summary.autoPlay ||
             summary.finalScore != best->score || summary.eventCount <= 0) {
@@ -1293,7 +1293,7 @@ void GamePlayScene::configurePacemakerTarget() {
         }
 
         auto replay =
-            ReplayDBHelper::GetInstance().LoadReplay(summary.id, chart->Meta);
+            ReplayRepository::GetInstance().LoadReplay(summary.id, chart->Meta);
         if (!replay.has_value() ||
             replay->finalScore != best->score) {
           continue;

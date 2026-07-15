@@ -44,7 +44,7 @@ private:
 #endif
 
 void SettingsScene::loadDifficultyTables() {
-  auto &dbHelper = ChartDBHelper::GetInstance();
+  auto &dbHelper = ChartRepository::GetInstance();
   SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
   sqlite3 *settingsDb = settingsDbHandle.get();
   if (settingsDb == nullptr) {
@@ -70,7 +70,7 @@ void SettingsScene::loadDifficultyTables() {
 }
 
 void SettingsScene::loadChartEntries() {
-  auto &dbHelper = ChartDBHelper::GetInstance();
+  auto &dbHelper = ChartRepository::GetInstance();
   SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
   sqlite3 *settingsDb = settingsDbHandle.get();
   if (settingsDb == nullptr) {
@@ -254,7 +254,7 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
     loadDifficultyTables();
     loadChartEntries();
     observedLibraryRevision =
-        ChartDBHelper::GetInstance().GetLibraryRevision();
+        ChartRepository::GetInstance().GetLibraryRevision();
     lastLayoutWidth = -1;
   }
   if (shouldRefreshImportModal) {
@@ -264,7 +264,7 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
 
 void SettingsScene::refreshTablesIfLibraryChanged() {
   const std::uint64_t revision =
-      ChartDBHelper::GetInstance().GetLibraryRevision();
+      ChartRepository::GetInstance().GetLibraryRevision();
   if (revision == observedLibraryRevision) {
     return;
   }
@@ -398,7 +398,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
 
   difficultyTableJobThread = std::jthread([this,
                                            url](const std::stop_token &token) {
-    auto &dbHelper = ChartDBHelper::GetInstance();
+    auto &dbHelper = ChartRepository::GetInstance();
     SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
     sqlite3 *settingsDb = settingsDbHandle.get();
     if (settingsDb == nullptr) {
@@ -468,7 +468,7 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
 
   difficultyTableJobThread = std::jthread([this, tableId](
                                               const std::stop_token &token) {
-    auto &dbHelper = ChartDBHelper::GetInstance();
+    auto &dbHelper = ChartRepository::GetInstance();
     SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
     sqlite3 *settingsDb = settingsDbHandle.get();
     if (settingsDb == nullptr) {
@@ -527,7 +527,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
 
   difficultyTableJobThread = std::jthread([this, tableId](
                                               const std::stop_token &token) {
-    auto &dbHelper = ChartDBHelper::GetInstance();
+    auto &dbHelper = ChartRepository::GetInstance();
     SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
     sqlite3 *settingsDb = settingsDbHandle.get();
     if (settingsDb == nullptr) {
@@ -586,7 +586,7 @@ void SettingsScene::refreshChartLibrary() {
 
   difficultyTableJobThread =
       std::jthread([this](const std::stop_token &token) {
-        auto &dbHelper = ChartDBHelper::GetInstance();
+        auto &dbHelper = ChartRepository::GetInstance();
         SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
         sqlite3 *settingsDb = settingsDbHandle.get();
         if (settingsDb == nullptr) {
@@ -602,7 +602,7 @@ void SettingsScene::refreshChartLibrary() {
         dbHelper.CreateEntriesTable(settingsDb);
         auto entries = dbHelper.SelectEffectiveEntries(settingsDb);
         if (entries.empty()) {
-          const auto defaultPath = ChartDBHelper::DefaultBmsFolderPath();
+          const auto defaultPath = ChartRepository::DefaultBmsFolderPath();
           std::error_code errorCode;
           if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
             if (!token.stop_requested()) {
@@ -679,7 +679,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   }
 
 #if TARGET_OS_ANDROID
-  if (ChartDBHelper::IsDefaultBmsFolderPath(
+  if (ChartRepository::IsDefaultBmsFolderPath(
           std::filesystem::path(utf8_to_path_t(entryPathText)))) {
     chartFolderStatusMessage = "The default BMS folder is built in.";
     chartFolderStatusColor = ui_theme::sdl(ui_theme::textSecondary());
@@ -714,7 +714,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
   difficultyTableJobThread =
       std::jthread([this, entryPathText](const std::stop_token &token) {
-        auto &dbHelper = ChartDBHelper::GetInstance();
+        auto &dbHelper = ChartRepository::GetInstance();
         SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
         sqlite3 *settingsDb = settingsDbHandle.get();
         if (settingsDb == nullptr) {

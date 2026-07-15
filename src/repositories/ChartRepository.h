@@ -167,18 +167,18 @@ using ChartScanFlushCompleteCallback = std::function<void(std::uint64_t)>;
 /**
  *
  */
-class ChartDBHelper {
+class ChartRepository {
 public:
   // Singleton
-  ChartDBHelper();
+  ChartRepository();
 
-  ChartDBHelper(const ChartDBHelper &) {}
+  ChartRepository(const ChartRepository &) {}
 
-  ChartDBHelper &operator=(const ChartDBHelper &) { return *this; }
+  ChartRepository &operator=(const ChartRepository &) { return *this; }
 
-  static ChartDBHelper &GetInstance() {
+  static ChartRepository &GetInstance() {
     sqlite3_config(SQLITE_CONFIG_SERIALIZED);
-    static ChartDBHelper instance;
+    static ChartRepository instance;
     return instance;
   }
 

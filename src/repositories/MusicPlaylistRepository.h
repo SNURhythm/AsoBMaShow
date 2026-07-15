@@ -20,13 +20,13 @@ struct MusicPlayerStateRecord {
   std::string queueDisplayName;
 };
 
-class MusicPlaylistDB {
+class MusicPlaylistRepository {
 public:
-  MusicPlaylistDB() = default;
-  MusicPlaylistDB(const MusicPlaylistDB &) = delete;
-  MusicPlaylistDB &operator=(const MusicPlaylistDB &) = delete;
-  MusicPlaylistDB(MusicPlaylistDB &&) = delete;
-  MusicPlaylistDB &operator=(MusicPlaylistDB &&) = delete;
+  MusicPlaylistRepository() = default;
+  MusicPlaylistRepository(const MusicPlaylistRepository &) = delete;
+  MusicPlaylistRepository &operator=(const MusicPlaylistRepository &) = delete;
+  MusicPlaylistRepository(MusicPlaylistRepository &&) = delete;
+  MusicPlaylistRepository &operator=(MusicPlaylistRepository &&) = delete;
 
   sqlite3 *Connect();
   void Close(sqlite3 *db);

@@ -149,8 +149,8 @@ public:
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
-        resultPersistence(ScoreDBHelper::GetInstance(),
-                          ReplayDBHelper::GetInstance()),
+        resultPersistence(ScoreRepository::GetInstance(),
+                          ReplayRepository::GetInstance()),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio) {
@@ -162,8 +162,8 @@ public:
         inputProfile.gyroscopeTurntable);
 
     const PlayerProfilePaths activePaths = profileManager.activePaths();
-    ScoreDBHelper::GetInstance().SetDatabasePath(activePaths.scoresDb);
-    ReplayDBHelper::GetInstance().SetDatabasePath(activePaths.replaysDb);
+    ScoreRepository::GetInstance().SetDatabasePath(activePaths.scoresDb);
+    ReplayRepository::GetInstance().SetDatabasePath(activePaths.replaysDb);
     saveActiveInputProfile = [this](const InputProfile &candidate,
                                     std::string &error) {
       if (!profileInitializationResult.ok()) {
@@ -184,8 +184,8 @@ public:
           error);
     };
     profileSessionCoordinator = std::make_unique<ProfileSessionCoordinator>(
-        profileManager, ScoreDBHelper::GetInstance(),
-        ReplayDBHelper::GetInstance(),
+        profileManager, ScoreRepository::GetInstance(),
+        ReplayRepository::GetInstance(),
         [this]() -> std::optional<std::string> {
           if (profileGameplayActive.load(std::memory_order_acquire)) {
             return "A profile cannot be switched during gameplay.";
@@ -335,8 +335,8 @@ public:
         thread.second.join();
       }
     }
-    ScoreDBHelper::GetInstance().Shutdown();
-    ReplayDBHelper::GetInstance().Shutdown();
+    ScoreRepository::GetInstance().Shutdown();
+    ReplayRepository::GetInstance().Shutdown();
     std::cout << "Main function is quitting..." << std::endl;
   }
 };

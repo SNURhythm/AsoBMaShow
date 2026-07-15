@@ -43,7 +43,7 @@ constexpr int kScoreSummarySemanticsSchemaVersion = 7;
 constexpr int kScoreBestEligibilitySchemaVersion = 8;
 constexpr int kScoreAttemptIdentitySchemaVersion = 9;
 constexpr int kScoreDatabaseSchemaVersion =
-    ScoreDBHelper::kCurrentSchemaVersion;
+    ScoreRepository::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
@@ -1527,7 +1527,7 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
 }
 
 bool ensureChartDatabaseReadyForScoreMigration() {
-  ChartDBHelper &chartDbHelper = ChartDBHelper::GetInstance();
+  ChartRepository &chartDbHelper = ChartRepository::GetInstance();
   SqliteConnectionHandle chartConnection(chartDbHelper.Connect());
   if (chartConnection.get() == nullptr) {
     return false;
@@ -1930,20 +1930,20 @@ ScoreBestCache::bestForStoredKey(std::string_view sha256,
   return std::nullopt;
 }
 
-ScoreDBHelper &ScoreDBHelper::GetInstance() {
-  static ScoreDBHelper instance;
+ScoreRepository &ScoreRepository::GetInstance() {
+  static ScoreRepository instance;
   return instance;
 }
 
-ScoreDBHelper::ScoreDBHelper(std::filesystem::path databasePath)
+ScoreRepository::ScoreRepository(std::filesystem::path databasePath)
     : databasePath_(std::move(databasePath)) {}
 
-ScoreDBHelper::~ScoreDBHelper() {
+ScoreRepository::~ScoreRepository() {
   std::lock_guard lock(sessionMutex_);
   CloseSessionDatabaseLocked();
 }
 
-void ScoreDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
+void ScoreRepository::SetDatabasePath(std::filesystem::path databasePath) {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
   if (!equivalentScoreDatabasePaths(databasePath_, databasePath)) {
@@ -1953,22 +1953,22 @@ void ScoreDBHelper::SetDatabasePath(std::filesystem::path databasePath) {
   gScoreRevision.fetch_add(1, std::memory_order_relaxed);
 }
 
-std::filesystem::path ScoreDBHelper::GetDatabasePath() const {
+std::filesystem::path ScoreRepository::GetDatabasePath() const {
   std::lock_guard lock(sessionMutex_);
   return databasePath_;
 }
 
-std::filesystem::path ScoreDBHelper::GetResolvedDatabasePath() const {
+std::filesystem::path ScoreRepository::GetResolvedDatabasePath() const {
   std::lock_guard lock(sessionMutex_);
   return GetResolvedDatabasePathLocked();
 }
 
-std::filesystem::path ScoreDBHelper::GetResolvedDatabasePathLocked() const {
+std::filesystem::path ScoreRepository::GetResolvedDatabasePathLocked() const {
   return resolvedScoreDatabasePath(databasePath_);
 }
 
-struct ScoreDBHelper::PreparedScoreQueryDatabase::State {
-  State(const ScoreDBHelper &helper, sqlite3 *chartDatabase)
+struct ScoreRepository::PreparedScoreQueryDatabase::State {
+  State(const ScoreRepository &helper, sqlite3 *chartDatabase)
       : sessionLock(helper.sessionMutex_) {
     const std::filesystem::path path = helper.GetResolvedDatabasePathLocked();
     error = score_cache_queries::prepareScoreQueryDatabase(chartDatabase, path);
@@ -1979,24 +1979,24 @@ struct ScoreDBHelper::PreparedScoreQueryDatabase::State {
   std::optional<std::string> error;
 };
 
-ScoreDBHelper::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
-    const ScoreDBHelper &helper, sqlite3 *chartDatabase)
+ScoreRepository::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
+    const ScoreRepository &helper, sqlite3 *chartDatabase)
     : state_(std::make_unique<State>(helper, chartDatabase)) {}
 
-ScoreDBHelper::PreparedScoreQueryDatabase::~PreparedScoreQueryDatabase() =
+ScoreRepository::PreparedScoreQueryDatabase::~PreparedScoreQueryDatabase() =
     default;
 
 const std::optional<std::string> &
-ScoreDBHelper::PreparedScoreQueryDatabase::error() const {
+ScoreRepository::PreparedScoreQueryDatabase::error() const {
   return state_->error;
 }
 
-ScoreDBHelper::PreparedScoreQueryDatabase
-ScoreDBHelper::PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const {
+ScoreRepository::PreparedScoreQueryDatabase
+ScoreRepository::PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const {
   return PreparedScoreQueryDatabase(*this, chartDatabase);
 }
 
-bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
+bool ScoreRepository::BindDatabasePath(std::filesystem::path databasePath,
                                      std::string &errorMessage) {
   profile_database_activity::WriteGuard operation;
   if (databasePath.empty()) {
@@ -2043,15 +2043,15 @@ bool ScoreDBHelper::BindDatabasePath(std::filesystem::path databasePath,
   return true;
 }
 
-bool ScoreDBHelper::HasActiveReads() {
+bool ScoreRepository::HasActiveReads() {
   return profile_database_activity::readsActive();
 }
 
-bool ScoreDBHelper::HasActiveWrites() {
+bool ScoreRepository::HasActiveWrites() {
   return profile_database_activity::writesActive();
 }
 
-sqlite3 *ScoreDBHelper::Connect() {
+sqlite3 *ScoreRepository::Connect() {
   if (this == &GetInstance()) {
     SDL_Log("Raw score connections are unavailable on the runtime singleton");
     return nullptr;
@@ -2074,20 +2074,20 @@ sqlite3 *ScoreDBHelper::Connect() {
   return db;
 }
 
-void ScoreDBHelper::Close(sqlite3 *db) { closeSqliteDatabase(db); }
+void ScoreRepository::Close(sqlite3 *db) { closeSqliteDatabase(db); }
 
-void ScoreDBHelper::CloseSessionDatabaseLocked() {
+void ScoreRepository::CloseSessionDatabaseLocked() {
   closeSqliteDatabase(sessionDatabase_);
   sessionDatabase_ = nullptr;
 }
 
-void ScoreDBHelper::Shutdown() {
+void ScoreRepository::Shutdown() {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
   CloseSessionDatabaseLocked();
 }
 
-sqlite3 *ScoreDBHelper::EnsureSessionDatabaseLocked() {
+sqlite3 *ScoreRepository::EnsureSessionDatabaseLocked() {
   if (sessionDatabase_ != nullptr) {
     if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
       return currentScoreAttemptIdentitySchemaIsValid(sessionDatabase_)
@@ -2113,12 +2113,12 @@ sqlite3 *ScoreDBHelper::EnsureSessionDatabaseLocked() {
   return sessionDatabase_;
 }
 
-bool ScoreDBHelper::CreateScoreTable(sqlite3 *db) {
+bool ScoreRepository::CreateScoreTable(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
   return CreateScoreTableOnConnection(db);
 }
 
-bool ScoreDBHelper::CreateScoreTableOnConnection(sqlite3 *db) {
+bool ScoreRepository::CreateScoreTableOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -2203,12 +2203,12 @@ bool ScoreDBHelper::CreateScoreTableOnConnection(sqlite3 *db) {
   return true;
 }
 
-bool ScoreDBHelper::CreateCourseScoreTable(sqlite3 *db) {
+bool ScoreRepository::CreateCourseScoreTable(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
   return CreateCourseScoreTableOnConnection(db);
 }
 
-bool ScoreDBHelper::CreateCourseScoreTableOnConnection(sqlite3 *db) {
+bool ScoreRepository::CreateCourseScoreTableOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -2268,12 +2268,12 @@ bool ScoreDBHelper::CreateCourseScoreTableOnConnection(sqlite3 *db) {
   return true;
 }
 
-bool ScoreDBHelper::EnsureSchema(sqlite3 *db) {
+bool ScoreRepository::EnsureSchema(sqlite3 *db) {
   profile_database_activity::WriteGuard operation;
   return EnsureSchemaOnConnection(db);
 }
 
-bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
+bool ScoreRepository::EnsureSchemaOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
@@ -2314,13 +2314,13 @@ bool ScoreDBHelper::EnsureSchemaOnConnection(sqlite3 *db) {
   return true;
 }
 
-bool ScoreDBHelper::EnsureSchema() {
+bool ScoreRepository::EnsureSchema() {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
   return EnsureSessionDatabaseLocked() != nullptr;
 }
 
-bool ScoreDBHelper::InsertScore(sqlite3 *db,
+bool ScoreRepository::InsertScore(sqlite3 *db,
                                 const bms_parser::ChartMeta &chartMeta,
                                 const RhythmState &state,
                                 const ScoreProvenance &provenance) {
@@ -2341,7 +2341,7 @@ bool ScoreDBHelper::InsertScore(sqlite3 *db,
              .status == ScoreWriteStatus::Inserted;
 }
 
-bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
+bool ScoreRepository::InsertCourseScore(sqlite3 *db,
                                       const CoursePlaySession &session,
                                       const RhythmState &state,
                                       int completedCharts, int totalCharts,
@@ -2363,7 +2363,7 @@ bool ScoreDBHelper::InsertCourseScore(sqlite3 *db,
                                        totalCharts, provenance, provenanceJson);
 }
 
-bool ScoreDBHelper::InsertCourseScoreOnConnection(
+bool ScoreRepository::InsertCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
     int completedCharts, int totalCharts, const ScoreProvenance &provenance,
     const std::string &provenanceJson) {
@@ -2453,7 +2453,7 @@ bool ScoreDBHelper::InsertCourseScoreOnConnection(
   return true;
 }
 
-bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
+bool ScoreRepository::SaveScore(const bms_parser::ChartMeta &chartMeta,
                               const RhythmState &state,
                               const ScoreProvenance &provenance) {
   profile_database_activity::WriteGuard writeGuard;
@@ -2481,7 +2481,7 @@ bool ScoreDBHelper::SaveScore(const bms_parser::ChartMeta &chartMeta,
   return result;
 }
 
-result_persistence::ProjectionOutcome ScoreDBHelper::SaveProjectedScore(
+result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
     const result_persistence::PendingChartScoreWrite &pending) {
   using result_persistence::ProjectionOutcome;
   using result_persistence::ProjectionStatus;
@@ -2531,7 +2531,7 @@ result_persistence::ProjectionOutcome ScoreDBHelper::SaveProjectedScore(
           .diagnostic = inserted.diagnostic};
 }
 
-bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
+bool ScoreRepository::SaveCourseScore(const CoursePlaySession &session,
                                     const RhythmState &state,
                                     int completedCharts, int totalCharts,
                                     const ScoreProvenance &provenance) {
@@ -2561,7 +2561,7 @@ bool ScoreDBHelper::SaveCourseScore(const CoursePlaySession &session,
   return result;
 }
 
-std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
+std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId) {
@@ -2575,7 +2575,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScore(
                                    excludeAttemptId);
 }
 
-std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScoreOnConnection(
+std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScoreOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId) {
@@ -2637,7 +2637,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestScoreOnConnection(
 }
 
 std::optional<ScoreBestSnapshot>
-ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
+ScoreRepository::LoadBestCourseScore(const CoursePlaySession &session) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   sqlite3 *db = EnsureSessionDatabaseLocked();
@@ -2647,7 +2647,7 @@ ScoreDBHelper::LoadBestCourseScore(const CoursePlaySession &session) {
   return LoadBestCourseScoreOnConnection(db, session);
 }
 
-std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestCourseScoreOnConnection(
+std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session) {
   const std::string courseKey = courseKeyForSession(session);
   const int lnMode = long_note_mode::normalizeValue(session.longNoteMode);
@@ -2692,7 +2692,7 @@ std::optional<ScoreBestSnapshot> ScoreDBHelper::LoadBestCourseScoreOnConnection(
   return snapshot;
 }
 
-CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecords(
+CourseScoreRecoveryResult ScoreRepository::RecoverCourseRecords(
     std::span<const course_identity::Definition> definitions) {
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(sessionMutex_);
@@ -2703,7 +2703,7 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecords(
   return RecoverCourseRecordsOnConnection(db, definitions);
 }
 
-CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
+CourseScoreRecoveryResult ScoreRepository::RecoverCourseRecordsOnConnection(
     sqlite3 *db, std::span<const course_identity::Definition> definitions) {
   CourseScoreRecoveryResult result;
   if (db == nullptr) {
@@ -2957,7 +2957,7 @@ CourseScoreRecoveryResult ScoreDBHelper::RecoverCourseRecordsOnConnection(
   return result;
 }
 
-ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
+ScoreClearRankCache ScoreRepository::LoadBestClearRanks() {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   ScoreClearRankCache cache;
@@ -2971,7 +2971,7 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks() {
   return cache;
 }
 
-ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks(sqlite3 *db,
+ScoreClearRankCache ScoreRepository::LoadBestClearRanks(sqlite3 *db,
                                                       std::string_view schema) {
   profile_database_activity::ReadGuard operation;
   ScoreClearRankCache cache;
@@ -2982,7 +2982,7 @@ ScoreClearRankCache ScoreDBHelper::LoadBestClearRanks(sqlite3 *db,
   return cache;
 }
 
-ScoreBestCache ScoreDBHelper::LoadBestScores() {
+ScoreBestCache ScoreRepository::LoadBestScores() {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
   ScoreBestCache cache;
@@ -2995,7 +2995,7 @@ ScoreBestCache ScoreDBHelper::LoadBestScores() {
   return cache;
 }
 
-ScoreBestCache ScoreDBHelper::LoadBestScores(sqlite3 *db,
+ScoreBestCache ScoreRepository::LoadBestScores(sqlite3 *db,
                                              std::string_view schema) {
   profile_database_activity::ReadGuard operation;
   ScoreBestCache cache;
@@ -3005,6 +3005,6 @@ ScoreBestCache ScoreDBHelper::LoadBestScores(sqlite3 *db,
   return cache;
 }
 
-std::uint64_t ScoreDBHelper::GetRevision() const {
+std::uint64_t ScoreRepository::GetRevision() const {
   return gScoreRevision.load(std::memory_order_relaxed);
 }

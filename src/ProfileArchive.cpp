@@ -881,8 +881,8 @@ ManifestParseResult parseManifest(std::string_view contents) {
             AppSettingsStore::kCurrentSchemaVersion ||
         manifest.inputSchemaVersion > InputProfile::kSchemaVersion ||
         manifest.practiceSchemaVersion > 1 ||
-        manifest.scoreSchemaVersion > ScoreDBHelper::kCurrentSchemaVersion ||
-        manifest.replaySchemaVersion > ReplayDBHelper::kCurrentSchemaVersion) {
+        manifest.scoreSchemaVersion > ScoreRepository::kCurrentSchemaVersion ||
+        manifest.replaySchemaVersion > ReplayRepository::kCurrentSchemaVersion) {
       return {.error = ProfileError::FutureVersion,
               .message = "archive requires a newer application version"};
     }
@@ -1386,8 +1386,8 @@ validateArchive(const std::filesystem::path &archivePath,
   if (!scoreVersion || !replayVersion) {
     return {.error = ProfileError::IntegrityFailure, .message = errorMessage};
   }
-  if (*scoreVersion > ScoreDBHelper::kCurrentSchemaVersion ||
-      *replayVersion > ReplayDBHelper::kCurrentSchemaVersion) {
+  if (*scoreVersion > ScoreRepository::kCurrentSchemaVersion ||
+      *replayVersion > ReplayRepository::kCurrentSchemaVersion) {
     return {.error = ProfileError::FutureVersion,
             .message = "archive database is newer than supported"};
   }
@@ -1621,8 +1621,8 @@ ProfileArchiveService::Export(std::string_view profileId,
   manifest.settingsSchemaVersion = AppSettingsStore::kCurrentSchemaVersion;
   manifest.inputSchemaVersion = InputProfile::kSchemaVersion;
   manifest.practiceSchemaVersion = 1;
-  manifest.scoreSchemaVersion = ScoreDBHelper::kCurrentSchemaVersion;
-  manifest.replaySchemaVersion = ReplayDBHelper::kCurrentSchemaVersion;
+  manifest.scoreSchemaVersion = ScoreRepository::kCurrentSchemaVersion;
+  manifest.replaySchemaVersion = ReplayRepository::kCurrentSchemaVersion;
   if (!writeTextFile(workspace / "manifest.json",
                      manifestJson(manifest).dump(2) + "\n", errorMessage)) {
     return failure(ProfileError::IoFailure, errorMessage);

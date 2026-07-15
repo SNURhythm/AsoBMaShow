@@ -3333,7 +3333,7 @@ void ChartViewerScene::showGhostModal() {
     return;
   }
 
-  ghostReplaySummaries = ReplayDBHelper::GetInstance().ListReplays(chart->Meta);
+  ghostReplaySummaries = ReplayRepository::GetInstance().ListReplays(chart->Meta);
   selectedGhostReplayIndex = -1;
   ghostReplayListView->setReplaySummaries(ghostReplaySummaries);
   if (ghostModalEmptyText != nullptr) {
@@ -3497,7 +3497,7 @@ void ChartViewerScene::loadSelectedGhostReplay() {
         const bms_parser::ChartMeta &loadMeta =
             chart != nullptr ? chart->Meta : record.meta;
         auto replay =
-            ReplayDBHelper::GetInstance().LoadReplay(replayId, loadMeta);
+            ReplayRepository::GetInstance().LoadReplay(replayId, loadMeta);
         if (!replay.has_value()) {
           if (statusText != nullptr) {
             statusText->setText("Ghost load failed");

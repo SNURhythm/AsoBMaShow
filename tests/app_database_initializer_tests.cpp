@@ -3,10 +3,10 @@
 #include <iostream>
 #include <type_traits>
 
-static_assert(!std::is_copy_constructible_v<MusicPlaylistDB>);
-static_assert(!std::is_copy_assignable_v<MusicPlaylistDB>);
-static_assert(!std::is_move_constructible_v<MusicPlaylistDB>);
-static_assert(!std::is_move_assignable_v<MusicPlaylistDB>);
+static_assert(!std::is_copy_constructible_v<MusicPlaylistRepository>);
+static_assert(!std::is_copy_assignable_v<MusicPlaylistRepository>);
+static_assert(!std::is_move_constructible_v<MusicPlaylistRepository>);
+static_assert(!std::is_move_assignable_v<MusicPlaylistRepository>);
 
 #define ASSERT_TRUE(value, label)                                              \
   if (!(value)) {                                                              \

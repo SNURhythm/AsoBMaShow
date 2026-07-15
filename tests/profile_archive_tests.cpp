@@ -38,9 +38,9 @@
 #include <AclAPI.h>
 #endif
 
-ChartDBHelper::ChartDBHelper() = default;
-sqlite3 *ChartDBHelper::Connect() { return nullptr; }
-bool ChartDBHelper::CreateChartMetaTable(sqlite3 *) { return false; }
+ChartRepository::ChartRepository() = default;
+sqlite3 *ChartRepository::Connect() { return nullptr; }
+bool ChartRepository::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 using Json = nlohmann::json;
@@ -647,9 +647,9 @@ void testExportIsDeterministicAndStrict() {
                document.at("profileUuid") == fixture.sourceId &&
                document.at("profileDisplayName") == "Portable Profile" &&
                document.at("scoreSchemaVersion") ==
-                   ScoreDBHelper::kCurrentSchemaVersion &&
+                   ScoreRepository::kCurrentSchemaVersion &&
                document.at("replaySchemaVersion") ==
-                   ReplayDBHelper::kCurrentSchemaVersion,
+                   ReplayRepository::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
   }
 }
@@ -1133,9 +1133,9 @@ void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
 
   std::string versionError;
   expect(sqliteDatabaseUserVersion(target.scoresDb, versionError) ==
-                 ScoreDBHelper::kCurrentSchemaVersion &&
+                 ScoreRepository::kCurrentSchemaVersion &&
              sqliteDatabaseUserVersion(target.replaysDb, versionError) ==
-                 ReplayDBHelper::kCurrentSchemaVersion &&
+                 ReplayRepository::kCurrentSchemaVersion &&
              fixture.manager.validateProfile(fixture.targetId).ok(),
          "overwrite installs a current RuntimeReady target: " + versionError);
   expect(scalarText(target.scoresDb,
@@ -1165,8 +1165,8 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
     const std::filesystem::path futureDatabase =
         futureScoreDatabase ? target.scoresDb : target.replaysDb;
     const int futureVersion =
-        futureScoreDatabase ? ScoreDBHelper::kCurrentSchemaVersion + 1
-                            : ReplayDBHelper::kCurrentSchemaVersion + 1;
+        futureScoreDatabase ? ScoreRepository::kCurrentSchemaVersion + 1
+                            : ReplayRepository::kCurrentSchemaVersion + 1;
     setDatabaseVersion(futureDatabase, futureVersion,
                        futureScoreDatabase ? "future overwrite score"
                                            : "future overwrite replay");
@@ -1502,9 +1502,9 @@ void testChecksumsVersionsValidatorsAndLimits() {
            std::pair{"inputSchemaVersion", InputProfile::kSchemaVersion},
            std::pair{"practiceSchemaVersion", 1},
            std::pair{"scoreSchemaVersion",
-                     ScoreDBHelper::kCurrentSchemaVersion},
+                     ScoreRepository::kCurrentSchemaVersion},
            std::pair{"replaySchemaVersion",
-                     ReplayDBHelper::kCurrentSchemaVersion}}) {
+                     ReplayRepository::kCurrentSchemaVersion}}) {
     auto futureComponent = valid;
     manifest =
         Json::parse(findMember(futureComponent, "manifest.json")->contents);
@@ -1762,9 +1762,9 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
              migratedInput.at("schemaVersion") == InputProfile::kSchemaVersion,
          "older settings and input documents persist at current schemas");
   expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) ==
-                 ScoreDBHelper::kCurrentSchemaVersion &&
+                 ScoreRepository::kCurrentSchemaVersion &&
              sqliteDatabaseUserVersion(paths.replaysDb, versionError) ==
-                 ReplayDBHelper::kCurrentSchemaVersion,
+                 ReplayRepository::kCurrentSchemaVersion,
          "older score and replay databases migrate to current schemas");
   expect(rowCount(paths.scoresDb, "scores") == 1 &&
              rowCount(paths.replaysDb, "replays") == 1 &&
@@ -1817,7 +1817,7 @@ void testFutureDatabaseAndCorruptionAreRejected() {
   expect(database != nullptr &&
              execute(database.get(),
                      "PRAGMA user_version = " +
-                         std::to_string(ScoreDBHelper::kCurrentSchemaVersion +
+                         std::to_string(ScoreRepository::kCurrentSchemaVersion +
                                         1)),
          "future database fixture updates user_version");
   database.reset();

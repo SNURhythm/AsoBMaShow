@@ -36,7 +36,7 @@ void appendRollbackError(std::string &message, std::string_view operation,
 } // namespace
 
 ProfileSessionCoordinator::ProfileSessionCoordinator(
-    PlayerProfileManager &manager, ScoreDBHelper &score, ReplayDBHelper &replay,
+    PlayerProfileManager &manager, ScoreRepository &score, ReplayRepository &replay,
     Blocker blocker, ApplyInput applyInput, RestoreInput restoreInput,
     RefreshCaches refreshCaches, ProfileSessionDependencies dependencies)
     : manager_(manager), score_(score), replay_(replay),
@@ -56,12 +56,12 @@ ProfileSessionCoordinator::ProfileSessionCoordinator(
   }
   if (!dependencies_.bindScore) {
     dependencies_.bindScore =
-        [](ScoreDBHelper &helper, const std::filesystem::path &path,
+        [](ScoreRepository &helper, const std::filesystem::path &path,
            std::string &error) { return helper.BindDatabasePath(path, error); };
   }
   if (!dependencies_.bindReplay) {
     dependencies_.bindReplay =
-        [](ReplayDBHelper &helper, const std::filesystem::path &path,
+        [](ReplayRepository &helper, const std::filesystem::path &path,
            std::string &error) { return helper.BindDatabasePath(path, error); };
   }
   if (!dependencies_.recoverPendingResults) {

@@ -159,11 +159,11 @@ private:
                              std::uint64_t preloadRevision,
                              bool requestedClubMode,
                              const std::stop_token &stopToken);
-  void RefreshPlaylistCachesLocked(MusicPlaylistDB &playlistDb, sqlite3 *db,
+  void RefreshPlaylistCachesLocked(MusicPlaylistRepository &playlistDb, sqlite3 *db,
                                    int preferredSelectedPlaylistId);
-  void RestoreQueueFromPersistedStateLocked(MusicPlaylistDB &playlistDb,
+  void RestoreQueueFromPersistedStateLocked(MusicPlaylistRepository &playlistDb,
                                             sqlite3 *db);
-  void PersistPlayerStateLocked(MusicPlaylistDB &playlistDb, sqlite3 *db);
+  void PersistPlayerStateLocked(MusicPlaylistRepository &playlistDb, sqlite3 *db);
   void PersistQueueTracksLocked();
   void PersistQueueTracksLocked(
       const std::vector<music_playlist::MusicTrack> &tracks,
@@ -180,7 +180,7 @@ private:
   void PublishNativeControlStatus(const std::string &statusMessage);
 
   mutable std::mutex stateMutex;
-  MusicPlaylistDB playlistDb;
+  MusicPlaylistRepository playlistDb;
   sqlite3 *playlistDatabase = nullptr;
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;

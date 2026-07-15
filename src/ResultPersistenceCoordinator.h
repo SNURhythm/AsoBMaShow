@@ -64,7 +64,7 @@ struct Dependencies {
 
 class Coordinator {
 public:
-  Coordinator(ScoreDBHelper &score, ReplayDBHelper &replay);
+  Coordinator(ScoreRepository &score, ReplayRepository &replay);
   explicit Coordinator(Dependencies dependencies);
 
   SaveOutcome persist(const ChartResultAttempt &attempt);

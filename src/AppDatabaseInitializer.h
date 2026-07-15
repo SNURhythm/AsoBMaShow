@@ -35,7 +35,7 @@ initializeApplicationDatabasesWith(ChartInit &&chartInit, ScoreInit &&scoreInit,
 }
 
 inline bool initializeChartDatabase() {
-  ChartDBHelper &helper = ChartDBHelper::GetInstance();
+  ChartRepository &helper = ChartRepository::GetInstance();
   SqliteConnectionHandle db(helper.Connect());
   if (!db) {
     return false;
@@ -52,28 +52,28 @@ inline bool initializeChartDatabase() {
 }
 
 inline bool initializeScoreDatabase() {
-  ScoreDBHelper &helper = ScoreDBHelper::GetInstance();
+  ScoreRepository &helper = ScoreRepository::GetInstance();
   return helper.EnsureSchema();
 }
 
 inline bool initializeScoreDatabase(const std::filesystem::path &databasePath) {
-  ScoreDBHelper helper(databasePath);
+  ScoreRepository helper(databasePath);
   return helper.EnsureSchema();
 }
 
 inline bool initializeReplayDatabase() {
-  ReplayDBHelper &helper = ReplayDBHelper::GetInstance();
+  ReplayRepository &helper = ReplayRepository::GetInstance();
   return helper.EnsureSchema();
 }
 
 inline bool initializeReplayDatabase(
     const std::filesystem::path &databasePath) {
-  ReplayDBHelper helper(databasePath);
+  ReplayRepository helper(databasePath);
   return helper.EnsureSchema();
 }
 
 inline bool initializeMusicDatabase() {
-  MusicPlaylistDB helper;
+  MusicPlaylistRepository helper;
   SqliteConnectionHandle db(helper.Connect());
   if (!db) {
     return false;

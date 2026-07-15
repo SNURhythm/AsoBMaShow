@@ -131,17 +131,17 @@ struct CourseReplayLookup {
   int legacyCourseId = 0;
 };
 
-class ReplayDBHelper {
+class ReplayRepository {
 public:
   static constexpr int kCurrentSchemaVersion = 5;
 
-  ReplayDBHelper() = default;
-  explicit ReplayDBHelper(std::filesystem::path databasePath);
-  ~ReplayDBHelper();
-  ReplayDBHelper(const ReplayDBHelper &) = delete;
-  ReplayDBHelper &operator=(const ReplayDBHelper &) = delete;
+  ReplayRepository() = default;
+  explicit ReplayRepository(std::filesystem::path databasePath);
+  ~ReplayRepository();
+  ReplayRepository(const ReplayRepository &) = delete;
+  ReplayRepository &operator=(const ReplayRepository &) = delete;
 
-  static ReplayDBHelper &GetInstance();
+  static ReplayRepository &GetInstance();
 
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;

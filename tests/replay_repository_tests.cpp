@@ -175,7 +175,7 @@ replayMigrationSnapshot(const std::filesystem::path &path) {
 void expectReplayMigrationRejectedWithoutMutation(
     const std::filesystem::path &path) {
   const auto before = replayMigrationSnapshot(path);
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(!helper.EnsureSchema());
   const auto after = replayMigrationSnapshot(path);
   assert(after == before);
@@ -1025,7 +1025,7 @@ void testVersion4MigrationAddsResultOutbox(
   const auto path = root / "result-outbox-v5-migration" / "replay.db";
   createVersion4ReplayFixture(path);
 
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   auto db = openDatabase(path);
@@ -1071,7 +1071,7 @@ void testVersion4MarkerAcceptsExactVersion5ResultOutbox(
   const auto attempt =
       sampleChartAttempt(root, "exact-v5-outbox-with-v4-marker", 50);
   {
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.StageChartResult(attempt).status ==
            result_persistence::StageStatus::Staged);
   }
@@ -1088,7 +1088,7 @@ void testVersion4MarkerAcceptsExactVersion5ResultOutbox(
   execOrAbort(db.get(), "PRAGMA user_version=4");
   db.reset();
 
-  ReplayDBHelper reopened(path);
+  ReplayRepository reopened(path);
   assert(reopened.EnsureSchema());
   db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 5);
@@ -1113,7 +1113,7 @@ void testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(
     const std::filesystem::path &root) {
   const auto path = root / "formatted-v5-outbox-with-v4-marker" / "replay.db";
   {
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.EnsureSchema());
   }
   auto db = openDatabase(path);
@@ -1135,7 +1135,7 @@ void testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(
   const std::string schemaBefore = schemaSnapshot(db.get());
   db.reset();
 
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 5);
@@ -1148,7 +1148,7 @@ void testVersion4MarkerAcceptsExactMixedCaseIdentifiers(
   const auto attempt =
       sampleChartAttempt(root, "mixed-case-v5-outbox-with-v4-marker", 54);
   {
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.StageChartResult(attempt).status ==
            result_persistence::StageStatus::Staged);
   }
@@ -1165,7 +1165,7 @@ void testVersion4MarkerAcceptsExactMixedCaseIdentifiers(
                 "'|' || recovery_attempts FROM pending_chart_score_writes");
   db.reset();
 
-  ReplayDBHelper reopened(path);
+  ReplayRepository reopened(path);
   assert(reopened.EnsureSchema());
   db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 5);
@@ -1190,7 +1190,7 @@ void testCurrentVersionAcceptsExactMixedCaseIdentifiersOnCachedPaths(
   const auto path = root / "current-v5-mixed-case-outbox" / "replay.db";
   const auto attempt =
       sampleChartAttempt(root, "current-v5-mixed-case-outbox", 55);
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.StageChartResult(attempt).status ==
          result_persistence::StageStatus::Staged);
 
@@ -1228,7 +1228,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
   {
     const auto path = root / "partial-v5-outbox-column" / "replay.db";
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.EnsureSchema());
     }
     auto db = openDatabase(path);
@@ -1248,7 +1248,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
     const auto attempt =
         sampleChartAttempt(root, "partial-v5-outbox-missing-index", 51);
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.StageChartResult(attempt).status ==
              result_persistence::StageStatus::Staged);
     }
@@ -1265,7 +1265,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
     const auto path =
         root / "partial-v5-outbox-missing-recovery-index" / "replay.db";
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.EnsureSchema());
     }
     auto db = openDatabase(path);
@@ -1281,7 +1281,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
   {
     const auto path = root / "malformed-v5-outbox-attempt-index" / "replay.db";
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.EnsureSchema());
     }
     auto db = openDatabase(path);
@@ -1300,7 +1300,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
     const auto path =
         root / "malformed-v5-outbox-collapsed-predicate" / "replay.db";
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.EnsureSchema());
     }
     auto db = openDatabase(path);
@@ -1318,7 +1318,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
   {
     const auto path = root / "partial-v5-outbox-with-base-repair" / "replay.db";
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.EnsureSchema());
     }
     auto db = openDatabase(path);
@@ -1334,7 +1334,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
   {
     const auto path = root / "malformed-v5-outbox-table" / "replay.db";
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.EnsureSchema());
     }
     auto db = openDatabase(path);
@@ -1357,7 +1357,7 @@ void testCurrentVersionRejectsMalformedVersion5Artifacts(
     const auto attempt =
         sampleChartAttempt(root, "current-v5-outbox-missing-index", 52);
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.StageChartResult(attempt).status ==
              result_persistence::StageStatus::Staged);
     }
@@ -1375,7 +1375,7 @@ void testCurrentVersionRejectsMalformedVersion5Artifacts(
     const auto attempt =
         sampleChartAttempt(root, "current-v5-malformed-outbox", 53);
     {
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       assert(helper.StageChartResult(attempt).status ==
              result_persistence::StageStatus::Staged);
     }
@@ -1393,7 +1393,7 @@ void testCurrentVersionRejectsMalformedVersion5Artifacts(
 
   {
     const auto path = root / "current-v5-cached-helper-malformed" / "replay.db";
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.EnsureSchema());
     auto db = openDatabase(path);
     execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
@@ -1427,7 +1427,7 @@ void testVersion4OutboxCreationFailureRollsBackBaseRepairs(
   };
   assert(sqlite3_set_authorizer(db.get(), denyPendingOutboxCreationAuthorizer,
                                 nullptr) == SQLITE_OK);
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(!helper.CreateReplayTables(db.get()));
   assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
   const ReplayMigrationSnapshot after{
@@ -1441,7 +1441,7 @@ void testVersion4OutboxCreationFailureRollsBackBaseRepairs(
 void testLegacyReplayRowsRemainRepeatableWithNullAttemptId(
     const std::filesystem::path &root) {
   const auto path = root / "legacy-null-attempt" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const ReplayData replay = sampleReplay(root, "legacy-null-attempt");
   const auto first = helper.SaveReplay(replay);
   const auto second = helper.SaveReplay(replay);
@@ -1459,7 +1459,7 @@ void testLegacyReplayRowsRemainRepeatableWithNullAttemptId(
 void testStageChartResultIsAtomicAndReturnsTimestamp(
     const std::filesystem::path &root) {
   const auto path = root / "stage-chart-result" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "stage-chart-result", 1);
   const auto staged = helper.StageChartResult(attempt);
   assert(staged.status == result_persistence::StageStatus::Staged);
@@ -1501,7 +1501,7 @@ void testStageChartResultIsAtomicAndReturnsTimestamp(
 
 void testIdenticalAttemptIsIdempotent(const std::filesystem::path &root) {
   const auto path = root / "stage-idempotent" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "stage-idempotent", 2);
   const auto first = helper.StageChartResult(attempt);
   const auto second = helper.StageChartResult(attempt);
@@ -1523,7 +1523,7 @@ void testIdenticalAttemptIsIdempotent(const std::filesystem::path &root) {
 void testRestageRejectsCorruptRetainedOutbox(
     const std::filesystem::path &root) {
   const auto path = root / "restage-corrupt-retained-outbox" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
 
   const auto pendingOnlyCorruption =
       sampleChartAttempt(root, "restage-pending-only-corruption", 40);
@@ -1574,7 +1574,7 @@ void testRestageRejectsCorruptRetainedOutbox(
 void testChangedPayloadForSameAttemptConflicts(
     const std::filesystem::path &root) {
   const auto path = root / "stage-conflict" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto original = sampleChartAttempt(root, "stage-conflict", 3);
   assert(helper.StageChartResult(original).status ==
          result_persistence::StageStatus::Staged);
@@ -1600,7 +1600,7 @@ void testChangedPayloadForSameAttemptConflicts(
 void testStageRejectsSemanticResultConflicts(
     const std::filesystem::path &root) {
   const auto path = root / "stage-semantic-conflicts" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   const auto expectConflict = [&](auto attempt) {
@@ -1652,7 +1652,7 @@ void testStageRejectsSemanticResultConflicts(
 void testStageAcceptsStandard9KeysGaugeMaximum(
     const std::filesystem::path &root) {
   const auto path = root / "stage-pms-gauge-maximum" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   auto attempt = sampleChartAttempt(root, "stage-pms-gauge-maximum", 13);
   attempt.replay.initialGaugeType = GaugeType::Normal;
   attempt.replay.finalGauge = 120.0f;
@@ -1676,7 +1676,7 @@ void testStageAcceptsStandard9KeysGaugeMaximum(
 void testStageAcceptsNonLongNoteChartMode(
     const std::filesystem::path &root) {
   const auto path = root / "stage-non-long-note-chart" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   auto attempt = sampleChartAttempt(root, "stage-non-long-note-chart", 16);
   attempt.replay.chartMeta.TotalLongNotes = 0;
   attempt.replay.chartMeta.LnMode = long_note_mode::kUnknownValue;
@@ -1697,7 +1697,7 @@ void testStageAcceptsNonLongNoteChartMode(
 void testStageAcceptsUnforcedLongNoteChartMode(
     const std::filesystem::path &root) {
   const auto path = root / "stage-unforced-long-note-chart" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   auto attempt = sampleChartAttempt(root, "stage-unforced-long-note-chart", 17);
   attempt.replay.chartMeta.LnMode = long_note_mode::kUnknownValue;
   attempt.replay.provenance.stages.front().longNoteMode =
@@ -1718,7 +1718,7 @@ void testStageAcceptsUnforcedLongNoteChartMode(
 void testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(
     const std::filesystem::path &root) {
   const auto path = root / "stage-charge-note-tail-judgements" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   auto attempt =
       sampleChartAttempt(root, "stage-charge-note-tail-judgements", 14);
   attempt.score.score = 110;
@@ -1744,7 +1744,7 @@ void testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(
 void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
     const std::filesystem::path &root) {
   const auto path = root / "stage-acknowledged" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "stage-acknowledged", 4);
   const auto staged = helper.StageChartResult(attempt);
   assert(staged.receipt.has_value());
@@ -1788,7 +1788,7 @@ void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
 void testOutboxInsertFailureRollsBackReplayAndChildren(
     const std::filesystem::path &root) {
   const auto path = root / "stage-outbox-rollback" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   auto db = openDatabase(path);
   execOrAbort(
@@ -1814,7 +1814,7 @@ void testOutboxInsertFailureRollsBackReplayAndChildren(
 void testPendingReadsDistinguishMissingFailureAndConflict(
     const std::filesystem::path &root) {
   const auto path = root / "pending-read-status" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "pending-read-status", 6);
   assert(helper.LoadPendingChartScore(attempt.attemptId).status ==
          result_persistence::PendingReadStatus::NotFound);
@@ -1861,7 +1861,7 @@ void testPendingReadsDistinguishMissingFailureAndConflict(
 void testRecoverySnapshotKeepsMalformedRowsAndContinues(
     const std::filesystem::path &root) {
   const auto path = root / "pending-batch-malformed" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto malformedAttempt =
       sampleChartAttempt(root, "pending-batch-malformed-a", 7);
   const auto validAttempt =
@@ -1905,7 +1905,7 @@ void testRecoverySnapshotKeepsMalformedRowsAndContinues(
 void testRecoverySnapshotPrioritizesNeverAttemptedRows(
     const std::filesystem::path &root) {
   const auto path = root / "pending-batch-fairness" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto first = sampleChartAttempt(root, "pending-fair-a", 1);
   const auto second = sampleChartAttempt(root, "pending-fair-b", 2);
   const auto third = sampleChartAttempt(root, "pending-fair-c", 3);
@@ -1942,7 +1942,7 @@ void testRecoverySnapshotPrioritizesNeverAttemptedRows(
 void testPendingSemanticConflictsAreRetainedByAcknowledgement(
     const std::filesystem::path &root) {
   const auto path = root / "pending-semantic-conflicts" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto attempt =
       sampleChartAttempt(root, "pending-semantic-conflicts", 20);
   const auto staged = helper.StageChartResult(attempt);
@@ -2044,7 +2044,7 @@ void testPendingSemanticConflictsAreRetainedByAcknowledgement(
 
 void testPendingBatchHardCapsAt256(const std::filesystem::path &root) {
   const auto path = root / "pending-batch-hard-cap" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   for (int suffix = 0; suffix < 257; ++suffix) {
     const auto attempt = sampleChartAttempt(
         root, "pending-cap-" + std::to_string(suffix), suffix);
@@ -2069,7 +2069,7 @@ void testPendingBatchHardCapsAt256(const std::filesystem::path &root) {
 void testMalformedPendingIdentitiesCanRotate(
     const std::filesystem::path &root) {
   const auto path = root / "pending-malformed-identity-fairness" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto first = sampleChartAttempt(root, "pending-malformed-id-a", 30);
   const auto second = sampleChartAttempt(root, "pending-malformed-id-b", 31);
   const auto valid = sampleChartAttempt(root, "pending-malformed-id-c", 32);
@@ -2170,7 +2170,7 @@ void testVersion2MigrationPreservesOutcomesAndRows(
   const std::string courseBefore = courseOutcome(before.get());
   before.reset();
 
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.GetDatabasePath() == path);
   assert(helper.EnsureSchema());
 
@@ -2225,7 +2225,7 @@ void testReplayMigrationNestsInsideCallerTransaction(
   execOrAbort(db.get(), "PRAGMA user_version=0");
 
   execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.CreateReplayTables(db.get()));
   assert(queryInt(db.get(), "PRAGMA user_version") == 5);
   assert(queryText(db.get(), "SELECT chart_md5 FROM replays WHERE id=1") ==
@@ -2253,8 +2253,8 @@ void testChartAndCourseRoundTripAndPathIsolation(
     const std::filesystem::path &root) {
   const auto firstPath = root / "profiles" / "one" / "replay.db";
   const auto secondPath = root / "profiles" / "two" / "replay.db";
-  ReplayDBHelper first(firstPath);
-  ReplayDBHelper second(secondPath);
+  ReplayRepository first(firstPath);
+  ReplayRepository second(secondPath);
   assert(first.EnsureSchema());
   assert(second.EnsureSchema());
 
@@ -2343,14 +2343,14 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(first.GetDatabasePath() == firstPath);
   assert(second.GetDatabasePath() == secondPath);
 
-  ReplayDBHelper retargetable;
+  ReplayRepository retargetable;
   retargetable.SetDatabasePath(firstPath);
   assert(retargetable.GetDatabasePath() == firstPath);
 }
 
 void testInvalidNewProvenanceFailsLoad(const std::filesystem::path &root) {
   const auto path = root / "invalid" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   ReplayData replay = sampleReplay(root, "invalid");
   const auto replayId = helper.SaveReplay(replay);
@@ -2380,7 +2380,7 @@ void testInvalidNewProvenanceFailsLoad(const std::filesystem::path &root) {
 void testInvalidProvenanceRejectsReplayWrites(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-provenance-write" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   const auto assertRejectedWithoutRows = [&](const ScoreProvenance &value,
@@ -2432,7 +2432,7 @@ void testInvalidProvenanceRejectsReplayWrites(
 void testInvalidReplayWritesDoNotCreateDatabase(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-write-no-database" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const auto assertDatabaseMissing = [&] {
     assert(!std::filesystem::exists(path));
   };
@@ -2513,7 +2513,7 @@ void testInvalidReplayWritesDoNotCreateDatabase(
 void testUnmatchableAndOversizedReplayWritesLeaveNoRows(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-replay-shape-write" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   const auto assertNoReplayRows = [&] {
@@ -2567,7 +2567,7 @@ void testUnmatchableAndOversizedReplayWritesLeaveNoRows(
 void testChartSummariesOmitInvalidProvenanceAndCountValidLimit(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-chart-summaries" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   ReplayData replay = sampleReplay(root, "summary-chart");
@@ -2600,7 +2600,7 @@ void testChartSummariesOmitInvalidProvenanceAndCountValidLimit(
 void testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-course-summaries" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   CourseReplayData course;
@@ -2645,7 +2645,7 @@ void testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(
 void testCourseSummariesOmitInvalidLinkedStages(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-course-summary-stages" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   CourseReplayData course;
@@ -2754,7 +2754,7 @@ void testFutureVersionRejectsWithoutSchemaMutation(
   const std::string before = schemaSnapshot(db.get());
   db.reset();
 
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(!helper.EnsureSchema());
 
   auto after = openDatabase(path);
@@ -2781,81 +2781,81 @@ void testFutureVersionFivePlusOneIsRejected(
     const auto path = root / "future-v6" / label / "replay.db";
     createFutureSentinelDatabase(path, 6);
     const auto before = persistentDatabaseSnapshot(path);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     operation(helper, path);
     helper.Shutdown();
     assert(persistentDatabaseSnapshot(path) == before);
   };
-  assertUnchanged("ensure", [](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("ensure", [](ReplayRepository &helper, const auto &) {
     assert(!helper.EnsureSchema());
   });
-  assertUnchanged("bind", [](ReplayDBHelper &helper, const auto &path) {
+  assertUnchanged("bind", [](ReplayRepository &helper, const auto &path) {
     std::string error;
     assert(!helper.BindDatabasePath(path, error));
     assert(!error.empty());
   });
-  assertUnchanged("connect", [](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("connect", [](ReplayRepository &helper, const auto &) {
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
   });
-  assertUnchanged("create", [](ReplayDBHelper &helper, const auto &path) {
+  assertUnchanged("create", [](ReplayRepository &helper, const auto &path) {
     auto db = openDatabase(path);
     assert(!helper.CreateReplayTables(db.get()));
   });
-  assertUnchanged("save-chart", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("save-chart", [&](ReplayRepository &helper, const auto &) {
     assert(!helper.SaveReplay(stage).has_value());
   });
-  assertUnchanged("save-course", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("save-course", [&](ReplayRepository &helper, const auto &) {
     assert(!helper.SaveCourseReplay(course).has_value());
   });
-  assertUnchanged("list-chart", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("list-chart", [&](ReplayRepository &helper, const auto &) {
     assert(helper.ListReplays(stage.chartMeta).empty());
   });
-  assertUnchanged("list-course", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("list-course", [&](ReplayRepository &helper, const auto &) {
     assert(helper
                .ListCourseReplays({.courseKey = course.courseKey,
                                    .legacyCourseId = course.courseId})
                .empty());
   });
-  assertUnchanged("load-chart", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("load-chart", [&](ReplayRepository &helper, const auto &) {
     assert(!helper.LoadReplay(1, stage.chartMeta).has_value());
   });
-  assertUnchanged("load-latest", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("load-latest", [&](ReplayRepository &helper, const auto &) {
     assert(!helper.LoadLatestReplay(stage.chartMeta).has_value());
   });
-  assertUnchanged("load-course", [](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("load-course", [](ReplayRepository &helper, const auto &) {
     assert(!helper.LoadCourseReplay(1).has_value());
   });
-  assertUnchanged("recover", [](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("recover", [](ReplayRepository &helper, const auto &) {
     std::string error;
     assert(!helper.RecoverCourseRecords({}, {}, error));
     assert(!error.empty());
   });
   assertUnchanged("recover-connection",
-                  [](ReplayDBHelper &helper, const auto &path) {
+                  [](ReplayRepository &helper, const auto &path) {
                     auto db = openDatabase(path);
                     std::string error;
                     assert(!helper.RecoverCourseRecords(db.get(), {}, {},
                                                         error));
                     assert(!error.empty());
                   });
-  assertUnchanged("stage", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("stage", [&](ReplayRepository &helper, const auto &) {
     assert(helper.StageChartResult(attempt).status ==
            result_persistence::StageStatus::StorageFailure);
   });
-  assertUnchanged("load-pending", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("load-pending", [&](ReplayRepository &helper, const auto &) {
     assert(helper.LoadPendingChartScore(attempt.attemptId).status ==
            result_persistence::PendingReadStatus::StorageFailure);
   });
-  assertUnchanged("list-pending", [](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("list-pending", [](ReplayRepository &helper, const auto &) {
     const auto batch = helper.ListPendingChartScores();
     assert(!batch.storageAvailable);
   });
-  assertUnchanged("acknowledge", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("acknowledge", [&](ReplayRepository &helper, const auto &) {
     assert(helper.AcknowledgePendingChartScore(attempt.attemptId, 1).status ==
            result_persistence::AcknowledgeStatus::StorageFailure);
   });
-  assertUnchanged("mark-recovery", [&](ReplayDBHelper &helper, const auto &) {
+  assertUnchanged("mark-recovery", [&](ReplayRepository &helper, const auto &) {
     assert(helper.RecordPendingChartScoreRecoveryAttempt(
                      attempt.attemptId,
                      result_persistence::RecoveryAttemptKind::StorageFailure)
@@ -2886,17 +2886,17 @@ void testFutureReplayWritesPreservePersistentDatabaseState(
 
   assertUnchanged(root / "future-save-replay" / "replay.db",
                   [&](const auto &path) {
-                    ReplayDBHelper helper(path);
+                    ReplayRepository helper(path);
                     assert(!helper.SaveReplay(replay).has_value());
                   });
   assertUnchanged(root / "future-save-course-replay" / "replay.db",
                   [&](const auto &path) {
-                    ReplayDBHelper helper(path);
+                    ReplayRepository helper(path);
                     assert(!helper.SaveCourseReplay(course).has_value());
                   });
   assertUnchanged(root / "future-direct-replay" / "replay.db",
                   [&](const auto &path) {
-                    ReplayDBHelper helper(path);
+                    ReplayRepository helper(path);
                     SqliteConnectionHandle db(helper.Connect());
                     assert(!db);
                   });
@@ -2935,18 +2935,18 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
   for (const FutureDatabaseState databaseState : states) {
     assertRejectedWithoutFamilyMutation(
         databaseState, "connect", [&](const auto &path) {
-          ReplayDBHelper helper(path);
+          ReplayRepository helper(path);
           SqliteConnectionHandle db(helper.Connect());
           return !db;
         });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-chart", [&](const auto &path) {
-          ReplayDBHelper helper(path);
+          ReplayRepository helper(path);
           return !helper.SaveReplay(replay).has_value();
         });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-course", [&](const auto &path) {
-          ReplayDBHelper helper(path);
+          ReplayRepository helper(path);
           return !helper.SaveCourseReplay(course).has_value();
         });
   }
@@ -2960,7 +2960,7 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
   execOrAbort(directDb.get(), "INSERT INTO sentinel VALUES ('unchanged')");
   execOrAbort(directDb.get(), "PRAGMA user_version=99");
   const auto directBefore = rawDatabaseFamilySnapshot(directPath);
-  ReplayDBHelper directHelper(directPath);
+  ReplayRepository directHelper(directPath);
   assert(!directHelper.CreateReplayTables(directDb.get()));
   const auto directAfter = rawDatabaseFamilySnapshot(directPath);
   // Reading a live WAL database may update transient reader marks in -shm.
@@ -2985,7 +2985,7 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     execOrAbort(db.get(), "PRAGMA user_version=-1");
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
@@ -2998,7 +2998,7 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     staleShm << "stale-shm-without-wal";
     staleShm.close();
     const auto before = rawDatabaseFamilySnapshot(path);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
@@ -3009,14 +3009,14 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     std::filesystem::create_directories(path.parent_path());
     std::ofstream empty(path, std::ios::binary);
     empty.close();
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.EnsureSchema());
     assert(std::filesystem::file_size(path) > 0);
   }
 
   {
     const auto path = root / "preflight-missing" / "replay.db";
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.EnsureSchema());
     assert(std::filesystem::exists(path));
   }
@@ -3026,7 +3026,7 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     const auto path = root / "preflight-live-writer" / "replay.db";
     withLiveWalWriter(path, 3, [&] {
       const auto before = rawDatabaseFamilySnapshot(path);
-      ReplayDBHelper helper(path);
+      ReplayRepository helper(path);
       SqliteConnectionHandle connection(helper.Connect());
       const auto after = rawDatabaseFamilySnapshot(path);
       assert(!connection);
@@ -3083,7 +3083,7 @@ void testEquivalentReplayAliasesRetainValidatedSession(
       root / "equivalent-alias" / "replay-hard-link-one.db";
   const auto secondHardLink =
       root / "equivalent-alias" / "replay-hard-link-two.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   std::error_code linkError;
@@ -3189,7 +3189,7 @@ void testCourseKeyMigrationStageFailureRollsBack(
   {
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s LEFT JOIN replays r");
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(!helper.EnsureSchema());
   }
 
@@ -3225,7 +3225,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     createWalDatabaseWithVersion(path, 3);
     assert(std::filesystem::remove(path.string() + "-shm"));
     const auto before = rawDatabaseFamilySnapshot(path);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(connection);
     connection.reset();
@@ -3237,7 +3237,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     createWalDatabaseWithVersion(path, 99);
     assert(std::filesystem::remove(path.string() + "-shm"));
     const auto before = rawDatabaseFamilySnapshot(path);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
@@ -3251,7 +3251,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     std::string error;
     assert(!preflightSqliteUserVersion(path, 3, error).has_value());
     assert(!error.empty());
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
@@ -3274,7 +3274,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const auto path = root / "header-shaped-corrupt" / "replay.db";
     writeHeaderShapedCorruptDatabase(path);
     const auto before = rawDatabaseFamilySnapshot(path);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
@@ -3288,7 +3288,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
     ScopedDenyJournalModeAutoExtension denyJournalMode;
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     SqliteConnectionHandle connection(helper.Connect());
     assert(!connection);
     assert(rawDatabaseFamilySnapshot(path) == before);
@@ -3303,7 +3303,7 @@ void testReplayTransactionalVersionErrorsDoNotMutateSchema(
     execOrAbort(db.get(), "PRAGMA user_version=-1");
     const std::string beforeSchema = schemaSnapshot(db.get());
     execOrAbort(db.get(), "BEGIN TRANSACTION");
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(!helper.CreateReplayTables(db.get()));
     assert(queryInt(db.get(), "PRAGMA user_version") == -1);
     assert(schemaSnapshot(db.get()) == beforeSchema);
@@ -3317,7 +3317,7 @@ void testReplayTransactionalVersionErrorsDoNotMutateSchema(
     execOrAbort(db.get(), "BEGIN TRANSACTION");
     assert(sqlite3_set_authorizer(db.get(), denyUserVersionAuthorizer,
                                   nullptr) == SQLITE_OK);
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(!helper.CreateReplayTables(db.get()));
     assert(schemaSnapshot(db.get()) == beforeSchema);
     assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
@@ -3328,7 +3328,7 @@ void testReplayTransactionalVersionErrorsDoNotMutateSchema(
 void testCourseStageStepErrorsFailListsAndFullLoad(
     const std::filesystem::path &root) {
   const auto path = root / "course-stage-step-error" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   CourseReplayData course;
   course.courseId = 72;
@@ -3381,7 +3381,7 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
 void testReplayHydrationStepErrorsFailWholeLoad(
     const std::filesystem::path &root) {
   const auto path = root / "replay-hydration-step-error" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   ReplayData chartReplay = sampleReplay(root, "interrupted-hydration-chart");
@@ -3447,7 +3447,7 @@ void testLargeWalReplayPreflightPreservesFamily(
   const auto path = root / "preflight-large-wal" / "replay.db";
   createLargeFutureWalDatabase(path);
   const auto before = rawDatabaseFamilySnapshot(path);
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   SqliteConnectionHandle connection(helper.Connect());
   assert(!connection);
   assert(rawDatabaseFamilySnapshot(path) == before);
@@ -3517,7 +3517,7 @@ void testChartSummaryValidationAndDetailsShareWalSnapshot(
   constexpr int kCandidateCount = 64;
   constexpr std::size_t kPaddingBytes = 512 * 1024;
   const auto path = root / "chart-summary-wal-snapshot" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   auto db = openDatabase(path);
   insertChartReplays(db.get(), kCandidateCount);
@@ -3570,7 +3570,7 @@ void testCourseSummaryValidationAndDetailsShareWalSnapshot(
   constexpr std::size_t kPaddingBytes = 512 * 1024;
   constexpr int kCourseId = 71;
   const auto path = root / "course-summary-wal-snapshot" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   auto db = openDatabase(path);
   insertCourseReplays(db.get(), kCourseId, kCandidateCount);
@@ -3682,7 +3682,7 @@ void testLimitedSummaryScansHaveFiniteCorruptBudget(
 
   {
     const auto path = root / "bounded-chart-summary" / "replay.db";
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.EnsureSchema());
     ReplayData valid = sampleReplay(root, "bounded-chart-summary");
     assert(helper.SaveReplay(valid).has_value());
@@ -3702,7 +3702,7 @@ void testLimitedSummaryScansHaveFiniteCorruptBudget(
 
   {
     const auto path = root / "bounded-course-summary" / "replay.db";
-    ReplayDBHelper helper(path);
+    ReplayRepository helper(path);
     assert(helper.EnsureSchema());
     CourseReplayData valid;
     valid.courseId = 65;
@@ -3734,7 +3734,7 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
     const std::filesystem::path &root) {
   const auto path = root / "course-key-v4-migration" / "replay.db";
   createVersion3CourseKeyFixture(path);
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   const std::string expectedKey = course_identity::makeCourseKey(
@@ -3791,7 +3791,7 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   createVersion3CourseKeyFixture(rollbackPath);
   auto rollbackDb = openDatabase(rollbackPath);
   execOrAbort(rollbackDb.get(), "BEGIN IMMEDIATE TRANSACTION");
-  ReplayDBHelper rollbackHelper(rollbackPath);
+  ReplayRepository rollbackHelper(rollbackPath);
   assert(rollbackHelper.CreateReplayTables(rollbackDb.get()));
   assert(queryInt(rollbackDb.get(), "PRAGMA user_version") == 5);
   assert(columnExists(rollbackDb.get(), "course_replays", "course_key"));
@@ -3809,7 +3809,7 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
 void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
     const std::filesystem::path &root) {
   const auto path = root / "partial-course-key" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   const std::vector<course_identity::ChartIdentity> fullCharts = {
       {.sha256 = file_checksum::sha256("partial-stage-a")},
       {.sha256 = file_checksum::sha256("partial-stage-b")},
@@ -3854,7 +3854,7 @@ void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
              .empty());
 
   const auto invalidPath = root / "invalid-course-v4" / "replay.db";
-  ReplayDBHelper invalidHelper(invalidPath);
+  ReplayRepository invalidHelper(invalidPath);
   const auto assertRejectedBeforeCreation = [&](CourseReplayData value) {
     assert(!invalidHelper.SaveCourseReplay(value).has_value());
     assert(!std::filesystem::exists(invalidPath));
@@ -3927,7 +3927,7 @@ void testCourseStagePreparationValidatesBeforeMetadataFallback(
 void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
     const std::filesystem::path &root) {
   const auto path = root / "course-key-list" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   const std::vector<course_identity::ChartIdentity> chartsA = {
       {.sha256 = file_checksum::sha256("list-a")}};
@@ -3984,7 +3984,7 @@ void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
 void testCourseReplayLookupInspectsInt64MaxFirstPage(
     const std::filesystem::path &root) {
   const auto path = root / "course-key-list-max-id" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   CourseReplayData valid;
   valid.courseId = 78;
   valid.courseName = "Max ID boundary";
@@ -4022,7 +4022,7 @@ void testCourseReplayLookupInspectsInt64MaxFirstPage(
 void testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(
     const std::filesystem::path &root) {
   const auto path = root / "course-key-list-out-of-range-id" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   CourseReplayData valid;
   valid.courseId = 79;
   valid.courseName = "Public ID boundary";
@@ -4087,7 +4087,7 @@ void testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(
 void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
     const std::filesystem::path &root) {
   const auto path = root / "course-key-recovery" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   const course_identity::ChartIdentity common{
@@ -4261,7 +4261,7 @@ void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
 void testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(
     const std::filesystem::path &root) {
   const auto path = root / "course-key-recovery-rollback" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
   const std::vector<course_identity::ChartIdentity> firstCharts = {
@@ -4349,7 +4349,7 @@ void testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(
 
 void testExistingListLimits(const std::filesystem::path &root) {
   const auto path = root / "limits" / "replay.db";
-  ReplayDBHelper helper(path);
+  ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   auto db = openDatabase(path);
   insertChartReplays(db.get(), 105);

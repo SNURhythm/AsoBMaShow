@@ -789,7 +789,7 @@ private:
   void pollPendingAndroidArchiveImport();
   void applyPendingAndroidArchiveImport();
 #endif
-  static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
+  static void LoadCharts(ChartRepository &dbHelper, sqlite3 *db,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,
                          const std::stop_token &stop_token,
                          ChartScanProgressCallback progressCallback = nullptr,

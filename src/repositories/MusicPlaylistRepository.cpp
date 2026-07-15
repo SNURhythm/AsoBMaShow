@@ -874,7 +874,7 @@ void readStoredMusicTrackRows(sqlite3_stmt *stmt,
 
 } // namespace
 
-sqlite3 *MusicPlaylistDB::Connect() {
+sqlite3 *MusicPlaylistRepository::Connect() {
   std::filesystem::path directory = Utils::GetDocumentsPath("db");
   const std::filesystem::path playlistPath =
       directory / kPlaylistDatabaseFileName;
@@ -918,14 +918,14 @@ sqlite3 *MusicPlaylistDB::Connect() {
   return db;
 }
 
-void MusicPlaylistDB::Close(sqlite3 *db) {
+void MusicPlaylistRepository::Close(sqlite3 *db) {
   if (schemaDatabase == db) {
     schemaDatabase = nullptr;
   }
   closeSqliteDatabase(db);
 }
 
-bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
+bool MusicPlaylistRepository::CreateTables(sqlite3 *db) {
   if (db == nullptr) {
     return false;
   }
@@ -1048,7 +1048,7 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
   return true;
 }
 
-int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
+int MusicPlaylistRepository::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   if (!CreateTables(db)) {
     return 0;
   }
@@ -1086,7 +1086,7 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   return 0;
 }
 
-bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::RenamePlaylist(sqlite3 *db, int playlistId,
                                      const std::string &name) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
@@ -1131,7 +1131,7 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
   return sqlite3_changes(db) > 0;
 }
 
-std::vector<MusicPlaylistInfo> MusicPlaylistDB::SelectPlaylists(sqlite3 *db) {
+std::vector<MusicPlaylistInfo> MusicPlaylistRepository::SelectPlaylists(sqlite3 *db) {
   std::vector<MusicPlaylistInfo> playlists;
   if (!CreateTables(db)) {
     return playlists;
@@ -1160,7 +1160,7 @@ std::vector<MusicPlaylistInfo> MusicPlaylistDB::SelectPlaylists(sqlite3 *db) {
   return playlists;
 }
 
-bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::InsertTrack(sqlite3 *db, int playlistId,
                                   const bms_parser::ChartMeta &chartMeta) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
@@ -1215,7 +1215,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   return true;
 }
 
-bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::DeleteTrack(sqlite3 *db, int playlistId,
                                   const bms_parser::ChartMeta &chartMeta,
                                   int storedItemId) {
   if (playlistId <= 0 || !CreateTables(db)) {
@@ -1262,7 +1262,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
   return deleted;
 }
 
-bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::MoveTrack(sqlite3 *db, int playlistId,
                                 const bms_parser::ChartMeta &chartMeta,
                                 int delta, int storedItemId) {
   if (playlistId <= 0 || delta == 0 || !CreateTables(db)) {
@@ -1354,7 +1354,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
   return moved;
 }
 
-bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
+bool MusicPlaylistRepository::ClearPlaylist(sqlite3 *db, int playlistId) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
   }
@@ -1377,7 +1377,7 @@ bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
   return true;
 }
 
-bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
+bool MusicPlaylistRepository::DeletePlaylist(sqlite3 *db, int playlistId) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
   }
@@ -1414,7 +1414,7 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   return sqlite3_changes(db) > 0;
 }
 
-MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
+MusicPlayerStateRecord MusicPlaylistRepository::SelectPlayerState(sqlite3 *db) {
   MusicPlayerStateRecord state;
   if (db == nullptr || !CreateTables(db)) {
     return state;
@@ -1441,7 +1441,7 @@ MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
   return state;
 }
 
-bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
+bool MusicPlaylistRepository::SavePlayerState(sqlite3 *db,
                                       const MusicPlayerStateRecord &state) {
   if (db == nullptr || !CreateTables(db)) {
     return false;
@@ -1511,7 +1511,7 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
   return true;
 }
 
-bool MusicPlaylistDB::ReplaceNowPlayingTracks(
+bool MusicPlaylistRepository::ReplaceNowPlayingTracks(
     sqlite3 *db, const std::vector<bms_parser::ChartMeta> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return false;
@@ -1583,7 +1583,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   return true;
 }
 
-void MusicPlaylistDB::SelectLibraryTracks(
+void MusicPlaylistRepository::SelectLibraryTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return;
@@ -1649,7 +1649,7 @@ void MusicPlaylistDB::SelectLibraryTracks(
   }
 }
 
-void MusicPlaylistDB::SelectLibraryGroupTracks(
+void MusicPlaylistRepository::SelectLibraryGroupTracks(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
@@ -1698,7 +1698,7 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   }
 }
 
-void MusicPlaylistDB::SelectNowPlayingTracks(
+void MusicPlaylistRepository::SelectNowPlayingTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return;
@@ -1716,7 +1716,7 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
   readStoredMusicTrackRows(stmt, tracks);
 }
 
-void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
+void MusicPlaylistRepository::SelectTracks(sqlite3 *db, int playlistId,
                                    std::vector<MusicTrackRecord> &tracks) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return;

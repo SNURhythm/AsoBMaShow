@@ -44,7 +44,7 @@ inline std::optional<ReplayData> bestReplayForSnapshot(
   }
 
   const auto summaries =
-      ReplayDBHelper::GetInstance().ListReplays(chart.Meta, 100);
+      ReplayRepository::GetInstance().ListReplays(chart.Meta, 100);
   for (const ReplaySummary &summary : summaries) {
     if (summary.courseReplay || summary.autoPlay ||
         summary.finalScore != best.score || summary.eventCount <= 0) {
@@ -56,7 +56,7 @@ inline std::optional<ReplayData> bestReplayForSnapshot(
     }
 
     auto replay =
-        ReplayDBHelper::GetInstance().LoadReplay(summary.id, chart.Meta);
+        ReplayRepository::GetInstance().LoadReplay(summary.id, chart.Meta);
     if (!replay.has_value() || replay->finalScore != best.score) {
       continue;
     }
@@ -152,7 +152,7 @@ previousBestForReplayChart(const bms_parser::ChartMeta &meta,
     beforeCreatedAt = replay.createdAt;
   }
   if (const auto best =
-          ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
+          ScoreRepository::GetInstance().LoadBestScore(meta, beforeCreatedAt);
       best.has_value()) {
     return previousBestDataFromSnapshot(*best);
   }
@@ -161,7 +161,7 @@ previousBestForReplayChart(const bms_parser::ChartMeta &meta,
 
 inline std::string difficultyLabelForChart(
     const bms_parser::ChartMeta &meta) {
-  return ChartDBHelper::GetInstance().DifficultyTableLabelsForChart(meta);
+  return ChartRepository::GetInstance().DifficultyTableLabelsForChart(meta);
 }
 
 inline bms_parser::ChartMeta courseResultMeta(

@@ -397,7 +397,7 @@ void ResultScene::saveCourseScore() {
       static_cast<int>(courseOptions.session->completedResults.size());
   const int totalCharts =
       static_cast<int>(courseOptions.session->entries.size());
-  if (ScoreDBHelper::GetInstance().SaveCourseScore(
+  if (ScoreRepository::GetInstance().SaveCourseScore(
           *courseOptions.session, resultState, completedCharts, totalCharts,
           attemptProvenance)) {
     courseOptions.session->courseScoreSaved = true;
@@ -429,9 +429,9 @@ void ResultScene::loadPreviousBest() {
   }
 
   const auto best = isCourseFinalResult()
-                        ? ScoreDBHelper::GetInstance().LoadBestCourseScore(
+                        ? ScoreRepository::GetInstance().LoadBestCourseScore(
                               *courseOptions.session)
-                        : ScoreDBHelper::GetInstance().LoadBestScore(
+                        : ScoreRepository::GetInstance().LoadBestScore(
                               meta, beforeCreatedAt, excludeAttemptId);
   if (best.has_value()) {
     previousBest = result_presentation::previousBestDataFromSnapshot(*best);
@@ -463,7 +463,7 @@ void ResultScene::saveCourseReplay() {
   auto courseReplay =
       std::make_shared<CourseReplayData>(std::move(*pendingCourseReplay));
 
-  auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
+  auto replayId = ReplayRepository::GetInstance().SaveCourseReplay(*courseReplay);
   if (!replayId.has_value()) {
     SDL_Log("Failed to save course replay: %s", session->courseName.c_str());
     return;

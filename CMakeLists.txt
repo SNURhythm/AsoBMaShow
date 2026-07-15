@@ -570,7 +570,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(course_identity_tests PRIVATE cxx_std_23)
 
-    add_executable(replay_db_helper_tests
+    add_executable(replay_repository_tests
         tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
@@ -582,14 +582,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/sqlite3.c
     )
-    target_include_directories(replay_db_helper_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(replay_db_helper_tests PRIVATE cxx_std_23)
+    target_include_directories(replay_repository_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(replay_repository_tests PRIVATE cxx_std_23)
     if(TARGET SDL2::SDL2)
-        target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2)
+        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2-static)
+        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
-        target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
+        target_link_libraries(replay_repository_tests PRIVATE SDL2)
     endif()
 
     add_executable(result_persistence_model_tests
@@ -1434,7 +1434,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_summary_list_tests
         replay_record_filters_tests
         course_identity_tests
-        replay_db_helper_tests
+        replay_repository_tests
         result_persistence_model_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests

@@ -26,7 +26,7 @@ void setEmptyPlaylistError(std::string &errorMessage) {
 }
 
 std::vector<music_playlist::MusicTrack>
-loadPlaylistTracks(MusicPlaylistDB &playlistDb, sqlite3 *db, int playlistId) {
+loadPlaylistTracks(MusicPlaylistRepository &playlistDb, sqlite3 *db, int playlistId) {
   std::vector<MusicTrackRecord> records;
   playlistDb.SelectTracks(db, playlistId, records);
   return music_playlist::MakeTracks(records);
@@ -35,7 +35,7 @@ loadPlaylistTracks(MusicPlaylistDB &playlistDb, sqlite3 *db, int playlistId) {
 std::vector<music_playlist::MusicTrack>
 loadFavoriteTracks() {
   std::vector<MusicTrackRecord> records;
-  auto &chartDb = ChartDBHelper::GetInstance();
+  auto &chartDb = ChartRepository::GetInstance();
   SqliteConnectionHandle dbHandle(chartDb.Connect());
   sqlite3 *db = dbHandle.get();
   if (db == nullptr) {
@@ -46,7 +46,7 @@ loadFavoriteTracks() {
 }
 
 std::vector<music_playlist::MusicTrack>
-loadNowPlayingTracks(MusicPlaylistDB &playlistDb, sqlite3 *db) {
+loadNowPlayingTracks(MusicPlaylistRepository &playlistDb, sqlite3 *db) {
   std::vector<MusicTrackRecord> records;
   playlistDb.SelectNowPlayingTracks(db, records);
   return music_playlist::MakeTracks(records);
@@ -290,7 +290,7 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  auto &chartDb = ChartDBHelper::GetInstance();
+  auto &chartDb = ChartRepository::GetInstance();
   SqliteConnectionHandle chartDbHandle(chartDb.Connect());
   sqlite3 *chartDbConnection = chartDbHandle.get();
   if (chartDbConnection == nullptr) {
@@ -309,7 +309,7 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
 }
 
 void MusicPlayerService::RefreshPlaylistCachesLocked(
-    MusicPlaylistDB &playlistDb, sqlite3 *db,
+    MusicPlaylistRepository &playlistDb, sqlite3 *db,
     int preferredSelectedPlaylistId) {
   defaultPlaylistId = playlistDb.EnsurePlaylist(db, kDefaultPlaylistName);
   playlists = playlistDb.SelectPlaylists(db);
@@ -343,7 +343,7 @@ void MusicPlayerService::RefreshPlaylistCachesLocked(
 }
 
 void MusicPlayerService::RestoreQueueFromPersistedStateLocked(
-    MusicPlaylistDB &playlistDb, sqlite3 *db) {
+    MusicPlaylistRepository &playlistDb, sqlite3 *db) {
   queue.SetRepeatMode(repeatModeFromRecordValue(persistedState.repeatMode));
   if (!queue.Empty()) {
     SyncNativeQueueLocked();
@@ -369,7 +369,7 @@ void MusicPlayerService::RestoreQueueFromPersistedStateLocked(
 }
 
 void MusicPlayerService::PersistPlayerStateLocked(
-    MusicPlaylistDB &playlistDb, sqlite3 *db) {
+    MusicPlaylistRepository &playlistDb, sqlite3 *db) {
   playlistDb.SavePlayerState(db, persistedState);
 }
 
