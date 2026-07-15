@@ -3,9 +3,10 @@
 ## Goal
 
 Refactor AsoBMaShow's SQLite access into concrete, domain-oriented
-repositories without changing runtime behavior, database compatibility, or
-performance. SQLite remains the only persistence backend, so the design does
-not introduce repository interfaces, generic repository templates, or
+repositories while preserving runtime behavior, database compatibility, and
+performance except for explicitly approved, regression-tested correctness or
+data-safety fixes. SQLite remains the only persistence backend, so the design
+does not introduce repository interfaces, generic repository templates, or
 implementation prefixes such as `SQLite`.
 
 The refactor covers the chart, score, replay, and music-playlist SQLite areas.
@@ -17,11 +18,19 @@ JSON-backed settings, input profiles, and practice presets are out of scope.
   pragmas, and stored data remain compatible.
 - Existing query ordering, filtering, pagination, recovery, cancellation,
   progress reporting, logging, and user-visible error behavior remain
-  unchanged.
-- Unsupported future schemas and corrupt or unreadable databases remain
-  fail-closed and unmodified.
-- Current transaction and rollback boundaries remain intact unless a test
-  proves that a behavior-preserving adjustment is necessary.
+  unchanged except for the chart fail-closed case below.
+- Score, replay, and music retain their validated, fail-closed open paths.
+  Apply the same preflight to chart persistence as an explicitly approved
+  data-safety fix: corrupt or future-version chart database families are
+  rejected before a read-write open, pragma, migration, journal checkpoint, or
+  sidecar mutation. Supported chart databases retain WAL and
+  `synchronous=NORMAL` after validation, including the current checkpoint-on-
+  last-close policy.
+- Other behavior changes are allowed only for a major, straightforward
+  correctness or data-safety defect with a deterministic regression test. Keep
+  each such fix isolated and call it out separately from mechanical refactoring.
+- Current transaction and rollback boundaries remain intact unless an
+  explicitly approved defect fix has a deterministic regression test.
 - Current profile-switch activity guards and atomic connection replacement
   remain intact.
 - Hot-path query counts, query plans, connection reuse, statement reuse,
@@ -94,11 +103,15 @@ independent connections for background scans, imports, and settings work.
 raw connection:
 
 ```cpp
-auto session = chartRepository.openSession();
-auto records = session.queryCharts(query);
+auto session = chartRepository.OpenSession(&scoreRepository);
+std::vector<ChartMetaRecord> records;
+session->QueryChartMeta(query, records);
 ```
 
-A session owns one validated connection internally. The main menu retains one
+`ChartRepository::EnsureReady()` performs the full unchanged-family preflight
+once before schema initialization. Each later session owns one cheaply opened,
+trusted connection that verifies the ready schema version and WAL mode without
+repeating the full database snapshot/integrity pass. The main menu retains one
 session for paging and its existing bounded page cache. Background operations
 open independent sessions so they do not introduce a new global chart lock.
 Session methods expose chart-domain operations only.
@@ -212,11 +225,13 @@ stores a raw database handle.
 
 1. A service performs I/O and parsing outside the repository.
 2. It opens an independent chart session and begins a domain write batch.
-3. The batch reuses prepared statements and the existing transaction scope.
+3. The batch reuses prepared statements and preserves the existing checkpoint
+   transaction boundaries.
 4. Successful material changes bump the library revision exactly when the
    current implementation does.
-5. Cancellation, failure, or interruption rolls back according to current
-   semantics.
+5. Cancellation commits the same current partial batch as today; checkpoint
+   retention/clearing and storage-failure rollback follow the characterized
+   current semantics.
 
 ### Result persistence and recovery
 
@@ -250,14 +265,19 @@ messages remain at user-facing boundaries.
 
 Malformed replay and score rows retain their current skip-versus-fail policy.
 Bounded replay scans retain their current candidate allowance and terminal
-error behavior. Future schemas, unreadable schema versions, invalid migrations,
-and failed integrity checks remain rejected without mutation.
+error behavior. All four validated-open paths reject future schemas, unreadable
+schema versions, and failed integrity checks without mutating the database
+family; score, replay, and music retain their existing invalid-migration
+guarantees. The chart path's new fail-closed preflight is the one approved
+observable change in this design.
 
 ## Performance Contract
 
 Performance preservation is a correctness requirement for this refactor.
 
 - Repository calls do not open a database per method.
+- Chart readiness performs one full validated preflight; each later chart
+  session performs exactly one SQLite connection open and no repeated snapshot.
 - Main-menu chart browsing retains one connection, paging, and the bounded page
   cache.
 - Background chart work retains independent connections and concurrent parsing.
@@ -313,8 +333,9 @@ cmake --build cmake-build-debug --target main -j 6
    consumers, and remove their helper/singleton APIs.
 4. Convert music persistence and remove raw connection ownership from
    `MusicPlayerService`.
-5. Convert chart persistence to repository sessions and migrate Main Menu,
-   Settings, startup, and other consumers.
+5. Convert chart persistence to repository sessions, add the approved
+   fail-closed chart preflight, and migrate Main Menu, Settings, startup, and
+   other consumers.
 6. Extract chart scanning and difficulty importing into application services.
 7. Remove obsolete helper APIs and raw repository-related SQLite handling from
    scenes and services.
@@ -333,7 +354,8 @@ cmake --build cmake-build-debug --target main -j 6
 - Existing databases open with identical stored data and compatible schemas.
 - Existing migrations produce identical schema and data results.
 - Observable query ordering, filtering, recovery, cancellation, progress, and
-  error behavior remains unchanged.
+  error behavior remains unchanged except that corrupt or future-version chart
+  database families now fail closed without mutation.
 - Deterministic statement-count and query-plan budgets do not regress.
 - Representative local benchmarks remain within baseline noise or improve.
 - Focused tests, the complete CTest suite, and the desktop `main` build pass.
