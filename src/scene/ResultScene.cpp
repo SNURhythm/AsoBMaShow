@@ -443,7 +443,9 @@ void ResultScene::loadDifficultyLabel() {
     difficultyLabel = "Course";
     return;
   }
-  difficultyLabel = result_presentation::difficultyLabelForChart(meta);
+  difficultyLabel =
+      result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                    meta);
 }
 
 void ResultScene::saveCourseReplay() {

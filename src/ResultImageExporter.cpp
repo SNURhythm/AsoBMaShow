@@ -712,7 +712,8 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
         context.replayRepository, chart, state, replay, target, previousBest);
   }
   std::string difficultyLabel =
-      result_presentation::difficultyLabelForChart(chart.Meta);
+      result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                    chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   const std::span<const ReplayData> attempts(&replay, 1);
@@ -783,7 +784,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
         std::in_place, *chart, attempts, 0);
     const auto result = renderResultImage(
         context, chart->Meta, state, display.mode, display.laneOrder,
-        result_presentation::difficultyLabelForChart(chart->Meta),
+        result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                      chart->Meta),
         result_presentation::previousBestForReplayChart(
             context.scoreRepository, chart->Meta, stageReplay),
         "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,

@@ -204,6 +204,8 @@ public:
     std::vector<ChartEntry> SelectAllEntries();
     std::vector<ChartEntry> SelectEffectiveEntries();
     bool DeleteEntry(const std::filesystem::path &path);
+    bool DeleteEntryAndChartMetaInDirectory(
+        const std::filesystem::path &path, int &removedChartCount);
     bool ClearEntries();
     int ScanChartRoots(
         const std::vector<std::filesystem::path> &roots,

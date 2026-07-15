@@ -596,7 +596,7 @@ private:
                             const std::stop_token &stopToken);
 #endif
   void seedDefaultDifficultyTablesIfNeeded(
-      sqlite3 *taskDb, std::uint64_t taskId,
+      ChartRepository::Session &chartSession, std::uint64_t taskId,
       const std::stop_token &stopToken);
   static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
   static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
@@ -790,7 +790,7 @@ private:
   void pollPendingAndroidArchiveImport();
   void applyPendingAndroidArchiveImport();
 #endif
-  static void LoadCharts(ChartRepository &dbHelper, sqlite3 *db,
+  static void LoadCharts(ChartRepository::Session &chartSession,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,
                          const std::stop_token &stop_token,
                          ChartScanProgressCallback progressCallback = nullptr,

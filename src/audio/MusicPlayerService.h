@@ -2,6 +2,7 @@
 
 #include "../ThreadCompat.h"
 #include "ChartMusicCache.h"
+#include "../repositories/ChartRepository.h"
 #include "../repositories/MusicPlaylistRepository.h"
 #include "MusicPlaylist.h"
 #include "NativeMusicPlayer.h"
@@ -21,7 +22,8 @@ namespace music_player {
 
 class MusicPlayerService {
 public:
-  explicit MusicPlayerService(MusicPlaylistRepository &repository);
+  MusicPlayerService(MusicPlaylistRepository &repository,
+                     ChartRepository &charts);
   ~MusicPlayerService();
   MusicPlayerService(const MusicPlayerService &) = delete;
   MusicPlayerService &operator=(const MusicPlayerService &) = delete;
@@ -177,6 +179,7 @@ private:
   void PublishNativeControlStatus(const std::string &statusMessage);
 
   MusicPlaylistRepository &repository;
+  ChartRepository &charts;
   mutable std::mutex stateMutex;
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;

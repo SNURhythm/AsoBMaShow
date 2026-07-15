@@ -2983,8 +2983,20 @@ int countChartMetaInArchive(sqlite3 *db,
 
 bool deleteChartMetaInArchive(sqlite3 *db,
                               const std::filesystem::path &archivePath) {
-  std::vector<bms_parser::ChartMeta> chartMetas;
-  ChartRepository::GetInstance().SelectAllChartMeta(db, chartMetas);
+  std::vector<std::filesystem::path> chartPaths;
+  SqliteStatementHandle selectStmt;
+  if (!prepareSqliteStatementLogged(db, "SELECT path FROM chart_meta",
+                                    selectStmt,
+                                    "selecting archive chart paths",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  while (sqlite3_step(selectStmt.get()) == SQLITE_ROW) {
+    std::filesystem::path path(utf8_to_path_t(
+        sqliteColumnString(selectStmt.get(), 0)));
+    ChartRepository::ToAbsolutePath(path);
+    chartPaths.push_back(std::move(path));
+  }
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
@@ -2995,13 +3007,12 @@ bool deleteChartMetaInArchive(sqlite3 *db,
 
   bool changed = false;
   const std::filesystem::path targetArchive = archivePath.lexically_normal();
-  for (const auto &meta : chartMetas) {
-    if (!pathIsInsideDirectory(meta.BmsPath, targetArchive)) {
+  for (const auto &path : chartPaths) {
+    if (!pathIsInsideDirectory(path, targetArchive)) {
       continue;
     }
 
-    const std::string pathText =
-        ChartRepository::StoredChartPathText(meta.BmsPath);
+    const std::string pathText = ChartRepository::StoredChartPathText(path);
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
     bindSqliteText(stmt.get(), 1, pathText);
@@ -3585,6 +3596,25 @@ std::vector<ChartEntry> ChartRepository::Session::SelectEffectiveEntries() {
 bool ChartRepository::Session::DeleteEntry(
     const std::filesystem::path &path) {
   return impl_->repository->DeleteEntry(impl_->connection.get(), path);
+}
+
+bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
+    const std::filesystem::path &path, int &removedChartCount) {
+  removedChartCount = -1;
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->connection.get(), "BEGIN",
+                                      transactionError);
+  if (!transaction.active()) {
+    return false;
+  }
+  removedChartCount =
+      impl_->repository->DeleteChartMetaInDirectory(impl_->connection.get(),
+                                                     path);
+  if (removedChartCount < 0 ||
+      !impl_->repository->DeleteEntry(impl_->connection.get(), path)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
 }
 
 bool ChartRepository::Session::ClearEntries() {

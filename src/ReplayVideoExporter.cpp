@@ -2849,7 +2849,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                         rendering::window_height);
     const std::string difficultyLabel =
-        result_presentation::difficultyLabelForChart(chart.Meta);
+        result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                      chart.Meta);
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
@@ -3681,7 +3682,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.playModeLabel = display.mode;
       data.laneOrderLabel = display.laneOrder;
       data.difficultyLabel =
-          result_presentation::difficultyLabelForChart(chart.Meta);
+          result_presentation::difficultyLabelForChart(
+              context.chartRepository, chart.Meta);
       data.currentClearLabelOverride = "NO PLAY";
       data.currentClearRankOverride = kNoClearTypeRank;
       data.previousBest = result_presentation::previousBestForReplayChart(

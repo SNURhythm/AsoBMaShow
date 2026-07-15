@@ -1,5 +1,4 @@
 #include "SettingsSceneShared.h"
-#include "../repositories/SqliteRAII.h"
 #include "../Utils.h"
 
 #include <memory>
@@ -44,18 +43,15 @@ private:
 #endif
 
 void SettingsScene::loadDifficultyTables() {
-  auto &dbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-  sqlite3 *settingsDb = settingsDbHandle.get();
-  if (settingsDb == nullptr) {
+  auto session = context.chartRepository.OpenSession();
+  if (!session.has_value()) {
     difficultyTables.clear();
     difficultyTableStatusMessage = "Could not open chart database.";
     difficultyTableStatusColor = {255, 177, 170, 255};
     return;
   }
 
-  dbHelper.CreateDifficultyTableTables(settingsDb);
-  difficultyTables = dbHelper.SelectDifficultyTables(settingsDb);
+  difficultyTables = session->SelectDifficultyTables();
 
   if (pendingDeleteDifficultyTableId != 0) {
     const auto it =
@@ -70,18 +66,15 @@ void SettingsScene::loadDifficultyTables() {
 }
 
 void SettingsScene::loadChartEntries() {
-  auto &dbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-  sqlite3 *settingsDb = settingsDbHandle.get();
-  if (settingsDb == nullptr) {
+  auto session = context.chartRepository.OpenSession();
+  if (!session.has_value()) {
     chartEntries.clear();
     chartFolderStatusMessage = "Could not open chart database.";
     chartFolderStatusColor = {255, 177, 170, 255};
     return;
   }
 
-  dbHelper.CreateEntriesTable(settingsDb);
-  chartEntries = dbHelper.SelectEffectiveEntries(settingsDb);
+  chartEntries = session->SelectEffectiveEntries();
 
   if (!pendingDeleteChartEntryPath.empty()) {
     const auto it = std::find_if(chartEntries.begin(), chartEntries.end(),
@@ -253,8 +246,7 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
   if (shouldReload) {
     loadDifficultyTables();
     loadChartEntries();
-    observedLibraryRevision =
-        ChartRepository::GetInstance().GetLibraryRevision();
+    observedLibraryRevision = context.chartRepository.GetLibraryRevision();
     lastLayoutWidth = -1;
   }
   if (shouldRefreshImportModal) {
@@ -263,8 +255,7 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
 }
 
 void SettingsScene::refreshTablesIfLibraryChanged() {
-  const std::uint64_t revision =
-      ChartRepository::GetInstance().GetLibraryRevision();
+  const std::uint64_t revision = context.chartRepository.GetLibraryRevision();
   if (revision == observedLibraryRevision) {
     return;
   }
@@ -398,10 +389,8 @@ void SettingsScene::addDifficultyTableFromUrl() {
 
   difficultyTableJobThread = std::jthread([this,
                                            url](const std::stop_token &token) {
-    auto &dbHelper = ChartRepository::GetInstance();
-    SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-    sqlite3 *settingsDb = settingsDbHandle.get();
-    if (settingsDb == nullptr) {
+    auto session = context.chartRepository.OpenSession();
+    if (!session.has_value()) {
       if (!token.stop_requested()) {
         difficultyTableJobRunning = false;
         requestDifficultyTableImportProgress(
@@ -412,7 +401,6 @@ void SettingsScene::addDifficultyTableFromUrl() {
       return;
     }
 
-    dbHelper.CreateDifficultyTableTables(settingsDb);
     std::string errorMessage;
     DifficultyTableImportProgress lastProgress{0, 1, url};
     auto progressCallback = [this, &lastProgress, &token](
@@ -425,8 +413,8 @@ void SettingsScene::addDifficultyTableFromUrl() {
           progress.current, progress.total, progress.tableName,
           "Downloading and importing tables...", false);
     };
-    const bool imported = dbHelper.ImportDifficultyTableFromUrl(
-        settingsDb, url, &errorMessage, progressCallback);
+    const bool imported = session->ImportDifficultyTableFromUrl(
+        url, &errorMessage, progressCallback);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -468,10 +456,8 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
 
   difficultyTableJobThread = std::jthread([this, tableId](
                                               const std::stop_token &token) {
-    auto &dbHelper = ChartRepository::GetInstance();
-    SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-    sqlite3 *settingsDb = settingsDbHandle.get();
-    if (settingsDb == nullptr) {
+    auto session = context.chartRepository.OpenSession();
+    if (!session.has_value()) {
       if (!token.stop_requested()) {
         requestDifficultyTableStatus("Could not open chart database.",
                                      {255, 177, 170, 255});
@@ -481,8 +467,8 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     }
 
     std::string errorMessage;
-    const bool updated = dbHelper.UpdateDifficultyTableFromSourceUrl(
-        settingsDb, tableId, &errorMessage);
+    const bool updated =
+        session->UpdateDifficultyTableFromSourceUrl(tableId, &errorMessage);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -527,10 +513,8 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
 
   difficultyTableJobThread = std::jthread([this, tableId](
                                               const std::stop_token &token) {
-    auto &dbHelper = ChartRepository::GetInstance();
-    SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-    sqlite3 *settingsDb = settingsDbHandle.get();
-    if (settingsDb == nullptr) {
+    auto session = context.chartRepository.OpenSession();
+    if (!session.has_value()) {
       if (!token.stop_requested()) {
         requestDifficultyTableStatus("Could not open chart database.",
                                      {255, 177, 170, 255});
@@ -539,7 +523,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
       return;
     }
 
-    const bool deleted = dbHelper.DeleteDifficultyTable(settingsDb, tableId);
+    const bool deleted = session->DeleteDifficultyTable(tableId);
 
     if (token.stop_requested()) {
       difficultyTableJobRunning = false;
@@ -586,10 +570,8 @@ void SettingsScene::refreshChartLibrary() {
 
   difficultyTableJobThread =
       std::jthread([this](const std::stop_token &token) {
-        auto &dbHelper = ChartRepository::GetInstance();
-        SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-        sqlite3 *settingsDb = settingsDbHandle.get();
-        if (settingsDb == nullptr) {
+        auto session = context.chartRepository.OpenSession();
+        if (!session.has_value()) {
           if (!token.stop_requested()) {
             requestChartFolderStatus("Could not open chart database.",
                                      {255, 177, 170, 255});
@@ -598,9 +580,7 @@ void SettingsScene::refreshChartLibrary() {
           return;
         }
 
-        dbHelper.CreateChartMetaTable(settingsDb);
-        dbHelper.CreateEntriesTable(settingsDb);
-        auto entries = dbHelper.SelectEffectiveEntries(settingsDb);
+        auto entries = session->SelectEffectiveEntries();
         if (entries.empty()) {
           const auto defaultPath = ChartRepository::DefaultBmsFolderPath();
           std::error_code errorCode;
@@ -613,8 +593,8 @@ void SettingsScene::refreshChartLibrary() {
             }
             return;
           }
-          dbHelper.InsertEntry(settingsDb, defaultPath);
-          entries = dbHelper.SelectEffectiveEntries(settingsDb);
+          session->InsertEntry(defaultPath);
+          entries = session->SelectEffectiveEntries();
         }
 
         std::vector<std::filesystem::path> roots;
@@ -643,8 +623,8 @@ void SettingsScene::refreshChartLibrary() {
         const int changedCount =
             token.stop_requested()
                 ? -1
-                : (dbHelper.ClearChartMeta(settingsDb)
-                       ? dbHelper.ScanChartRoots(settingsDb, roots, &token)
+                : (session->ClearChartMeta()
+                       ? session->ScanChartRoots(roots, &token)
                        : -1);
 
         if (token.stop_requested()) {
@@ -714,10 +694,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
   difficultyTableJobThread =
       std::jthread([this, entryPathText](const std::stop_token &token) {
-        auto &dbHelper = ChartRepository::GetInstance();
-        SqliteConnectionHandle settingsDbHandle(dbHelper.Connect());
-        sqlite3 *settingsDb = settingsDbHandle.get();
-        if (settingsDb == nullptr) {
+        auto session = context.chartRepository.OpenSession();
+        if (!session.has_value()) {
           if (!token.stop_requested()) {
             requestChartFolderStatus("Could not open chart database.",
                                      {255, 177, 170, 255});
@@ -726,10 +704,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
           return;
         }
 
-        dbHelper.CreateChartMetaTable(settingsDb);
-        dbHelper.CreateEntriesTable(settingsDb);
-
-        const auto entries = dbHelper.SelectEffectiveEntries(settingsDb);
+        const auto entries = session->SelectEffectiveEntries();
         const auto entryIt =
             std::find_if(entries.begin(), entries.end(),
                          [&entryPathText](const ChartEntry &entry) {
@@ -750,19 +725,8 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
         const std::filesystem::path entryPath(entryIt->path);
         int removedChartCount = -1;
-        bool removed = false;
-        std::string transactionError;
-        SqliteTransactionHandle transaction(settingsDb, "BEGIN",
-                                            transactionError);
-        if (transaction.active()) {
-          removedChartCount =
-              dbHelper.DeleteChartMetaInDirectory(settingsDb, entryPath);
-          removed = removedChartCount >= 0 &&
-                    dbHelper.DeleteEntry(settingsDb, entryPath);
-          if (removed && !transaction.commit(transactionError)) {
-            removed = false;
-          }
-        }
+        const bool removed = session->DeleteEntryAndChartMetaInDirectory(
+            entryPath, removedChartCount);
 
         if (token.stop_requested()) {
           difficultyTableJobRunning = false;

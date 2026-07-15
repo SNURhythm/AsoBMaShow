@@ -1994,11 +1994,6 @@ struct ScoreRepository::PreparedScoreQueryDatabase::State {
 };
 
 ScoreRepository::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
-    const ScoreRepository &helper, ChartRepository::Session &chartSession)
-    : PreparedScoreQueryDatabase(
-          helper, chartSession.NativeHandleForScoreRepository()) {}
-
-ScoreRepository::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
     const ScoreRepository &helper, sqlite3 *chartDatabase)
     : state_(std::make_unique<State>(helper, chartDatabase)) {}
 
@@ -2008,12 +2003,6 @@ ScoreRepository::PreparedScoreQueryDatabase::~PreparedScoreQueryDatabase() =
 const std::optional<std::string> &
 ScoreRepository::PreparedScoreQueryDatabase::error() const {
   return state_->error;
-}
-
-ScoreRepository::PreparedScoreQueryDatabase
-ScoreRepository::PrepareScoreQueryDatabase(
-    ChartRepository::Session &chartSession) const {
-  return PreparedScoreQueryDatabase(*this, chartSession);
 }
 
 ScoreRepository::PreparedScoreQueryDatabase
@@ -3003,12 +2992,6 @@ ScoreClearRankCache ScoreRepository::LoadBestClearRanks(sqlite3 *db,
   return cache;
 }
 
-ScoreClearRankCache ScoreRepository::LoadBestClearRanks(
-    ChartRepository::Session &chartSession, std::string_view schema) {
-  return LoadBestClearRanks(chartSession.NativeHandleForScoreRepository(),
-                            schema);
-}
-
 ScoreBestCache ScoreRepository::LoadBestScores() {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(sessionMutex_);
@@ -3030,11 +3013,6 @@ ScoreBestCache ScoreRepository::LoadBestScores(sqlite3 *db,
     loadBestChartScores(db, cache, schema);
   }
   return cache;
-}
-
-ScoreBestCache ScoreRepository::LoadBestScores(
-    ChartRepository::Session &chartSession, std::string_view schema) {
-  return LoadBestScores(chartSession.NativeHandleForScoreRepository(), schema);
 }
 
 std::uint64_t ScoreRepository::GetRevision() const {

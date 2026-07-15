@@ -856,6 +856,7 @@
 				ReplayVideoExporter.cpp,
 				ResultImageExporter.cpp,
 				repositories/ScoreRepository.cpp,
+				repositories/ScoreRepositoryChartSession.cpp,
 				repositories/ScoreRepositoryModels.h,
 				ScoreProvenance.cpp,
 				settings/AudioVideoSettings.cpp,

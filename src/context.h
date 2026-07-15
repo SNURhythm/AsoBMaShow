@@ -158,7 +158,7 @@ public:
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio),
-        musicPlayer(musicPlaylistRepository) {
+        musicPlayer(musicPlaylistRepository, chartRepository) {
     if (!profileInitializationResult.ok()) {
       return;
     }

@@ -125,6 +125,8 @@ public:
   [[nodiscard]] std::uint64_t GetRevision() const;
 
 private:
+  static sqlite3 *
+  NativeChartDatabase(ChartRepository::Session &chartSession);
   bool EnsureSchema(sqlite3 *db);
   bool CreateScoreTableOnConnection(sqlite3 *db);
   bool CreateCourseScoreTableOnConnection(sqlite3 *db);

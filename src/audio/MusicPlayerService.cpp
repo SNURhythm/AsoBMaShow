@@ -1,7 +1,5 @@
 #include "MusicPlayerService.h"
 
-#include "../repositories/SqliteRAII.h"
-
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -31,15 +29,13 @@ loadPlaylistTracks(MusicPlaylistRepository &repository, int playlistId) {
 }
 
 std::vector<music_playlist::MusicTrack>
-loadFavoriteTracks() {
+loadFavoriteTracks(ChartRepository &charts) {
   std::vector<MusicTrackRecord> records;
-  auto &chartDb = ChartRepository::GetInstance();
-  SqliteConnectionHandle dbHandle(chartDb.Connect());
-  sqlite3 *db = dbHandle.get();
-  if (db == nullptr) {
+  auto session = charts.OpenSession();
+  if (!session.has_value()) {
     return {};
   }
-  chartDb.SelectFavoriteMusicTracks(db, records);
+  session->SelectFavoriteMusicTracks(records);
   return music_playlist::MakeTracks(records);
 }
 
@@ -151,8 +147,9 @@ native_music_player::QueueMetadata nativeQueueMetadataForSnapshot(
 
 } // namespace
 
-MusicPlayerService::MusicPlayerService(MusicPlaylistRepository &repository)
-    : repository(repository) {}
+MusicPlayerService::MusicPlayerService(MusicPlaylistRepository &repository,
+                                       ChartRepository &chartRepository)
+    : repository(repository), charts(chartRepository) {}
 
 MusicPlayerService::~MusicPlayerService() {
   StopSleepTimerWorker();
@@ -181,7 +178,7 @@ bool MusicPlayerService::ReloadLibrary(std::string &errorMessage) {
   }
 
   const std::vector<MusicTrackRecord> records = repository.SelectLibraryTracks();
-  favoriteTracks = loadFavoriteTracks();
+  favoriteTracks = loadFavoriteTracks(charts);
 
   libraryTracks = music_playlist::MakeTracks(records);
   return true;
@@ -198,7 +195,7 @@ bool MusicPlayerService::ReloadLibraryAndPlaylists(
 
   const std::vector<MusicTrackRecord> records = repository.SelectLibraryTracks();
   libraryTracks = music_playlist::MakeTracks(records);
-  favoriteTracks = loadFavoriteTracks();
+  favoriteTracks = loadFavoriteTracks(charts);
   persistedState = repository.SelectPlayerState();
 
   RefreshPlaylistCachesLocked(preferredSelectedPlaylistId);
@@ -261,21 +258,18 @@ bool MusicPlayerService::SetFavorite(const bms_parser::ChartMeta &chartMeta,
   std::lock_guard<std::mutex> lock(stateMutex);
   errorMessage.clear();
 
-  auto &chartDb = ChartRepository::GetInstance();
-  SqliteConnectionHandle chartDbHandle(chartDb.Connect());
-  sqlite3 *chartDbConnection = chartDbHandle.get();
-  if (chartDbConnection == nullptr) {
+  auto chartSession = charts.OpenSession();
+  if (!chartSession.has_value()) {
     errorMessage = "Could not open chart database.";
     return false;
   }
-  const bool updated =
-      chartDb.SetFavorite(chartDbConnection, chartMeta, favorite);
+  const bool updated = chartSession->SetFavorite(chartMeta, favorite);
   if (!updated) {
     errorMessage = favorite ? "Could not add favorite."
                             : "Could not remove favorite.";
     return false;
   }
-  favoriteTracks = loadFavoriteTracks();
+  favoriteTracks = loadFavoriteTracks(charts);
   return true;
 }
 

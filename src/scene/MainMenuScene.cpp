@@ -1830,14 +1830,13 @@ void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
 }
 
 void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
-    sqlite3 *taskDb, std::uint64_t taskId,
+    ChartRepository::Session &chartSession, std::uint64_t taskId,
     const std::stop_token &stopToken) {
   if (context.settings.defaultDifficultyTablesSeeded ||
       stopToken.stop_requested()) {
     return;
   }
 
-  auto &dbHelper = ChartRepository::GetInstance();
   constexpr int totalTables =
       static_cast<int>(sizeof(kDefaultDifficultyTableUrls) /
                        sizeof(kDefaultDifficultyTableUrls[0]));
@@ -1854,8 +1853,8 @@ void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
                         totalTables, "Adding default difficulty tables");
 
     std::string errorMessage;
-    const bool ok = dbHelper.ImportDifficultyTableFromUrl(
-        taskDb, url, &errorMessage,
+    const bool ok = chartSession.ImportDifficultyTableFromUrl(
+        url, &errorMessage,
         [this, taskId, i, totalTables,
          url](const DifficultyTableImportProgress &progress) {
           std::string detail = progress.tableName.empty()
@@ -1891,16 +1890,11 @@ void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
 
 void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
                                           const std::stop_token &stopToken) {
-  auto &dbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle taskDbHandle(dbHelper.Connect());
-  sqlite3 *taskDb = taskDbHandle.get();
-  if (taskDb == nullptr) {
+  auto taskSession = context.chartRepository.OpenSession();
+  if (!taskSession.has_value()) {
     throw std::runtime_error("Failed to open chart database");
   }
-  dbHelper.CreateChartMetaTable(taskDb);
-  dbHelper.CreateSolidArchiveTable(taskDb);
-  dbHelper.CreateEntriesTable(taskDb);
-  dbHelper.CreateDifficultyTableTables(taskDb);
+  taskSession->EnsureSchema();
 
   auto pauseTask = [&]() {
     return waitForLibraryTaskResume(task.id, stopToken);
@@ -1913,7 +1907,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (!task.folderToAdd.empty()) {
     setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.01, 0, 0,
                         "Adding folder");
-    if (!dbHelper.InsertEntry(taskDb, task.folderToAdd, task.iosBookmark)) {
+    if (!taskSession->InsertEntry(task.folderToAdd, task.iosBookmark)) {
       throw std::runtime_error("Failed to add folder");
     }
     requestLibraryReload(true);
@@ -1928,17 +1922,17 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (!pauseTask()) {
     return;
   }
-  seedDefaultDifficultyTablesIfNeeded(taskDb, task.id, stopToken);
+  seedDefaultDifficultyTablesIfNeeded(*taskSession, task.id, stopToken);
   if (stopToken.stop_requested() || !pauseTask()) {
     return;
   }
-  const int importedTables = dbHelper.ImportDifficultyTablesFromDirectory(
-      taskDb, Utils::GetDocumentsPath("tables"));
+  const int importedTables = taskSession->ImportDifficultyTablesFromDirectory(
+      Utils::GetDocumentsPath("tables"));
   if (importedTables > 0 && !stopToken.stop_requested()) {
     requestLibraryReload(true);
   }
   if (entries.empty()) {
-    entries = dbHelper.SelectEffectiveEntries(taskDb);
+    entries = taskSession->SelectEffectiveEntries();
   }
 
   if (stopToken.stop_requested()) {
@@ -1956,8 +1950,8 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     std::string bookmark;
     std::string errorMessage;
     if (PickIOSFolder(folder, bookmark, errorMessage)) {
-      dbHelper.InsertEntry(taskDb, std::filesystem::path(folder), bookmark);
-      entries = dbHelper.SelectEffectiveEntries(taskDb);
+      taskSession->InsertEntry(std::filesystem::path(folder), bookmark);
+      entries = taskSession->SelectEffectiveEntries();
     } else {
       if (!errorMessage.empty()) {
         SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
@@ -1972,8 +1966,8 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
 #elif TARGET_OS_ANDROID
     auto path = ChartRepository::DefaultBmsFolderPath();
     ensureLibraryFolderExists(path);
-    dbHelper.InsertEntry(taskDb, path);
-    entries = dbHelper.SelectEffectiveEntries(taskDb);
+    taskSession->InsertEntry(path);
+    entries = taskSession->SelectEffectiveEntries();
 #else
     char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
     std::string folder;
@@ -2013,8 +2007,8 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
       folder = folder_c;
     }
     std::filesystem::path path(folder);
-    dbHelper.InsertEntry(taskDb, path);
-    entries = dbHelper.SelectEffectiveEntries(taskDb);
+    taskSession->InsertEntry(path);
+    entries = taskSession->SelectEffectiveEntries();
 #endif
   }
 
@@ -2038,13 +2032,13 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     }
     archive_file::appendDebugLogLine(
         "Manual library rebuild requested; clearing chart metadata caches.");
-    if (!dbHelper.ClearChartMeta(taskDb)) {
+    if (!taskSession->ClearChartMeta()) {
       throw std::runtime_error("Failed to clear chart metadata cache");
     }
     requestLibraryReload(true);
   }
   LoadCharts(
-      dbHelper, taskDb, entries, *this, stopToken,
+      *taskSession, entries, *this, stopToken,
       [this, taskId = task.id](const ChartScanProgress &progress) {
         updateLibraryTaskProgress(taskId, progress);
       },
@@ -2059,17 +2053,14 @@ bool MainMenuScene::insertChartFolderEntryImmediately(
     return false;
   }
 
-  auto &dbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle entryDbHandle(dbHelper.Connect());
-  sqlite3 *entryDb = entryDbHandle.get();
-  if (entryDb == nullptr) {
+  auto entrySession = context.chartRepository.OpenSession();
+  if (!entrySession.has_value()) {
     SDL_Log("Failed to open chart database while adding folder %s",
             fspath_to_utf8(folderPath).c_str());
     return false;
   }
 
-  dbHelper.CreateEntriesTable(entryDb);
-  if (!dbHelper.InsertEntry(entryDb, folderPath, iosBookmark)) {
+  if (!entrySession->InsertEntry(folderPath, iosBookmark)) {
     SDL_Log("Failed to add chart folder entry %s",
             fspath_to_utf8(folderPath).c_str());
     return false;
@@ -2362,19 +2353,14 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
     throw std::runtime_error("Import cancelled");
   }
 
-  auto &dbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle importDbHandle(dbHelper.Connect());
-  sqlite3 *importDb = importDbHandle.get();
-  if (importDb == nullptr) {
+  auto importSession = context.chartRepository.OpenSession();
+  if (!importSession.has_value()) {
     throw std::runtime_error("Imported " + importType +
                              ". Failed to refresh library.");
   }
 
-  dbHelper.CreateEntriesTable(importDb);
-  dbHelper.CreateChartMetaTable(importDb);
-  dbHelper.CreateSolidArchiveTable(importDb);
-  dbHelper.CreateDifficultyTableTables(importDb);
-  dbHelper.InsertEntry(importDb, outputRoot);
+  importSession->EnsureSchema();
+  importSession->InsertEntry(outputRoot);
 
   std::vector<std::filesystem::path> roots{outputFolder};
   postImportProgress(0.92, "Refreshing library");
@@ -2391,9 +2377,8 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
   auto pauseTask = [this, &task, &stopToken]() {
     return waitForLibraryTaskResume(task.id, stopToken);
   };
-  const int changedCount =
-      dbHelper.ScanChartRoots(importDb, roots, &stopToken, scanProgress,
-                              pauseTask);
+  const int changedCount = importSession->ScanChartRoots(
+      roots, &stopToken, scanProgress, pauseTask);
   if (stopToken.stop_requested()) {
     throw std::runtime_error("Import cancelled");
   }
@@ -5583,24 +5568,20 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
       result.success = false;
       result.message = "Unzip cancelled";
     } else {
-      auto &dbHelper = ChartRepository::GetInstance();
-      SqliteConnectionHandle unzipDbHandle(dbHelper.Connect());
-      sqlite3 *unzipDb = unzipDbHandle.get();
-      if (unzipDb == nullptr) {
+      auto unzipSession = context.chartRepository.OpenSession();
+      if (!unzipSession.has_value()) {
         result.success = false;
         result.message = "Unzipped archive. Failed to refresh library.";
       } else {
-        dbHelper.CreateChartMetaTable(unzipDb);
-        dbHelper.CreateSolidArchiveTable(unzipDb);
-        dbHelper.CreateDifficultyTableTables(unzipDb);
+        unzipSession->EnsureSchema();
         std::vector<std::filesystem::path> roots{scanRoot};
         postProgress(archive_file::UnzipProgress{
             .fraction = 0.98, .message = "Refreshing library"});
         const int changedCount =
-            dbHelper.ScanChartRoots(unzipDb, roots, &stopToken);
+            unzipSession->ScanChartRoots(roots, &stopToken);
         if (!stopToken.stop_requested()) {
           std::vector<bms_parser::ChartMeta> chartMetas;
-          dbHelper.SelectAllChartMeta(unzipDb, chartMetas);
+          unzipSession->SelectAllChartMeta(chartMetas);
           for (const auto &meta : chartMetas) {
             if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
               result.chartPath = meta.BmsPath;
@@ -5838,11 +5819,9 @@ void MainMenuScene::deleteUnzippedSourceArchive() {
     return;
   }
 
-  auto &dbHelper = ChartRepository::GetInstance();
-  SqliteConnectionHandle deleteDbHandle(dbHelper.Connect());
-  sqlite3 *deleteDb = deleteDbHandle.get();
-  if (deleteDb != nullptr) {
-    dbHelper.DeleteArchiveRecords(deleteDb, archivePath);
+  auto deleteSession = context.chartRepository.OpenSession();
+  if (deleteSession.has_value()) {
+    deleteSession->DeleteArchiveRecords(archivePath);
   }
   requestLibraryReload(true);
   unzipDeleteCandidatePath.reset();
@@ -10061,7 +10040,7 @@ void MainMenuScene::cleanupScene() {
   lastSafeRight = -1;
 }
 
-void MainMenuScene::LoadCharts(ChartRepository &dbHelper, sqlite3 *db,
+void MainMenuScene::LoadCharts(ChartRepository::Session &chartSession,
                                std::vector<ChartEntry> &entries,
                                MainMenuScene &scene,
                                const std::stop_token &stop_token,
@@ -10089,8 +10068,8 @@ void MainMenuScene::LoadCharts(ChartRepository &dbHelper, sqlite3 *db,
   }
 
   SDL_Log("Refreshing chart library");
-  const int changedCount = dbHelper.ScanChartRoots(
-      db, roots, &stop_token, progressCallback, pauseCallback,
+  const int changedCount = chartSession.ScanChartRoots(
+      roots, &stop_token, progressCallback, pauseCallback,
       [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
       [&scene](std::uint64_t request) {
         scene.completeLibraryScanFlush(request);

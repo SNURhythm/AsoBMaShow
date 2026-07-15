@@ -161,8 +161,11 @@ previousBestForReplayChart(ScoreRepository &scores,
 }
 
 inline std::string difficultyLabelForChart(
-    const bms_parser::ChartMeta &meta) {
-  return ChartRepository::GetInstance().DifficultyTableLabelsForChart(meta);
+    ChartRepository &charts, const bms_parser::ChartMeta &meta) {
+  auto session = charts.OpenSession();
+  return session.has_value()
+             ? session->DifficultyTableLabelsForChart(meta)
+             : std::string{};
 }
 
 inline bms_parser::ChartMeta courseResultMeta(
