@@ -1,6 +1,5 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
-#include "../src/repositories/ChartRepository.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/repositories/ReplayRepository.h"
@@ -23,10 +22,6 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
-
-ChartRepository::ChartRepository() = default;
-sqlite3 *ChartRepository::Connect() { return nullptr; }
-bool ChartRepository::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 int failures = 0;

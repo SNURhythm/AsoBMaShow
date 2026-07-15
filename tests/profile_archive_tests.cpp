@@ -1,7 +1,6 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/ArchiveRAII.h"
 #include "../src/AtomicFile.h"
-#include "../src/repositories/ChartRepository.h"
 #include "../src/FileChecksum.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileArchive.h"
@@ -37,10 +36,6 @@
 #include <Windows.h>
 #include <AclAPI.h>
 #endif
-
-ChartRepository::ChartRepository() = default;
-sqlite3 *ChartRepository::Connect() { return nullptr; }
-bool ChartRepository::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 using Json = nlohmann::json;

@@ -1,4 +1,3 @@
-#include "../src/repositories/ChartRepository.h"
 #include "../src/CourseIdentity.h"
 #include "../src/CoursePlaySession.h"
 #include "../src/repositories/ReplayRepository.h"
@@ -25,15 +24,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
-
-// ScoreRepository's pre-v1 migration can consult ChartRepository. These v4/v5
-// fixtures never take that path, so the focused target supplies only the
-// three legacy symbols required by the linker.
-struct ChartRepository::Impl {};
-ChartRepository::ChartRepository() : impl_(std::make_unique<Impl>()) {}
-ChartRepository::~ChartRepository() = default;
-sqlite3 *ChartRepository::Connect() { return nullptr; }
-bool ChartRepository::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 

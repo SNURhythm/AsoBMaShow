@@ -1,6 +1,5 @@
 #include "../src/ResultPersistenceCoordinator.h"
 
-#include "../src/repositories/ChartRepository.h"
 #include "../src/FileChecksum.h"
 #include "../src/ProfileDatabaseActivity.h"
 #include "../src/repositories/SqliteRAII.h"
@@ -21,13 +20,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-// ScoreRepository's oldest migration can consult ChartRepository. These focused
-// current-schema fixtures do not take that path, so only the legacy linker
-// surface is supplied here.
-ChartRepository::ChartRepository() = default;
-sqlite3 *ChartRepository::Connect() { return nullptr; }
-bool ChartRepository::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 

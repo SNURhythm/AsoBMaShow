@@ -257,15 +257,11 @@ public:
   bool EnsureReady();
   std::optional<Session> OpenSession(ScoreRepository *scores = nullptr);
   [[nodiscard]] const std::filesystem::path &DatabasePath() const;
+  [[nodiscard]] std::uint64_t GetLibraryRevision() const;
+  static std::filesystem::path DefaultBmsFolderPath();
+  static bool IsDefaultBmsFolderPath(const std::filesystem::path &path);
 
-  static ChartRepository &GetInstance() {
-    sqlite3_config(SQLITE_CONFIG_SERIALIZED);
-    static ChartRepository instance;
-    return instance;
-  }
-
-  // Connect, return connection
-  sqlite3 *Connect();
+private:
 
   // CreateTable
   bool CreateChartMetaTable(sqlite3 *db);
@@ -298,7 +294,6 @@ public:
   bool DeleteArchiveRecords(sqlite3 *db,
                             const std::filesystem::path &archivePath);
   bool ClearChartMeta(sqlite3 *db);
-  void Close(sqlite3 *db);
   bool CreateEntriesTable(sqlite3 *db);
   bool InsertEntry(sqlite3 *db, const std::filesystem::path &path,
                    const std::string &iosBookmark = "");
@@ -306,8 +301,6 @@ public:
   std::vector<ChartEntry> SelectEffectiveEntries(sqlite3 *db);
   bool DeleteEntry(sqlite3 *db, const std::filesystem::path &path);
   bool ClearEntries(sqlite3 *db);
-  static std::filesystem::path DefaultBmsFolderPath();
-  static bool IsDefaultBmsFolderPath(const std::filesystem::path &path);
   int ScanChartRoots(sqlite3 *db,
                      const std::vector<std::filesystem::path> &roots,
                      const std::stop_token *stopToken = nullptr,
@@ -344,16 +337,7 @@ public:
   std::vector<course_identity::Definition>
   SelectDifficultyCourseDefinitions(sqlite3 *db);
   std::string DifficultyTableLabelsForChart(
-      const bms_parser::ChartMeta &meta);
-  std::string DifficultyTableLabelsForChart(
       sqlite3 *db, const bms_parser::ChartMeta &meta);
-  [[nodiscard]] std::uint64_t GetLibraryRevision() const;
-
-  static std::string StoredChartPathText(std::filesystem::path path);
-  static void ToRelativePath(std::filesystem::path &path);
-  static void ToAbsolutePath(std::filesystem::path &path);
-
-private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 

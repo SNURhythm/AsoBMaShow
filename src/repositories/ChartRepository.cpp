@@ -307,7 +307,7 @@ struct ChartFavoriteIdentity {
 ChartFavoriteIdentity chartFavoriteIdentityFor(
     const bms_parser::ChartMeta &chartMeta) {
   return {
-      .chartPath = ChartRepository::StoredChartPathText(chartMeta.BmsPath),
+      .chartPath = chart_storage_identity::StoredPathText(chartMeta.BmsPath),
       .sha256 = normalizedHash(chartMeta.SHA256),
       .md5 = normalizedHash(chartMeta.MD5),
   };
@@ -1382,8 +1382,8 @@ std::optional<std::string> normalizedPathTextForStorage(
   if (path.empty()) {
     return std::nullopt;
   }
-  ChartRepository::ToAbsolutePath(path);
-  ChartRepository::ToRelativePath(path);
+  chart_storage_identity::ToAbsolutePath(path);
+  chart_storage_identity::ToRelativePath(path);
   path = path.lexically_normal();
 
   const std::string normalized = fspath_to_utf8(path);
@@ -2494,7 +2494,7 @@ bool updateChartSourcePreferenceValues(sqlite3 *db,
                                        int priority,
                                        sqlite3_int64 archiveSize) {
   const std::string storedPathText =
-      ChartRepository::StoredChartPathText(chartPath);
+      chart_storage_identity::StoredPathText(chartPath);
 
   const char *query =
       "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
@@ -2569,17 +2569,17 @@ bool archiveFileStateForDb(const std::filesystem::path &path,
 }
 
 std::string archivePathTextForDb(const std::filesystem::path &archivePath) {
-  return ChartRepository::StoredChartPathText(archivePath);
+  return chart_storage_identity::StoredPathText(archivePath);
 }
 
 std::string checkpointPathTextForDb(const std::filesystem::path &path) {
-  return ChartRepository::StoredChartPathText(path);
+  return chart_storage_identity::StoredPathText(path);
 }
 
 std::filesystem::path checkpointPathFromDbText(const std::string &text) {
   std::filesystem::path path(utf8_to_path_t(text));
   if (!path.empty()) {
-    ChartRepository::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
   }
   return path;
 }
@@ -2799,7 +2799,7 @@ std::vector<std::filesystem::path> selectArchiveScanCachePaths(sqlite3 *db) {
       continue;
     }
     std::filesystem::path path(utf8_to_path_t(text));
-    ChartRepository::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
     paths.push_back(path);
   }
   return paths;
@@ -2897,7 +2897,7 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
   }
 
   const std::string pathText =
-      ChartRepository::StoredChartPathText(archivePath);
+      chart_storage_identity::StoredPathText(archivePath);
   const std::string name = solidArchiveNameForPath(archivePath);
 
   const char *query =
@@ -2939,7 +2939,7 @@ bool upsertSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath,
 
 bool deleteSolidArchive(sqlite3 *db, const std::filesystem::path &archivePath) {
   const std::string pathText =
-      ChartRepository::StoredChartPathText(archivePath);
+      chart_storage_identity::StoredPathText(archivePath);
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, "DELETE FROM solid_archives WHERE path = ?", stmt,
@@ -2973,7 +2973,7 @@ int countChartMetaInArchive(sqlite3 *db,
       continue;
     }
     std::filesystem::path path(utf8_to_path_t(pathText));
-    ChartRepository::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
     if (pathIsInsideDirectory(path, targetArchive)) {
       ++count;
     }
@@ -2994,7 +2994,7 @@ bool deleteChartMetaInArchive(sqlite3 *db,
   while (sqlite3_step(selectStmt.get()) == SQLITE_ROW) {
     std::filesystem::path path(utf8_to_path_t(
         sqliteColumnString(selectStmt.get(), 0)));
-    ChartRepository::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
     chartPaths.push_back(std::move(path));
   }
 
@@ -3012,7 +3012,7 @@ bool deleteChartMetaInArchive(sqlite3 *db,
       continue;
     }
 
-    const std::string pathText = ChartRepository::StoredChartPathText(path);
+    const std::string pathText = chart_storage_identity::StoredPathText(path);
     sqlite3_reset(stmt.get());
     sqlite3_clear_bindings(stmt.get());
     bindSqliteText(stmt.get(), 1, pathText);
@@ -3040,7 +3040,7 @@ std::vector<std::filesystem::path> selectSolidArchivePaths(sqlite3 *db) {
       continue;
     }
     std::filesystem::path path(utf8_to_path_t(text));
-    ChartRepository::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
     paths.push_back(path);
   }
   return paths;
@@ -3800,36 +3800,6 @@ const std::filesystem::path &ChartRepository::DatabasePath() const {
   return impl_->databasePath;
 }
 
-sqlite3 *ChartRepository::Connect() {
-  const std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  std::cout << "DB Directory: " << fspath_to_utf8(directory) << "\n";
-  std::error_code directoryError;
-  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
-    std::cerr << "Can't create chart database directory "
-              << fspath_to_utf8(directory) << ": "
-              << directoryError.message() << "\n";
-    return nullptr;
-  }
-  const std::filesystem::path path = directory / "chart.db";
-  std::cout << "DB Path: " << fspath_to_utf8(path) << "\n";
-  std::string openError;
-  sqlite3 *db = openSqliteDatabase(path, openError);
-  if (db == nullptr) {
-    std::cerr << "Can't open chart database: " << openError << "\n";
-    return nullptr;
-  }
-  if (const auto pragmaError = applySqlitePragmas(
-          db, {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
-    std::cerr << "Could not configure chart database: " << *pragmaError
-              << "\n";
-  }
-  return db;
-}
-
-void ChartRepository::Close(sqlite3 *db) {
-  closeSqliteDatabase(db);
-}
-
 bool ChartRepository::CreateChartMetaTable(sqlite3 *db) {
   bool existingChartMetaTable = false;
   if (!sqliteTableExists(db, "chart_meta", existingChartMetaTable,
@@ -4025,7 +3995,7 @@ bool insertChartMetaPrepared(
           ? *sourcePreferenceHint
           : archive_file::sourcePreferenceForPath(chartMeta.BmsPath);
   std::filesystem::path path = chartMeta.BmsPath;
-  ChartRepository::ToRelativePath(path);
+  chart_storage_identity::ToRelativePath(path);
   const std::string md5 = normalizedHash(chartMeta.MD5);
   const std::string sha256 = normalizedHash(chartMeta.SHA256);
 
@@ -4039,7 +4009,7 @@ bool insertChartMetaPrepared(
   bindSqliteText(stmt, 8, chartMeta.SubArtist);
 
   std::filesystem::path folder = chartMeta.Folder;
-  ChartRepository::ToRelativePath(folder);
+  chart_storage_identity::ToRelativePath(folder);
   bindSqliteText(stmt, 9, fspath_to_utf8(folder));
   bindSqliteText(stmt, 10, fspath_to_utf8(chartMeta.StageFile));
   bindSqliteText(stmt, 11, fspath_to_utf8(chartMeta.Banner));
@@ -4334,7 +4304,7 @@ void ChartRepository::QueryChartMeta(
       ChartMetaRecord record;
       std::filesystem::path path(ReadPath(stmt, idx++));
       if (!path.empty()) {
-        ToAbsolutePath(path);
+        chart_storage_identity::ToAbsolutePath(path);
       }
       record.meta.BmsPath = path;
       record.meta.Folder = path.parent_path();
@@ -4585,7 +4555,7 @@ int ChartRepository::FindChartMetaIndex(sqlite3 *db, ScoreRepository &scores,
     return -1;
   }
 
-  const std::string targetPath = StoredChartPathText(path);
+  const std::string targetPath = chart_storage_identity::StoredPathText(path);
   if (targetPath.empty()) {
     return -1;
   }
@@ -4597,7 +4567,8 @@ int ChartRepository::FindChartMetaIndex(sqlite3 *db, ScoreRepository &scores,
     std::vector<ChartMetaRecord> records;
     QueryChartMeta(db, scores, scanQuery, records);
     for (size_t i = 0; i < records.size(); ++i) {
-      if (StoredChartPathText(records[i].meta.BmsPath) == targetPath) {
+      if (chart_storage_identity::StoredPathText(records[i].meta.BmsPath) ==
+          targetPath) {
         return static_cast<int>(i);
       }
     }
@@ -4775,7 +4746,7 @@ int ChartRepository::FindChartMetaIndex(sqlite3 *db, ScoreRepository &scores,
 
 bool ChartRepository::DeleteChartMeta(sqlite3 *db, std::filesystem::path path) {
   // std::cout << "Deleting chart: " << path.string() << std::endl;
-  ToRelativePath(path);
+  chart_storage_identity::ToRelativePath(path);
   auto query = "DELETE FROM chart_meta WHERE path = @path";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
@@ -4808,7 +4779,7 @@ int ChartRepository::DeleteChartMetaInDirectory(
   createChartScanCheckpointTable(db);
 
   std::filesystem::path targetDirectory = directory;
-  ToAbsolutePath(targetDirectory);
+  chart_storage_identity::ToAbsolutePath(targetDirectory);
   const std::filesystem::path normalizedTarget =
       targetDirectory.lexically_normal();
   auto matchesTarget = [&](const std::filesystem::path &path) {
@@ -4834,7 +4805,7 @@ int ChartRepository::DeleteChartMetaInDirectory(
     }
 
     const std::string target =
-        ChartRepository::StoredChartPathText(chartMeta.BmsPath);
+        chart_storage_identity::StoredPathText(chartMeta.BmsPath);
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     bindSqliteText(stmt, 1, target);
@@ -4955,7 +4926,7 @@ bms_parser::ChartMeta ChartRepository::ReadChartMeta(sqlite3_stmt *stmt) {
   const auto absolutePathFromColumn = [this](sqlite3_stmt *row, int column) {
     std::filesystem::path path(ReadPath(row, column));
     if (!path.empty()) {
-      ToAbsolutePath(path);
+      chart_storage_identity::ToAbsolutePath(path);
     }
     return path;
   };
@@ -4980,15 +4951,6 @@ ChartMetaRecord ChartRepository::ReadChartMetaRecord(sqlite3_stmt *stmt) {
     record.favorite = sqlite3_column_int(stmt, idx++) != 0;
   }
   return record;
-}
-
-std::string ChartRepository::DifficultyTableLabelsForChart(
-    const bms_parser::ChartMeta &meta) {
-  SqliteConnectionHandle connection(Connect());
-  if (connection.get() == nullptr) {
-    return {};
-  }
-  return DifficultyTableLabelsForChart(connection.get(), meta);
 }
 
 std::string ChartRepository::DifficultyTableLabelsForChart(
@@ -5039,7 +5001,7 @@ bool ChartRepository::InsertEntry(sqlite3 *db,
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = ChartRepository::StoredChartPathText(path);
+  const std::string pathText = chart_storage_identity::StoredPathText(path);
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
   int rc = sqlite3_step(stmt);
@@ -5067,7 +5029,7 @@ std::vector<ChartEntry> ChartRepository::SelectAllEntries(sqlite3 *db) {
     ChartEntry entry;
     std::filesystem::path path(ReadPath(stmt, 0));
     if (!path.empty()) {
-      ToAbsolutePath(path);
+      chart_storage_identity::ToAbsolutePath(path);
     }
     entry.path = fspath_to_path_t(path);
     entry.iosBookmark = sqliteColumnString(stmt, 1);
@@ -5137,7 +5099,7 @@ bool ChartRepository::DeleteEntry(sqlite3 *db,
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = ChartRepository::StoredChartPathText(path);
+  const std::string pathText = chart_storage_identity::StoredPathText(path);
   bindSqliteText(stmt, 1, pathText);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
@@ -8303,7 +8265,7 @@ ChartRepository::ChartRepository()
 ChartRepository::ChartRepository(std::filesystem::path databasePath)
     : impl_(std::make_unique<Impl>(std::move(databasePath))) {
   archive_file::setCachePathNormalizer([](std::filesystem::path &path) {
-    ChartRepository::ToRelativePath(path);
+    chart_storage_identity::ToRelativePath(path);
   });
 }
 
@@ -8311,16 +8273,4 @@ ChartRepository::~ChartRepository() = default;
 
 std::uint64_t ChartRepository::GetLibraryRevision() const {
   return gLibraryRevision.load(std::memory_order_relaxed);
-}
-
-std::string ChartRepository::StoredChartPathText(std::filesystem::path path) {
-  return chart_storage_identity::StoredPathText(std::move(path));
-}
-
-void ChartRepository::ToRelativePath(std::filesystem::path &path) {
-  chart_storage_identity::ToRelativePath(path);
-}
-
-void ChartRepository::ToAbsolutePath(std::filesystem::path &path) {
-  chart_storage_identity::ToAbsolutePath(path);
 }
