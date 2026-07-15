@@ -30,6 +30,8 @@ struct ProfileResult {
   [[nodiscard]] bool ok() const { return error == ProfileError::None; }
 };
 
+enum class ProfileUse : unsigned char;
+
 enum class ProfileMigrationPhase {
   PrepareStaging,
   WriteSettings,
@@ -95,14 +97,9 @@ public:
                                ProfileStagingWriter writeStaging);
 
 private:
-  enum class ValidationDepth { Routine, Deep };
-  enum class DatabaseVersionPolicy { CurrentOnly, AllowSupportedOlder };
-
-  [[nodiscard]] std::vector<PlayerProfile>
-  listProfiles(ValidationDepth depth, DatabaseVersionPolicy policy) const;
+  [[nodiscard]] std::vector<PlayerProfile> listProfiles(ProfileUse use) const;
   [[nodiscard]] ProfileResult validateProfile(std::string_view id,
-                                              ValidationDepth depth,
-                                              DatabaseVersionPolicy policy) const;
+                                              ProfileUse use) const;
 
   std::filesystem::path applicationDataRoot_;
   PlayerProfileManagerDependencies dependencies_;

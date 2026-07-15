@@ -266,6 +266,69 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
          std::string(label) + " database version updates");
 }
 
+void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
+                               std::string_view label) {
+  Database scores = openDatabase(paths.scoresDb);
+  Database replays = openDatabase(paths.replaysDb);
+  expect(scores != nullptr && replays != nullptr,
+         std::string(label) + " marker databases open");
+  if (!scores || !replays) {
+    return;
+  }
+  expect(execute(scores.get(),
+                 "CREATE TABLE validation_policy_marker(value TEXT);"
+                 "INSERT INTO validation_policy_marker VALUES('score')"),
+         std::string(label) + " score marker is written");
+  expect(execute(replays.get(),
+                 "CREATE TABLE validation_policy_marker(value TEXT);"
+                 "INSERT INTO validation_policy_marker VALUES('replay')"),
+         std::string(label) + " replay marker is written");
+  scores.reset();
+  replays.reset();
+  setDatabaseVersion(paths.scoresDb, 5, std::string(label) + " score");
+  setDatabaseVersion(paths.replaysDb, 3, std::string(label) + " replay");
+}
+
+void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
+                                 std::string_view label) {
+  std::string error;
+  expect(sqliteDatabaseUserVersion(paths.scoresDb, error) == 5,
+         std::string(label) + " keeps score schema version 5: " + error);
+  error.clear();
+  expect(sqliteDatabaseUserVersion(paths.replaysDb, error) == 3,
+         std::string(label) + " keeps replay schema version 3: " + error);
+  expect(rowCount(paths.scoresDb, "validation_policy_marker") == 1,
+         std::string(label) + " keeps the score marker row");
+  expect(rowCount(paths.replaysDb, "validation_policy_marker") == 1,
+         std::string(label) + " keeps the replay marker row");
+}
+
+std::vector<std::filesystem::path>
+profileTransactionArtifacts(const std::filesystem::path &root) {
+  std::vector<std::filesystem::path> result;
+  const auto profiles = root / "profiles";
+  std::error_code error;
+  if (!std::filesystem::exists(profiles, error)) {
+    expect(!error, "profile transaction artifact root inspection succeeds");
+    return result;
+  }
+  std::filesystem::directory_iterator iterator(profiles, error);
+  expect(!error, "profile transaction artifact enumeration begins");
+  if (error) {
+    return result;
+  }
+  for (const auto &entry : iterator) {
+    const std::string filename = entry.path().filename().string();
+    if (filename.starts_with(".staging-") ||
+        filename.starts_with(".deleting-") ||
+        filename.starts_with(".backup-")) {
+      result.push_back(entry.path());
+    }
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
 void testSqliteSnapshotIncludesWalAndValidatesIdentifiers() {
   TempDirectory temp("sqlite-snapshot");
   const auto source = temp.path() / "source.db";
@@ -530,6 +593,1039 @@ void testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure() {
          "sync-failure recovery preserves the finalized profile ID");
 }
 
+void testFailedCreateCommitSyncLeavesNoVisibleProfile() {
+  TempDirectory temp("profile-create-parent-sync");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string createdId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, createdId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool finalRenameCompleted = false;
+  bool commitSyncFailed = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto staging = profiles / (".staging-" + createdId);
+  const auto destination = profiles / createdId;
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    const bool renamed = atomic_file::renameDurably(from, to, error);
+    if (inject && renamed && from == staging && to == destination) {
+      finalRenameCompleted = true;
+    }
+    return renamed;
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && finalRenameCompleted && !commitSyncFailed &&
+        path == profiles) {
+      commitSyncFailed = true;
+      error = "injected create commit sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "create parent-sync fixture initializes");
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result = manager.createProfile("Create Sync Failure");
+  inject = false;
+  expect(result.error == ProfileError::IoFailure,
+         "failed commit sync reports create failure");
+  expect(!std::filesystem::exists(manager.pathsFor(createdId).root),
+         "failed create commit leaves no visible destination");
+  expect(stagingDirectories(temp.path()).empty(),
+         "successful create rollback cleans hidden staging");
+  expect(manager.listProfiles().size() == countBefore,
+         "reported create failure does not change the visible catalog");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  expect(recovered.Initialize().ok(),
+         "create parent-sync failure reinitializes cleanly");
+  expect(!std::filesystem::exists(recovered.pathsFor(createdId).root) &&
+             recovered.listProfiles().size() == countBefore,
+         "reinitialization preserves failed create outcome");
+}
+
+void testFailedDuplicateCommitSyncLeavesNoVisibleProfile() {
+  TempDirectory temp("profile-duplicate-parent-sync");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string duplicateId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, duplicateId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool finalRenameCompleted = false;
+  bool commitSyncFailed = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto staging = profiles / (".staging-" + duplicateId);
+  const auto destination = profiles / duplicateId;
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    const bool renamed = atomic_file::renameDurably(from, to, error);
+    if (inject && renamed && from == staging && to == destination) {
+      finalRenameCompleted = true;
+    }
+    return renamed;
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && finalRenameCompleted && !commitSyncFailed &&
+        path == profiles) {
+      commitSyncFailed = true;
+      error = "injected duplicate commit sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "duplicate parent-sync fixture initializes");
+  const std::string sourceId = manager.activeProfile().id;
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result =
+      manager.duplicateProfile(sourceId, "Duplicate Sync Failure");
+  inject = false;
+  expect(result.error == ProfileError::IoFailure,
+         "failed commit sync reports duplicate failure");
+  expect(!std::filesystem::exists(manager.pathsFor(duplicateId).root),
+         "failed duplicate commit leaves no visible destination");
+  expect(stagingDirectories(temp.path()).empty(),
+         "successful duplicate rollback cleans hidden staging");
+  expect(manager.listProfiles().size() == countBefore,
+         "reported duplicate failure does not change the visible catalog");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  expect(recovered.Initialize().ok(),
+         "duplicate parent-sync failure reinitializes cleanly");
+  expect(!std::filesystem::exists(recovered.pathsFor(duplicateId).root) &&
+             recovered.listProfiles().size() == countBefore,
+         "reinitialization preserves failed duplicate outcome");
+}
+
+enum class NewProfileOperation { Create, Duplicate };
+
+enum class NewProfileFault {
+  FinalRenameFails,
+  FinalRenameMovesThenFails,
+  CommitSyncRollbackSucceeds,
+  CommitSyncRollbackUnavailable,
+  RollbackMovesThenFails,
+  RollbackCleanupFails,
+  RollbackParentSyncFails,
+  RollbackUnavailableRetrySyncFails,
+  AmbiguousFinalLeavesBoth,
+  AmbiguousFinalRetrySyncFails,
+  AmbiguousFinalLeavesInvalidDestination,
+  AmbiguousFinalLeavesNeither,
+  RollbackCleanupSyncFails,
+  UnsafeDestinationInspection,
+};
+
+struct NewProfileFaultCase {
+  NewProfileFault fault;
+  std::string_view name;
+  bool expectedSuccess;
+  bool expectedWarning = false;
+  bool expectedStagingEvidence = false;
+  bool safelyInspected = true;
+};
+
+constexpr std::array kNewProfileFaultCases{
+    NewProfileFaultCase{NewProfileFault::FinalRenameFails,
+                        "point 0 final rename fails", false},
+    NewProfileFaultCase{NewProfileFault::FinalRenameMovesThenFails,
+                        "point 1 final rename moves then fails", true},
+    NewProfileFaultCase{NewProfileFault::CommitSyncRollbackSucceeds,
+                        "point 2 commit sync rollback succeeds", false},
+    NewProfileFaultCase{NewProfileFault::CommitSyncRollbackUnavailable,
+                        "point 3 commit sync rollback unavailable", true},
+    NewProfileFaultCase{NewProfileFault::RollbackMovesThenFails,
+                        "point 4 rollback moves then fails", false},
+    NewProfileFaultCase{NewProfileFault::RollbackCleanupFails,
+                        "point 5 rollback staging cleanup fails", false, false,
+                        true},
+    NewProfileFaultCase{NewProfileFault::RollbackParentSyncFails,
+                        "point 6 rollback parent sync fails", false, false,
+                        true},
+    NewProfileFaultCase{NewProfileFault::RollbackUnavailableRetrySyncFails,
+                        "point 7 rollback unavailable retry sync fails", true,
+                        true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalLeavesBoth,
+                        "ambiguous final rename leaves destination and staging",
+                        true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalRetrySyncFails,
+                        "ambiguous final rename retry sync fails", true, true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalLeavesInvalidDestination,
+                        "ambiguous final rename leaves invalid destination",
+                        false, false, true},
+    NewProfileFaultCase{NewProfileFault::AmbiguousFinalLeavesNeither,
+                        "ambiguous final rename leaves neither path", false},
+    NewProfileFaultCase{NewProfileFault::RollbackCleanupSyncFails,
+                        "rollback staging cleanup sync fails", false},
+    NewProfileFaultCase{NewProfileFault::UnsafeDestinationInspection,
+                        "unsafe destination inspection", false, false, true,
+                        false},
+};
+
+std::string faultCaseLabel(NewProfileOperation operation,
+                           std::string_view name) {
+  return std::string(operation == NewProfileOperation::Create ? "create "
+                                                              : "duplicate ") +
+         std::string(name);
+}
+
+bool hasProfile(const PlayerProfileManager &manager, std::string_view id) {
+  const auto catalog = manager.listProfiles();
+  return std::ranges::find(catalog, id, &PlayerProfile::id) != catalog.end();
+}
+
+void seedDuplicateFaultPayload(const PlayerProfilePaths &source) {
+  auto loaded = AppSettingsStore::Load(source.settingsJson);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded,
+         "duplicate fault source settings load");
+  if (loaded.status == AppSettingsLoadStatus::Loaded) {
+    loaded.settings.audioOffsetMs = 137;
+    loaded.settings.selectedPlayOption = "R-RANDOM";
+    std::string error;
+    expect(AppSettingsStore::Save(source.settingsJson, loaded.settings, error),
+           "duplicate fault source settings save: " + error);
+  }
+
+  Database scores = openDatabase(source.scoresDb);
+  expect(scores != nullptr, "duplicate fault source database opens");
+  if (scores) {
+    expect(execute(scores.get(),
+                   "CREATE TABLE profile_fault_marker(value TEXT);"
+                   "INSERT INTO profile_fault_marker VALUES('source-data')"),
+           "duplicate fault source database marker seeds");
+  }
+}
+
+bool isCommitSyncFault(NewProfileFault fault) {
+  switch (fault) {
+  case NewProfileFault::CommitSyncRollbackSucceeds:
+  case NewProfileFault::CommitSyncRollbackUnavailable:
+  case NewProfileFault::RollbackMovesThenFails:
+  case NewProfileFault::RollbackCleanupFails:
+  case NewProfileFault::RollbackParentSyncFails:
+  case NewProfileFault::RollbackUnavailableRetrySyncFails:
+  case NewProfileFault::RollbackCleanupSyncFails:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsRollbackAttempt(NewProfileFault fault) {
+  return isCommitSyncFault(fault);
+}
+
+bool copyTreeForFault(const std::filesystem::path &source,
+                      const std::filesystem::path &destination,
+                      std::string &errorMessage) {
+  std::error_code error;
+  std::filesystem::copy(source, destination,
+                        std::filesystem::copy_options::recursive, error);
+  if (error) {
+    errorMessage = "unable to copy fault tree: " + error.message();
+    return false;
+  }
+  return true;
+}
+
+void runNewProfileFaultCase(NewProfileOperation operation,
+                            const NewProfileFaultCase &testCase) {
+  const std::string label = faultCaseLabel(operation, testCase.name);
+  TempDirectory temp(operation == NewProfileOperation::Create
+                         ? "profile-create-fault"
+                         : "profile-duplicate-fault");
+  TempDirectory external("profile-new-fault-external");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string generatedId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, generatedId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  int finalRenameCalls = 0;
+  int rollbackRenameCalls = 0;
+  int profilesSyncCalls = 0;
+  bool rollbackCleanupFailureInjected = false;
+  bool rollbackCleanupSyncAttempted = false;
+  bool destinationRemovalAttempted = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto staging = profiles / (".staging-" + generatedId);
+  const auto destination = profiles / generatedId;
+  const auto externalSentinel = external.path() / "sentinel.txt";
+  writeFile(externalSentinel, "external-data");
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    if (!inject) {
+      return atomic_file::renameDurably(from, to, error);
+    }
+    if (from == staging && to == destination) {
+      ++finalRenameCalls;
+      switch (testCase.fault) {
+      case NewProfileFault::FinalRenameFails:
+        error = "injected final rename failure";
+        return false;
+      case NewProfileFault::FinalRenameMovesThenFails:
+      case NewProfileFault::AmbiguousFinalRetrySyncFails:
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous final rename";
+        return false;
+      case NewProfileFault::AmbiguousFinalLeavesBoth:
+        if (!copyTreeForFault(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous final rename with both paths";
+        return false;
+      case NewProfileFault::AmbiguousFinalLeavesInvalidDestination:
+        if (!copyTreeForFault(from, to, error)) {
+          return false;
+        }
+        {
+          std::error_code removeError;
+          std::filesystem::remove(destination / "settings.json", removeError);
+          if (removeError) {
+            error =
+                "unable to invalidate destination: " + removeError.message();
+            return false;
+          }
+        }
+        error = "injected ambiguous invalid destination";
+        return false;
+      case NewProfileFault::AmbiguousFinalLeavesNeither: {
+        std::error_code removeError;
+        std::filesystem::remove_all(staging, removeError);
+        if (removeError) {
+          error =
+              "unable to remove ambiguous staging: " + removeError.message();
+          return false;
+        }
+      }
+        error = "injected ambiguous rename with neither path";
+        return false;
+      case NewProfileFault::UnsafeDestinationInspection: {
+        std::error_code linkError;
+        std::filesystem::create_directory_symlink(external.path(), destination,
+                                                  linkError);
+        if (linkError) {
+          error = "unable to create unsafe destination: " + linkError.message();
+          return false;
+        }
+      }
+        error = "injected unsafe destination";
+        return false;
+      default:
+        return atomic_file::renameDurably(from, to, error);
+      }
+    }
+    if (from == destination && to == staging) {
+      ++rollbackRenameCalls;
+      switch (testCase.fault) {
+      case NewProfileFault::CommitSyncRollbackUnavailable:
+      case NewProfileFault::RollbackUnavailableRetrySyncFails:
+        error = "injected rollback rename failure";
+        return false;
+      case NewProfileFault::RollbackMovesThenFails:
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous rollback rename";
+        return false;
+      default:
+        return atomic_file::renameDurably(from, to, error);
+      }
+    }
+    return atomic_file::renameDurably(from, to, error);
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (!inject || path != profiles) {
+      return atomic_file::syncDirectory(path, error);
+    }
+    ++profilesSyncCalls;
+    if (isCommitSyncFault(testCase.fault) && profilesSyncCalls == 1) {
+      error = "injected commit sync failure";
+      return false;
+    }
+    if (testCase.fault == NewProfileFault::RollbackParentSyncFails &&
+        profilesSyncCalls == 2) {
+      error = "injected rollback parent sync failure";
+      return false;
+    }
+    if ((testCase.fault == NewProfileFault::RollbackUnavailableRetrySyncFails &&
+         profilesSyncCalls == 2) ||
+        (testCase.fault == NewProfileFault::AmbiguousFinalRetrySyncFails &&
+         profilesSyncCalls == 1)) {
+      error = "injected reconciliation retry sync failure";
+      return false;
+    }
+    if (testCase.fault == NewProfileFault::RollbackCleanupSyncFails &&
+        profilesSyncCalls == 3) {
+      rollbackCleanupSyncAttempted = true;
+      error = "injected rollback cleanup sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+  dependencies.filesystem.removeTree = [&](const std::filesystem::path &path,
+                                           std::string &error) {
+    if (inject && path == destination) {
+      destinationRemovalAttempted = true;
+    }
+    if (inject && testCase.fault == NewProfileFault::RollbackCleanupFails &&
+        path == staging && rollbackRenameCalls > 0) {
+      rollbackCleanupFailureInjected = true;
+      error = "injected rollback staging cleanup failure";
+      return false;
+    }
+    return removeTree(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  const ProfileResult initialized = manager.Initialize();
+  expect(initialized.ok(),
+         label + " fixture initializes: " + initialized.message);
+  if (!initialized.ok()) {
+    return;
+  }
+  const PlayerProfilePaths source = manager.pathsFor(activeId);
+  seedDuplicateFaultPayload(source);
+  const std::string sourceSettingsBefore = readFile(source.settingsJson);
+  const std::int64_t sourceMarkerRowsBefore =
+      rowCount(source.scoresDb, "profile_fault_marker");
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result =
+      operation == NewProfileOperation::Create
+          ? manager.createProfile("Fault Target")
+          : manager.duplicateProfile(activeId, "Fault Target");
+  inject = false;
+
+  expect(finalRenameCalls == 1, label + " reaches final rename exactly once");
+  if (expectsRollbackAttempt(testCase.fault)) {
+    expect(rollbackRenameCalls == 1,
+           label + " reaches rollback reconciliation");
+  }
+  if (testCase.fault == NewProfileFault::RollbackCleanupFails) {
+    expect(rollbackCleanupFailureInjected,
+           label + " reaches rollback staging cleanup");
+  }
+  if (testCase.fault == NewProfileFault::RollbackCleanupSyncFails) {
+    expect(rollbackCleanupSyncAttempted,
+           label + " reaches rollback staging cleanup sync");
+  }
+  expect(result.ok() == testCase.expectedSuccess,
+         label + " reports the canonical outcome: " + result.message);
+  if (!testCase.expectedSuccess) {
+    const ProfileError expectedError =
+        testCase.fault ==
+                NewProfileFault::AmbiguousFinalLeavesInvalidDestination
+            ? ProfileError::IntegrityFailure
+            : ProfileError::IoFailure;
+    expect(result.error == expectedError,
+           label + " reports the classified failure kind");
+  }
+  if (testCase.expectedWarning) {
+    expect(!result.message.empty(), label + " reports a warning");
+  }
+
+  if (testCase.safelyInspected) {
+    expect(result.ok() == manager.validateProfile(generatedId).ok(),
+           label + " result matches canonical profile validity");
+    expect(result.ok() == hasProfile(manager, generatedId),
+           label + " result matches canonical profile catalog membership");
+  } else {
+    expect(result.error == ProfileError::IoFailure,
+           label + " fails closed on unsafe inspection");
+    expect(!hasProfile(manager, generatedId),
+           label + " unsafe destination is not cataloged");
+  }
+  expect(manager.listProfiles().size() ==
+             countBefore + (testCase.expectedSuccess ? 1U : 0U),
+         label + " catalog count matches the reported outcome");
+  expect(stagingDirectories(temp.path()).empty() ==
+             !testCase.expectedStagingEvidence,
+         label + " preserves only required hidden staging evidence");
+
+  if (testCase.fault ==
+          NewProfileFault::AmbiguousFinalLeavesInvalidDestination ||
+      testCase.fault == NewProfileFault::UnsafeDestinationInspection) {
+    expect(!destinationRemovalAttempted,
+           label + " never removes an unsafe or invalid destination");
+    expect(std::filesystem::symlink_status(destination).type() !=
+               std::filesystem::file_type::not_found,
+           label + " preserves destination evidence");
+  }
+  if (testCase.fault == NewProfileFault::UnsafeDestinationInspection) {
+    expect(readFile(externalSentinel) == "external-data",
+           label + " leaves the external target untouched");
+  }
+
+  expect(readFile(source.settingsJson) == sourceSettingsBefore &&
+             rowCount(source.scoresDb, "profile_fault_marker") ==
+                 sourceMarkerRowsBefore,
+         label + " does not mutate source settings or database data");
+  if (operation == NewProfileOperation::Duplicate && result.ok()) {
+    const PlayerProfilePaths duplicate = manager.pathsFor(generatedId);
+    expect(readFile(duplicate.settingsJson) == sourceSettingsBefore &&
+               rowCount(duplicate.scoresDb, "profile_fault_marker") ==
+                   sourceMarkerRowsBefore,
+           label + " preserves duplicate settings and database data");
+  }
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  const ProfileResult reinitialized = recovered.Initialize();
+  expect(reinitialized.ok(),
+         label + " clean reinitialization succeeds: " + reinitialized.message);
+  expect(recovered.validateProfile(generatedId).ok() ==
+             testCase.expectedSuccess,
+         label + " clean reinitialization preserves canonical validity");
+  expect(hasProfile(recovered, generatedId) == testCase.expectedSuccess,
+         label + " clean reinitialization preserves catalog outcome");
+  expect(stagingDirectories(temp.path()).empty(),
+         label + " clean reinitialization recovers hidden staging");
+  expect(readFile(externalSentinel) == "external-data",
+         label + " recovery leaves external data untouched");
+}
+
+void testCreateAndDuplicateFaultMatrixHasFilesystemDerivedOutcomes() {
+  for (const NewProfileOperation operation :
+       {NewProfileOperation::Create, NewProfileOperation::Duplicate}) {
+    for (const NewProfileFaultCase &testCase : kNewProfileFaultCases) {
+      runNewProfileFaultCase(operation, testCase);
+    }
+  }
+}
+
+enum class ProfileDeletionFault {
+  SourceRenameFails,
+  SourceRenameMovesThenFails,
+  CommitSyncRollbackSucceeds,
+  RollbackUnavailableRetrySyncSucceeds,
+  RollbackMovesThenFails,
+  PostCommitCleanupFails,
+  PostCommitCleanupPartiallyMutates,
+  FinalCleanupSyncFails,
+  RollbackUnavailableRetrySyncFails,
+  RollbackUnavailableLeavesInvalidTombstone,
+  StaleTombstoneRemovalFails,
+  StaleTombstoneCleanupSyncFails,
+  RollbackParentSyncFails,
+  AmbiguousRenameLeavesBoth,
+  SourceAbsentWithInvalidTombstone,
+  PresentInvalidSource,
+  BothPathsAbsent,
+  UnsafeSourceInspection,
+};
+
+struct ProfileDeletionFaultCase {
+  ProfileDeletionFault fault;
+  std::string_view name;
+  bool expectedSuccess;
+  bool expectedWarning = false;
+  bool expectedTombstoneEvidence = false;
+  bool safelyClassified = true;
+};
+
+constexpr std::array kProfileDeletionFaultCases{
+    ProfileDeletionFaultCase{ProfileDeletionFault::SourceRenameFails,
+                             "point 0 source rename fails", false},
+    ProfileDeletionFaultCase{ProfileDeletionFault::SourceRenameMovesThenFails,
+                             "point 1 source rename moves then fails", true},
+    ProfileDeletionFaultCase{ProfileDeletionFault::CommitSyncRollbackSucceeds,
+                             "point 2 commit sync rollback succeeds", false},
+    ProfileDeletionFaultCase{
+        ProfileDeletionFault::RollbackUnavailableRetrySyncSucceeds,
+        "point 3 rollback unavailable retry sync succeeds", true},
+    ProfileDeletionFaultCase{ProfileDeletionFault::RollbackMovesThenFails,
+                             "point 4 rollback moves then fails", false},
+    ProfileDeletionFaultCase{ProfileDeletionFault::PostCommitCleanupFails,
+                             "point 5 post-commit cleanup fails", true, true,
+                             true},
+    ProfileDeletionFaultCase{
+        ProfileDeletionFault::PostCommitCleanupPartiallyMutates,
+        "point 6 post-commit cleanup partially mutates", true, true, true},
+    ProfileDeletionFaultCase{ProfileDeletionFault::FinalCleanupSyncFails,
+                             "point 7 final cleanup sync fails", true, true},
+    ProfileDeletionFaultCase{
+        ProfileDeletionFault::RollbackUnavailableRetrySyncFails,
+        "point 8 rollback unavailable retry sync fails", true, true, true},
+    ProfileDeletionFaultCase{
+        ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone,
+        "rollback unavailable leaves invalid tombstone", true, true, true},
+    ProfileDeletionFaultCase{ProfileDeletionFault::StaleTombstoneRemovalFails,
+                             "stale tombstone removal fails before mutation",
+                             false, false, true},
+    ProfileDeletionFaultCase{
+        ProfileDeletionFault::StaleTombstoneCleanupSyncFails,
+        "stale tombstone cleanup sync fails before mutation", false},
+    ProfileDeletionFaultCase{ProfileDeletionFault::RollbackParentSyncFails,
+                             "rollback parent sync fails", false},
+    ProfileDeletionFaultCase{ProfileDeletionFault::AmbiguousRenameLeavesBoth,
+                             "ambiguous rename leaves source and tombstone",
+                             false, false, true},
+    ProfileDeletionFaultCase{
+        ProfileDeletionFault::SourceAbsentWithInvalidTombstone,
+        "source absent with invalid tombstone", true, true, true},
+    ProfileDeletionFaultCase{ProfileDeletionFault::PresentInvalidSource,
+                             "present source cannot be deeply validated", false,
+                             false, false, false},
+    ProfileDeletionFaultCase{ProfileDeletionFault::BothPathsAbsent,
+                             "source and tombstone are both absent", true,
+                             true},
+    ProfileDeletionFaultCase{ProfileDeletionFault::UnsafeSourceInspection,
+                             "unsafe source inspection", false, false, true,
+                             false},
+};
+
+bool isDeletionCommitSyncFault(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::CommitSyncRollbackSucceeds:
+  case ProfileDeletionFault::RollbackUnavailableRetrySyncSucceeds:
+  case ProfileDeletionFault::RollbackMovesThenFails:
+  case ProfileDeletionFault::RollbackUnavailableRetrySyncFails:
+  case ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone:
+  case ProfileDeletionFault::RollbackParentSyncFails:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsDeletionRollback(ProfileDeletionFault fault) {
+  return isDeletionCommitSyncFault(fault);
+}
+
+bool expectsRollbackParentSync(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::CommitSyncRollbackSucceeds:
+  case ProfileDeletionFault::RollbackMovesThenFails:
+  case ProfileDeletionFault::RollbackParentSyncFails:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsRetryCommitSync(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::RollbackUnavailableRetrySyncSucceeds:
+  case ProfileDeletionFault::RollbackUnavailableRetrySyncFails:
+  case ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool expectsDurabilityRecheckWarning(ProfileDeletionFault fault) {
+  switch (fault) {
+  case ProfileDeletionFault::SourceAbsentWithInvalidTombstone:
+  case ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone:
+  case ProfileDeletionFault::BothPathsAbsent:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool hasPhysicalPath(const std::filesystem::path &path) {
+  std::error_code error;
+  const bool exists = std::filesystem::exists(path, error);
+  expect(!error, "physical path inspection succeeds: " + error.message());
+  return !error && exists;
+}
+
+void runProfileDeletionFaultCase(const ProfileDeletionFaultCase &testCase) {
+  const std::string label = "delete " + std::string(testCase.name);
+  TempDirectory temp("profile-delete-fault");
+  TempDirectory external("profile-delete-fault-external");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string deletedId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, deletedId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  int sourceRenameCalls = 0;
+  int rollbackRenameCalls = 0;
+  int tombstoneRemovalCalls = 0;
+  bool initialCommitSyncAttempted = false;
+  bool rollbackParentSyncAttempted = false;
+  bool retryCommitSyncAttempted = false;
+  bool cleanupSyncAttempted = false;
+  bool staleCleanupSyncAttempted = false;
+  bool staleTombstoneRemoved = false;
+  bool partialCleanupInjected = false;
+  bool sourceRemovalAttempted = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto source = profiles / deletedId;
+  const auto tombstone = profiles / (".deleting-" + deletedId);
+  const auto externalSentinel = external.path() / "sentinel.txt";
+  writeFile(externalSentinel, "external-data");
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    if (!inject) {
+      return atomic_file::renameDurably(from, to, error);
+    }
+    if (from == source && to == tombstone) {
+      ++sourceRenameCalls;
+      switch (testCase.fault) {
+      case ProfileDeletionFault::SourceRenameFails:
+        error = "injected source rename failure";
+        return false;
+      case ProfileDeletionFault::SourceRenameMovesThenFails:
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous source rename";
+        return false;
+      case ProfileDeletionFault::AmbiguousRenameLeavesBoth:
+        if (!copyTreeForFault(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous source rename with both paths";
+        return false;
+      case ProfileDeletionFault::SourceAbsentWithInvalidTombstone: {
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        std::error_code removeError;
+        std::filesystem::remove(tombstone / "profile.json", removeError);
+        if (removeError) {
+          error = "unable to invalidate tombstone: " + removeError.message();
+          return false;
+        }
+        error = "injected ambiguous rename with invalid tombstone";
+        return false;
+      }
+      case ProfileDeletionFault::PresentInvalidSource: {
+        std::error_code removeError;
+        std::filesystem::remove(source / "settings.json", removeError);
+        if (removeError) {
+          error = "unable to invalidate source: " + removeError.message();
+          return false;
+        }
+        error = "injected invalid canonical source";
+        return false;
+      }
+      case ProfileDeletionFault::BothPathsAbsent: {
+        std::error_code removeError;
+        std::filesystem::remove_all(source, removeError);
+        if (removeError) {
+          error = "unable to remove source: " + removeError.message();
+          return false;
+        }
+        error = "injected ambiguous rename with neither path";
+        return false;
+      }
+      case ProfileDeletionFault::UnsafeSourceInspection: {
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        std::error_code linkError;
+        std::filesystem::create_directory_symlink(external.path(), source,
+                                                  linkError);
+        if (linkError) {
+          error = "unable to create unsafe source: " + linkError.message();
+          return false;
+        }
+        error = "injected unsafe canonical source";
+        return false;
+      }
+      default:
+        return atomic_file::renameDurably(from, to, error);
+      }
+    }
+    if (from == tombstone && to == source) {
+      ++rollbackRenameCalls;
+      switch (testCase.fault) {
+      case ProfileDeletionFault::RollbackUnavailableRetrySyncSucceeds:
+      case ProfileDeletionFault::RollbackUnavailableRetrySyncFails:
+        error = "injected rollback rename failure";
+        return false;
+      case ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone: {
+        std::error_code removeError;
+        std::filesystem::remove(tombstone / "profile.json", removeError);
+        if (removeError) {
+          error = "unable to invalidate rollback tombstone: " +
+                  removeError.message();
+          return false;
+        }
+        error = "injected rollback failure with invalid tombstone";
+        return false;
+      }
+      case ProfileDeletionFault::RollbackMovesThenFails:
+        if (!atomic_file::renameDurably(from, to, error)) {
+          return false;
+        }
+        error = "injected ambiguous rollback rename";
+        return false;
+      default:
+        return atomic_file::renameDurably(from, to, error);
+      }
+    }
+    return atomic_file::renameDurably(from, to, error);
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (!inject || path != profiles) {
+      return atomic_file::syncDirectory(path, error);
+    }
+    if (sourceRenameCalls == 0) {
+      staleCleanupSyncAttempted = true;
+      if (testCase.fault ==
+          ProfileDeletionFault::StaleTombstoneCleanupSyncFails) {
+        error = "injected stale tombstone cleanup sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+    if (tombstoneRemovalCalls > 0) {
+      cleanupSyncAttempted = true;
+      if (testCase.fault == ProfileDeletionFault::FinalCleanupSyncFails) {
+        error = "injected final cleanup sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+    if (rollbackRenameCalls == 0) {
+      initialCommitSyncAttempted = true;
+      if (isDeletionCommitSyncFault(testCase.fault)) {
+        error = "injected delete commit sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+
+    std::error_code sourceError;
+    const bool sourceExists = std::filesystem::exists(source, sourceError);
+    expect(!sourceError, label + " sync-state source inspection succeeds: " +
+                             sourceError.message());
+    if (sourceExists) {
+      rollbackParentSyncAttempted = true;
+      if (testCase.fault == ProfileDeletionFault::RollbackParentSyncFails) {
+        error = "injected rollback parent sync failure";
+        return false;
+      }
+      return atomic_file::syncDirectory(path, error);
+    }
+    retryCommitSyncAttempted = true;
+    if (testCase.fault ==
+        ProfileDeletionFault::RollbackUnavailableRetrySyncFails) {
+      error = "injected retry commit sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+  dependencies.filesystem.removeTree = [&](const std::filesystem::path &path,
+                                           std::string &error) {
+    if (inject && path == source) {
+      sourceRemovalAttempted = true;
+    }
+    if (!inject || path != tombstone) {
+      return removeTree(path, error);
+    }
+    ++tombstoneRemovalCalls;
+    if (testCase.fault == ProfileDeletionFault::StaleTombstoneRemovalFails &&
+        sourceRenameCalls == 0) {
+      error = "injected stale tombstone removal failure";
+      return false;
+    }
+    if (testCase.fault ==
+            ProfileDeletionFault::StaleTombstoneCleanupSyncFails &&
+        sourceRenameCalls == 0) {
+      const bool removed = removeTree(path, error);
+      staleTombstoneRemoved = removed;
+      return removed;
+    }
+    if (testCase.fault == ProfileDeletionFault::PostCommitCleanupFails) {
+      error = "injected post-commit tombstone cleanup failure";
+      return false;
+    }
+    if (testCase.fault ==
+        ProfileDeletionFault::PostCommitCleanupPartiallyMutates) {
+      std::error_code removeError;
+      std::filesystem::remove(path / "profile.json", removeError);
+      if (removeError) {
+        error = "unable to partially clean tombstone: " + removeError.message();
+        return false;
+      }
+      partialCleanupInjected = true;
+      error = "injected partial tombstone cleanup failure";
+      return false;
+    }
+    return removeTree(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  const ProfileResult initialized = manager.Initialize();
+  expect(initialized.ok(),
+         label + " fixture initializes: " + initialized.message);
+  if (!initialized.ok()) {
+    return;
+  }
+  const ProfileResult created = manager.createProfile("Delete Fault Target");
+  expect(created.ok() && created.profile,
+         label + " fixture creates an inactive profile");
+  if (!created.profile) {
+    return;
+  }
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  if (testCase.fault == ProfileDeletionFault::StaleTombstoneRemovalFails ||
+      testCase.fault == ProfileDeletionFault::StaleTombstoneCleanupSyncFails) {
+    std::string copyError;
+    expect(copyTreeForFault(source, tombstone, copyError),
+           label + " creates a stale tombstone: " + copyError);
+  }
+
+  inject = true;
+  const ProfileResult result = manager.deleteProfile(deletedId);
+  inject = false;
+
+  const bool stalePrecommitFault =
+      testCase.fault == ProfileDeletionFault::StaleTombstoneRemovalFails ||
+      testCase.fault == ProfileDeletionFault::StaleTombstoneCleanupSyncFails;
+  expect(sourceRenameCalls == (stalePrecommitFault ? 0 : 1),
+         label + " reaches only the expected source rename");
+  if (expectsDeletionRollback(testCase.fault)) {
+    expect(rollbackRenameCalls == 1,
+           label + " reaches rollback reconciliation");
+    expect(initialCommitSyncAttempted,
+           label + " reaches the initial deletion commit sync");
+  }
+  if (expectsRollbackParentSync(testCase.fault)) {
+    expect(rollbackParentSyncAttempted,
+           label + " attempts the restored-source parent sync");
+    expect(!retryCommitSyncAttempted,
+           label + " does not use the absent-source retry sync");
+  }
+  if (expectsRetryCommitSync(testCase.fault)) {
+    expect(retryCommitSyncAttempted,
+           label + " attempts the absent-source retry commit sync");
+    expect(!rollbackParentSyncAttempted,
+           label + " does not use the restored-source parent sync");
+  }
+  if (testCase.fault == ProfileDeletionFault::StaleTombstoneCleanupSyncFails) {
+    expect(staleTombstoneRemoved,
+           label + " removes stale tombstone before failed cleanup sync");
+    expect(staleCleanupSyncAttempted,
+           label + " attempts the stale-tombstone cleanup sync");
+  }
+  if (testCase.fault == ProfileDeletionFault::FinalCleanupSyncFails) {
+    expect(cleanupSyncAttempted,
+           label + " attempts the post-commit cleanup sync");
+  }
+  if (testCase.fault ==
+      ProfileDeletionFault::PostCommitCleanupPartiallyMutates) {
+    expect(partialCleanupInjected,
+           label + " reaches partial post-commit cleanup");
+  }
+  expect(result.ok() == testCase.expectedSuccess,
+         label + " reports the canonical outcome: " + result.message);
+  if (testCase.expectedWarning) {
+    expect(!result.message.empty(), label + " reports a warning");
+  }
+  if (expectsDurabilityRecheckWarning(testCase.fault)) {
+    expect(result.message.find("durability should be rechecked") !=
+               std::string::npos,
+           label +
+               " explicitly warns that directory durability is unconfirmed");
+  }
+
+  std::error_code sourceError;
+  const bool sourceExists = std::filesystem::exists(source, sourceError);
+  expect(!sourceError, label + " canonical source inspection succeeds");
+  if (testCase.safelyClassified) {
+    expect(!sourceError && result.ok() == !sourceExists,
+           label + " result matches physical canonical source presence");
+    expect(result.ok() == !hasProfile(manager, deletedId),
+           label + " result matches catalog membership");
+    expect(manager.listProfiles().size() ==
+               countBefore - (testCase.expectedSuccess ? 1U : 0U),
+           label + " catalog count matches the reported outcome");
+  } else {
+    expect(!result.ok() && sourceExists,
+           label + " fails closed while preserving the canonical path");
+    expect(!manager.validateProfile(deletedId).ok(),
+           label + " canonical path remains unverifiable");
+    expect(!sourceRemovalAttempted,
+           label + " validation failure never authorizes source cleanup");
+  }
+  if (testCase.expectedTombstoneEvidence) {
+    expect(hasPhysicalPath(tombstone),
+           label + " preserves required tombstone evidence");
+  }
+  if (testCase.fault ==
+          ProfileDeletionFault::SourceAbsentWithInvalidTombstone ||
+      testCase.fault ==
+          ProfileDeletionFault::RollbackUnavailableLeavesInvalidTombstone) {
+    expect(!manager.validateProfile(deletedId).ok() &&
+               tombstoneRemovalCalls == 0,
+           label + " preserves invalid tombstone evidence without cleanup");
+  }
+  if (testCase.fault == ProfileDeletionFault::UnsafeSourceInspection) {
+    expect(result.error == ProfileError::IoFailure &&
+               tombstoneRemovalCalls == 0,
+           label + " rejects unsafe inspection without cleanup");
+  }
+  expect(readFile(externalSentinel) == "external-data",
+         label + " leaves external data untouched");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  const ProfileResult reinitialized = recovered.Initialize();
+  expect(reinitialized.ok(),
+         label + " clean reinitialization succeeds: " + reinitialized.message);
+  expect(!hasPhysicalPath(tombstone),
+         label + " clean reinitialization removes recoverable tombstones");
+  if (testCase.safelyClassified) {
+    expect(recovered.validateProfile(deletedId).ok() ==
+               !testCase.expectedSuccess,
+           label + " clean reinitialization preserves source validity");
+    expect(hasProfile(recovered, deletedId) == !testCase.expectedSuccess,
+           label + " clean reinitialization preserves catalog outcome");
+  } else {
+    expect(hasPhysicalPath(source) &&
+               !recovered.validateProfile(deletedId).ok(),
+           label + " clean reinitialization preserves unsafe source evidence");
+  }
+  expect(readFile(externalSentinel) == "external-data",
+         label + " recovery leaves external data untouched");
+}
+
+void testProfileDeletionFaultMatrixHasFilesystemDerivedOutcomes() {
+  for (const ProfileDeletionFaultCase &testCase : kProfileDeletionFaultCases) {
+    runProfileDeletionFaultCase(testCase);
+  }
+}
+
 void testProfilesRootSymlinkNeverEscapesApplicationRoot() {
   TempDirectory temp("profile-confinement");
   TempDirectory external("profile-external");
@@ -647,8 +1743,9 @@ void testPartialTombstoneCleanupNeverRestoresOrExposesProfile() {
   const std::string deletedId = created.profile->id;
   const auto source = manager.pathsFor(deletedId).root;
   const auto tombstone = temp.path() / "profiles" / (".deleting-" + deletedId);
-  expect(manager.deleteProfile(deletedId).error == ProfileError::IoFailure,
-         "partial physical cleanup reports an I/O failure");
+  const auto deleted = manager.deleteProfile(deletedId);
+  expect(deleted.ok() && !deleted.message.empty(),
+         "post-commit tombstone cleanup failure reports success warning");
   expect(!std::filesystem::exists(source) && std::filesystem::exists(tombstone),
          "logical deletion is never rolled back after partial cleanup");
   expect(manager.listProfiles().size() == 1,
@@ -678,6 +1775,72 @@ void testPartialTombstoneCleanupNeverRestoresOrExposesProfile() {
          "successful restart removes tombstone without exposing deleted data");
 }
 
+void testFailedDeleteCommitSyncRestoresProfile() {
+  TempDirectory temp("profile-delete-parent-sync");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string deletedId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, deletedId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool deletionRenameCompleted = false;
+  bool commitSyncFailed = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto source = profiles / deletedId;
+  const auto tombstone = profiles / (".deleting-" + deletedId);
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    const bool renamed = atomic_file::renameDurably(from, to, error);
+    if (inject && renamed && from == source && to == tombstone) {
+      deletionRenameCompleted = true;
+    }
+    return renamed;
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && deletionRenameCompleted && !commitSyncFailed &&
+        path == profiles) {
+      commitSyncFailed = true;
+      error = "injected delete commit sync failure";
+      return false;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "delete parent-sync fixture initializes");
+  const auto created = manager.createProfile("Delete Sync Failure");
+  expect(created.ok() && created.profile,
+         "delete parent-sync fixture creates an inactive profile");
+  if (!created.profile) {
+    return;
+  }
+  const std::size_t countBefore = manager.listProfiles().size();
+
+  inject = true;
+  const ProfileResult result = manager.deleteProfile(deletedId);
+  inject = false;
+  expect(result.error == ProfileError::IoFailure,
+         "failed delete commit sync reports failure");
+  expect(manager.validateProfile(deletedId).ok(),
+         "failed delete commit sync restores the valid canonical source");
+  expect(hasProfile(manager, deletedId) &&
+             manager.listProfiles().size() == countBefore,
+         "failed delete commit sync leaves the visible catalog unchanged");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  expect(recovered.Initialize().ok(),
+         "delete parent-sync failure reinitializes cleanly");
+  expect(recovered.validateProfile(deletedId).ok() &&
+             hasProfile(recovered, deletedId) &&
+             recovered.listProfiles().size() == countBefore,
+         "reinitialization preserves the restored delete outcome");
+}
+
 void testFutureLegacyDatabaseVersionFailsClosedBeforeMigration() {
   for (const bool scoreDatabase : {true, false}) {
     TempDirectory temp(scoreDatabase ? "profile-future-score"
@@ -703,6 +1866,258 @@ void testFutureLegacyDatabaseVersionFailsClosedBeforeMigration() {
     expect(stagingDirectories(temp.path()).empty() &&
                !std::filesystem::exists(temp.path() / "active-profile.json"),
            "future legacy preflight creates no staged or bootstrap state");
+  }
+}
+
+void testSupportedOlderInactiveProfileUsesManagePolicy() {
+  TempDirectory temp("profile-supported-older-manage");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string olderId = "22222222-2222-4222-8222-222222222222";
+  const std::string duplicateId = "33333333-3333-4333-8333-333333333333";
+  std::vector<std::string> uuids{activeId, olderId, duplicateId};
+  std::size_t uuidIndex = 0;
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "supported-older management fixture initializes");
+  const ProfileResult created = manager.createProfile("Older Inactive");
+  expect(created.ok() && created.profile,
+         "supported-older management target is created");
+  if (!created.profile) {
+    return;
+  }
+
+  const PlayerProfilePaths olderPaths = manager.pathsFor(olderId);
+  seedSupportedOlderProfile(olderPaths, "supported-older management target");
+  const std::string settingsBefore = readFile(olderPaths.settingsJson);
+  const std::string inputBefore = readFile(olderPaths.inputJson);
+  const std::string metadataBeforeCommit = readFile(olderPaths.profileJson);
+  const auto bootstrap = temp.path() / "active-profile.json";
+  const std::string bootstrapBefore = readFile(bootstrap);
+
+  expect(hasProfile(manager, olderId),
+         "supported-older inactive profile remains cataloged");
+  expect(manager.validateProfileForActivation(olderId).ok(),
+         "activation preflight admits the supported-older profile");
+  expect(manager.validateProfile(olderId).error == ProfileError::IntegrityFailure,
+         "strict public validation rejects the supported-older profile");
+  expect(manager.commitActiveProfile(olderId).error ==
+             ProfileError::IntegrityFailure,
+         "runtime commit rejects the supported-older profile before binding");
+  expect(manager.activeProfile().id == activeId &&
+             readFile(bootstrap) == bootstrapBefore &&
+             readFile(olderPaths.profileJson) == metadataBeforeCommit,
+         "rejected runtime commit leaves bootstrap and metadata unchanged");
+
+  const ProfileResult renamed = manager.renameProfile(olderId, "Older Renamed");
+  expect(renamed.ok() && renamed.profile &&
+             renamed.profile->displayName == "Older Renamed",
+         "supported-older inactive profile can be renamed");
+  expect(hasProfile(manager, olderId),
+         "renamed supported-older profile remains cataloged");
+  expect(readFile(olderPaths.settingsJson) == settingsBefore &&
+             readFile(olderPaths.inputJson) == inputBefore,
+         "supported-older rename changes metadata only");
+  expectSupportedOlderPayload(olderPaths,
+                              "supported-older profile after rename");
+
+  const ProfileResult duplicated =
+      manager.duplicateProfile(olderId, "Older Copy");
+  expect(duplicated.ok() && duplicated.profile &&
+             duplicated.profile->id == duplicateId,
+         "supported-older inactive profile can be duplicated");
+  expectSupportedOlderPayload(olderPaths,
+                              "supported-older source after duplication");
+  if (duplicated.profile) {
+    const PlayerProfilePaths copyPaths = manager.pathsFor(duplicateId);
+    std::string versionError;
+    expect(sqliteDatabaseUserVersion(copyPaths.scoresDb, versionError) ==
+                   ScoreDBHelper::kCurrentSchemaVersion &&
+               sqliteDatabaseUserVersion(copyPaths.replaysDb, versionError) ==
+                   ReplayDBHelper::kCurrentSchemaVersion,
+           "normal duplicate database owners migrate the copy to current");
+    expect(rowCount(copyPaths.scoresDb, "validation_policy_marker") == 1 &&
+               rowCount(copyPaths.replaysDb, "validation_policy_marker") == 1,
+           "supported-older duplicate preserves both marker rows");
+    expect(manager.validateProfile(duplicateId).ok(),
+           "migrated supported-older duplicate is runtime ready");
+    expect(manager.deleteProfile(duplicateId).ok(),
+           "current duplicate can be deleted before the older source");
+  }
+
+  expect(manager.listProfiles().size() == 2 && hasProfile(manager, activeId) &&
+             hasProfile(manager, olderId),
+         "mixed current and supported-older profiles remain manageable");
+  const ProfileResult deleted = manager.deleteProfile(olderId);
+  expect(deleted.ok() && deleted.message.empty(),
+         "supported-older inactive profile deletes without a warning");
+  expect(!std::filesystem::exists(olderPaths.root) &&
+             !std::filesystem::exists(temp.path() / "profiles" /
+                                      (".deleting-" + olderId)),
+         "supported-older deletion removes canonical and tombstone paths");
+  expect(manager.listProfiles().size() == 1 && hasProfile(manager, activeId) &&
+             profileTransactionArtifacts(temp.path()).empty(),
+         "supported-older deletion leaves only the active catalog profile");
+}
+
+void testSupportedOlderDeleteRollbackRestoresManageableSource() {
+  TempDirectory temp("profile-supported-older-delete-rollback");
+  const std::string activeId = "11111111-1111-4111-8111-111111111111";
+  const std::string olderId = "22222222-2222-4222-8222-222222222222";
+  std::vector<std::string> uuids{activeId, olderId};
+  std::size_t uuidIndex = 0;
+  bool inject = false;
+  bool sourceRenameReached = false;
+  bool commitSyncFailed = false;
+  bool rollbackRenameReached = false;
+  bool rollbackSyncReached = false;
+  const auto profiles = temp.path() / "profiles";
+  const auto source = profiles / olderId;
+  const auto tombstone = profiles / (".deleting-" + olderId);
+
+  auto dependencies = dependenciesFor();
+  dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+  dependencies.filesystem.durableRename = [&](const std::filesystem::path &from,
+                                              const std::filesystem::path &to,
+                                              std::string &error) {
+    if (inject && from == source && to == tombstone) {
+      sourceRenameReached = true;
+    } else if (inject && from == tombstone && to == source) {
+      rollbackRenameReached = true;
+    }
+    return atomic_file::renameDurably(from, to, error);
+  };
+  dependencies.filesystem.syncDirectory = [&](const std::filesystem::path &path,
+                                              std::string &error) {
+    if (inject && path == profiles && sourceRenameReached &&
+        !rollbackRenameReached && !commitSyncFailed) {
+      commitSyncFailed = true;
+      error = "injected supported-older deletion commit sync failure";
+      return false;
+    }
+    if (inject && path == profiles && rollbackRenameReached) {
+      rollbackSyncReached = true;
+    }
+    return atomic_file::syncDirectory(path, error);
+  };
+
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(),
+         "supported-older rollback fixture initializes");
+  const ProfileResult created = manager.createProfile("Older Rollback");
+  expect(created.ok() && created.profile,
+         "supported-older rollback target is created");
+  if (!created.profile) {
+    return;
+  }
+  const PlayerProfilePaths olderPaths = manager.pathsFor(olderId);
+  seedSupportedOlderProfile(olderPaths, "supported-older rollback target");
+  const std::string settingsBefore = readFile(olderPaths.settingsJson);
+  const std::string inputBefore = readFile(olderPaths.inputJson);
+
+  inject = true;
+  const ProfileResult deleted = manager.deleteProfile(olderId);
+  inject = false;
+  expect(deleted.error == ProfileError::IoFailure,
+         "supported-older commit-sync failure reports deletion failure");
+  expect(sourceRenameReached && commitSyncFailed && rollbackRenameReached &&
+             rollbackSyncReached,
+         "supported-older deletion reaches commit failure and durable rollback");
+  expect(std::filesystem::exists(source) &&
+             !std::filesystem::exists(tombstone),
+         "supported-older deletion rollback restores only the source path");
+  expect(manager.validateProfileForActivation(olderId).ok() &&
+             hasProfile(manager, olderId) && manager.listProfiles().size() == 2,
+         "restored supported-older source is manageable and cataloged");
+  expect(!manager.validateProfile(olderId).ok(),
+         "restored supported-older source remains intentionally runtime strict");
+  expect(readFile(olderPaths.settingsJson) == settingsBefore &&
+             readFile(olderPaths.inputJson) == inputBefore,
+         "supported-older rollback preserves non-database profile data");
+  expectSupportedOlderPayload(olderPaths,
+                              "supported-older source after rollback");
+
+  PlayerProfileManager recovered(
+      temp.path(), dependenciesFor("33333333-3333-4333-8333-333333333333"));
+  const ProfileResult initialized = recovered.Initialize();
+  expect(initialized.ok(),
+         "supported-older rollback state reinitializes: " + initialized.message);
+  expect(recovered.activeProfile().id == activeId &&
+             recovered.validateProfileForActivation(olderId).ok() &&
+             hasProfile(recovered, olderId) &&
+             recovered.listProfiles().size() == 2 &&
+             profileTransactionArtifacts(temp.path()).empty(),
+         "clean reinitialization preserves the restored manageable source");
+  expectSupportedOlderPayload(recovered.pathsFor(olderId),
+                              "reinitialized supported-older source");
+}
+
+void testFutureDatabaseProfileIsNeverManageable() {
+  for (const bool futureScoreDatabase : {true, false}) {
+    TempDirectory temp(futureScoreDatabase ? "profile-future-managed-score"
+                                            : "profile-future-managed-replay");
+    const std::string activeId = "11111111-1111-4111-8111-111111111111";
+    const std::string futureId = "22222222-2222-4222-8222-222222222222";
+    const std::string duplicateId = "33333333-3333-4333-8333-333333333333";
+    std::vector<std::string> uuids{activeId, futureId, duplicateId};
+    std::size_t uuidIndex = 0;
+    auto dependencies = dependenciesFor();
+    dependencies.generateUuid = [&] { return uuids.at(uuidIndex++); };
+    PlayerProfileManager manager(temp.path(), std::move(dependencies));
+    expect(manager.Initialize().ok(), "future managed fixture initializes");
+    const ProfileResult created = manager.createProfile("Future Inactive");
+    expect(created.ok() && created.profile,
+           "future managed target is created");
+    if (!created.profile) {
+      continue;
+    }
+
+    const PlayerProfilePaths paths = manager.pathsFor(futureId);
+    const auto futureDatabase =
+        futureScoreDatabase ? paths.scoresDb : paths.replaysDb;
+    const int futureVersion =
+        futureScoreDatabase ? ScoreDBHelper::kCurrentSchemaVersion + 1
+                            : ReplayDBHelper::kCurrentSchemaVersion + 1;
+    setDatabaseVersion(futureDatabase, futureVersion,
+                       futureScoreDatabase ? "future score"
+                                           : "future replay");
+    const std::string metadataBefore = readFile(paths.profileJson);
+    const auto bootstrap = temp.path() / "active-profile.json";
+    const std::string bootstrapBefore = readFile(bootstrap);
+    const auto artifactsBefore = profileTransactionArtifacts(temp.path());
+
+    expect(!hasProfile(manager, futureId),
+           "future database profile is omitted from the catalog");
+    expect(manager.renameProfile(futureId, "Rejected Future").error ==
+               ProfileError::FutureVersion,
+           "rename rejects a future database profile");
+    expect(manager.duplicateProfile(futureId, "Rejected Future Copy").error ==
+               ProfileError::FutureVersion,
+           "duplicate rejects a future database profile");
+    expect(manager.deleteProfile(futureId).error == ProfileError::FutureVersion,
+           "delete rejects a future database profile");
+    expect(manager.validateProfileForActivation(futureId).error ==
+               ProfileError::FutureVersion,
+           "activation preflight rejects a future database profile");
+    expect(manager.validateProfile(futureId).error ==
+               ProfileError::FutureVersion,
+           "runtime validation rejects a future database profile");
+    expect(manager.commitActiveProfile(futureId).error ==
+               ProfileError::FutureVersion,
+           "runtime commit rejects a future database profile");
+
+    std::string versionError;
+    expect(std::filesystem::exists(paths.root) &&
+               sqliteDatabaseUserVersion(futureDatabase, versionError) ==
+                   futureVersion,
+           "future database path and version remain unchanged: " +
+               versionError);
+    expect(readFile(paths.profileJson) == metadataBefore &&
+               readFile(bootstrap) == bootstrapBefore,
+           "future database rejection preserves metadata and bootstrap");
+    expect(profileTransactionArtifacts(temp.path()) == artifactsBefore,
+           "future database rejection creates no transaction artifacts");
   }
 }
 
@@ -1016,9 +2431,17 @@ int main() {
   testEveryPreFinalizeFailureCleansStaging();
   testFinalizedOrphanRecoversAfterBootstrapFailure();
   testDurableFinalizePrecedesBootstrapAndRecoversAfterSyncFailure();
+  testFailedCreateCommitSyncLeavesNoVisibleProfile();
+  testFailedDuplicateCommitSyncLeavesNoVisibleProfile();
+  testCreateAndDuplicateFaultMatrixHasFilesystemDerivedOutcomes();
+  testProfileDeletionFaultMatrixHasFilesystemDerivedOutcomes();
   testProfilesRootSymlinkNeverEscapesApplicationRoot();
   testPartialTombstoneCleanupNeverRestoresOrExposesProfile();
+  testFailedDeleteCommitSyncRestoresProfile();
   testFutureLegacyDatabaseVersionFailsClosedBeforeMigration();
+  testSupportedOlderInactiveProfileUsesManagePolicy();
+  testSupportedOlderDeleteRollbackRestoresManageableSource();
+  testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testProfileCrudConstraintsAndDataIsolation();
   testPracticeDirectoryLifecycleAndValidation();

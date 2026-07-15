@@ -19,6 +19,7 @@
 #include "PlayerProfileManager.h"
 #include "ProfileSessionCoordinator.h"
 #include "ReplayDBHelper.h"
+#include "ResultPersistenceCoordinator.h"
 #include "ScoreDBHelper.h"
 #include "Utils.h"
 #include "game/GameState.h"
@@ -98,6 +99,7 @@ public:
   ProfileResult profileInitializationResult;
   AppSettings settings;
   InputProfile inputProfile;
+  result_persistence::Coordinator resultPersistence;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
@@ -147,12 +149,12 @@ public:
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
+        resultPersistence(ScoreDBHelper::GetInstance(),
+                          ReplayDBHelper::GetInstance()),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio) {
     if (!profileInitializationResult.ok()) {
-      SDL_Log("Player profile initialization failed: %s",
-              profileInitializationResult.message.c_str());
       return;
     }
 
@@ -235,6 +237,9 @@ public:
               }
               return saveActiveInputProfile(inputProfile, error);
             },
+            .recoverPendingResults = [this] {
+              return recoverPendingResults();
+            },
             .beforeInputReplacement = [this]() {
               inputProfileReplacementNotifier.notifyBeforeReplacement();
             }});
@@ -262,6 +267,30 @@ public:
          .showArtist = settings.systemPlaybackShowArtist,
          .showArtwork = settings.systemPlaybackShowJacket},
         metadataVisibilityError);
+  }
+
+  [[nodiscard]] result_persistence::RecoverySummary
+  recoverPendingResults() noexcept {
+    try {
+      result_persistence::RecoverySummary summary =
+          resultPersistence.recoverAll();
+      SDL_Log("Result recovery completed: attempted=%zu saved=%zu pending=%zu "
+              "conflicts=%zu",
+              summary.attempted, summary.saved, summary.pending,
+              summary.conflicts);
+      if (!summary.diagnostic.empty()) {
+        SDL_Log("Result recovery reported technical diagnostics");
+      }
+      return summary;
+    } catch (const std::exception &) {
+      SDL_Log("Result recovery raised a standard exception");
+      return result_persistence::recoveryFailureSummary(
+          "result recovery raised a standard exception");
+    } catch (...) {
+      SDL_Log("Result recovery raised a non-standard exception");
+      return result_persistence::recoveryFailureSummary(
+          "result recovery raised a non-standard exception");
+    }
   }
 
   [[nodiscard]] bool profileReady() const {

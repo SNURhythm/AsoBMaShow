@@ -710,6 +710,8 @@
 		B76AAF692DA4A1C400E8327C /* Exceptions for "../../../../src" folder in "AsoBMaShow" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				ApplicationResultRecovery.cpp,
+				ApplicationStartup.cpp,
 				AppSettings.cpp,
 				AppSettingsStore.cpp,
 				ArchiveFile.cpp,
@@ -844,6 +846,8 @@
 				SDL_uikit_main.c,
 				ReplayDBHelper.cpp,
 				ReplayResultStateBuilder.cpp,
+				ResultPersistenceCoordinator.cpp,
+				ResultPersistenceModel.cpp,
 				ReplayVideoExporter.cpp,
 				ResultImageExporter.cpp,
 				ScoreDBHelper.cpp,
@@ -853,6 +857,7 @@
 				sqlite3.c,
 				tinyfiledialogs.c,
 				Utils.cpp,
+				Uuid.cpp,
 				utils/SpriteLoader.cpp,
 				utils/Stopwatch.cpp,
 				VersionedJson.cpp,

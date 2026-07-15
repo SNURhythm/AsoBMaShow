@@ -5,8 +5,10 @@
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileSessionCoordinator.h"
 #include "../src/ReplayDBHelper.h"
+#include "../src/ResultPersistenceCoordinator.h"
 #include "../src/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
+#include "../src/Utils.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/scene/MainMenuProfileSelections.h"
 #include "../src/sqlite3.h"
@@ -15,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -66,6 +69,30 @@ public:
 private:
   std::filesystem::path path_;
 };
+
+#if !TARGET_OS_WINDOWS
+class ScopedHomeOverride {
+public:
+  explicit ScopedHomeOverride(const std::filesystem::path &path) {
+    if (const char *home = std::getenv("HOME")) {
+      previousHome_ = home;
+    }
+    expect(setenv("HOME", path.string().c_str(), 1) == 0,
+           "temporary HOME override installs");
+  }
+
+  ~ScopedHomeOverride() {
+    if (previousHome_.has_value()) {
+      setenv("HOME", previousHome_->c_str(), 1);
+    } else {
+      unsetenv("HOME");
+    }
+  }
+
+private:
+  std::optional<std::string> previousHome_;
+};
+#endif
 
 std::string readFile(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
@@ -132,6 +159,41 @@ std::string queryString(sqlite3 *database, const std::string &sql) {
                                 : std::string();
   sqlite3_finalize(statement);
   return value;
+}
+
+void setDatabaseVersion(const std::filesystem::path &path, int version,
+                        std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(database.get(),
+                 "PRAGMA user_version=" + std::to_string(version)),
+         std::string(label) + " database version updates");
+}
+
+void seedValidationPolicyMarker(const std::filesystem::path &path,
+                                std::string_view value,
+                                std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " marker database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(database.get(),
+                 "CREATE TABLE profile_use_marker(value TEXT);"
+                 "INSERT INTO profile_use_marker(value) VALUES ('" +
+                     std::string(value) + "')"),
+         std::string(label) + " marker row inserts");
+}
+
+std::string queryDatabaseString(const std::filesystem::path &path,
+                                const std::string &sql,
+                                std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " database opens");
+  return database ? queryString(database.get(), sql) : std::string{};
 }
 
 std::filesystem::path attachedDatabasePath(sqlite3 *database,
@@ -326,12 +388,20 @@ struct SwitchFixture {
   bool failReplayBind = false;
   bool failInputApply = false;
   bool failRefreshOnce = false;
+  bool throwRecoveryStd = false;
+  bool throwRecoveryNonStd = false;
   std::optional<std::string> blocker;
   ProfileSwitchBlockers operationBlockers;
   int refreshCount = 0;
+  int recoveryCalls = 0;
+  bool recoveryObservedTargetBindings = false;
+  bool recoveryNestedGuardCompleted = false;
+  result_persistence::RecoverySummary recoverySummary;
+  std::vector<std::string> switchEvents;
   std::vector<std::string> inputReplacementEvents;
   std::vector<input::GyroscopeTurntableConfig> runtimeGyroscopeApplications;
   std::function<void()> refreshAction;
+  std::function<void()> recoveryAction;
   std::filesystem::path appliedInputPath;
   InputProfile currentInput = makeDefaultInputProfile();
   input::GyroscopeTurntableConfig runtimeGyroscopeConfig;
@@ -438,6 +508,7 @@ struct SwitchFixture {
     appliedInputPath = firstPaths.inputJson;
     score.SetDatabasePath(firstPaths.scoresDb);
     replay.SetDatabasePath(firstPaths.replaysDb);
+    switchEvents.clear();
   }
 
   PlayerProfileManagerDependencies makeManagerDependencies() {
@@ -446,6 +517,9 @@ struct SwitchFixture {
     dependencies.utcNow = [] { return "2026-07-11T12:34:56Z"; };
     dependencies.beforeMigrationPhase = [this](ProfileMigrationPhase phase,
                                                std::string &error) {
+      if (phase == ProfileMigrationPhase::WriteBootstrap) {
+        switchEvents.emplace_back("commit");
+      }
       if (phase == ProfileMigrationPhase::WriteBootstrap && failBootstrap) {
         error = "injected bootstrap failure";
         return false;
@@ -481,7 +555,11 @@ struct SwitchFixture {
         error = "injected score bind failure";
         return false;
       }
-      return helper.BindDatabasePath(path, error);
+      const bool bound = helper.BindDatabasePath(path, error);
+      if (bound) {
+        switchEvents.emplace_back("bind-score");
+      }
+      return bound;
     };
     dependencies.bindReplay = [this](ReplayDBHelper &helper,
                                      const std::filesystem::path &path,
@@ -490,7 +568,35 @@ struct SwitchFixture {
         error = "injected replay bind failure";
         return false;
       }
-      return helper.BindDatabasePath(path, error);
+      const bool bound = helper.BindDatabasePath(path, error);
+      if (bound) {
+        switchEvents.emplace_back("bind-replay");
+      }
+      return bound;
+    };
+    dependencies.recoverPendingResults = [this] {
+      ++recoveryCalls;
+      switchEvents.emplace_back("recover-results");
+      recoveryObservedTargetBindings =
+          score.GetDatabasePath() == secondPaths.scoresDb &&
+          replay.GetDatabasePath() == secondPaths.replaysDb;
+      {
+        profile_database_activity::WriteGuard nestedRecoveryGuard;
+        recoveryNestedGuardCompleted =
+            ScoreDBHelper::HasActiveWrites() &&
+            ReplayDBHelper::HasActiveWrites();
+      }
+      if (recoveryAction) {
+        recoveryAction();
+      }
+      if (throwRecoveryStd) {
+        throw std::runtime_error(
+            "attempt-private: /private/profile/replays.db");
+      }
+      if (throwRecoveryNonStd) {
+        throw 17;
+      }
+      return recoverySummary;
     };
     dependencies.beforeInputReplacement = [this]() {
       inputReplacementEvents.emplace_back("before");
@@ -499,6 +605,7 @@ struct SwitchFixture {
   }
 
   bool applyInput(const std::filesystem::path &path, std::string &error) {
+    switchEvents.emplace_back("apply-input");
     inputReplacementEvents.emplace_back("apply");
     const auto loaded = InputProfileStore::load(path);
     if (loaded.status != InputProfileLoadStatus::Loaded) {
@@ -528,6 +635,7 @@ struct SwitchFixture {
   }
 
   void refreshCaches() {
+    switchEvents.emplace_back("refresh-caches");
     ++refreshCount;
     if (failRefreshOnce) {
       failRefreshOnce = false;
@@ -640,6 +748,197 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
   expect(savedOldInput.status == InputProfileLoadStatus::Loaded &&
              firstBindingId(savedOldInput.profile) == "unsaved-first-binding",
          "switch saves current input into the old profile first");
+}
+
+void testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  fixture.switchEvents.clear();
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok(), "ordered recovery profile switch succeeds");
+  expect(fixture.switchEvents ==
+             std::vector<std::string>{"bind-score", "bind-replay",
+                                      "recover-results", "apply-input",
+                                      "refresh-caches", "commit"},
+         "target recovery runs after both binds and before input, caches, and "
+         "commit");
+  expect(fixture.recoveryCalls == 1 &&
+             fixture.recoveryObservedTargetBindings,
+         "recovery runs exactly once against both target database bindings");
+}
+
+void testRecoveryWarningDoesNotRollbackSuccessfulSwitch() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  fixture.recoverySummary = {
+      .attempted = 2,
+      .saved = 1,
+      .pending = 1,
+      .conflicts = 0,
+      .userMessage =
+          std::string(result_persistence::recoveryUserMessage()),
+      .diagnostic = "attempt-private: /private/profile/replays.db",
+  };
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok(), "pending recovery warning keeps switch successful");
+  expect(result.message == result_persistence::recoveryUserMessage(),
+         "successful switch preserves only the aggregate recovery warning");
+  expect(fixture.manager.activeProfile().id == fixture.secondId &&
+             fixture.score.GetDatabasePath() == fixture.secondPaths.scoresDb &&
+             fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
+         "recovery warning does not roll back valid target bindings");
+}
+
+void testRecoveryExceptionBecomesSanitizedWarning() {
+  for (const bool nonStandard : {false, true}) {
+    SwitchFixture fixture;
+    if (fixture.firstId.empty() || fixture.secondId.empty()) {
+      continue;
+    }
+    fixture.throwRecoveryStd = !nonStandard;
+    fixture.throwRecoveryNonStd = nonStandard;
+
+    const ProfileSwitchResult result = fixture.coordinator.switchTo(
+        fixture.secondId, fixture.currentSettings);
+
+    expect(result.ok(),
+           "recovery callback exception does not roll back profile switch");
+    expect(result.message == result_persistence::recoveryUserMessage(),
+           "recovery callback exception becomes the sanitized aggregate "
+           "warning");
+    expect(result.message.find("attempt-private") == std::string::npos &&
+               result.message.find("/private/") == std::string::npos,
+           "recovery warning excludes raw exception details");
+    expect(fixture.manager.activeProfile().id == fixture.secondId &&
+               fixture.recoveryCalls == 1,
+           "recovery exception still leaves the target profile active");
+  }
+}
+
+void testRollbackRestoresOldBindingsAfterLaterFailure() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+  const std::string bootstrapBefore =
+      readFile(fixture.temp.path() / "active-profile.json");
+  int recoveredTargetResults = 0;
+  fixture.recoveryAction = [&] { ++recoveredTargetResults; };
+  fixture.failRefreshOnce = true;
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(!result.ok(), "failure after recovery still aborts profile switch");
+  expect(fixture.recoveryCalls == 1 && recoveredTargetResults == 1,
+         "target recovery side effect remains committed after later failure");
+  expectFirstProfileState(fixture, bootstrapBefore,
+                          "post-recovery cache failure");
+}
+
+void testRecoveryRunsUnderExistingSwitchGuardWithoutDeadlock() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+
+  const ProfileSwitchResult result =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+
+  expect(result.ok(), "nested recovery guard profile switch completes");
+  expect(fixture.recoveryNestedGuardCompleted,
+         "recovery acquires its nested write guard under the switch guard");
+}
+
+void testRecoverySkipsSameProfileAndFailedDatabaseBinds() {
+  SwitchFixture sameProfile;
+  if (sameProfile.firstId.empty()) {
+    return;
+  }
+  const ProfileSwitchResult unchanged = sameProfile.coordinator.switchTo(
+      sameProfile.firstId, sameProfile.currentSettings);
+  expect(unchanged.ok() && sameProfile.recoveryCalls == 0,
+         "same-profile early return does not run recovery");
+
+  for (const bool scoreFailure : {true, false}) {
+    SwitchFixture fixture;
+    if (fixture.firstId.empty() || fixture.secondId.empty()) {
+      continue;
+    }
+    fixture.failScoreBind = scoreFailure;
+    fixture.failReplayBind = !scoreFailure;
+    const ProfileSwitchResult result = fixture.coordinator.switchTo(
+        fixture.secondId, fixture.currentSettings);
+    expect(!result.ok() && fixture.recoveryCalls == 0,
+           "failed target database bind never runs recovery");
+  }
+}
+
+void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
+  SwitchFixture fixture;
+  if (fixture.firstId.empty() || fixture.secondId.empty()) {
+    return;
+  }
+
+  seedValidationPolicyMarker(fixture.secondPaths.scoresDb, "score-marker",
+                             "supported-older score");
+  seedValidationPolicyMarker(fixture.secondPaths.replaysDb, "replay-marker",
+                             "supported-older replay");
+  setDatabaseVersion(fixture.secondPaths.scoresDb, 5,
+                     "supported-older score");
+  setDatabaseVersion(fixture.secondPaths.replaysDb, 3,
+                     "supported-older replay");
+
+  expect(fixture.manager.validateProfileForActivation(fixture.secondId).ok(),
+         "activation preflight admits supported-older databases");
+  expect(fixture.manager.validateProfile(fixture.secondId).error ==
+             ProfileError::IntegrityFailure,
+         "runtime-ready validation rejects supported-older databases before "
+         "binding");
+
+  const ProfileSwitchResult switched =
+      fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
+  expect(switched.ok(),
+         "supported-older profile switch completes: " + switched.message);
+
+  std::string versionError;
+  expect(sqliteDatabaseUserVersion(fixture.secondPaths.scoresDb,
+                                   versionError) ==
+             ScoreDBHelper::kCurrentSchemaVersion,
+         "score database owner migrates the supported-older target: " +
+             versionError);
+  versionError.clear();
+  expect(sqliteDatabaseUserVersion(fixture.secondPaths.replaysDb,
+                                   versionError) ==
+             ReplayDBHelper::kCurrentSchemaVersion,
+         "replay database owner migrates the supported-older target: " +
+             versionError);
+  expect(fixture.manager.activeProfile().id == fixture.secondId &&
+             fixture.score.GetDatabasePath() == fixture.secondPaths.scoresDb &&
+             fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
+         "switch commits the migrated target active after both owners bind");
+  expect(fixture.currentClearRank() == kClearTypeHardClearRank &&
+             fixture.currentReplayCount() == 2,
+         "schema-owner migration preserves target scores and replays");
+  expect(queryDatabaseString(fixture.secondPaths.scoresDb,
+                             "SELECT value FROM profile_use_marker",
+                             "migrated score marker") == "score-marker" &&
+             queryDatabaseString(fixture.secondPaths.replaysDb,
+                                 "SELECT value FROM profile_use_marker",
+                                 "migrated replay marker") == "replay-marker",
+         "schema-owner migration preserves unrelated marker rows");
+  expect(fixture.manager.validateProfile(fixture.secondId).ok(),
+         "migrated switched profile is runtime ready");
 }
 
 void testEveryDeclaredBlockerRejectsWithoutMutation() {
@@ -1320,6 +1619,199 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   activeScore.SetDatabasePath(previousScorePath);
 }
 
+void testLegacyForcedLongNoteScoreMigrationPreservesLamp() {
+#if !TARGET_OS_WINDOWS
+  TempDirectory temp;
+  ScopedHomeOverride home(temp.path());
+  const std::filesystem::path chartDirectory =
+      Utils::GetDocumentsPath("db");
+  std::filesystem::create_directories(chartDirectory);
+  Database chartDatabase = openDatabase(chartDirectory / "chart.db");
+  expect(chartDatabase != nullptr,
+         "legacy forced-LN migration chart database opens");
+  if (!chartDatabase) {
+    return;
+  }
+  expect(ChartDBHelper::GetInstance().CreateChartMetaTable(chartDatabase.get()),
+         "legacy forced-LN migration chart schema creates");
+  expect(execute(chartDatabase.get(),
+                 "INSERT INTO chart_meta "
+                 "(path, md5, sha256, title, ln_mode, total_long_notes, "
+                 "total_backspin_notes, source_priority, source_archive_size) "
+                 "VALUES ('forced.bms', '" +
+                     std::string(kChartMd5) + "', '" +
+                     std::string(kChartSha) +
+                     "', 'Forced CN', 2, 1, 0, 0, 0)"),
+         "legacy forced-LN migration chart metadata inserts");
+  chartDatabase.reset();
+
+  const std::filesystem::path scorePath = temp.path() / "legacy-score.db";
+  Database scoreDatabase = openDatabase(scorePath);
+  expect(scoreDatabase != nullptr,
+         "legacy forced-LN migration score database opens");
+  if (!scoreDatabase) {
+    return;
+  }
+  expect(execute(scoreDatabase.get(),
+                 "CREATE TABLE scores ("
+                 "id INTEGER PRIMARY KEY AUTOINCREMENT, chart_path TEXT, "
+                 "chart_md5 TEXT, chart_sha256 TEXT NOT NULL, "
+                 "ln_mode INTEGER NOT NULL DEFAULT 0, chart_title TEXT, "
+                 "chart_artist TEXT, score INTEGER NOT NULL, "
+                 "max_score INTEGER NOT NULL, max_combo INTEGER NOT NULL, "
+                 "combo_break INTEGER NOT NULL, pgreat INTEGER NOT NULL, "
+                 "great INTEGER NOT NULL, good INTEGER NOT NULL, "
+                 "bad INTEGER NOT NULL, poor INTEGER NOT NULL, "
+                 "kpoor INTEGER NOT NULL, fast INTEGER NOT NULL, "
+                 "slow INTEGER NOT NULL, final_gauge REAL NOT NULL, "
+                 "clear_type INTEGER NOT NULL, "
+                 "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
+                 "INSERT INTO scores (chart_path, chart_md5, chart_sha256, "
+                 "ln_mode, chart_title, chart_artist, score, max_score, "
+                 "max_combo, combo_break, pgreat, great, good, bad, poor, "
+                 "kpoor, fast, slow, final_gauge, clear_type) VALUES "
+                 "('forced.bms', '" +
+                     std::string(kChartMd5) + "', '" +
+                     std::string(kChartSha) +
+                     "', 0, 'Forced CN', 'Artist', 1500, 2000, 500, 2, "
+                     "700, 100, 10, 2, 3, 4, 5, 6, 75.0, " +
+                     std::to_string(kClearTypeHardClearRank) +
+                     "); PRAGMA user_version=1;"),
+         "legacy forced-LN score fixture creates");
+  scoreDatabase.reset();
+
+  ScoreDBHelper helper(scorePath);
+  expect(helper.EnsureSchema(),
+         "legacy forced-LN score database migrates");
+  scoreDatabase = openDatabase(scorePath);
+  expect(scoreDatabase != nullptr &&
+             queryInt(scoreDatabase.get(), "SELECT COUNT(*) FROM scores") ==
+                 1,
+         "forced-LN migration retains the historical score row");
+  expect(scoreDatabase != nullptr &&
+             queryInt(scoreDatabase.get(), "SELECT ln_mode FROM scores") ==
+                 long_note_mode::kLnValue,
+         "forced-LN migration classifies the historical score as classic LN");
+  scoreDatabase.reset();
+
+  bms_parser::ChartMeta meta;
+  meta.SHA256 = std::string(kChartSha);
+  meta.LnMode = long_note_mode::kCnValue;
+  meta.TotalLongNotes = 1;
+  expect(helper.LoadBestClearRanks().bestRankFor(
+             meta, long_note_mode::kHcnValue) == kClearTypeHardClearRank,
+         "forced-CN chart inherits its preserved historical classic-LN lamp");
+#endif
+}
+
+void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
+#if !TARGET_OS_WINDOWS
+  struct Case {
+    const char *label;
+    bool rebuildRequired;
+  };
+  for (const Case testCase : {
+           Case{"empty chart metadata", false},
+           Case{"chart metadata rebuild", true},
+       }) {
+    TempDirectory temp;
+    ScopedHomeOverride home(temp.path());
+    const std::filesystem::path chartDirectory =
+        Utils::GetDocumentsPath("db");
+    std::filesystem::create_directories(chartDirectory);
+    Database chartDatabase = openDatabase(chartDirectory / "chart.db");
+    expect(chartDatabase != nullptr,
+           std::string(testCase.label) + " chart database opens");
+    if (!chartDatabase) {
+      continue;
+    }
+    expect(ChartDBHelper::GetInstance().CreateChartMetaTable(
+               chartDatabase.get()),
+           std::string(testCase.label) + " chart schema creates");
+    if (testCase.rebuildRequired) {
+      expect(execute(chartDatabase.get(),
+                     "INSERT INTO chart_meta "
+                     "(path, md5, sha256, title, ln_mode, total_long_notes, "
+                     "total_backspin_notes, source_priority, "
+                     "source_archive_size) VALUES ('stale.bms', '" +
+                         std::string(kChartMd5) + "', '" +
+                         std::string(kChartSha) +
+                         "', 'Stale', 2, 1, 0, 0, 0);"
+                         "CREATE TABLE chart_meta_rebuild_state ("
+                         "id INTEGER PRIMARY KEY CHECK(id=1), "
+                         "required INTEGER NOT NULL DEFAULT 0, "
+                         "updated_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+                         "INSERT INTO chart_meta_rebuild_state "
+                         "(id, required) VALUES (1, 1);"),
+             "rebuild fixture marks chart metadata unavailable");
+    }
+    chartDatabase.reset();
+
+    const std::filesystem::path scorePath =
+        temp.path() / "legacy-unclassified-score.db";
+    Database scoreDatabase = openDatabase(scorePath);
+    expect(scoreDatabase != nullptr,
+           std::string(testCase.label) + " score database opens");
+    if (!scoreDatabase) {
+      continue;
+    }
+    expect(execute(scoreDatabase.get(),
+                   "CREATE TABLE scores ("
+                   "id INTEGER PRIMARY KEY AUTOINCREMENT, chart_path TEXT, "
+                   "chart_md5 TEXT, chart_sha256 TEXT NOT NULL, "
+                   "ln_mode INTEGER NOT NULL DEFAULT 0, chart_title TEXT, "
+                   "chart_artist TEXT, score INTEGER NOT NULL, "
+                   "max_score INTEGER NOT NULL, max_combo INTEGER NOT NULL, "
+                   "combo_break INTEGER NOT NULL, pgreat INTEGER NOT NULL, "
+                   "great INTEGER NOT NULL, good INTEGER NOT NULL, "
+                   "bad INTEGER NOT NULL, poor INTEGER NOT NULL, "
+                   "kpoor INTEGER NOT NULL, fast INTEGER NOT NULL, "
+                   "slow INTEGER NOT NULL, final_gauge REAL NOT NULL, "
+                   "clear_type INTEGER NOT NULL, "
+                   "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);"
+                   "INSERT INTO scores (chart_path, chart_md5, chart_sha256, "
+                   "ln_mode, chart_title, chart_artist, score, max_score, "
+                   "max_combo, combo_break, pgreat, great, good, bad, poor, "
+                   "kpoor, fast, slow, final_gauge, clear_type) VALUES "
+                   "('legacy.bms', '" +
+                       std::string(kChartMd5) + "', '" +
+                       std::string(kChartSha) +
+                       "', 0, 'Legacy', 'Artist', 1500, 2000, 500, 2, "
+                       "700, 100, 10, 2, 3, 4, 5, 6, 75.0, " +
+                       std::to_string(kClearTypeHardClearRank) +
+                       "); PRAGMA user_version=1;"),
+           std::string(testCase.label) + " legacy score fixture creates");
+    scoreDatabase.reset();
+
+    ScoreDBHelper helper(scorePath);
+    expect(helper.EnsureSchema(),
+           std::string(testCase.label) +
+               " does not strand the legacy score migration");
+    scoreDatabase = openDatabase(scorePath);
+    expect(scoreDatabase != nullptr &&
+               queryInt(scoreDatabase.get(), "PRAGMA user_version") ==
+                   ScoreDBHelper::kCurrentSchemaVersion &&
+               queryInt(scoreDatabase.get(), "SELECT COUNT(*) FROM scores") ==
+                   1 &&
+               queryInt(scoreDatabase.get(),
+                        "SELECT ln_mode FROM scores") ==
+                   long_note_mode::kUnknownValue,
+           std::string(testCase.label) +
+               " keeps the unclassified row and completes the schema");
+    scoreDatabase.reset();
+
+    bms_parser::ChartMeta meta;
+    meta.SHA256 = std::string(kChartSha);
+    meta.LnMode = long_note_mode::kCnValue;
+    meta.TotalLongNotes = 1;
+    expect(helper.LoadBestClearRanks().bestRankFor(
+               meta, long_note_mode::kHcnValue) == kClearTypeHardClearRank,
+           std::string(testCase.label) +
+               " retains the historical lamp through legacy fallback");
+  }
+#endif
+}
+
 void testDifficultyCourseKeysTrackCanonicalDefinitions() {
   Database chartDatabase = openDatabase(":memory:");
   expect(chartDatabase != nullptr, "difficulty course key database opens");
@@ -1756,6 +2248,13 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
 
 int main() {
   testSuccessfulSwitchIsIsolatedAndPersistsOldState();
+  testTargetRecoveryRunsAfterBothDatabaseBindsBeforeCacheRefresh();
+  testRecoveryWarningDoesNotRollbackSuccessfulSwitch();
+  testRecoveryExceptionBecomesSanitizedWarning();
+  testRollbackRestoresOldBindingsAfterLaterFailure();
+  testRecoveryRunsUnderExistingSwitchGuardWithoutDeadlock();
+  testRecoverySkipsSameProfileAndFailedDatabaseBinds();
+  testSupportedOlderTargetMigratesAtSchemaOwnerBoundary();
   testEveryDeclaredBlockerRejectsWithoutMutation();
   testBackgroundLibraryBlockerSurvivesSceneReplacement();
   testEveryTransactionalFailureRollsBackAllVisibleState();
@@ -1769,6 +2268,8 @@ int main() {
   testScoreAttachmentPreparationOwnsActivePathSnapshot();
   testPreparedScoreQueryGuardLivesThroughDependentQuery();
   testRealChartDbScoreQueryRetainsPreparedAttachmentGuard();
+  testLegacyForcedLongNoteScoreMigrationPreservesLamp();
+  testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata();
   testDifficultyCourseKeysTrackCanonicalDefinitions();
   testDifficultyCourseImportRejectsAmbiguousCounterpartHashes();
   testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence();

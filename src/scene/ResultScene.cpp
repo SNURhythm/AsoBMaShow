@@ -28,7 +28,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -113,7 +112,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
 play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
     const bms_parser::ChartMeta &meta,
-    const std::optional<ReplayData> &replayToSave,
+    const std::optional<ReplayData> &presentationReplay,
     const std::optional<ReplayData> &retryData,
     const ResultPracticeOptions &practiceOptions) {
   if (practiceOptions.enabled) {
@@ -121,8 +120,8 @@ play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
         meta, practiceOptions.playOption, practiceOptions.playOptionSeed,
         practiceOptions.playOption2, practiceOptions.playOption2Seed);
   }
-  if (replayToSave.has_value()) {
-    return play_options::formatPlayModeDisplayLabel(*replayToSave);
+  if (presentationReplay.has_value()) {
+    return play_options::formatPlayModeDisplayLabel(*presentationReplay);
   }
   if (retryData.has_value()) {
     return play_options::formatPlayModeDisplayLabel(*retryData);
@@ -277,7 +276,7 @@ courseReplayDataForSession(const CoursePlaySession &session,
 ResultScene::ResultScene(
     ApplicationContext &context, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &attemptProvenance,
-    const ReplayData *replay, bool shouldSaveScore,
+    const ReplayData *replay, ResultPersistenceOptions persistenceOptions,
     const ReplayData *retrySource, ResultPracticeOptions practiceOptions,
     bool autoPlayResult, ResultCourseOptions courseOptions,
     std::string pacemakerTarget,
@@ -287,8 +286,8 @@ ResultScene::ResultScene(
     const ReplayData *analyticsSource)
     : Scene(context), meta(meta), resultState(state),
       attemptProvenance(attemptProvenance),
-      replayToSave(replay != nullptr ? std::optional<ReplayData>(*replay)
-                                     : std::nullopt),
+      presentationReplay(replay != nullptr ? std::optional<ReplayData>(*replay)
+                                           : std::nullopt),
       retryData(retrySource != nullptr
                     ? std::optional<ReplayData>(*retrySource)
                     : (replay != nullptr ? std::optional<ReplayData>(*replay)
@@ -296,6 +295,7 @@ ResultScene::ResultScene(
       analyticsData(analyticsSource != nullptr
                         ? std::optional<ReplayData>(*analyticsSource)
                         : std::nullopt),
+      persistenceOptions(std::move(persistenceOptions)),
       practiceOptions(std::move(practiceOptions)),
       courseOptions(std::move(courseOptions)),
       ownedReusableRetryChart(std::move(ownedReusableRetryChart)),
@@ -306,14 +306,14 @@ ResultScene::ResultScene(
           pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                                   : pacemakerTarget)),
       pacemakerOverride(std::move(pacemakerOverride)),
-      shouldSaveScore(shouldSaveScore),
-      replayResult(!shouldSaveScore && retrySource != nullptr &&
-                   !this->practiceOptions.enabled),
+      replayResult(replay == nullptr && retrySource != nullptr &&
+                   !this->practiceOptions.enabled &&
+                   this->courseOptions.mode == ResultCourseMode::None),
       autoPlayResult(autoPlayResult ||
                      (retrySource != nullptr && retrySource->autoPlay)) {
-  const play_options::PlayModeDisplayLabel display =
-      resultPlayModeDisplayLabel(this->meta, replayToSave, retryData,
-                                 this->practiceOptions);
+  applyResultPersistenceReceipt();
+  const play_options::PlayModeDisplayLabel display = resultPlayModeDisplayLabel(
+      this->meta, presentationReplay, retryData, this->practiceOptions);
   playModeLabel = display.mode;
   laneOrderLabel = display.laneOrder;
   if (this->courseOptions.session != nullptr) {
@@ -368,40 +368,42 @@ ResultScene::pacemakerDataForCurrentResult() const {
       meta, resultState, pacemakerTarget, previousBest);
 }
 
-void ResultScene::saveScore() {
-  if (scoreSaved) {
-    return;
+ResultSkinData ResultScene::makeResultSkinData() const {
+  ResultSkinData data = {&resultState, &meta, &context};
+  data.playModeLabel = playModeLabel;
+  data.laneOrderLabel = laneOrderLabel;
+  data.difficultyLabel = difficultyLabel;
+  data.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
+  if (autoPlayResult) {
+    data.currentClearLabelOverride = "AUTO PLAY";
   }
-  scoreSaved = true;
-
-  if (isCourseFinalResult()) {
-    if (courseOptions.session->courseReplayPlayback) {
-      return;
-    }
-    if (!courseOptions.session->courseScoreSaved) {
-      const int completedCharts =
-          static_cast<int>(courseOptions.session->completedResults.size());
-      const int totalCharts =
-          static_cast<int>(courseOptions.session->entries.size());
-      if (ScoreDBHelper::GetInstance().SaveCourseScore(
-              *courseOptions.session, resultState, completedCharts, totalCharts,
-              attemptProvenance)) {
-        courseOptions.session->courseScoreSaved = true;
-      } else {
-        SDL_Log("Failed to save course score: %s",
-                courseOptions.session->courseName.c_str());
-      }
-    }
-    return;
+  if (currentClearLabelOverride.has_value()) {
+    data.currentClearLabelOverride = currentClearLabelOverride;
   }
+  data.currentClearRankOverride = currentClearRankOverride;
+  data.previousBest = previousBest;
+  data.pacemaker = pacemakerDataForCurrentResult();
+  return data;
+}
 
-  if (!shouldSaveScore) {
+void ResultScene::saveCourseScore() {
+  if (!isCourseFinalResult() || courseOptions.session == nullptr ||
+      courseOptions.session->courseReplayPlayback ||
+      courseOptions.session->courseScoreSaved) {
     return;
   }
 
-  if (!ScoreDBHelper::GetInstance().SaveScore(meta, resultState,
-                                              attemptProvenance)) {
-    SDL_Log("Failed to save score for chart: %s", meta.Title.c_str());
+  const int completedCharts =
+      static_cast<int>(courseOptions.session->completedResults.size());
+  const int totalCharts =
+      static_cast<int>(courseOptions.session->entries.size());
+  if (ScoreDBHelper::GetInstance().SaveCourseScore(
+          *courseOptions.session, resultState, completedCharts, totalCharts,
+          attemptProvenance)) {
+    courseOptions.session->courseScoreSaved = true;
+  } else {
+    SDL_Log("Failed to save course score: %s",
+            courseOptions.session->courseName.c_str());
   }
 }
 
@@ -410,10 +412,19 @@ void ResultScene::loadPreviousBest() {
     return;
   }
   previousBestLoaded = true;
+  previousBest.reset();
 
   std::optional<std::string> beforeCreatedAt;
-  if (!shouldSaveScore && retryData.has_value() && !retryData->autoPlay &&
-      !retryData->createdAt.empty()) {
+  std::optional<std::string> excludeAttemptId;
+  const auto *receipt =
+      persistenceOptions.attempt == nullptr
+          ? nullptr
+          : persistenceOptions.outcome.validatedReceiptFor(
+                *persistenceOptions.attempt);
+  if (receipt != nullptr) {
+    excludeAttemptId = persistenceOptions.attempt->attemptId;
+  } else if (replayResult && retryData.has_value() && !retryData->autoPlay &&
+             !retryData->createdAt.empty()) {
     beforeCreatedAt = retryData->createdAt;
   }
 
@@ -421,7 +432,7 @@ void ResultScene::loadPreviousBest() {
                         ? ScoreDBHelper::GetInstance().LoadBestCourseScore(
                               *courseOptions.session)
                         : ScoreDBHelper::GetInstance().LoadBestScore(
-                              meta, beforeCreatedAt);
+                              meta, beforeCreatedAt, excludeAttemptId);
   if (best.has_value()) {
     previousBest = result_presentation::previousBestDataFromSnapshot(*best);
   }
@@ -435,50 +446,59 @@ void ResultScene::loadDifficultyLabel() {
   difficultyLabel = result_presentation::difficultyLabelForChart(meta);
 }
 
-void ResultScene::saveReplay() {
-  if (isCourseFinalResult()) {
-    auto session = courseOptions.session;
-    if (session == nullptr || session->courseReplayPlayback ||
-        session->courseReplaySaved) {
-      return;
-    }
-
-    auto pendingCourseReplay = courseReplayDataForSession(
-        *session, resultState, attemptProvenance);
-    if (!pendingCourseReplay.has_value()) {
-      SDL_Log("Refusing incomplete or non-contiguous course replay: %s",
-              session->courseName.c_str());
-      return;
-    }
-    auto courseReplay = std::make_shared<CourseReplayData>(
-        std::move(*pendingCourseReplay));
-
-    auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
-    if (!replayId.has_value()) {
-      SDL_Log("Failed to save course replay: %s",
-              session->courseName.c_str());
-      return;
-    }
-
-    courseReplay->id = *replayId;
-    session->savedCourseReplayId = *replayId;
-    session->courseReplaySaved = true;
-    session->courseReplayData = std::move(courseReplay);
+void ResultScene::saveCourseReplay() {
+  auto session = courseOptions.session;
+  if (!isCourseFinalResult() || session == nullptr ||
+      session->courseReplayPlayback || session->courseReplaySaved) {
     return;
   }
 
-  if (replaySaved || !replayToSave.has_value() ||
-      replayToSave->events.empty()) {
+  auto pendingCourseReplay =
+      courseReplayDataForSession(*session, resultState, attemptProvenance);
+  if (!pendingCourseReplay.has_value()) {
+    SDL_Log("Refusing incomplete or non-contiguous course replay: %s",
+            session->courseName.c_str());
     return;
   }
-  replaySaved = true;
+  auto courseReplay =
+      std::make_shared<CourseReplayData>(std::move(*pendingCourseReplay));
 
-  assert(replayToSave->provenance == attemptProvenance);
-  replayToSave->provenance = attemptProvenance;
-
-  if (!ReplayDBHelper::GetInstance().SaveReplay(*replayToSave).has_value()) {
-    SDL_Log("Failed to save replay for chart: %s", meta.Title.c_str());
+  auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
+  if (!replayId.has_value()) {
+    SDL_Log("Failed to save course replay: %s", session->courseName.c_str());
+    return;
   }
+
+  courseReplay->id = *replayId;
+  session->savedCourseReplayId = *replayId;
+  session->courseReplaySaved = true;
+  session->courseReplayData = std::move(courseReplay);
+}
+
+void ResultScene::applyResultPersistenceReceipt() {
+  const auto *receipt =
+      persistenceOptions.attempt == nullptr
+          ? nullptr
+          : persistenceOptions.outcome.validatedReceiptFor(
+                *persistenceOptions.attempt);
+  if (receipt == nullptr) {
+    return;
+  }
+
+  const auto applyReceipt = [receipt](std::optional<ReplayData> &replay) {
+    if (!replay.has_value()) {
+      return;
+    }
+    replay->id = receipt->replayId;
+    replay->createdAt = receipt->createdAt;
+  };
+  applyReceipt(presentationReplay);
+  applyReceipt(retryData);
+}
+
+bool ResultScene::persistenceDecisionRequired() const {
+  return persistenceOptions.outcome.requiresUserDecision(
+      persistenceOptions.attempt != nullptr, persistenceContinueChosen);
 }
 
 std::optional<practice::ResultModel>
@@ -496,8 +516,8 @@ ResultScene::makeTimingAnalyticsModel() const {
   } else if (analyticsData.has_value()) {
     singleAttempt.front() = *analyticsData;
     completedAttempts = singleAttempt;
-  } else if (replayToSave.has_value()) {
-    singleAttempt.front() = *replayToSave;
+  } else if (presentationReplay.has_value()) {
+    singleAttempt.front() = *presentationReplay;
     singleAttempt.front().autoPlay =
         singleAttempt.front().autoPlay || autoPlayResult;
     completedAttempts = singleAttempt;
@@ -558,6 +578,156 @@ void ResultScene::addTimingAnalytics() {
   timingAnalyticsView =
       new PracticeAnalyticsView(std::move(*analyticsModel));
   host->addView(timingAnalyticsView);
+}
+
+void ResultScene::addResultPersistenceStatus() {
+  if (rootLayout == nullptr) {
+    return;
+  }
+
+  normalResultActions = rootLayout->findViewByName("resultActions");
+  const bool hasPersistenceResult =
+      persistenceOptions.attempt != nullptr ||
+      !persistenceOptions.outcome.userMessage.empty();
+  if (!hasPersistenceResult) {
+    return;
+  }
+
+  auto *status = new View();
+  status->setName("resultPersistenceStatus");
+  status->setWidthPercent(100.0f);
+  status->setPadding(Edge::All, 18);
+  status->setFlexDirection(FlexDirection::Column);
+  status->setAlignItems(YGAlignCenter);
+  status->setGap(14);
+  status->setBackgroundColor(ui_theme::resultPanelStrong());
+  status->setCornerRadius(ui_theme::panelRadius());
+  status->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 180));
+  status->setBorderWidth(1);
+  status->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+
+  persistenceStatusMessage = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  persistenceStatusMessage->setText(persistenceOptions.outcome.userMessage);
+  persistenceStatusMessage->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  persistenceStatusMessage->setAlign(TextView::CENTER);
+  persistenceStatusMessage->setWrap(true);
+  persistenceStatusMessage->setWidthPercent(100.0f);
+  persistenceStatusMessage->setHeight(58);
+  status->addView(persistenceStatusMessage);
+
+  auto *actions = new View();
+  actions->setFlexDirection(FlexDirection::Row);
+  actions->setAlignItems(YGAlignCenter);
+  actions->setJustifyContent(YGJustifyCenter);
+  actions->setFlexWrap(YGWrapWrap);
+  actions->setGap(14);
+
+  const auto makeButton = [](const std::string &label, Color normal,
+                             Color hover, Color pressed, Color border,
+                             std::function<void()> onClick) {
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    button->setContentView(text);
+    button->setOnClickListener(std::move(onClick));
+    button->setSize(292, 60);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(normal, hover, pressed);
+    button->setBorderColors(ui_theme::withAlpha(border, 150),
+                            ui_theme::withAlpha(border, 190),
+                            ui_theme::withAlpha(border, 220));
+    button->setStyledBorderWidth(1);
+    return button;
+  };
+
+  persistenceRetryButton = makeButton(
+      "Retry Save", ui_theme::primaryAction(), ui_theme::primaryActionHover(),
+      ui_theme::primaryActionPressed(), ui_theme::cyan(),
+      [this]() { retryResultPersistence(); });
+  persistenceRetryButton->setEnabled(persistenceOptions.attempt != nullptr &&
+                                     persistenceOptions.outcome.retryable());
+  actions->addView(persistenceRetryButton);
+  actions->addView(makeButton(
+      "Continue Without Saving", ui_theme::warningAction(),
+      ui_theme::warningActionHover(), ui_theme::warningActionPressed(),
+      ui_theme::coral(), [this]() { continueWithoutSaving(); }));
+  status->addView(actions);
+
+  if (normalResultActions != nullptr) {
+    rootLayout->insertViewBefore(status, normalResultActions);
+  } else {
+    rootLayout->addView(status);
+  }
+  resultPersistenceStatus = status;
+}
+
+void ResultScene::retryResultPersistence() {
+  if (persistenceOptions.attempt == nullptr ||
+      !persistenceOptions.outcome.retryable()) {
+    return;
+  }
+
+  persistenceContinueChosen = false;
+  persistenceOptions.outcome =
+      context.resultPersistence.persist(*persistenceOptions.attempt);
+  SDL_Log("Result persistence retry state=%d diagnostic=%s",
+          static_cast<int>(persistenceOptions.outcome.state),
+          persistenceOptions.outcome.diagnostic.c_str());
+  applyResultPersistenceReceipt();
+  previousBestLoaded = false;
+  loadPreviousBest();
+  defer(
+      [this]() {
+        refreshResultSummary();
+        updateResultPersistencePresentation();
+        return true;
+      },
+      0, true);
+}
+
+void ResultScene::continueWithoutSaving() {
+  persistenceContinueChosen = true;
+  updateResultPersistencePresentation();
+}
+
+void ResultScene::updateResultPersistencePresentation() {
+  const bool decisionRequired = persistenceDecisionRequired();
+  if (normalResultActions != nullptr) {
+    normalResultActions->setVisible(!decisionRequired);
+    normalResultActions->setDisplay(decisionRequired ? YGDisplayNone
+                                                     : YGDisplayFlex);
+  }
+  if (resultPersistenceStatus != nullptr) {
+    resultPersistenceStatus->setVisible(decisionRequired);
+    resultPersistenceStatus->setDisplay(decisionRequired ? YGDisplayFlex
+                                                         : YGDisplayNone);
+  }
+  if (persistenceStatusMessage != nullptr) {
+    persistenceStatusMessage->setText(persistenceOptions.outcome.userMessage);
+  }
+  if (persistenceRetryButton != nullptr) {
+    persistenceRetryButton->setEnabled(persistenceOptions.attempt != nullptr &&
+                                       persistenceOptions.outcome.retryable());
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ResultScene::refreshResultSummary() {
+  if (rootLayout == nullptr || skin == nullptr) {
+    return;
+  }
+  View *summary = rootLayout->findViewByName("resultSummary");
+  if (summary == nullptr) {
+    return;
+  }
+  ResultSkinData data = makeResultSkinData();
+  skin->rebuildLayoutSection("ResultSummary", summary, &data);
+  rootLayout->applyYogaLayout();
 }
 
 void ResultScene::addRetryButtons() {
@@ -1031,7 +1201,8 @@ void ResultScene::showCourseResult() {
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
           context, courseMeta, courseState, session->aggregateProvenance(),
-          nullptr, false, nullptr, ResultPracticeOptions{}, false,
+          nullptr, ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{},
+          false,
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
                               .session = session}),
       false);
@@ -1226,6 +1397,9 @@ void ResultScene::startRetry(bool samePattern) {
 }
 
 void ResultScene::exitResult() {
+  if (persistenceDecisionRequired()) {
+    return;
+  }
   context.jukebox.stop();
   if (practiceOptions.enabled && practiceOptions.returnScene != nullptr) {
     context.sceneManager->changeScene(practiceOptions.returnScene, false);
@@ -1468,29 +1642,17 @@ void ResultScene::init() {
 
   loadDifficultyLabel();
   loadPreviousBest();
-  saveScore();
-  saveReplay();
+  saveCourseScore();
+  saveCourseReplay();
 
   rootLayout =
       new View(0, 0, rendering::window_width, rendering::window_height);
   addView(rootLayout);
 
-  ResultSkinData data = {&resultState, &meta, &context};
-  data.playModeLabel = playModeLabel;
-  data.laneOrderLabel = laneOrderLabel;
-  data.difficultyLabel = difficultyLabel;
-  data.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
-  if (autoPlayResult) {
-    data.currentClearLabelOverride = "AUTO PLAY";
-  }
-  if (currentClearLabelOverride.has_value()) {
-    data.currentClearLabelOverride = currentClearLabelOverride;
-  }
-  data.currentClearRankOverride = currentClearRankOverride;
-  data.previousBest = previousBest;
-  data.pacemaker = pacemakerDataForCurrentResult();
+  ResultSkinData data = makeResultSkinData();
   skin->buildLayout("Result", rootLayout, &data);
   addTimingAnalytics();
+  addResultPersistenceStatus();
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();
     buildCourseExitConfirmation();
@@ -1505,6 +1667,8 @@ void ResultScene::init() {
       backButton->setOnClickListener([this]() { exitResult(); });
     }
   }
+
+  updateResultPersistencePresentation();
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
 
@@ -1549,6 +1713,10 @@ void ResultScene::renderScene() {
 void ResultScene::cleanupScene() {
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
+  normalResultActions = nullptr;
+  resultPersistenceStatus = nullptr;
+  persistenceStatusMessage = nullptr;
+  persistenceRetryButton = nullptr;
   timingAnalyticsView = nullptr;
   courseExitConfirmation = nullptr;
   exportPhotoButton = nullptr;

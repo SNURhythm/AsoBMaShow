@@ -26,6 +26,7 @@ import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
+import android.util.Log;
 
 import org.libsdl.app.SDLActivity;
 
@@ -46,12 +47,8 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
@@ -86,17 +83,13 @@ public class AsoBMaShowActivity extends SDLActivity {
     private DocumentHandoffOperation documentHandoffOperation;
     private static final DocumentHandoffTokenRegistry DOCUMENT_HANDOFF_TOKENS =
             new DocumentHandoffTokenRegistry();
-    private static final DocumentHandoffRestoreRegistry DOCUMENT_HANDOFF_RESTORES =
-            new DocumentHandoffRestoreRegistry();
-    private static final Executor DOCUMENT_HANDOFF_ROLLBACK_EXECUTOR =
-            new ThreadPoolExecutor(
-                    1, 1, 0L, TimeUnit.MILLISECONDS,
-                    new ArrayBlockingQueue<>(8), runnable -> {
-                        Thread thread = new Thread(
-                                runnable, "AsoBMaShow-document-rollback");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
+    private static final String TAG = "AsoBMaShow";
+    private static final DocumentHandoffRollbackCoordinator
+            DOCUMENT_HANDOFF_ROLLBACKS =
+            DocumentHandoffRollbackCoordinator.createDefault(
+                    ignored -> Log.e(
+                            TAG,
+                            "Could not restore an empty export destination."));
     private boolean documentHandoffDestroyed = false;
     private final Object manageStorageLock = new Object();
     private CountDownLatch manageStorageLatch;
@@ -826,17 +819,17 @@ public class AsoBMaShowActivity extends SDLActivity {
         DocumentHandoffExportPolicy.Decision destinationDecision = null;
         boolean destinationTouched = false;
         boolean restoreEmpty = false;
-        DocumentHandoffRestoreRegistry.Ticket uriWriteTicket = null;
+        DocumentHandoffRollbackCoordinator.Lease uriWriteLease = null;
         String operationResult = SUCCESS_RESULT;
         try {
             if (!registerDocumentHandoffIo(
                     selection.operation, cancellation, null)) {
                 throw new DocumentHandoffCancelledException();
             }
-            uriWriteTicket = DOCUMENT_HANDOFF_RESTORES.acquire(
+            uriWriteLease = DOCUMENT_HANDOFF_ROLLBACKS.acquire(
                     destinationKey,
                     () -> selection.operation.cancelled);
-            if (uriWriteTicket == null) {
+            if (uriWriteLease == null) {
                 throw new DocumentHandoffCancelledException();
             }
             throwIfDocumentHandoffCancelled(selection.operation);
@@ -895,9 +888,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         if (SUCCESS_RESULT.equals(operationResult) &&
                 nativeCommitDocumentHandoff(operationToken) &&
                 commitDocumentHandoffOperation(selection.operation)) {
-            if (uriWriteTicket != null) {
-                DOCUMENT_HANDOFF_RESTORES.complete(uriWriteTicket);
-            }
+            DOCUMENT_HANDOFF_ROLLBACKS.finish(uriWriteLease);
             return SUCCESS_RESULT;
         }
         if (SUCCESS_RESULT.equals(operationResult)) {
@@ -906,12 +897,10 @@ public class AsoBMaShowActivity extends SDLActivity {
                     destinationDecision, destinationTouched);
         }
 
-        if (restoreEmpty && uriWriteTicket != null &&
-                restoreEmptyDocumentAsync(selection.uri, uriWriteTicket)) {
-            uriWriteTicket = null;
-        }
-        if (uriWriteTicket != null) {
-            DOCUMENT_HANDOFF_RESTORES.complete(uriWriteTicket);
+        if (restoreEmpty && uriWriteLease != null) {
+            restoreEmptyDocument(selection.uri, uriWriteLease);
+        } else if (uriWriteLease != null) {
+            DOCUMENT_HANDOFF_ROLLBACKS.finish(uriWriteLease);
         }
         if (!finishDocumentHandoffOperation(selection.operation)) {
             return CANCELLED_RESULT;
@@ -2063,27 +2052,19 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
-    private boolean restoreEmptyDocumentAsync(
-            Uri uri, DocumentHandoffRestoreRegistry.Ticket ticket) {
+    private void restoreEmptyDocument(
+            Uri uri, DocumentHandoffRollbackCoordinator.Lease lease) {
         ContentResolver resolver =
                 getApplicationContext().getContentResolver();
-        try {
-            DOCUMENT_HANDOFF_ROLLBACK_EXECUTOR.execute(() -> {
-                try (OutputStream output =
-                             resolver.openOutputStream(uri, "wt")) {
-                    if (output != null) {
-                        output.flush();
-                    }
-                } catch (Exception ignored) {
-                    // The only accepted pre-state was empty; preserve it when possible.
-                } finally {
-                    DOCUMENT_HANDOFF_RESTORES.complete(ticket);
+        DOCUMENT_HANDOFF_ROLLBACKS.rollback(lease, () -> {
+            try (OutputStream output = resolver.openOutputStream(uri, "wt")) {
+                if (output == null) {
+                    return false;
                 }
-            });
-            return true;
-        } catch (Exception ignored) {
-            return false;
-        }
+                output.flush();
+                return true;
+            }
+        });
     }
 
     private void finishPicker() {

@@ -253,6 +253,8 @@ int main() {
               0, kClearTypeFullComboRank, "2026-01-02 00:00:00",
               kNeutralProvenanceJson,
               static_cast<int>(ScoreEligibility::Modified));
+  insertScore(db, "historical-ln", "md5-historical-ln", "", 1, 170, 200,
+              85, 1, kClearTypeHardClearRank, "2026-01-01 00:00:00");
 
   ASSERT_EQ(180,
             queryInt(db,
@@ -271,6 +273,29 @@ int main() {
                      "SELECT " + score_cache_queries::scoreRankLookupExpr(
                                      "'abcdef'", "1")),
             "ln mode 1 falls back to mode 0 full combo clear rank");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            queryInt(db,
+                     "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                     "'historical-ln'", "2")),
+            "CN lamp falls back to a historical classic-LN result");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            queryInt(db,
+                     "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                     "'historical-ln'", "3")),
+            "HCN lamp falls back to a historical classic-LN result");
+  ASSERT_EQ(1,
+            queryInt(db,
+                     "SELECT " + score_cache_queries::scoreBestLookupExpr(
+                                     "'historical-ln'", "2", "score") +
+                         " IS NULL"),
+            "CN best score does not inherit a historical classic-LN score");
+  insertScore(db, "historical-ln", "md5-historical-ln", "", 2, 120, 200,
+              60, 1, kClearTypeEasyClearRank, "2026-01-02 00:00:00");
+  ASSERT_EQ(kClearTypeEasyClearRank,
+            queryInt(db,
+                     "SELECT " + score_cache_queries::scoreRankLookupExpr(
+                                     "'historical-ln'", "2")),
+            "exact CN lamp takes priority over historical classic-LN");
   ASSERT_EQ(150,
             queryInt(db,
                      "SELECT " +

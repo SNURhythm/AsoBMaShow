@@ -51,16 +51,16 @@ struct ScoreBestByLongNoteMode {
 using ScoreRankMap = std::unordered_map<std::string, ScoreRankByLongNoteMode,
                                         TransparentStringHash, std::equal_to<>>;
 struct CourseScoreRankByLongNoteMode {
-  std::array<int, 4> ranks{kNoClearTypeRank, kNoClearTypeRank,
-                           kNoClearTypeRank, kNoClearTypeRank};
+  std::array<int, 4> ranks{kNoClearTypeRank, kNoClearTypeRank, kNoClearTypeRank,
+                           kNoClearTypeRank};
   int wildcardRank = kNoClearTypeRank;
 
   [[nodiscard]] int bestRankForMode(int lnMode) const;
 };
 
-using CourseScoreRankMap = std::unordered_map<
-    std::string, CourseScoreRankByLongNoteMode, TransparentStringHash,
-    std::equal_to<>>;
+using CourseScoreRankMap =
+    std::unordered_map<std::string, CourseScoreRankByLongNoteMode,
+                       TransparentStringHash, std::equal_to<>>;
 using LegacyCourseScoreRankMap =
     std::unordered_map<int, CourseScoreRankByLongNoteMode>;
 using ScoreBestMap = std::unordered_map<std::string, ScoreBestByLongNoteMode,
@@ -121,9 +121,25 @@ scoreLongNoteModeForClearLamp(const bms_parser::ChartMeta &chartMeta,
 
 struct CoursePlaySession;
 
+namespace result_persistence {
+struct PendingChartScoreWrite;
+
+enum class ProjectionStatus {
+  Inserted,
+  AlreadyPresent,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ProjectionOutcome {
+  ProjectionStatus status = ProjectionStatus::StorageFailure;
+  std::string diagnostic;
+};
+} // namespace result_persistence
+
 class ScoreDBHelper {
 public:
-  static constexpr int kCurrentSchemaVersion = 8;
+  static constexpr int kCurrentSchemaVersion = 9;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:
@@ -176,6 +192,8 @@ public:
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state,
                  const ScoreProvenance &provenance = ScoreProvenance::Legacy());
+  result_persistence::ProjectionOutcome
+  SaveProjectedScore(const result_persistence::PendingChartScoreWrite &pending);
   bool CreateCourseScoreTable(sqlite3 *db);
   bool InsertCourseScore(
       sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
@@ -187,7 +205,8 @@ public:
       const ScoreProvenance &provenance = ScoreProvenance::Legacy());
   std::optional<ScoreBestSnapshot> LoadBestScore(
       const bms_parser::ChartMeta &chartMeta,
-      const std::optional<std::string> &beforeCreatedAt = std::nullopt);
+      const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+      const std::optional<std::string> &excludeAttemptId = std::nullopt);
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
   CourseScoreRecoveryResult RecoverCourseRecords(
@@ -203,26 +222,22 @@ private:
   bool CreateScoreTableOnConnection(sqlite3 *db);
   bool CreateCourseScoreTableOnConnection(sqlite3 *db);
   bool EnsureSchemaOnConnection(sqlite3 *db);
-  bool InsertScoreOnConnection(sqlite3 *db,
-                               const bms_parser::ChartMeta &chartMeta,
-                               const RhythmState &state,
-                               const ScoreProvenance &provenance,
-                               const std::string &provenanceJson);
-  bool InsertCourseScoreOnConnection(
-      sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
-      int completedCharts, int totalCharts, const ScoreProvenance &provenance,
-      const std::string &provenanceJson);
-  std::optional<ScoreBestSnapshot> LoadBestScoreOnConnection(
-      sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
-      const std::optional<std::string> &beforeCreatedAt);
+  bool InsertCourseScoreOnConnection(sqlite3 *db,
+                                     const CoursePlaySession &session,
+                                     const RhythmState &state,
+                                     int completedCharts, int totalCharts,
+                                     const ScoreProvenance &provenance,
+                                     const std::string &provenanceJson);
+  std::optional<ScoreBestSnapshot>
+  LoadBestScoreOnConnection(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
+                            const std::optional<std::string> &beforeCreatedAt,
+                            const std::optional<std::string> &excludeAttemptId);
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScoreOnConnection(sqlite3 *db,
                                   const CoursePlaySession &session);
   CourseScoreRecoveryResult RecoverCourseRecordsOnConnection(
-      sqlite3 *db,
-      std::span<const course_identity::Definition> definitions);
-  [[nodiscard]] std::filesystem::path
-  GetResolvedDatabasePathLocked() const;
+      sqlite3 *db, std::span<const course_identity::Definition> definitions);
+  [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;
   sqlite3 *EnsureSessionDatabaseLocked();
   void CloseSessionDatabaseLocked();
 

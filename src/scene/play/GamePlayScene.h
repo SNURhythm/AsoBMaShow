@@ -15,7 +15,9 @@
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../input/InputTypes.h"
+#include "../../practice/PracticeResultFlow.h"
 #include "../../view/TextView.h"
+#include "../ResultScene.h"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -85,10 +87,10 @@ private:
   [[nodiscard]] int effectiveNoteStartPositionPercent() const;
   [[nodiscard]] bool shouldRecordReplay() const;
   [[nodiscard]] bool shouldPersistRecordedReplay() const;
+  [[nodiscard]] practice::ResultCapturePolicy resultCapturePolicy() const;
   [[nodiscard]] std::optional<NoteTimeRange> practiceNoteRange() const;
   [[nodiscard]] bool practiceInputAllowed(long long chartTimeMicros) const;
-  [[nodiscard]] bool practiceReplayEventAllowed(
-      const ReplayEvent &event) const;
+  [[nodiscard]] bool practiceReplayEventAllowed(const ReplayEvent &event) const;
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();
@@ -181,6 +183,8 @@ private:
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;
+  ResultPersistenceOptions resultPersistenceOptions;
+  std::string resultPersistenceAttemptId;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;
   std::unordered_map<std::string, bms_parser::Note *> replayNoteLookup;
   std::unordered_map<bms_parser::LongNote *, long long>
@@ -194,6 +198,7 @@ private:
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
+  bool resultPersistenceAttemptCreationTried = false;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
   bool floatingLaneCoverSettingsDirty = false;

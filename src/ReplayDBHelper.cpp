@@ -5,12 +5,16 @@
 #include "LongNoteModeUtils.h"
 #include "ProfileDatabaseActivity.h"
 #include "SqliteRAII.h"
+#include "Uuid.h"
 #include "Utils.h"
 #include "path.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <bit>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -335,6 +339,449 @@ bool backfillCompleteCourseReplayKeys(sqlite3 *db) {
   return true;
 }
 
+constexpr const char *kReplayAttemptIdIndexSql =
+    "CREATE UNIQUE INDEX idx_replays_attempt_id ON "
+    "replays(attempt_id) WHERE attempt_id IS NOT NULL";
+
+constexpr const char *kPendingChartScoreWritesTableSql =
+    "CREATE TABLE pending_chart_score_writes ("
+    "attempt_id TEXT PRIMARY KEY NOT NULL,"
+    "replay_id INTEGER NOT NULL UNIQUE,"
+    "chart_path TEXT NOT NULL,"
+    "chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,"
+    "chart_title TEXT NOT NULL,"
+    "chart_artist TEXT NOT NULL,"
+    "ln_mode INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,"
+    "max_score INTEGER NOT NULL,"
+    "max_combo INTEGER NOT NULL,"
+    "combo_break INTEGER NOT NULL,"
+    "pgreat INTEGER NOT NULL,"
+    "great INTEGER NOT NULL,"
+    "good INTEGER NOT NULL,"
+    "bad INTEGER NOT NULL,"
+    "poor INTEGER NOT NULL,"
+    "kpoor INTEGER NOT NULL,"
+    "fast INTEGER NOT NULL,"
+    "slow INTEGER NOT NULL,"
+    "final_gauge REAL NOT NULL,"
+    "clear_type INTEGER NOT NULL,"
+    "ruleset_version INTEGER NOT NULL,"
+    "eligibility INTEGER NOT NULL,"
+    "provenance_json TEXT NOT NULL,"
+    "created_at TEXT NOT NULL,"
+    "recovery_attempts INTEGER NOT NULL DEFAULT 0,"
+    "last_recovery_at TEXT,"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kPendingChartScoreRecoveryIndexSql =
+    "CREATE INDEX idx_pending_chart_score_created ON "
+    "pending_chart_score_writes("
+    "recovery_attempts, last_recovery_at, created_at, attempt_id)";
+
+enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
+
+struct NamedSchemaObjectInspection {
+  bool present = false;
+  bool exact = false;
+};
+
+unsigned char sqliteAsciiIdentifierFold(unsigned char character) {
+  return character >= 'A' && character <= 'Z'
+             ? static_cast<unsigned char>(character + ('a' - 'A'))
+             : character;
+}
+
+bool sqliteAsciiIdentifiersEqual(std::string_view left,
+                                 std::string_view right) {
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < left.size(); ++i) {
+    if (sqliteAsciiIdentifierFold(static_cast<unsigned char>(left[i])) !=
+        sqliteAsciiIdentifierFold(static_cast<unsigned char>(right[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+enum class SchemaSqlTokenKind {
+  Word,
+  QuotedIdentifier,
+  Number,
+  String,
+  Symbol,
+};
+
+struct SchemaSqlToken {
+  SchemaSqlTokenKind kind{};
+  std::string text;
+};
+
+std::optional<std::vector<SchemaSqlToken>>
+tokenizeSchemaSql(std::string_view sql) {
+  std::vector<SchemaSqlToken> result;
+  for (std::size_t i = 0; i < sql.size();) {
+    const unsigned char character = static_cast<unsigned char>(sql[i]);
+    if (std::isspace(character) != 0) {
+      ++i;
+      continue;
+    }
+    if (character == '"' || character == '`' || character == '[') {
+      const char openingQuote = static_cast<char>(character);
+      const char closingQuote = openingQuote == '[' ? ']' : openingQuote;
+      std::string identifier;
+      bool closed = false;
+      for (++i; i < sql.size(); ++i) {
+        if (sql[i] == closingQuote) {
+          if (openingQuote != '[' && i + 1 < sql.size() &&
+              sql[i + 1] == closingQuote) {
+            identifier.push_back(closingQuote);
+            ++i;
+            continue;
+          }
+          ++i;
+          closed = true;
+          break;
+        }
+        identifier.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(sql[i]))));
+      }
+      if (!closed) {
+        return std::nullopt;
+      }
+      result.push_back({.kind = SchemaSqlTokenKind::QuotedIdentifier,
+                        .text = std::move(identifier)});
+      continue;
+    }
+    if (character == '\'') {
+      std::string value;
+      bool closed = false;
+      for (++i; i < sql.size(); ++i) {
+        if (sql[i] == '\'') {
+          if (i + 1 < sql.size() && sql[i + 1] == '\'') {
+            value.push_back('\'');
+            ++i;
+            continue;
+          }
+          ++i;
+          closed = true;
+          break;
+        }
+        value.push_back(sql[i]);
+      }
+      if (!closed) {
+        return std::nullopt;
+      }
+      result.push_back(
+          {.kind = SchemaSqlTokenKind::String, .text = std::move(value)});
+      continue;
+    }
+    if (std::isdigit(character) != 0) {
+      const std::size_t begin = i++;
+      while (i < sql.size() &&
+             std::isdigit(static_cast<unsigned char>(sql[i])) != 0) {
+        ++i;
+      }
+      result.push_back({.kind = SchemaSqlTokenKind::Number,
+                        .text = std::string(sql.substr(begin, i - begin))});
+      continue;
+    }
+    if (std::isalpha(character) != 0 || character == '_' || character == '$') {
+      std::string word;
+      do {
+        word.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(sql[i++]))));
+      } while (i < sql.size() &&
+               (std::isalnum(static_cast<unsigned char>(sql[i])) != 0 ||
+                sql[i] == '_' || sql[i] == '$'));
+      result.push_back(
+          {.kind = SchemaSqlTokenKind::Word, .text = std::move(word)});
+      continue;
+    }
+    result.push_back({.kind = SchemaSqlTokenKind::Symbol,
+                      .text = std::string(1, static_cast<char>(character))});
+    ++i;
+  }
+  return result;
+}
+
+bool schemaSqlIsEquivalent(std::string_view actual, std::string_view expected) {
+  const auto actualTokens = tokenizeSchemaSql(actual);
+  const auto expectedTokens = tokenizeSchemaSql(expected);
+  if (!actualTokens.has_value() || !expectedTokens.has_value() ||
+      actualTokens->size() != expectedTokens->size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < actualTokens->size(); ++i) {
+    const SchemaSqlToken &actualToken = (*actualTokens)[i];
+    const SchemaSqlToken &expectedToken = (*expectedTokens)[i];
+    if (actualToken.text != expectedToken.text) {
+      return false;
+    }
+    if (actualToken.kind == expectedToken.kind) {
+      continue;
+    }
+    if (expectedToken.kind != SchemaSqlTokenKind::Word ||
+        actualToken.kind != SchemaSqlTokenKind::QuotedIdentifier ||
+        sqlite3_keyword_check(expectedToken.text.c_str(),
+                              static_cast<int>(expectedToken.text.size())) !=
+            0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool inspectNamedSchemaObject(sqlite3 *db, std::string_view name,
+                              std::string_view expectedType,
+                              std::string_view expectedTable,
+                              std::string_view expectedSql,
+                              NamedSchemaObjectInspection &inspection,
+                              const char *context) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT type, tbl_name, sql FROM sqlite_master "
+          "WHERE name = ? COLLATE NOCASE",
+          stmt, context, logSqlErrorText) ||
+      name.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+      sqlite3_bind_text(stmt.get(), 1, name.data(),
+                        static_cast<int>(name.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK) {
+    logSqlError(context, db);
+    return false;
+  }
+
+  int rc = sqlite3_step(stmt.get());
+  if (rc == SQLITE_DONE) {
+    return true;
+  }
+  if (rc != SQLITE_ROW) {
+    logSqlError(context, db);
+    return false;
+  }
+  inspection.present = true;
+  inspection.exact =
+      sqlite3_column_type(stmt.get(), 0) == SQLITE_TEXT &&
+      sqliteColumnTextView(stmt.get(), 0) == expectedType &&
+      sqlite3_column_type(stmt.get(), 1) == SQLITE_TEXT &&
+      sqliteAsciiIdentifiersEqual(sqliteColumnTextView(stmt.get(), 1),
+                                  expectedTable) &&
+      sqlite3_column_type(stmt.get(), 2) == SQLITE_TEXT &&
+      schemaSqlIsEquivalent(sqliteColumnTextView(stmt.get(), 2), expectedSql);
+
+  rc = sqlite3_step(stmt.get());
+  while (rc == SQLITE_ROW) {
+    inspection.exact = false;
+    rc = sqlite3_step(stmt.get());
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError(context, db);
+    return false;
+  }
+  return true;
+}
+
+bool inspectNamedIndexShape(
+    sqlite3 *db, std::string_view tableName, std::string_view indexName,
+    bool expectedUnique, bool expectedPartial,
+    const std::vector<std::string_view> &expectedColumns, bool &exact,
+    const char *context) {
+  exact = false;
+  const std::string indexListQuery =
+      "PRAGMA index_list(\"" + std::string(tableName) + "\")";
+  SqliteStatementHandle indexList;
+  if (!prepareSqliteStatementLogged(db, indexListQuery, indexList, context,
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  bool found = false;
+  bool shapeExact = true;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(indexList.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(indexList.get(), 1) != SQLITE_TEXT ||
+        !sqliteAsciiIdentifiersEqual(sqliteColumnTextView(indexList.get(), 1),
+                                     indexName)) {
+      continue;
+    }
+    if (found) {
+      shapeExact = false;
+    }
+    found = true;
+    shapeExact =
+        shapeExact &&
+        sqlite3_column_type(indexList.get(), 2) == SQLITE_INTEGER &&
+        (sqlite3_column_int(indexList.get(), 2) != 0) == expectedUnique &&
+        sqlite3_column_type(indexList.get(), 3) == SQLITE_TEXT &&
+        sqliteColumnTextView(indexList.get(), 3) == "c" &&
+        sqlite3_column_type(indexList.get(), 4) == SQLITE_INTEGER &&
+        (sqlite3_column_int(indexList.get(), 4) != 0) == expectedPartial;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError(context, db);
+    return false;
+  }
+  if (!found) {
+    return true;
+  }
+
+  const std::string indexInfoQuery =
+      "PRAGMA index_xinfo(\"" + std::string(indexName) + "\")";
+  SqliteStatementHandle indexInfo;
+  if (!prepareSqliteStatementLogged(db, indexInfoQuery, indexInfo, context,
+                                    logSqlErrorText)) {
+    return false;
+  }
+  std::size_t keyColumnCount = 0;
+  std::size_t auxiliaryColumnCount = 0;
+  while ((rc = sqlite3_step(indexInfo.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(indexInfo.get(), 5) != SQLITE_INTEGER) {
+      shapeExact = false;
+      continue;
+    }
+    if (sqlite3_column_int(indexInfo.get(), 5) != 0) {
+      bool columnExact = false;
+      if (keyColumnCount < expectedColumns.size()) {
+        columnExact =
+            sqlite3_column_type(indexInfo.get(), 0) == SQLITE_INTEGER &&
+            sqlite3_column_int64(indexInfo.get(), 0) ==
+                static_cast<sqlite3_int64>(keyColumnCount) &&
+            sqlite3_column_type(indexInfo.get(), 1) == SQLITE_INTEGER &&
+            sqlite3_column_int(indexInfo.get(), 1) >= 0 &&
+            sqlite3_column_type(indexInfo.get(), 2) == SQLITE_TEXT &&
+            sqliteAsciiIdentifiersEqual(
+                sqliteColumnTextView(indexInfo.get(), 2),
+                expectedColumns[keyColumnCount]) &&
+            sqlite3_column_type(indexInfo.get(), 3) == SQLITE_INTEGER &&
+            sqlite3_column_int(indexInfo.get(), 3) == 0 &&
+            sqlite3_column_type(indexInfo.get(), 4) == SQLITE_TEXT &&
+            sqliteColumnTextView(indexInfo.get(), 4) == "BINARY";
+      }
+      shapeExact = shapeExact && columnExact;
+      ++keyColumnCount;
+      continue;
+    }
+    const bool auxiliaryExact =
+        sqlite3_column_type(indexInfo.get(), 0) == SQLITE_INTEGER &&
+        sqlite3_column_int64(indexInfo.get(), 0) ==
+            static_cast<sqlite3_int64>(expectedColumns.size()) &&
+        sqlite3_column_type(indexInfo.get(), 1) == SQLITE_INTEGER &&
+        sqlite3_column_int(indexInfo.get(), 1) == -1 &&
+        sqlite3_column_type(indexInfo.get(), 2) == SQLITE_NULL &&
+        sqlite3_column_type(indexInfo.get(), 3) == SQLITE_INTEGER &&
+        sqlite3_column_int(indexInfo.get(), 3) == 0 &&
+        sqlite3_column_type(indexInfo.get(), 4) == SQLITE_TEXT &&
+        sqliteColumnTextView(indexInfo.get(), 4) == "BINARY";
+    shapeExact = shapeExact && auxiliaryExact;
+    ++auxiliaryColumnCount;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError(context, db);
+    return false;
+  }
+  exact = shapeExact && keyColumnCount == expectedColumns.size() &&
+          auxiliaryColumnCount == 1;
+  return true;
+}
+
+bool inspectReplayResultOutboxSchema(sqlite3 *db,
+                                     ReplayResultOutboxSchemaState &state) {
+  bool hasAttemptIdColumn = false;
+  bool hasExactAttemptIdColumn = false;
+  bool hasAttemptFingerprintColumn = false;
+  bool hasExactAttemptFingerprintColumn = false;
+  SqliteStatementHandle columns;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA table_info(replays)", columns,
+                                    "reading replay result outbox columns",
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(columns.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(columns.get(), 1) != SQLITE_TEXT) {
+      continue;
+    }
+    const std::string_view name = sqliteColumnTextView(columns.get(), 1);
+    bool *present = nullptr;
+    bool *exact = nullptr;
+    if (sqliteAsciiIdentifiersEqual(name, "attempt_id")) {
+      present = &hasAttemptIdColumn;
+      exact = &hasExactAttemptIdColumn;
+    } else if (sqliteAsciiIdentifiersEqual(name, "attempt_fingerprint")) {
+      present = &hasAttemptFingerprintColumn;
+      exact = &hasExactAttemptFingerprintColumn;
+    } else {
+      continue;
+    }
+    *present = true;
+    *exact =
+        sqlite3_column_type(columns.get(), 2) == SQLITE_TEXT &&
+        schemaSqlIsEquivalent(sqliteColumnTextView(columns.get(), 2), "TEXT") &&
+        sqlite3_column_type(columns.get(), 3) == SQLITE_INTEGER &&
+        sqlite3_column_int(columns.get(), 3) == 0 &&
+        sqlite3_column_type(columns.get(), 4) == SQLITE_NULL &&
+        sqlite3_column_type(columns.get(), 5) == SQLITE_INTEGER &&
+        sqlite3_column_int(columns.get(), 5) == 0;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading replay result outbox columns", db);
+    return false;
+  }
+
+  NamedSchemaObjectInspection attemptIndex;
+  NamedSchemaObjectInspection pendingTable;
+  NamedSchemaObjectInspection recoveryIndex;
+  bool attemptIndexShapeExact = false;
+  bool recoveryIndexShapeExact = false;
+  if (!inspectNamedSchemaObject(db, "idx_replays_attempt_id", "index",
+                                "replays", kReplayAttemptIdIndexSql,
+                                attemptIndex,
+                                "reading replay attempt identity index") ||
+      !inspectNamedSchemaObject(db, "pending_chart_score_writes", "table",
+                                "pending_chart_score_writes",
+                                kPendingChartScoreWritesTableSql, pendingTable,
+                                "reading pending chart score outbox schema") ||
+      !inspectNamedSchemaObject(
+          db, "idx_pending_chart_score_created", "index",
+          "pending_chart_score_writes", kPendingChartScoreRecoveryIndexSql,
+          recoveryIndex, "reading pending chart score recovery index") ||
+      !inspectNamedIndexShape(db, "replays", "idx_replays_attempt_id", true,
+                              true, {"attempt_id"}, attemptIndexShapeExact,
+                              "reading replay attempt identity index shape") ||
+      !inspectNamedIndexShape(
+          db, "pending_chart_score_writes", "idx_pending_chart_score_created",
+          false, false,
+          {"recovery_attempts", "last_recovery_at", "created_at", "attempt_id"},
+          recoveryIndexShapeExact,
+          "reading pending chart score recovery index shape")) {
+    return false;
+  }
+
+  const bool entirelyAbsent =
+      !hasAttemptIdColumn && !hasAttemptFingerprintColumn &&
+      !attemptIndex.present && !pendingTable.present && !recoveryIndex.present;
+  const bool exact =
+      hasAttemptIdColumn && hasExactAttemptIdColumn &&
+      hasAttemptFingerprintColumn && hasExactAttemptFingerprintColumn &&
+      attemptIndex.present && attemptIndex.exact && attemptIndexShapeExact &&
+      pendingTable.present && pendingTable.exact && recoveryIndex.present &&
+      recoveryIndex.exact && recoveryIndexShapeExact;
+  if (entirelyAbsent) {
+    state = ReplayResultOutboxSchemaState::Absent;
+  } else if (exact) {
+    state = ReplayResultOutboxSchemaState::Exact;
+  } else {
+    state = ReplayResultOutboxSchemaState::Malformed;
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -346,6 +793,15 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
   if (*version >= kReplayDatabaseSchemaVersion) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState)) {
+      return false;
+    }
+    if (resultOutboxState != ReplayResultOutboxSchemaState::Exact) {
+      SDL_Log("Refusing current replay database with a partial or unexpected "
+              "result outbox schema");
+      return false;
+    }
     return true;
   }
 
@@ -392,6 +848,30 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
                 "course_replays(course_key, id)",
                 "creating course replay content key index"))) {
     return false;
+  }
+  if (*version < 5) {
+    ReplayResultOutboxSchemaState resultOutboxState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState)) {
+      return false;
+    }
+    if (resultOutboxState == ReplayResultOutboxSchemaState::Malformed) {
+      SDL_Log("Refusing replay result outbox migration from a partial or "
+              "unexpected schema");
+      return false;
+    }
+    if (resultOutboxState == ReplayResultOutboxSchemaState::Absent &&
+        (!execSql(db, "ALTER TABLE replays ADD COLUMN attempt_id TEXT",
+                  "adding replay attempt ID column") ||
+         !execSql(db, "ALTER TABLE replays ADD COLUMN attempt_fingerprint TEXT",
+                  "adding replay attempt fingerprint column") ||
+         !execSql(db, kReplayAttemptIdIndexSql,
+                  "creating replay attempt ID index") ||
+         !execSql(db, kPendingChartScoreWritesTableSql,
+                  "creating pending chart score outbox") ||
+         !execSql(db, kPendingChartScoreRecoveryIndexSql,
+                  "creating pending chart score recovery index"))) {
+      return false;
+    }
   }
   if (!setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
     return false;
@@ -848,8 +1328,10 @@ CourseReplayStageDescriptorReadResult courseReplayStageProvenanceStatus(
                                           error);
 }
 
-std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
-                                    const std::string &provenanceJson) {
+std::optional<int> insertReplayRows(
+    sqlite3 *db, const ReplayData &replay, const std::string &provenanceJson,
+    std::optional<std::string_view> attemptId,
+    std::optional<std::string_view> attemptFingerprint) {
   const char *replayInsert =
       "INSERT INTO replays ("
       "chart_path, chart_md5, chart_sha256, chart_title, chart_artist,"
@@ -857,14 +1339,15 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
       "clear_type,"
       "random_seed, random_prng, random_values, play_option, play_option_seed,"
       "play_option2, play_option2_seed, assist_option, ln_mode,"
-      "ruleset_version, eligibility, provenance_json"
+      "ruleset_version, eligibility, provenance_json, attempt_id,"
+      "attempt_fingerprint"
       ") VALUES ("
       "@chart_path, @chart_md5, @chart_sha256, @chart_title, @chart_artist,"
       "@gauge_type, @gauge_auto_shift, @final_score, @max_combo,"
       "@final_gauge, @clear_type, @random_seed, @random_prng, @random_values,"
       "@play_option, @play_option_seed, @play_option2, @play_option2_seed,"
       "@assist_option, @ln_mode, @ruleset_version, @eligibility,"
-      "@provenance_json"
+      "@provenance_json, @attempt_id, @attempt_fingerprint"
       ")";
 
   SqliteStatementHandle replayStmt;
@@ -921,6 +1404,20 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
   sqlite3_bind_int(replayStmt.get(), bindIndex++,
                    static_cast<int>(replay.provenance.eligibility));
   bindSqliteText(replayStmt.get(), bindIndex++, provenanceJson);
+  if (attemptId.has_value()) {
+    sqlite3_bind_text(replayStmt.get(), bindIndex++, attemptId->data(),
+                      static_cast<int>(attemptId->size()), SQLITE_TRANSIENT);
+  } else {
+    sqlite3_bind_null(replayStmt.get(), bindIndex++);
+  }
+  if (attemptFingerprint.has_value()) {
+    sqlite3_bind_text(replayStmt.get(), bindIndex++,
+                      attemptFingerprint->data(),
+                      static_cast<int>(attemptFingerprint->size()),
+                      SQLITE_TRANSIENT);
+  } else {
+    sqlite3_bind_null(replayStmt.get(), bindIndex++);
+  }
 
   int rc = sqlite3_step(replayStmt.get());
   replayStmt.reset();
@@ -929,7 +1426,14 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
     return std::nullopt;
   }
 
-  const int replayId = static_cast<int>(sqlite3_last_insert_rowid(db));
+  const sqlite3_int64 storedReplayId = sqlite3_last_insert_rowid(db);
+  if (storedReplayId <= 0 ||
+      storedReplayId > static_cast<sqlite3_int64>(
+                           std::numeric_limits<int>::max())) {
+    SDL_Log("Refusing replay row ID outside the supported integer range");
+    return std::nullopt;
+  }
+  const int replayId = static_cast<int>(storedReplayId);
   const char *eventInsert =
       "INSERT INTO replay_events ("
       "replay_id, event_index, action, lane, note_time_micros,"
@@ -996,6 +1500,711 @@ std::optional<int> insertReplayRows(sqlite3 *db, const ReplayData &replay,
     }
   }
   return replayId;
+}
+
+bool isCanonicalLowerHex(std::string_view value, std::size_t size) {
+  return value.size() == size &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return std::isdigit(character) != 0 ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+bool sameFloatBits(float left, float right) {
+  return std::bit_cast<std::uint32_t>(left) ==
+         std::bit_cast<std::uint32_t>(right);
+}
+
+bool isKnownClearRank(int clearType) {
+  switch (clearType) {
+  case kClearTypeFailedRank:
+  case kClearTypeAssistedEasyClearRank:
+  case kClearTypeLightAssistedEasyClearRank:
+  case kClearTypeEasyClearRank:
+  case kClearTypeNormalClearRank:
+  case kClearTypeHardClearRank:
+  case kClearTypeExHardClearRank:
+  case kClearTypeFullComboRank:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool validateChartScoreReplaySemantics(
+    const result_persistence::ChartScoreWrite &score,
+    const bms_parser::ChartMeta &chartMeta, int replayFinalScore,
+    int replayMaxCombo, float replayFinalGauge, int replayClearType,
+    std::optional<int> expectedTotalNotes,
+    std::optional<int> storedReplayChartLongNoteMode,
+    std::string &diagnostic) {
+  const auto reject = [&](std::string message) {
+    diagnostic = std::move(message);
+    return false;
+  };
+
+  if (long_note_mode::normalizeValue(score.longNoteMode) !=
+      score.longNoteMode) {
+    return reject("score long-note mode is outside the canonical range");
+  }
+  const ScoreStageProvenance *stage =
+      score_provenance::uniqueStageForChart(score.provenance, chartMeta);
+  if (stage == nullptr || stage->longNoteMode <= long_note_mode::kUnknownValue ||
+      long_note_mode::normalizeValue(stage->longNoteMode) !=
+          stage->longNoteMode) {
+    return reject(
+        "score long-note mode does not match a unique provenance stage");
+  }
+  if (storedReplayChartLongNoteMode.has_value()) {
+    const int replayChartLongNoteMode = *storedReplayChartLongNoteMode;
+    if (long_note_mode::normalizeValue(replayChartLongNoteMode) !=
+            replayChartLongNoteMode ||
+        (score.longNoteMode > long_note_mode::kUnknownValue &&
+         (stage->longNoteMode != score.longNoteMode ||
+          (replayChartLongNoteMode > long_note_mode::kUnknownValue &&
+           replayChartLongNoteMode != score.longNoteMode)))) {
+      return reject(
+          "score long-note mode does not match staged replay metadata");
+    }
+  } else {
+    const int chartLongNoteMode =
+        long_note_mode::normalizeValue(chartMeta.LnMode);
+    const int expectedLongNoteMode =
+        std::max(0, chartMeta.TotalLongNotes) +
+                    std::max(0, chartMeta.TotalBackSpinNotes) <=
+                0
+            ? long_note_mode::kUnknownValue
+            : (chartLongNoteMode > long_note_mode::kUnknownValue
+                   ? chartLongNoteMode
+                   : stage->longNoteMode);
+    if (score.longNoteMode != expectedLongNoteMode ||
+        (expectedLongNoteMode > long_note_mode::kUnknownValue &&
+         stage->longNoteMode != expectedLongNoteMode)) {
+      return reject(
+          "score long-note mode does not match a unique provenance stage");
+    }
+  }
+
+  if (score.score < 0 || score.maxScore < 0 || score.maxCombo < 0 ||
+      score.comboBreak < 0 || score.pGreat < 0 || score.great < 0 ||
+      score.good < 0 || score.bad < 0 || score.poor < 0 || score.kPoor < 0 ||
+      score.fast < 0 || score.slow < 0) {
+    return reject("score payload contains negative result counters");
+  }
+  if ((score.maxScore % 2) != 0) {
+    return reject("score maximum is not a whole-note score");
+  }
+  const int totalNotes = score.maxScore / 2;
+  if (expectedTotalNotes.has_value()) {
+    const std::int64_t expectedMaxScore =
+        static_cast<std::int64_t>(*expectedTotalNotes) * 2;
+    if (*expectedTotalNotes < 0 ||
+        expectedMaxScore > std::numeric_limits<int>::max() ||
+        score.maxScore != static_cast<int>(expectedMaxScore)) {
+      return reject("score maximum does not match replay chart notes");
+    }
+  }
+  const std::int64_t judgementScore =
+      static_cast<std::int64_t>(score.pGreat) * 2 + score.great;
+  if (judgementScore != score.score) {
+    return reject("score payload is inconsistent with its result counters");
+  }
+  const float maximumGauge = gaugeStartingMaximumValue(
+      score.provenance.gaugeType, score.provenance.gaugeAutoShift,
+      score.provenance.gaugeAutoShiftLowerBound, score.provenance.gaugeProfile);
+  if (!std::isfinite(score.finalGauge) || score.finalGauge < 0.0f ||
+      score.finalGauge > maximumGauge) {
+    return reject("score gauge is outside the playable range");
+  }
+  if (!isKnownClearRank(score.clearType)) {
+    return reject("score clear rank is not recognized");
+  }
+  if (score.score != replayFinalScore || score.maxCombo != replayMaxCombo ||
+      !sameFloatBits(score.finalGauge, replayFinalGauge)) {
+    return reject("score and replay result facts disagree");
+  }
+
+  const bool fullCombo =
+      totalNotes > 0 && score.comboBreak == 0 && score.maxCombo >= totalNotes;
+  const int expectedReplayClearType = clear_policy::fullComboRankForPlayback(
+      score.clearType, fullCombo, score.provenance.playback);
+  if (replayClearType != expectedReplayClearType) {
+    return reject("score and replay clear ranks disagree");
+  }
+  return true;
+}
+
+std::optional<std::string> validateChartResultAttempt(
+    const result_persistence::ChartResultAttempt &attempt,
+    std::string &diagnostic) {
+  diagnostic.clear();
+  if (!uuid::isCanonicalLowerV4(attempt.attemptId)) {
+    diagnostic = "attempt ID is not a canonical version-4 UUID";
+    return std::nullopt;
+  }
+  if (!isCanonicalLowerHex(attempt.payloadFingerprint, 64) ||
+      attempt.payloadFingerprint != result_persistence::payloadFingerprint(
+                                        attempt.replay, attempt.score)) {
+    diagnostic = "attempt fingerprint is malformed or inconsistent";
+    return std::nullopt;
+  }
+
+  const auto &score = attempt.score;
+  if (!result_persistence::hasProjectableChartIdentity(score)) {
+    diagnostic = "score chart identity is not projectable";
+    return std::nullopt;
+  }
+  const std::string replayMd5 = normalizedHash(attempt.replay.chartMeta.MD5);
+  const std::string replaySha256 =
+      normalizedHash(attempt.replay.chartMeta.SHA256);
+  const std::string replayPath =
+      Utils::GetStoragePathUtf8RelativeToDocuments(
+          attempt.replay.chartMeta.BmsPath, "BMS/");
+  if (score.chartMd5 != replayMd5 || score.chartSha256 != replaySha256 ||
+      score.chartPath != replayPath ||
+      score.chartTitle != attempt.replay.chartMeta.Title ||
+      score.chartArtist != attempt.replay.chartMeta.Artist) {
+    diagnostic = "score and replay chart identities disagree";
+    return std::nullopt;
+  }
+  if (score.provenance != attempt.replay.provenance) {
+    diagnostic = "score and replay provenance disagree";
+    return std::nullopt;
+  }
+  if (!validateChartScoreReplaySemantics(
+          score, attempt.replay.chartMeta, attempt.replay.finalScore,
+          attempt.replay.maxCombo, attempt.replay.finalGauge,
+          attempt.replay.clearType, attempt.replay.chartMeta.TotalNotes,
+          std::nullopt, diagnostic)) {
+    return std::nullopt;
+  }
+
+  std::string provenanceError;
+  auto provenanceJson =
+      serializeValidatedScoreProvenance(score.provenance, provenanceError);
+  if (!provenanceJson.has_value()) {
+    diagnostic = "result provenance is invalid";
+    return std::nullopt;
+  }
+  return provenanceJson;
+}
+
+enum class ExistingAttemptStatus {
+  Found,
+  NotFound,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct ExistingAttempt {
+  int replayId = 0;
+  std::string fingerprint;
+  std::string createdAt;
+  bool scorePending = false;
+};
+
+struct ExistingAttemptOutcome {
+  ExistingAttemptStatus status = ExistingAttemptStatus::StorageFailure;
+  ExistingAttempt value;
+  std::string diagnostic;
+};
+
+bool bindTextView(sqlite3_stmt *stmt, int index, std::string_view value) {
+  if (value.size() >
+      static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+  return sqlite3_bind_text(stmt, index, value.data(),
+                           static_cast<int>(value.size()), SQLITE_TRANSIENT) ==
+         SQLITE_OK;
+}
+
+ExistingAttemptOutcome findExistingAttempt(sqlite3 *db,
+                                           std::string_view attemptId) {
+  SqliteStatementHandle replayStmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT id, attempt_id, attempt_fingerprint, created_at "
+          "FROM replays WHERE attempt_id = ?",
+          replayStmt, "preparing staged replay lookup", logSqlErrorText) ||
+      !bindTextView(replayStmt.get(), 1, attemptId)) {
+    return {.status = ExistingAttemptStatus::StorageFailure,
+            .diagnostic = "could not query the staged replay"};
+  }
+
+  int rc = sqlite3_step(replayStmt.get());
+  if (rc == SQLITE_DONE) {
+    replayStmt.reset();
+    SqliteStatementHandle orphanStmt;
+    if (!prepareSqliteStatementLogged(
+            db,
+            "SELECT 1 FROM pending_chart_score_writes "
+            "WHERE attempt_id = ? LIMIT 1",
+            orphanStmt, "preparing orphaned pending score lookup",
+            logSqlErrorText) ||
+        !bindTextView(orphanStmt.get(), 1, attemptId)) {
+      return {.status = ExistingAttemptStatus::StorageFailure,
+              .diagnostic = "could not query pending score identity"};
+    }
+    rc = sqlite3_step(orphanStmt.get());
+    if (rc == SQLITE_ROW) {
+      return {.status = ExistingAttemptStatus::IntegrityConflict,
+              .diagnostic =
+                  "pending score identity has no matching staged replay"};
+    }
+    if (rc != SQLITE_DONE) {
+      return {.status = ExistingAttemptStatus::StorageFailure,
+              .diagnostic = "could not query pending score identity"};
+    }
+
+    SqliteStatementHandle noncanonicalStmt;
+    if (!prepareSqliteStatementLogged(
+            db,
+            "SELECT 1 FROM replays WHERE attempt_id IS NOT NULL "
+            "AND lower(attempt_id) = ? LIMIT 1",
+            noncanonicalStmt, "preparing noncanonical replay identity lookup",
+            logSqlErrorText) ||
+        !bindTextView(noncanonicalStmt.get(), 1, attemptId)) {
+      return {.status = ExistingAttemptStatus::StorageFailure,
+              .diagnostic = "could not query staged replay identity"};
+    }
+    rc = sqlite3_step(noncanonicalStmt.get());
+    if (rc == SQLITE_ROW) {
+      return {.status = ExistingAttemptStatus::IntegrityConflict,
+              .diagnostic = "stored replay attempt identity is malformed"};
+    }
+    if (rc != SQLITE_DONE) {
+      return {.status = ExistingAttemptStatus::StorageFailure,
+              .diagnostic = "could not query staged replay identity"};
+    }
+    return {.status = ExistingAttemptStatus::NotFound};
+  }
+  if (rc != SQLITE_ROW) {
+    return {.status = ExistingAttemptStatus::StorageFailure,
+            .diagnostic = "could not query the staged replay"};
+  }
+
+  const sqlite3_int64 replayId64 = sqlite3_column_int64(replayStmt.get(), 0);
+  const bool validReplay =
+      sqlite3_column_type(replayStmt.get(), 0) == SQLITE_INTEGER &&
+      replayId64 > 0 &&
+      replayId64 <=
+          static_cast<sqlite3_int64>(std::numeric_limits<int>::max()) &&
+      sqlite3_column_type(replayStmt.get(), 1) == SQLITE_TEXT &&
+      sqliteColumnString(replayStmt.get(), 1) == attemptId &&
+      sqlite3_column_type(replayStmt.get(), 2) == SQLITE_TEXT &&
+      isCanonicalLowerHex(sqliteColumnTextView(replayStmt.get(), 2), 64) &&
+      sqlite3_column_type(replayStmt.get(), 3) == SQLITE_TEXT &&
+      !sqliteColumnTextView(replayStmt.get(), 3).empty();
+  if (!validReplay) {
+    return {.status = ExistingAttemptStatus::IntegrityConflict,
+            .diagnostic = "stored replay attempt identity is malformed"};
+  }
+
+  ExistingAttempt existing{
+      .replayId = static_cast<int>(replayId64),
+      .fingerprint = sqliteColumnString(replayStmt.get(), 2),
+      .createdAt = sqliteColumnString(replayStmt.get(), 3),
+  };
+  if (sqlite3_step(replayStmt.get()) != SQLITE_DONE) {
+    return {.status = ExistingAttemptStatus::StorageFailure,
+            .diagnostic = "staged replay identity lookup did not complete"};
+  }
+  replayStmt.reset();
+
+  SqliteStatementHandle pendingStmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT attempt_id, replay_id FROM pending_chart_score_writes "
+          "WHERE attempt_id = ? OR replay_id = ? ORDER BY attempt_id",
+          pendingStmt, "preparing staged replay outbox linkage lookup",
+          logSqlErrorText) ||
+      !bindTextView(pendingStmt.get(), 1, attemptId) ||
+      sqlite3_bind_int(pendingStmt.get(), 2, existing.replayId) != SQLITE_OK) {
+    return {.status = ExistingAttemptStatus::StorageFailure,
+            .diagnostic = "could not query staged replay outbox linkage"};
+  }
+
+  int linkedRows = 0;
+  while ((rc = sqlite3_step(pendingStmt.get())) == SQLITE_ROW) {
+    ++linkedRows;
+    if (linkedRows > 1 ||
+        sqlite3_column_type(pendingStmt.get(), 0) != SQLITE_TEXT ||
+        sqliteColumnString(pendingStmt.get(), 0) != attemptId ||
+        sqlite3_column_type(pendingStmt.get(), 1) != SQLITE_INTEGER ||
+        sqlite3_column_int64(pendingStmt.get(), 1) != existing.replayId) {
+      return {.status = ExistingAttemptStatus::IntegrityConflict,
+              .diagnostic = "staged replay outbox linkage is malformed"};
+    }
+    existing.scorePending = true;
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ExistingAttemptStatus::StorageFailure,
+            .diagnostic = "could not query staged replay outbox linkage"};
+  }
+  return {.status = ExistingAttemptStatus::Found,
+          .value = std::move(existing)};
+}
+
+bool insertPendingChartScore(
+    sqlite3 *db, const result_persistence::ChartResultAttempt &attempt,
+    int replayId, std::string_view provenanceJson,
+    std::string_view createdAt) {
+  constexpr const char *query =
+      "INSERT INTO pending_chart_score_writes ("
+      "attempt_id, replay_id, chart_path, chart_md5, chart_sha256,"
+      "chart_title, chart_artist, ln_mode, score, max_score, max_combo,"
+      "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow,"
+      "final_gauge, clear_type, ruleset_version, eligibility,"
+      "provenance_json, created_at"
+      ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+      "?, ?, ?, ?, ?, ?, ?)";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing pending chart score insert",
+                                    logSqlErrorText)) {
+    return false;
+  }
+
+  const auto &score = attempt.score;
+  int index = 1;
+  bool bound = bindTextView(stmt.get(), index++, attempt.attemptId);
+  bound = bound && sqlite3_bind_int(stmt.get(), index++, replayId) == SQLITE_OK;
+  bound = bound && bindTextView(stmt.get(), index++, score.chartPath);
+  bound = bound && bindTextView(stmt.get(), index++, score.chartMd5);
+  bound = bound && bindTextView(stmt.get(), index++, score.chartSha256);
+  bound = bound && bindTextView(stmt.get(), index++, score.chartTitle);
+  bound = bound && bindTextView(stmt.get(), index++, score.chartArtist);
+  const auto bindInt = [&](int value) {
+    bound = bound &&
+            sqlite3_bind_int(stmt.get(), index++, value) == SQLITE_OK;
+  };
+  bindInt(score.longNoteMode);
+  bindInt(score.score);
+  bindInt(score.maxScore);
+  bindInt(score.maxCombo);
+  bindInt(score.comboBreak);
+  bindInt(score.pGreat);
+  bindInt(score.great);
+  bindInt(score.good);
+  bindInt(score.bad);
+  bindInt(score.poor);
+  bindInt(score.kPoor);
+  bindInt(score.fast);
+  bindInt(score.slow);
+  bound = bound &&
+          sqlite3_bind_double(stmt.get(), index++, score.finalGauge) ==
+              SQLITE_OK;
+  bindInt(score.clearType);
+  bindInt(score.provenance.ruleset.version);
+  bindInt(static_cast<int>(score.provenance.eligibility));
+  bound = bound && bindTextView(stmt.get(), index++, provenanceJson);
+  bound = bound && bindTextView(stmt.get(), index++, createdAt);
+  if (!bound || index != 27) {
+    logSqlError("binding pending chart score", db);
+    return false;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+    logSqlError("saving pending chart score", db);
+    return false;
+  }
+  return true;
+}
+
+std::optional<std::string> readStagedReplayTimestamp(
+    sqlite3 *db, int replayId, std::string_view attemptId) {
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT created_at FROM replays WHERE id = ? AND attempt_id = ?",
+          stmt, "preparing staged replay timestamp lookup", logSqlErrorText) ||
+      sqlite3_bind_int(stmt.get(), 1, replayId) != SQLITE_OK ||
+      !bindTextView(stmt.get(), 2, attemptId)) {
+    return std::nullopt;
+  }
+  if (sqlite3_step(stmt.get()) != SQLITE_ROW ||
+      sqlite3_column_type(stmt.get(), 0) != SQLITE_TEXT ||
+      sqliteColumnTextView(stmt.get(), 0).empty()) {
+    return std::nullopt;
+  }
+  std::string createdAt = sqliteColumnString(stmt.get(), 0);
+  if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+    return std::nullopt;
+  }
+  return createdAt;
+}
+
+constexpr const char *kPendingChartScoreSelect =
+    "SELECT p.attempt_id, p.replay_id, p.chart_path, p.chart_md5,"
+    "p.chart_sha256, p.chart_title, p.chart_artist, p.ln_mode, p.score,"
+    "p.max_score, p.max_combo, p.combo_break, p.pgreat, p.great, p.good,"
+    "p.bad, p.poor, p.kpoor, p.fast, p.slow, p.final_gauge, p.clear_type,"
+    "p.ruleset_version, p.eligibility, p.provenance_json, p.created_at,"
+    "p.recovery_attempts, p.last_recovery_at, r.id, r.attempt_id,"
+    "r.attempt_fingerprint, r.chart_path, r.chart_md5, r.chart_sha256,"
+    "r.chart_title, r.chart_artist, r.created_at, r.final_score,"
+    "r.max_combo, r.final_gauge, r.clear_type, r.ruleset_version,"
+    "r.eligibility, r.provenance_json, r.ln_mode "
+    "FROM pending_chart_score_writes p "
+    "LEFT JOIN replays r ON r.id = p.replay_id ";
+
+bool readStrictText(sqlite3_stmt *stmt, int column, std::string &value,
+                    bool allowEmpty = true) {
+  if (sqlite3_column_type(stmt, column) != SQLITE_TEXT) {
+    return false;
+  }
+  value = sqliteColumnString(stmt, column);
+  return allowEmpty || !value.empty();
+}
+
+bool readStrictInteger(sqlite3_stmt *stmt, int column, int &value) {
+  if (sqlite3_column_type(stmt, column) != SQLITE_INTEGER) {
+    return false;
+  }
+  const sqlite3_int64 stored = sqlite3_column_int64(stmt, column);
+  if (stored < static_cast<sqlite3_int64>(std::numeric_limits<int>::min()) ||
+      stored > static_cast<sqlite3_int64>(std::numeric_limits<int>::max())) {
+    return false;
+  }
+  value = static_cast<int>(stored);
+  return true;
+}
+
+result_persistence::PendingBatchEntry decodePendingChartScoreRow(
+    sqlite3_stmt *stmt, std::optional<std::string_view> expectedAttemptId) {
+  using result_persistence::PendingBatchEntry;
+  using result_persistence::PendingChartScoreWrite;
+  using result_persistence::PendingReadStatus;
+
+  PendingBatchEntry result;
+  result.attemptId = sqliteColumnString(stmt, 0);
+  const auto conflict = [&](std::string diagnostic) {
+    result.status = PendingReadStatus::IntegrityConflict;
+    result.value.reset();
+    result.diagnostic = std::move(diagnostic);
+    return result;
+  };
+
+  if (sqlite3_column_type(stmt, 0) != SQLITE_TEXT ||
+      !uuid::isCanonicalLowerV4(result.attemptId) ||
+      (expectedAttemptId.has_value() &&
+       result.attemptId != *expectedAttemptId)) {
+    return conflict("pending score attempt identity is malformed");
+  }
+
+  PendingChartScoreWrite pending;
+  pending.attemptId = result.attemptId;
+  if (!readStrictInteger(stmt, 1, pending.replayId) ||
+      pending.replayId <= 0) {
+    return conflict("pending score replay identity is malformed");
+  }
+
+  auto &score = pending.score;
+  if (!readStrictText(stmt, 2, score.chartPath) ||
+      !readStrictText(stmt, 3, score.chartMd5) ||
+      !readStrictText(stmt, 4, score.chartSha256) ||
+      !readStrictText(stmt, 5, score.chartTitle) ||
+      !readStrictText(stmt, 6, score.chartArtist) ||
+      !readStrictInteger(stmt, 7, score.longNoteMode) ||
+      !readStrictInteger(stmt, 8, score.score) ||
+      !readStrictInteger(stmt, 9, score.maxScore) ||
+      !readStrictInteger(stmt, 10, score.maxCombo) ||
+      !readStrictInteger(stmt, 11, score.comboBreak) ||
+      !readStrictInteger(stmt, 12, score.pGreat) ||
+      !readStrictInteger(stmt, 13, score.great) ||
+      !readStrictInteger(stmt, 14, score.good) ||
+      !readStrictInteger(stmt, 15, score.bad) ||
+      !readStrictInteger(stmt, 16, score.poor) ||
+      !readStrictInteger(stmt, 17, score.kPoor) ||
+      !readStrictInteger(stmt, 18, score.fast) ||
+      !readStrictInteger(stmt, 19, score.slow) ||
+      !readStrictInteger(stmt, 21, score.clearType)) {
+    return conflict("pending score has an invalid SQLite storage class or "
+                    "integer range");
+  }
+
+  if (sqlite3_column_type(stmt, 20) != SQLITE_FLOAT) {
+    return conflict("pending score gauge has an invalid SQLite storage class");
+  }
+  const double storedGauge = sqlite3_column_double(stmt, 20);
+  if (!std::isfinite(storedGauge) ||
+      storedGauge < -static_cast<double>(std::numeric_limits<float>::max()) ||
+      storedGauge > static_cast<double>(std::numeric_limits<float>::max())) {
+    return conflict("pending score gauge is outside the finite float range");
+  }
+  score.finalGauge = static_cast<float>(storedGauge);
+
+  int rulesetVersion = 0;
+  int eligibility = 0;
+  int recoveryAttempts = 0;
+  std::string provenanceJson;
+  if (!readStrictInteger(stmt, 22, rulesetVersion) ||
+      !readStrictInteger(stmt, 23, eligibility) ||
+      eligibility < static_cast<int>(ScoreEligibility::Verified) ||
+      eligibility > static_cast<int>(ScoreEligibility::LegacyUnverified) ||
+      !readStrictText(stmt, 24, provenanceJson, false) ||
+      !readStrictText(stmt, 25, pending.createdAt, false) ||
+      !readStrictInteger(stmt, 26, recoveryAttempts) ||
+      recoveryAttempts < 0 ||
+      (sqlite3_column_type(stmt, 27) != SQLITE_NULL &&
+       sqlite3_column_type(stmt, 27) != SQLITE_TEXT) ||
+      (sqlite3_column_type(stmt, 27) == SQLITE_TEXT &&
+       sqliteColumnTextView(stmt, 27).empty())) {
+    return conflict("pending score metadata is malformed");
+  }
+
+  std::string provenanceError;
+  auto provenance =
+      deserializeScoreProvenance(provenanceJson, provenanceError);
+  if (!provenance.has_value()) {
+    return conflict("pending score provenance is malformed");
+  }
+  auto canonicalProvenance =
+      serializeValidatedScoreProvenance(*provenance, provenanceError);
+  if (!canonicalProvenance.has_value() ||
+      *canonicalProvenance != provenanceJson ||
+      provenance->ruleset.version != rulesetVersion ||
+      static_cast<int>(provenance->eligibility) != eligibility) {
+    return conflict("pending score provenance is not canonical or linked");
+  }
+  score.provenance = std::move(*provenance);
+
+  if (!result_persistence::hasProjectableChartIdentity(score)) {
+    return conflict("pending score chart identity is not projectable");
+  }
+
+  int linkedReplayId = 0;
+  std::string linkedAttemptId;
+  std::string linkedFingerprint;
+  std::string linkedPath;
+  std::string linkedMd5;
+  std::string linkedSha256;
+  std::string linkedTitle;
+  std::string linkedArtist;
+  std::string linkedCreatedAt;
+  if (!readStrictInteger(stmt, 28, linkedReplayId) ||
+      linkedReplayId != pending.replayId ||
+      !readStrictText(stmt, 29, linkedAttemptId, false) ||
+      linkedAttemptId != pending.attemptId ||
+      !uuid::isCanonicalLowerV4(linkedAttemptId) ||
+      !readStrictText(stmt, 30, linkedFingerprint, false) ||
+      !isCanonicalLowerHex(linkedFingerprint, 64) ||
+      !readStrictText(stmt, 31, linkedPath) ||
+      !readStrictText(stmt, 32, linkedMd5) ||
+      !readStrictText(stmt, 33, linkedSha256) ||
+      !readStrictText(stmt, 34, linkedTitle) ||
+      !readStrictText(stmt, 35, linkedArtist) ||
+      !readStrictText(stmt, 36, linkedCreatedAt, false) ||
+      linkedCreatedAt != pending.createdAt || linkedPath != score.chartPath ||
+      linkedMd5 != score.chartMd5 || linkedSha256 != score.chartSha256 ||
+      linkedTitle != score.chartTitle || linkedArtist != score.chartArtist) {
+    return conflict("pending score and staged replay linkage is malformed");
+  }
+
+  int linkedFinalScore = 0;
+  int linkedMaxCombo = 0;
+  int linkedClearType = 0;
+  int linkedRulesetVersion = 0;
+  int linkedEligibility = 0;
+  int linkedLongNoteMode = 0;
+  std::string linkedProvenanceJson;
+  if (!readStrictInteger(stmt, 37, linkedFinalScore) ||
+      !readStrictInteger(stmt, 38, linkedMaxCombo) ||
+      sqlite3_column_type(stmt, 39) != SQLITE_FLOAT ||
+      !readStrictInteger(stmt, 40, linkedClearType) ||
+      !readStrictInteger(stmt, 41, linkedRulesetVersion) ||
+      !readStrictInteger(stmt, 42, linkedEligibility) ||
+      linkedEligibility < static_cast<int>(ScoreEligibility::Verified) ||
+      linkedEligibility >
+          static_cast<int>(ScoreEligibility::LegacyUnverified) ||
+      !readStrictText(stmt, 43, linkedProvenanceJson, false) ||
+      !readStrictInteger(stmt, 44, linkedLongNoteMode)) {
+    return conflict("staged replay result metadata is malformed");
+  }
+  const double storedReplayGauge = sqlite3_column_double(stmt, 39);
+  if (!std::isfinite(storedReplayGauge) ||
+      storedReplayGauge <
+          -static_cast<double>(std::numeric_limits<float>::max()) ||
+      storedReplayGauge >
+          static_cast<double>(std::numeric_limits<float>::max())) {
+    return conflict("staged replay gauge is outside the finite float range");
+  }
+  const float linkedFinalGauge = static_cast<float>(storedReplayGauge);
+
+  std::string linkedProvenanceError;
+  auto linkedProvenance =
+      deserializeScoreProvenance(linkedProvenanceJson, linkedProvenanceError);
+  if (!linkedProvenance.has_value()) {
+    return conflict("staged replay provenance is malformed");
+  }
+  auto canonicalLinkedProvenance = serializeValidatedScoreProvenance(
+      *linkedProvenance, linkedProvenanceError);
+  if (!canonicalLinkedProvenance.has_value() ||
+      *canonicalLinkedProvenance != linkedProvenanceJson ||
+      linkedProvenance->ruleset.version != linkedRulesetVersion ||
+      static_cast<int>(linkedProvenance->eligibility) != linkedEligibility ||
+      *linkedProvenance != score.provenance) {
+    return conflict("staged replay provenance is not canonical or linked");
+  }
+
+  bms_parser::ChartMeta linkedChartMeta;
+  linkedChartMeta.MD5 = score.chartMd5;
+  linkedChartMeta.SHA256 = score.chartSha256;
+  std::string semanticDiagnostic;
+  if (!validateChartScoreReplaySemantics(score, linkedChartMeta,
+                                         linkedFinalScore, linkedMaxCombo,
+                                         linkedFinalGauge, linkedClearType,
+                                         std::nullopt, linkedLongNoteMode,
+                                         semanticDiagnostic)) {
+    return conflict("pending score semantics are invalid: " +
+                    semanticDiagnostic);
+  }
+
+  result.status = PendingReadStatus::Found;
+  result.value = std::move(pending);
+  result.diagnostic.clear();
+  return result;
+}
+
+result_persistence::PendingReadOutcome loadPendingChartScoreOnConnection(
+    sqlite3 *db, std::string_view attemptId) {
+  using result_persistence::PendingReadOutcome;
+  using result_persistence::PendingReadStatus;
+
+  std::string query = kPendingChartScoreSelect;
+  query += "WHERE p.attempt_id = ? OR r.attempt_id = ?";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(db, query, stmt,
+                                    "preparing pending chart score lookup",
+                                    logSqlErrorText) ||
+      !bindTextView(stmt.get(), 1, attemptId) ||
+      !bindTextView(stmt.get(), 2, attemptId)) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = "could not query the pending score"};
+  }
+
+  int rc = sqlite3_step(stmt.get());
+  if (rc == SQLITE_DONE) {
+    return {.status = PendingReadStatus::NotFound};
+  }
+  if (rc != SQLITE_ROW) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = "could not query the pending score"};
+  }
+  auto entry = decodePendingChartScoreRow(stmt.get(), attemptId);
+  rc = sqlite3_step(stmt.get());
+  if (rc == SQLITE_ROW) {
+    return {.status = PendingReadStatus::IntegrityConflict,
+            .diagnostic =
+                "multiple pending scores claim the same attempt identity"};
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = "pending score lookup did not complete"};
+  }
+  return {.status = entry.status,
+          .value = std::move(entry.value),
+          .diagnostic = std::move(entry.diagnostic)};
 }
 
 std::filesystem::path resolvedReplayDatabasePath(
@@ -1086,6 +2295,12 @@ sqlite3 *openTrustedReplayDatabase(const std::filesystem::path &path,
                              versionError;
     return nullptr;
   }
+  ReplayResultOutboxSchemaState resultOutboxState{};
+  if (!inspectReplayResultOutboxSchema(database.get(), resultOutboxState) ||
+      resultOutboxState != ReplayResultOutboxSchemaState::Exact) {
+    errorMessage = "trusted replay database result outbox schema changed";
+    return nullptr;
+  }
   SqliteStatementHandle journalMode;
   if (prepareSqliteStatement(database.get(), "PRAGMA journal_mode",
                              journalMode) != SQLITE_OK ||
@@ -1158,8 +2373,12 @@ bool ReplayDBHelper::BindDatabasePath(std::filesystem::path databasePath,
   if (sessionDatabase_ != nullptr &&
       equivalentReplayDatabasePaths(databasePath_, databasePath)) {
     databasePath_ = std::move(databasePath);
-    errorMessage.clear();
-    return true;
+    if (migrateReplayDatabaseSchema(sessionDatabase_)) {
+      errorMessage.clear();
+      return true;
+    }
+    errorMessage = "replay database validation failed";
+    return false;
   }
 
   const std::filesystem::path resolvedPath =
@@ -1208,7 +2427,7 @@ void ReplayDBHelper::ShutdownLocked() {
 bool ReplayDBHelper::EnsureSessionDatabaseLocked() {
   if (sessionDatabase_ != nullptr) {
     if (sqlite3_get_autocommit(sessionDatabase_) != 0) {
-      return true;
+      return migrateReplayDatabaseSchema(sessionDatabase_);
     }
     SDL_Log("Discarding replay database with an unfinished transaction");
     ShutdownLocked();
@@ -1261,6 +2480,25 @@ bool ReplayDBHelper::CreateReplayTables(sqlite3 *db) {
 
 bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
+    return false;
+  }
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_replay_schema_ensure"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery = callerOwnsTransaction
+                                ? "RELEASE asobmashow_replay_schema_ensure"
+                                : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_replay_schema_ensure; RELEASE "
+            "asobmashow_replay_schema_ensure"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting replay schema ensure", transactionError);
     return false;
   }
   const char *replayQuery = "CREATE TABLE IF NOT EXISTS replays ("
@@ -1468,10 +2706,17 @@ bool ReplayDBHelper::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (!migrateReplayDatabaseSchema(db)) {
     return false;
   }
-  return execSql(db,
-                 "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
-                 "course_replays(course_key, id)",
-                 "ensuring course replay content key index");
+  if (!execSql(db,
+               "CREATE INDEX IF NOT EXISTS idx_course_replays_key_id ON "
+               "course_replays(course_key, id)",
+               "ensuring course replay content key index")) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing replay schema ensure", transactionError);
+    return false;
+  }
+  return true;
 }
 
 bool ReplayDBHelper::EnsureSchema() {
@@ -1508,7 +2753,8 @@ std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
     return std::nullopt;
   }
 
-  const auto replayId = insertReplayRows(db, replay, provenanceJson);
+  const auto replayId = insertReplayRows(db, replay, provenanceJson,
+                                         std::nullopt, std::nullopt);
   if (!replayId.has_value()) {
     return std::nullopt;
   }
@@ -1519,6 +2765,328 @@ std::optional<int> ReplayDBHelper::SaveReplayOnConnection(
   }
 
   return *replayId;
+}
+
+result_persistence::StageOutcome ReplayDBHelper::StageChartResult(
+    const result_persistence::ChartResultAttempt &attempt) {
+  using result_persistence::PendingReadStatus;
+  using result_persistence::StageOutcome;
+  using result_persistence::StageReceipt;
+  using result_persistence::StageStatus;
+
+  profile_database_activity::WriteGuard writeGuard;
+  std::string validationDiagnostic;
+  const auto provenanceJson =
+      validateChartResultAttempt(attempt, validationDiagnostic);
+  if (!provenanceJson.has_value()) {
+    return {.status = StageStatus::IntegrityConflict,
+            .diagnostic = std::move(validationDiagnostic)};
+  }
+
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(sessionDatabase_,
+                                      "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    logSqlErrorText("starting chart result staging", transactionError);
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = "could not start result staging"};
+  }
+
+  ExistingAttemptOutcome existing =
+      findExistingAttempt(sessionDatabase_, attempt.attemptId);
+  if (existing.status == ExistingAttemptStatus::StorageFailure) {
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status == ExistingAttemptStatus::IntegrityConflict) {
+    return {.status = StageStatus::IntegrityConflict,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status == ExistingAttemptStatus::Found) {
+    if (existing.value.fingerprint != attempt.payloadFingerprint) {
+      return {.status = StageStatus::IntegrityConflict,
+              .diagnostic =
+                  "attempt ID already names a different result payload"};
+    }
+    if (existing.value.scorePending) {
+      auto pending = loadPendingChartScoreOnConnection(sessionDatabase_,
+                                                       attempt.attemptId);
+      if (pending.status == PendingReadStatus::StorageFailure) {
+        return {.status = StageStatus::StorageFailure,
+                .diagnostic = pending.diagnostic.empty()
+                                  ? "could not validate the pending score"
+                                  : std::move(pending.diagnostic)};
+      }
+      if (pending.status != PendingReadStatus::Found ||
+          !pending.value.has_value()) {
+        return {.status = StageStatus::IntegrityConflict,
+                .diagnostic = pending.diagnostic.empty()
+                                  ? "staged result has no valid pending score"
+                                  : std::move(pending.diagnostic)};
+      }
+      if (pending.value->attemptId != attempt.attemptId ||
+          pending.value->replayId != existing.value.replayId ||
+          pending.value->createdAt != existing.value.createdAt ||
+          pending.value->score != attempt.score) {
+        return {.status = StageStatus::IntegrityConflict,
+                .diagnostic =
+                    "pending score differs from the staged result payload"};
+      }
+    }
+    if (!transaction.commit(transactionError)) {
+      logSqlErrorText("finishing idempotent chart result staging",
+                      transactionError);
+      return {.status = StageStatus::StorageFailure,
+              .diagnostic = "could not finish result staging"};
+    }
+    return {
+        .status = StageStatus::AlreadyStaged,
+        .receipt = StageReceipt{.attemptId = attempt.attemptId,
+                                .replayId = existing.value.replayId,
+                                .createdAt = existing.value.createdAt,
+                                .scorePending = existing.value.scorePending},
+    };
+  }
+
+  const auto replayId =
+      insertReplayRows(sessionDatabase_, attempt.replay, *provenanceJson,
+                       attempt.attemptId, attempt.payloadFingerprint);
+  if (!replayId.has_value()) {
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = "could not stage the replay"};
+  }
+  const auto createdAt = readStagedReplayTimestamp(
+      sessionDatabase_, *replayId, attempt.attemptId);
+  if (!createdAt.has_value()) {
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = "could not read the staged result timestamp"};
+  }
+  if (!insertPendingChartScore(sessionDatabase_, attempt, *replayId,
+                               *provenanceJson, *createdAt)) {
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = "could not stage the pending score"};
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing chart result staging", transactionError);
+    return {.status = StageStatus::StorageFailure,
+            .diagnostic = "could not commit result staging"};
+  }
+  return {
+      .status = StageStatus::Staged,
+      .receipt = StageReceipt{.attemptId = attempt.attemptId,
+                              .replayId = *replayId,
+                              .createdAt = *createdAt,
+                              .scorePending = true},
+  };
+}
+
+result_persistence::PendingReadOutcome
+ReplayDBHelper::LoadPendingChartScore(std::string_view attemptId) {
+  using result_persistence::PendingReadStatus;
+  profile_database_activity::ReadGuard readGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId)) {
+    return {.status = PendingReadStatus::IntegrityConflict,
+            .diagnostic = "attempt ID is not a canonical version-4 UUID"};
+  }
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = PendingReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  return loadPendingChartScoreOnConnection(sessionDatabase_, attemptId);
+}
+
+result_persistence::PendingBatchOutcome
+ReplayDBHelper::ListPendingChartScores(std::size_t limit) {
+  using result_persistence::PendingBatchOutcome;
+  profile_database_activity::ReadGuard readGuard;
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.storageAvailable = false,
+            .diagnostic = "replay storage is unavailable"};
+  }
+
+  SqliteStatementHandle countStmt;
+  if (!prepareSqliteStatementLogged(
+          sessionDatabase_,
+          "SELECT COUNT(*) FROM pending_chart_score_writes", countStmt,
+          "counting pending chart score recovery", logSqlErrorText) ||
+      sqlite3_step(countStmt.get()) != SQLITE_ROW ||
+      sqlite3_column_type(countStmt.get(), 0) != SQLITE_INTEGER) {
+    return {.storageAvailable = false,
+            .diagnostic = "could not count pending score recovery"};
+  }
+  const sqlite3_int64 storedPendingCount =
+      sqlite3_column_int64(countStmt.get(), 0);
+  if (storedPendingCount < 0 ||
+      static_cast<std::uint64_t>(storedPendingCount) >
+          std::numeric_limits<std::size_t>::max() ||
+      sqlite3_step(countStmt.get()) != SQLITE_DONE) {
+    return {.storageAvailable = false,
+            .diagnostic = "pending score recovery count is invalid"};
+  }
+  const std::size_t pendingCount =
+      static_cast<std::size_t>(storedPendingCount);
+
+  std::string query = kPendingChartScoreSelect;
+  query += "ORDER BY p.recovery_attempts, p.last_recovery_at, p.created_at, "
+           "p.attempt_id LIMIT ?";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(sessionDatabase_, query, stmt,
+                                    "preparing pending chart score recovery",
+                                    logSqlErrorText)) {
+    return {.storageAvailable = false,
+            .diagnostic = "could not query pending score recovery"};
+  }
+  constexpr std::size_t maxRecoveryBatchSize = 256;
+  const sqlite3_int64 queryLimit =
+      static_cast<sqlite3_int64>(std::min(limit, maxRecoveryBatchSize));
+  if (sqlite3_bind_int64(stmt.get(), 1, queryLimit) != SQLITE_OK) {
+    return {.storageAvailable = false,
+            .diagnostic = "could not bind pending score recovery limit"};
+  }
+
+  PendingBatchOutcome outcome{.storageAvailable = true};
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    outcome.entries.push_back(
+        decodePendingChartScoreRow(stmt.get(), std::nullopt));
+  }
+  if (rc != SQLITE_DONE) {
+    outcome.storageAvailable = false;
+    outcome.entries.clear();
+    outcome.diagnostic = "pending score recovery query did not complete";
+  } else if (outcome.entries.size() > pendingCount) {
+    outcome.storageAvailable = false;
+    outcome.entries.clear();
+    outcome.diagnostic = "pending score recovery count changed unexpectedly";
+  } else {
+    outcome.remaining = pendingCount - outcome.entries.size();
+  }
+  return outcome;
+}
+
+result_persistence::AcknowledgeOutcome
+ReplayDBHelper::AcknowledgePendingChartScore(std::string_view attemptId,
+                                             int replayId) {
+  using result_persistence::AcknowledgeStatus;
+  using result_persistence::PendingReadStatus;
+  profile_database_activity::WriteGuard writeGuard;
+  if (!uuid::isCanonicalLowerV4(attemptId) || replayId <= 0) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic = "pending score identity is malformed"};
+  }
+
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(sessionDatabase_,
+                                      "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "could not start score acknowledgement"};
+  }
+
+  auto pending =
+      loadPendingChartScoreOnConnection(sessionDatabase_, attemptId);
+  if (pending.status == PendingReadStatus::StorageFailure) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = std::move(pending.diagnostic)};
+  }
+  if (pending.status == PendingReadStatus::IntegrityConflict) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic = std::move(pending.diagnostic)};
+  }
+  if (pending.status == PendingReadStatus::Found) {
+    if (!pending.value.has_value() || pending.value->replayId != replayId) {
+      return {.status = AcknowledgeStatus::IntegrityConflict,
+              .diagnostic = "pending score names a different replay"};
+    }
+    SqliteStatementHandle deleteStmt;
+    if (!prepareSqliteStatementLogged(
+            sessionDatabase_,
+            "DELETE FROM pending_chart_score_writes "
+            "WHERE attempt_id = ? AND replay_id = ?",
+            deleteStmt, "preparing pending chart score acknowledgement",
+            logSqlErrorText) ||
+        !bindTextView(deleteStmt.get(), 1, attemptId) ||
+        sqlite3_bind_int(deleteStmt.get(), 2, replayId) != SQLITE_OK ||
+        sqlite3_step(deleteStmt.get()) != SQLITE_DONE ||
+        sqlite3_changes(sessionDatabase_) != 1) {
+      return {.status = AcknowledgeStatus::StorageFailure,
+              .diagnostic = "could not acknowledge the pending score"};
+    }
+    if (!transaction.commit(transactionError)) {
+      return {.status = AcknowledgeStatus::StorageFailure,
+              .diagnostic = "could not commit score acknowledgement"};
+    }
+    return {.status = AcknowledgeStatus::Acknowledged};
+  }
+
+  ExistingAttemptOutcome existing =
+      findExistingAttempt(sessionDatabase_, attemptId);
+  if (existing.status == ExistingAttemptStatus::StorageFailure) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = std::move(existing.diagnostic)};
+  }
+  if (existing.status != ExistingAttemptStatus::Found ||
+      existing.value.replayId != replayId || existing.value.scorePending) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic =
+                "acknowledged score has no matching durable replay identity"};
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "could not finish score acknowledgement"};
+  }
+  return {.status = AcknowledgeStatus::AlreadyAcknowledged};
+}
+
+result_persistence::RecoveryMarkOutcome
+ReplayDBHelper::RecordPendingChartScoreRecoveryAttempt(
+    std::string_view attemptId,
+    result_persistence::RecoveryAttemptKind kind) {
+  using result_persistence::RecoveryMarkStatus;
+  profile_database_activity::WriteGuard writeGuard;
+  (void)kind;
+  std::lock_guard lock(sessionMutex_);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = RecoveryMarkStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          sessionDatabase_,
+          "UPDATE pending_chart_score_writes "
+          "SET recovery_attempts = recovery_attempts + 1, "
+          "last_recovery_at = CURRENT_TIMESTAMP WHERE attempt_id = ?",
+          stmt, "preparing pending score recovery marker", logSqlErrorText) ||
+      !bindTextView(stmt.get(), 1, attemptId) ||
+      sqlite3_step(stmt.get()) != SQLITE_DONE) {
+    return {.status = RecoveryMarkStatus::StorageFailure,
+            .diagnostic = "could not record the pending score recovery"};
+  }
+  const int changes = sqlite3_changes(sessionDatabase_);
+  if (changes == 0) {
+    return {.status = RecoveryMarkStatus::NotFound};
+  }
+  if (changes != 1) {
+    return {.status = RecoveryMarkStatus::StorageFailure,
+            .diagnostic = "pending score recovery updated unexpected rows"};
+  }
+  return {.status = RecoveryMarkStatus::Recorded};
 }
 
 std::optional<int>
@@ -1646,8 +3214,9 @@ std::optional<int> ReplayDBHelper::SaveCourseReplayOnConnection(
   }
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
-    auto stageReplayId =
-        insertReplayRows(db, replay.stages[i].replay, stageProvenanceJson[i]);
+    auto stageReplayId = insertReplayRows(
+        db, replay.stages[i].replay, stageProvenanceJson[i], std::nullopt,
+        std::nullopt);
     if (!stageReplayId.has_value()) {
       return std::nullopt;
     }

@@ -516,9 +516,12 @@ repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema = {}) {
 inline std::string scoreRankLookupExpr(const std::string &sha256Expr,
                                        const std::string &lnModeExpr) {
   const std::string primary = detail::rankLookupForMode(sha256Expr, lnModeExpr);
-  const std::string fallback = detail::rankLookupForMode(sha256Expr, "0");
+  const std::string classicLongNote =
+      detail::rankLookupForMode(sha256Expr, "1");
+  const std::string legacy = detail::rankLookupForMode(sha256Expr, "0");
   return "(COALESCE(" + primary + ", CASE WHEN " + lnModeExpr +
-         " = 1 THEN " + fallback + " END))";
+         " != 0 THEN COALESCE(" + classicLongNote + ", " + legacy +
+         ") END))";
 }
 
 inline std::string scoreBestLookupExpr(const std::string &sha256Expr,

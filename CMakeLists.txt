@@ -503,6 +503,15 @@ else()
 endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME result_persistence_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(result_persistence_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -566,7 +575,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -581,12 +592,82 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
     endif()
 
+    add_executable(result_persistence_model_tests
+        tests/result_persistence_model_tests.cpp
+        src/ResultPersistenceModel.cpp
+        src/Uuid.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(result_persistence_model_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_persistence_model_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(result_persistence_model_tests PRIVATE SDL2)
+    endif()
+    if(WIN32)
+        target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(result_persistence_coordinator_tests
+        tests/result_persistence_coordinator_tests.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ScoreProvenance.cpp
+    )
+    target_include_directories(result_persistence_coordinator_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_persistence_coordinator_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(result_persistence_integration_tests
+        tests/result_persistence_integration_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ReplayDBHelper.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreDBHelper.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(result_persistence_integration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_persistence_integration_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(result_persistence_integration_tests PRIVATE SDL2)
+    endif()
+    if(WIN32)
+        target_link_libraries(result_persistence_integration_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(score_provenance_db_tests
         tests/score_provenance_db_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreDBHelper.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
@@ -643,6 +724,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(app_database_initializer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(app_database_initializer_tests PRIVATE cxx_std_23)
+
+    add_executable(application_startup_tests
+        tests/application_startup_tests.cpp
+        src/ApplicationStartup.cpp
+    )
+    target_include_directories(application_startup_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(application_startup_tests PRIVATE cxx_std_23)
+
+    add_executable(application_result_recovery_tests
+        tests/application_result_recovery_tests.cpp
+        src/ApplicationResultRecovery.cpp
+    )
+    target_include_directories(application_result_recovery_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(application_result_recovery_tests PRIVATE cxx_std_23)
 
     add_executable(audio_video_settings_tests
         tests/audio_video_settings_tests.cpp
@@ -1055,6 +1154,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/PlayerProfileManager.cpp
+        src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
@@ -1069,6 +1169,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -1095,6 +1196,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
         src/PlayerProfileManager.cpp
+        src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
@@ -1113,6 +1215,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ChartDBHelper.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceCoordinator.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -1143,6 +1247,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ProfileArchive.cpp
         src/FileChecksum.cpp
         src/PlayerProfileManager.cpp
+        src/Uuid.cpp
         src/ProfileDatabaseTools.cpp
         src/AppSettingsStore.cpp
         src/AtomicFile.cpp
@@ -1157,6 +1262,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
+        src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -1328,11 +1434,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         course_identity_tests
         replay_db_helper_tests
+        result_persistence_model_tests
+        result_persistence_coordinator_tests
+        result_persistence_integration_tests
         chart_record_filters_tests
         main_menu_library_tests
         chart_meta_index_order_tests
         score_cache_query_tests
         app_database_initializer_tests
+        application_startup_tests
+        application_result_recovery_tests
         chart_filter_sort_panel_view_tests
         dropdown_view_tests
         view_layout_tests
@@ -1340,6 +1451,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    set_tests_properties(application_result_recovery_tests PROPERTIES
+        TIMEOUT 10
+    )
+    set_tests_properties(result_persistence_integration_tests PROPERTIES
+        TIMEOUT 15
+    )
     add_test(NAME foundation_provenance_contract
         COMMAND $<TARGET_FILE:score_provenance_tests>)
     set_tests_properties(foundation_provenance_contract PROPERTIES
@@ -1372,6 +1489,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
+    set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 30)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)

@@ -1,5 +1,6 @@
 #pragma once
 #include "../ReplayData.h"
+#include "../ResultPersistenceCoordinator.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
@@ -54,6 +55,11 @@ struct ResultCourseOptions {
   std::shared_ptr<CoursePlaySession> session = nullptr;
 };
 
+struct ResultPersistenceOptions {
+  std::shared_ptr<const result_persistence::ChartResultAttempt> attempt;
+  result_persistence::SaveOutcome outcome;
+};
+
 class TextView;
 class Button;
 class PracticeAnalyticsView;
@@ -63,7 +69,8 @@ public:
   ResultScene(
       ApplicationContext &context, const bms_parser::ChartMeta &meta,
       const RhythmState &state, const ScoreProvenance &attemptProvenance,
-      const ReplayData *replay = nullptr, bool shouldSaveScore = true,
+      const ReplayData *replay = nullptr,
+      ResultPersistenceOptions persistenceOptions = {},
       const ReplayData *retrySource = nullptr,
       ResultPracticeOptions practiceOptions = {}, bool autoPlayResult = false,
       ResultCourseOptions courseOptions = {}, std::string pacemakerTarget = {},
@@ -81,8 +88,14 @@ public:
 private:
   void loadDifficultyLabel();
   void loadPreviousBest();
-  void saveScore();
-  void saveReplay();
+  void saveCourseScore();
+  void saveCourseReplay();
+  void addResultPersistenceStatus();
+  void retryResultPersistence();
+  void continueWithoutSaving();
+  void applyResultPersistenceReceipt();
+  void updateResultPersistencePresentation();
+  void refreshResultSummary();
   void addTimingAnalytics();
   void addRetryButtons();
   void addCourseButtons();
@@ -102,6 +115,8 @@ private:
   void exitResult();
   [[nodiscard]] bool isCourseStageResult() const;
   [[nodiscard]] bool isCourseFinalResult() const;
+  [[nodiscard]] bool persistenceDecisionRequired() const;
+  [[nodiscard]] ResultSkinData makeResultSkinData() const;
   [[nodiscard]] std::optional<ResultPacemakerData>
   pacemakerDataForCurrentResult() const;
   [[nodiscard]] std::optional<practice::ResultModel>
@@ -114,10 +129,11 @@ private:
   bms_parser::ChartMeta meta;
   RhythmState resultState;
   const ScoreProvenance attemptProvenance;
-  std::optional<ReplayData> replayToSave;
+  std::optional<ReplayData> presentationReplay;
   std::optional<ReplayData> retryData;
   std::optional<ReplayData> analyticsData;
   std::optional<ResultPreviousBestData> previousBest;
+  ResultPersistenceOptions persistenceOptions;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
   std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
@@ -132,6 +148,10 @@ private:
   std::optional<int> currentClearRankOverride;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  View *normalResultActions = nullptr;
+  View *resultPersistenceStatus = nullptr;
+  TextView *persistenceStatusMessage = nullptr;
+  Button *persistenceRetryButton = nullptr;
   PracticeAnalyticsView *timingAnalyticsView = nullptr;
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
@@ -139,12 +159,10 @@ private:
   Button *practiceSectionButton = nullptr;
   TextView *practiceSectionButtonText = nullptr;
   std::unique_ptr<ISkin> skin;
-  bool shouldSaveScore = true;
   bool replayResult = false;
   bool autoPlayResult = false;
-  bool scoreSaved = false;
-  bool replaySaved = false;
   bool previousBestLoaded = false;
+  bool persistenceContinueChosen = false;
   bool resultPhotoExportInProgress = false;
   bool courseTransitionStarted = false;
   bool courseStageRestRecorded = false;

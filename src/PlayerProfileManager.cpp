@@ -6,6 +6,7 @@
 #include "ProfileDatabaseTools.h"
 #include "ReplayDBHelper.h"
 #include "ScoreDBHelper.h"
+#include "Uuid.h"
 #include "VersionedJson.h"
 #include "input/InputProfileStore.h"
 #include "practice/PracticePresetStore.h"
@@ -18,7 +19,6 @@
 #include <cctype>
 #include <ctime>
 #include <iomanip>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -28,17 +28,36 @@
 #include <Windows.h>
 #endif
 
+enum class ProfileUse : unsigned char {
+  Catalog,
+  Manage,
+  Activate,
+  RuntimeReady,
+};
+
 namespace {
 using Json = nlohmann::json;
 constexpr std::uintmax_t kMaximumPracticeFileBytes = 1U * 1024U * 1024U;
 
 enum class BuildMode { Migration, Create, Duplicate };
 
-struct BuildProfileResult {
-  ProfileResult result;
-  PlayerProfilePaths paths;
-  bool finalized = false;
+struct ProfileValidationPolicy {
+  bool deep;
+  bool allowSupportedOlderDatabases;
 };
+
+constexpr ProfileValidationPolicy validationPolicy(ProfileUse use) {
+  switch (use) {
+  case ProfileUse::Catalog:
+    return {.deep = false, .allowSupportedOlderDatabases = true};
+  case ProfileUse::Manage:
+  case ProfileUse::Activate:
+    return {.deep = true, .allowSupportedOlderDatabases = true};
+  case ProfileUse::RuntimeReady:
+    return {.deep = true, .allowSupportedOlderDatabases = false};
+  }
+  return {.deep = true, .allowSupportedOlderDatabases = false};
+}
 
 ProfileResult failure(ProfileError error, std::string message) {
   return {
@@ -49,26 +68,6 @@ ProfileResult success(PlayerProfile profile, std::string message = {}) {
   return {.error = ProfileError::None,
           .message = std::move(message),
           .profile = std::move(profile)};
-}
-
-std::string defaultUuid() {
-  std::array<unsigned char, 16> bytes{};
-  std::random_device random;
-  for (unsigned char &value : bytes) {
-    value = static_cast<unsigned char>(random());
-  }
-  bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0fU) | 0x40U);
-  bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3fU) | 0x80U);
-
-  std::ostringstream encoded;
-  encoded << std::hex << std::setfill('0');
-  for (std::size_t index = 0; index < bytes.size(); ++index) {
-    if (index == 4 || index == 6 || index == 8 || index == 10) {
-      encoded << '-';
-    }
-    encoded << std::setw(2) << static_cast<unsigned int>(bytes[index]);
-  }
-  return encoded.str();
 }
 
 std::string defaultUtcNow() {
@@ -83,24 +82,6 @@ std::string defaultUtcNow() {
   std::ostringstream encoded;
   encoded << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
   return encoded.str();
-}
-
-bool isUuid(std::string_view value) {
-  if (value.size() != 36) {
-    return false;
-  }
-  for (std::size_t index = 0; index < value.size(); ++index) {
-    if (index == 8 || index == 13 || index == 18 || index == 23) {
-      if (value[index] != '-') {
-        return false;
-      }
-      continue;
-    }
-    if (std::isxdigit(static_cast<unsigned char>(value[index])) == 0) {
-      return false;
-    }
-  }
-  return true;
 }
 
 std::optional<std::string> normalizedName(std::string_view value) {
@@ -496,7 +477,7 @@ bool copyPracticeDirectory(const std::filesystem::path &applicationRoot,
 
 PlayerProfilePaths makePaths(const std::filesystem::path &applicationRoot,
                              std::string_view id) {
-  if (!isUuid(id)) {
+  if (!uuid::isStructurallyValid(id)) {
     return {};
   }
   return makePathsAtRoot(applicationRoot / "profiles" / std::string(id));
@@ -555,7 +536,7 @@ ProfileResult loadProfileMetadata(const std::filesystem::path &path,
     profile.createdAt = loaded.document.at("createdAt").get<std::string>();
     profile.lastUsedAt = loaded.document.at("lastUsedAt").get<std::string>();
     const auto validName = normalizedName(profile.displayName);
-    if (!isUuid(profile.id) || !validName.has_value() ||
+    if (!uuid::isStructurallyValid(profile.id) || !validName.has_value() ||
         *validName != profile.displayName || profile.createdAt.empty() ||
         profile.lastUsedAt.empty() ||
         (!expectedId.empty() && profile.id != expectedId)) {
@@ -595,7 +576,7 @@ BootstrapResult loadBootstrap(const std::filesystem::path &path) {
   try {
     const std::string id =
         loaded.document.at("activeProfileId").get<std::string>();
-    if (!isUuid(id)) {
+    if (!uuid::isStructurallyValid(id)) {
       return {.status = BootstrapStatus::Invalid,
               .message = "active profile bootstrap contains an invalid UUID"};
     }
@@ -689,7 +670,8 @@ bool pathExists(const std::filesystem::path &path, bool &exists,
 ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
                                    const PlayerProfilePaths &paths,
                                    std::string_view expectedId,
-                                   bool allowSupportedOlderDatabases) {
+                                   ProfileUse use) {
+  const ProfileValidationPolicy policy = validationPolicy(use);
   std::string safetyError;
   if (!ensureSafeProfilesRoot(applicationRoot, false, safetyError) ||
       !ensureContainedPath(applicationRoot, paths.root, safetyError) ||
@@ -758,33 +740,400 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
-  if (!allowSupportedOlderDatabases &&
+  if (!policy.allowSupportedOlderDatabases &&
       (*scoreVersion != ScoreDBHelper::kCurrentSchemaVersion ||
        *replayVersion != ReplayDBHelper::kCurrentSchemaVersion)) {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
-  if (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
-      !sqliteIntegrityCheck(paths.replaysDb, errorMessage)) {
+  if (policy.deep &&
+      (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
+       !sqliteIntegrityCheck(paths.replaysDb, errorMessage))) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
   }
   return metadata;
 }
 
-BuildProfileResult buildProfile(
+ProfileResult finalizeNewProfileDirectory(
+    const std::filesystem::path &applicationRoot,
+    const PlayerProfileManagerDependencies &dependencies,
+    const PlayerProfilePaths &staging, const PlayerProfilePaths &destination,
+    PlayerProfile profile) {
+  struct DirectoryState {
+    bool stagingExists = false;
+    bool destinationExists = false;
+    std::optional<ProfileResult> destinationValidation;
+  };
+
+  const auto profilesRoot = applicationRoot / "profiles";
+  auto appendDetail = [](std::string &message, std::string detail) {
+    if (detail.empty()) {
+      return;
+    }
+    if (!message.empty()) {
+      message += "; ";
+    }
+    message += std::move(detail);
+  };
+  auto inspectState = [&](DirectoryState &state, std::string &inspectionError) {
+    if (!ensureContainedPath(applicationRoot, staging.root, inspectionError) ||
+        !ensureContainedPath(applicationRoot, destination.root,
+                             inspectionError) ||
+        !pathExists(staging.root, state.stagingExists, inspectionError) ||
+        !pathExists(destination.root, state.destinationExists,
+                    inspectionError)) {
+      return false;
+    }
+    if (state.destinationExists) {
+      state.destinationValidation = validateProfileFiles(
+          applicationRoot, destination, profile.id, ProfileUse::RuntimeReady);
+    }
+    return true;
+  };
+  auto invalidDestinationFailure = [&](const DirectoryState &state) {
+    const ProfileResult &validation = *state.destinationValidation;
+    return failure(
+        validation.error == ProfileError::None ? ProfileError::IntegrityFailure
+                                               : validation.error,
+        "profile destination is present but cannot be safely accepted: " +
+            validation.message);
+  };
+  auto installedResult = [&](const DirectoryState &state) {
+    std::string warning;
+    if (state.stagingExists) {
+      std::string cleanupError;
+      if (!cleanupStaging(applicationRoot, dependencies, staging.root,
+                          cleanupError)) {
+        appendDetail(warning, "profile is installed, but " + cleanupError);
+      }
+    }
+    std::string syncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, syncError)) {
+      appendDetail(warning,
+                   "profile is installed, but directory sync should be "
+                   "retried: " +
+                       syncError);
+    }
+    return success(std::move(profile), std::move(warning));
+  };
+  auto failedWithoutDestination = [&](const DirectoryState &state,
+                                      std::string message) {
+    if (state.stagingExists) {
+      const bool cleaned =
+          cleanupStaging(applicationRoot, dependencies, staging.root, message);
+      if (cleaned) {
+        std::string syncError;
+        if (!dependencies.filesystem.syncDirectory(profilesRoot, syncError)) {
+          appendDetail(message, "unable to sync staging cleanup: " + syncError);
+        }
+      }
+    }
+    return failure(ProfileError::IoFailure, std::move(message));
+  };
+
+  std::string errorMessage;
+  if (!ensureContainedPath(applicationRoot, staging.root, errorMessage) ||
+      !ensureContainedPath(applicationRoot, destination.root, errorMessage)) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect profile finalization paths: " +
+                       errorMessage);
+  }
+
+  const bool renameReportedSuccess = dependencies.filesystem.durableRename(
+      staging.root, destination.root, errorMessage);
+  const std::string renameError = errorMessage;
+  DirectoryState afterRename;
+  std::string inspectionError;
+  if (!inspectState(afterRename, inspectionError)) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect profile finalization outcome: " +
+                       inspectionError);
+  }
+  if (afterRename.destinationExists &&
+      !afterRename.destinationValidation->ok()) {
+    return invalidDestinationFailure(afterRename);
+  }
+  if (!afterRename.destinationExists) {
+    std::string message = renameReportedSuccess
+                              ? "profile finalization left no destination"
+                              : "unable to finalize profile: " + renameError;
+    return failedWithoutDestination(afterRename, std::move(message));
+  }
+  if (!renameReportedSuccess || afterRename.stagingExists) {
+    return installedResult(afterRename);
+  }
+
+  errorMessage.clear();
+  if (dependencies.filesystem.syncDirectory(profilesRoot, errorMessage)) {
+    return success(std::move(profile));
+  }
+
+  std::string failureMessage =
+      "unable to sync finalized profile directory: " + errorMessage;
+  std::string rollbackError;
+  const bool rollbackReportedSuccess = dependencies.filesystem.durableRename(
+      destination.root, staging.root, rollbackError);
+  DirectoryState afterRollback;
+  inspectionError.clear();
+  if (!inspectState(afterRollback, inspectionError)) {
+    return failure(
+        ProfileError::IoFailure,
+        failureMessage +
+            "; unable to inspect profile rollback outcome: " + inspectionError);
+  }
+  if (afterRollback.destinationExists &&
+      !afterRollback.destinationValidation->ok()) {
+    return invalidDestinationFailure(afterRollback);
+  }
+  if (afterRollback.destinationExists) {
+    return installedResult(afterRollback);
+  }
+
+  if (!rollbackReportedSuccess && !rollbackError.empty()) {
+    appendDetail(failureMessage,
+                 "profile rollback reported failure: " + rollbackError);
+  }
+  std::string rollbackSyncError;
+  if (!dependencies.filesystem.syncDirectory(profilesRoot, rollbackSyncError)) {
+    appendDetail(failureMessage,
+                 "unable to sync profile rollback: " + rollbackSyncError);
+    return failure(ProfileError::IoFailure, std::move(failureMessage));
+  }
+  if (afterRollback.stagingExists &&
+      !cleanupStaging(applicationRoot, dependencies, staging.root,
+                      failureMessage)) {
+    return failure(ProfileError::IoFailure, std::move(failureMessage));
+  }
+  if (afterRollback.stagingExists) {
+    std::string cleanupSyncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot,
+                                               cleanupSyncError)) {
+      appendDetail(failureMessage, "unable to sync profile rollback cleanup: " +
+                                       cleanupSyncError);
+    }
+  }
+  return failure(ProfileError::IoFailure, std::move(failureMessage));
+}
+
+ProfileResult
+finalizeProfileDeletion(const std::filesystem::path &applicationRoot,
+                        const PlayerProfileManagerDependencies &dependencies,
+                        const PlayerProfilePaths &source,
+                        const std::filesystem::path &tombstone,
+                        PlayerProfile profile) {
+  struct DirectoryState {
+    bool sourceExists = false;
+    bool tombstoneExists = false;
+    std::optional<ProfileResult> sourceValidation;
+    std::optional<ProfileResult> tombstoneValidation;
+  };
+
+  const auto profilesRoot = applicationRoot / "profiles";
+  const PlayerProfilePaths tombstonePaths = makePathsAtRoot(tombstone);
+  auto appendDetail = [](std::string &message, std::string detail) {
+    if (detail.empty()) {
+      return;
+    }
+    if (!message.empty()) {
+      message += "; ";
+    }
+    message += std::move(detail);
+  };
+  auto inspectState = [&](DirectoryState &state, std::string &inspectionError) {
+    if (!ensureContainedPath(applicationRoot, source.root, inspectionError) ||
+        !ensureContainedPath(applicationRoot, tombstone, inspectionError) ||
+        !pathExists(source.root, state.sourceExists, inspectionError) ||
+        !pathExists(tombstone, state.tombstoneExists, inspectionError)) {
+      return false;
+    }
+    if (state.sourceExists) {
+      state.sourceValidation = validateProfileFiles(
+          applicationRoot, source, profile.id, ProfileUse::Manage);
+    }
+    if (state.tombstoneExists) {
+      state.tombstoneValidation = validateProfileFiles(
+          applicationRoot, tombstonePaths, profile.id, ProfileUse::Manage);
+    }
+    return true;
+  };
+  auto sourceRetainedFailure = [&](const DirectoryState &state,
+                                   std::string message) {
+    const ProfileResult &validation = *state.sourceValidation;
+    if (!validation.ok()) {
+      return failure(
+          validation.error == ProfileError::None
+              ? ProfileError::IntegrityFailure
+              : validation.error,
+          "profile source is present but cannot be safely retained as a "
+          "completed deletion: " +
+              validation.message);
+    }
+    appendDetail(message, "the canonical profile source remains present");
+    return failure(ProfileError::IoFailure, std::move(message));
+  };
+  auto absentWithoutValidTombstone = [&](const DirectoryState &state,
+                                         std::string warning) {
+    if (!state.tombstoneExists) {
+      appendDetail(warning,
+                   "the canonical profile is absent and no deletion "
+                   "tombstone remains; durability should be rechecked");
+    } else {
+      const ProfileResult &validation = *state.tombstoneValidation;
+      appendDetail(
+          warning,
+          "the canonical profile is absent, but the deletion tombstone is "
+          "invalid and was preserved: " +
+              validation.message +
+              "; directory durability should be rechecked");
+    }
+    return success(std::move(profile), std::move(warning));
+  };
+  auto cleanupCommittedTombstone = [&](std::string warning = {}) {
+    std::string cleanupError;
+    if (!dependencies.filesystem.removeTree(tombstone, cleanupError)) {
+      appendDetail(warning,
+                   "profile deletion committed, but tombstone cleanup should "
+                   "be retried: " +
+                       cleanupError);
+      return success(std::move(profile), std::move(warning));
+    }
+    std::string syncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, syncError)) {
+      appendDetail(warning,
+                   "profile deletion committed, but cleanup directory sync "
+                   "should be retried: " +
+                       syncError);
+    }
+    return success(std::move(profile), std::move(warning));
+  };
+
+  std::string errorMessage;
+  if (!ensureContainedPath(applicationRoot, source.root, errorMessage) ||
+      !ensureContainedPath(applicationRoot, tombstone, errorMessage)) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect profile deletion paths: " + errorMessage);
+  }
+
+  bool tombstoneExists = false;
+  if (!pathExists(tombstone, tombstoneExists, errorMessage)) {
+    return failure(ProfileError::IoFailure, errorMessage);
+  }
+  if (tombstoneExists) {
+    if (!dependencies.filesystem.removeTree(tombstone, errorMessage)) {
+      return failure(ProfileError::IoFailure,
+                     "unable to clean prior deletion tombstone: " +
+                         errorMessage);
+    }
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, errorMessage)) {
+      return failure(ProfileError::IoFailure,
+                     "unable to sync prior deletion tombstone cleanup: " +
+                         errorMessage);
+    }
+  }
+
+  errorMessage.clear();
+  const bool renameReportedSuccess = dependencies.filesystem.durableRename(
+      source.root, tombstone, errorMessage);
+  const std::string renameError = errorMessage;
+  DirectoryState afterRename;
+  std::string inspectionError;
+  if (!inspectState(afterRename, inspectionError)) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect profile deletion outcome: " +
+                       inspectionError);
+  }
+  if (afterRename.sourceExists) {
+    std::string message =
+        renameReportedSuccess
+            ? "profile deletion staging left the canonical source present"
+            : "unable to stage profile deletion: " + renameError;
+    return sourceRetainedFailure(afterRename, std::move(message));
+  }
+  if (!afterRename.tombstoneExists || !afterRename.tombstoneValidation->ok()) {
+    std::string warning;
+    if (!renameReportedSuccess && !renameError.empty()) {
+      warning = "profile rename reported failure: " + renameError;
+    }
+    return absentWithoutValidTombstone(afterRename, std::move(warning));
+  }
+
+  errorMessage.clear();
+  if (dependencies.filesystem.syncDirectory(profilesRoot, errorMessage)) {
+    return cleanupCommittedTombstone();
+  }
+
+  std::string commitFailure =
+      "unable to commit profile deletion: " + errorMessage;
+  std::string rollbackError;
+  const bool rollbackReportedSuccess = dependencies.filesystem.durableRename(
+      tombstone, source.root, rollbackError);
+  DirectoryState afterRollback;
+  inspectionError.clear();
+  if (!inspectState(afterRollback, inspectionError)) {
+    return failure(ProfileError::IoFailure,
+                   commitFailure +
+                       "; unable to inspect profile deletion rollback: " +
+                       inspectionError);
+  }
+  if (afterRollback.sourceExists) {
+    if (!afterRollback.sourceValidation->ok()) {
+      return sourceRetainedFailure(afterRollback, std::move(commitFailure));
+    }
+    if (!rollbackReportedSuccess && !rollbackError.empty()) {
+      appendDetail(commitFailure,
+                   "profile rollback reported failure: " + rollbackError);
+    }
+    std::string rollbackSyncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot,
+                                               rollbackSyncError)) {
+      appendDetail(commitFailure, "unable to sync profile deletion rollback: " +
+                                      rollbackSyncError);
+    }
+    return sourceRetainedFailure(afterRollback, std::move(commitFailure));
+  }
+
+  if (!afterRollback.tombstoneExists ||
+      !afterRollback.tombstoneValidation->ok()) {
+    if (!rollbackReportedSuccess && !rollbackError.empty()) {
+      appendDetail(commitFailure,
+                   "profile rollback reported failure: " + rollbackError);
+    }
+    std::string retrySyncError;
+    if (!dependencies.filesystem.syncDirectory(profilesRoot, retrySyncError)) {
+      appendDetail(commitFailure,
+                   "profile remains absent, but directory sync should be "
+                   "retried: " +
+                       retrySyncError);
+    }
+    return absentWithoutValidTombstone(afterRollback, std::move(commitFailure));
+  }
+
+  std::string retrySyncError;
+  if (!dependencies.filesystem.syncDirectory(profilesRoot, retrySyncError)) {
+    if (!rollbackReportedSuccess && !rollbackError.empty()) {
+      appendDetail(commitFailure,
+                   "profile rollback reported failure: " + rollbackError);
+    }
+    appendDetail(commitFailure,
+                 "profile remains absent, but directory sync should be "
+                 "retried: " +
+                     retrySyncError);
+    return success(std::move(profile), std::move(commitFailure));
+  }
+  return cleanupCommittedTombstone();
+}
+
+ProfileResult buildProfile(
     const std::filesystem::path &applicationRoot,
     const PlayerProfileManagerDependencies &dependencies, std::string id,
     std::string displayName, BuildMode mode,
     const std::optional<PlayerProfilePaths> &duplicateSource = std::nullopt) {
-  BuildProfileResult outcome;
   const PlayerProfilePaths staging = makeStagingPaths(applicationRoot, id);
   const PlayerProfilePaths destination = makePaths(applicationRoot, id);
-  outcome.paths = destination;
   std::string errorMessage;
   auto fail = [&](ProfileError error, std::string message) {
     cleanupStaging(applicationRoot, dependencies, staging.root, message);
-    outcome.result = failure(error, std::move(message));
-    return outcome;
+    return failure(error, std::move(message));
   };
   auto migrationPhase = [&](ProfileMigrationPhase phase) {
     return mode != BuildMode::Migration ||
@@ -1072,23 +1421,24 @@ BuildProfileResult buildProfile(
   if (!migrationPhase(ProfileMigrationPhase::FinalizeProfile)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
   }
-  if (!ensureContainedPath(applicationRoot, staging.root, errorMessage) ||
-      !ensureContainedPath(applicationRoot, destination.root, errorMessage) ||
-      !dependencies.filesystem.durableRename(staging.root, destination.root,
-                                             errorMessage)) {
-    return fail(mode == BuildMode::Migration ? ProfileError::MigrationFailure
-                                             : ProfileError::IoFailure,
-                "unable to finalize profile: " + errorMessage);
+  if (mode == BuildMode::Migration) {
+    if (!ensureContainedPath(applicationRoot, staging.root, errorMessage) ||
+        !ensureContainedPath(applicationRoot, destination.root, errorMessage) ||
+        !dependencies.filesystem.durableRename(staging.root, destination.root,
+                                               errorMessage)) {
+      return fail(ProfileError::MigrationFailure,
+                  "unable to finalize profile: " + errorMessage);
+    }
+    if (!dependencies.filesystem.syncDirectory(applicationRoot / "profiles",
+                                               errorMessage)) {
+      return fail(ProfileError::MigrationFailure,
+                  "unable to sync finalized profile directory: " +
+                      errorMessage);
+    }
+    return success(std::move(profile));
   }
-  outcome.finalized = true;
-  if (!dependencies.filesystem.syncDirectory(applicationRoot / "profiles",
-                                             errorMessage)) {
-    return fail(mode == BuildMode::Migration ? ProfileError::MigrationFailure
-                                             : ProfileError::IoFailure,
-                "unable to sync finalized profile directory: " + errorMessage);
-  }
-  outcome.result = success(std::move(profile));
-  return outcome;
+  return finalizeNewProfileDirectory(applicationRoot, dependencies, staging,
+                                     destination, std::move(profile));
 }
 
 bool cleanupAbandonedStaging(
@@ -1109,7 +1459,7 @@ bool cleanupAbandonedStaging(
     const std::string filename = entry.path().filename().string();
     if (filename.starts_with(".backup-")) {
       const std::string id = filename.substr(std::string(".backup-").size());
-      if (!isUuid(id)) {
+      if (!uuid::isStructurallyValid(id)) {
         errorMessage = "invalid abandoned profile backup name";
         return false;
       }
@@ -1124,7 +1474,8 @@ bool cleanupAbandonedStaging(
       }
       if (destinationExists) {
         const ProfileResult destinationValidation =
-            validateProfileFiles(applicationRoot, destination, id, true);
+            validateProfileFiles(applicationRoot, destination, id,
+                                 ProfileUse::Manage);
         if (destinationValidation.ok()) {
           if (!dependencies.filesystem.removeTree(entry.path(), errorMessage)) {
             errorMessage =
@@ -1142,7 +1493,8 @@ bool cleanupAbandonedStaging(
             return false;
           }
           const ProfileResult backupValidation =
-              validateProfileFiles(applicationRoot, backup, id, true);
+              validateProfileFiles(applicationRoot, backup, id,
+                                   ProfileUse::Manage);
           if (!backupValidation.ok()) {
             errorMessage =
                 "profile overwrite recovery found an invalid destination (" +
@@ -1170,7 +1522,8 @@ bool cleanupAbandonedStaging(
         }
       } else {
         const ProfileResult backupValidation =
-            validateProfileFiles(applicationRoot, backup, id, true);
+            validateProfileFiles(applicationRoot, backup, id,
+                                 ProfileUse::Manage);
         if (!backupValidation.ok()) {
           errorMessage = "abandoned profile backup is invalid: " +
                          backupValidation.message;
@@ -1216,7 +1569,7 @@ PlayerProfileManager::PlayerProfileManager(
     : applicationDataRoot_(std::move(applicationDataRoot)),
       dependencies_(std::move(dependencies)) {
   if (!dependencies_.generateUuid) {
-    dependencies_.generateUuid = defaultUuid;
+    dependencies_.generateUuid = uuid::generateV4;
   }
   if (!dependencies_.utcNow) {
     dependencies_.utcNow = defaultUtcNow;
@@ -1255,8 +1608,7 @@ ProfileResult PlayerProfileManager::Initialize() {
   }
   if (bootstrap.status == BootstrapStatus::Loaded) {
     const ProfileResult validated =
-        validateProfile(bootstrap.id, ValidationDepth::Routine,
-                        DatabaseVersionPolicy::AllowSupportedOlder);
+        validateProfile(bootstrap.id, ProfileUse::Catalog);
     if (validated.ok()) {
       activeProfile_ = validated.profile;
       return validated;
@@ -1271,9 +1623,8 @@ ProfileResult PlayerProfileManager::Initialize() {
     return failure(ProfileError::FutureVersion, backup.message);
   }
   if (backup.status == BootstrapStatus::Loaded) {
-    const ProfileResult validated = validateProfile(
-        backup.id, ValidationDepth::Deep,
-        DatabaseVersionPolicy::AllowSupportedOlder);
+    const ProfileResult validated =
+        validateProfile(backup.id, ProfileUse::Activate);
     if (validated.ok()) {
       if (!writeBootstrap(applicationDataRoot_, backup.id, errorMessage)) {
         return failure(ProfileError::IoFailure,
@@ -1288,8 +1639,7 @@ ProfileResult PlayerProfileManager::Initialize() {
     }
   }
 
-  std::vector<PlayerProfile> profiles = listProfiles(
-      ValidationDepth::Deep, DatabaseVersionPolicy::AllowSupportedOlder);
+  std::vector<PlayerProfile> profiles = listProfiles(ProfileUse::Activate);
   if (!profiles.empty()) {
     const PlayerProfile recovered = profiles.front();
     if (!writeBootstrap(applicationDataRoot_, recovered.id, errorMessage)) {
@@ -1311,12 +1661,11 @@ ProfileResult PlayerProfileManager::Initialize() {
   }
   for (const auto &entry : profileIterator) {
     const std::string candidateId = entry.path().filename().string();
-    if (!isUuid(candidateId)) {
+    if (!uuid::isStructurallyValid(candidateId)) {
       continue;
     }
-    const ProfileResult candidate = validateProfile(
-        candidateId, ValidationDepth::Deep,
-        DatabaseVersionPolicy::AllowSupportedOlder);
+    const ProfileResult candidate =
+        validateProfile(candidateId, ProfileUse::Activate);
     if (candidate.error == ProfileError::FutureVersion) {
       return candidate;
     }
@@ -1325,7 +1674,7 @@ ProfileResult PlayerProfileManager::Initialize() {
   std::string id;
   for (int attempt = 0; attempt < 64; ++attempt) {
     const std::string candidate = dependencies_.generateUuid();
-    if (!isUuid(candidate)) {
+    if (!uuid::isStructurallyValid(candidate)) {
       continue;
     }
     bool exists = false;
@@ -1343,10 +1692,10 @@ ProfileResult PlayerProfileManager::Initialize() {
                    "unable to generate a unique profile UUID");
   }
 
-  BuildProfileResult built = buildProfile(applicationDataRoot_, dependencies_,
-                                          id, "Player", BuildMode::Migration);
-  if (!built.result.ok()) {
-    return built.result;
+  ProfileResult built = buildProfile(applicationDataRoot_, dependencies_, id,
+                                     "Player", BuildMode::Migration);
+  if (!built.ok()) {
+    return built;
   }
   if (!runPhase(dependencies_, ProfileMigrationPhase::WriteBootstrap,
                 errorMessage)) {
@@ -1356,8 +1705,8 @@ ProfileResult PlayerProfileManager::Initialize() {
     return failure(ProfileError::MigrationFailure,
                    "unable to write active profile bootstrap: " + errorMessage);
   }
-  activeProfile_ = built.result.profile;
-  return built.result;
+  activeProfile_ = built.profile;
+  return built;
 }
 
 const PlayerProfile &PlayerProfileManager::activeProfile() const {
@@ -1380,13 +1729,11 @@ PlayerProfilePaths PlayerProfileManager::pathsFor(std::string_view id) const {
 }
 
 std::vector<PlayerProfile> PlayerProfileManager::listProfiles() const {
-  return listProfiles(ValidationDepth::Routine,
-                      DatabaseVersionPolicy::AllowSupportedOlder);
+  return listProfiles(ProfileUse::Catalog);
 }
 
 std::vector<PlayerProfile>
-PlayerProfileManager::listProfiles(ValidationDepth depth,
-                                   DatabaseVersionPolicy policy) const {
+PlayerProfileManager::listProfiles(ProfileUse use) const {
   std::vector<PlayerProfile> profiles;
   std::string safetyError;
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, safetyError)) {
@@ -1400,10 +1747,10 @@ PlayerProfileManager::listProfiles(ValidationDepth depth,
   }
   for (const auto &entry : iterator) {
     const std::string id = entry.path().filename().string();
-    if (!isUuid(id)) {
+    if (!uuid::isStructurallyValid(id)) {
       continue;
     }
-    const ProfileResult validated = validateProfile(id, depth, policy);
+    const ProfileResult validated = validateProfile(id, use);
     if (validated.ok() && validated.profile) {
       profiles.push_back(*validated.profile);
     }
@@ -1436,7 +1783,7 @@ ProfileResult PlayerProfileManager::createProfile(std::string displayName) {
   for (int attempt = 0; attempt < 64; ++attempt) {
     const std::string candidate = dependencies_.generateUuid();
     bool exists = false;
-    if (isUuid(candidate) &&
+    if (uuid::isStructurallyValid(candidate) &&
         pathExists(pathsFor(candidate).root, exists, errorMessage) && !exists) {
       id = candidate;
       break;
@@ -1449,8 +1796,7 @@ ProfileResult PlayerProfileManager::createProfile(std::string displayName) {
                        : errorMessage);
   }
   return buildProfile(applicationDataRoot_, dependencies_, id, *name,
-                      BuildMode::Create)
-      .result;
+                      BuildMode::Create);
 }
 
 ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
@@ -1463,9 +1809,7 @@ ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, rootError)) {
     return failure(ProfileError::IoFailure, rootError);
   }
-  const ProfileResult source = validateProfile(
-      sourceId, ValidationDepth::Deep,
-      DatabaseVersionPolicy::AllowSupportedOlder);
+  const ProfileResult source = validateProfile(sourceId, ProfileUse::Manage);
   if (!source.ok()) {
     return source;
   }
@@ -1478,7 +1822,7 @@ ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
   for (int attempt = 0; attempt < 64; ++attempt) {
     const std::string candidate = dependencies_.generateUuid();
     bool exists = false;
-    if (isUuid(candidate) &&
+    if (uuid::isStructurallyValid(candidate) &&
         pathExists(pathsFor(candidate).root, exists, errorMessage) && !exists) {
       id = candidate;
       break;
@@ -1491,8 +1835,7 @@ ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
                        : errorMessage);
   }
   return buildProfile(applicationDataRoot_, dependencies_, id, *name,
-                      BuildMode::Duplicate, pathsFor(sourceId))
-      .result;
+                      BuildMode::Duplicate, pathsFor(sourceId));
 }
 
 ProfileResult PlayerProfileManager::renameProfile(std::string_view id,
@@ -1505,7 +1848,7 @@ ProfileResult PlayerProfileManager::renameProfile(std::string_view id,
   if (!name) {
     return failure(ProfileError::InvalidName, "profile name is invalid");
   }
-  ProfileResult validated = validateProfile(id);
+  ProfileResult validated = validateProfile(id, ProfileUse::Manage);
   if (!validated.ok() || !validated.profile) {
     return validated;
   }
@@ -1530,12 +1873,11 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
   if (!ensureSafeProfilesRoot(applicationDataRoot_, false, rootError)) {
     return failure(ProfileError::IoFailure, rootError);
   }
-  const ProfileResult validated = validateProfile(id);
+  const ProfileResult validated = validateProfile(id, ProfileUse::Manage);
   if (!validated.ok()) {
     return validated;
   }
-  const auto profiles = listProfiles(ValidationDepth::Deep,
-                                     DatabaseVersionPolicy::CurrentOnly);
+  const auto profiles = listProfiles(ProfileUse::Manage);
   if (profiles.size() <= 1) {
     return failure(ProfileError::LastProfileDeletion,
                    "the last profile cannot be deleted");
@@ -1545,61 +1887,27 @@ ProfileResult PlayerProfileManager::deleteProfile(std::string_view id) {
                    "the active profile cannot be deleted");
   }
 
-  const auto source = pathsFor(id).root;
+  const PlayerProfilePaths source = pathsFor(id);
   const auto tombstone =
       applicationDataRoot_ / "profiles" / (".deleting-" + std::string(id));
-  std::string errorMessage;
-  if (!ensureContainedPath(applicationDataRoot_, source, errorMessage) ||
-      !ensureContainedPath(applicationDataRoot_, tombstone, errorMessage)) {
-    return failure(ProfileError::IoFailure, errorMessage);
-  }
-  bool tombstoneExists = false;
-  if (!pathExists(tombstone, tombstoneExists, errorMessage)) {
-    return failure(ProfileError::IoFailure, errorMessage);
-  }
-  if (tombstoneExists &&
-      !dependencies_.filesystem.removeTree(tombstone, errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to clean prior deletion tombstone: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.durableRename(source, tombstone,
-                                              errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to stage profile deletion: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.syncDirectory(applicationDataRoot_ / "profiles",
-                                              errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to commit profile deletion: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.removeTree(tombstone, errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to delete profile data: " + errorMessage);
-  }
-  if (!dependencies_.filesystem.syncDirectory(applicationDataRoot_ / "profiles",
-                                              errorMessage)) {
-    return failure(ProfileError::IoFailure,
-                   "unable to sync profile deletion cleanup: " + errorMessage);
-  }
-  return success(*validated.profile);
+  return finalizeProfileDeletion(applicationDataRoot_, dependencies_, source,
+                                 tombstone, *validated.profile);
 }
 
 ProfileResult PlayerProfileManager::validateProfile(std::string_view id) const {
-  return validateProfile(id, ValidationDepth::Deep,
-                         DatabaseVersionPolicy::CurrentOnly);
+  return validateProfile(id, ProfileUse::RuntimeReady);
 }
 
-ProfileResult PlayerProfileManager::validateProfileForActivation(
-    std::string_view id) const {
-  return validateProfile(id, ValidationDepth::Deep,
-                         DatabaseVersionPolicy::AllowSupportedOlder);
+ProfileResult
+PlayerProfileManager::validateProfileForActivation(std::string_view id) const {
+  return validateProfile(id, ProfileUse::Activate);
 }
 
 ProfileResult
 PlayerProfileManager::validateProfile(std::string_view id,
-                                      ValidationDepth depth,
-                                      DatabaseVersionPolicy policy) const {
-  if (!isUuid(id)) {
+                                      ProfileUse use) const {
+  const ProfileValidationPolicy policy = validationPolicy(use);
+  if (!uuid::isStructurallyValid(id)) {
     return failure(ProfileError::NotFound, "profile UUID is invalid");
   }
   const PlayerProfilePaths paths = pathsFor(id);
@@ -1677,13 +1985,13 @@ PlayerProfileManager::validateProfile(std::string_view id,
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
-  if (policy == DatabaseVersionPolicy::CurrentOnly &&
+  if (!policy.allowSupportedOlderDatabases &&
       (*scoreVersion != ScoreDBHelper::kCurrentSchemaVersion ||
        *replayVersion != ReplayDBHelper::kCurrentSchemaVersion)) {
     return failure(ProfileError::IntegrityFailure,
                    "profile database schema is not current");
   }
-  if (depth == ValidationDepth::Deep &&
+  if (policy.deep &&
       (!sqliteIntegrityCheck(paths.scoresDb, errorMessage) ||
        !sqliteIntegrityCheck(paths.replaysDb, errorMessage))) {
     return failure(ProfileError::IntegrityFailure, errorMessage);
@@ -1759,15 +2067,12 @@ ProfileResult PlayerProfileManager::installProfile(
   const bool overwrite = overwriteProfileId.has_value();
   std::string id;
   if (overwrite) {
-    const ProfileResult target = validateProfile(
-        *overwriteProfileId, ValidationDepth::Deep,
-        DatabaseVersionPolicy::AllowSupportedOlder);
+    const ProfileResult target =
+        validateProfile(*overwriteProfileId, ProfileUse::Manage);
     if (!target.ok()) {
       return target;
     }
-    if (listProfiles(ValidationDepth::Deep,
-                     DatabaseVersionPolicy::AllowSupportedOlder)
-            .size() <= 1) {
+    if (listProfiles(ProfileUse::Manage).size() <= 1) {
       return failure(ProfileError::LastProfileDeletion,
                      "the last profile cannot be overwritten");
     }
@@ -1779,7 +2084,7 @@ ProfileResult PlayerProfileManager::installProfile(
   } else {
     for (int attempt = 0; attempt < 64; ++attempt) {
       const std::string candidate = dependencies_.generateUuid();
-      if (!isUuid(candidate)) {
+      if (!uuid::isStructurallyValid(candidate)) {
         continue;
       }
       bool destinationExists = false;
@@ -1929,7 +2234,8 @@ ProfileResult PlayerProfileManager::installProfile(
         "database migration changed imported row counts");
   }
   ProfileResult staged = validateProfileFiles(
-      applicationDataRoot_, staging, sourceProfile.id, false);
+      applicationDataRoot_, staging, sourceProfile.id,
+      ProfileUse::RuntimeReady);
   if (!staged.ok()) {
     return cleanStagingAndFail(
         staged.error, "staged imported profile is invalid: " + staged.message);
@@ -1970,88 +2276,9 @@ ProfileResult PlayerProfileManager::installProfile(
 
   const auto profilesRoot = applicationDataRoot_ / "profiles";
   if (!overwrite) {
-    if (!dependencies_.filesystem.durableRename(staging.root, destination.root,
-                                                errorMessage)) {
-      bool stagingStillExists = false;
-      std::string inspectError;
-      const ProfileResult committed =
-          validateProfileFiles(applicationDataRoot_, destination, id, false);
-      if (pathExists(staging.root, stagingStillExists, inspectError) &&
-          !stagingStillExists && committed.ok()) {
-        std::string syncError;
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot, syncError)) {
-          return success(
-              std::move(sourceProfile),
-              "profile import finalized despite an ambiguous rename, but "
-              "directory sync should be retried: " +
-                  syncError);
-        }
-        return success(std::move(sourceProfile));
-      }
-      return cleanStagingAndFail(ProfileError::IoFailure,
-                                 "unable to finalize imported profile: " +
-                                     errorMessage);
-    }
-    if (!dependencies_.filesystem.syncDirectory(profilesRoot, errorMessage)) {
-      std::string rollbackMessage =
-          "unable to sync imported profile: " + errorMessage;
-      std::string rollbackError;
-      if (dependencies_.filesystem.durableRename(destination.root, staging.root,
-                                                 rollbackError)) {
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot,
-                                                    rollbackError)) {
-          return failure(
-              ProfileError::IoFailure,
-              rollbackMessage +
-                  "; unable to sync create rollback: " + rollbackError);
-        }
-        if (!cleanupStaging(applicationDataRoot_, dependencies_, staging.root,
-                            rollbackMessage)) {
-          return failure(ProfileError::IoFailure, std::move(rollbackMessage));
-        }
-        rollbackError.clear();
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot,
-                                                    rollbackError)) {
-          rollbackMessage +=
-              "; unable to sync create rollback cleanup: " + rollbackError;
-        }
-        return failure(ProfileError::IoFailure, std::move(rollbackMessage));
-      }
-
-      bool stagingExistsAfterRollback = false;
-      bool destinationExistsAfterRollback = false;
-      std::string inspectError;
-      if (pathExists(staging.root, stagingExistsAfterRollback, inspectError) &&
-          pathExists(destination.root, destinationExistsAfterRollback,
-                     inspectError) &&
-          !stagingExistsAfterRollback && destinationExistsAfterRollback &&
-          validateProfileFiles(applicationDataRoot_, destination, id, false)
-              .ok()) {
-        std::string syncError;
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot, syncError)) {
-          return success(
-              std::move(sourceProfile),
-              "profile import remains installed because rollback was "
-              "unavailable; directory sync should be retried: " +
-                  syncError);
-        }
-        return success(std::move(sourceProfile));
-      }
-      if (stagingExistsAfterRollback && !destinationExistsAfterRollback) {
-        cleanupStaging(applicationDataRoot_, dependencies_, staging.root,
-                       rollbackMessage);
-        std::string cleanupSyncError;
-        if (!dependencies_.filesystem.syncDirectory(profilesRoot,
-                                                    cleanupSyncError)) {
-          rollbackMessage +=
-              "; unable to sync ambiguous create cleanup: " + cleanupSyncError;
-        }
-      }
-      return failure(ProfileError::IoFailure,
-                     rollbackMessage + "; unable to roll back create import: " +
-                         rollbackError);
-    }
-    return success(std::move(sourceProfile));
+    return finalizeNewProfileDirectory(
+        applicationDataRoot_, dependencies_, staging, destination,
+        std::move(sourceProfile));
   }
 
   auto rollback = [&](std::string message) {
@@ -2063,7 +2290,8 @@ ProfileResult PlayerProfileManager::installProfile(
       message += "; rollback backup is missing; retaining replacement";
     } else {
       const ProfileResult backupValidation = validateProfileFiles(
-          applicationDataRoot_, makePathsAtRoot(backup), id, true);
+          applicationDataRoot_, makePathsAtRoot(backup), id,
+          ProfileUse::Manage);
       if (!backupValidation.ok()) {
         message += "; rollback backup is not safely recoverable (" +
                    backupValidation.message +

@@ -14,7 +14,9 @@ ProfileSwitchResult switchFailure(ProfileError error, std::string message) {
   return {.error = error, .message = std::move(message)};
 }
 
-ProfileSwitchResult switchSuccess() { return {}; }
+ProfileSwitchResult switchSuccess(std::string message = {}) {
+  return {.message = std::move(message)};
+}
 
 void appendRollbackError(std::string &message, std::string_view operation,
                          const std::exception &error) {
@@ -61,6 +63,11 @@ ProfileSessionCoordinator::ProfileSessionCoordinator(
     dependencies_.bindReplay =
         [](ReplayDBHelper &helper, const std::filesystem::path &path,
            std::string &error) { return helper.BindDatabasePath(path, error); };
+  }
+  if (!dependencies_.recoverPendingResults) {
+    dependencies_.recoverPendingResults = [] {
+      return result_persistence::RecoverySummary{};
+    };
   }
 }
 
@@ -198,6 +205,7 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
                     "Unable to bind target score database: " +
                         std::string(error.what()));
   }
+
   try {
     errorMessage.clear();
     if (!dependencies_.bindReplay(replay_, targetPaths.replaysDb,
@@ -209,6 +217,21 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
     return rollback(ProfileError::IoFailure,
                     "Unable to bind target replay database: " +
                         std::string(error.what()));
+  }
+
+  std::string recoveryWarning;
+  try {
+    result_persistence::RecoverySummary recovery =
+        dependencies_.recoverPendingResults();
+    if (!recovery.userMessage.empty()) {
+      recoveryWarning = std::move(recovery.userMessage);
+    } else if (recovery.pending != 0 || recovery.conflicts != 0) {
+      recoveryWarning = result_persistence::recoveryUserMessage();
+    }
+  } catch (const std::exception &) {
+    recoveryWarning = result_persistence::recoveryUserMessage();
+  } catch (...) {
+    recoveryWarning = result_persistence::recoveryUserMessage();
   }
 
   inputApplyAttempted = true;
@@ -250,5 +273,5 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
     return rollback(committed.error,
                     "Unable to commit active profile: " + committed.message);
   }
-  return switchSuccess();
+  return switchSuccess(std::move(recoveryWarning));
 }
