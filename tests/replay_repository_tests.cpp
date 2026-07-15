@@ -181,15 +181,6 @@ void expectReplayMigrationRejectedWithoutMutation(
   assert(after == before);
 }
 
-int denyPendingOutboxCreationAuthorizer(void *, int action, const char *first,
-                                        const char *, const char *,
-                                        const char *) {
-  return action == SQLITE_CREATE_TABLE && first != nullptr &&
-                 std::string_view(first) == "pending_chart_score_writes"
-             ? SQLITE_DENY
-             : SQLITE_OK;
-}
-
 std::string readFileBytes(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input),
@@ -1206,8 +1197,7 @@ void testCurrentVersionAcceptsExactMixedCaseIdentifiersOnCachedPaths(
   std::string bindError;
   assert(helper.BindDatabasePath(path, bindError));
   assert(bindError.empty());
-  SqliteConnectionHandle trusted(helper.Connect());
-  assert(trusted);
+  auto trusted = openDatabase(path);
   assert(queryInt(trusted.get(), "PRAGMA user_version") == 5);
   assert(queryText(trusted.get(),
                    "SELECT attempt_id || '|' || replay_id || '|' || score "
@@ -1407,8 +1397,6 @@ void testCurrentVersionRejectsMalformedVersion5Artifacts(
     std::string bindError;
     assert(!helper.BindDatabasePath(path, bindError));
     assert(!bindError.empty());
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
     assert(replayMigrationSnapshot(path) == before);
   }
 }
@@ -1420,16 +1408,18 @@ void testVersion4OutboxCreationFailureRollsBackBaseRepairs(
   auto db = openDatabase(path);
   execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
   execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('ddl-rollback')");
+  execOrAbort(db.get(),
+              "CREATE VIEW pending_chart_score_writes AS "
+              "SELECT 'blocked' AS attempt_id");
   const ReplayMigrationSnapshot before{
       .userVersion = queryInt(db.get(), "PRAGMA user_version"),
       .schema = schemaSnapshot(db.get()),
       .sentinel = queryText(db.get(), "SELECT value FROM sentinel"),
   };
-  assert(sqlite3_set_authorizer(db.get(), denyPendingOutboxCreationAuthorizer,
-                                nullptr) == SQLITE_OK);
+  db.reset();
   ReplayRepository helper(path);
-  assert(!helper.CreateReplayTables(db.get()));
-  assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+  assert(!helper.EnsureSchema());
+  db = openDatabase(path);
   const ReplayMigrationSnapshot after{
       .userVersion = queryInt(db.get(), "PRAGMA user_version"),
       .schema = schemaSnapshot(db.get()),
@@ -2208,47 +2198,6 @@ void testVersion2MigrationPreservesOutcomesAndRows(
   assert(queryInt(second.get(), "SELECT COUNT(*) FROM course_replays") == 1);
 }
 
-void testReplayMigrationNestsInsideCallerTransaction(
-    const std::filesystem::path &root) {
-  const auto path = root / "nested-migration" / "replay.db";
-  createVersion2ReplayFixture(path);
-  auto db = openDatabase(path);
-  execOrAbort(db.get(),
-              "UPDATE replays SET chart_md5='ABCDEF', "
-              "chart_sha256='FEDCBA', max_combo=0");
-  execOrAbort(db.get(),
-              "INSERT INTO replay_events (replay_id,event_index,action,lane,"
-              "note_time_micros,song_time_micros,judge_time_micros,judgement,"
-              "diff_micros,gauge,gauge_type,combo,score)"
-              " VALUES (2,0,0,3,100000,100100,100050,0,-50,73.5,2,7,2)");
-  execOrAbort(db.get(), "UPDATE course_replays SET max_combo=0");
-  execOrAbort(db.get(), "PRAGMA user_version=0");
-
-  execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
-  ReplayRepository helper(path);
-  assert(helper.CreateReplayTables(db.get()));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
-  assert(queryText(db.get(), "SELECT chart_md5 FROM replays WHERE id=1") ==
-         "abcdef");
-  assert(queryText(db.get(), "SELECT chart_sha256 FROM replays WHERE id=1") ==
-         "fedcba");
-  assert(queryInt(db.get(), "SELECT max_combo FROM replays WHERE id=1") == 1);
-  assert(queryInt(db.get(), "SELECT max_combo FROM course_replays WHERE id=1") ==
-         7);
-  assert(columnExists(db.get(), "replays", "provenance_json"));
-
-  execOrAbort(db.get(), "ROLLBACK");
-  assert(queryInt(db.get(), "PRAGMA user_version") == 0);
-  assert(queryText(db.get(), "SELECT chart_md5 FROM replays WHERE id=1") ==
-         "ABCDEF");
-  assert(queryText(db.get(), "SELECT chart_sha256 FROM replays WHERE id=1") ==
-         "FEDCBA");
-  assert(queryInt(db.get(), "SELECT max_combo FROM replays WHERE id=1") == 0);
-  assert(queryInt(db.get(), "SELECT max_combo FROM course_replays WHERE id=1") ==
-         0);
-  assert(!columnExists(db.get(), "replays", "provenance_json"));
-}
-
 void testChartAndCourseRoundTripAndPathIsolation(
     const std::filesystem::path &root) {
   const auto firstPath = root / "profiles" / "one" / "replay.db";
@@ -2794,14 +2743,6 @@ void testFutureVersionFivePlusOneIsRejected(
     assert(!helper.BindDatabasePath(path, error));
     assert(!error.empty());
   });
-  assertUnchanged("connect", [](ReplayRepository &helper, const auto &) {
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
-  });
-  assertUnchanged("create", [](ReplayRepository &helper, const auto &path) {
-    auto db = openDatabase(path);
-    assert(!helper.CreateReplayTables(db.get()));
-  });
   assertUnchanged("save-chart", [&](ReplayRepository &helper, const auto &) {
     assert(!helper.SaveReplay(stage).has_value());
   });
@@ -2831,14 +2772,6 @@ void testFutureVersionFivePlusOneIsRejected(
     assert(!helper.RecoverCourseRecords({}, {}, error));
     assert(!error.empty());
   });
-  assertUnchanged("recover-connection",
-                  [](ReplayRepository &helper, const auto &path) {
-                    auto db = openDatabase(path);
-                    std::string error;
-                    assert(!helper.RecoverCourseRecords(db.get(), {}, {},
-                                                        error));
-                    assert(!error.empty());
-                  });
   assertUnchanged("stage", [&](ReplayRepository &helper, const auto &) {
     assert(helper.StageChartResult(attempt).status ==
            result_persistence::StageStatus::StorageFailure);
@@ -2897,8 +2830,7 @@ void testFutureReplayWritesPreservePersistentDatabaseState(
   assertUnchanged(root / "future-direct-replay" / "replay.db",
                   [&](const auto &path) {
                     ReplayRepository helper(path);
-                    SqliteConnectionHandle db(helper.Connect());
-                    assert(!db);
+                    assert(!helper.EnsureSchema());
                   });
 }
 
@@ -2936,8 +2868,7 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
     assertRejectedWithoutFamilyMutation(
         databaseState, "connect", [&](const auto &path) {
           ReplayRepository helper(path);
-          SqliteConnectionHandle db(helper.Connect());
-          return !db;
+          return !helper.EnsureSchema();
         });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-chart", [&](const auto &path) {
@@ -2961,7 +2892,7 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
   execOrAbort(directDb.get(), "PRAGMA user_version=99");
   const auto directBefore = rawDatabaseFamilySnapshot(directPath);
   ReplayRepository directHelper(directPath);
-  assert(!directHelper.CreateReplayTables(directDb.get()));
+  assert(!directHelper.EnsureSchema());
   const auto directAfter = rawDatabaseFamilySnapshot(directPath);
   // Reading a live WAL database may update transient reader marks in -shm.
   // Durable files and application-visible state must remain unchanged.
@@ -2986,8 +2917,7 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
     ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -2999,8 +2929,7 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     staleShm.close();
     const auto before = rawDatabaseFamilySnapshot(path);
     ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -3027,9 +2956,8 @@ void testReplayPreflightRejectsMalformedStatesAndAllowsCreation(
     withLiveWalWriter(path, 3, [&] {
       const auto before = rawDatabaseFamilySnapshot(path);
       ReplayRepository helper(path);
-      SqliteConnectionHandle connection(helper.Connect());
+      assert(!helper.EnsureSchema());
       const auto after = rawDatabaseFamilySnapshot(path);
-      assert(!connection);
       assert(after == before);
     });
   }
@@ -3040,14 +2968,6 @@ int denyJournalModeAuthorizer(void *, int action, const char *first,
                               const char *, const char *, const char *) {
   return action == SQLITE_PRAGMA && first != nullptr &&
                  std::string_view(first) == "journal_mode"
-             ? SQLITE_DENY
-             : SQLITE_OK;
-}
-
-int denyUserVersionAuthorizer(void *, int action, const char *first,
-                              const char *, const char *, const char *) {
-  return action == SQLITE_PRAGMA && first != nullptr &&
-                 std::string_view(first) == "user_version"
              ? SQLITE_DENY
              : SQLITE_OK;
 }
@@ -3221,25 +3141,12 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const std::filesystem::path &root) {
 #if !TARGET_OS_WINDOWS
   {
-    const auto path = root / "wal-without-shm-supported" / "replay.db";
-    createWalDatabaseWithVersion(path, 3);
-    assert(std::filesystem::remove(path.string() + "-shm"));
-    const auto before = rawDatabaseFamilySnapshot(path);
-    ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(connection);
-    connection.reset();
-    assert(rawDatabaseFamilySnapshot(path) == before);
-  }
-
-  {
     const auto path = root / "wal-without-shm-future" / "replay.db";
     createWalDatabaseWithVersion(path, 99);
     assert(std::filesystem::remove(path.string() + "-shm"));
     const auto before = rawDatabaseFamilySnapshot(path);
     ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -3252,8 +3159,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     assert(!preflightSqliteUserVersion(path, 3, error).has_value());
     assert(!error.empty());
     ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -3275,8 +3181,7 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     writeHeaderShapedCorruptDatabase(path);
     const auto before = rawDatabaseFamilySnapshot(path);
     ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -3289,39 +3194,8 @@ void testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const auto before = rawDatabaseFamilySnapshot(path);
     ScopedDenyJournalModeAutoExtension denyJournalMode;
     ReplayRepository helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
-  }
-}
-
-void testReplayTransactionalVersionErrorsDoNotMutateSchema(
-    const std::filesystem::path &root) {
-  {
-    const auto path = root / "transaction-negative-version" / "replay.db";
-    auto db = openDatabase(path);
-    execOrAbort(db.get(), "PRAGMA user_version=-1");
-    const std::string beforeSchema = schemaSnapshot(db.get());
-    execOrAbort(db.get(), "BEGIN TRANSACTION");
-    ReplayRepository helper(path);
-    assert(!helper.CreateReplayTables(db.get()));
-    assert(queryInt(db.get(), "PRAGMA user_version") == -1);
-    assert(schemaSnapshot(db.get()) == beforeSchema);
-    execOrAbort(db.get(), "ROLLBACK");
-  }
-
-  {
-    const auto path = root / "transaction-version-read-error" / "replay.db";
-    auto db = openDatabase(path);
-    const std::string beforeSchema = schemaSnapshot(db.get());
-    execOrAbort(db.get(), "BEGIN TRANSACTION");
-    assert(sqlite3_set_authorizer(db.get(), denyUserVersionAuthorizer,
-                                  nullptr) == SQLITE_OK);
-    ReplayRepository helper(path);
-    assert(!helper.CreateReplayTables(db.get()));
-    assert(schemaSnapshot(db.get()) == beforeSchema);
-    assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
-    execOrAbort(db.get(), "ROLLBACK");
   }
 }
 
@@ -3448,8 +3322,7 @@ void testLargeWalReplayPreflightPreservesFamily(
   createLargeFutureWalDatabase(path);
   const auto before = rawDatabaseFamilySnapshot(path);
   ReplayRepository helper(path);
-  SqliteConnectionHandle connection(helper.Connect());
-  assert(!connection);
+  assert(!helper.EnsureSchema());
   assert(rawDatabaseFamilySnapshot(path) == before);
 #else
   (void)root;
@@ -3787,23 +3660,6 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   db = openDatabase(path);
   assert(schemaSnapshot(db.get()) == firstSchema);
 
-  const auto rollbackPath = root / "course-key-v4-rollback" / "replay.db";
-  createVersion3CourseKeyFixture(rollbackPath);
-  auto rollbackDb = openDatabase(rollbackPath);
-  execOrAbort(rollbackDb.get(), "BEGIN IMMEDIATE TRANSACTION");
-  ReplayRepository rollbackHelper(rollbackPath);
-  assert(rollbackHelper.CreateReplayTables(rollbackDb.get()));
-  assert(queryInt(rollbackDb.get(), "PRAGMA user_version") == 5);
-  assert(columnExists(rollbackDb.get(), "course_replays", "course_key"));
-  assert(indexExists(rollbackDb.get(), "idx_course_replays_key_id"));
-  execOrAbort(rollbackDb.get(), "ROLLBACK");
-  assert(queryInt(rollbackDb.get(), "PRAGMA user_version") == 3);
-  assert(!columnExists(rollbackDb.get(), "course_replays", "course_key"));
-  assert(!indexExists(rollbackDb.get(), "idx_course_replays_key_id"));
-  assert(queryInt(rollbackDb.get(), "SELECT COUNT(*) FROM course_replays") ==
-         13);
-  assert(queryInt(rollbackDb.get(),
-                  "SELECT COUNT(*) FROM course_replay_stages") == 273);
 }
 
 void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
@@ -4325,26 +4181,16 @@ void testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(
                                  std::to_string(secondId))
              .empty());
   execOrAbort(db.get(), "DROP TRIGGER fail_second_course_recovery");
-
-  execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
+  db.reset();
   error.clear();
-  assert(helper.RecoverCourseRecords(db.get(), definitions, {}, error));
+  assert(helper.RecoverCourseRecords(definitions, {}, error));
   assert(error.empty());
-  assert(sqlite3_get_autocommit(db.get()) == 0);
+  helper.Shutdown();
+  db = openDatabase(path);
   assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
                                  std::to_string(firstId)) == firstKey);
   assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
                                  std::to_string(secondId)) == secondKey);
-  execOrAbort(db.get(), "UPDATE course_replays SET final_score=final_score "
-                        "WHERE id=" +
-                            std::to_string(firstId));
-  execOrAbort(db.get(), "ROLLBACK");
-  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
-                                 std::to_string(firstId))
-             .empty());
-  assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
-                                 std::to_string(secondId))
-             .empty());
 }
 
 void testExistingListLimits(const std::filesystem::path &root) {
@@ -4387,7 +4233,6 @@ int main() {
   std::filesystem::create_directories(root);
 
   testVersion2MigrationPreservesOutcomesAndRows(root);
-  testReplayMigrationNestsInsideCallerTransaction(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testInvalidNewProvenanceFailsLoad(root);
   testInvalidProvenanceRejectsReplayWrites(root);
@@ -4403,7 +4248,6 @@ int main() {
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
   testEquivalentReplayAliasesRetainValidatedSession(root);
   testReplayOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
-  testReplayTransactionalVersionErrorsDoNotMutateSchema(root);
   testCourseKeyMigrationStageFailureRollsBack(root);
   testCourseStageStepErrorsFailListsAndFullLoad(root);
   testReplayHydrationStepErrorsFailWholeLoad(root);
