@@ -762,6 +762,11 @@ struct SqliteValidatedOpenHooks {
   bool (*configureNoCheckpoint)(sqlite3 *, void *, std::string &) = nullptr;
 };
 
+struct SqliteValidatedOpenPolicy {
+  bool enableForeignKeys = false;
+  bool disableCheckpointOnClose = true;
+};
+
 inline bool configureSqliteNoCheckpoint(sqlite3 *db,
                                         const SqliteValidatedOpenHooks &hooks,
                                         std::string &errorMessage) {
@@ -798,7 +803,8 @@ inline bool setSqliteJournalModeWal(sqlite3 *db, std::string &errorMessage) {
 
 inline sqlite3 *
 openValidatedSqliteDatabase(const std::filesystem::path &path,
-                            int maximumSupportedVersion, bool enableForeignKeys,
+                            int maximumSupportedVersion,
+                            const SqliteValidatedOpenPolicy &policy,
                             std::string &errorMessage,
                             const SqliteValidatedOpenHooks &hooks = {}) {
   const auto snapshotVersion =
@@ -871,14 +877,17 @@ openValidatedSqliteDatabase(const std::filesystem::path &path,
                                             : "could not open database";
     return nullptr;
   }
-  int noCheckpointOnClose = 0;
-  if (sqlite3_db_config(production.get(), SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1,
+  int noCheckpointOnClose = -1;
+  const int requestedCheckpointSetting =
+      policy.disableCheckpointOnClose ? 1 : 0;
+  if (sqlite3_db_config(production.get(), SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                        requestedCheckpointSetting,
                         &noCheckpointOnClose) != SQLITE_OK ||
-      noCheckpointOnClose != 1) {
+      noCheckpointOnClose != requestedCheckpointSetting) {
     errorMessage = "could not configure production checkpoint-on-close";
     return nullptr;
   }
-  if (enableForeignKeys) {
+  if (policy.enableForeignKeys) {
     int foreignKeysEnabled = 0;
     if (sqlite3_db_config(production.get(), SQLITE_DBCONFIG_ENABLE_FKEY, 1,
                           &foreignKeysEnabled) != SQLITE_OK ||
@@ -890,6 +899,20 @@ openValidatedSqliteDatabase(const std::filesystem::path &path,
   sqlite3_busy_timeout(production.get(), 1000);
   guard.reset();
   return production.release();
+}
+
+inline sqlite3 *
+openValidatedSqliteDatabase(const std::filesystem::path &path,
+                            int maximumSupportedVersion, bool enableForeignKeys,
+                            std::string &errorMessage,
+                            const SqliteValidatedOpenHooks &hooks = {}) {
+  return openValidatedSqliteDatabase(
+      path, maximumSupportedVersion,
+      SqliteValidatedOpenPolicy{
+          .enableForeignKeys = enableForeignKeys,
+          .disableCheckpointOnClose = true,
+      },
+      errorMessage, hooks);
 }
 
 inline std::optional<std::string>

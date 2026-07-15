@@ -29,7 +29,9 @@
 // ScoreRepository's pre-v1 migration can consult ChartRepository. These v4/v5
 // fixtures never take that path, so the focused target supplies only the
 // three legacy symbols required by the linker.
-ChartRepository::ChartRepository() = default;
+struct ChartRepository::Impl {};
+ChartRepository::ChartRepository() : impl_(std::make_unique<Impl>()) {}
+ChartRepository::~ChartRepository() = default;
 sqlite3 *ChartRepository::Connect() { return nullptr; }
 bool ChartRepository::CreateChartMetaTable(sqlite3 *) { return false; }
 
@@ -2781,6 +2783,39 @@ void testLargeWalPreflightPreservesFamily(const std::filesystem::path &root) {
 #endif
 }
 
+void testValidatedOpenCheckpointPolicy(const std::filesystem::path &root) {
+  const auto policyPath = root / "validated-open-policy" / "score.db";
+  std::filesystem::create_directories(policyPath.parent_path());
+
+  std::string errorMessage;
+  SqliteValidatedOpenPolicy policy{
+      .enableForeignKeys = false,
+      .disableCheckpointOnClose = false,
+  };
+  SqliteConnectionHandle policyConnection(openValidatedSqliteDatabase(
+      policyPath, 3, policy, errorMessage));
+  assert(policyConnection);
+  int noCheckpointOnClose = -1;
+  assert(sqlite3_db_config(policyConnection.get(),
+                           SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, -1,
+                           &noCheckpointOnClose) == SQLITE_OK);
+  assert(noCheckpointOnClose == 0);
+  policyConnection.reset();
+
+  const auto compatibilityPath =
+      root / "validated-open-compatibility" / "score.db";
+  std::filesystem::create_directories(compatibilityPath.parent_path());
+  errorMessage.clear();
+  SqliteConnectionHandle compatibilityConnection(openValidatedSqliteDatabase(
+      compatibilityPath, 3, false, errorMessage));
+  assert(compatibilityConnection);
+  noCheckpointOnClose = -1;
+  assert(sqlite3_db_config(compatibilityConnection.get(),
+                           SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, -1,
+                           &noCheckpointOnClose) == SQLITE_OK);
+  assert(noCheckpointOnClose == 1);
+}
+
 } // namespace
 
 int main() {
@@ -2834,6 +2869,7 @@ int main() {
   testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(root);
   testScoreTransactionalVersionErrorsDoNotMutateSchema(root);
   testLargeWalPreflightPreservesFamily(root);
+  testValidatedOpenCheckpointPolicy(root);
 
   std::filesystem::remove_all(root);
   std::cout << "score provenance database tests passed\n";

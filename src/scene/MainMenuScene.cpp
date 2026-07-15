@@ -2665,7 +2665,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       [](const LibraryFolderItem &a, const LibraryFolderItem &b) {
         return a.key == b.key;
       });
-  auto dbHelper = ChartRepository::GetInstance();
+  auto &dbHelper = ChartRepository::GetInstance();
   dbHelper.CreateChartMetaTable(db);
   dbHelper.CreateSolidArchiveTable(db);
   dbHelper.CreateFavoritesTable(db);

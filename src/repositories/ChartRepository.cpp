@@ -3450,6 +3450,322 @@ void populateDifficultyTableLabels(
 }
 } // namespace
 
+struct ChartRepository::Impl {
+  explicit Impl(std::filesystem::path path) : databasePath(std::move(path)) {}
+
+  std::filesystem::path databasePath;
+  std::mutex readinessMutex;
+  bool ready = false;
+};
+
+struct ChartRepository::Session::Impl {
+  Impl(ChartRepository &owner, sqlite3 *database, ScoreRepository *scoresValue)
+      : repository(&owner), connection(database), scores(scoresValue) {}
+
+  ScoreRepository &scoreRepository() {
+    return scores != nullptr ? *scores : fallbackScores;
+  }
+
+  ChartRepository *repository;
+  SqliteConnectionHandle connection;
+  ScoreRepository *scores;
+  ScoreRepository fallbackScores;
+};
+
+ChartRepository::Session::Session(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
+
+ChartRepository::Session::~Session() = default;
+ChartRepository::Session::Session(Session &&) noexcept = default;
+ChartRepository::Session &
+ChartRepository::Session::operator=(Session &&) noexcept = default;
+
+bool ChartRepository::Session::EnsureSchema() {
+  sqlite3 *db = impl_->connection.get();
+  bool ok = true;
+  ok = impl_->repository->CreateChartMetaTable(db) && ok;
+  ok = impl_->repository->CreateSolidArchiveTable(db) && ok;
+  ok = impl_->repository->CreateFavoritesTable(db) && ok;
+  ok = impl_->repository->CreateEntriesTable(db) && ok;
+  ok = impl_->repository->CreateDifficultyTableTables(db) && ok;
+  ok = impl_->repository->CreateChartStateTables(db) && ok;
+  return ok;
+}
+
+bool ChartRepository::Session::InsertChartMeta(
+    bms_parser::ChartMeta &chartMeta) {
+  return impl_->repository->InsertChartMeta(impl_->connection.get(), chartMeta);
+}
+
+int ChartRepository::Session::CountAllChartMeta() {
+  return impl_->repository->CountAllChartMeta(impl_->connection.get());
+}
+
+int ChartRepository::Session::CountSolidArchives() {
+  return impl_->repository->CountSolidArchives(impl_->connection.get());
+}
+
+void ChartRepository::Session::SelectAllChartMeta(
+    std::vector<bms_parser::ChartMeta> &chartMetas) {
+  impl_->repository->SelectAllChartMeta(impl_->connection.get(), chartMetas);
+}
+
+void ChartRepository::Session::SelectFavoriteMusicTracks(
+    std::vector<MusicTrackRecord> &tracks) {
+  impl_->repository->SelectFavoriteMusicTracks(impl_->connection.get(), tracks);
+}
+
+int ChartRepository::Session::CountFavoriteCharts() {
+  return impl_->repository->CountFavoriteCharts(impl_->connection.get());
+}
+
+bool ChartRepository::Session::SetFavorite(
+    const bms_parser::ChartMeta &chartMeta, bool favorite) {
+  return impl_->repository->SetFavorite(impl_->connection.get(), chartMeta,
+                                        favorite);
+}
+
+void ChartRepository::Session::QueryChartMeta(
+    const ChartMetaQuery &query, std::vector<ChartMetaRecord> &chartMetas) {
+  impl_->repository->QueryChartMeta(impl_->connection.get(),
+                                    impl_->scoreRepository(), query,
+                                    chartMetas);
+}
+
+int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
+  return impl_->repository->CountChartMeta(
+      impl_->connection.get(), impl_->scoreRepository(), query);
+}
+
+int ChartRepository::Session::FindChartMetaIndex(
+    const ChartMetaQuery &query, const std::filesystem::path &path) {
+  return impl_->repository->FindChartMetaIndex(
+      impl_->connection.get(), impl_->scoreRepository(), query, path);
+}
+
+bool ChartRepository::Session::DeleteChartMeta(std::filesystem::path path) {
+  return impl_->repository->DeleteChartMeta(impl_->connection.get(),
+                                             std::move(path));
+}
+
+int ChartRepository::Session::DeleteChartMetaInDirectory(
+    const std::filesystem::path &directory) {
+  return impl_->repository->DeleteChartMetaInDirectory(impl_->connection.get(),
+                                                        directory);
+}
+
+bool ChartRepository::Session::DeleteArchiveRecords(
+    const std::filesystem::path &archivePath) {
+  return impl_->repository->DeleteArchiveRecords(impl_->connection.get(),
+                                                  archivePath);
+}
+
+bool ChartRepository::Session::ClearChartMeta() {
+  return impl_->repository->ClearChartMeta(impl_->connection.get());
+}
+
+bool ChartRepository::Session::InsertEntry(
+    const std::filesystem::path &path, const std::string &iosBookmark) {
+  return impl_->repository->InsertEntry(impl_->connection.get(), path,
+                                        iosBookmark);
+}
+
+std::vector<ChartEntry> ChartRepository::Session::SelectAllEntries() {
+  return impl_->repository->SelectAllEntries(impl_->connection.get());
+}
+
+std::vector<ChartEntry> ChartRepository::Session::SelectEffectiveEntries() {
+  return impl_->repository->SelectEffectiveEntries(impl_->connection.get());
+}
+
+bool ChartRepository::Session::DeleteEntry(
+    const std::filesystem::path &path) {
+  return impl_->repository->DeleteEntry(impl_->connection.get(), path);
+}
+
+bool ChartRepository::Session::ClearEntries() {
+  return impl_->repository->ClearEntries(impl_->connection.get());
+}
+
+int ChartRepository::Session::ScanChartRoots(
+    const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return impl_->repository->ScanChartRoots(
+      impl_->connection.get(), roots, stopToken, std::move(progressCallback),
+      std::move(pauseCallback), std::move(flushRequestCallback),
+      std::move(flushCompleteCallback));
+}
+
+bool ChartRepository::Session::ImportDifficultyTable(
+    const std::string &headerJson, const std::string &dataJson,
+    const std::string &sourceUrl) {
+  return impl_->repository->ImportDifficultyTable(
+      impl_->connection.get(), headerJson, dataJson, sourceUrl);
+}
+
+bool ChartRepository::Session::ImportDifficultyTableFromUrl(
+    const std::string &pageUrl, std::string *errorMessage,
+    DifficultyTableImportProgressCallback progressCallback) {
+  return impl_->repository->ImportDifficultyTableFromUrl(
+      impl_->connection.get(), pageUrl, errorMessage,
+      std::move(progressCallback));
+}
+
+bool ChartRepository::Session::UpdateDifficultyTableFromSourceUrl(
+    int tableId, std::string *errorMessage) {
+  return impl_->repository->UpdateDifficultyTableFromSourceUrl(
+      impl_->connection.get(), tableId, errorMessage);
+}
+
+bool ChartRepository::Session::DeleteDifficultyTable(int tableId) {
+  return impl_->repository->DeleteDifficultyTable(impl_->connection.get(),
+                                                   tableId);
+}
+
+int ChartRepository::Session::ImportDifficultyTablesFromDirectory(
+    const std::filesystem::path &directory) {
+  return impl_->repository->ImportDifficultyTablesFromDirectory(
+      impl_->connection.get(), directory);
+}
+
+std::vector<DifficultyTableInfo>
+ChartRepository::Session::SelectDifficultyTables() {
+  return impl_->repository->SelectDifficultyTables(impl_->connection.get());
+}
+
+std::vector<DifficultyLevelInfo>
+ChartRepository::Session::SelectDifficultyLevels(int tableId) {
+  return impl_->repository->SelectDifficultyLevels(impl_->connection.get(),
+                                                    tableId);
+}
+
+std::vector<DifficultyCourseTableInfo>
+ChartRepository::Session::SelectDifficultyCourseTables() {
+  return impl_->repository->SelectDifficultyCourseTables(
+      impl_->connection.get());
+}
+
+std::vector<DifficultyCourseGroupInfo>
+ChartRepository::Session::SelectDifficultyCourseGroups(int tableId) {
+  return impl_->repository->SelectDifficultyCourseGroups(
+      impl_->connection.get(), tableId);
+}
+
+std::vector<DifficultyCourseInfo>
+ChartRepository::Session::SelectDifficultyCourses(
+    int tableId, const std::string &groupName) {
+  return impl_->repository->SelectDifficultyCourses(
+      impl_->connection.get(), tableId, groupName);
+}
+
+std::vector<course_identity::Definition>
+ChartRepository::Session::SelectDifficultyCourseDefinitions() {
+  return impl_->repository->SelectDifficultyCourseDefinitions(
+      impl_->connection.get());
+}
+
+std::string ChartRepository::Session::DifficultyTableLabelsForChart(
+    const bms_parser::ChartMeta &meta) {
+  return impl_->repository->DifficultyTableLabelsForChart(
+      impl_->connection.get(), meta);
+}
+
+bool ChartRepository::EnsureReady() {
+  std::lock_guard lock(impl_->readinessMutex);
+  if (impl_->ready) {
+    return true;
+  }
+
+  const std::filesystem::path directory = impl_->databasePath.parent_path();
+  std::cout << "DB Directory: " << fspath_to_utf8(directory) << "\n";
+  std::error_code directoryError;
+  if (!directory.empty() &&
+      !Utils::EnsureDirectoryExists(directory, directoryError)) {
+    std::cerr << "Can't create chart database directory "
+              << fspath_to_utf8(directory) << ": "
+              << directoryError.message() << "\n";
+    return false;
+  }
+  std::cout << "DB Path: " << fspath_to_utf8(impl_->databasePath) << "\n";
+
+  std::string openError;
+  SqliteConnectionHandle connection(openValidatedSqliteDatabase(
+      impl_->databasePath, kChartDatabaseSchemaVersion,
+      SqliteValidatedOpenPolicy{
+          .enableForeignKeys = false,
+          .disableCheckpointOnClose = false,
+      },
+      openError));
+  if (!connection) {
+    std::cerr << "Can't open chart database: " << openError << "\n";
+    return false;
+  }
+  if (const auto pragmaError =
+          applySqlitePragmas(connection.get(), {"PRAGMA synchronous=NORMAL"})) {
+    std::cerr << "Could not configure chart database: " << *pragmaError
+              << "\n";
+    return false;
+  }
+
+  bool ok = true;
+  ok = CreateChartMetaTable(connection.get()) && ok;
+  ok = CreateSolidArchiveTable(connection.get()) && ok;
+  ok = CreateFavoritesTable(connection.get()) && ok;
+  ok = CreateEntriesTable(connection.get()) && ok;
+  ok = CreateDifficultyTableTables(connection.get()) && ok;
+  ok = CreateChartStateTables(connection.get()) && ok;
+  impl_->ready = ok;
+  return ok;
+}
+
+std::optional<ChartRepository::Session>
+ChartRepository::OpenSession(ScoreRepository *scores) {
+  if (!EnsureReady()) {
+    return std::nullopt;
+  }
+
+  sqlite3 *raw = nullptr;
+  const std::string pathText = fspath_to_utf8(impl_->databasePath);
+  const int openRc = sqlite3_open_v2(
+      pathText.c_str(), &raw,
+      SQLITE_OPEN_READWRITE | SQLITE_OPEN_PRIVATECACHE, nullptr);
+  SqliteConnectionHandle connection(raw);
+  if (openRc != SQLITE_OK || !connection) {
+    std::cerr << "Can't open chart database session: "
+              << (raw != nullptr ? sqlite3_errmsg(raw) : "unknown error")
+              << "\n";
+    return std::nullopt;
+  }
+  sqlite3_busy_timeout(connection.get(), 1000);
+
+  std::string versionError;
+  const auto version = readSqliteUserVersion(connection.get(), versionError);
+  if (!version.has_value() || *version != kChartDatabaseSchemaVersion) {
+    std::cerr << "Can't use chart database session: "
+              << (versionError.empty() ? "unexpected schema version"
+                                       : versionError)
+              << "\n";
+    return std::nullopt;
+  }
+  if (const auto pragmaError = applySqlitePragmas(
+          connection.get(),
+          {"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"})) {
+    std::cerr << "Could not configure chart database session: "
+              << *pragmaError << "\n";
+  }
+
+  sqlite3 *database = connection.release();
+  return Session(std::make_unique<Session::Impl>(*this, database, scores));
+}
+
+const std::filesystem::path &ChartRepository::DatabasePath() const {
+  return impl_->databasePath;
+}
+
 sqlite3 *ChartRepository::Connect() {
   const std::filesystem::path directory = Utils::GetDocumentsPath("db");
   std::cout << "DB Directory: " << fspath_to_utf8(directory) << "\n";
@@ -7947,11 +8263,17 @@ ChartRepository::SelectDifficultyCourseDefinitions(sqlite3 *db) {
   return definitions;
 }
 
-ChartRepository::ChartRepository() {
+ChartRepository::ChartRepository()
+    : ChartRepository(Utils::GetDocumentsPath("db") / "chart.db") {}
+
+ChartRepository::ChartRepository(std::filesystem::path databasePath)
+    : impl_(std::make_unique<Impl>(std::move(databasePath))) {
   archive_file::setCachePathNormalizer([](std::filesystem::path &path) {
     ChartRepository::ToRelativePath(path);
   });
 }
+
+ChartRepository::~ChartRepository() = default;
 
 std::uint64_t ChartRepository::GetLibraryRevision() const {
   return gLibraryRevision.load(std::memory_order_relaxed);

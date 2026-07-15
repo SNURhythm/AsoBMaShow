@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -171,12 +172,84 @@ using ChartScanFlushCompleteCallback = std::function<void(std::uint64_t)>;
  */
 class ChartRepository {
 public:
-  // Singleton
+  class Session {
+  public:
+    ~Session();
+    Session(Session &&) noexcept;
+    Session &operator=(Session &&) noexcept;
+    Session(const Session &) = delete;
+    Session &operator=(const Session &) = delete;
+
+    bool EnsureSchema();
+    bool InsertChartMeta(bms_parser::ChartMeta &chartMeta);
+    int CountAllChartMeta();
+    int CountSolidArchives();
+    void SelectAllChartMeta(std::vector<bms_parser::ChartMeta> &chartMetas);
+    void SelectFavoriteMusicTracks(std::vector<MusicTrackRecord> &tracks);
+    int CountFavoriteCharts();
+    bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);
+    void QueryChartMeta(const ChartMetaQuery &query,
+                        std::vector<ChartMetaRecord> &chartMetas);
+    int CountChartMeta(const ChartMetaQuery &query);
+    int FindChartMetaIndex(const ChartMetaQuery &query,
+                           const std::filesystem::path &path);
+    bool DeleteChartMeta(std::filesystem::path path);
+    int DeleteChartMetaInDirectory(const std::filesystem::path &directory);
+    bool DeleteArchiveRecords(const std::filesystem::path &archivePath);
+    bool ClearChartMeta();
+    bool InsertEntry(const std::filesystem::path &path,
+                     const std::string &iosBookmark = "");
+    std::vector<ChartEntry> SelectAllEntries();
+    std::vector<ChartEntry> SelectEffectiveEntries();
+    bool DeleteEntry(const std::filesystem::path &path);
+    bool ClearEntries();
+    int ScanChartRoots(
+        const std::vector<std::filesystem::path> &roots,
+        const std::stop_token *stopToken = nullptr,
+        ChartScanProgressCallback progressCallback = nullptr,
+        ChartScanPauseCallback pauseCallback = nullptr,
+        ChartScanFlushRequestCallback flushRequestCallback = nullptr,
+        ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+    bool ImportDifficultyTable(const std::string &headerJson,
+                               const std::string &dataJson,
+                               const std::string &sourceUrl = "");
+    bool ImportDifficultyTableFromUrl(
+        const std::string &pageUrl, std::string *errorMessage = nullptr,
+        DifficultyTableImportProgressCallback progressCallback = nullptr);
+    bool UpdateDifficultyTableFromSourceUrl(
+        int tableId, std::string *errorMessage = nullptr);
+    bool DeleteDifficultyTable(int tableId);
+    int ImportDifficultyTablesFromDirectory(
+        const std::filesystem::path &directory);
+    std::vector<DifficultyTableInfo> SelectDifficultyTables();
+    std::vector<DifficultyLevelInfo> SelectDifficultyLevels(int tableId);
+    std::vector<DifficultyCourseTableInfo> SelectDifficultyCourseTables();
+    std::vector<DifficultyCourseGroupInfo>
+    SelectDifficultyCourseGroups(int tableId);
+    std::vector<DifficultyCourseInfo>
+    SelectDifficultyCourses(int tableId, const std::string &groupName);
+    std::vector<course_identity::Definition>
+    SelectDifficultyCourseDefinitions();
+    std::string
+    DifficultyTableLabelsForChart(const bms_parser::ChartMeta &meta);
+
+  private:
+    friend class ChartRepository;
+    friend class ScoreRepository;
+    struct Impl;
+    explicit Session(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+  };
+
   ChartRepository();
+  explicit ChartRepository(std::filesystem::path databasePath);
+  ~ChartRepository();
+  ChartRepository(const ChartRepository &) = delete;
+  ChartRepository &operator=(const ChartRepository &) = delete;
 
-  ChartRepository(const ChartRepository &) {}
-
-  ChartRepository &operator=(const ChartRepository &) { return *this; }
+  bool EnsureReady();
+  std::optional<Session> OpenSession(ScoreRepository *scores = nullptr);
+  [[nodiscard]] const std::filesystem::path &DatabasePath() const;
 
   static ChartRepository &GetInstance() {
     sqlite3_config(SQLITE_CONFIG_SERIALIZED);
@@ -274,6 +347,9 @@ public:
   static void ToAbsolutePath(std::filesystem::path &path);
 
 private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+
   bms_parser::ChartMeta ReadChartMeta(sqlite3_stmt *stmt);
   ChartMetaRecord ReadChartMetaRecord(sqlite3_stmt *stmt);
   path_t ReadPath(sqlite3_stmt *stmt, int idx) {
