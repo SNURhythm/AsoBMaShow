@@ -805,6 +805,7 @@
 				ProfileExportStaging.cpp,
 				ProfileDatabaseTools.cpp,
 				ProfileSessionCoordinator.cpp,
+				repositories/ChartStorageIdentity.cpp,
 				rendering/BlurPass.cpp,
 				rendering/Camera.cpp,
 				rendering/Color.cpp,

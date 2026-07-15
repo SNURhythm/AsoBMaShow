@@ -3,7 +3,7 @@
 #include "ChartDBHelper.h"
 #include "ReplayDBHelper.h"
 #include "ScoreDBHelper.h"
-#include "SqliteRAII.h"
+#include "repositories/SqliteRAII.h"
 #include "audio/MusicPlaylistDB.h"
 
 #include <filesystem>

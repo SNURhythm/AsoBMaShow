@@ -1,9 +1,10 @@
 #include "MusicPlaylistDB.h"
 
 #include "../BmsMetadataText.h"
-#include "../ChartMetaSql.h"
-#include "../ChartSqlExpressions.h"
-#include "../SqliteRAII.h"
+#include "../repositories/ChartMetaSql.h"
+#include "../repositories/ChartSqlExpressions.h"
+#include "../repositories/ChartStorageIdentity.h"
+#include "../repositories/SqliteRAII.h"
 #include "../Utils.h"
 #include "../path.h"
 
@@ -279,7 +280,7 @@ std::filesystem::path pathFromDbText(const std::string &value) {
 std::filesystem::path absolutePathFromColumn(sqlite3_stmt *stmt, int idx) {
   auto path = pathFromDbText(columnString(stmt, idx));
   if (!path.empty()) {
-    ChartDBHelper::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
   }
   return path;
 }
@@ -289,7 +290,7 @@ std::filesystem::path relativePathFromColumn(sqlite3_stmt *stmt, int idx) {
 }
 
 std::string storedPathTextForDbValue(const std::string &value) {
-  return ChartDBHelper::StoredChartPathText(pathFromDbText(value));
+  return chart_storage_identity::StoredPathText(pathFromDbText(value));
 }
 
 struct PendingStoredPathNormalization {
@@ -527,7 +528,8 @@ struct StoredMusicTrackIdentity {
 StoredMusicTrackIdentity
 storedMusicTrackIdentity(const bms_parser::ChartMeta &chartMeta) {
   StoredMusicTrackIdentity identity;
-  identity.chartPath = ChartDBHelper::StoredChartPathText(chartMeta.BmsPath);
+  identity.chartPath =
+      chart_storage_identity::StoredPathText(chartMeta.BmsPath);
   identity.md5 = normalizedHash(chartMeta.MD5);
   identity.sha256 = normalizedHash(chartMeta.SHA256);
 
@@ -1659,7 +1661,8 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   if (!useFolder) {
     groupPath = chartMeta.BmsPath;
   }
-  const std::string groupKey = ChartDBHelper::StoredChartPathText(groupPath);
+  const std::string groupKey =
+      chart_storage_identity::StoredPathText(groupPath);
   if (groupKey.empty()) {
     return;
   }

@@ -1,6 +1,6 @@
 #include "MusicPlayerService.h"
 
-#include "../SqliteRAII.h"
+#include "../repositories/SqliteRAII.h"
 
 #include <algorithm>
 #include <chrono>

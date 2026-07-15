@@ -1,4 +1,4 @@
-#include "../src/ChartSqlExpressions.h"
+#include "../src/repositories/ChartSqlExpressions.h"
 #include "../src/sqlite3.h"
 
 #include <cstdlib>

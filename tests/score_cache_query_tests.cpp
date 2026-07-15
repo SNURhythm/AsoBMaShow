@@ -1,4 +1,4 @@
-#include "../src/ScoreCacheQueries.h"
+#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/sqlite3.h"
 #include "RepositorySqliteTestSupport.h"
 

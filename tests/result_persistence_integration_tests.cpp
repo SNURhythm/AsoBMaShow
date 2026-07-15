@@ -3,7 +3,7 @@
 #include "../src/ChartDBHelper.h"
 #include "../src/FileChecksum.h"
 #include "../src/ProfileDatabaseActivity.h"
-#include "../src/SqliteRAII.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 
 #include <algorithm>

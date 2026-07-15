@@ -1,8 +1,8 @@
 #include "MainMenuLibrary.h"
 
-#include "../ChartSqlExpressions.h"
+#include "../repositories/ChartSqlExpressions.h"
 #include "../LongNoteModeUtils.h"
-#include "../SqliteRAII.h"
+#include "../repositories/SqliteRAII.h"
 #include "../view/ClearLampColors.h"
 
 #include <SDL2/SDL.h>

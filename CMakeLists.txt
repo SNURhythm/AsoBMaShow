@@ -1213,6 +1213,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/bms_parser.cpp
         src/ChartDBHelper.cpp
+        src/repositories/ChartStorageIdentity.cpp
         src/ScoreDBHelper.cpp
         src/ReplayDBHelper.cpp
         src/ResultPersistenceCoordinator.cpp

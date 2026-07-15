@@ -1,5 +1,5 @@
 #include "SettingsSceneShared.h"
-#include "../SqliteRAII.h"
+#include "../repositories/SqliteRAII.h"
 #include "../Utils.h"
 
 #include <memory>

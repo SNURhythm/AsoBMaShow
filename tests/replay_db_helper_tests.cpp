@@ -5,7 +5,7 @@
 #include "../src/FileChecksum.h"
 #include "../src/LongNoteModeUtils.h"
 #include "../src/ScoreProvenance.h"
-#include "../src/SqliteRAII.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 #include "../src/targets.h"
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "bms_parser.hpp"
-#include "sqlite3.h"
+#include "../bms_parser.hpp"
+#include "../sqlite3.h"
 
 #include <cstddef>
 #include <filesystem>

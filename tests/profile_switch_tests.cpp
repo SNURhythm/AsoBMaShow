@@ -6,7 +6,7 @@
 #include "../src/ProfileSessionCoordinator.h"
 #include "../src/ReplayDBHelper.h"
 #include "../src/ResultPersistenceCoordinator.h"
-#include "../src/ScoreCacheQueries.h"
+#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/Utils.h"
 #include "../src/input/InputProfileStore.h"

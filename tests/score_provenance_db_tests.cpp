@@ -2,10 +2,10 @@
 #include "../src/CourseIdentity.h"
 #include "../src/CoursePlaySession.h"
 #include "../src/ReplayDBHelper.h"
-#include "../src/ScoreCacheQueries.h"
+#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/ScoreDBHelper.h"
 #include "../src/ScoreProvenance.h"
-#include "../src/SqliteRAII.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
 
 #include <array>
