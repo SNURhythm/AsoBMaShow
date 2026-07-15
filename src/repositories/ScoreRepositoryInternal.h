@@ -6,6 +6,15 @@
 
 #include <mutex>
 
+struct ScoreRepository::Impl {
+  explicit Impl(std::filesystem::path path = {});
+
+  mutable std::mutex sessionMutex;
+  std::filesystem::path databasePath;
+  std::filesystem::path chartDatabasePath;
+  sqlite3 *sessionDatabase = nullptr;
+};
+
 struct ScoreRepository::PreparedScoreQueryDatabase::State {
   State(const ScoreRepository &repository, sqlite3 *chartDatabase);
 
@@ -15,6 +24,17 @@ struct ScoreRepository::PreparedScoreQueryDatabase::State {
 };
 
 namespace score_repository_detail {
+
+sqlite3 *OpenDatabase(const std::filesystem::path &path,
+                      std::string &errorMessage);
+void LogDatabaseOpenFailure(const std::filesystem::path &path,
+                            const std::string &errorMessage);
+std::filesystem::path
+ResolvedDatabasePath(const std::filesystem::path &databasePath);
+bool EquivalentDatabasePaths(const std::filesystem::path &first,
+                             const std::filesystem::path &second);
+bool CurrentSchemaIsValid(sqlite3 *database);
+void IncrementRevision();
 
 bool CreateScoreTableOnConnection(
     sqlite3 *database, const std::filesystem::path &chartDatabasePath);

@@ -35,7 +35,6 @@ if (ANDROID)
 else()
     set(PLATFORM_ANDROID OFF)
 endif()
-
 # Option to build macOS app bundle
 if (PLATFORM_MACOS)
     option(BUILD_MACOS_BUNDLE "Build macOS app bundle" OFF)
@@ -621,6 +620,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartRepositoryFolderSession.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -692,6 +693,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -721,6 +724,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1224,6 +1229,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
@@ -1272,6 +1279,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryChartSession.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
@@ -1319,6 +1328,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp

@@ -860,6 +860,8 @@
 				repositories/ScoreRepositoryChartSession.cpp,
 				repositories/ScoreRepositoryInternal.h,
 				repositories/ScoreRepositoryModels.h,
+				repositories/ScoreRepositoryQueries.cpp,
+				repositories/ScoreRepositorySchema.cpp,
 				ScoreProvenance.cpp,
 				settings/AudioVideoSettings.cpp,
 				skin/DefaultSkin.cpp,
