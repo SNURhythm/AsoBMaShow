@@ -4,14 +4,12 @@
 #include "../ScoreProvenance.h"
 #include "ChartRepository.h"
 #include "ScoreRepositoryModels.h"
-#include "../sqlite3.h"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -45,8 +43,6 @@ public:
   public:
     PreparedScoreQueryDatabase(const ScoreRepository &,
                                ChartRepository::Session &);
-    // Transitional native-handle constructor used by chart query internals.
-    PreparedScoreQueryDatabase(const ScoreRepository &, sqlite3 *chartDatabase);
     ~PreparedScoreQueryDatabase();
     PreparedScoreQueryDatabase(PreparedScoreQueryDatabase &&) = delete;
     PreparedScoreQueryDatabase &
@@ -59,6 +55,7 @@ public:
     [[nodiscard]] const std::optional<std::string> &error() const;
 
   private:
+    friend class ScoreRepository;
     struct State;
 
     std::unique_ptr<State> state_;
@@ -76,32 +73,17 @@ public:
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
   [[nodiscard]] PreparedScoreQueryDatabase
   PrepareScoreQueryDatabase(ChartRepository::Session &chartSession) const;
-  [[nodiscard]] PreparedScoreQueryDatabase
-  PrepareScoreQueryDatabase(sqlite3 *chartDatabase) const;
   bool BindDatabasePath(std::filesystem::path databasePath,
                         std::string &errorMessage);
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
   void Shutdown();
-  // Compatibility API for standalone migration and test helpers.
-  sqlite3 *Connect();
-  void Close(sqlite3 *db);
-  bool CreateScoreTable(sqlite3 *db);
-  bool
-  InsertScore(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
-              const RhythmState &state,
-              const ScoreProvenance &provenance = ScoreProvenance::Legacy());
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state,
                  const ScoreProvenance &provenance = ScoreProvenance::Legacy());
   result_persistence::ProjectionOutcome
   SaveProjectedScore(const result_persistence::PendingChartScoreWrite &pending);
-  bool CreateCourseScoreTable(sqlite3 *db);
-  bool InsertCourseScore(
-      sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
-      int completedCharts, int totalCharts,
-      const ScoreProvenance &provenance = ScoreProvenance::Legacy());
   bool SaveCourseScore(
       const CoursePlaySession &session, const RhythmState &state,
       int completedCharts, int totalCharts,
@@ -117,41 +99,17 @@ public:
   ScoreClearRankCache LoadBestClearRanks();
   ScoreClearRankCache LoadBestClearRanks(ChartRepository::Session &chartSession,
                                          std::string_view schema);
-  ScoreClearRankCache LoadBestClearRanks(sqlite3 *db, std::string_view schema);
   ScoreBestCache LoadBestScores();
   ScoreBestCache LoadBestScores(ChartRepository::Session &chartSession,
                                 std::string_view schema);
-  ScoreBestCache LoadBestScores(sqlite3 *db, std::string_view schema);
   [[nodiscard]] std::uint64_t GetRevision() const;
 
 private:
-  static sqlite3 *
-  NativeChartDatabase(ChartRepository::Session &chartSession);
-  bool EnsureSchema(sqlite3 *db);
-  bool CreateScoreTableOnConnection(sqlite3 *db);
-  bool CreateCourseScoreTableOnConnection(sqlite3 *db);
-  bool EnsureSchemaOnConnection(sqlite3 *db);
-  bool InsertCourseScoreOnConnection(sqlite3 *db,
-                                     const CoursePlaySession &session,
-                                     const RhythmState &state,
-                                     int completedCharts, int totalCharts,
-                                     const ScoreProvenance &provenance,
-                                     const std::string &provenanceJson);
-  std::optional<ScoreBestSnapshot>
-  LoadBestScoreOnConnection(sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
-                            const std::optional<std::string> &beforeCreatedAt,
-                            const std::optional<std::string> &excludeAttemptId);
-  std::optional<ScoreBestSnapshot>
-  LoadBestCourseScoreOnConnection(sqlite3 *db,
-                                  const CoursePlaySession &session);
-  CourseScoreRecoveryResult RecoverCourseRecordsOnConnection(
-      sqlite3 *db, std::span<const course_identity::Definition> definitions);
+  struct Impl;
+  std::unique_ptr<PreparedScoreQueryDatabase::State>
+  PrepareScoreQueryState(ChartRepository::Session &chartSession) const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;
-  sqlite3 *EnsureSessionDatabaseLocked();
+  bool EnsureSessionDatabaseLocked();
   void CloseSessionDatabaseLocked();
-
-  mutable std::mutex sessionMutex_;
-  std::filesystem::path databasePath_;
-  std::filesystem::path chartDatabasePath_;
-  sqlite3 *sessionDatabase_ = nullptr;
+  std::unique_ptr<Impl> impl_;
 };

@@ -1,14 +1,16 @@
 #include "ScoreRepository.h"
+#include "ScoreRepositoryInternal.h"
 
-sqlite3 *ScoreRepository::NativeChartDatabase(
-    ChartRepository::Session &chartSession) {
-  return chartSession.NativeHandleForScoreRepository();
+std::unique_ptr<ScoreRepository::PreparedScoreQueryDatabase::State>
+ScoreRepository::PrepareScoreQueryState(
+    ChartRepository::Session &chartSession) const {
+  return std::make_unique<PreparedScoreQueryDatabase::State>(
+      *this, chartSession.NativeHandleForScoreRepository());
 }
 
 ScoreRepository::PreparedScoreQueryDatabase::PreparedScoreQueryDatabase(
     const ScoreRepository &repository, ChartRepository::Session &chartSession)
-    : PreparedScoreQueryDatabase(
-          repository, ScoreRepository::NativeChartDatabase(chartSession)) {}
+    : state_(repository.PrepareScoreQueryState(chartSession)) {}
 
 ScoreRepository::PreparedScoreQueryDatabase
 ScoreRepository::PrepareScoreQueryDatabase(
@@ -18,10 +20,12 @@ ScoreRepository::PrepareScoreQueryDatabase(
 
 ScoreClearRankCache ScoreRepository::LoadBestClearRanks(
     ChartRepository::Session &chartSession, std::string_view schema) {
-  return LoadBestClearRanks(NativeChartDatabase(chartSession), schema);
+  return score_repository_detail::LoadBestClearRanksOnConnection(
+      chartSession.NativeHandleForScoreRepository(), schema);
 }
 
 ScoreBestCache ScoreRepository::LoadBestScores(
     ChartRepository::Session &chartSession, std::string_view schema) {
-  return LoadBestScores(NativeChartDatabase(chartSession), schema);
+  return score_repository_detail::LoadBestScoresOnConnection(
+      chartSession.NativeHandleForScoreRepository(), schema);
 }

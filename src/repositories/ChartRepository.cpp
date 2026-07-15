@@ -1697,21 +1697,6 @@ bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
          chartQuery.sortCriterion == ChartRecordSortCriterion::Score;
 }
 
-bool ensureScoreQueryDatabase(
-    sqlite3 *db, ScoreRepository &scores, const ChartMetaQuery &chartQuery,
-    std::optional<ScoreRepository::PreparedScoreQueryDatabase> &prepared) {
-  if (!chartMetaQueryNeedsScoreCache(chartQuery)) {
-    return true;
-  }
-  prepared.emplace(scores, db);
-  if (const auto &error = prepared->error()) {
-    SDL_Log("SQL error while preparing score query database: %s",
-            error->c_str());
-    return false;
-  }
-  return true;
-}
-
 bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
@@ -3542,20 +3527,44 @@ bool ChartRepository::Session::SetFavorite(
 
 void ChartRepository::Session::QueryChartMeta(
     const ChartMetaQuery &query, std::vector<ChartMetaRecord> &chartMetas) {
-  impl_->repository->QueryChartMeta(impl_->connection.get(),
-                                    impl_->scoreRepository(), query,
-                                    chartMetas);
+  std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
+  if (chartMetaQueryNeedsScoreCache(query)) {
+    prepared.emplace(impl_->scoreRepository(), *this);
+    if (const auto &error = prepared->error()) {
+      SDL_Log("SQL error while preparing score query database: %s",
+              error->c_str());
+      return;
+    }
+  }
+  impl_->repository->QueryChartMeta(impl_->connection.get(), query, chartMetas);
 }
 
 int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
-  return impl_->repository->CountChartMeta(
-      impl_->connection.get(), impl_->scoreRepository(), query);
+  std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
+  if (chartMetaQueryNeedsScoreCache(query)) {
+    prepared.emplace(impl_->scoreRepository(), *this);
+    if (const auto &error = prepared->error()) {
+      SDL_Log("SQL error while preparing score query database: %s",
+              error->c_str());
+      return 0;
+    }
+  }
+  return impl_->repository->CountChartMeta(impl_->connection.get(), query);
 }
 
 int ChartRepository::Session::FindChartMetaIndex(
     const ChartMetaQuery &query, const std::filesystem::path &path) {
-  return impl_->repository->FindChartMetaIndex(
-      impl_->connection.get(), impl_->scoreRepository(), query, path);
+  std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
+  if (chartMetaQueryNeedsScoreCache(query)) {
+    prepared.emplace(impl_->scoreRepository(), *this);
+    if (const auto &error = prepared->error()) {
+      SDL_Log("SQL error while preparing score query database: %s",
+              error->c_str());
+      return -1;
+    }
+  }
+  return impl_->repository->FindChartMetaIndex(impl_->connection.get(), query,
+                                                path);
 }
 
 bool ChartRepository::Session::DeleteChartMeta(std::filesystem::path path) {
@@ -4258,17 +4267,13 @@ int ChartRepository::CountSolidArchives(sqlite3 *db) {
 }
 
 void ChartRepository::QueryChartMeta(
-    sqlite3 *db, ScoreRepository &scores, const ChartMetaQuery &chartQuery,
+    sqlite3 *db, const ChartMetaQuery &chartQuery,
     std::vector<ChartMetaRecord> &chartMetas) {
-  std::optional<ScoreRepository::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (!CreateFavoritesTable(db)) {
     return;
   }
   if (queryNeedsDifficultyTableSchema(chartQuery) &&
       !CreateDifficultyTableTables(db)) {
-    return;
-  }
-  if (!ensureScoreQueryDatabase(db, scores, chartQuery, preparedScoreQuery)) {
     return;
   }
   if (chartQuery.solidArchivesOnly) {
@@ -4429,17 +4434,13 @@ void ChartRepository::QueryChartMeta(
   populateDifficultyTableLabels(db, chartMetas);
 }
 
-int ChartRepository::CountChartMeta(sqlite3 *db, ScoreRepository &scores,
+int ChartRepository::CountChartMeta(sqlite3 *db,
                                     const ChartMetaQuery &chartQuery) {
-  std::optional<ScoreRepository::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (!CreateFavoritesTable(db)) {
     return 0;
   }
   if (queryNeedsDifficultyTableSchema(chartQuery) &&
       !CreateDifficultyTableTables(db)) {
-    return 0;
-  }
-  if (!ensureScoreQueryDatabase(db, scores, chartQuery, preparedScoreQuery)) {
     return 0;
   }
   if (chartQuery.solidArchivesOnly) {
@@ -4543,10 +4544,9 @@ int ChartRepository::CountChartMeta(sqlite3 *db, ScoreRepository &scores,
   return count;
 }
 
-int ChartRepository::FindChartMetaIndex(sqlite3 *db, ScoreRepository &scores,
+int ChartRepository::FindChartMetaIndex(sqlite3 *db,
                                         const ChartMetaQuery &chartQuery,
                                         const std::filesystem::path &path) {
-  std::optional<ScoreRepository::PreparedScoreQueryDatabase> preparedScoreQuery;
   if (db == nullptr || path.empty() || !CreateFavoritesTable(db)) {
     return -1;
   }
@@ -4565,17 +4565,13 @@ int ChartRepository::FindChartMetaIndex(sqlite3 *db, ScoreRepository &scores,
     scanQuery.limit = 0;
     scanQuery.offset = 0;
     std::vector<ChartMetaRecord> records;
-    QueryChartMeta(db, scores, scanQuery, records);
+    QueryChartMeta(db, scanQuery, records);
     for (size_t i = 0; i < records.size(); ++i) {
       if (chart_storage_identity::StoredPathText(records[i].meta.BmsPath) ==
           targetPath) {
         return static_cast<int>(i);
       }
     }
-    return -1;
-  }
-
-  if (!ensureScoreQueryDatabase(db, scores, chartQuery, preparedScoreQuery)) {
     return -1;
   }
 

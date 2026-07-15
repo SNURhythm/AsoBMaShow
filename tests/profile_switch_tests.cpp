@@ -6,8 +6,8 @@
 #include "../src/ProfileSessionCoordinator.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/ResultPersistenceCoordinator.h"
-#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/ScoreRepository.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/scene/MainMenuProfileSelections.h"
@@ -195,38 +195,6 @@ std::string queryDatabaseString(const std::filesystem::path &path,
   Database database = openDatabase(path);
   expect(database != nullptr, std::string(label) + " database opens");
   return database ? queryString(database.get(), sql) : std::string{};
-}
-
-std::filesystem::path attachedDatabasePath(sqlite3 *database,
-                                           std::string_view schema) {
-  sqlite3_stmt *statement = nullptr;
-  if (sqlite3_prepare_v2(database, "PRAGMA database_list", -1, &statement,
-                         nullptr) != SQLITE_OK) {
-    return {};
-  }
-  std::filesystem::path path;
-  while (sqlite3_step(statement) == SQLITE_ROW) {
-    if (sqliteColumnString(statement, 1) == schema) {
-      path = sqliteColumnString(statement, 2);
-      break;
-    }
-  }
-  sqlite3_finalize(statement);
-  return path;
-}
-
-struct DenyNextAttach {
-  bool pending = true;
-};
-
-int denyNextAttach(void *rawState, int action, const char *, const char *,
-                   const char *, const char *) {
-  auto &state = *static_cast<DenyNextAttach *>(rawState);
-  if (action == SQLITE_ATTACH && state.pending) {
-    state.pending = false;
-    return SQLITE_DENY;
-  }
-  return SQLITE_OK;
 }
 
 struct BlockingStatementTrace {
@@ -470,7 +438,8 @@ struct SwitchFixture {
   AppSettings currentSettings;
   ScoreRepository score;
   ReplayRepository replay;
-  Database persistentChartDatabase;
+  std::unique_ptr<ChartRepository> persistentCharts;
+  std::optional<ChartRepository::Session> persistentChartSession;
   ProfileSessionCoordinator coordinator;
 
   SwitchFixture()
@@ -701,13 +670,19 @@ struct SwitchFixture {
     if (refreshAction) {
       refreshAction();
     }
-    if (persistentChartDatabase) {
-      auto prepared =
-          score.PrepareScoreQueryDatabase(persistentChartDatabase.get());
+    if (persistentChartSession) {
+      auto prepared = score.PrepareScoreQueryDatabase(*persistentChartSession);
       if (const auto &error = prepared.error()) {
         throw std::runtime_error(*error);
       }
     }
+  }
+
+  bool openPersistentChartSession(std::string_view label) {
+    persistentCharts = std::make_unique<ChartRepository>(
+        temp.path() / (std::string(label) + "-chart.db"));
+    persistentChartSession = persistentCharts->OpenSession(&score);
+    return persistentChartSession.has_value();
   }
 
   [[nodiscard]] int currentClearRank() {
@@ -1297,41 +1272,43 @@ void testPersistentScoreAttachmentFailureRollsBackToSource() {
   if (fixture.firstId.empty()) {
     return;
   }
-  fixture.persistentChartDatabase = openDatabase(":memory:");
-  expect(fixture.persistentChartDatabase != nullptr,
-         "persistent chart connection opens");
-  if (!fixture.persistentChartDatabase) {
+  expect(fixture.openPersistentChartSession("attachment-failure"),
+         "persistent chart session opens");
+  if (!fixture.persistentChartSession) {
     return;
   }
-  const auto initialError = score_cache_queries::prepareScoreQueryDatabase(
-      fixture.persistentChartDatabase.get(), fixture.firstPaths.scoresDb);
-  expect(!initialError.has_value(),
-         "persistent chart connection initially attaches profile A");
+  {
+    auto initialPrepared = fixture.score.PrepareScoreQueryDatabase(
+        *fixture.persistentChartSession);
+    expect(!initialPrepared.error().has_value(),
+           "persistent chart connection initially attaches profile A");
+  }
   const std::string bootstrapBefore =
       readFile(fixture.temp.path() / "active-profile.json");
 
-  DenyNextAttach denyState;
-  expect(sqlite3_set_authorizer(fixture.persistentChartDatabase.get(),
-                                denyNextAttach, &denyState) == SQLITE_OK,
-         "one-shot profile B attach failure installs");
+  bool targetPathSabotaged = false;
+  fixture.refreshAction = [&]() {
+    if (targetPathSabotaged) {
+      return;
+    }
+    targetPathSabotaged = true;
+    const auto backup = fixture.secondPaths.scoresDb.string() + ".backup";
+    std::filesystem::rename(fixture.secondPaths.scoresDb, backup);
+    std::filesystem::create_directory(fixture.secondPaths.scoresDb);
+  };
   const ProfileSwitchResult result =
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
-  expect(sqlite3_set_authorizer(fixture.persistentChartDatabase.get(), nullptr,
-                                nullptr) == SQLITE_OK,
-         "one-shot profile B attach failure clears");
 
   expect(!result.ok(), "score cache reattach failure aborts profile switch");
-  expect(!denyState.pending, "target score attach was attempted");
-  expect(std::filesystem::canonical(attachedDatabasePath(
-             fixture.persistentChartDatabase.get(), "score_db")) ==
-             std::filesystem::canonical(fixture.firstPaths.scoresDb),
-         "rollback refresh reattaches profile A score database");
-  expect(queryInt(fixture.persistentChartDatabase.get(),
-                  "SELECT " + score_cache_queries::scoreBestLookupExpr(
-                                  "'" + std::string(kChartSha) + "'", "0",
-                                  "score")) == 500,
+  expect(targetPathSabotaged, "target score attach was attempted");
+  const auto rollbackScores = fixture.score.LoadBestScores(
+      *fixture.persistentChartSession, "score_db");
+  const auto rollbackBest =
+      rollbackScores.bestForStoredKey(kChartSha, 0);
+  expect(rollbackBest.has_value() && rollbackBest->score == 500,
          "rollback persistent connection queries profile A score data");
-  fixture.persistentChartDatabase.reset();
+  fixture.persistentChartSession.reset();
+  fixture.persistentCharts.reset();
   expectFirstProfileState(fixture, bootstrapBefore,
                           "score attachment refresh failure");
 }
@@ -1480,17 +1457,16 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
   ScopedBlockingStatementTrace blockedPrepare("PRAGMA database_list");
   expect(blockedPrepare.installed(),
          "score attachment preparation trace installs");
-  fixture.persistentChartDatabase = openDatabase(":memory:");
-  expect(fixture.persistentChartDatabase != nullptr,
-         "guarded score attachment chart connection opens");
-  if (!fixture.persistentChartDatabase) {
+  expect(fixture.openPersistentChartSession("attachment-snapshot"),
+         "guarded score attachment chart session opens");
+  if (!fixture.persistentChartSession) {
     return;
   }
 
   std::optional<std::string> prepareError;
   std::thread preparer([&]() {
     auto prepared = fixture.score.PrepareScoreQueryDatabase(
-        fixture.persistentChartDatabase.get());
+        *fixture.persistentChartSession);
     prepareError = prepared.error();
   });
   const bool prepareEntered = blockedPrepare.waitUntilEntered();
@@ -1515,9 +1491,11 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
   preparer.join();
   expect(!prepareError.has_value(),
          "guarded profile A score attachment preparation succeeds");
-  expect(std::filesystem::canonical(attachedDatabasePath(
-             fixture.persistentChartDatabase.get(), "score_db")) ==
-             std::filesystem::canonical(fixture.firstPaths.scoresDb),
+  expect(fixture.score
+                 .LoadBestClearRanks(*fixture.persistentChartSession,
+                                     "score_db")
+                 .bestRankForStoredKey(kChartSha, 0) ==
+             kClearTypeEasyClearRank,
          "blocked switch leaves the retained connection attached to profile "
          "A");
 
@@ -1525,11 +1503,14 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
   expect(afterPrepare.ok(),
          "profile switch succeeds after guarded attachment preparation");
-  expect(std::filesystem::canonical(attachedDatabasePath(
-             fixture.persistentChartDatabase.get(), "score_db")) ==
-             std::filesystem::canonical(fixture.secondPaths.scoresDb),
+  expect(fixture.score
+                 .LoadBestClearRanks(*fixture.persistentChartSession,
+                                     "score_db")
+                 .bestRankForStoredKey(kChartSha, 0) ==
+             kClearTypeHardClearRank,
          "successful switch reattaches the retained connection to profile B");
-  fixture.persistentChartDatabase.reset();
+  fixture.persistentChartSession.reset();
+  fixture.persistentCharts.reset();
 }
 
 void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
@@ -1541,10 +1522,9 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
   ScopedBlockingStatementTrace blockedQuery(
       "FROM score_db.score_sha256_clear_rank_cache");
   expect(blockedQuery.installed(), "score-backed query trace installs");
-  fixture.persistentChartDatabase = openDatabase(":memory:");
-  expect(fixture.persistentChartDatabase != nullptr,
-         "score-backed query chart connection opens");
-  if (!fixture.persistentChartDatabase) {
+  expect(fixture.openPersistentChartSession("dependent-score-query"),
+         "score-backed query chart session opens");
+  if (!fixture.persistentChartSession) {
     return;
   }
 
@@ -1552,13 +1532,13 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
   int queryRank = kNoClearTypeRank;
   std::thread query([&]() {
     auto prepared = fixture.score.PrepareScoreQueryDatabase(
-        fixture.persistentChartDatabase.get());
+        *fixture.persistentChartSession);
     prepareError = prepared.error();
     if (!prepareError.has_value()) {
-      queryRank =
-          queryInt(fixture.persistentChartDatabase.get(),
-                   "SELECT " + score_cache_queries::scoreRankLookupExpr(
-                                   "'" + std::string(kChartSha) + "'", "0"));
+      queryRank = fixture.score
+                      .LoadBestClearRanks(*fixture.persistentChartSession,
+                                          "score_db")
+                      .bestRankForStoredKey(kChartSha, 0);
     }
   });
   const bool queryEntered = blockedQuery.waitUntilEntered();
@@ -1591,15 +1571,17 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
          "profile switch succeeds after the dependent query releases its "
          "guard");
   auto prepared = fixture.score.PrepareScoreQueryDatabase(
-      fixture.persistentChartDatabase.get());
+      *fixture.persistentChartSession);
   expect(!prepared.error().has_value(),
          "profile B score-backed query preparation succeeds");
-  expect(queryInt(fixture.persistentChartDatabase.get(),
-                  "SELECT " + score_cache_queries::scoreRankLookupExpr(
-                                  "'" + std::string(kChartSha) + "'", "0")) ==
+  expect(fixture.score
+                 .LoadBestClearRanks(*fixture.persistentChartSession,
+                                     "score_db")
+                 .bestRankForStoredKey(kChartSha, 0) ==
              kClearTypeHardClearRank,
          "post-switch dependent query reads profile B data");
-  fixture.persistentChartDatabase.reset();
+  fixture.persistentChartSession.reset();
+  fixture.persistentCharts.reset();
 }
 
 void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
