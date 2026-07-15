@@ -1,5 +1,6 @@
 #include "../src/scene/MainMenuLibrary.h"
 #include "../src/LongNoteModeUtils.h"
+#include "RepositorySqliteTestSupport.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -198,8 +199,15 @@ int main() {
                        "ddddddddddddddddddd"]
       .ranks[long_note_mode::kLnValue] = kClearTypeFullComboRank;
 
-  const auto data =
-      main_menu_library::LoadFolderClearDataByLongNoteMode(db, scoreRanks);
+  repository_test::StatementTrace trace;
+  main_menu_library::FolderClearDataByLongNoteMode data;
+  {
+    repository_test::ScopedStatementTrace observation(db, trace);
+    data =
+        main_menu_library::LoadFolderClearDataByLongNoteMode(db, scoreRanks);
+  }
+  ASSERT_EQ(4, trace.count,
+            "folder clear aggregation keeps four streaming SELECTs");
 
   ASSERT_EQ(kClearTypeHardClearRank,
             folderRankForLn(data, main_menu_library::folderKeyForTable(1)),
