@@ -30,6 +30,11 @@ Chart preview playback remains unchanged. Offline replay video export follows
 normal replay playback: it includes the silent cue, the preparation metronome
 when enabled, and then the chart.
 
+Raise the global maximum lane-cover position from 90% to 100%. Apply the same
+range to persisted settings, settings controls, live dragging, replay events,
+and replay export. Existing saved positions remain unchanged; 100% allows the
+cover edge to reach the judge line.
+
 ## Cue Lane Selection
 
 Selection runs against the chart after play options and lane randomization
@@ -119,13 +124,13 @@ white/blue/scratch classification, overriding the scratch marker color to red.
 Add a small triangle primitive to `SimpleBatchRenderer`; no texture, text, or
 animation is required.
 
-Triangles render after notes but before the lane cover. Their bases sit below
-the lane-cover edge with a small constant gap while sufficient visible lane
-space remains. As the floating cover moves downward, the triangles follow its
-edge until doing so would leave insufficient space above the judge line. At
-that point the triangles stop moving, enter the cover region, and are hidden
-by the lane cover's later draw pass. The gap must remain visible in all
-non-occluded positions.
+Triangles render after both notes and the lane cover. Their bases sit below
+the lane-cover edge with a small constant gap, cascading with the floating
+cover as it moves downward. When the cover approaches the judge line and the
+triangle can no longer retain the gap without crossing it, the triangle stops
+at its judge-line-safe position. Any resulting overlap is resolved by the
+triangle's later draw pass, keeping it visible above the cover. Indicator
+geometry must not add any further constraint to the lane-cover position.
 
 The same geometry and depth ordering apply to live play, interactive replay,
 course replay, and offline replay export.
@@ -137,7 +142,7 @@ course replay, and offline replay export.
 3. Normal play extends the playback start by the chart-time equivalent of
    exactly `2,000,000` real microseconds; practice reuses the count-in start.
 4. The scene/export clock determines whether the indicator is visible.
-5. `BMSRenderer` draws the selected lane triangles at a depth below the lane
+5. `BMSRenderer` draws the selected lane triangles at a depth above the lane
    cover.
 6. Live preparation input records signed no-judgement lane events, touch
    samples, and lane-cover events.
@@ -157,8 +162,9 @@ Focused tests must cover:
 - disabled indicators preserving existing timing;
 - enabled-by-default loading, settings JSON round trips, and legacy parsing;
 - white, blue, and red lane classification;
-- triangle placement, the lane-cover gap, and lane-cover occlusion when space
-  runs out;
+- triangle placement, cascading lane-cover gap, judge-line stop, and triangle
+  visibility above an overlapping cover;
+- 0%-100% lane-cover settings, dragging, replay, and export behavior;
 - chronological signed lane, touch, and lane-cover replay events; and
 - offline export start time, metronome scheduling, frame duration, and cue
   visibility.
@@ -177,3 +183,4 @@ cmake --build cmake-build-debug --target main -j 6
 - Changing note, judgement, score, gauge, or chart timestamps.
 - Adding preparation behavior to chart preview playback.
 - Changing preparation metronome tempo or beat selection.
+- Changing lane-cover behavior other than raising its maximum to 100%.
