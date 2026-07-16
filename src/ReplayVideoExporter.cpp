@@ -4072,11 +4072,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto videoStart = std::chrono::steady_clock::now();
   const auto failureMicros = replay_result::FindGaugeFailureMicros(
       *chart, replay, GaugeProfile::Standard);
-  const auto rawFailureMicros = failureMicros.transform(
-      [audioOffsetMicros](long long gameplayTimeMicros) {
-        return gameplay_timing::rawSongTimeFromGameplayTime(
-            gameplayTimeMicros, audioOffsetMicros);
-      });
+  const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
+      failureMicros, audioOffsetMicros);
   const long long normalGameplayDurationMicros =
       preparationPlan.realTimeAtGameplayTime(
           gameplayEndMicrosForReplay(*chart), audioOffsetMicros) +
@@ -4232,11 +4229,8 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     const auto failureMicros = replay_result::FindGaugeFailureMicros(
         *chart, configuredStageReplay, replay.gaugeProfile,
         carriedGaugeState);
-    const auto rawFailureMicros = failureMicros.transform(
-        [audioOffsetMicros](long long gameplayTimeMicros) {
-          return gameplay_timing::rawSongTimeFromGameplayTime(
-              gameplayTimeMicros, audioOffsetMicros);
-        });
+    const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
+        failureMicros, audioOffsetMicros);
     const long long normalGameplayDurationMicros =
         courseStageGameplayDurationMicrosForReplay(
             *chart, audioResult.durationMicros,

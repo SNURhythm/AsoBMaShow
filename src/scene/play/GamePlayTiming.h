@@ -3,6 +3,7 @@
 #include "../../audio/PlaybackRate.h"
 
 #include <cmath>
+#include <optional>
 
 namespace gameplay_timing {
 
@@ -26,6 +27,15 @@ inline long long gameplayTimeFromRawSongTime(long long rawSongTimeMicros,
 inline long long rawSongTimeFromGameplayTime(long long gameplayTimeMicros,
                                              long long audioOffsetMicros) {
   return gameplayTimeMicros - audioOffsetMicros;
+}
+
+inline std::optional<long long> rawSongTimeFromGameplayTime(
+    const std::optional<long long> &gameplayTimeMicros,
+    long long audioOffsetMicros) {
+  if (!gameplayTimeMicros.has_value()) {
+    return std::nullopt;
+  }
+  return rawSongTimeFromGameplayTime(*gameplayTimeMicros, audioOffsetMicros);
 }
 
 inline FrameTiming frameTiming(long long rawSongTimeMicros,

@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <optional>
 
 #define ASSERT_EQ(expected, actual, label)                                     \
   if ((expected) != (actual)) {                                                \
@@ -364,6 +365,16 @@ int main() {
             gameplay_timing::rawSongTimeFromGameplayTime(
                 exportFrame.gameplayTimeMicros, 120000LL),
             "gameplay failure times convert back to the raw export clock");
+  const auto rawFailureTime = gameplay_timing::rawSongTimeFromGameplayTime(
+      std::optional<long long>{1120000LL}, 120000LL);
+  ASSERT_TRUE(rawFailureTime.has_value(),
+              "optional gameplay failure time remains present");
+  ASSERT_EQ(1000000LL, *rawFailureTime,
+            "optional gameplay failure time converts to the raw clock");
+  ASSERT_TRUE(!gameplay_timing::rawSongTimeFromGameplayTime(
+                   std::optional<long long>{}, 120000LL)
+                   .has_value(),
+              "missing gameplay failure time remains missing");
   ASSERT_NEAR(1.0,
               gameplay_timing::leadInBeatDistance(0LL, -2000000LL, 120.0),
               0.000001, "negative lead-in beat distance");
