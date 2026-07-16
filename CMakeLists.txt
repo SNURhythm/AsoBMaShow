@@ -535,6 +535,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(prep_metronome_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(prep_metronome_tests PRIVATE cxx_std_23)
 
+    add_executable(preparation_plan_tests
+        tests/preparation_plan_tests.cpp
+        src/PreparationPlan.cpp
+        src/PrepMetronome.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(preparation_plan_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(preparation_plan_tests PRIVATE cxx_std_23)
+
     add_executable(club_beat_tests
         tests/club_beat_tests.cpp
         src/audio/ClubBeat.cpp
@@ -1617,6 +1626,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     foreach(test_target IN ITEMS
         prep_metronome_tests
+        preparation_plan_tests
         club_beat_tests
         gbattle_tests
         replay_summary_list_tests
