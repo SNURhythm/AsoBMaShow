@@ -74,9 +74,11 @@ practice:
 
 For normal play, the indicator ends when the first preparation-metronome click
 begins, or at the chart/audio seek anchor when the metronome is disabled. The
-Jukebox starts two seconds before that boundary. For practice, the indicator
-starts with the existing count-in plan and ends at the configured practice
-start; no extra time is added.
+Jukebox starts exactly two real-time seconds before that boundary. Convert that
+duration to chart time through the selected playback rate so 50%, 100%, and
+200% playback all show the cue for two wall-clock seconds. For practice, the
+indicator starts with the existing count-in plan and ends at the configured
+practice start; no extra time is added.
 
 Retries and course stage transitions rebuild the plan. Interactive replay and
 course replay use the same plan construction as live play. Offline replay
@@ -132,8 +134,8 @@ course replay, and offline replay export.
 
 1. Gameplay or export builds the existing metronome/count-in plan.
 2. Cue planning finds the first qualifying timeline in the active range.
-3. Normal play extends the playback start by exactly `2,000,000` microseconds;
-   practice reuses the count-in start.
+3. Normal play extends the playback start by the chart-time equivalent of
+   exactly `2,000,000` real microseconds; practice reuses the count-in start.
 4. The scene/export clock determines whether the indicator is visible.
 5. `BMSRenderer` draws the selected lane triangles at a depth below the lane
    cover.
