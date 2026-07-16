@@ -5,6 +5,14 @@ ios_pods_cache_valid() {
   [ "$#" -eq 2 ] || return 2
   local pods_dir="$1"
   local lock_file="$2"
+  local configuration
+  local aggregate_config
+
+  for configuration in debug release; do
+    aggregate_config="${pods_dir}/Target Support Files/Pods-AsoBMaShow/Pods-AsoBMaShow.${configuration}.xcconfig"
+    [ -f "${aggregate_config}" ] || return 1
+    grep -Fqx 'PODS_ROOT = ${SRCROOT}/Pods' "${aggregate_config}" || return 1
+  done
 
   [ -d "${pods_dir}" ] &&
     [ ! -L "${pods_dir}" ] &&

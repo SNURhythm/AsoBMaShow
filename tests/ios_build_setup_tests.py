@@ -163,6 +163,12 @@ class PodsCacheTests(unittest.TestCase):
         (directory / "Pods.xcodeproj/project.pbxproj").write_text(
             "// generated pods project\n", encoding="utf-8"
         )
+        support = directory / "Target Support Files/Pods-AsoBMaShow"
+        support.mkdir(parents=True)
+        for configuration in ("debug", "release"):
+            (support / f"Pods-AsoBMaShow.{configuration}.xcconfig").write_text(
+                "PODS_ROOT = ${SRCROOT}/Pods\n", encoding="utf-8"
+            )
         (directory / "Manifest.lock").write_bytes(lock.read_bytes())
         (directory / "marker.txt").write_text(marker, encoding="utf-8")
 
@@ -201,6 +207,29 @@ class PodsCacheTests(unittest.TestCase):
             )
             self.assertNotEqual(0, result.returncode)
             self.assertEqual("preserved", (cache / "marker.txt").read_text())
+
+    def test_restore_rejects_cache_generated_for_external_pods_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "Podfile.lock"
+            lock.write_text("PODS:\n", encoding="utf-8")
+            cache = root / "cache"
+            local = root / "Pods"
+            self.make_valid_pods(cache, lock, "stale")
+            xcconfig = (
+                cache
+                / "Target Support Files/Pods-AsoBMaShow/Pods-AsoBMaShow.release.xcconfig"
+            )
+            xcconfig.write_text(
+                "PODS_ROOT = ${SRCROOT}/../../Library/Caches/Pods\n",
+                encoding="utf-8",
+            )
+
+            result = self.bash(
+                f'ios_pods_cache_restore "{cache}" "{local}" "{lock}"'
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse(local.exists())
 
     def test_ios_init_uses_copy_cache_instead_of_pods_symlink(self):
         script = IOS_INIT.read_text(encoding="utf-8")
