@@ -7,6 +7,7 @@
 
 #include "bms_parser.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <unordered_map>
@@ -92,6 +93,71 @@ void testDefinitionUsesStableIdsAndLaneIndices() {
           "unknown lanes return an empty span without allocation");
 }
 
+void testEmptyValidLaneCommitsPressAndReleaseIntents() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  bool everyValidLaneIsEmpty = true;
+  for (const int lane : chart.Meta.GetTotalLaneIndices()) {
+    const auto emptyLane = std::ranges::find(
+        definition.lanes(), lane, &gameplay::LaneDefinition::lane);
+    everyValidLaneIsEmpty =
+        everyValidLaneIsEmpty && emptyLane != definition.lanes().end() &&
+        emptyLane->noteIds.empty();
+  }
+  require(everyValidLaneIsEmpty &&
+              std::ranges::is_sorted(definition.lanes(), {},
+                                     &gameplay::LaneDefinition::lane),
+          "definition retains an empty span for every chart-valid lane");
+
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto press = simulation.pressLane(
+      3, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+
+  require(simulation.lanePressed(3),
+          "empty valid lane press commits pressed state");
+  require(press.noteId == gameplay::kInvalidNoteId &&
+              press.soundNoteId == gameplay::kInvalidNoteId &&
+              !press.hasJudge,
+          "empty valid lane press creates no note, sound, or judgement");
+  require(press.hasReplayEvent &&
+              press.replayEvent.action == gameplay::GameplayReplayAction::Press &&
+              press.replayEvent.lane == 3 &&
+              press.replayEvent.noteId == gameplay::kInvalidNoteId,
+          "empty valid lane press commits lane-only replay intent");
+  require(press.hasLaneVisual &&
+              press.laneVisual.action == gameplay::LaneVisualAction::Press &&
+              press.laneVisual.lane == 3 &&
+              press.laneVisual.judge.judgement == None,
+          "empty valid lane press commits lane-only visual intent");
+
+  const auto release = simulation.releaseLane(
+      3, {.songTimeMicros = 1'100'000,
+          .laneBeamTimeMicros = 2'100'000});
+
+  require(!simulation.lanePressed(3),
+          "empty valid lane release clears pressed state");
+  require(release.noteId == gameplay::kInvalidNoteId &&
+              release.soundNoteId == gameplay::kInvalidNoteId &&
+              !release.hasJudge,
+          "empty valid lane release creates no note, sound, or judgement");
+  require(release.hasReplayEvent &&
+              release.replayEvent.action ==
+                  gameplay::GameplayReplayAction::Release &&
+              release.replayEvent.lane == 3 &&
+              release.replayEvent.noteId == gameplay::kInvalidNoteId,
+          "empty valid lane release commits lane-only replay intent");
+  require(release.hasLaneVisual &&
+              release.laneVisual.action ==
+                  gameplay::LaneVisualAction::Release &&
+              release.laneVisual.lane == 3 &&
+              release.laneVisual.judge.judgement == None,
+          "empty valid lane release commits lane-only visual intent");
+}
+
 void testCandidateSelectionIsLaneIndexed() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -116,6 +182,39 @@ void testCandidateSelectionIsLaneIndexed() {
           "target lane resolves its note");
   require(simulation.lastSearchStats().notesExamined <= 2,
           "unrelated lanes are not scanned");
+}
+
+void testRejectedTransactionsResetLatestSearchStats() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(9));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+
+  simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+  const bool acceptedPressSearched =
+      simulation.lastSearchStats().notesExamined > 0;
+  simulation.pressLane(1, {.songTimeMicros = 1'000'001});
+  const bool rejectedPressReset =
+      simulation.lastSearchStats().notesExamined == 0;
+
+  const auto release =
+      simulation.releaseLane(1, {.songTimeMicros = 1'100'000});
+  const bool acceptedReleaseSearched =
+      simulation.lastSearchStats().notesExamined > 0;
+  simulation.releaseLane(1, {.songTimeMicros = 1'100'001});
+  const bool rejectedReleaseReset =
+      simulation.lastSearchStats().notesExamined == 0;
+
+  require(acceptedPressSearched && rejectedPressReset &&
+              release.hasReplayEvent && acceptedReleaseSearched &&
+              rejectedReleaseReset,
+          "latest search stats reset for press and release early rejections");
 }
 
 void testCompensationAndPriorityMatchCurrentRules() {
@@ -319,12 +418,63 @@ void testPressDoesNotClaimLongTail() {
   require(press.noteId == gameplay::kInvalidNoteId &&
               press.soundNoteId == gameplay::kInvalidNoteId,
           "press near a long tail claims neither note nor sound identity");
-  require(!simulation.lanePressed(1) &&
+  require(simulation.lanePressed(1) &&
               !simulation.noteState(tailId).played &&
               !simulation.noteState(tailId).holding,
-          "long-tail rejection leaves lane and note state unchanged");
-  require(!press.hasJudge && !press.hasReplayEvent && !press.hasLaneVisual,
-          "long-tail rejection returns no judgement, replay, or visual intent");
+          "long-tail ineligibility preserves lane state without note mutation");
+  require(!press.hasJudge && press.hasReplayEvent && press.hasLaneVisual &&
+              press.replayEvent.noteId == gameplay::kInvalidNoteId,
+          "tail-only press returns lane replay and visual intent without a judge");
+}
+
+void testLongTailCannotMaskLaterPressCandidateForAnyPriorityMode() {
+  bool allPrioritiesSelectedNormal = true;
+  for (const auto priority : {
+           AppSettings::NotePriorityMode::Lowest,
+           AppSettings::NotePriorityMode::Duration,
+           AppSettings::NotePriorityMode::Combo,
+           AppSettings::NotePriorityMode::Score}) {
+    bms_parser::Chart chart;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 0, 990'000, 1,
+                bms_parser::LongNoteType::LongNote);
+    auto *normalTimeline = addTimeline(*measure, 1'100'000);
+    normalTimeline->SetNote(1, new bms_parser::Note(19));
+    chart.Measures.push_back(measure);
+
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::NoteId tailId = gameplay::kInvalidNoteId;
+    gameplay::NoteId normalId = gameplay::kInvalidNoteId;
+    for (const auto id : definition.laneNotes(1)) {
+      const auto &note = definition.note(id);
+      if (note.kind == gameplay::NoteKind::LongTail) {
+        tailId = id;
+      } else if (note.kind == gameplay::NoteKind::Normal) {
+        normalId = id;
+      }
+    }
+
+    gameplay::GameplaySimulation simulation(
+        definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+         .notePriorityMode = priority});
+    const auto press = simulation.pressLane(
+        1, {.songTimeMicros = 1'000'000,
+            .laneBeamTimeMicros = 2'000'000});
+
+    const bool selectedNormal =
+        tailId != gameplay::kInvalidNoteId &&
+        normalId != gameplay::kInvalidNoteId && press.noteId == normalId &&
+        press.soundNoteId == normalId && press.hasJudge &&
+        press.hasReplayEvent && press.replayEvent.noteId == normalId &&
+        simulation.noteState(normalId).played &&
+        !simulation.noteState(tailId).played && simulation.lanePressed(1);
+    allPrioritiesSelectedNormal =
+        allPrioritiesSelectedNormal && selectedNormal;
+  }
+
+  require(allPrioritiesSelectedNormal,
+          "a long tail cannot mask a later playable normal under any priority");
 }
 
 void testClassicReleaseCommitsOneJudgeAndNoSound() {
@@ -548,6 +698,93 @@ struct PressSummary {
   bool operator==(const PressSummary &) const = default;
 };
 
+struct EmptyLaneTransactionSummary {
+  PressSummary press;
+  bool pressedAfterPress = false;
+  PressSummary release;
+  bool pressedAfterRelease = false;
+
+  bool operator==(const EmptyLaneTransactionSummary &) const = default;
+};
+
+EmptyLaneTransactionSummary oldEmptyLaneTransactions() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, Judge(1));
+  const auto press = controller.pressLane(
+      3, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  const bool pressedAfterPress = lanes.at(3);
+  const auto release = controller.releaseLane(
+      3, {.songTimeMicros = 1'100'000,
+          .laneBeamTimeMicros = 2'100'000});
+  return {
+      .press = {
+          .selected = oldNoteIdentity(press.note),
+          .sound = oldNoteIdentity(press.keySoundNote),
+          .judge = {.present = press.hasJudge,
+                    .judgement = press.judge.judgement,
+                    .diffMicros = press.judge.Diff},
+          .replay = oldReplaySummary(press.hasReplayEvent, press.replayEvent),
+      },
+      .pressedAfterPress = pressedAfterPress,
+      .release = {
+          .selected = oldNoteIdentity(release.note),
+          .sound = oldNoteIdentity(release.keySoundNote),
+          .judge = {.present = release.hasJudge,
+                    .judgement = release.judge.judgement,
+                    .diffMicros = release.judge.Diff},
+          .replay =
+              oldReplaySummary(release.hasReplayEvent, release.replayEvent),
+      },
+      .pressedAfterRelease = lanes.at(3),
+  };
+}
+
+EmptyLaneTransactionSummary newEmptyLaneTransactions() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto press = simulation.pressLane(
+      3, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  const bool pressedAfterPress = simulation.lanePressed(3);
+  const auto release = simulation.releaseLane(
+      3, {.songTimeMicros = 1'100'000,
+          .laneBeamTimeMicros = 2'100'000});
+  return {
+      .press = {
+          .selected = newNoteIdentity(definition, press.noteId),
+          .sound = newNoteIdentity(definition, press.soundNoteId),
+          .judge = {.present = press.hasJudge,
+                    .judgement = press.judge.judgement,
+                    .diffMicros = press.judge.Diff},
+          .replay = newReplaySummary(press.hasReplayEvent, press.replayEvent,
+                                     definition),
+      },
+      .pressedAfterPress = pressedAfterPress,
+      .release = {
+          .selected = newNoteIdentity(definition, release.noteId),
+          .sound = newNoteIdentity(definition, release.soundNoteId),
+          .judge = {.present = release.hasJudge,
+                    .judgement = release.judge.judgement,
+                    .diffMicros = release.judge.Diff},
+          .replay = newReplaySummary(release.hasReplayEvent,
+                                     release.replayEvent, definition),
+      },
+      .pressedAfterRelease = simulation.lanePressed(3),
+  };
+}
+
+void testEmptyValidLaneMatchesCurrentController() {
+  require(oldEmptyLaneTransactions() == newEmptyLaneTransactions(),
+          "empty valid lane transactions match the current controller");
+}
+
 PressSummary oldPress(long long diffMicros,
                       AppSettings::NotePriorityMode priority) {
   bms_parser::Chart chart;
@@ -738,7 +975,9 @@ void testCurrentReleaseParityMatrix() {
 int main() {
   testCompiledJudgePreservesResolvedWindows();
   testDefinitionUsesStableIdsAndLaneIndices();
+  testEmptyValidLaneCommitsPressAndReleaseIntents();
   testCandidateSelectionIsLaneIndexed();
+  testRejectedTransactionsResetLatestSearchStats();
   testCompensationAndPriorityMatchCurrentRules();
   testPracticeRangeIsHalfOpenBeforeLaneMutation();
   testEqualTimeKeepsMainLanePrecedence();
@@ -747,9 +986,11 @@ int main() {
   testPressCommitsStateAndSoundTogether();
   testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
   testPressDoesNotClaimLongTail();
+  testLongTailCannotMaskLaterPressCandidateForAnyPriorityMode();
   testClassicReleaseCommitsOneJudgeAndNoSound();
   testChargeScratchRequiresBackspinRelease();
   testParitySummaryDetectsPerturbedIdentityAndPayload();
+  testEmptyValidLaneMatchesCurrentController();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
   return 0;

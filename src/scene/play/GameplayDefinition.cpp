@@ -64,6 +64,13 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
   GameplayDefinition result;
   std::unordered_map<const bms_parser::Note *, NoteId> ids;
 
+  const auto validLanes = chart.Meta.GetTotalLaneIndices();
+  result.lanes_.reserve(validLanes.size());
+  for (const int lane : validLanes) {
+    result.lanes_.push_back({.lane = lane});
+  }
+  std::ranges::sort(result.lanes_, {}, &LaneDefinition::lane);
+
   const auto append = [&](const bms_parser::Note *note) {
     if (note == nullptr || ids.contains(note)) {
       return;

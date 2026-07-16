@@ -167,6 +167,7 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
     }
     const auto &state = noteStates_[id];
     if (state.played || state.dead || note.kind == NoteKind::Landmine ||
+        note.kind == NoteKind::LongTail ||
         !noteAllowed(note)) {
       continue;
     }
@@ -229,6 +230,7 @@ GameplaySimulation::pressLane(int lane, const GameplayInputContext &context) {
 GameplayInputResult
 GameplaySimulation::pressLane(int mainLane, int compensateLane,
                               const GameplayInputContext &context) {
+  lastSearchStats_ = {};
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) {
@@ -312,6 +314,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
 GameplayInputResult
 GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
                                 bool isBackSpin) {
+  lastSearchStats_ = {};
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) {
