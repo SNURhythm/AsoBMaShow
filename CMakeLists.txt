@@ -954,6 +954,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
+        src/audio/PrepMetronomeSound.cpp
         src/bms_parser.cpp
     )
     target_include_directories(audio_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -6,6 +6,7 @@
 #include "../path.h"
 #include "ChartAssetExtensions.h"
 #include "ClubBeat.h"
+#include "PrepMetronomeSound.h"
 #include "SoundFileIO.h"
 #include "decoder.h"
 
@@ -46,6 +47,17 @@ DecodedSound decodedClubSound(const club_beat::StereoSound &sound) {
     result.pcm.push_back(static_cast<short>(
         std::clamp(sample, -1.0f, 1.0f) * static_cast<float>(INT16_MAX)));
   }
+  return result;
+}
+
+DecodedSound decodedGeneratedPcm(std::vector<short> pcm, int sampleRate,
+                                 int channels) {
+  DecodedSound result;
+  result.pcm = std::move(pcm);
+  result.info.channels = channels;
+  result.info.samplerate = sampleRate;
+  result.info.frames = static_cast<sf_count_t>(
+      result.pcm.size() / static_cast<std::size_t>(channels));
   return result;
 }
 
@@ -536,14 +548,14 @@ long long baseDurationMicros(const bms_parser::Chart &chart,
                              const RenderOptions &options) {
   if (options.keySoundMode == KeySoundMode::ReplayTiming &&
       options.replay != nullptr) {
-    return outputTimeMicros(
+    return outputTimeMicrosFromTimelineStart(
         chart_playback_duration::ReplayTimelineEndMicros(chart,
                                                          *options.replay),
-        options.playback);
+        options.timelineStartMicros, options.playback);
   }
-  return outputTimeMicros(
+  return outputTimeMicrosFromTimelineStart(
       chart_playback_duration::ChartTimelineEndMicros(chart),
-      options.playback);
+      options.timelineStartMicros, options.playback);
 }
 
 } // namespace
@@ -687,7 +699,9 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     if (sound == nullptr) {
       continue;
     }
-    mixSoundAt(mix, *sound, event.timeMicros, options.playback);
+    mixSoundAt(mix, *sound,
+               event.timeMicros - options.timelineStartMicros,
+               options.playback);
   }
   if (options.clubMode && !isCancelled) {
     const DecodedSound kick =
@@ -695,10 +709,30 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     const DecodedSound clap =
         decodedClubSound(club_beat::synthesizeClap(kOutputSampleRate));
     for (const auto &event : club_beat::buildPlan(chart)) {
-      mixSoundAt(mix, kick, event.timeMicros, options.playback);
+      mixSoundAt(mix, kick,
+                 event.timeMicros - options.timelineStartMicros,
+                 options.playback);
       if (event.clap) {
-        mixSoundAt(mix, clap, event.timeMicros, options.playback);
+        mixSoundAt(mix, clap,
+                   event.timeMicros - options.timelineStartMicros,
+                   options.playback);
       }
+    }
+  }
+  if (options.prepMetronomePlan != nullptr &&
+      options.prepMetronomePlan->enabled && !isCancelled) {
+    const DecodedSound accent = decodedGeneratedPcm(
+        prep_metronome_audio::makeClick(true, kOutputSampleRate,
+                                        kOutputChannels),
+        kOutputSampleRate, kOutputChannels);
+    const DecodedSound regular = decodedGeneratedPcm(
+        prep_metronome_audio::makeClick(false, kOutputSampleRate,
+                                        kOutputChannels),
+        kOutputSampleRate, kOutputChannels);
+    for (const auto &click : options.prepMetronomePlan->clicks) {
+      mixSoundAt(mix, click.accent ? accent : regular,
+                 click.timeMicros - options.timelineStartMicros,
+                 options.playback);
     }
   }
   if (mix.empty()) {

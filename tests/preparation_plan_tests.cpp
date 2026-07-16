@@ -139,6 +139,12 @@ int main() {
             "indicator ends when metronome starts");
   ASSERT_EQ(-2000000LL, plan.metronome.startTimeMicros,
             "metronome still ends at chart start");
+  ASSERT_EQ(-4000000LL, plan.chartTimeAtRealTime(0),
+            "export frame zero starts at the cue origin");
+  ASSERT_EQ(-2000000LL, plan.chartTimeAtRealTime(2000000),
+            "export reaches the first metronome click after the cue");
+  ASSERT_EQ(0LL, plan.chartTimeAtRealTime(4000000),
+            "export reaches chart zero after cue and count-in");
 
   plan = preparation::buildNormalPlan(chart, false, true, 0, 0,
                                       std::nullopt, normalRate);
