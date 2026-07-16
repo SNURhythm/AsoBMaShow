@@ -985,6 +985,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioWrapper.cpp
         src/audio/ClubBeat.cpp
         src/audio/Jukebox.cpp
+        src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
         src/bms_parser.cpp
         src/path.cpp

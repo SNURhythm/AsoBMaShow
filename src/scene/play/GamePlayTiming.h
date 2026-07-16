@@ -11,10 +11,41 @@ struct PracticeFrameTiming {
   bool sectionComplete = false;
 };
 
+struct FrameTiming {
+  long long rawSongTimeMicros = 0;
+  long long gameplayTimeMicros = 0;
+  long long bgaTimeMicros = 0;
+  long long visualTimeMicros = 0;
+};
+
+inline long long gameplayTimeFromRawSongTime(long long rawSongTimeMicros,
+                                             long long audioOffsetMicros) {
+  return rawSongTimeMicros + audioOffsetMicros;
+}
+
+inline long long rawSongTimeFromGameplayTime(long long gameplayTimeMicros,
+                                             long long audioOffsetMicros) {
+  return gameplayTimeMicros - audioOffsetMicros;
+}
+
+inline FrameTiming frameTiming(long long rawSongTimeMicros,
+                               long long audioOffsetMicros,
+                               long long visualOffsetMicros) {
+  const long long gameplayTimeMicros =
+      gameplayTimeFromRawSongTime(rawSongTimeMicros, audioOffsetMicros);
+  return {
+      .rawSongTimeMicros = rawSongTimeMicros,
+      .gameplayTimeMicros = gameplayTimeMicros,
+      .bgaTimeMicros = gameplayTimeMicros,
+      .visualTimeMicros = gameplayTimeMicros - visualOffsetMicros,
+  };
+}
+
 inline PracticeFrameTiming practiceFrameTiming(long long rawSongTimeMicros,
                                                long long audioOffsetMicros,
                                                long long endMicros) {
-  const long long chartTimeMicros = rawSongTimeMicros + audioOffsetMicros;
+  const long long chartTimeMicros =
+      gameplayTimeFromRawSongTime(rawSongTimeMicros, audioOffsetMicros);
   if (chartTimeMicros < endMicros) {
     return {.chartTimeMicros = chartTimeMicros};
   }

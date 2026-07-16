@@ -27,6 +27,11 @@ inline long long outputTimeMicrosFromTimelineStart(
   return outputTimeMicros(chartTimeMicros - timelineStartMicros, playback);
 }
 
+inline long long replayEventRawTimeMicros(long long gameplayTimeMicros,
+                                          long long audioOffsetMicros) {
+  return gameplayTimeMicros - audioOffsetMicros;
+}
+
 inline long double
 sourceFramesPerOutputFrame(int sourceSampleRate,
                            audio::PlaybackRate playback,

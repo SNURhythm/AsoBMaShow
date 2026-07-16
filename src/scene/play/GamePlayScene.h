@@ -106,7 +106,7 @@ private:
   void finishReplayRecording();
   void publishPracticeGhost();
   void buildReplayNoteLookup();
-  void processReplayKeySounds(long long rawSongTimeMicros);
+  void processReplayKeySounds(long long gameplayTimeMicros);
   void processReplayEvents(long long gameplayTimeMicros);
   void processReplayLaneCoverEvents(long long gameplayTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);

@@ -1721,7 +1721,8 @@ void GamePlayScene::applyTimelineBpm(const bms_parser::TimeLine *timeline) {
 
 long long
 GamePlayScene::getGameplayTimeMicros(long long rawSongTimeMicros) const {
-  return rawSongTimeMicros + getAudioOffsetMicros();
+  return gameplay_timing::gameplayTimeFromRawSongTime(
+      rawSongTimeMicros, getAudioOffsetMicros());
 }
 
 long long GamePlayScene::getInputSongTimeMicros(long long songTimeMicros,
@@ -1947,7 +1948,7 @@ void GamePlayScene::update(float dt) {
   updatePracticeHud(gameplayTimeMicros);
   touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
-    processReplayKeySounds(rawSongTimeMicros);
+    processReplayKeySounds(gameplayTimeMicros);
     processReplayEvents(gameplayTimeMicros);
     processReplayLaneCoverEvents(gameplayTimeMicros);
   }
@@ -2577,7 +2578,7 @@ GamePlayScene::findReplayNote(const ReplayEvent &event) const {
   return it == replayNoteLookup.end() ? nullptr : it->second;
 }
 
-void GamePlayScene::processReplayKeySounds(long long rawSongTimeMicros) {
+void GamePlayScene::processReplayKeySounds(long long gameplayTimeMicros) {
   if (!isReplayPlayback() || options.replayData == nullptr ||
       options.autoKeySound) {
     return;
@@ -2586,7 +2587,7 @@ void GamePlayScene::processReplayKeySounds(long long rawSongTimeMicros) {
   const auto &events = options.replayData->events;
   while (replayKeySoundCursor < events.size()) {
     const auto &event = events[replayKeySoundCursor];
-    if (event.songTimeMicros > rawSongTimeMicros) {
+    if (event.songTimeMicros > gameplayTimeMicros) {
       break;
     }
 

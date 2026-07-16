@@ -128,6 +128,16 @@ int main() {
               "indicator duration stays two seconds in real time");
   }
 
+  plan = preparation::buildNormalPlan(
+      chart, true, false, 0, 0, std::nullopt,
+      audio::PlaybackRate{.percent = 200});
+  ASSERT_EQ(3940000LL,
+            plan.realTimeAtGameplayTime(4000000LL, 120000LL),
+            "export converts gameplay time through the raw audio clock");
+  ASSERT_EQ(5940000LL,
+            plan.realTimeAtGameplayTime(4000000LL, 120000LL) + 2000000LL,
+            "export result transition adds two seconds in real time");
+
   plan = preparation::buildNormalPlan(chart, true, true, 0, 0,
                                       std::nullopt, normalRate);
   ASSERT_TRUE(plan.metronome.enabled, "prep metronome remains enabled");

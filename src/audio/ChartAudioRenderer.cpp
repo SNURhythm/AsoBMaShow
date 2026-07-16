@@ -643,8 +643,9 @@ CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
         noteIt->second->Wav == bms_parser::Parser::NoWav) {
       continue;
     }
-    events.push_back(
-        {event.songTimeMicros - keySoundOffsetMicros, noteIt->second->Wav});
+    events.push_back({replayEventRawTimeMicros(event.songTimeMicros,
+                                              keySoundOffsetMicros),
+                      noteIt->second->Wav});
   }
 
   std::sort(events.begin(), events.end(), [](const auto &a, const auto &b) {

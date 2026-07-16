@@ -880,6 +880,10 @@ int main() {
                 0, -4000000, audio::PlaybackRate{.percent = 100}) == 4000000,
             "offline audio shifts chart zero after preparation");
 
+    require(chart_audio::replayEventRawTimeMicros(1120000, 120000) ==
+                1000000,
+            "offline replay keysounds convert gameplay time to raw time");
+
     const ScheduledAudioEvent defaultEvent;
     require(defaultEvent.wav == bms_parser::Parser::NoWav &&
                 defaultEvent.bus == audio::Bus::Bgm,

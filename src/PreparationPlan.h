@@ -45,6 +45,12 @@ struct Plan {
     return playback.realMicrosFromChart(chartTimeMicros -
                                         playbackStartTimeMicros);
   }
+
+  [[nodiscard]] long long
+  realTimeAtGameplayTime(long long gameplayTimeMicros,
+                         long long audioOffsetMicros) const {
+    return realTimeAtChartTime(gameplayTimeMicros - audioOffsetMicros);
+  }
 };
 
 std::vector<int>
