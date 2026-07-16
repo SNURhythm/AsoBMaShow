@@ -1,7 +1,7 @@
 # Frame-Independent Asynchronous Gameplay Input Design
 
 **Date:** 2026-07-17
-**Status:** Draft assembled from approved design sections; awaiting final review
+**Status:** Approved
 
 ## Summary
 
