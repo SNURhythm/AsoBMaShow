@@ -1255,6 +1255,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
     )
 
+    add_executable(gameplay_simulation_tests
+        tests/gameplay_simulation_tests.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(gameplay_simulation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_simulation_tests PRIVATE cxx_std_23)
+
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp
         src/ScoreProvenance.cpp
@@ -1694,6 +1704,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_practice_boundary_tests)
     asobmashow_register_test(gameplay_playback_startup_tests)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)
+    asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
     asobmashow_register_test(practice_result_flow_tests)
