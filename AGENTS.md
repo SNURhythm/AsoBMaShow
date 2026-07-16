@@ -17,8 +17,8 @@
 
 - `scripts/ios_init.sh` configures the generated bgfx Xcode project and caches only Bundler gems and CocoaPods. It intentionally does not cache `bgfx/build`.
 - TestFlight clean builds are intentional. Do not remove the TestFlight clean behavior without the user asking.
-- Firebase PR builds should keep the fixed DerivedData path so Xcode can reuse `ArchiveIntermediates`.
-- When adding a new source file under `src`, add its path to `membershipExceptions` in `ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj` so the app target builds it.
+- Firebase PR builds should keep checkout-specific DerivedData and the stable Firebase archive object root beneath it. Xcode does not preserve its default archive object location across separate `archive` invocations. `IOS_DERIVED_DATA_PATH` remains available as an explicit override.
+- The iOS app target uses an Xcode file-system-synchronized group and automatically discovers supported files under `src`. Keep platform-only and build-metadata exclusions in the synchronized group's small `membershipExceptions` list; do not add normal new source files there.
 
 ## Android Firebase Deploy
 

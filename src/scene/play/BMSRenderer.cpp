@@ -4,6 +4,7 @@
 
 #include "BMSRenderer.h"
 #include "GamePlayTiming.h"
+#include "JudgementTimingText.h"
 #include "TouchVisualizationTiming.h"
 
 #include "../../CoursePlaySession.h"
@@ -2814,13 +2815,12 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
     }
   }
   if (judgementTimingMsText != nullptr) {
-    const long long absDiffMicros =
-        diffMicros < 0 ? -diffMicros : diffMicros;
-    const long long ms = (absDiffMicros + 500LL) / 1000LL;
     if (refreshedTimingText || !keepLingeringTimingText) {
       judgementTimingMsText->setVisible(showTimingMs);
-      judgementTimingMsText->setText(showTimingMs ? std::to_string(ms) + "ms"
-                                                  : "");
+      judgementTimingMsText->setText(
+          showTimingMs
+              ? gameplay_timing::formatJudgementTimingMilliseconds(diffMicros)
+              : "");
       judgementTimingMsText->setColor(ui_theme::sdl(timingColor));
     }
   }

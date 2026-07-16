@@ -176,7 +176,8 @@ has_firebase_auth() {
 }
 
 run_build_only() {
-  local derived_data_path="${IOS_DERIVED_DATA_PATH:-${HOME}/Library/Developer/Xcode/DerivedData/AsoBMaShow-FirebaseCI}"
+  local derived_data_path
+  derived_data_path="$("${ROOT_DIR}/scripts/ios_derived_data_path.sh")"
 
   cd "${IOS_DIR}"
   echo "Building iOS app only from ${GITHUB_HEAD_REF} (${GITHUB_SHA})"

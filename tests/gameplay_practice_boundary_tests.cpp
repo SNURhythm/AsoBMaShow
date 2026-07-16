@@ -1,6 +1,8 @@
 #include "scene/play/GamePlayTiming.h"
+#include "scene/play/JudgementTimingText.h"
 
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -10,6 +12,13 @@ bool expect(bool condition, const char *message) {
     std::cerr << message << '\n';
   }
   return condition;
+}
+
+bool expectTimingText(long long diffMicros, const std::string &expected,
+                      const char *message) {
+  return expect(gameplay_timing::formatJudgementTimingMilliseconds(
+                    diffMicros) == expected,
+                message);
 }
 
 bool expectBoundary(long long rawSongTimeMicros, long long audioOffsetMicros,
@@ -40,6 +49,19 @@ bool expectBoundary(long long rawSongTimeMicros, long long audioOffsetMicros,
 } // namespace
 
 int main() {
+  if (!expectTimingText(12'340, "12.34ms",
+                        "exact hundredths remain unchanged") ||
+      !expectTimingText(12'341, "12.35ms", "partial hundredths round upward") ||
+      !expectTimingText(-12'341, "12.35ms",
+                        "FAST timing uses the absolute magnitude") ||
+      !expectTimingText(1, "0.01ms", "sub-hundredth timing rounds upward") ||
+      !expectTimingText(0, "0.00ms", "zero retains two decimal places") ||
+      !expectTimingText(std::numeric_limits<long long>::min(),
+                        "9223372036854775.81ms",
+                        "minimum signed timing formats without overflow")) {
+    return 1;
+  }
+
   if (!expect(gameplay_timing::realJudgementDiffMicros(
                   20'000, {.percent = 200}) == 10'000,
               "200 percent HUD timing stays in real milliseconds")) {
