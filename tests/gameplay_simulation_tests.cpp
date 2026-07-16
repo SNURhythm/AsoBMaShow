@@ -377,12 +377,175 @@ void testChargeScratchRequiresBackspinRelease() {
           "non-backspin scratch release is Poor");
 }
 
-struct PressSummary {
-  bool selected = false;
-  bool sound = false;
-  bool judged = false;
+struct NoteIdentity {
+  bool present = false;
+  int lane = -1;
+  long long timingMicros = -1;
+  int wav = 0;
+  gameplay::NoteKind kind = gameplay::NoteKind::Normal;
+  gameplay::LongNoteRule longNoteRule = gameplay::LongNoteRule::None;
+
+  bool operator==(const NoteIdentity &) const = default;
+};
+
+gameplay::LongNoteRule
+oldLongNoteRule(const bms_parser::LongNote *longNote) {
+  if (longNote == nullptr) {
+    return gameplay::LongNoteRule::None;
+  }
+  switch (longNote->GetType()) {
+  case bms_parser::LongNoteType::ChargeNote:
+    return gameplay::LongNoteRule::Charge;
+  case bms_parser::LongNoteType::HellChargeNote:
+    return gameplay::LongNoteRule::HellCharge;
+  case bms_parser::LongNoteType::Undefined:
+  case bms_parser::LongNoteType::LongNote:
+    return gameplay::LongNoteRule::Classic;
+  }
+  return gameplay::LongNoteRule::Classic;
+}
+
+NoteIdentity oldNoteIdentity(const bms_parser::Note *note) {
+  if (note == nullptr) {
+    return {};
+  }
+  gameplay::NoteKind kind = gameplay::NoteKind::Normal;
+  const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+  if (dynamic_cast<const bms_parser::LandmineNote *>(note) != nullptr) {
+    kind = gameplay::NoteKind::Landmine;
+  } else if (longNote != nullptr) {
+    kind = longNote->IsTail() ? gameplay::NoteKind::LongTail
+                              : gameplay::NoteKind::LongHead;
+  }
+  return {
+      .present = true,
+      .lane = note->Lane,
+      .timingMicros = note->Timeline == nullptr ? -1 : note->Timeline->Timing,
+      .wav = note->Wav,
+      .kind = kind,
+      .longNoteRule = oldLongNoteRule(longNote),
+  };
+}
+
+NoteIdentity newNoteIdentity(const gameplay::GameplayDefinition &definition,
+                             gameplay::NoteId id) {
+  if (id == gameplay::kInvalidNoteId) {
+    return {};
+  }
+  const auto &note = definition.note(id);
+  return {
+      .present = true,
+      .lane = note.lane,
+      .timingMicros = note.timingMicros,
+      .wav = note.wav,
+      .kind = note.kind,
+      .longNoteRule = note.longNoteRule,
+  };
+}
+
+struct JudgeSummary {
+  bool present = false;
   Judgement judgement = None;
-  bool replayed = false;
+  long long diffMicros = 0;
+
+  bool operator==(const JudgeSummary &) const = default;
+};
+
+enum class ReplayActionSummary { Press, Release, Miss, Mine, Gauge };
+
+ReplayActionSummary replayActionSummary(ReplayEventAction action) {
+  switch (action) {
+  case ReplayEventAction::Press:
+    return ReplayActionSummary::Press;
+  case ReplayEventAction::Release:
+    return ReplayActionSummary::Release;
+  case ReplayEventAction::Miss:
+    return ReplayActionSummary::Miss;
+  case ReplayEventAction::Mine:
+    return ReplayActionSummary::Mine;
+  case ReplayEventAction::Gauge:
+    return ReplayActionSummary::Gauge;
+  }
+  return ReplayActionSummary::Press;
+}
+
+ReplayActionSummary
+replayActionSummary(gameplay::GameplayReplayAction action) {
+  switch (action) {
+  case gameplay::GameplayReplayAction::Press:
+    return ReplayActionSummary::Press;
+  case gameplay::GameplayReplayAction::Release:
+    return ReplayActionSummary::Release;
+  case gameplay::GameplayReplayAction::Miss:
+    return ReplayActionSummary::Miss;
+  case gameplay::GameplayReplayAction::Mine:
+    return ReplayActionSummary::Mine;
+  case gameplay::GameplayReplayAction::Gauge:
+    return ReplayActionSummary::Gauge;
+  }
+  return ReplayActionSummary::Press;
+}
+
+struct ReplaySummary {
+  bool present = false;
+  ReplayActionSummary action = ReplayActionSummary::Press;
+  int lane = -1;
+  NoteIdentity note;
+  long long noteTimeMicros = -1;
+  long long songTimeMicros = 0;
+  long long judgeTimeMicros = 0;
+  Judgement judgement = None;
+  long long diffMicros = 0;
+
+  bool operator==(const ReplaySummary &) const = default;
+};
+
+ReplaySummary oldReplaySummary(
+    bool present,
+    const RhythmLaneInputController::ReplayEventResult &replay) {
+  if (!present) {
+    return {};
+  }
+  const auto note = oldNoteIdentity(replay.note);
+  return {
+      .present = true,
+      .action = replayActionSummary(replay.action),
+      .lane = replay.lane,
+      .note = note,
+      .noteTimeMicros = note.timingMicros,
+      .songTimeMicros = replay.songTimeMicros,
+      .judgeTimeMicros = replay.judgeTimeMicros,
+      .judgement = replay.judge.judgement,
+      .diffMicros = replay.judge.Diff,
+  };
+}
+
+ReplaySummary newReplaySummary(
+    bool present, const gameplay::GameplayReplayEvent &replay,
+    const gameplay::GameplayDefinition &definition) {
+  if (!present) {
+    return {};
+  }
+  return {
+      .present = true,
+      .action = replayActionSummary(replay.action),
+      .lane = replay.lane,
+      .note = newNoteIdentity(definition, replay.noteId),
+      .noteTimeMicros = replay.noteTimeMicros,
+      .songTimeMicros = replay.songTimeMicros,
+      .judgeTimeMicros = replay.judgeTimeMicros,
+      .judgement = replay.judgement,
+      .diffMicros = replay.diffMicros,
+  };
+}
+
+struct PressSummary {
+  NoteIdentity selected;
+  NoteIdentity sound;
+  JudgeSummary judge;
+  ReplaySummary replay;
+
+  bool operator==(const PressSummary &) const = default;
 };
 
 PressSummary oldPress(long long diffMicros,
@@ -398,9 +561,14 @@ PressSummary oldPress(long long diffMicros,
       1, {.songTimeMicros = 1'000'000 + diffMicros,
           .laneBeamTimeMicros = 2'000'000,
           .notePriorityMode = priority});
-  return {result.note != nullptr, result.keySoundNote != nullptr,
-          result.hasJudge, result.judge.judgement,
-          result.hasReplayEvent};
+  return {
+      .selected = oldNoteIdentity(result.note),
+      .sound = oldNoteIdentity(result.keySoundNote),
+      .judge = {.present = result.hasJudge,
+                .judgement = result.judge.judgement,
+                .diffMicros = result.judge.Diff},
+      .replay = oldReplaySummary(result.hasReplayEvent, result.replayEvent),
+  };
 }
 
 PressSummary newPress(long long diffMicros,
@@ -418,10 +586,42 @@ PressSummary newPress(long long diffMicros,
   const auto result = simulation.pressLane(
       1, {.songTimeMicros = 1'000'000 + diffMicros,
           .laneBeamTimeMicros = 2'000'000});
-  return {result.noteId != gameplay::kInvalidNoteId,
-          result.soundNoteId != gameplay::kInvalidNoteId,
-          result.hasJudge, result.judge.judgement,
-          result.hasReplayEvent};
+  PressSummary summary{
+      .selected = newNoteIdentity(definition, result.noteId),
+      .sound = newNoteIdentity(definition, result.soundNoteId),
+      .judge = {.present = result.hasJudge,
+                .judgement = result.judge.judgement,
+                .diffMicros = result.judge.Diff},
+      .replay =
+          newReplaySummary(result.hasReplayEvent, result.replayEvent,
+                           definition),
+  };
+  return summary;
+}
+
+void testParitySummaryDetectsPerturbedIdentityAndPayload() {
+  const auto baseline =
+      oldPress(0, AppSettings::NotePriorityMode::Lowest);
+
+  auto wrongIdentity = baseline;
+  ++wrongIdentity.selected.wav;
+  require(wrongIdentity != baseline,
+          "parity summary detects a perturbed selected-note identity");
+
+  auto wrongSound = baseline;
+  ++wrongSound.sound.timingMicros;
+  require(wrongSound != baseline,
+          "parity summary detects a perturbed sound-note identity");
+
+  auto wrongJudge = baseline;
+  ++wrongJudge.judge.diffMicros;
+  require(wrongJudge != baseline,
+          "parity summary detects a perturbed JudgeResult diff");
+
+  auto wrongReplay = baseline;
+  ++wrongReplay.replay.lane;
+  require(wrongReplay != baseline,
+          "parity summary detects a perturbed replay payload");
 }
 
 void testCurrentPressParityMatrix() {
@@ -434,24 +634,21 @@ void testCurrentPressParityMatrix() {
                                  30'000LL, 420'000LL, 420'001LL}) {
       const auto oldResult = oldPress(diff, priority);
       const auto newResult = newPress(diff, priority);
-      require(oldResult.selected == newResult.selected &&
-                  oldResult.sound == newResult.sound &&
-                  oldResult.judged == newResult.judged &&
-                  oldResult.judgement == newResult.judgement &&
-                  oldResult.replayed == newResult.replayed,
+      require(oldResult == newResult,
               "new press transaction matches current controller outcome");
     }
   }
 }
 
 struct ReleaseSummary {
-  bool selected = false;
-  bool sound = false;
-  bool judged = false;
-  Judgement judgement = None;
-  bool replayed = false;
+  NoteIdentity selected;
+  NoteIdentity sound;
+  JudgeSummary judge;
+  ReplaySummary replay;
   bool headHolding = false;
   bool tailHolding = false;
+
+  bool operator==(const ReleaseSummary &) const = default;
 };
 
 ReleaseSummary oldRelease(bms_parser::LongNoteType type, int lane,
@@ -469,9 +666,16 @@ ReleaseSummary oldRelease(bms_parser::LongNoteType type, int lane,
       lane, {.songTimeMicros = 1'500'000 + diffMicros,
              .laneBeamTimeMicros = 2'000'000},
       isBackSpin);
-  return {result.note != nullptr, result.keySoundNote != nullptr,
-          result.hasJudge, result.judge.judgement,
-          result.hasReplayEvent, head->IsHolding, head->Tail->IsHolding};
+  return {
+      .selected = oldNoteIdentity(result.note),
+      .sound = oldNoteIdentity(result.keySoundNote),
+      .judge = {.present = result.hasJudge,
+                .judgement = result.judge.judgement,
+                .diffMicros = result.judge.Diff},
+      .replay = oldReplaySummary(result.hasReplayEvent, result.replayEvent),
+      .headHolding = head->IsHolding,
+      .tailHolding = head->Tail->IsHolding,
+  };
 }
 
 ReleaseSummary newRelease(bms_parser::LongNoteType type, int lane,
@@ -493,11 +697,18 @@ ReleaseSummary newRelease(bms_parser::LongNoteType type, int lane,
       lane, {.songTimeMicros = 1'500'000 + diffMicros,
              .laneBeamTimeMicros = 2'000'000},
       isBackSpin);
-  return {result.noteId != gameplay::kInvalidNoteId,
-          result.soundNoteId != gameplay::kInvalidNoteId,
-          result.hasJudge, result.judge.judgement,
-          result.hasReplayEvent, simulation.noteState(press.noteId).holding,
-          simulation.noteState(tailId).holding};
+  return {
+      .selected = newNoteIdentity(definition, result.noteId),
+      .sound = newNoteIdentity(definition, result.soundNoteId),
+      .judge = {.present = result.hasJudge,
+                .judgement = result.judge.judgement,
+                .diffMicros = result.judge.Diff},
+      .replay =
+          newReplaySummary(result.hasReplayEvent, result.replayEvent,
+                           definition),
+      .headHolding = simulation.noteState(press.noteId).holding,
+      .tailHolding = simulation.noteState(tailId).holding,
+  };
 }
 
 void testCurrentReleaseParityMatrix() {
@@ -518,13 +729,7 @@ void testCurrentReleaseParityMatrix() {
         oldRelease(entry.type, entry.lane, entry.isBackSpin, entry.diffMicros);
     const auto newResult =
         newRelease(entry.type, entry.lane, entry.isBackSpin, entry.diffMicros);
-    require(oldResult.selected == newResult.selected &&
-                oldResult.sound == newResult.sound &&
-                oldResult.judged == newResult.judged &&
-                oldResult.judgement == newResult.judgement &&
-                oldResult.replayed == newResult.replayed &&
-                oldResult.headHolding == newResult.headHolding &&
-                oldResult.tailHolding == newResult.tailHolding,
+    require(oldResult == newResult,
             "new release transaction matches current controller outcome");
   }
 }
@@ -544,6 +749,7 @@ int main() {
   testPressDoesNotClaimLongTail();
   testClassicReleaseCommitsOneJudgeAndNoSound();
   testChargeScratchRequiresBackspinRelease();
+  testParitySummaryDetectsPerturbedIdentityAndPayload();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
   return 0;
