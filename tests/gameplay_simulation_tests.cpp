@@ -234,6 +234,64 @@ void testReleaseSearchStopsAtPracticeEnd() {
   require(firstNotesExamined <= 1 && secondNotesExamined <= 1,
           "repeated release search does not rescan the excluded practice tail");
 }
+
+void testPressCommitsStateAndSoundTogether() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(42));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto first = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 9'000'000});
+
+  require(first.noteId != gameplay::kInvalidNoteId &&
+              first.soundNoteId == first.noteId,
+          "accepted press returns matching note and sound identity");
+  require(simulation.noteState(first.noteId).played,
+          "accepted press commits note state before returning");
+  require(first.hasJudge && first.judge.judgement == PGreat,
+          "normal note commits its judgement");
+  require(first.hasReplayEvent &&
+              first.replayEvent.action == gameplay::GameplayReplayAction::Press,
+          "accepted press commits replay intent");
+  require(first.hasLaneVisual && simulation.lanePressed(1),
+          "accepted press commits lane state and visual intent");
+
+  const auto duplicate = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'001,
+          .laneBeamTimeMicros = 9'000'001});
+  require(duplicate.noteId == gameplay::kInvalidNoteId &&
+              duplicate.soundNoteId == gameplay::kInvalidNoteId,
+          "held-lane duplicate produces neither note nor sound");
+}
+
+void testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 1'500'000, 1,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+
+  const auto press = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 3'000'000});
+  const auto &head = definition.note(press.noteId);
+  require(press.soundNoteId == press.noteId && !press.hasJudge,
+          "classic head sounds now and defers scoring to release");
+  require(simulation.noteState(head.id).holding &&
+              simulation.noteState(head.pairId).holding,
+          "classic head atomically marks both identities holding");
+}
 } // namespace
 
 int main() {
@@ -245,5 +303,7 @@ int main() {
   testEqualTimeKeepsMainLanePrecedence();
   testEqualTimeKeepsMainLanePrecedenceForLatePriorityModes();
   testReleaseSearchStopsAtPracticeEnd();
+  testPressCommitsStateAndSoundTogether();
+  testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
   return 0;
 }

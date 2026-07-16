@@ -221,8 +221,78 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) {
     return result;
   }
-  result.noteId =
-      selectPressCandidate(mainLane, compensateLane, inputTime(context));
+  auto *mainState = findLane(mainLane);
+  auto *compensateState = findLane(compensateLane);
+  if ((mainState == nullptr || mainState->pressed) &&
+      (compensateLane == mainLane || compensateState == nullptr ||
+       compensateState->pressed)) {
+    return result;
+  }
+
+  const std::int64_t judgedTime = inputTime(context);
+  const NoteId selected =
+      selectPressCandidate(mainLane, compensateLane, judgedTime);
+  if (selected == kInvalidNoteId) {
+    if (mainState != nullptr) {
+      mainState->pressed = true;
+    }
+    result.hasReplayEvent = true;
+    result.replayEvent = {
+        .action = GameplayReplayAction::Press,
+        .lane = mainLane,
+        .songTimeMicros = judgedTime,
+        .judgeTimeMicros = judgedTime,
+    };
+    result.hasLaneVisual = true;
+    result.laneVisual = {LaneVisualAction::Press, mainLane,
+                         context.laneBeamTimeMicros, JudgeResult(None, 0)};
+    return result;
+  }
+
+  const auto &note = definition_.note(selected);
+  auto &state = noteStates_[selected];
+  const JudgeResult judge = config_.judge.judgeAt(note.timingMicros, judgedTime);
+  result.noteId = selected;
+  result.soundNoteId = selected;
+  result.judge = judge;
+  if (auto *laneState = findLane(note.lane)) {
+    laneState->pressed = true;
+  }
+  result.hasLaneVisual = true;
+  result.laneVisual = {LaneVisualAction::Press, note.lane,
+                       context.laneBeamTimeMicros, judge};
+
+  if (judge.judgement != None) {
+    if (judge.isNotePlayed() && note.kind == NoteKind::LongTail) {
+      return result;
+    }
+    if (judge.isNotePlayed()) {
+      state.played = true;
+      state.playedTimeMicros = judgedTime;
+      if (note.kind == NoteKind::LongHead) {
+        state.holding = true;
+        if (note.pairId != kInvalidNoteId) {
+          noteStates_[note.pairId].holding = true;
+        }
+        result.hasJudge = note.longNoteRule != LongNoteRule::Classic;
+      } else {
+        result.hasJudge = true;
+      }
+    } else {
+      result.hasJudge = true;
+    }
+    result.hasReplayEvent = true;
+    result.replayEvent = {
+        .action = GameplayReplayAction::Press,
+        .noteId = selected,
+        .lane = note.lane,
+        .noteTimeMicros = note.timingMicros,
+        .songTimeMicros = judgedTime,
+        .judgeTimeMicros = judgedTime,
+        .judgement = judge.judgement,
+        .diffMicros = judge.Diff,
+    };
+  }
   return result;
 }
 
