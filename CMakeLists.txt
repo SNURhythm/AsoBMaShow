@@ -1262,11 +1262,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/RhythmLaneInputController.cpp
     )
     target_include_directories(gameplay_simulation_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(gameplay_simulation_tests PRIVATE cxx_std_23)
+    target_compile_definitions(gameplay_simulation_tests PRIVATE
+        BX_CONFIG_DEBUG=1
+    )
+    target_link_libraries(gameplay_simulation_tests PRIVATE
+        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+    )
 
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp

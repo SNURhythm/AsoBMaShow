@@ -1,12 +1,18 @@
+#include "scene/play/BMSRenderer.h"
 #include "scene/play/CompiledGameplayJudge.h"
 #include "scene/play/GameplayDefinition.h"
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
+#include "scene/play/RhythmLaneInputController.h"
 
 #include "bms_parser.hpp"
 
 #include <cstdlib>
 #include <iostream>
+#include <unordered_map>
+
+void BMSRenderer::onLanePressed(int, const JudgeResult, long long) {}
+void BMSRenderer::onLaneReleased(int, long long) {}
 
 namespace {
 void require(bool condition, const char *message) {
@@ -370,6 +376,158 @@ void testChargeScratchRequiresBackspinRelease() {
   require(release.hasJudge && release.judge.judgement == Poor,
           "non-backspin scratch release is Poor");
 }
+
+struct PressSummary {
+  bool selected = false;
+  bool sound = false;
+  bool judged = false;
+  Judgement judgement = None;
+  bool replayed = false;
+};
+
+PressSummary oldPress(long long diffMicros,
+                      AppSettings::NotePriorityMode priority) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(5));
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes{{1, false}};
+  RhythmLaneInputController controller(&chart, nullptr, lanes, Judge(1));
+  const auto result = controller.pressLane(
+      1, {.songTimeMicros = 1'000'000 + diffMicros,
+          .laneBeamTimeMicros = 2'000'000,
+          .notePriorityMode = priority});
+  return {result.note != nullptr, result.keySoundNote != nullptr,
+          result.hasJudge, result.judge.judgement,
+          result.hasReplayEvent};
+}
+
+PressSummary newPress(long long diffMicros,
+                      AppSettings::NotePriorityMode priority) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(5));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .notePriorityMode = priority});
+  const auto result = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'000 + diffMicros,
+          .laneBeamTimeMicros = 2'000'000});
+  return {result.noteId != gameplay::kInvalidNoteId,
+          result.soundNoteId != gameplay::kInvalidNoteId,
+          result.hasJudge, result.judge.judgement,
+          result.hasReplayEvent};
+}
+
+void testCurrentPressParityMatrix() {
+  for (const auto priority : {
+           AppSettings::NotePriorityMode::Lowest,
+           AppSettings::NotePriorityMode::Duration,
+           AppSettings::NotePriorityMode::Combo,
+           AppSettings::NotePriorityMode::Score}) {
+    for (const long long diff : {-500'001LL, -500'000LL, -30'000LL, 0LL,
+                                 30'000LL, 420'000LL, 420'001LL}) {
+      const auto oldResult = oldPress(diff, priority);
+      const auto newResult = newPress(diff, priority);
+      require(oldResult.selected == newResult.selected &&
+                  oldResult.sound == newResult.sound &&
+                  oldResult.judged == newResult.judged &&
+                  oldResult.judgement == newResult.judgement &&
+                  oldResult.replayed == newResult.replayed,
+              "new press transaction matches current controller outcome");
+    }
+  }
+}
+
+struct ReleaseSummary {
+  bool selected = false;
+  bool sound = false;
+  bool judged = false;
+  Judgement judgement = None;
+  bool replayed = false;
+  bool headHolding = false;
+  bool tailHolding = false;
+};
+
+ReleaseSummary oldRelease(bms_parser::LongNoteType type, int lane,
+                          bool isBackSpin, long long diffMicros) {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  auto *head = addLongNote(*measure, 1'000'000, 1'500'000, lane, type);
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, Judge(1));
+  head->Press(1'000'000);
+  lanes[lane] = true;
+  const auto result = controller.releaseLane(
+      lane, {.songTimeMicros = 1'500'000 + diffMicros,
+             .laneBeamTimeMicros = 2'000'000},
+      isBackSpin);
+  return {result.note != nullptr, result.keySoundNote != nullptr,
+          result.hasJudge, result.judge.judgement,
+          result.hasReplayEvent, head->IsHolding, head->Tail->IsHolding};
+}
+
+ReleaseSummary newRelease(bms_parser::LongNoteType type, int lane,
+                          bool isBackSpin, long long diffMicros) {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 1'500'000, lane, type);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto press = simulation.pressLane(
+      lane, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 1'500'000});
+  const auto tailId = definition.note(press.noteId).pairId;
+  const auto result = simulation.releaseLane(
+      lane, {.songTimeMicros = 1'500'000 + diffMicros,
+             .laneBeamTimeMicros = 2'000'000},
+      isBackSpin);
+  return {result.noteId != gameplay::kInvalidNoteId,
+          result.soundNoteId != gameplay::kInvalidNoteId,
+          result.hasJudge, result.judge.judgement,
+          result.hasReplayEvent, simulation.noteState(press.noteId).holding,
+          simulation.noteState(tailId).holding};
+}
+
+void testCurrentReleaseParityMatrix() {
+  struct ReleaseCase {
+    bms_parser::LongNoteType type;
+    int lane;
+    bool isBackSpin;
+    long long diffMicros;
+  };
+  for (const auto &entry : {
+           ReleaseCase{bms_parser::LongNoteType::LongNote, 1, false, -30'000},
+           ReleaseCase{bms_parser::LongNoteType::LongNote, 1, false, 0},
+           ReleaseCase{bms_parser::LongNoteType::ChargeNote, 1, false, 30'000},
+           ReleaseCase{bms_parser::LongNoteType::HellChargeNote, 1, false, 0},
+           ReleaseCase{bms_parser::LongNoteType::ChargeNote, 7, false, 0},
+           ReleaseCase{bms_parser::LongNoteType::ChargeNote, 7, true, 0}}) {
+    const auto oldResult =
+        oldRelease(entry.type, entry.lane, entry.isBackSpin, entry.diffMicros);
+    const auto newResult =
+        newRelease(entry.type, entry.lane, entry.isBackSpin, entry.diffMicros);
+    require(oldResult.selected == newResult.selected &&
+                oldResult.sound == newResult.sound &&
+                oldResult.judged == newResult.judged &&
+                oldResult.judgement == newResult.judgement &&
+                oldResult.replayed == newResult.replayed &&
+                oldResult.headHolding == newResult.headHolding &&
+                oldResult.tailHolding == newResult.tailHolding,
+            "new release transaction matches current controller outcome");
+  }
+}
 } // namespace
 
 int main() {
@@ -386,5 +544,7 @@ int main() {
   testPressDoesNotClaimLongTail();
   testClassicReleaseCommitsOneJudgeAndNoSound();
   testChargeScratchRequiresBackspinRelease();
+  testCurrentPressParityMatrix();
+  testCurrentReleaseParityMatrix();
   return 0;
 }
