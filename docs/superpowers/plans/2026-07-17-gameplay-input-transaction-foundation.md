@@ -751,7 +751,7 @@ void testPracticeRangeIsHalfOpenBeforeLaneMutation() {
           "the exclusive end blocks selection before lane mutation");
 }
 
-void testEqualTimeKeepsMainLanePrecedence() {
+void testEqualTimeLowestKeepsMainLanePrecedence() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
   auto *timeline = addTimeline(*measure, 1'000'000);
@@ -767,9 +767,17 @@ void testEqualTimeKeepsMainLanePrecedence() {
       2, 1, {.songTimeMicros = 1'000'000,
              .laneBeamTimeMicros = 2'000'000});
   require(definition.note(result.noteId).lane == 2,
-          "equal-time compensation keeps the caller's main lane first");
+          "Lowest priority keeps equal-time compensation behind the main lane");
 }
 ```
+
+Execution correction: this test freezes equal-time main-lane precedence only
+for `Lowest`. The authoritative controller still applies `shouldPreferCandidate`
+to later equal-time candidates for every other priority mode; at a sufficiently
+late input, `Combo` and `Score` therefore replace the main-lane candidate with
+the compensation-lane candidate. The chronological merge and `shouldPrefer`
+snippet below must preserve that priority-dependent behavior under Task 6's
+current-controller parity goal; do not add an unconditional equal-time return.
 
 Call all four tests from `main()`.
 

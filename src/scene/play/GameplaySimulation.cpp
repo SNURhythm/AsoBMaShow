@@ -108,9 +108,6 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
   const auto shouldPrefer = [&](NoteId current, NoteId next) {
     const auto &currentNote = definition_.note(current);
     const auto &nextNote = definition_.note(next);
-    if (currentNote.timingMicros == nextNote.timingMicros) {
-      return false;
-    }
     switch (config_.notePriorityMode) {
     case AppSettings::NotePriorityMode::Duration:
       return std::llabs(currentNote.timingMicros - inputTimeMicros) >

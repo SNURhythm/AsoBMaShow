@@ -265,7 +265,7 @@ void testPracticeRangeIsHalfOpenBeforeLaneMutation() {
           "the exclusive end blocks selection before lane mutation");
 }
 
-void testEqualTimeKeepsMainLanePrecedence() {
+void testEqualTimeLowestKeepsMainLanePrecedence() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
   auto *timeline = addTimeline(*measure, 1'000'000);
@@ -281,7 +281,7 @@ void testEqualTimeKeepsMainLanePrecedence() {
       2, 1, {.songTimeMicros = 1'000'000,
              .laneBeamTimeMicros = 2'000'000});
   require(definition.note(result.noteId).lane == 2,
-          "equal-time compensation keeps the caller's main lane first");
+          "Lowest priority keeps equal-time compensation behind the main lane");
 }
 
 int selectedEqualTimeLane(AppSettings::NotePriorityMode priorityMode) {
@@ -302,18 +302,20 @@ int selectedEqualTimeLane(AppSettings::NotePriorityMode priorityMode) {
   return definition.note(result.noteId).lane;
 }
 
-void testEqualTimeKeepsMainLanePrecedenceForLatePriorityModes() {
+void testEqualTimeFollowsLatePriorityModes() {
   const int comboLane =
       selectedEqualTimeLane(AppSettings::NotePriorityMode::Combo);
   const int scoreLane =
       selectedEqualTimeLane(AppSettings::NotePriorityMode::Score);
-  require(comboLane == 2 && scoreLane == 2,
-          "equal-time main-lane precedence survives Combo and Score priority");
+  require(comboLane == 1 && scoreLane == 1,
+          "equal-time Combo and Score selection follows current late-note rules");
 }
 
 void testReleaseSearchStopsAtPracticeEnd() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
+  auto *inside = addTimeline(*measure, 999'999);
+  inside->SetNote(1, new bms_parser::Note(1));
   for (int index = 0; index < 1'000; ++index) {
     auto *timeline = addTimeline(*measure, 1'000'000 + index * 10'000LL);
     timeline->SetNote(1, new bms_parser::Note(1));
@@ -328,15 +330,20 @@ void testReleaseSearchStopsAtPracticeEnd() {
            .startMicros = 0, .endMicros = 1'000'000}});
   const gameplay::GameplayInputContext context{
       .songTimeMicros = 999'999, .laneBeamTimeMicros = 2'000'000};
+  const auto press = simulation.pressLane(1, context);
   const auto first = simulation.releaseLane(1, context);
   const auto firstNotesExamined = simulation.lastSearchStats().notesExamined;
+  const auto repress = simulation.pressLane(1, context);
   const auto second = simulation.releaseLane(1, context);
   const auto secondNotesExamined = simulation.lastSearchStats().notesExamined;
 
+  require(press.noteId != gameplay::kInvalidNoteId &&
+              repress.noteId == gameplay::kInvalidNoteId,
+          "release boundary setup presses the valid note then re-presses its lane");
   require(first.noteId == gameplay::kInvalidNoteId &&
               second.noteId == gameplay::kInvalidNoteId,
           "notes at the practice end remain excluded from release selection");
-  require(firstNotesExamined <= 1 && secondNotesExamined <= 1,
+  require(firstNotesExamined == 2 && secondNotesExamined == 0,
           "repeated release search does not rescan the excluded practice tail");
 }
 
@@ -836,6 +843,70 @@ PressSummary newPress(long long diffMicros,
   return summary;
 }
 
+PressSummary oldTwoLaneEqualTimePress(
+    AppSettings::NotePriorityMode priority) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(1));
+  timeline->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes{{1, false}, {2, false}};
+  RhythmLaneInputController controller(&chart, nullptr, lanes, Judge(1));
+  const auto result = controller.pressLane(
+      2, 1, {.songTimeMicros = 1'100'000,
+             .laneBeamTimeMicros = 2'000'000,
+             .notePriorityMode = priority});
+  return {
+      .selected = oldNoteIdentity(result.note),
+      .sound = oldNoteIdentity(result.keySoundNote),
+      .judge = {.present = result.hasJudge,
+                .judgement = result.judge.judgement,
+                .diffMicros = result.judge.Diff},
+      .replay = oldReplaySummary(result.hasReplayEvent, result.replayEvent),
+  };
+}
+
+PressSummary newTwoLaneEqualTimePress(
+    AppSettings::NotePriorityMode priority) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(1));
+  timeline->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .notePriorityMode = priority});
+  const auto result = simulation.pressLane(
+      2, 1, {.songTimeMicros = 1'100'000,
+             .laneBeamTimeMicros = 2'000'000});
+  return {
+      .selected = newNoteIdentity(definition, result.noteId),
+      .sound = newNoteIdentity(definition, result.soundNoteId),
+      .judge = {.present = result.hasJudge,
+                .judgement = result.judge.judgement,
+                .diffMicros = result.judge.Diff},
+      .replay = newReplaySummary(result.hasReplayEvent, result.replayEvent,
+                                 definition),
+  };
+}
+
+void testTwoLaneEqualTimePressMatchesCurrentController() {
+  for (const auto priority : {
+           AppSettings::NotePriorityMode::Lowest,
+           AppSettings::NotePriorityMode::Duration,
+           AppSettings::NotePriorityMode::Combo,
+           AppSettings::NotePriorityMode::Score}) {
+    const auto oldResult = oldTwoLaneEqualTimePress(priority);
+    const auto newResult = newTwoLaneEqualTimePress(priority);
+    require(oldResult == newResult,
+            "equal-time two-lane press matches current controller outcome");
+  }
+}
+
 void testParitySummaryDetectsPerturbedIdentityAndPayload() {
   const auto baseline =
       oldPress(0, AppSettings::NotePriorityMode::Lowest);
@@ -980,8 +1051,8 @@ int main() {
   testRejectedTransactionsResetLatestSearchStats();
   testCompensationAndPriorityMatchCurrentRules();
   testPracticeRangeIsHalfOpenBeforeLaneMutation();
-  testEqualTimeKeepsMainLanePrecedence();
-  testEqualTimeKeepsMainLanePrecedenceForLatePriorityModes();
+  testEqualTimeLowestKeepsMainLanePrecedence();
+  testEqualTimeFollowsLatePriorityModes();
   testReleaseSearchStopsAtPracticeEnd();
   testPressCommitsStateAndSoundTogether();
   testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
@@ -991,6 +1062,7 @@ int main() {
   testChargeScratchRequiresBackspinRelease();
   testParitySummaryDetectsPerturbedIdentityAndPayload();
   testEmptyValidLaneMatchesCurrentController();
+  testTwoLaneEqualTimePressMatchesCurrentController();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
   return 0;
