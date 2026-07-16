@@ -431,6 +431,7 @@ void SettingsScene::cleanupScene() {
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
+  startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
   floatingLaneCoverModeText = nullptr;
@@ -449,6 +450,7 @@ void SettingsScene::cleanupScene() {
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   prepMetronomeModeButton = nullptr;
+  startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
   floatingLaneCoverModeButton = nullptr;

@@ -173,6 +173,13 @@ class PodsCacheTests(unittest.TestCase):
             capture_output=True,
         )
 
+    def cache_key(self, podfile: Path, pod_lock: Path, gem_lock: Path) -> str:
+        result = self.bash(
+            f'ios_pods_cache_key "{podfile}" "{pod_lock}" "{gem_lock}"'
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return result.stdout.strip()
+
     @staticmethod
     def make_valid_pods(directory: Path, lock: Path, marker: str) -> None:
         (directory / "Pods.xcodeproj").mkdir(parents=True)
@@ -207,6 +214,28 @@ class PodsCacheTests(unittest.TestCase):
             self.assertFalse(local.is_symlink())
             self.assertEqual("cached", (local / "marker.txt").read_text())
             self.assertEqual(marker_time, int((local / "marker.txt").stat().st_mtime))
+
+    def test_cache_key_changes_when_only_podfile_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            podfile = root / "Podfile"
+            pod_lock = root / "Podfile.lock"
+            gem_lock = root / "Gemfile.lock"
+            podfile.write_text("platform :ios, '13.4'\n", encoding="utf-8")
+            pod_lock.write_text("PODS:\n", encoding="utf-8")
+            gem_lock.write_text("GEM\n", encoding="utf-8")
+            original = self.cache_key(podfile, pod_lock, gem_lock)
+
+            podfile.write_text(
+                "platform :ios, '13.4'\npost_install { |installer| installer }\n",
+                encoding="utf-8",
+            )
+
+            self.assertNotEqual(original, self.cache_key(podfile, pod_lock, gem_lock))
+
+    def test_ios_init_includes_podfile_in_cache_key(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn('ios_pods_cache_key "${IOS_DIR}/Podfile"', script)
 
     def test_invalid_source_does_not_replace_existing_cache(self):
         with tempfile.TemporaryDirectory() as temp:

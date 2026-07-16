@@ -2,6 +2,7 @@
 #include "audio/AudioWrapper.h"
 #include "audio/ChartAudioRenderer.h"
 #include "audio/Jukebox.h"
+#include "audio/PrepMetronomeSound.h"
 
 #include <array>
 #include <cmath>
@@ -868,6 +869,20 @@ int main() {
                 2.0f,
                 "offline chart audio advances two source frames at double "
                 "speed");
+    const auto accent = prep_metronome_audio::makeClick(true, 48000, 2);
+    const auto regular = prep_metronome_audio::makeClick(false, 48000, 2);
+    require(accent.size() == 4320 && regular.size() == 4320,
+            "prep clicks are 45 ms stereo at 48 kHz");
+    require(*std::max_element(accent.begin(), accent.end()) >
+                *std::max_element(regular.begin(), regular.end()),
+            "accent click is stronger than regular click");
+    require(chart_audio::outputTimeMicrosFromTimelineStart(
+                0, -4000000, audio::PlaybackRate{.percent = 100}) == 4000000,
+            "offline audio shifts chart zero after preparation");
+
+    require(chart_audio::replayEventRawTimeMicros(1120000, 120000) ==
+                1000000,
+            "offline replay keysounds convert gameplay time to raw time");
 
     const ScheduledAudioEvent defaultEvent;
     require(defaultEvent.wav == bms_parser::Parser::NoWav &&

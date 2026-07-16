@@ -18,6 +18,7 @@
 #include "ChartAssetExtensions.h"
 #include "JukeboxLifecycle.h"
 #include "JukeboxSoundResources.h"
+#include "PrepMetronomeSound.h"
 #include "bgfx/bgfx.h"
 #include <stb_image.h>
 #include <algorithm>
@@ -53,8 +54,6 @@ const path_t kClubKickPath = PATH("@club_kick");
 const path_t kClubClapPath = PATH("@club_clap");
 constexpr int kPrepMetronomeSampleRate = 48000;
 constexpr int kPrepMetronomeChannels = 2;
-constexpr double kPrepMetronomeClickSeconds = 0.045;
-constexpr double kPrepMetronomePi = 3.14159265358979323846;
 
 bool scheduledAudioEventLess(const ScheduledAudioEvent &left,
                              const ScheduledAudioEvent &right) {
@@ -66,26 +65,6 @@ bool scheduledAudioEventLess(const ScheduledAudioEvent &left,
   }
   return static_cast<std::uint8_t>(left.bus) <
          static_cast<std::uint8_t>(right.bus);
-}
-
-std::vector<short> makePrepMetronomeClick(double frequency, double amplitude) {
-  const int frames = static_cast<int>(std::lround(
-      static_cast<double>(kPrepMetronomeSampleRate) *
-      kPrepMetronomeClickSeconds));
-  std::vector<short> pcm(static_cast<size_t>(frames) *
-                         kPrepMetronomeChannels);
-  for (int frame = 0; frame < frames; ++frame) {
-    const double t = static_cast<double>(frame) /
-                     static_cast<double>(kPrepMetronomeSampleRate);
-    const double envelope = std::exp(-t * 90.0);
-    const double sample =
-        std::sin(2.0 * kPrepMetronomePi * frequency * t) * envelope * amplitude;
-    const auto value = static_cast<short>(
-        std::clamp(sample, -1.0, 1.0) * static_cast<double>(INT16_MAX));
-    pcm[static_cast<size_t>(frame) * 2] = value;
-    pcm[static_cast<size_t>(frame) * 2 + 1] = value;
-  }
-  return pcm;
 }
 
 std::vector<short> generatedPcm(const club_beat::StereoSound &sound) {
@@ -2908,10 +2887,14 @@ void Jukebox::playOverlappingAudioAt(long long micro) {
 
 void Jukebox::ensurePrepMetronomeSoundsLoaded() {
   audio.loadGeneratedSound(kPrepMetronomeAccentPath,
-                           makePrepMetronomeClick(1760.0, 0.65),
+                           prep_metronome_audio::makeClick(
+                               true, kPrepMetronomeSampleRate,
+                               kPrepMetronomeChannels),
                            kPrepMetronomeChannels, kPrepMetronomeSampleRate);
   audio.loadGeneratedSound(kPrepMetronomeRegularPath,
-                           makePrepMetronomeClick(1100.0, 0.5),
+                           prep_metronome_audio::makeClick(
+                               false, kPrepMetronomeSampleRate,
+                               kPrepMetronomeChannels),
                            kPrepMetronomeChannels, kPrepMetronomeSampleRate);
   wavTableAbs[kPrepMetronomeAccentWav] = kPrepMetronomeAccentPath;
   wavTableAbs[kPrepMetronomeRegularWav] = kPrepMetronomeRegularPath;

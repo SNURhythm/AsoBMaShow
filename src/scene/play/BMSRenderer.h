@@ -18,6 +18,7 @@
 #include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
 #include "Pacemaker.h"
+#include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
 #include <array>
 #include <atomic>
@@ -168,6 +169,9 @@ private:
   std::vector<size_t> whiteKeyLaneIndices;
   std::vector<size_t> blueKeyLaneIndices;
   std::vector<size_t> scratchLaneIndices;
+  std::vector<int> startLaneIndicatorLanes;
+  std::unordered_map<int, start_lane_indicator::ColorRole>
+      startLaneIndicatorColorRoles;
 
   float noteImageHeight = 0;
   float noteImageWidth = 0;
@@ -241,6 +245,7 @@ private:
   bool touchVisualizationEnabled = true;
   bool replayGhostRenderingEnabled = true;
   bool autoPlayMarkVisible = false;
+  bool startLaneIndicatorsVisible = false;
 
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
@@ -282,6 +287,7 @@ private:
   void publishJudgementCounterSnapshot(
       const JudgementCounterSnapshot &snapshot);
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
+  void drawStartLaneIndicators();
   void drawLaneCover();
   void layoutLaneCoverVisibleTimeText();
   void drawTitle(RenderContext &context) const;
@@ -427,6 +433,8 @@ public:
   void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);
+  void setStartLaneIndicators(std::vector<int> lanes);
+  void setStartLaneIndicatorsVisible(bool visible);
   void setLiveTouchPoint(long long fingerId, ReplayTouchAction action, float x,
                          float y, long long songTimeMicros);
   void clearLiveTouchPoints();

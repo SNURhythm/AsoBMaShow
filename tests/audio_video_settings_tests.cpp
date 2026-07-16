@@ -180,6 +180,7 @@ bool appSettingsSanitizesAudioVideoSettings() {
   value.audioVideo.audio.outputDeviceId = "missing:app-device";
   value.audioVideo.audio.requestedBufferFrames = 15;
   value.audioVideo.video.frameCap = 14;
+  value.noteStartPositionPercent = 100;
   value.sanitize();
 
   ASSERT_TRUE(value.audioVideo.audio.outputDeviceId == "missing:app-device",
@@ -188,6 +189,13 @@ bool appSettingsSanitizesAudioVideoSettings() {
               "AppSettings sanitizes buffer frames");
   ASSERT_TRUE(value.audioVideo.video.frameCap == 0,
               "AppSettings sanitizes frame cap");
+  ASSERT_TRUE(value.noteStartPositionPercent == 100,
+              "AppSettings accepts full lane cover");
+
+  value.noteStartPositionPercent = 101;
+  value.sanitize();
+  ASSERT_TRUE(value.noteStartPositionPercent == 100,
+              "AppSettings clamps lane cover above 100 percent");
 
   return true;
 }

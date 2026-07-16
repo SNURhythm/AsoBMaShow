@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ios_pods_cache_key() {
+  [ "$#" -eq 3 ] || return 2
+  local podfile="$1"
+  local pod_lock_file="$2"
+  local gem_lock_file="$3"
+  local podfile_hash
+  local pod_lock_hash
+  local gem_lock_hash
+
+  podfile_hash="$(shasum "${podfile}" | awk '{ print $1 }')"
+  pod_lock_hash="$(shasum "${pod_lock_file}" | awk '{ print $1 }')"
+  gem_lock_hash="$(shasum "${gem_lock_file}" | awk '{ print $1 }')"
+  printf '%s-%s-%s\n' "${podfile_hash}" "${pod_lock_hash}" "${gem_lock_hash}"
+}
+
 ios_pods_cache_valid() {
   [ "$#" -eq 2 ] || return 2
   local pods_dir="$1"

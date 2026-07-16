@@ -8,6 +8,9 @@
 #include "path.h"
 #include "repositories/ChartStorageIdentity.h"
 #include "targets.h"
+#if TARGET_OS_ANDROID
+#include "AndroidNatives.h"
+#endif
 
 #include <SDL2/SDL.h>
 

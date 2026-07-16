@@ -109,10 +109,12 @@ Delete the tracked `Pods` symlink and leave `Pods/` ignored. Keep exactly one
 workspace reference: `group:Pods/Pods.xcodeproj`. No absolute user, cache, or
 worktree path may be written to the workspace.
 
-The external lock-hashed cache remains an optimization, but it is no longer
+The external input-hashed cache remains an optimization, but it is no longer
 mounted into the project as a symlink. `ios_init.sh` follows this flow:
 
-1. Hash `Podfile.lock` and `Gemfile.lock` to select the existing cache key.
+1. Hash `Podfile`, `Podfile.lock`, and `Gemfile.lock` to select the cache key.
+   This invalidates generated Pods projects and xcconfigs when hooks or build
+   settings change without altering dependency resolution.
 2. If the cache contains a matching `Manifest.lock` and a complete
    `Pods.xcodeproj`, restore it into a normal local `Pods/` directory while
    preserving timestamps and skip `pod install`.

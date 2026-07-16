@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../PrepMetronome.h"
 #include "../ReplayData.h"
 #include "../bms_parser.hpp"
 
@@ -18,6 +19,17 @@ inline constexpr int kOutputChannels = 2;
 inline long long outputTimeMicros(long long chartTimeMicros,
                                   audio::PlaybackRate playback) {
   return playback.realMicrosFromChart(chartTimeMicros);
+}
+
+inline long long outputTimeMicrosFromTimelineStart(
+    long long chartTimeMicros, long long timelineStartMicros,
+    audio::PlaybackRate playback) {
+  return outputTimeMicros(chartTimeMicros - timelineStartMicros, playback);
+}
+
+inline long long replayEventRawTimeMicros(long long gameplayTimeMicros,
+                                          long long audioOffsetMicros) {
+  return gameplayTimeMicros - audioOffsetMicros;
 }
 
 inline long double
@@ -51,6 +63,8 @@ struct RenderOptions {
   audio::PlaybackRate playback;
   bool clubMode = false;
   long long keySoundOffsetMicros = 0;
+  long long timelineStartMicros = 0;
+  const prep_metronome::PrepMetronomePlan *prepMetronomePlan = nullptr;
   std::atomic_bool *isCancelled = nullptr;
   LogCallback log;
 };

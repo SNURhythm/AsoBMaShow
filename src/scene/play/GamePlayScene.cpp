@@ -778,23 +778,27 @@ bool GamePlayScene::reset() {
   const long long audioSeekPosition = getAudioSeekPositionMicros();
   if (options.practiceSession != nullptr) {
     const auto &configuration = options.practiceSession->configuration();
-    practiceCountInPlan = prep_metronome::buildPracticeCountInPlan(
-        *chart, configuration.startMicros, configuration.countInBeats,
-        configuration.playback);
+    preparationPlan = preparation::buildPracticePlan(
+        *chart, context.settings.startLaneIndicatorsEnabled,
+        configuration.startMicros, configuration.endMicros,
+        configuration.countInBeats, configuration.playback);
   } else {
     const bool prepMetronomeEnabled = gameplay_timing::shouldApplyPrepMetronome(
         context.settings.prepMetronomeEnabled, options.practiceLeadInMicros,
         startPositionMicros);
-    practiceCountInPlan = prep_metronome::buildPlan(
-        *chart, prepMetronomeEnabled, false, audioSeekPosition);
+    preparationPlan = preparation::buildNormalPlan(
+        *chart, context.settings.startLaneIndicatorsEnabled,
+        prepMetronomeEnabled, audioSeekPosition, startPositionMicros,
+        std::nullopt, options.playback);
+  }
+  if (renderer != nullptr) {
+    renderer->setStartLaneIndicators(preparationPlan.laneIndicator.lanes);
   }
   context.jukebox.schedule(
       *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,
-      practiceCountInPlan.enabled ? &practiceCountInPlan : nullptr,
+      preparationPlan.metronome.enabled ? &preparationPlan.metronome : nullptr,
       options.clubMode);
-  context.jukebox.play(practiceCountInPlan.enabled
-                           ? practiceCountInPlan.startTimeMicros
-                           : audioSeekPosition);
+  context.jukebox.play(preparationPlan.playbackStartTimeMicros);
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
@@ -1199,8 +1203,24 @@ bool GamePlayScene::practiceReplayEventAllowed(
   if (!range.has_value()) {
     return true;
   }
+  const long long preparationStartMicros = getGameplayTimeMicros(
+      preparationPlan.laneIndicator.startTimeMicros);
+  const long long preparationEndMicros =
+      getGameplayTimeMicros(preparationPlan.laneIndicator.endTimeMicros);
+  const bool preparationInput =
+      event.noteTimeMicros < 0 && event.judgement == None &&
+      event.songTimeMicros >= preparationStartMicros &&
+      event.songTimeMicros < preparationEndMicros;
+  if (preparationInput) {
+    return true;
+  }
   return range->contains(event.songTimeMicros) &&
          (event.noteTimeMicros < 0 || range->contains(event.noteTimeMicros));
+}
+
+bool GamePlayScene::preparationIndicatorActive(
+    long long rawSongTimeMicros) const {
+  return preparationPlan.indicatorVisibleAt(rawSongTimeMicros);
 }
 
 bool GamePlayScene::isCoursePlayback() const {
@@ -1483,9 +1503,9 @@ void GamePlayScene::beginReplayRecording() {
       static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
   recordedReplay.touchSamples.reserve(1024);
   recordedReplay.laneCoverEvents.reserve(128);
-  const auto range = practiceNoteRange();
   appendReplayLaneCoverEvent(effectiveNoteStartPositionPercent(),
-                             range.has_value() ? range->startMicros : 0,
+                             getGameplayTimeMicros(
+                                 preparationPlan.playbackStartTimeMicros),
                              false);
 }
 
@@ -1590,7 +1610,8 @@ void GamePlayScene::updatePracticeHud(long long chartTimeMicros) {
   }
   const auto &configuration = options.practiceSession->configuration();
   const auto remaining = std::ranges::count_if(
-      practiceCountInPlan.clicks, [chartTimeMicros](const auto &click) {
+      preparationPlan.metronome.clicks,
+      [chartTimeMicros](const auto &click) {
         return click.timeMicros > chartTimeMicros;
       });
   std::string text =
@@ -1700,7 +1721,8 @@ void GamePlayScene::applyTimelineBpm(const bms_parser::TimeLine *timeline) {
 
 long long
 GamePlayScene::getGameplayTimeMicros(long long rawSongTimeMicros) const {
-  return rawSongTimeMicros + getAudioOffsetMicros();
+  return gameplay_timing::gameplayTimeFromRawSongTime(
+      rawSongTimeMicros, getAudioOffsetMicros());
 }
 
 long long GamePlayScene::getInputSongTimeMicros(long long songTimeMicros,
@@ -1926,8 +1948,12 @@ void GamePlayScene::update(float dt) {
   updatePracticeHud(gameplayTimeMicros);
   touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
-    processReplayKeySounds(rawSongTimeMicros);
+    processReplayKeySounds(gameplayTimeMicros);
     processReplayEvents(gameplayTimeMicros);
+    processReplayLaneCoverEvents(gameplayTimeMicros);
+  }
+  if (preparationIndicatorActive(rawSongTimeMicros)) {
+    return;
   }
   updateHellChargeGauge(gameplayTimeMicros);
   if (finishIfGaugeFailed()) {
@@ -1936,9 +1962,6 @@ void GamePlayScene::update(float dt) {
   checkPassedTimeline(gameplayTimeMicros);
   if (finishIfGaugeFailed()) {
     return;
-  }
-  if (isReplayPlayback()) {
-    processReplayLaneCoverEvents(gameplayTimeMicros);
   }
   const auto completePracticeSection = [this]() {
     finalizePracticeRangeMisses();
@@ -1998,8 +2021,10 @@ void GamePlayScene::renderScene() {
     practiceRestartButton->setPositionNoLayout(rendering::window_width - 88,
                                                98);
   }
-  long long gameplayTimeMicros =
-      getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  renderer->setStartLaneIndicatorsVisible(
+      preparationIndicatorActive(rawSongTimeMicros));
+  long long gameplayTimeMicros = getGameplayTimeMicros(rawSongTimeMicros);
   if (const auto range = practiceNoteRange();
       range.has_value() && gameplayTimeMicros >= range->endMicros) {
     gameplayTimeMicros = range->endMicros - 1;
@@ -2261,8 +2286,21 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (laneInputController == nullptr) {
     return nullptr;
   }
+  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  if (preparationIndicatorActive(rawSongTimeMicros)) {
+    auto pressedIt = lanePressed.find(mainLane);
+    if (pressedIt == lanePressed.end() || pressedIt->second) {
+      return nullptr;
+    }
+    pressedIt->second = true;
+    renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
+    updateLaneStateText();
+    recordPreparationLaneEvent(ReplayEventAction::Press, mainLane,
+                               getGameplayTimeMicros(rawSongTimeMicros));
+    return nullptr;
+  }
   const RhythmLaneInputController::InputContext inputContext{
-      .songTimeMicros = getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
       .laneBeamTimeMicros = nowMicros(),
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
@@ -2295,8 +2333,21 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
   if (laneInputController == nullptr) {
     return nullptr;
   }
+  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  if (preparationIndicatorActive(rawSongTimeMicros)) {
+    auto pressedIt = lanePressed.find(lane);
+    if (pressedIt == lanePressed.end() || !pressedIt->second) {
+      return nullptr;
+    }
+    pressedIt->second = false;
+    renderer->onLaneReleased(lane, nowMicros());
+    updateLaneStateText();
+    recordPreparationLaneEvent(ReplayEventAction::Release, lane,
+                               getGameplayTimeMicros(rawSongTimeMicros));
+    return nullptr;
+  }
   const RhythmLaneInputController::InputContext inputContext{
-      .songTimeMicros = getGameplayTimeMicros(context.jukebox.getTimeMicros()),
+      .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
       .laneBeamTimeMicros = nowMicros(),
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
@@ -2527,7 +2578,7 @@ GamePlayScene::findReplayNote(const ReplayEvent &event) const {
   return it == replayNoteLookup.end() ? nullptr : it->second;
 }
 
-void GamePlayScene::processReplayKeySounds(long long rawSongTimeMicros) {
+void GamePlayScene::processReplayKeySounds(long long gameplayTimeMicros) {
   if (!isReplayPlayback() || options.replayData == nullptr ||
       options.autoKeySound) {
     return;
@@ -2536,7 +2587,7 @@ void GamePlayScene::processReplayKeySounds(long long rawSongTimeMicros) {
   const auto &events = options.replayData->events;
   while (replayKeySoundCursor < events.size()) {
     const auto &event = events[replayKeySoundCursor];
-    if (event.songTimeMicros > rawSongTimeMicros) {
+    if (event.songTimeMicros > gameplayTimeMicros) {
       break;
     }
 
@@ -2877,6 +2928,26 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
   (void)finishIfGaugeFailed();
 }
 
+void GamePlayScene::recordPreparationLaneEvent(ReplayEventAction action,
+                                               int lane,
+                                               long long songTimeMicros) {
+  if (!shouldRecordReplay() || state == nullptr || state->isEnding) {
+    return;
+  }
+  recordedReplay.events.push_back({
+      .action = action,
+      .lane = lane,
+      .noteTimeMicros = -1,
+      .songTimeMicros = songTimeMicros,
+      .judgeTimeMicros = songTimeMicros,
+      .judgement = None,
+      .gauge = state->currentGauge,
+      .gaugeType = state->gaugeType,
+      .combo = state->combo,
+      .score = state->getScore(),
+  });
+}
+
 void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
                                                long long songTimeMicros,
                                                bool resetVisibleTimeReference) {
@@ -2888,7 +2959,7 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
   }
 
   ReplayLaneCoverEvent event;
-  event.songTimeMicros = std::max(0LL, songTimeMicros);
+  event.songTimeMicros = songTimeMicros;
   event.noteStartPositionPercent =
       std::clamp(noteStartPositionPercent,
                  AppSettings::kMinNoteStartPositionPercent,

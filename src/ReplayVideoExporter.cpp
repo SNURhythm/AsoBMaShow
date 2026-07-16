@@ -3,6 +3,7 @@
 #include "ChartPlaybackDuration.h"
 #include "CoursePlaySession.h"
 #include "PlayOptionUtils.h"
+#include "PreparationPlan.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
 #include "ResultPresentationUtils.h"
@@ -19,6 +20,7 @@
 #include "scene/PracticeAnalyticsPresentation.h"
 #include "scene/PracticeAnalyticsView.h"
 #include "scene/play/BMSRenderer.h"
+#include "scene/play/GamePlayTiming.h"
 #include "scene/play/Judge.h"
 #include "skin/DefaultSkin.h"
 #include "view/UiTheme.h"
@@ -297,14 +299,12 @@ long long elapsedMicros(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
-long long gameplayResultTransitionMicrosForReplay(
-    const bms_parser::Chart &chart) {
+long long gameplayEndMicrosForReplay(const bms_parser::Chart &chart) {
   Judge judge(chart.Meta.Rank);
   const auto badWindow = judge.timingWindows.find(Bad);
   const long long latePoorTiming =
       badWindow == judge.timingWindows.end() ? 0LL : badWindow->second.second;
-  return chart_playback_duration::GameplayResultTransitionMicros(
-      chart, latePoorTiming);
+  return chart_playback_duration::GameplayEndMicros(chart, latePoorTiming);
 }
 
 ReplayData replayThroughFailure(const ReplayData &replay,
@@ -330,9 +330,12 @@ ReplayData replayThroughFailure(const ReplayData &replay,
 
 long long courseStageGameplayDurationMicrosForReplay(
     const bms_parser::Chart &chart, long long audioDurationMicros,
-    bool includeResultScreen) {
+    bool includeResultScreen, const preparation::Plan &preparationPlan,
+    long long audioOffsetMicros) {
   const long long transitionDurationMicros =
-      gameplayResultTransitionMicrosForReplay(chart);
+      preparationPlan.realTimeAtGameplayTime(
+          gameplayEndMicrosForReplay(chart), audioOffsetMicros) +
+      chart_playback_duration::kGameplayResultTransitionDelayMicros;
   if (includeResultScreen) {
     return transitionDurationMicros;
   }
@@ -703,16 +706,21 @@ struct ReplayAudioTrackResult {
 
 ReplayAudioTrackResult
 writeReplayAudioTrack(bms_parser::Chart &chart, const ReplayData &replay,
-                      audio::PlaybackRate playback,
+                      const preparation::Plan &preparationPlan,
+                      long long audioOffsetMicros,
                       const std::filesystem::path &path,
                       ReplayVideoExportLog *log) {
   std::atomic_bool isCancelled = false;
   const chart_audio::RenderOptions options{
       .keySoundMode = chart_audio::KeySoundMode::ReplayTiming,
       .replay = &replay,
-      .playback = playback,
+      .playback = preparationPlan.playback,
       .clubMode = replay.provenance.clubMode,
-      .keySoundOffsetMicros = 0,
+      .keySoundOffsetMicros = audioOffsetMicros,
+      .timelineStartMicros = preparationPlan.playbackStartTimeMicros,
+      .prepMetronomePlan = preparationPlan.metronome.enabled
+                               ? &preparationPlan.metronome
+                               : nullptr,
       .isCancelled = &isCancelled,
       .log = [log](const std::string &message) {
         if (log != nullptr) {
@@ -1230,6 +1238,7 @@ void drawReplayResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 struct CourseReplayVideoStage {
   std::unique_ptr<bms_parser::Chart> chart;
   ReplayData replay;
+  preparation::Plan preparationPlan;
   GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
   long long gameplayDurationMicros = 0;
@@ -1238,12 +1247,14 @@ struct CourseReplayVideoStage {
 
   CourseReplayVideoStage(std::unique_ptr<bms_parser::Chart> chart,
                          ReplayData replay,
+                         preparation::Plan preparationPlan,
                          GaugeStateSnapshot initialGaugeState,
                          RhythmState resultState,
                          long long gameplayDurationMicros,
                          long long resultDurationMicros,
                          long long audioDurationMicros)
       : chart(std::move(chart)), replay(std::move(replay)),
+        preparationPlan(std::move(preparationPlan)),
         initialGaugeState(std::move(initialGaugeState)),
         resultState(std::move(resultState)),
         gameplayDurationMicros(gameplayDurationMicros),
@@ -2583,6 +2594,7 @@ private:
 ReplayVideoExportResult
 renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                        const ReplayData &replay, const AppSettings &settings,
+                       const preparation::Plan &preparationPlan,
                        const ReplayVideoExportOptions &options,
                        const std::filesystem::path &wavPath,
                        const std::filesystem::path &outputPath,
@@ -2594,7 +2606,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
-  const audio::PlaybackRate playback = replay.provenance.playback;
+  const long long audioOffsetMicros =
+      static_cast<long long>(settings.audioOffsetMs) * 1000LL;
+  const audio::PlaybackRate playback = preparationPlan.playback;
   const long long gameplayDurationMicros =
       std::max(0LL, requestedGameplayDurationMicros);
 
@@ -2785,6 +2799,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                           initialGaugeState.gaugeProfile);
   renderer.setPlayOptionStatus(replayExportPlayOptionLabel(replay));
   renderer.setReplayData(&replay);
+  renderer.setStartLaneIndicators(preparationPlan.laneIndicator.lanes);
   renderer.setAutoPlayMarkVisible(replay.autoPlay);
   renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
   renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
@@ -2811,8 +2826,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto replayNotes = buildReplayNoteLookup(chart);
   const auto replayAutoReleaseTails = collectReplayAutoReleaseTails(chart);
   size_t replayAutoReleaseTailCursor = 0;
-  const long long scheduledVisualEndMicros = playback.realMicrosFromChart(
-      context.jukebox.getScheduledVisualEndMicros());
+  const long long scheduledVisualEndMicros =
+      preparationPlan.realTimeAtGameplayTime(
+          context.jukebox.getScheduledVisualEndMicros(), audioOffsetMicros);
   const long long visualTailMicros =
       stoppedOnGaugeFailure
           ? 0LL
@@ -3069,16 +3085,18 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   for (size_t frameIndex = 0; frameIndex < gameplayFrameCount; ++frameIndex) {
     const long long videoTimeMicros = static_cast<long long>(
         (static_cast<long double>(frameIndex) * 1000000.0L) / fps);
-    const long long songTimeMicros =
-        playback.chartMicrosFromReal(videoTimeMicros);
-    const long long visualTimeMicros =
-        std::max(0LL, songTimeMicros - visualOffsetMicros);
+    const long long rawSongTimeMicros =
+        preparationPlan.chartTimeAtRealTime(videoTimeMicros);
+    const auto frameTiming = gameplay_timing::frameTiming(
+        rawSongTimeMicros, audioOffsetMicros, visualOffsetMicros);
     while (replayCursor < replay.events.size() &&
-           replay.events[replayCursor].songTimeMicros <= songTimeMicros) {
+           replay.events[replayCursor].songTimeMicros <=
+               frameTiming.gameplayTimeMicros) {
       const auto &event = replay.events[replayCursor];
       const bool appliedHud =
           applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                   visualTimeMicros, replay.gaugeAutoShift,
+                                   frameTiming.visualTimeMicros,
+                                   replay.gaugeAutoShift,
                                    gaugeProfile);
       if (appliedHud && event.judgement != None) {
         applyReplayEventToPacemakerState(pacemakerState, event);
@@ -3093,20 +3111,24 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       ++replayCursor;
     }
     releaseDueReplayLongNoteTails(chart, replayAutoReleaseTails,
-                                  replayAutoReleaseTailCursor, songTimeMicros);
-    applyExportBpm(songTimeMicros);
-    applyReplayLaneCoverEvents(songTimeMicros);
+                                  replayAutoReleaseTailCursor,
+                                  frameTiming.gameplayTimeMicros);
+    applyExportBpm(frameTiming.gameplayTimeMicros);
+    applyReplayLaneCoverEvents(frameTiming.gameplayTimeMicros);
+    renderer.setStartLaneIndicatorsVisible(
+        preparationPlan.indicatorVisibleAt(rawSongTimeMicros));
 
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
-          context.jukebox.renderVisualsAt(songTimeMicros);
+          context.jukebox.renderVisualsAt(frameTiming.bgaTimeMicros);
           bgaBlurPass->execute();
           rendering::renderFullscreenTextureTint(
               bgaBlurPass->outputTexture(), rendering::final_view,
               static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
-          renderer.render(renderContext, visualTimeMicros, songTimeMicros);
+          renderer.render(renderContext, frameTiming.visualTimeMicros,
+                          frameTiming.gameplayTimeMicros);
         })) {
       bgfxCleanup.runNow();
       return {
@@ -3128,8 +3150,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         static_cast<long long>((static_cast<long double>(resultFrameIndex) *
                                 1000000.0L) /
                                fps);
-    const long long songTimeMicros =
-        playback.chartMicrosFromReal(videoTimeMicros);
+    const long long rawSongTimeMicros =
+        preparationPlan.chartTimeAtRealTime(videoTimeMicros);
+    const long long bgaTimeMicros =
+        gameplay_timing::gameplayTimeFromRawSongTime(rawSongTimeMicros,
+                                                     audioOffsetMicros);
     const auto analyticsMode =
         practice_analytics_presentation::analyticsModeForSlideshow(
             videoTimeMicros - gameplayDurationMicros, resultTailMicros);
@@ -3141,7 +3166,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
           bgfx::touch(rendering::bga_layer_view);
-          context.jukebox.renderVisualsAt(songTimeMicros);
+          context.jukebox.renderVisualsAt(bgaTimeMicros);
           bgaBlurPass->execute();
           rendering::renderFullscreenTextureTint(
               bgaBlurPass->outputTexture(), rendering::final_view,
@@ -3235,6 +3260,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   const int width = resolvedOptions.width;
   const int height = resolvedOptions.height;
   const int fps = resolvedOptions.fps;
+  const long long audioOffsetMicros =
+      static_cast<long long>(settings.audioOffsetMs) * 1000LL;
 
   if (width > UINT16_MAX || height > UINT16_MAX) {
     return {.success = false,
@@ -3597,7 +3624,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     ScopedChartNoteReset chartReset(chart);
     Judge judge(chart.Meta.Rank);
     BMSRenderer renderer(&chart, judge.timingWindows,
-                         settings.visibleTimeGreenNumber);
+                         settings.visibleTimeGreenNumber, true,
+                         stage.preparationPlan.playback);
     renderer.setVisibleTimeBpmStrategy(settings.visibleTimeBpmStrategy);
     renderer.setVisibleTimeUseMilliseconds(settings.visibleTimeUseMilliseconds);
     renderer.setPlayAreaWidth(
@@ -3650,6 +3678,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                             stage.initialGaugeState.gaugeProfile);
     renderer.setPlayOptionStatus(replayExportPlayOptionLabel(stageReplay));
     renderer.setReplayData(&stageReplay);
+    renderer.setStartLaneIndicators(
+        stage.preparationPlan.laneIndicator.lanes);
     renderer.setTouchVisualizationEnabled(resolvedOptions.renderTouchPoints);
     renderer.setReplayGhostRenderingEnabled(resolvedOptions.renderReplayGhosts);
 
@@ -3697,17 +3727,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     }
 
     for (size_t frame = 0; frame < gameplayFrameCount; ++frame) {
-      const long long songTimeMicros = static_cast<long long>(
+      const long long stageRealTimeMicros = static_cast<long long>(
           (static_cast<long double>(frame) * 1000000.0L) / fps);
-      const long long visualTimeMicros =
-          std::max(0LL, songTimeMicros - visualOffsetMicros);
+      const long long rawSongTimeMicros =
+          stage.preparationPlan.chartTimeAtRealTime(stageRealTimeMicros);
+      const auto frameTiming = gameplay_timing::frameTiming(
+          rawSongTimeMicros, audioOffsetMicros, visualOffsetMicros);
       while (replayCursor < stageReplay.events.size() &&
              stageReplay.events[replayCursor].songTimeMicros <=
-                 songTimeMicros) {
+                 frameTiming.gameplayTimeMicros) {
         const auto &event = stageReplay.events[replayCursor];
         const bool appliedHud =
             applyReplayEventForVideo(renderer, chart, replayNotes, event,
-                                     visualTimeMicros, replay.gaugeAutoShift,
+                                     frameTiming.visualTimeMicros,
+                                     replay.gaugeAutoShift,
                                      replay.gaugeProfile);
         if (appliedHud && event.judgement != None) {
           replayJudgeCounts[event.judgement]++;
@@ -3719,16 +3752,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         ++replayCursor;
       }
       releaseDueReplayLongNoteTails(chart, replayAutoReleaseTails,
-                                    replayAutoReleaseTailCursor, songTimeMicros);
-      applyExportBpm(songTimeMicros);
-      applyReplayLaneCoverEvents(songTimeMicros);
+                                    replayAutoReleaseTailCursor,
+                                    frameTiming.gameplayTimeMicros);
+      applyExportBpm(frameTiming.gameplayTimeMicros);
+      applyReplayLaneCoverEvents(frameTiming.gameplayTimeMicros);
+      renderer.setStartLaneIndicatorsVisible(
+          stage.preparationPlan.indicatorVisibleAt(rawSongTimeMicros));
 
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                                [&]() {
                                  bgfx::touch(rendering::clear_view);
                                  bgfx::touch(rendering::bga_view);
                                  bgfx::touch(rendering::bga_layer_view);
-                                 context.jukebox.renderVisualsAt(songTimeMicros);
+                                 context.jukebox.renderVisualsAt(
+                                     frameTiming.bgaTimeMicros);
                                  bgaBlurPass->execute();
                                  rendering::renderFullscreenTextureTint(
                                      bgaBlurPass->outputTexture(),
@@ -3736,9 +3773,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      static_cast<float>(
                                          settings.bgaBrightnessPercent) /
                                          100.0f);
-                                 renderer.render(renderContext,
-                                                 visualTimeMicros,
-                                                 songTimeMicros);
+                                 renderer.render(
+                                     renderContext,
+                                     frameTiming.visualTimeMicros,
+                                     frameTiming.gameplayTimeMicros);
                                })) {
         bgfxCleanup.runNow();
         return {.success = false,
@@ -3755,6 +3793,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           (static_cast<long double>(frame) * 1000000.0L) / fps);
       const long long stageVideoMicros =
           stage.gameplayDurationMicros + resultOffsetMicros;
+      const long long stageChartTimeMicros =
+          stage.preparationPlan.chartTimeAtRealTime(stageVideoMicros);
+      const long long stageBgaTimeMicros =
+          gameplay_timing::gameplayTimeFromRawSongTime(
+              stageChartTimeMicros, audioOffsetMicros);
       const auto analyticsMode =
           practice_analytics_presentation::analyticsModeForSlideshow(
               resultOffsetMicros, stage.resultDurationMicros);
@@ -3768,7 +3811,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                  bgfx::touch(rendering::clear_view);
                                  bgfx::touch(rendering::bga_view);
                                  bgfx::touch(rendering::bga_layer_view);
-                                 context.jukebox.renderVisualsAt(stageVideoMicros);
+                                 context.jukebox.renderVisualsAt(
+                                     stageBgaTimeMicros);
                                  bgaBlurPass->execute();
                                  rendering::renderFullscreenTextureTint(
                                      bgaBlurPass->outputTexture(),
@@ -3811,12 +3855,18 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         (static_cast<long double>(frame) * 1000000.0L) / fps);
     const long long stageVideoMicros =
         finalStageVisualBaseMicros + resultOffsetMicros;
+    const long long stageChartTimeMicros =
+        stages.back().preparationPlan.chartTimeAtRealTime(stageVideoMicros);
+    const long long stageBgaTimeMicros =
+        gameplay_timing::gameplayTimeFromRawSongTime(
+            stageChartTimeMicros, audioOffsetMicros);
     if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                              [&]() {
                                bgfx::touch(rendering::clear_view);
                                bgfx::touch(rendering::bga_view);
                                bgfx::touch(rendering::bga_layer_view);
-                               context.jukebox.renderVisualsAt(stageVideoMicros);
+                               context.jukebox.renderVisualsAt(
+                                   stageBgaTimeMicros);
                                bgaBlurPass->execute();
                                rendering::renderFullscreenTextureTint(
                                    bgaBlurPass->outputTexture(),
@@ -3991,13 +4041,19 @@ ReplayVideoExporter::Export(ApplicationContext &context,
 
   const auto wavPath = tempDir / "audio.wav";
   const auto outputPath = outputDir / (baseName + ".mp4");
+  const preparation::Plan preparationPlan = preparation::buildNormalPlan(
+      *chart, context.settings.startLaneIndicatorsEnabled,
+      context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
+      replay.provenance.playback);
+  const long long audioOffsetMicros =
+      static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
 
   replayExportLog(exportLog, "Replay export audio: %s",
                   fspath_to_utf8(wavPath).c_str());
   reportReplayExportProgress(resolvedOptions, 0.02, "Building audio track");
   const auto audioStart = std::chrono::steady_clock::now();
   auto audioResult = writeReplayAudioTrack(
-      *chart, replay, replay.provenance.playback, wavPath, exportLog);
+      *chart, replay, preparationPlan, audioOffsetMicros, wavPath, exportLog);
   if (!audioResult.success) {
     replayExportLog(exportLog, "Replay export audio failed: %s",
                     audioResult.message.c_str());
@@ -4016,12 +4072,15 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const auto videoStart = std::chrono::steady_clock::now();
   const auto failureMicros = replay_result::FindGaugeFailureMicros(
       *chart, replay, GaugeProfile::Standard);
+  const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
+      failureMicros, audioOffsetMicros);
   const long long normalGameplayDurationMicros =
-      replay.provenance.playback.realMicrosFromChart(
-          gameplayResultTransitionMicrosForReplay(*chart));
+      preparationPlan.realTimeAtGameplayTime(
+          gameplayEndMicrosForReplay(*chart), audioOffsetMicros) +
+      chart_playback_duration::kGameplayResultTransitionDelayMicros;
   const long long failureAudioMicros =
-      failureMicros.has_value()
-          ? replay.provenance.playback.realMicrosFromChart(*failureMicros)
+      rawFailureMicros.has_value()
+          ? preparationPlan.realTimeAtChartTime(*rawFailureMicros)
           : normalGameplayDurationMicros;
   const long long failureFrameMicros =
       (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;
@@ -4034,12 +4093,10 @@ ReplayVideoExporter::Export(ApplicationContext &context,
       failureMicros.has_value()
           ? std::min(audioResult.durationMicros, failureAudioMicros)
           : audioResult.durationMicros;
-  auto muxResult =
-      renderReplayVideoToMp4(context, *chart, replay, context.settings,
-                             resolvedOptions, wavPath, outputPath,
-                             gameplayDurationMicros,
-                             requestedAudioDurationMicros,
-                             failureMicros.has_value(), exportLog);
+  auto muxResult = renderReplayVideoToMp4(
+      context, *chart, replay, context.settings, preparationPlan,
+      resolvedOptions, wavPath, outputPath, gameplayDurationMicros,
+      requestedAudioDurationMicros, failureMicros.has_value(), exportLog);
   if (!muxResult.success) {
     replayExportLog(exportLog, "Replay export MP4 failed: %s",
                     muxResult.message.c_str());
@@ -4121,6 +4178,8 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
   stages.reserve(replay.stages.size());
   audioSegments.reserve(replay.stages.size());
   std::optional<GaugeStateSnapshot> carriedGauge;
+  const long long audioOffsetMicros =
+      static_cast<long long>(context.settings.audioOffsetMs) * 1000LL;
 
   for (size_t i = 0; i < replay.stages.size(); ++i) {
     const ReplayData &stageReplay = replay.stages[i].replay;
@@ -4139,11 +4198,16 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
               .message = "Failed to load course replay stage"};
     }
 
+    preparation::Plan stagePreparationPlan = preparation::buildNormalPlan(
+        *chart, context.settings.startLaneIndicatorsEnabled,
+        context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
+        course_rules::kRequiredPlaybackRate);
+
     const auto stageWavPath =
         tempDir / ("stage_" + std::to_string(i + 1) + ".wav");
     const auto audioResult = writeReplayAudioTrack(
-        *chart, stageReplay, course_rules::kRequiredPlaybackRate, stageWavPath,
-        exportLog);
+        *chart, stageReplay, stagePreparationPlan, audioOffsetMicros,
+        stageWavPath, exportLog);
     if (!audioResult.success) {
       removeReplayExportWorkDirectory(tempDir);
       return {.success = false,
@@ -4165,20 +4229,27 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     const auto failureMicros = replay_result::FindGaugeFailureMicros(
         *chart, configuredStageReplay, replay.gaugeProfile,
         carriedGaugeState);
+    const auto rawFailureMicros = gameplay_timing::rawSongTimeFromGameplayTime(
+        failureMicros, audioOffsetMicros);
     const long long normalGameplayDurationMicros =
         courseStageGameplayDurationMicrosForReplay(
             *chart, audioResult.durationMicros,
-            resolvedOptions.includeResultScreen);
+            resolvedOptions.includeResultScreen, stagePreparationPlan,
+            audioOffsetMicros);
     const long long failureFrameMicros =
         (1000000LL + resolvedOptions.fps - 1) / resolvedOptions.fps;
     const long long gameplayDurationMicros =
         failureMicros.has_value()
             ? std::min(normalGameplayDurationMicros,
-                       *failureMicros + failureFrameMicros)
+                       stagePreparationPlan.realTimeAtChartTime(
+                           *rawFailureMicros) +
+                           failureFrameMicros)
             : normalGameplayDurationMicros;
     const long long audioContentDurationMicros =
         failureMicros.has_value()
-            ? std::min(audioResult.durationMicros, *failureMicros)
+            ? std::min(audioResult.durationMicros,
+                       stagePreparationPlan.realTimeAtChartTime(
+                           *rawFailureMicros))
             : gameplayDurationMicros + resultDurationMicros;
     ReplayData exportStageReplay =
         replayThroughFailure(configuredStageReplay, failureMicros);
@@ -4197,6 +4268,7 @@ ReplayVideoExporter::ExportCourseReplay(ApplicationContext &context,
     });
     stages.emplace_back(
         std::move(chart), std::move(exportStageReplay),
+        std::move(stagePreparationPlan),
         initialGaugeState.gaugeSnapshot(), std::move(resultState),
         gameplayDurationMicros,
         resultDurationMicros,

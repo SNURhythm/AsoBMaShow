@@ -63,13 +63,12 @@ install_gems() {
 }
 
 install_pods() {
-  local pod_lock_hash
-  local gem_lock_hash
+  local pods_cache_key
   local pods_cache
 
-  pod_lock_hash="$(shasum "${IOS_DIR}/Podfile.lock" | awk '{ print $1 }')"
-  gem_lock_hash="$(shasum "${IOS_DIR}/Gemfile.lock" | awk '{ print $1 }')"
-  pods_cache="${CACHE_ROOT}/pods/${pod_lock_hash}-${gem_lock_hash}"
+  pods_cache_key="$(ios_pods_cache_key "${IOS_DIR}/Podfile" \
+    "${IOS_DIR}/Podfile.lock" "${IOS_DIR}/Gemfile.lock")"
+  pods_cache="${CACHE_ROOT}/pods/${pods_cache_key}"
 
   if ios_pods_cache_restore "${pods_cache}" "${IOS_DIR}/Pods" \
       "${IOS_DIR}/Podfile.lock"; then

@@ -120,6 +120,7 @@ json settingsToJson(const AppSettings &settings) {
        static_cast<int>(settings.visibleTimeBpmStrategy)},
       {"inputKeysoundEnabled", settings.inputKeysoundEnabled},
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
+      {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
       {"touchVisualizationEnabled", settings.touchVisualizationEnabled},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
@@ -212,6 +213,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
             diagnostics);
+  readValue(document, "startLaneIndicatorsEnabled",
+            settings.startLaneIndicatorsEnabled, diagnostics);
   readValue(document, "showInvisibleNotes", settings.showInvisibleNotes,
             diagnostics);
   readValue(document, "touchVisualizationEnabled",

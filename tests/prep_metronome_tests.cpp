@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <optional>
 
 #define ASSERT_EQ(expected, actual, label)                                     \
   if ((expected) != (actual)) {                                                \
@@ -350,6 +351,30 @@ int main() {
   ASSERT_EQ(-2123000LL,
             gameplay_timing::visualTimeMicros(-2000000LL, 123000LL),
             "negative visual time with offset");
+  const auto exportFrame = gameplay_timing::frameTiming(
+      -2000000LL, 120000LL, 45000LL);
+  ASSERT_EQ(-2000000LL, exportFrame.rawSongTimeMicros,
+            "export frame preserves the raw preparation clock");
+  ASSERT_EQ(-1880000LL, exportFrame.gameplayTimeMicros,
+            "export replay input clock includes the audio offset");
+  ASSERT_EQ(-1880000LL, exportFrame.bgaTimeMicros,
+            "export BGA clock includes the audio offset");
+  ASSERT_EQ(-1925000LL, exportFrame.visualTimeMicros,
+            "export chart rendering includes audio and visual offsets");
+  ASSERT_EQ(-2000000LL,
+            gameplay_timing::rawSongTimeFromGameplayTime(
+                exportFrame.gameplayTimeMicros, 120000LL),
+            "gameplay failure times convert back to the raw export clock");
+  const auto rawFailureTime = gameplay_timing::rawSongTimeFromGameplayTime(
+      std::optional<long long>{1120000LL}, 120000LL);
+  ASSERT_TRUE(rawFailureTime.has_value(),
+              "optional gameplay failure time remains present");
+  ASSERT_EQ(1000000LL, *rawFailureTime,
+            "optional gameplay failure time converts to the raw clock");
+  ASSERT_TRUE(!gameplay_timing::rawSongTimeFromGameplayTime(
+                   std::optional<long long>{}, 120000LL)
+                   .has_value(),
+              "missing gameplay failure time remains missing");
   ASSERT_NEAR(1.0,
               gameplay_timing::leadInBeatDistance(0LL, -2000000LL, 120.0),
               0.000001, "negative lead-in beat distance");

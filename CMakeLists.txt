@@ -535,6 +535,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(prep_metronome_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(prep_metronome_tests PRIVATE cxx_std_23)
 
+    add_executable(preparation_plan_tests
+        tests/preparation_plan_tests.cpp
+        src/PreparationPlan.cpp
+        src/PrepMetronome.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(preparation_plan_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(preparation_plan_tests PRIVATE cxx_std_23)
+
+    add_executable(start_lane_indicator_geometry_tests
+        tests/start_lane_indicator_geometry_tests.cpp
+    )
+    target_include_directories(start_lane_indicator_geometry_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(start_lane_indicator_geometry_tests PRIVATE cxx_std_23)
+
     add_executable(club_beat_tests
         tests/club_beat_tests.cpp
         src/audio/ClubBeat.cpp
@@ -937,6 +954,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
+        src/audio/PrepMetronomeSound.cpp
         src/bms_parser.cpp
     )
     target_include_directories(audio_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -967,6 +985,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioWrapper.cpp
         src/audio/ClubBeat.cpp
         src/audio/Jukebox.cpp
+        src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
         src/bms_parser.cpp
         src/path.cpp
@@ -1617,6 +1636,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     foreach(test_target IN ITEMS
         prep_metronome_tests
+        preparation_plan_tests
+        start_lane_indicator_geometry_tests
         club_beat_tests
         gbattle_tests
         replay_summary_list_tests

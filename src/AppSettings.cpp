@@ -666,6 +666,11 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.prepMetronomeEnabled = parsed;
         }
+      } else if (key == "start_lane_indicators_enabled") {
+        bool parsed = settings.startLaneIndicatorsEnabled;
+        if (parseBool(value, parsed)) {
+          settings.startLaneIndicatorsEnabled = parsed;
+        }
       } else if (key == "show_invisible_notes") {
         bool parsed = settings.showInvisibleNotes;
         if (parseBool(value, parsed)) {
