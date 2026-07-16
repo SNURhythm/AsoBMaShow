@@ -94,6 +94,7 @@ AppSettings makeDistinctSettings() {
       AppSettings::VisibleTimeBpmStrategy::MostPrevalent;
   value.inputKeysoundEnabled = false;
   value.prepMetronomeEnabled = true;
+  value.startLaneIndicatorsEnabled = false;
   value.showInvisibleNotes = true;
   value.touchVisualizationEnabled = false;
   value.archiveChartPreviewEnabled = false;
@@ -174,6 +175,9 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "JSON round trip preserves every setting including audio/video");
   expect(readFile(path).find("\"schemaVersion\": 1") != std::string::npos,
          "saved JSON declares schema version 1");
+  expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
+             std::string::npos,
+         "saved JSON includes the start lane indicator setting");
   expect(readFile(path).find("\"selectedPlaybackRatePercent\": 75") !=
              std::string::npos,
          "saved JSON includes the selected normal-play rate");
@@ -240,6 +244,8 @@ void testPlaybackSelectionSanitizationAndLegacyDefaults() {
   expect(!legacy.settings.gameplayClubModeEnabled &&
              !legacy.settings.musicPlayerClubModeEnabled,
          "legacy settings default both Club modes off");
+  expect(legacy.settings.startLaneIndicatorsEnabled,
+         "settings without the field default start lane indicators on");
 }
 
 void testVersionFixturesAndNoRewrite() {

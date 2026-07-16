@@ -113,6 +113,7 @@ public:
   VisibleTimeBpmStrategy visibleTimeBpmStrategy = VisibleTimeBpmStrategy::Chart;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
+  bool startLaneIndicatorsEnabled = true;
   bool showInvisibleNotes = false;
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;

@@ -82,6 +82,7 @@ void SettingsScene::resetViewState() {
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
+  startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
   floatingLaneCoverModeText = nullptr;
@@ -107,6 +108,7 @@ void SettingsScene::resetViewState() {
   visibleTimeBpmStrategyButton = nullptr;
   keysoundModeButton = nullptr;
   prepMetronomeModeButton = nullptr;
+  startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
   floatingLaneCoverModeButton = nullptr;
@@ -1412,6 +1414,27 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, "Invisible Notes", "Show invisible notes as lane markers.",
       invisibleNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *startLaneIndicatorControls = new View();
+  startLaneIndicatorControls->setFlexDirection(FlexDirection::Column);
+  startLaneIndicatorControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  startLaneIndicatorControls->setAlignItems(YGAlignFlexStart);
+  startLaneIndicatorsModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  startLaneIndicatorsModeButton = makeControlButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      startLaneIndicatorsModeText);
+  startLaneIndicatorsModeButton->setOnClickListener([this]() {
+    context.settings.startLaneIndicatorsEnabled =
+        !context.settings.startLaneIndicatorsEnabled;
+    persistSettings();
+  });
+  startLaneIndicatorControls->addView(startLaneIndicatorsModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Start Lane Indicators",
+      "Show the lanes used by the first playable chord.",
+      startLaneIndicatorControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *touchVisualizationControls = new View();
   touchVisualizationControls->setFlexDirection(FlexDirection::Column);
