@@ -1260,6 +1260,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(gameplay_simulation_tests PRIVATE

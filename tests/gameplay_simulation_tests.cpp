@@ -1,5 +1,6 @@
 #include "scene/play/CompiledGameplayJudge.h"
 #include "scene/play/GameplayDefinition.h"
+#include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
 
 #include "bms_parser.hpp"
@@ -84,10 +85,107 @@ void testDefinitionUsesStableIdsAndLaneIndices() {
   require(definition.laneNotes(99).empty(),
           "unknown lanes return an empty span without allocation");
 }
+
+void testCandidateSelectionIsLaneIndexed() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  for (int index = 0; index < 1'000; ++index) {
+    auto *timeline = addTimeline(*measure, index * 10'000LL);
+    timeline->SetNote(2, new bms_parser::Note(1));
+  }
+  auto *targetTimeline = addTimeline(*measure, 5'000'000);
+  targetTimeline->SetNote(1, new bms_parser::Note(9));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .notePriorityMode = AppSettings::NotePriorityMode::Lowest});
+
+  const auto result = simulation.pressLane(
+      1, 1, {.songTimeMicros = 5'000'000,
+             .laneBeamTimeMicros = 7'000'000});
+  require(result.noteId != gameplay::kInvalidNoteId,
+          "target lane resolves its note");
+  require(simulation.lastSearchStats().notesExamined <= 2,
+          "unrelated lanes are not scanned");
+}
+
+void testCompensationAndPriorityMatchCurrentRules() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *early = addTimeline(*measure, 970'000);
+  early->SetNote(1, new bms_parser::Note(1));
+  auto *exact = addTimeline(*measure, 1'000'000);
+  exact->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .notePriorityMode = AppSettings::NotePriorityMode::Duration});
+  const auto result = simulation.pressLane(
+      1, 2, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 2'000'000});
+  require(definition.note(result.noteId).lane == 2,
+          "duration priority selects the closer compensation-lane note");
+}
+
+void testPracticeRangeIsHalfOpenBeforeLaneMutation() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *inside = addTimeline(*measure, 999'999);
+  inside->SetNote(1, new bms_parser::Note(1));
+  auto *atEnd = addTimeline(*measure, 1'000'000);
+  atEnd->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .allowedNoteRange = gameplay::GameplayTimeRange{
+           .startMicros = 500'000, .endMicros = 1'000'000}});
+  const auto accepted = simulation.pressLane(
+      1, {.songTimeMicros = 999'999, .laneBeamTimeMicros = 2'000'000});
+  const auto rejected = simulation.pressLane(
+      2, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 2'000'001});
+  require(accepted.noteId != gameplay::kInvalidNoteId,
+          "the final microsecond inside practice remains hittable");
+  require(rejected.noteId == gameplay::kInvalidNoteId &&
+              !simulation.lanePressed(2),
+          "the exclusive end blocks selection before lane mutation");
+}
+
+void testEqualTimeKeepsMainLanePrecedence() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(1));
+  timeline->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .notePriorityMode = AppSettings::NotePriorityMode::Lowest});
+  const auto result = simulation.pressLane(
+      2, 1, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 2'000'000});
+  require(definition.note(result.noteId).lane == 2,
+          "equal-time compensation keeps the caller's main lane first");
+}
 } // namespace
 
 int main() {
   testCompiledJudgePreservesResolvedWindows();
   testDefinitionUsesStableIdsAndLaneIndices();
+  testCandidateSelectionIsLaneIndexed();
+  testCompensationAndPriorityMatchCurrentRules();
+  testPracticeRangeIsHalfOpenBeforeLaneMutation();
+  testEqualTimeKeepsMainLanePrecedence();
   return 0;
 }
