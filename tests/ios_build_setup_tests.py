@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+import os
 import subprocess
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -11,6 +13,9 @@ WORKSPACE = ROOT / "ios/Xcode/AsoBMaShow/AsoBMaShow.xcworkspace/contents.xcworks
 SRC_GROUP_ID = "B76AAF3F2DA4A1C400E8327C"
 EXCEPTION_SET_ID = "B76AAF692DA4A1C400E8327C"
 TARGET_ID = "B70027002BF7A8D8000DB8EC"
+DERIVED_DATA_HELPER = ROOT / "scripts/ios_derived_data_path.sh"
+DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
+FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -72,6 +77,56 @@ class IOSBuildSetupTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual("", result.stdout.strip())
+
+
+class DerivedDataPathTests(unittest.TestCase):
+    def resolve(self, root: Path, **environment: str) -> str:
+        env = os.environ.copy()
+        env.update(environment)
+        return subprocess.run(
+            [str(DERIVED_DATA_HELPER), "--root", str(root)],
+            cwd=ROOT,
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    def test_explicit_override_is_returned_exactly(self):
+        self.assertEqual(
+            "/tmp/custom-ios-derived-data",
+            self.resolve(ROOT, IOS_DERIVED_DATA_PATH="/tmp/custom-ios-derived-data"),
+        )
+
+    def test_checkout_path_is_stable_and_isolated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            first = parent / "checkout-a"
+            second = parent / "checkout-b"
+            first.mkdir()
+            second.mkdir()
+            home = parent / "home"
+            home.mkdir()
+            first_path = self.resolve(first, HOME=str(home), IOS_DERIVED_DATA_PATH="")
+            self.assertEqual(
+                first_path,
+                self.resolve(first, HOME=str(home), IOS_DERIVED_DATA_PATH=""),
+            )
+            self.assertNotEqual(
+                first_path,
+                self.resolve(second, HOME=str(home), IOS_DERIVED_DATA_PATH=""),
+            )
+            self.assertTrue(
+                first_path.startswith(
+                    str(home / "Library/Developer/Xcode/DerivedData/AsoBMaShow-FirebaseCI-")
+                )
+            )
+
+    def test_fastlane_and_build_only_share_resolver(self):
+        self.assertIn("ios_derived_data_path.sh", DEPLOY_SCRIPT.read_text())
+        fastfile = FASTFILE.read_text()
+        self.assertIn("ios_derived_data_path.sh", fastfile)
+        self.assertIn("clean: !distribute_to_firebase", fastfile)
 
 
 if __name__ == "__main__":

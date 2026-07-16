@@ -13,6 +13,8 @@
 # Uncomment the line if you want fastlane to automatically update itself
 # update_fastlane
 
+require "open3"
+
 default_platform(:ios)
 
 def github_pull_request_to_develop?
@@ -59,9 +61,14 @@ def firebase_build_number
 end
 
 def firebase_derived_data_path
-  path = ENV["IOS_DERIVED_DATA_PATH"].to_s.strip
-  path = "~/Library/Developer/Xcode/DerivedData/AsoBMaShow-FirebaseCI" if path.empty?
-  File.expand_path(path)
+  repository_root = File.expand_path("../../../..", __dir__)
+  helper = File.join(repository_root, "scripts", "ios_derived_data_path.sh")
+  output, error, status = Open3.capture3(helper)
+  UI.user_error!("Unable to resolve iOS DerivedData path: #{error.strip}") unless status.success?
+
+  path = output.strip
+  UI.user_error!("iOS DerivedData path resolver returned an empty path") if path.empty?
+  path
 end
 
 def app_store_key_id
