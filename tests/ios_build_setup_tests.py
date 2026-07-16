@@ -16,6 +16,8 @@ TARGET_ID = "B70027002BF7A8D8000DB8EC"
 DERIVED_DATA_HELPER = ROOT / "scripts/ios_derived_data_path.sh"
 DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
 FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
+PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
+IOS_INIT = ROOT / "scripts/ios_init.sh"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -127,6 +129,67 @@ class DerivedDataPathTests(unittest.TestCase):
         fastfile = FASTFILE.read_text()
         self.assertIn("ios_derived_data_path.sh", fastfile)
         self.assertIn("clean: !distribute_to_firebase", fastfile)
+
+
+class PodsCacheTests(unittest.TestCase):
+    def bash(self, command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-c", f'source "{PODS_CACHE_HELPER}"; {command}'],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+
+    @staticmethod
+    def make_valid_pods(directory: Path, lock: Path, marker: str) -> None:
+        (directory / "Pods.xcodeproj").mkdir(parents=True)
+        (directory / "Pods.xcodeproj/project.pbxproj").write_text(
+            "// generated pods project\n", encoding="utf-8"
+        )
+        (directory / "Manifest.lock").write_bytes(lock.read_bytes())
+        (directory / "marker.txt").write_text(marker, encoding="utf-8")
+
+    def test_restore_creates_real_local_directory_and_preserves_timestamp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "Podfile.lock"
+            lock.write_text("PODS:\n", encoding="utf-8")
+            cache = root / "cache"
+            local = root / "Pods"
+            self.make_valid_pods(cache, lock, "cached")
+            marker_time = 1_700_000_000
+            os.utime(cache / "marker.txt", (marker_time, marker_time))
+
+            result = self.bash(
+                f'ios_pods_cache_restore "{cache}" "{local}" "{lock}"'
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue(local.is_dir())
+            self.assertFalse(local.is_symlink())
+            self.assertEqual("cached", (local / "marker.txt").read_text())
+            self.assertEqual(marker_time, int((local / "marker.txt").stat().st_mtime))
+
+    def test_invalid_source_does_not_replace_existing_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock = root / "Podfile.lock"
+            lock.write_text("PODS:\n", encoding="utf-8")
+            source = root / "Pods"
+            source.mkdir()
+            cache = root / "cache"
+            self.make_valid_pods(cache, lock, "preserved")
+
+            result = self.bash(
+                f'ios_pods_cache_store "{source}" "{cache}" "{lock}"'
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual("preserved", (cache / "marker.txt").read_text())
+
+    def test_ios_init_uses_copy_cache_instead_of_pods_symlink(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        self.assertIn("ios_pods_cache_restore", script)
+        self.assertIn("ios_pods_cache_store", script)
+        self.assertNotIn('link_cache_dir "${IOS_DIR}/Pods"', script)
 
 
 if __name__ == "__main__":

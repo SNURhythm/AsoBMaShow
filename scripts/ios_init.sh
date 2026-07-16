@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="${ROOT_DIR}/ios/Xcode/AsoBMaShow"
 CACHE_ROOT="${IOS_DEPLOY_CACHE_ROOT:-${HOME}/Library/Caches/AsoBMaShow/ios-deploy}"
 
+# shellcheck source=scripts/ios_pods_cache.sh
+source "${ROOT_DIR}/scripts/ios_pods_cache.sh"
+
 link_cache_dir() {
   local link_path="$1"
   local cache_dir="$2"
@@ -68,10 +71,24 @@ install_pods() {
   gem_lock_hash="$(shasum "${IOS_DIR}/Gemfile.lock" | awk '{ print $1 }')"
   pods_cache="${CACHE_ROOT}/pods/${pod_lock_hash}-${gem_lock_hash}"
 
-  link_cache_dir "${IOS_DIR}/Pods" "${pods_cache}"
+  if ios_pods_cache_restore "${pods_cache}" "${IOS_DIR}/Pods" \
+      "${IOS_DIR}/Podfile.lock"; then
+    echo "Using cached CocoaPods install: ${pods_cache}"
+    return 0
+  fi
 
+  rm -rf "${IOS_DIR}/Pods"
   cd "${IOS_DIR}"
   bundle exec pod install --deployment
+  if ! ios_pods_cache_valid "${IOS_DIR}/Pods" "${IOS_DIR}/Podfile.lock"; then
+    echo "CocoaPods installation is incomplete" >&2
+    return 1
+  fi
+  if ! ios_pods_cache_store "${IOS_DIR}/Pods" "${pods_cache}" \
+      "${IOS_DIR}/Podfile.lock"; then
+    echo "Unable to refresh CocoaPods cache: ${pods_cache}" >&2
+    return 1
+  fi
 }
 
 prepare_bgfx_project
