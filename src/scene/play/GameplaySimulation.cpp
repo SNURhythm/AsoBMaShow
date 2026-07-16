@@ -95,6 +95,9 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
   const auto shouldPrefer = [&](NoteId current, NoteId next) {
     const auto &currentNote = definition_.note(current);
     const auto &nextNote = definition_.note(next);
+    if (currentNote.timingMicros == nextNote.timingMicros) {
+      return false;
+    }
     switch (config_.notePriorityMode) {
     case AppSettings::NotePriorityMode::Duration:
       return std::llabs(currentNote.timingMicros - inputTimeMicros) >
@@ -187,6 +190,11 @@ GameplaySimulation::selectReleaseCandidate(int lane,
     const auto &note = definition_.note(id);
     const auto &state = noteStates_[id];
     ++lastSearchStats_.notesExamined;
+    if (config_.allowedNoteRange.has_value() &&
+        note.timingMicros >= config_.allowedNoteRange->endMicros) {
+      runtime->cursor = ids.size();
+      return kInvalidNoteId;
+    }
     if (state.played || state.dead || note.timingMicros < poorCutoff) {
       runtime->cursor = index + 1;
       continue;

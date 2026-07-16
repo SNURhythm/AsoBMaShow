@@ -178,6 +178,62 @@ void testEqualTimeKeepsMainLanePrecedence() {
   require(definition.note(result.noteId).lane == 2,
           "equal-time compensation keeps the caller's main lane first");
 }
+
+int selectedEqualTimeLane(AppSettings::NotePriorityMode priorityMode) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(1));
+  timeline->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .notePriorityMode = priorityMode});
+  const auto result = simulation.pressLane(
+      2, 1, {.songTimeMicros = 1'100'000,
+             .laneBeamTimeMicros = 2'000'000});
+  return definition.note(result.noteId).lane;
+}
+
+void testEqualTimeKeepsMainLanePrecedenceForLatePriorityModes() {
+  const int comboLane =
+      selectedEqualTimeLane(AppSettings::NotePriorityMode::Combo);
+  const int scoreLane =
+      selectedEqualTimeLane(AppSettings::NotePriorityMode::Score);
+  require(comboLane == 2 && scoreLane == 2,
+          "equal-time main-lane precedence survives Combo and Score priority");
+}
+
+void testReleaseSearchStopsAtPracticeEnd() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  for (int index = 0; index < 1'000; ++index) {
+    auto *timeline = addTimeline(*measure, 1'000'000 + index * 10'000LL);
+    timeline->SetNote(1, new bms_parser::Note(1));
+  }
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .allowedNoteRange = gameplay::GameplayTimeRange{
+           .startMicros = 0, .endMicros = 1'000'000}});
+  const gameplay::GameplayInputContext context{
+      .songTimeMicros = 999'999, .laneBeamTimeMicros = 2'000'000};
+  const auto first = simulation.releaseLane(1, context);
+  const auto firstNotesExamined = simulation.lastSearchStats().notesExamined;
+  const auto second = simulation.releaseLane(1, context);
+  const auto secondNotesExamined = simulation.lastSearchStats().notesExamined;
+
+  require(first.noteId == gameplay::kInvalidNoteId &&
+              second.noteId == gameplay::kInvalidNoteId,
+          "notes at the practice end remain excluded from release selection");
+  require(firstNotesExamined <= 1 && secondNotesExamined <= 1,
+          "repeated release search does not rescan the excluded practice tail");
+}
 } // namespace
 
 int main() {
@@ -187,5 +243,7 @@ int main() {
   testCompensationAndPriorityMatchCurrentRules();
   testPracticeRangeIsHalfOpenBeforeLaneMutation();
   testEqualTimeKeepsMainLanePrecedence();
+  testEqualTimeKeepsMainLanePrecedenceForLatePriorityModes();
+  testReleaseSearchStopsAtPracticeEnd();
   return 0;
 }
