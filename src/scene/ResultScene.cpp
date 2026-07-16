@@ -3,10 +3,10 @@
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
-#include "../ReplayDBHelper.h"
+#include "../repositories/ReplayRepository.h"
 #include "../ResultImageExporter.h"
 #include "../ResultPresentationUtils.h"
-#include "../ScoreDBHelper.h"
+#include "../repositories/ScoreRepository.h"
 #include "../path.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
@@ -397,7 +397,7 @@ void ResultScene::saveCourseScore() {
       static_cast<int>(courseOptions.session->completedResults.size());
   const int totalCharts =
       static_cast<int>(courseOptions.session->entries.size());
-  if (ScoreDBHelper::GetInstance().SaveCourseScore(
+  if (context.scoreRepository.SaveCourseScore(
           *courseOptions.session, resultState, completedCharts, totalCharts,
           attemptProvenance)) {
     courseOptions.session->courseScoreSaved = true;
@@ -429,9 +429,9 @@ void ResultScene::loadPreviousBest() {
   }
 
   const auto best = isCourseFinalResult()
-                        ? ScoreDBHelper::GetInstance().LoadBestCourseScore(
+                        ? context.scoreRepository.LoadBestCourseScore(
                               *courseOptions.session)
-                        : ScoreDBHelper::GetInstance().LoadBestScore(
+                        : context.scoreRepository.LoadBestScore(
                               meta, beforeCreatedAt, excludeAttemptId);
   if (best.has_value()) {
     previousBest = result_presentation::previousBestDataFromSnapshot(*best);
@@ -443,7 +443,9 @@ void ResultScene::loadDifficultyLabel() {
     difficultyLabel = "Course";
     return;
   }
-  difficultyLabel = result_presentation::difficultyLabelForChart(meta);
+  difficultyLabel =
+      result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                    meta);
 }
 
 void ResultScene::saveCourseReplay() {
@@ -463,7 +465,7 @@ void ResultScene::saveCourseReplay() {
   auto courseReplay =
       std::make_shared<CourseReplayData>(std::move(*pendingCourseReplay));
 
-  auto replayId = ReplayDBHelper::GetInstance().SaveCourseReplay(*courseReplay);
+  auto replayId = context.replayRepository.SaveCourseReplay(*courseReplay);
   if (!replayId.has_value()) {
     SDL_Log("Failed to save course replay: %s", session->courseName.c_str());
     return;

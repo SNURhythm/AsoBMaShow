@@ -18,9 +18,10 @@
 #include "AppSettingsStore.h"
 #include "PlayerProfileManager.h"
 #include "ProfileSessionCoordinator.h"
-#include "ReplayDBHelper.h"
+#include "repositories/ChartRepository.h"
+#include "repositories/ReplayRepository.h"
 #include "ResultPersistenceCoordinator.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ScoreRepository.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -99,6 +100,10 @@ public:
   ProfileResult profileInitializationResult;
   AppSettings settings;
   InputProfile inputProfile;
+  ChartRepository chartRepository;
+  ScoreRepository scoreRepository;
+  ReplayRepository replayRepository;
+  MusicPlaylistRepository musicPlaylistRepository;
   result_persistence::Coordinator resultPersistence;
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
@@ -149,11 +154,11 @@ public:
             profileManager, profileInitializationResult)),
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
-        resultPersistence(ScoreDBHelper::GetInstance(),
-                          ReplayDBHelper::GetInstance()),
+        resultPersistence(scoreRepository, replayRepository),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
-                           settings.audioVideo.audio) {
+                           settings.audioVideo.audio),
+        musicPlayer(musicPlaylistRepository, chartRepository) {
     if (!profileInitializationResult.ok()) {
       return;
     }
@@ -162,8 +167,8 @@ public:
         inputProfile.gyroscopeTurntable);
 
     const PlayerProfilePaths activePaths = profileManager.activePaths();
-    ScoreDBHelper::GetInstance().SetDatabasePath(activePaths.scoresDb);
-    ReplayDBHelper::GetInstance().SetDatabasePath(activePaths.replaysDb);
+    scoreRepository.SetDatabasePath(activePaths.scoresDb);
+    replayRepository.SetDatabasePath(activePaths.replaysDb);
     saveActiveInputProfile = [this](const InputProfile &candidate,
                                     std::string &error) {
       if (!profileInitializationResult.ok()) {
@@ -184,8 +189,7 @@ public:
           error);
     };
     profileSessionCoordinator = std::make_unique<ProfileSessionCoordinator>(
-        profileManager, ScoreDBHelper::GetInstance(),
-        ReplayDBHelper::GetInstance(),
+        profileManager, scoreRepository, replayRepository,
         [this]() -> std::optional<std::string> {
           if (profileGameplayActive.load(std::memory_order_acquire)) {
             return "A profile cannot be switched during gameplay.";
@@ -335,8 +339,8 @@ public:
         thread.second.join();
       }
     }
-    ScoreDBHelper::GetInstance().Shutdown();
-    ReplayDBHelper::GetInstance().Shutdown();
+    scoreRepository.Shutdown();
+    replayRepository.Shutdown();
     std::cout << "Main function is quitting..." << std::endl;
   }
 };

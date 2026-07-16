@@ -2,7 +2,8 @@
 
 #include "../ThreadCompat.h"
 #include "ChartMusicCache.h"
-#include "MusicPlaylistDB.h"
+#include "../repositories/ChartRepository.h"
+#include "../repositories/MusicPlaylistRepository.h"
 #include "MusicPlaylist.h"
 #include "NativeMusicPlayer.h"
 
@@ -21,7 +22,8 @@ namespace music_player {
 
 class MusicPlayerService {
 public:
-  MusicPlayerService() = default;
+  MusicPlayerService(MusicPlaylistRepository &repository,
+                     ChartRepository &charts);
   ~MusicPlayerService();
   MusicPlayerService(const MusicPlayerService &) = delete;
   MusicPlayerService &operator=(const MusicPlayerService &) = delete;
@@ -130,8 +132,7 @@ public:
 private:
   enum class PlaybackRequest { Current, Next, Previous };
 
-  sqlite3 *DatabaseLocked(std::string &errorMessage);
-  void CloseDatabaseLocked();
+  bool EnsureRepositoryReadyLocked(std::string &errorMessage);
   bool PlayCurrentLocked(std::string &errorMessage);
   bool PlayNextLocked(std::string &errorMessage);
   bool PlayPreviousLocked(std::string &errorMessage);
@@ -159,11 +160,9 @@ private:
                              std::uint64_t preloadRevision,
                              bool requestedClubMode,
                              const std::stop_token &stopToken);
-  void RefreshPlaylistCachesLocked(MusicPlaylistDB &playlistDb, sqlite3 *db,
-                                   int preferredSelectedPlaylistId);
-  void RestoreQueueFromPersistedStateLocked(MusicPlaylistDB &playlistDb,
-                                            sqlite3 *db);
-  void PersistPlayerStateLocked(MusicPlaylistDB &playlistDb, sqlite3 *db);
+  void RefreshPlaylistCachesLocked(int preferredSelectedPlaylistId);
+  void RestoreQueueFromPersistedStateLocked();
+  void PersistPlayerStateLocked();
   void PersistQueueTracksLocked();
   void PersistQueueTracksLocked(
       const std::vector<music_playlist::MusicTrack> &tracks,
@@ -179,9 +178,9 @@ private:
   void NativeControlEventLoop(const std::stop_token &stopToken);
   void PublishNativeControlStatus(const std::string &statusMessage);
 
+  MusicPlaylistRepository &repository;
+  ChartRepository &charts;
   mutable std::mutex stateMutex;
-  MusicPlaylistDB playlistDb;
-  sqlite3 *playlistDatabase = nullptr;
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;

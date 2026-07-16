@@ -1,9 +1,8 @@
 #include "../src/ResultPersistenceCoordinator.h"
 
-#include "../src/ChartDBHelper.h"
 #include "../src/FileChecksum.h"
 #include "../src/ProfileDatabaseActivity.h"
-#include "../src/SqliteRAII.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 
 #include <algorithm>
@@ -21,13 +20,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-// ScoreDBHelper's oldest migration can consult ChartDBHelper. These focused
-// current-schema fixtures do not take that path, so only the legacy linker
-// surface is supplied here.
-ChartDBHelper::ChartDBHelper() = default;
-sqlite3 *ChartDBHelper::Connect() { return nullptr; }
-bool ChartDBHelper::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 
@@ -224,8 +216,8 @@ void testPersistCreatesOneReplayOneScoreNoPending() {
   TemporaryDirectory temporary("persist");
   const auto replayPath = temporary.path() / "replay.db";
   const auto scorePath = temporary.path() / "score.db";
-  ReplayDBHelper replay(replayPath);
-  ScoreDBHelper score(scorePath);
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
   Coordinator coordinator(score, replay);
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-persist", 1);
@@ -246,8 +238,8 @@ void testCrashAfterStageRecoversExactlyOneScore() {
   TemporaryDirectory temporary("crash-after-stage");
   const auto replayPath = temporary.path() / "replay.db";
   const auto scorePath = temporary.path() / "score.db";
-  ReplayDBHelper replay(replayPath);
-  ScoreDBHelper score(scorePath);
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
   assert(score.EnsureSchema());
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-stage-crash", 2);
@@ -275,8 +267,8 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   TemporaryDirectory temporary("committed-before-ack");
   const auto replayPath = temporary.path() / "replay.db";
   const auto scorePath = temporary.path() / "score.db";
-  ReplayDBHelper replay(replayPath);
-  ScoreDBHelper score(scorePath);
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-before-ack", 3);
 
@@ -302,8 +294,8 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
 
 void testProfileSwitchCannotAcquireGateMidPersist() {
   TemporaryDirectory temporary("profile-gate");
-  ReplayDBHelper replay(temporary.path() / "replay.db");
-  ScoreDBHelper score(temporary.path() / "score.db");
+  ReplayRepository replay(temporary.path() / "replay.db");
+  ScoreRepository score(temporary.path() / "score.db");
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-profile-gate", 4);
 
@@ -391,8 +383,8 @@ void testSuccessfulBoundedRecoveryReportsRemainingBacklog() {
   TemporaryDirectory temporary("bounded-recovery-backlog");
   const auto replayPath = temporary.path() / "replay.db";
   const auto scorePath = temporary.path() / "score.db";
-  ReplayDBHelper replay(replayPath);
-  ScoreDBHelper score(scorePath);
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
   assert(score.EnsureSchema());
 
   for (int suffix = 0; suffix < 3; ++suffix) {
@@ -426,8 +418,8 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
   TemporaryDirectory temporary("recovery-fairness");
   const auto replayPath = temporary.path() / "replay.db";
   const auto scorePath = temporary.path() / "score.db";
-  ReplayDBHelper replay(replayPath);
-  ScoreDBHelper score(scorePath);
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
 
   std::vector<std::string> conflictIds;
   conflictIds.reserve(256);

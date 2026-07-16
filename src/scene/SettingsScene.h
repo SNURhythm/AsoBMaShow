@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ChartDBHelper.h"
+#include "../repositories/ChartRepository.h"
 #include "../PlatformDocumentHandoff.h"
 #include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"

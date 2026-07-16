@@ -1,13 +1,13 @@
 #include "../src/AppSettingsStore.h"
-#include "../src/ChartDBHelper.h"
+#include "../src/repositories/ChartRepository.h"
 #include "../src/CoursePlaySession.h"
 #include "../src/ProfileDatabaseActivity.h"
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileSessionCoordinator.h"
-#include "../src/ReplayDBHelper.h"
+#include "../src/repositories/ReplayRepository.h"
 #include "../src/ResultPersistenceCoordinator.h"
-#include "../src/ScoreCacheQueries.h"
-#include "../src/ScoreDBHelper.h"
+#include "../src/repositories/ScoreRepository.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/scene/MainMenuProfileSelections.h"
@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -36,15 +37,29 @@ namespace {
 int failures = 0;
 
 static_assert(
-    !std::is_move_constructible_v<ScoreDBHelper::PreparedScoreQueryDatabase>);
+    !std::is_move_constructible_v<ScoreRepository::PreparedScoreQueryDatabase>);
 static_assert(
-    !std::is_move_assignable_v<ScoreDBHelper::PreparedScoreQueryDatabase>);
+    !std::is_move_assignable_v<ScoreRepository::PreparedScoreQueryDatabase>);
 
 void expect(bool condition, const std::string &message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
     ++failures;
   }
+}
+
+bool replaceDifficultyTableJson(ChartRepository::Session &session,
+                                const std::string &headerJson,
+                                const std::string &dataJson,
+                                const std::string &sourceUrl) {
+  std::string errorMessage;
+  const auto document =
+      difficulty_table::Parse(headerJson, dataJson, sourceUrl, errorMessage);
+  if (!document.has_value()) {
+    std::cerr << "Difficulty table parse failure: " << errorMessage << '\n';
+    return false;
+  }
+  return session.ReplaceDifficultyTable(*document);
 }
 
 class TempDirectory {
@@ -196,38 +211,6 @@ std::string queryDatabaseString(const std::filesystem::path &path,
   return database ? queryString(database.get(), sql) : std::string{};
 }
 
-std::filesystem::path attachedDatabasePath(sqlite3 *database,
-                                           std::string_view schema) {
-  sqlite3_stmt *statement = nullptr;
-  if (sqlite3_prepare_v2(database, "PRAGMA database_list", -1, &statement,
-                         nullptr) != SQLITE_OK) {
-    return {};
-  }
-  std::filesystem::path path;
-  while (sqlite3_step(statement) == SQLITE_ROW) {
-    if (sqliteColumnString(statement, 1) == schema) {
-      path = sqliteColumnString(statement, 2);
-      break;
-    }
-  }
-  sqlite3_finalize(statement);
-  return path;
-}
-
-struct DenyNextAttach {
-  bool pending = true;
-};
-
-int denyNextAttach(void *rawState, int action, const char *, const char *,
-                   const char *, const char *) {
-  auto &state = *static_cast<DenyNextAttach *>(rawState);
-  if (action == SQLITE_ATTACH && state.pending) {
-    state.pending = false;
-    return SQLITE_DENY;
-  }
-  return SQLITE_OK;
-}
-
 struct BlockingStatementTrace {
   std::mutex mutex;
   std::condition_variable condition;
@@ -251,6 +234,38 @@ int collectSqlStatement(unsigned traceType, void *rawContext, void *statement,
   }
   return 0;
 }
+
+SqlStatementTrace *activeSqlStatementTrace = nullptr;
+
+int installSqlStatementTrace(sqlite3 *database, char **,
+                             const sqlite3_api_routines *) {
+  if (activeSqlStatementTrace == nullptr) {
+    return SQLITE_OK;
+  }
+  return sqlite3_trace_v2(database, SQLITE_TRACE_STMT, collectSqlStatement,
+                          activeSqlStatementTrace);
+}
+
+class ScopedSqlStatementTrace {
+public:
+  explicit ScopedSqlStatementTrace(SqlStatementTrace &trace) {
+    activeSqlStatementTrace = &trace;
+    sqlite3_reset_auto_extension();
+    installed_ = sqlite3_auto_extension(
+                     reinterpret_cast<void (*)()>(installSqlStatementTrace)) ==
+                 SQLITE_OK;
+  }
+
+  ~ScopedSqlStatementTrace() {
+    sqlite3_reset_auto_extension();
+    activeSqlStatementTrace = nullptr;
+  }
+
+  [[nodiscard]] bool installed() const { return installed_; }
+
+private:
+  bool installed_ = false;
+};
 
 BlockingStatementTrace *activeBlockingTrace = nullptr;
 
@@ -344,6 +359,30 @@ void seedScore(const std::filesystem::path &path, int clearType, int score) {
       "score row inserts");
 }
 
+void seedChartScore(const std::filesystem::path &path,
+                    std::string_view chartPath, std::string_view chartMd5,
+                    std::string_view chartSha256, int longNoteMode,
+                    int clearRank, int score) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, "chart-matrix score seed database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(database.get(),
+              "INSERT INTO scores (chart_path,chart_md5,chart_sha256,ln_mode,"
+              "chart_title,chart_artist,score,max_score,max_combo,"
+              "combo_break,pgreat,great,good,bad,poor,kpoor,fast,slow,"
+              "final_gauge,clear_type) VALUES ('" +
+                  std::string(chartPath) + "','" + std::string(chartMd5) +
+                  "','" + std::string(chartSha256) + "'," +
+                  std::to_string(longNoteMode) + ",'Chart','Artist'," +
+                  std::to_string(score) +
+                  ",1000,50,1,10,9,8,7,6,5,4,3,0.75," +
+                  std::to_string(clearRank) + ")"),
+      "chart-matrix score row inserts");
+}
+
 ReplayData sampleReplay(const std::filesystem::path &root, int score) {
   ReplayData replay;
   replay.chartMeta.BmsPath = root / "BMS" / "chart.bms";
@@ -411,9 +450,10 @@ struct SwitchFixture {
   PlayerProfilePaths firstPaths;
   PlayerProfilePaths secondPaths;
   AppSettings currentSettings;
-  ScoreDBHelper score;
-  ReplayDBHelper replay;
-  Database persistentChartDatabase;
+  ScoreRepository score;
+  ReplayRepository replay;
+  std::unique_ptr<ChartRepository> persistentCharts;
+  std::optional<ChartRepository::Session> persistentChartSession;
   ProfileSessionCoordinator coordinator;
 
   SwitchFixture()
@@ -493,8 +533,8 @@ struct SwitchFixture {
 
     seedScore(firstPaths.scoresDb, kClearTypeEasyClearRank, 500);
     seedScore(secondPaths.scoresDb, kClearTypeHardClearRank, 1500);
-    ReplayDBHelper firstReplay(firstPaths.replaysDb);
-    ReplayDBHelper secondReplay(secondPaths.replaysDb);
+    ReplayRepository firstReplay(firstPaths.replaysDb);
+    ReplayRepository secondReplay(secondPaths.replaysDb);
     expect(firstReplay.SaveReplay(sampleReplay(temp.path(), 500)).has_value(),
            "first replay seed saves");
     expect(secondReplay.SaveReplay(sampleReplay(temp.path(), 1500)).has_value(),
@@ -548,7 +588,7 @@ struct SwitchFixture {
       }
       return InputProfileStore::saveAtomic(path, currentInput, error);
     };
-    dependencies.bindScore = [this](ScoreDBHelper &helper,
+    dependencies.bindScore = [this](ScoreRepository &helper,
                                     const std::filesystem::path &path,
                                     std::string &error) {
       if (failScoreBind) {
@@ -561,7 +601,7 @@ struct SwitchFixture {
       }
       return bound;
     };
-    dependencies.bindReplay = [this](ReplayDBHelper &helper,
+    dependencies.bindReplay = [this](ReplayRepository &helper,
                                      const std::filesystem::path &path,
                                      std::string &error) {
       if (failReplayBind) {
@@ -583,8 +623,8 @@ struct SwitchFixture {
       {
         profile_database_activity::WriteGuard nestedRecoveryGuard;
         recoveryNestedGuardCompleted =
-            ScoreDBHelper::HasActiveWrites() &&
-            ReplayDBHelper::HasActiveWrites();
+            ScoreRepository::HasActiveWrites() &&
+            ReplayRepository::HasActiveWrites();
       }
       if (recoveryAction) {
         recoveryAction();
@@ -644,13 +684,19 @@ struct SwitchFixture {
     if (refreshAction) {
       refreshAction();
     }
-    if (persistentChartDatabase) {
-      auto prepared =
-          score.PrepareScoreQueryDatabase(persistentChartDatabase.get());
+    if (persistentChartSession) {
+      auto prepared = score.PrepareScoreQueryDatabase(*persistentChartSession);
       if (const auto &error = prepared.error()) {
         throw std::runtime_error(*error);
       }
     }
+  }
+
+  bool openPersistentChartSession(std::string_view label) {
+    persistentCharts = std::make_unique<ChartRepository>(
+        temp.path() / (std::string(label) + "-chart.db"));
+    persistentChartSession = persistentCharts->OpenSession(&score);
+    return persistentChartSession.has_value();
   }
 
   [[nodiscard]] int currentClearRank() {
@@ -914,13 +960,13 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
   std::string versionError;
   expect(sqliteDatabaseUserVersion(fixture.secondPaths.scoresDb,
                                    versionError) ==
-             ScoreDBHelper::kCurrentSchemaVersion,
+             ScoreRepository::kCurrentSchemaVersion,
          "score database owner migrates the supported-older target: " +
              versionError);
   versionError.clear();
   expect(sqliteDatabaseUserVersion(fixture.secondPaths.replaysDb,
                                    versionError) ==
-             ReplayDBHelper::kCurrentSchemaVersion,
+             ReplayRepository::kCurrentSchemaVersion,
          "replay database owner migrates the supported-older target: " +
              versionError);
   expect(fixture.manager.activeProfile().id == fixture.secondId &&
@@ -970,8 +1016,8 @@ void testEveryDeclaredBlockerRejectsWithoutMutation() {
       readFile(fixture.temp.path() / "active-profile.json");
   {
     profile_database_activity::WriteGuard activeWrite;
-    expect(ScoreDBHelper::HasActiveWrites() &&
-               ReplayDBHelper::HasActiveWrites(),
+    expect(ScoreRepository::HasActiveWrites() &&
+               ReplayRepository::HasActiveWrites(),
            "shared database activity reports a real active write");
     const ProfileSwitchResult result =
         fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
@@ -1240,41 +1286,43 @@ void testPersistentScoreAttachmentFailureRollsBackToSource() {
   if (fixture.firstId.empty()) {
     return;
   }
-  fixture.persistentChartDatabase = openDatabase(":memory:");
-  expect(fixture.persistentChartDatabase != nullptr,
-         "persistent chart connection opens");
-  if (!fixture.persistentChartDatabase) {
+  expect(fixture.openPersistentChartSession("attachment-failure"),
+         "persistent chart session opens");
+  if (!fixture.persistentChartSession) {
     return;
   }
-  const auto initialError = score_cache_queries::prepareScoreQueryDatabase(
-      fixture.persistentChartDatabase.get(), fixture.firstPaths.scoresDb);
-  expect(!initialError.has_value(),
-         "persistent chart connection initially attaches profile A");
+  {
+    auto initialPrepared = fixture.score.PrepareScoreQueryDatabase(
+        *fixture.persistentChartSession);
+    expect(!initialPrepared.error().has_value(),
+           "persistent chart connection initially attaches profile A");
+  }
   const std::string bootstrapBefore =
       readFile(fixture.temp.path() / "active-profile.json");
 
-  DenyNextAttach denyState;
-  expect(sqlite3_set_authorizer(fixture.persistentChartDatabase.get(),
-                                denyNextAttach, &denyState) == SQLITE_OK,
-         "one-shot profile B attach failure installs");
+  bool targetPathSabotaged = false;
+  fixture.refreshAction = [&]() {
+    if (targetPathSabotaged) {
+      return;
+    }
+    targetPathSabotaged = true;
+    const auto backup = fixture.secondPaths.scoresDb.string() + ".backup";
+    std::filesystem::rename(fixture.secondPaths.scoresDb, backup);
+    std::filesystem::create_directory(fixture.secondPaths.scoresDb);
+  };
   const ProfileSwitchResult result =
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
-  expect(sqlite3_set_authorizer(fixture.persistentChartDatabase.get(), nullptr,
-                                nullptr) == SQLITE_OK,
-         "one-shot profile B attach failure clears");
 
   expect(!result.ok(), "score cache reattach failure aborts profile switch");
-  expect(!denyState.pending, "target score attach was attempted");
-  expect(std::filesystem::canonical(attachedDatabasePath(
-             fixture.persistentChartDatabase.get(), "score_db")) ==
-             std::filesystem::canonical(fixture.firstPaths.scoresDb),
-         "rollback refresh reattaches profile A score database");
-  expect(queryInt(fixture.persistentChartDatabase.get(),
-                  "SELECT " + score_cache_queries::scoreBestLookupExpr(
-                                  "'" + std::string(kChartSha) + "'", "0",
-                                  "score")) == 500,
+  expect(targetPathSabotaged, "target score attach was attempted");
+  const auto rollbackScores = fixture.score.LoadBestScores(
+      *fixture.persistentChartSession, "score_db");
+  const auto rollbackBest =
+      rollbackScores.bestForStoredKey(kChartSha, 0);
+  expect(rollbackBest.has_value() && rollbackBest->score == 500,
          "rollback persistent connection queries profile A score data");
-  fixture.persistentChartDatabase.reset();
+  fixture.persistentChartSession.reset();
+  fixture.persistentCharts.reset();
   expectFirstProfileState(fixture, bootstrapBefore,
                           "score attachment refresh failure");
 }
@@ -1282,7 +1330,7 @@ void testPersistentScoreAttachmentFailureRollsBackToSource() {
 void testDatabasePathReadsAreIndependentSnapshots() {
   const std::filesystem::path scoreFirst = "profile-one/scores.db";
   const std::filesystem::path scoreSecond = "profile-two/scores.db";
-  ScoreDBHelper score;
+  ScoreRepository score;
   score.SetDatabasePath(scoreFirst);
   const auto &scoreSnapshot = score.GetDatabasePath();
   score.SetDatabasePath(scoreSecond);
@@ -1291,7 +1339,7 @@ void testDatabasePathReadsAreIndependentSnapshots() {
 
   const std::filesystem::path replayFirst = "profile-one/replays.db";
   const std::filesystem::path replaySecond = "profile-two/replays.db";
-  ReplayDBHelper replay;
+  ReplayRepository replay;
   replay.SetDatabasePath(replayFirst);
   const auto &replaySnapshot = replay.GetDatabasePath();
   replay.SetDatabasePath(replaySecond);
@@ -1386,7 +1434,7 @@ void testRealScoreReadBlocksSwitchUntilQueryCompletes() {
     reader.join();
     return;
   }
-  expect(ScoreDBHelper::HasActiveReads() && ReplayDBHelper::HasActiveReads(),
+  expect(ScoreRepository::HasActiveReads() && ReplayRepository::HasActiveReads(),
          "shared database activity reports the real active read");
 
   const auto switchStarted = std::chrono::steady_clock::now();
@@ -1400,7 +1448,7 @@ void testRealScoreReadBlocksSwitchUntilQueryCompletes() {
 
   blockedRead.release();
   reader.join();
-  expect(!ScoreDBHelper::HasActiveReads() && !ReplayDBHelper::HasActiveReads(),
+  expect(!ScoreRepository::HasActiveReads() && !ReplayRepository::HasActiveReads(),
          "active read state clears after the query completes");
   expect(readRank == kClearTypeEasyClearRank,
          "old-profile read completes before any successful switch");
@@ -1423,17 +1471,16 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
   ScopedBlockingStatementTrace blockedPrepare("PRAGMA database_list");
   expect(blockedPrepare.installed(),
          "score attachment preparation trace installs");
-  fixture.persistentChartDatabase = openDatabase(":memory:");
-  expect(fixture.persistentChartDatabase != nullptr,
-         "guarded score attachment chart connection opens");
-  if (!fixture.persistentChartDatabase) {
+  expect(fixture.openPersistentChartSession("attachment-snapshot"),
+         "guarded score attachment chart session opens");
+  if (!fixture.persistentChartSession) {
     return;
   }
 
   std::optional<std::string> prepareError;
   std::thread preparer([&]() {
     auto prepared = fixture.score.PrepareScoreQueryDatabase(
-        fixture.persistentChartDatabase.get());
+        *fixture.persistentChartSession);
     prepareError = prepared.error();
   });
   const bool prepareEntered = blockedPrepare.waitUntilEntered();
@@ -1445,7 +1492,7 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
     return;
   }
 
-  expect(ScoreDBHelper::HasActiveWrites() && ReplayDBHelper::HasActiveWrites(),
+  expect(ScoreRepository::HasActiveWrites() && ReplayRepository::HasActiveWrites(),
          "active-path snapshot and attachment preparation publish one "
          "database operation");
   const ProfileSwitchResult duringPrepare =
@@ -1458,9 +1505,11 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
   preparer.join();
   expect(!prepareError.has_value(),
          "guarded profile A score attachment preparation succeeds");
-  expect(std::filesystem::canonical(attachedDatabasePath(
-             fixture.persistentChartDatabase.get(), "score_db")) ==
-             std::filesystem::canonical(fixture.firstPaths.scoresDb),
+  expect(fixture.score
+                 .LoadBestClearRanks(*fixture.persistentChartSession,
+                                     "score_db")
+                 .bestRankForStoredKey(kChartSha, 0) ==
+             kClearTypeEasyClearRank,
          "blocked switch leaves the retained connection attached to profile "
          "A");
 
@@ -1468,11 +1517,14 @@ void testScoreAttachmentPreparationOwnsActivePathSnapshot() {
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
   expect(afterPrepare.ok(),
          "profile switch succeeds after guarded attachment preparation");
-  expect(std::filesystem::canonical(attachedDatabasePath(
-             fixture.persistentChartDatabase.get(), "score_db")) ==
-             std::filesystem::canonical(fixture.secondPaths.scoresDb),
+  expect(fixture.score
+                 .LoadBestClearRanks(*fixture.persistentChartSession,
+                                     "score_db")
+                 .bestRankForStoredKey(kChartSha, 0) ==
+             kClearTypeHardClearRank,
          "successful switch reattaches the retained connection to profile B");
-  fixture.persistentChartDatabase.reset();
+  fixture.persistentChartSession.reset();
+  fixture.persistentCharts.reset();
 }
 
 void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
@@ -1484,10 +1536,9 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
   ScopedBlockingStatementTrace blockedQuery(
       "FROM score_db.score_sha256_clear_rank_cache");
   expect(blockedQuery.installed(), "score-backed query trace installs");
-  fixture.persistentChartDatabase = openDatabase(":memory:");
-  expect(fixture.persistentChartDatabase != nullptr,
-         "score-backed query chart connection opens");
-  if (!fixture.persistentChartDatabase) {
+  expect(fixture.openPersistentChartSession("dependent-score-query"),
+         "score-backed query chart session opens");
+  if (!fixture.persistentChartSession) {
     return;
   }
 
@@ -1495,13 +1546,13 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
   int queryRank = kNoClearTypeRank;
   std::thread query([&]() {
     auto prepared = fixture.score.PrepareScoreQueryDatabase(
-        fixture.persistentChartDatabase.get());
+        *fixture.persistentChartSession);
     prepareError = prepared.error();
     if (!prepareError.has_value()) {
-      queryRank =
-          queryInt(fixture.persistentChartDatabase.get(),
-                   "SELECT " + score_cache_queries::scoreRankLookupExpr(
-                                   "'" + std::string(kChartSha) + "'", "0"));
+      queryRank = fixture.score
+                      .LoadBestClearRanks(*fixture.persistentChartSession,
+                                          "score_db")
+                      .bestRankForStoredKey(kChartSha, 0);
     }
   });
   const bool queryEntered = blockedQuery.waitUntilEntered();
@@ -1513,7 +1564,7 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
     return;
   }
 
-  expect(ScoreDBHelper::HasActiveWrites(),
+  expect(ScoreRepository::HasActiveWrites(),
          "prepared score query retains its write-classified operation guard");
   const ProfileSwitchResult duringQuery =
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
@@ -1534,15 +1585,17 @@ void testPreparedScoreQueryGuardLivesThroughDependentQuery() {
          "profile switch succeeds after the dependent query releases its "
          "guard");
   auto prepared = fixture.score.PrepareScoreQueryDatabase(
-      fixture.persistentChartDatabase.get());
+      *fixture.persistentChartSession);
   expect(!prepared.error().has_value(),
          "profile B score-backed query preparation succeeds");
-  expect(queryInt(fixture.persistentChartDatabase.get(),
-                  "SELECT " + score_cache_queries::scoreRankLookupExpr(
-                                  "'" + std::string(kChartSha) + "'", "0")) ==
+  expect(fixture.score
+                 .LoadBestClearRanks(*fixture.persistentChartSession,
+                                     "score_db")
+                 .bestRankForStoredKey(kChartSha, 0) ==
              kClearTypeHardClearRank,
          "post-switch dependent query reads profile B data");
-  fixture.persistentChartDatabase.reset();
+  fixture.persistentChartSession.reset();
+  fixture.persistentCharts.reset();
 }
 
 void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
@@ -1551,21 +1604,20 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
     return;
   }
 
-  ScoreDBHelper &activeScore = ScoreDBHelper::GetInstance();
-  const std::filesystem::path previousScorePath = activeScore.GetDatabasePath();
-  activeScore.SetDatabasePath(fixture.firstPaths.scoresDb);
+  ScoreRepository &activeScore = fixture.score;
 
   ScopedBlockingStatementTrace blockedQuery(
       "FROM score_db.score_sha256_clear_rank_cache");
   expect(blockedQuery.installed(), "real ChartDB score query trace installs");
-  Database chartDatabase = openDatabase(":memory:");
+  const std::filesystem::path chartPath =
+      fixture.temp.path() / "real-chart-query.db";
+  ChartRepository charts(chartPath);
+  expect(charts.EnsureReady(), "real ChartDB score query schema creates");
+  Database chartDatabase = openDatabase(chartPath);
   expect(chartDatabase != nullptr, "real ChartDB score query connection opens");
   if (!chartDatabase) {
-    activeScore.SetDatabasePath(previousScorePath);
     return;
   }
-  expect(ChartDBHelper::GetInstance().CreateChartMetaTable(chartDatabase.get()),
-         "real ChartDB score query schema creates");
   expect(execute(chartDatabase.get(),
                  "INSERT INTO chart_meta "
                  "(path, md5, sha256, title, ln_mode, total_long_notes, "
@@ -1574,14 +1626,19 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
                      std::string(kChartMd5) + "', '" + std::string(kChartSha) +
                      "', 'Chart', 0, 0, 0, 0, 0)"),
          "real ChartDB score query row inserts");
+  chartDatabase.reset();
+  auto chartSession = charts.OpenSession(&activeScore);
+  expect(chartSession.has_value(), "real ChartDB score query session opens");
+  if (!chartSession) {
+    return;
+  }
 
   ChartMetaQuery firstQuery;
   firstQuery.clearMarkFilter = true;
   firstQuery.clearMarkRank = kClearTypeEasyClearRank;
   int firstCount = -1;
   std::thread query([&]() {
-    firstCount = ChartDBHelper::GetInstance().CountChartMeta(
-        chartDatabase.get(), firstQuery);
+    firstCount = chartSession->CountChartMeta(firstQuery);
   });
   const bool queryEntered = blockedQuery.waitUntilEntered();
   expect(queryEntered,
@@ -1589,7 +1646,6 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   if (!queryEntered) {
     blockedQuery.release();
     query.join();
-    activeScore.SetDatabasePath(previousScorePath);
     return;
   }
 
@@ -1612,11 +1668,9 @@ void testRealChartDbScoreQueryRetainsPreparedAttachmentGuard() {
   }
   ChartMetaQuery secondQuery = firstQuery;
   secondQuery.clearMarkRank = kClearTypeHardClearRank;
-  expect(ChartDBHelper::GetInstance().CountChartMeta(chartDatabase.get(),
-                                                     secondQuery) == 1,
+  expect(chartSession->CountChartMeta(secondQuery) == 1,
          "next real ChartDB score-backed count reattaches and reads profile "
          "B");
-  activeScore.SetDatabasePath(previousScorePath);
 }
 
 void testLegacyForcedLongNoteScoreMigrationPreservesLamp() {
@@ -1626,14 +1680,16 @@ void testLegacyForcedLongNoteScoreMigrationPreservesLamp() {
   const std::filesystem::path chartDirectory =
       Utils::GetDocumentsPath("db");
   std::filesystem::create_directories(chartDirectory);
-  Database chartDatabase = openDatabase(chartDirectory / "chart.db");
+  const std::filesystem::path chartPath = chartDirectory / "chart.db";
+  ChartRepository charts(chartPath);
+  expect(charts.EnsureReady(),
+         "legacy forced-LN migration chart schema creates");
+  Database chartDatabase = openDatabase(chartPath);
   expect(chartDatabase != nullptr,
          "legacy forced-LN migration chart database opens");
   if (!chartDatabase) {
     return;
   }
-  expect(ChartDBHelper::GetInstance().CreateChartMetaTable(chartDatabase.get()),
-         "legacy forced-LN migration chart schema creates");
   expect(execute(chartDatabase.get(),
                  "INSERT INTO chart_meta "
                  "(path, md5, sha256, title, ln_mode, total_long_notes, "
@@ -1680,7 +1736,7 @@ void testLegacyForcedLongNoteScoreMigrationPreservesLamp() {
          "legacy forced-LN score fixture creates");
   scoreDatabase.reset();
 
-  ScoreDBHelper helper(scorePath);
+  ScoreRepository helper(scorePath);
   expect(helper.EnsureSchema(),
          "legacy forced-LN score database migrates");
   scoreDatabase = openDatabase(scorePath);
@@ -1719,15 +1775,16 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
     const std::filesystem::path chartDirectory =
         Utils::GetDocumentsPath("db");
     std::filesystem::create_directories(chartDirectory);
-    Database chartDatabase = openDatabase(chartDirectory / "chart.db");
+    const std::filesystem::path chartPath = chartDirectory / "chart.db";
+    ChartRepository charts(chartPath);
+    expect(charts.EnsureReady(),
+           std::string(testCase.label) + " chart schema creates");
+    Database chartDatabase = openDatabase(chartPath);
     expect(chartDatabase != nullptr,
            std::string(testCase.label) + " chart database opens");
     if (!chartDatabase) {
       continue;
     }
-    expect(ChartDBHelper::GetInstance().CreateChartMetaTable(
-               chartDatabase.get()),
-           std::string(testCase.label) + " chart schema creates");
     if (testCase.rebuildRequired) {
       expect(execute(chartDatabase.get(),
                      "INSERT INTO chart_meta "
@@ -1737,11 +1794,7 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
                          std::string(kChartMd5) + "', '" +
                          std::string(kChartSha) +
                          "', 'Stale', 2, 1, 0, 0, 0);"
-                         "CREATE TABLE chart_meta_rebuild_state ("
-                         "id INTEGER PRIMARY KEY CHECK(id=1), "
-                         "required INTEGER NOT NULL DEFAULT 0, "
-                         "updated_at TEXT DEFAULT CURRENT_TIMESTAMP);"
-                         "INSERT INTO chart_meta_rebuild_state "
+                         "INSERT OR REPLACE INTO chart_meta_rebuild_state "
                          "(id, required) VALUES (1, 1);"),
              "rebuild fixture marks chart metadata unavailable");
     }
@@ -1783,14 +1836,14 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
            std::string(testCase.label) + " legacy score fixture creates");
     scoreDatabase.reset();
 
-    ScoreDBHelper helper(scorePath);
+    ScoreRepository helper(scorePath);
     expect(helper.EnsureSchema(),
            std::string(testCase.label) +
                " does not strand the legacy score migration");
     scoreDatabase = openDatabase(scorePath);
     expect(scoreDatabase != nullptr &&
                queryInt(scoreDatabase.get(), "PRAGMA user_version") ==
-                   ScoreDBHelper::kCurrentSchemaVersion &&
+                   ScoreRepository::kCurrentSchemaVersion &&
                queryInt(scoreDatabase.get(), "SELECT COUNT(*) FROM scores") ==
                    1 &&
                queryInt(scoreDatabase.get(),
@@ -1813,7 +1866,15 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
 }
 
 void testDifficultyCourseKeysTrackCanonicalDefinitions() {
-  Database chartDatabase = openDatabase(":memory:");
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "difficulty-course-keys.db";
+  ChartRepository chartDb(chartPath);
+  auto chartSession = chartDb.OpenSession();
+  expect(chartSession.has_value(), "difficulty course key session opens");
+  if (!chartSession) {
+    return;
+  }
+  Database chartDatabase = openDatabase(chartPath);
   expect(chartDatabase != nullptr, "difficulty course key database opens");
   if (!chartDatabase) {
     return;
@@ -1872,12 +1933,11 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
            "]";
   };
 
-  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
-  expect(chartDb.ImportDifficultyTable(
-             chartDatabase.get(),
-             makeHeader("Original Table", "Original Group L1", "[]",
-                        "initial", false),
-             makeData("initial", false), sourceUrl),
+  expect(replaceDifficultyTableJson(*chartSession,
+                                    makeHeader("Original Table",
+                                               "Original Group L1", "[]",
+                                               "initial", false),
+                                    makeData("initial", false), sourceUrl),
          "initial difficulty table import succeeds");
   const int initialCourseId = queryInt(
       chartDatabase.get(), "SELECT id FROM difficulty_courses LIMIT 1");
@@ -1888,7 +1948,7 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
              course_identity::makeCourseKey(md5Definition, "[]"),
          "initial difficulty course receives its ordered stored content key");
 
-  expect(chartDb.CreateChartMetaTable(chartDatabase.get()),
+  expect(chartSession->EnsureSchema(),
          "course definition local chart schema opens");
   expect(execute(chartDatabase.get(),
                  "INSERT INTO chart_meta(path,md5,sha256) VALUES "
@@ -1898,7 +1958,7 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
                      std::string(shaB) + "')"),
          "local chart metadata supplies stronger course hash evidence");
   const auto initialDefinitions =
-      chartDb.SelectDifficultyCourseDefinitions(chartDatabase.get());
+      chartSession->SelectDifficultyCourseDefinitions();
   const auto initialDefinition =
       std::find_if(initialDefinitions.begin(), initialDefinitions.end(),
                    [initialCourseId](const auto &definition) {
@@ -1923,12 +1983,11 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
   for (const std::string gradeConstraint :
        {"grade", "grade_mirror", "grade_random"}) {
     const std::string displayToken = "renamed-" + gradeConstraint;
-    expect(chartDb.ImportDifficultyTable(
-               chartDatabase.get(),
+    expect(replaceDifficultyTableJson(
+               *chartSession,
                makeHeader("Renamed " + gradeConstraint,
                           "Renamed " + gradeConstraint + " L9",
-                          "[\"" + gradeConstraint + "\"]", displayToken,
-                          true),
+                          "[\"" + gradeConstraint + "\"]", displayToken, true),
                makeData(displayToken, true), sourceUrl),
            gradeConstraint + " difficulty course refresh succeeds");
     expect(queryInt(chartDatabase.get(),
@@ -1945,13 +2004,13 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
 
   const int tableId = queryInt(
       chartDatabase.get(), "SELECT table_id FROM difficulty_courses LIMIT 1");
-  const auto selectedCourses = chartDb.SelectDifficultyCourses(
-      chartDatabase.get(), tableId, "Renamed grade_random");
+  const auto selectedCourses =
+      chartSession->SelectDifficultyCourses(tableId, "Renamed grade_random");
   expect(selectedCourses.size() == 1 &&
              selectedCourses.front().courseKey == initialCourseKey,
          "difficulty course metadata exposes the canonical key");
   const auto selectedGroups =
-      chartDb.SelectDifficultyCourseGroups(chartDatabase.get(), tableId);
+      chartSession->SelectDifficultyCourseGroups(tableId);
   const auto singletonGroup =
       std::find_if(selectedGroups.begin(), selectedGroups.end(),
                    [](const auto &group) { return group.courseCount == 1; });
@@ -1966,10 +2025,10 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
              selectedSession.courseKey == initialCourseKey,
          "course play session carries a selected key independently of id");
 
-  expect(chartDb.ImportDifficultyTable(
-             chartDatabase.get(),
-             makeHeader("Order Change", "Order Change L1",
-                        "[\"grade_random\"]", "order", true, true),
+  expect(replaceDifficultyTableJson(
+             *chartSession,
+             makeHeader("Order Change", "Order Change L1", "[\"grade_random\"]",
+                        "order", true, true),
              makeData("order", true), sourceUrl),
          "reordered difficulty course import succeeds");
   std::vector<course_identity::ChartIdentity> reversedDefinition =
@@ -1990,16 +2049,15 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
       {"forced-LN", "[\"ln\"]"},
   };
   for (const auto &[label, constraintJson] : identityConstraints) {
-    expect(chartDb.ImportDifficultyTable(
-               chartDatabase.get(),
-               makeHeader("Constraint " + label, "Constraint " + label +
-                                                     " L1",
-                          constraintJson, label, true),
-               makeData(label, true), sourceUrl),
+    expect(replaceDifficultyTableJson(*chartSession,
+                                      makeHeader("Constraint " + label,
+                                                 "Constraint " + label + " L1",
+                                                 constraintJson, label, true),
+                                      makeData(label, true), sourceUrl),
            label + " constrained difficulty course import succeeds");
-    const std::string constrainedCourseKey = queryString(
-        chartDatabase.get(),
-        "SELECT course_key FROM difficulty_courses LIMIT 1");
+    const std::string constrainedCourseKey =
+        queryString(chartDatabase.get(),
+                    "SELECT course_key FROM difficulty_courses LIMIT 1");
     expect(constrainedCourseKey == course_identity::makeCourseKey(
                                        enrichedDefinition, constraintJson) &&
                constrainedCourseKey != enrichedUnconstrainedKey,
@@ -2008,7 +2066,17 @@ void testDifficultyCourseKeysTrackCanonicalDefinitions() {
 }
 
 void testDifficultyCourseImportRejectsAmbiguousCounterpartHashes() {
-  Database chartDatabase = openDatabase(":memory:");
+  TempDirectory temporary;
+  const auto chartPath =
+      temporary.path() / "ambiguous-difficulty-import.db";
+  ChartRepository chartDb(chartPath);
+  auto chartSession = chartDb.OpenSession();
+  expect(chartSession.has_value(),
+         "ambiguous difficulty table evidence session opens");
+  if (!chartSession) {
+    return;
+  }
+  Database chartDatabase = openDatabase(chartPath);
   expect(chartDatabase != nullptr,
          "ambiguous difficulty table evidence database opens");
   if (!chartDatabase) {
@@ -2042,11 +2110,10 @@ void testDifficultyCourseImportRejectsAmbiguousCounterpartHashes() {
       "\"},{\"md5\":\"" + std::string(md5E) +
       "\",\"sha256\":\"" + std::string(sharedSha) + "\"}]";
 
-  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
-  expect(chartDb.ImportDifficultyTable(
-             chartDatabase.get(), header, data,
-             "https://example.test/ambiguous-import.json"),
-         "ambiguous counterpart table imports without inventing identity");
+  expect(
+      replaceDifficultyTableJson(*chartSession, header, data,
+                                 "https://example.test/ambiguous-import.json"),
+      "ambiguous counterpart table imports without inventing identity");
 
   expect(queryString(chartDatabase.get(),
                      "SELECT dce.md5 FROM difficulty_course_entries dce JOIN "
@@ -2089,7 +2156,20 @@ void testDifficultyCourseImportRejectsAmbiguousCounterpartHashes() {
 }
 
 void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
-  Database chartDatabase = openDatabase(":memory:");
+  TempDirectory temporary;
+  const auto chartPath =
+      temporary.path() / "ambiguous-local-course-definitions.db";
+  SqlStatementTrace trace;
+  ScopedSqlStatementTrace observation(trace);
+  expect(observation.installed(), "course definition query trace installs");
+  ChartRepository chartDb(chartPath);
+  auto chartSession = chartDb.OpenSession();
+  expect(chartSession.has_value(),
+         "ambiguous local course definition session opens");
+  if (!chartSession) {
+    return;
+  }
+  Database chartDatabase = openDatabase(chartPath);
   expect(chartDatabase != nullptr,
          "ambiguous local course definition database opens");
   if (!chartDatabase) {
@@ -2121,12 +2201,11 @@ void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
       "[{\"md5\":\"" + std::string(sharedMd5) +
       "\"},{\"sha256\":\"" + std::string(sharedSha) + "\"}]";
 
-  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
-  expect(chartDb.ImportDifficultyTable(
-             chartDatabase.get(), header, data,
-             "https://example.test/ambiguous-local.json"),
-         "direct-only local evidence fixture imports");
-  expect(chartDb.CreateChartMetaTable(chartDatabase.get()),
+  expect(
+      replaceDifficultyTableJson(*chartSession, header, data,
+                                 "https://example.test/ambiguous-local.json"),
+      "direct-only local evidence fixture imports");
+  expect(chartSession->EnsureSchema(),
          "ambiguous local chart metadata schema opens");
   expect(execute(chartDatabase.get(),
                  "INSERT INTO chart_meta(path,md5,sha256) VALUES "
@@ -2140,13 +2219,8 @@ void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
                      "','" + std::string(sharedSha) + "')"),
          "conflicting local hash counterparts are installed");
 
-  SqlStatementTrace trace;
-  expect(sqlite3_trace_v2(chartDatabase.get(), SQLITE_TRACE_STMT,
-                          collectSqlStatement, &trace) == SQLITE_OK,
-         "course definition query trace installs");
-  const auto definitions =
-      chartDb.SelectDifficultyCourseDefinitions(chartDatabase.get());
-  sqlite3_trace_v2(chartDatabase.get(), 0, nullptr, nullptr);
+  trace.statements.clear();
+  const auto definitions = chartSession->SelectDifficultyCourseDefinitions();
   const auto statementCount = [&](std::string_view fragment) {
     return std::ranges::count_if(trace.statements, [&](const std::string &sql) {
       return std::string_view(sql).find(fragment) != std::string_view::npos;
@@ -2185,7 +2259,9 @@ void testDifficultyCourseDefinitionsRejectAmbiguousLocalHashEvidence() {
 }
 
 void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
-  Database chartDatabase = openDatabase(":memory:");
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "legacy-difficulty-course.db";
+  Database chartDatabase = openDatabase(chartPath);
   expect(chartDatabase != nullptr, "legacy difficulty course database opens");
   if (!chartDatabase) {
     return;
@@ -2208,10 +2284,21 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
                  "sort_order) VALUES(42,'11111111111111111111111111111111',0),"
                  "(42,'22222222222222222222222222222222',1);"),
          "legacy difficulty course schema is prepared");
+  chartDatabase.reset();
 
-  ChartDBHelper &chartDb = ChartDBHelper::GetInstance();
-  expect(chartDb.CreateDifficultyTableTables(chartDatabase.get()),
+  ChartRepository chartDb(chartPath);
+  auto chartSession = chartDb.OpenSession();
+  expect(chartSession.has_value(),
          "legacy difficulty course schema migrates");
+  if (!chartSession) {
+    return;
+  }
+  chartDatabase = openDatabase(chartPath);
+  expect(chartDatabase != nullptr,
+         "migrated difficulty course database reopens");
+  if (!chartDatabase) {
+    return;
+  }
   expect(queryInt(chartDatabase.get(),
                   "SELECT COUNT(*) FROM difficulty_courses") == 1 &&
              queryInt(chartDatabase.get(),
@@ -2237,7 +2324,7 @@ void testDifficultyCourseKeySchemaBackfillsWithoutDeletingRows() {
                  "UPDATE difficulty_courses SET course_key='retained-key' "
                  "WHERE id=42"),
          "legacy nonempty key is installed");
-  expect(chartDb.CreateDifficultyTableTables(chartDatabase.get()),
+  expect(chartSession->EnsureSchema(),
          "difficulty course schema migration is safely repeatable");
   expect(queryString(chartDatabase.get(),
                      "SELECT course_key FROM difficulty_courses WHERE id=42") ==

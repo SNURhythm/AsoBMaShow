@@ -35,7 +35,6 @@ if (ANDROID)
 else()
     set(PLATFORM_ANDROID OFF)
 endif()
-
 # Option to build macOS app bundle
 if (PLATFORM_MACOS)
     option(BUILD_MACOS_BUNDLE "Build macOS app bundle" OFF)
@@ -51,7 +50,6 @@ if (PLATFORM_MACOS)
     set(MACOS_INFO_PLIST "${CMAKE_BINARY_DIR}/Info.plist")
     configure_file(${CMAKE_SOURCE_DIR}/Info.plist ${MACOS_INFO_PLIST} @ONLY)
 endif()
-
 # Common Definitions
 add_definitions(-DSOL_LUAJIT=1 -DNOMINMAX)
 set(BX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
@@ -512,6 +510,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
+    add_executable(repository_boundary_tests
+        tests/repository_boundary_tests.cpp
+    )
+    target_compile_features(repository_boundary_tests PRIVATE cxx_std_23)
+    target_compile_definitions(repository_boundary_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(gyroscope_turntable_tests
         tests/gyroscope_turntable_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -570,11 +576,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(course_identity_tests PRIVATE cxx_std_23)
 
-    add_executable(replay_db_helper_tests
-        tests/replay_db_helper_tests.cpp
+    add_executable(replay_repository_tests
+        tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -582,14 +590,165 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/path.cpp
         src/sqlite3.c
     )
-    target_include_directories(replay_db_helper_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(replay_db_helper_tests PRIVATE cxx_std_23)
+    target_include_directories(replay_repository_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(replay_repository_tests PRIVATE cxx_std_23)
     if(TARGET SDL2::SDL2)
-        target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2)
+        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(replay_db_helper_tests PRIVATE SDL2::SDL2-static)
+        target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
-        target_link_libraries(replay_db_helper_tests PRIVATE SDL2)
+        target_link_libraries(replay_repository_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(music_playlist_repository_tests
+        tests/music_playlist_repository_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/MusicPlaylistRepository.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(music_playlist_repository_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(music_playlist_repository_tests PRIVATE cxx_std_23)
+    target_link_libraries(music_playlist_repository_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(music_playlist_repository_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(music_playlist_repository_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(chart_repository_tests
+        tests/chart_repository_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_repository_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_repository_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_repository_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(chart_repository_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(chart_repository_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(chart_library_scanner_tests
+        tests/chart_library_scanner_tests.cpp
+        src/ChartLibraryScanner.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_library_scanner_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_library_scanner_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_library_scanner_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(chart_library_scanner_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(chart_library_scanner_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(chart_library_scanner_tests PRIVATE shell32 ole32)
+    endif()
+
+    add_executable(difficulty_table_importer_tests
+        tests/difficulty_table_importer_tests.cpp
+        src/DifficultyTableImporter.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(difficulty_table_importer_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(difficulty_table_importer_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(difficulty_table_importer_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(difficulty_table_importer_tests PRIVATE shell32 ole32)
     endif()
 
     add_executable(result_persistence_model_tests
@@ -633,10 +792,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/result_persistence_integration_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
-        src/ScoreDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -665,7 +828,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
-        src/ScoreDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -691,11 +856,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(main_menu_library_tests
         tests/main_menu_library_tests.cpp
+        src/repositories/ChartRepositoryQueries.cpp
         src/scene/MainMenuLibrary.cpp
         src/sqlite3.c
     )
     target_include_directories(main_menu_library_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(main_menu_library_tests PRIVATE cxx_std_23)
+    target_compile_definitions(main_menu_library_tests PRIVATE
+        ASOBMASHOW_FOLDER_QUERY_ONLY=1
+    )
     if(TARGET SDL2::SDL2)
         target_link_libraries(main_menu_library_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -1167,8 +1336,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
-        src/ScoreDBHelper.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1192,6 +1365,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(profile_switch_tests
         tests/profile_switch_tests.cpp
+        src/DifficultyTableImporter.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ProfileSessionCoordinator.cpp
@@ -1212,9 +1386,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
-        src/ChartDBHelper.cpp
-        src/ScoreDBHelper.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
@@ -1260,8 +1443,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfile.cpp
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
-        src/ScoreDBHelper.cpp
-        src/ReplayDBHelper.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1394,6 +1581,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endfunction()
 
+    asobmashow_register_test(repository_boundary_tests)
+
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)
     set_tests_properties(foundation_av_settings PROPERTIES
@@ -1433,7 +1622,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_summary_list_tests
         replay_record_filters_tests
         course_identity_tests
-        replay_db_helper_tests
+        replay_repository_tests
+        music_playlist_repository_tests
+        chart_repository_tests
+        chart_library_scanner_tests
+        difficulty_table_importer_tests
         result_persistence_model_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests

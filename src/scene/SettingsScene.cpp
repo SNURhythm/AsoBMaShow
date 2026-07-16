@@ -238,7 +238,7 @@ void SettingsScene::init() {
         inputGyroscopeSettingsError.clear();
         inputViewRebuildGate.prepareForProfileReplacement();
       });
-  observedLibraryRevision = ChartDBHelper::GetInstance().GetLibraryRevision();
+  observedLibraryRevision = context.chartRepository.GetLibraryRevision();
   ensureLayoutUpToDate();
 }
 

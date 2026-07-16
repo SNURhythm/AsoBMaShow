@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../ChartRecordFilters.h"
-#include "../ChartDBHelper.h"
+#include "../repositories/ChartRepository.h"
 #include "../view/View.h"
 
 #include <array>

@@ -1,13 +1,14 @@
 #pragma once
 #include "../BmsSearchService.h"
+#include "../ChartLibraryScanner.h"
 #include "../view/RecyclerView.h"
 #include "ChartFilterSortPanelView.h"
 #include "Scene.h"
-#include "../ChartDBHelper.h"
-#include "../ReplayDBHelper.h"
+#include "../repositories/ChartRepository.h"
+#include "../repositories/ReplayRepository.h"
 #include "../ReplayRecordFilters.h"
 #include "../ReplayVideoExporter.h"
-#include "../ScoreDBHelper.h"
+#include "../repositories/ScoreRepository.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
 #include "../utils/Debouncer.h"
@@ -63,7 +64,7 @@ public:
   void cleanupScene() override;
 
 private:
-  sqlite3 *db = nullptr;
+  std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
   std::unique_ptr<bms_parser::Chart> selectedChart;
   mutable std::mutex selectedChartMutex;
@@ -214,7 +215,7 @@ private:
         coursesByGroup;
   };
   struct ChartListPageCache {
-    sqlite3 *db = nullptr;
+    ChartRepository::Session *session = nullptr;
     ChartMetaQuery query;
     int totalCount = 0;
     int pageSize = 128;
@@ -224,7 +225,8 @@ private:
     mutable ChartMetaRecord fallbackRecord;
     std::optional<ChartMetaRecord> leadingRecord;
 
-    void reset(sqlite3 *database, const ChartMetaQuery &chartQuery, int count,
+    void reset(ChartRepository::Session &chartSession,
+               const ChartMetaQuery &chartQuery, int count,
                std::optional<ChartMetaRecord> leading = std::nullopt);
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
@@ -456,7 +458,7 @@ private:
   ScoreBestCache scoreBestScores;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t libraryRevision = 0;
-  main_menu_library::FolderClearDataByLongNoteMode folderClearData;
+  chart_library::FolderClearDataByLongNoteMode folderClearData;
   struct CourseValidationCache {
     bool valid = false;
     std::uint64_t libraryRevision = 0;
@@ -595,7 +597,7 @@ private:
                             const std::stop_token &stopToken);
 #endif
   void seedDefaultDifficultyTablesIfNeeded(
-      sqlite3 *taskDb, std::uint64_t taskId,
+      ChartRepository::Session &chartSession, std::uint64_t taskId,
       const std::stop_token &stopToken);
   static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
   static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
@@ -789,7 +791,7 @@ private:
   void pollPendingAndroidArchiveImport();
   void applyPendingAndroidArchiveImport();
 #endif
-  static void LoadCharts(ChartDBHelper &dbHelper, sqlite3 *db,
+  static void LoadCharts(ChartRepository::Session &chartSession,
                          std::vector<ChartEntry> &entries, MainMenuScene &scene,
                          const std::stop_token &stop_token,
                          ChartScanProgressCallback progressCallback = nullptr,

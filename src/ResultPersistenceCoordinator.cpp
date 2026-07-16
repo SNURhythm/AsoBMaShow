@@ -137,7 +137,7 @@ const StageReceipt *SaveOutcome::validatedReceiptFor(
   return &*receipt;
 }
 
-Coordinator::Coordinator(ScoreDBHelper &score, ReplayDBHelper &replay)
+Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
     : Coordinator(Dependencies{
           .stage =
               [&replay](const ChartResultAttempt &attempt) {

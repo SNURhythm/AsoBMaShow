@@ -1,12 +1,25 @@
 #include "../src/AppDatabaseInitializer.h"
+#include "../src/ResultPersistenceCoordinator.h"
 
 #include <iostream>
 #include <type_traits>
 
-static_assert(!std::is_copy_constructible_v<MusicPlaylistDB>);
-static_assert(!std::is_copy_assignable_v<MusicPlaylistDB>);
-static_assert(!std::is_move_constructible_v<MusicPlaylistDB>);
-static_assert(!std::is_move_assignable_v<MusicPlaylistDB>);
+static_assert(!std::is_copy_constructible_v<MusicPlaylistRepository>);
+static_assert(!std::is_copy_assignable_v<MusicPlaylistRepository>);
+static_assert(!std::is_move_constructible_v<MusicPlaylistRepository>);
+static_assert(!std::is_move_assignable_v<MusicPlaylistRepository>);
+static_assert(!std::is_copy_constructible_v<ScoreRepository>);
+static_assert(!std::is_copy_constructible_v<ReplayRepository>);
+static_assert(!std::is_copy_constructible_v<ChartRepository>);
+static_assert(std::is_constructible_v<result_persistence::Coordinator,
+                                      ScoreRepository &,
+                                      ReplayRepository &>);
+static_assert(requires(ChartRepository &charts, ScoreRepository &scores,
+                       ReplayRepository &replays,
+                       MusicPlaylistRepository &music) {
+  app_database_initializer::initializeApplicationDatabases(
+      charts, scores, replays, music);
+});
 
 #define ASSERT_TRUE(value, label)                                              \
   if (!(value)) {                                                              \

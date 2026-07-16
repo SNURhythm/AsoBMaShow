@@ -1,9 +1,10 @@
-#include "MusicPlaylistDB.h"
+#include "MusicPlaylistRepository.h"
 
 #include "../BmsMetadataText.h"
-#include "../ChartMetaSql.h"
-#include "../ChartSqlExpressions.h"
-#include "../SqliteRAII.h"
+#include "ChartMetaSql.h"
+#include "ChartSqlExpressions.h"
+#include "ChartStorageIdentity.h"
+#include "SqliteRAII.h"
 #include "../Utils.h"
 #include "../path.h"
 
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -279,7 +281,7 @@ std::filesystem::path pathFromDbText(const std::string &value) {
 std::filesystem::path absolutePathFromColumn(sqlite3_stmt *stmt, int idx) {
   auto path = pathFromDbText(columnString(stmt, idx));
   if (!path.empty()) {
-    ChartDBHelper::ToAbsolutePath(path);
+    chart_storage_identity::ToAbsolutePath(path);
   }
   return path;
 }
@@ -289,7 +291,7 @@ std::filesystem::path relativePathFromColumn(sqlite3_stmt *stmt, int idx) {
 }
 
 std::string storedPathTextForDbValue(const std::string &value) {
-  return ChartDBHelper::StoredChartPathText(pathFromDbText(value));
+  return chart_storage_identity::StoredPathText(pathFromDbText(value));
 }
 
 struct PendingStoredPathNormalization {
@@ -527,7 +529,8 @@ struct StoredMusicTrackIdentity {
 StoredMusicTrackIdentity
 storedMusicTrackIdentity(const bms_parser::ChartMeta &chartMeta) {
   StoredMusicTrackIdentity identity;
-  identity.chartPath = ChartDBHelper::StoredChartPathText(chartMeta.BmsPath);
+  identity.chartPath =
+      chart_storage_identity::StoredPathText(chartMeta.BmsPath);
   identity.md5 = normalizedHash(chartMeta.MD5);
   identity.sha256 = normalizedHash(chartMeta.SHA256);
 
@@ -872,21 +875,93 @@ void readStoredMusicTrackRows(sqlite3_stmt *stmt,
 
 } // namespace
 
-sqlite3 *MusicPlaylistDB::Connect() {
-  std::filesystem::path directory = Utils::GetDocumentsPath("db");
-  const std::filesystem::path playlistPath =
-      directory / kPlaylistDatabaseFileName;
-  const std::filesystem::path chartPath = directory / kChartDatabaseFileName;
+struct MusicPlaylistRepository::Impl {
+  Impl(std::filesystem::path databasePath,
+       std::filesystem::path chartDatabasePath)
+      : databasePath(std::move(databasePath)),
+        chartDatabasePath(std::move(chartDatabasePath)) {}
+  ~Impl();
 
+  bool EnsureDatabase();
+  void Shutdown();
+  sqlite3 *Connect();
+  void Close(sqlite3 *db);
+  bool CreateTables(sqlite3 *db);
+  int EnsurePlaylist(sqlite3 *db, const std::string &name);
+  bool RenamePlaylist(sqlite3 *db, int playlistId, const std::string &name);
+  std::vector<MusicPlaylistInfo> SelectPlaylists(sqlite3 *db);
+  bool InsertTrack(sqlite3 *db, int playlistId,
+                   const bms_parser::ChartMeta &chartMeta);
+  bool DeleteTrack(sqlite3 *db, int playlistId,
+                   const bms_parser::ChartMeta &chartMeta,
+                   int storedItemId);
+  bool MoveTrack(sqlite3 *db, int playlistId,
+                 const bms_parser::ChartMeta &chartMeta, int delta,
+                 int storedItemId);
+  bool ClearPlaylist(sqlite3 *db, int playlistId);
+  bool DeletePlaylist(sqlite3 *db, int playlistId);
+  MusicPlayerStateRecord SelectPlayerState(sqlite3 *db);
+  bool SavePlayerState(sqlite3 *db, const MusicPlayerStateRecord &state);
+  bool ReplaceNowPlayingTracks(
+      sqlite3 *db, const std::vector<bms_parser::ChartMeta> &tracks);
+  void SelectLibraryTracks(sqlite3 *db,
+                           std::vector<MusicTrackRecord> &tracks);
+  void SelectLibraryGroupTracks(sqlite3 *db,
+                                const bms_parser::ChartMeta &chartMeta,
+                                std::vector<MusicTrackRecord> &tracks);
+  void SelectNowPlayingTracks(sqlite3 *db,
+                              std::vector<MusicTrackRecord> &tracks);
+  void SelectTracks(sqlite3 *db, int playlistId,
+                    std::vector<MusicTrackRecord> &tracks);
+
+  std::filesystem::path databasePath;
+  std::filesystem::path chartDatabasePath;
+  std::mutex mutex;
+  sqlite3 *database = nullptr;
+  sqlite3 *schemaDatabase = nullptr;
+};
+
+MusicPlaylistRepository::Impl::~Impl() { Shutdown(); }
+
+bool MusicPlaylistRepository::Impl::EnsureDatabase() {
+  if (database != nullptr) {
+    if (sqlite3_get_autocommit(database) != 0) {
+      return true;
+    }
+    std::cerr << "Discarding music playlist database with an unfinished "
+                 "transaction.\n";
+    Shutdown();
+  }
+
+  database = Connect();
+  if (database == nullptr) {
+    return false;
+  }
+  if (!CreateTables(database)) {
+    Shutdown();
+    return false;
+  }
+  return true;
+}
+
+void MusicPlaylistRepository::Impl::Shutdown() {
+  sqlite3 *connection = database;
+  database = nullptr;
+  Close(connection);
+}
+
+sqlite3 *MusicPlaylistRepository::Impl::Connect() {
   std::string chartValidationError;
-  if (!validateChartDatabase(chartPath, chartValidationError)) {
+  if (!validateChartDatabase(chartDatabasePath, chartValidationError)) {
     std::cerr << "Can't use chart database for music playlists: "
               << chartValidationError << "\n";
     return nullptr;
   }
 
+  const std::filesystem::path directory = databasePath.parent_path();
   std::error_code directoryError;
-  if (!Utils::EnsureDirectoryExists(directory, directoryError)) {
+  if (!directory.empty() &&
+      !Utils::EnsureDirectoryExists(directory, directoryError)) {
     std::cerr << "Can't create music playlist database directory "
               << fspath_to_utf8(directory) << ": " << directoryError.message()
               << "\n";
@@ -895,7 +970,7 @@ sqlite3 *MusicPlaylistDB::Connect() {
 
   std::string openError;
   sqlite3 *db = openValidatedSqliteDatabase(
-      playlistPath, kMusicPlaylistDatabaseSchemaVersion, true, openError);
+      databasePath, kMusicPlaylistDatabaseSchemaVersion, true, openError);
   if (db == nullptr) {
     std::cerr << "Can't open music playlist database: " << openError << "\n";
     return nullptr;
@@ -909,21 +984,21 @@ sqlite3 *MusicPlaylistDB::Connect() {
     return nullptr;
   }
   registerMusicPlaylistSqliteFunctions(db);
-  if (!attachChartDatabase(db, chartPath)) {
+  if (!attachChartDatabase(db, chartDatabasePath)) {
     closeSqliteDatabase(db);
     return nullptr;
   }
   return db;
 }
 
-void MusicPlaylistDB::Close(sqlite3 *db) {
+void MusicPlaylistRepository::Impl::Close(sqlite3 *db) {
   if (schemaDatabase == db) {
     schemaDatabase = nullptr;
   }
   closeSqliteDatabase(db);
 }
 
-bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
+bool MusicPlaylistRepository::Impl::CreateTables(sqlite3 *db) {
   if (db == nullptr) {
     return false;
   }
@@ -1046,7 +1121,7 @@ bool MusicPlaylistDB::CreateTables(sqlite3 *db) {
   return true;
 }
 
-int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
+int MusicPlaylistRepository::Impl::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   if (!CreateTables(db)) {
     return 0;
   }
@@ -1084,7 +1159,7 @@ int MusicPlaylistDB::EnsurePlaylist(sqlite3 *db, const std::string &name) {
   return 0;
 }
 
-bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::Impl::RenamePlaylist(sqlite3 *db, int playlistId,
                                      const std::string &name) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
@@ -1129,7 +1204,7 @@ bool MusicPlaylistDB::RenamePlaylist(sqlite3 *db, int playlistId,
   return sqlite3_changes(db) > 0;
 }
 
-std::vector<MusicPlaylistInfo> MusicPlaylistDB::SelectPlaylists(sqlite3 *db) {
+std::vector<MusicPlaylistInfo> MusicPlaylistRepository::Impl::SelectPlaylists(sqlite3 *db) {
   std::vector<MusicPlaylistInfo> playlists;
   if (!CreateTables(db)) {
     return playlists;
@@ -1158,7 +1233,7 @@ std::vector<MusicPlaylistInfo> MusicPlaylistDB::SelectPlaylists(sqlite3 *db) {
   return playlists;
 }
 
-bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::Impl::InsertTrack(sqlite3 *db, int playlistId,
                                   const bms_parser::ChartMeta &chartMeta) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
@@ -1213,7 +1288,7 @@ bool MusicPlaylistDB::InsertTrack(sqlite3 *db, int playlistId,
   return true;
 }
 
-bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::Impl::DeleteTrack(sqlite3 *db, int playlistId,
                                   const bms_parser::ChartMeta &chartMeta,
                                   int storedItemId) {
   if (playlistId <= 0 || !CreateTables(db)) {
@@ -1260,7 +1335,7 @@ bool MusicPlaylistDB::DeleteTrack(sqlite3 *db, int playlistId,
   return deleted;
 }
 
-bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
+bool MusicPlaylistRepository::Impl::MoveTrack(sqlite3 *db, int playlistId,
                                 const bms_parser::ChartMeta &chartMeta,
                                 int delta, int storedItemId) {
   if (playlistId <= 0 || delta == 0 || !CreateTables(db)) {
@@ -1352,7 +1427,7 @@ bool MusicPlaylistDB::MoveTrack(sqlite3 *db, int playlistId,
   return moved;
 }
 
-bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
+bool MusicPlaylistRepository::Impl::ClearPlaylist(sqlite3 *db, int playlistId) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
   }
@@ -1375,7 +1450,7 @@ bool MusicPlaylistDB::ClearPlaylist(sqlite3 *db, int playlistId) {
   return true;
 }
 
-bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
+bool MusicPlaylistRepository::Impl::DeletePlaylist(sqlite3 *db, int playlistId) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return false;
   }
@@ -1412,7 +1487,7 @@ bool MusicPlaylistDB::DeletePlaylist(sqlite3 *db, int playlistId) {
   return sqlite3_changes(db) > 0;
 }
 
-MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
+MusicPlayerStateRecord MusicPlaylistRepository::Impl::SelectPlayerState(sqlite3 *db) {
   MusicPlayerStateRecord state;
   if (db == nullptr || !CreateTables(db)) {
     return state;
@@ -1439,7 +1514,7 @@ MusicPlayerStateRecord MusicPlaylistDB::SelectPlayerState(sqlite3 *db) {
   return state;
 }
 
-bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
+bool MusicPlaylistRepository::Impl::SavePlayerState(sqlite3 *db,
                                       const MusicPlayerStateRecord &state) {
   if (db == nullptr || !CreateTables(db)) {
     return false;
@@ -1509,7 +1584,7 @@ bool MusicPlaylistDB::SavePlayerState(sqlite3 *db,
   return true;
 }
 
-bool MusicPlaylistDB::ReplaceNowPlayingTracks(
+bool MusicPlaylistRepository::Impl::ReplaceNowPlayingTracks(
     sqlite3 *db, const std::vector<bms_parser::ChartMeta> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return false;
@@ -1581,7 +1656,7 @@ bool MusicPlaylistDB::ReplaceNowPlayingTracks(
   return true;
 }
 
-void MusicPlaylistDB::SelectLibraryTracks(
+void MusicPlaylistRepository::Impl::SelectLibraryTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return;
@@ -1647,7 +1722,7 @@ void MusicPlaylistDB::SelectLibraryTracks(
   }
 }
 
-void MusicPlaylistDB::SelectLibraryGroupTracks(
+void MusicPlaylistRepository::Impl::SelectLibraryGroupTracks(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
@@ -1659,7 +1734,8 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   if (!useFolder) {
     groupPath = chartMeta.BmsPath;
   }
-  const std::string groupKey = ChartDBHelper::StoredChartPathText(groupPath);
+  const std::string groupKey =
+      chart_storage_identity::StoredPathText(groupPath);
   if (groupKey.empty()) {
     return;
   }
@@ -1695,7 +1771,7 @@ void MusicPlaylistDB::SelectLibraryGroupTracks(
   }
 }
 
-void MusicPlaylistDB::SelectNowPlayingTracks(
+void MusicPlaylistRepository::Impl::SelectNowPlayingTracks(
     sqlite3 *db, std::vector<MusicTrackRecord> &tracks) {
   if (db == nullptr || !CreateTables(db)) {
     return;
@@ -1713,7 +1789,7 @@ void MusicPlaylistDB::SelectNowPlayingTracks(
   readStoredMusicTrackRows(stmt, tracks);
 }
 
-void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
+void MusicPlaylistRepository::Impl::SelectTracks(sqlite3 *db, int playlistId,
                                    std::vector<MusicTrackRecord> &tracks) {
   if (playlistId <= 0 || !CreateTables(db)) {
     return;
@@ -1730,4 +1806,193 @@ void MusicPlaylistDB::SelectTracks(sqlite3 *db, int playlistId,
   }
   sqlite3_bind_int(stmt, 1, playlistId);
   readStoredMusicTrackRows(stmt, tracks);
+}
+
+MusicPlaylistRepository::MusicPlaylistRepository()
+    : MusicPlaylistRepository(
+          Utils::GetDocumentsPath("db") / kPlaylistDatabaseFileName,
+          Utils::GetDocumentsPath("db") / kChartDatabaseFileName) {}
+
+MusicPlaylistRepository::MusicPlaylistRepository(
+    std::filesystem::path databasePath,
+    std::filesystem::path chartDatabasePath)
+    : impl_(std::make_unique<Impl>(std::move(databasePath),
+                                   std::move(chartDatabasePath))) {}
+
+MusicPlaylistRepository::~MusicPlaylistRepository() = default;
+
+bool MusicPlaylistRepository::EnsureReady() {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase();
+}
+
+void MusicPlaylistRepository::Shutdown() {
+  std::lock_guard lock(impl_->mutex);
+  impl_->Shutdown();
+}
+
+int MusicPlaylistRepository::EnsurePlaylist(const std::string &name) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase()
+             ? impl_->EnsurePlaylist(impl_->database, name)
+             : 0;
+}
+
+int MusicPlaylistRepository::EnsurePlaylistWithTracks(
+    const std::string &name,
+    const std::vector<bms_parser::ChartMeta> &tracks) {
+  std::lock_guard lock(impl_->mutex);
+  if (!impl_->EnsureDatabase()) {
+    return 0;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->database, "BEGIN",
+                                      transactionError);
+  if (!transaction.active()) {
+    return 0;
+  }
+  const int playlistId = impl_->EnsurePlaylist(impl_->database, name);
+  if (playlistId <= 0) {
+    return 0;
+  }
+  for (const auto &track : tracks) {
+    if (!impl_->InsertTrack(impl_->database, playlistId, track)) {
+      return 0;
+    }
+  }
+  return transaction.commit(transactionError) ? playlistId : 0;
+}
+
+bool MusicPlaylistRepository::RenamePlaylist(int playlistId,
+                                             const std::string &name) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->RenamePlaylist(impl_->database, playlistId, name);
+}
+
+std::vector<MusicPlaylistInfo> MusicPlaylistRepository::SelectPlaylists() {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase()
+             ? impl_->SelectPlaylists(impl_->database)
+             : std::vector<MusicPlaylistInfo>{};
+}
+
+bool MusicPlaylistRepository::InsertTrack(
+    int playlistId, const bms_parser::ChartMeta &chartMeta) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->InsertTrack(impl_->database, playlistId, chartMeta);
+}
+
+bool MusicPlaylistRepository::DeleteTrack(
+    int playlistId, const bms_parser::ChartMeta &chartMeta, int storedItemId) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->DeleteTrack(impl_->database, playlistId, chartMeta,
+                            storedItemId);
+}
+
+bool MusicPlaylistRepository::MoveTrack(
+    int playlistId, const bms_parser::ChartMeta &chartMeta, int delta,
+    int storedItemId) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->MoveTrack(impl_->database, playlistId, chartMeta, delta,
+                          storedItemId);
+}
+
+bool MusicPlaylistRepository::ClearPlaylist(int playlistId) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->ClearPlaylist(impl_->database, playlistId);
+}
+
+bool MusicPlaylistRepository::DeletePlaylist(int playlistId) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->DeletePlaylist(impl_->database, playlistId);
+}
+
+MusicPlayerStateRecord MusicPlaylistRepository::SelectPlayerState() {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase()
+             ? impl_->SelectPlayerState(impl_->database)
+             : MusicPlayerStateRecord{};
+}
+
+bool MusicPlaylistRepository::SavePlayerState(
+    const MusicPlayerStateRecord &state) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->SavePlayerState(impl_->database, state);
+}
+
+bool MusicPlaylistRepository::ReplaceNowPlayingTracks(
+    const std::vector<bms_parser::ChartMeta> &tracks) {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->EnsureDatabase() &&
+         impl_->ReplaceNowPlayingTracks(impl_->database, tracks);
+}
+
+bool MusicPlaylistRepository::SaveNowPlayingState(
+    const std::vector<bms_parser::ChartMeta> &tracks,
+    const MusicPlayerStateRecord &state) {
+  std::lock_guard lock(impl_->mutex);
+  if (!impl_->EnsureDatabase()) {
+    return false;
+  }
+
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->database, "BEGIN",
+                                      transactionError);
+  if (!transaction.active()) {
+    return false;
+  }
+  if (!impl_->ReplaceNowPlayingTracks(impl_->database, tracks) ||
+      !impl_->SavePlayerState(impl_->database, state)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
+}
+
+std::vector<MusicTrackRecord>
+MusicPlaylistRepository::SelectLibraryTracks() {
+  std::lock_guard lock(impl_->mutex);
+  std::vector<MusicTrackRecord> tracks;
+  if (impl_->EnsureDatabase()) {
+    impl_->SelectLibraryTracks(impl_->database, tracks);
+  }
+  return tracks;
+}
+
+std::vector<MusicTrackRecord>
+MusicPlaylistRepository::SelectLibraryGroupTracks(
+    const bms_parser::ChartMeta &chartMeta) {
+  std::lock_guard lock(impl_->mutex);
+  std::vector<MusicTrackRecord> tracks;
+  if (impl_->EnsureDatabase()) {
+    impl_->SelectLibraryGroupTracks(impl_->database, chartMeta, tracks);
+  }
+  return tracks;
+}
+
+std::vector<MusicTrackRecord>
+MusicPlaylistRepository::SelectNowPlayingTracks() {
+  std::lock_guard lock(impl_->mutex);
+  std::vector<MusicTrackRecord> tracks;
+  if (impl_->EnsureDatabase()) {
+    impl_->SelectNowPlayingTracks(impl_->database, tracks);
+  }
+  return tracks;
+}
+
+std::vector<MusicTrackRecord>
+MusicPlaylistRepository::SelectTracks(int playlistId) {
+  std::lock_guard lock(impl_->mutex);
+  std::vector<MusicTrackRecord> tracks;
+  if (impl_->EnsureDatabase()) {
+    impl_->SelectTracks(impl_->database, playlistId, tracks);
+  }
+  return tracks;
 }

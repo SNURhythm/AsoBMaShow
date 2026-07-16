@@ -701,17 +701,19 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   const std::string &pacemakerTarget) {
   RhythmState state = replay_result::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
-      result_presentation::previousBestForReplayChart(chart.Meta, replay);
+      result_presentation::previousBestForReplayChart(
+          context.scoreRepository, chart.Meta, replay);
   std::optional<ResultPacemakerData> pacemaker;
   if (!replay.autoPlay) {
     const std::string target =
         pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
                                 : pacemakerTarget;
     pacemaker = result_presentation::pacemakerDataForReplayResult(
-        chart, state, replay, target, previousBest);
+        context.replayRepository, chart, state, replay, target, previousBest);
   }
   std::string difficultyLabel =
-      result_presentation::difficultyLabelForChart(chart.Meta);
+      result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                    chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
   const std::span<const ReplayData> attempts(&replay, 1);
@@ -782,9 +784,10 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
         std::in_place, *chart, attempts, 0);
     const auto result = renderResultImage(
         context, chart->Meta, state, display.mode, display.laneOrder,
-        result_presentation::difficultyLabelForChart(chart->Meta),
-        result_presentation::previousBestForReplayChart(chart->Meta,
-                                                        stageReplay),
+        result_presentation::difficultyLabelForChart(context.chartRepository,
+                                                      chart->Meta),
+        result_presentation::previousBestForReplayChart(
+            context.scoreRepository, chart->Meta, stageReplay),
         "NO PLAY", kNoClearTypeRank, std::nullopt, std::nullopt,
         analyticsModel,
         outputDir / filename);

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ProfileDatabaseActivity.h"
-#include "ScoreProvenance.h"
+#include "../ProfileDatabaseActivity.h"
+#include "../ScoreProvenance.h"
 #include "SqliteRAII.h"
-#include "scene/play/RhythmState.h"
+#include "../scene/play/RhythmState.h"
 
 #include <array>
 #include <filesystem>

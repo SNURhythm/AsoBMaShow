@@ -1,10 +1,9 @@
 #include "../src/AppSettingsStore.h"
 #include "../src/AtomicFile.h"
-#include "../src/ChartDBHelper.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileDatabaseTools.h"
-#include "../src/ReplayDBHelper.h"
-#include "../src/ScoreDBHelper.h"
+#include "../src/repositories/ReplayRepository.h"
+#include "../src/repositories/ScoreRepository.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -23,10 +22,6 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
-
-ChartDBHelper::ChartDBHelper() = default;
-sqlite3 *ChartDBHelper::Connect() { return nullptr; }
-bool ChartDBHelper::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 int failures = 0;
@@ -183,8 +178,8 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
 
   const auto scorePath = root / "db" / "score.db";
   const auto replayPath = root / "db" / "replay.db";
-  ScoreDBHelper scoreHelper(scorePath);
-  ReplayDBHelper replayHelper(replayPath);
+  ScoreRepository scoreHelper(scorePath);
+  ReplayRepository replayHelper(replayPath);
   expect(scoreHelper.EnsureSchema(), "legacy score schema initializes");
   expect(replayHelper.EnsureSchema(), "legacy replay schema initializes");
 
@@ -1933,9 +1928,9 @@ void testSupportedOlderInactiveProfileUsesManagePolicy() {
     const PlayerProfilePaths copyPaths = manager.pathsFor(duplicateId);
     std::string versionError;
     expect(sqliteDatabaseUserVersion(copyPaths.scoresDb, versionError) ==
-                   ScoreDBHelper::kCurrentSchemaVersion &&
+                   ScoreRepository::kCurrentSchemaVersion &&
                sqliteDatabaseUserVersion(copyPaths.replaysDb, versionError) ==
-                   ReplayDBHelper::kCurrentSchemaVersion,
+                   ReplayRepository::kCurrentSchemaVersion,
            "normal duplicate database owners migrate the copy to current");
     expect(rowCount(copyPaths.scoresDb, "validation_policy_marker") == 1 &&
                rowCount(copyPaths.replaysDb, "validation_policy_marker") == 1,
@@ -2077,8 +2072,8 @@ void testFutureDatabaseProfileIsNeverManageable() {
     const auto futureDatabase =
         futureScoreDatabase ? paths.scoresDb : paths.replaysDb;
     const int futureVersion =
-        futureScoreDatabase ? ScoreDBHelper::kCurrentSchemaVersion + 1
-                            : ReplayDBHelper::kCurrentSchemaVersion + 1;
+        futureScoreDatabase ? ScoreRepository::kCurrentSchemaVersion + 1
+                            : ReplayRepository::kCurrentSchemaVersion + 1;
     setDatabaseVersion(futureDatabase, futureVersion,
                        futureScoreDatabase ? "future score"
                                            : "future replay");
@@ -2167,16 +2162,16 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
              sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,
          "profile startup preflight remains read-only");
 
-  ScoreDBHelper score(paths.scoresDb);
-  ReplayDBHelper replay(paths.replaysDb);
+  ScoreRepository score(paths.scoresDb);
+  ReplayRepository replay(paths.replaysDb);
   expect(score.EnsureSchema() && replay.EnsureSchema(),
          "normal database owners migrate the admitted profile");
   score.Shutdown();
   replay.Shutdown();
   expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) ==
-                 ScoreDBHelper::kCurrentSchemaVersion &&
+                 ScoreRepository::kCurrentSchemaVersion &&
              sqliteDatabaseUserVersion(paths.replaysDb, versionError) ==
-                 ReplayDBHelper::kCurrentSchemaVersion,
+                 ReplayRepository::kCurrentSchemaVersion,
          "database owners advance v5/v3 to the current schemas");
   expect(rowCount(paths.scoresDb, "migration_marker") == 1 &&
              rowCount(paths.replaysDb, "migration_marker") == 1,

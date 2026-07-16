@@ -1,5 +1,6 @@
-#include "../src/ScoreCacheQueries.h"
+#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/sqlite3.h"
+#include "RepositorySqliteTestSupport.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -408,9 +409,34 @@ int main() {
     std::cerr << "open chart db failed" << std::endl;
     return 1;
   }
-  const auto prepareError =
-      score_cache_queries::prepareScoreQueryDatabase(chartDb, scoreDbPath);
-  ASSERT_FALSE(prepareError.has_value(), "prepare score query database");
+  repository_test::StatementTrace trace;
+  {
+    repository_test::ScopedStatementTrace observation(chartDb, trace);
+    ASSERT_FALSE(score_cache_queries::prepareScoreQueryDatabase(chartDb,
+                                                                 scoreDbPath)
+                     .has_value(),
+                 "prepare score query database");
+    ASSERT_FALSE(score_cache_queries::prepareScoreQueryDatabase(chartDb,
+                                                                 scoreDbPath)
+                     .has_value(),
+                 "equivalent score attachment is reused");
+  }
+  int attachmentCount = 0;
+  for (const std::string &sql : trace.sql) {
+    attachmentCount +=
+        sql.find("ATTACH DATABASE") != std::string::npos ? 1 : 0;
+  }
+  ASSERT_EQ(1, attachmentCount,
+            "equivalent preparation does not reattach");
+
+  const auto clearPlan = repository_test::explainPlan(
+      chartDb,
+      "SELECT chart_sha256, ln_mode, rank "
+      "FROM score_db.score_sha256_clear_rank_cache "
+      "WHERE chart_sha256 = 'abcdef' AND ln_mode = 0");
+  ASSERT_TRUE(repository_test::planContains(clearPlan, "PRIMARY KEY"),
+              "WITHOUT ROWID score lookup retains its composite primary-key "
+              "search");
   ASSERT_EQ(123,
             queryInt(chartDb,
                      "SELECT " +

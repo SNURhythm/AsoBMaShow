@@ -1,11 +1,10 @@
-#include "../src/ChartDBHelper.h"
 #include "../src/CourseIdentity.h"
 #include "../src/CoursePlaySession.h"
-#include "../src/ReplayDBHelper.h"
-#include "../src/ScoreCacheQueries.h"
-#include "../src/ScoreDBHelper.h"
+#include "../src/repositories/ReplayRepository.h"
+#include "../src/repositories/ScoreCacheQueries.h"
+#include "../src/repositories/ScoreRepository.h"
 #include "../src/ScoreProvenance.h"
-#include "../src/SqliteRAII.h"
+#include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
 
 #include <array>
@@ -25,13 +24,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
-
-// ScoreDBHelper's pre-v1 migration can consult ChartDBHelper. These v4/v5
-// fixtures never take that path, so the focused target supplies only the
-// three legacy symbols required by the linker.
-ChartDBHelper::ChartDBHelper() = default;
-sqlite3 *ChartDBHelper::Connect() { return nullptr; }
-bool ChartDBHelper::CreateChartMetaTable(sqlite3 *) { return false; }
 
 namespace {
 
@@ -230,25 +222,9 @@ ScoreSchemaSnapshot scoreSchemaSnapshot(const std::filesystem::path &path) {
 void expectScoreSchemaRejectedWithoutMutation(
     const std::filesystem::path &path) {
   const ScoreSchemaSnapshot before = scoreSchemaSnapshot(path);
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(!helper.EnsureSchema());
   assert(scoreSchemaSnapshot(path) == before);
-}
-
-struct AttemptSchemaInspectionAuthorizerState {
-  int tableInfoReads = 0;
-};
-
-int countAttemptSchemaInspection(void *context, int action, const char *first,
-                                 const char *second, const char *,
-                                 const char *) {
-  auto &state = *static_cast<AttemptSchemaInspectionAuthorizerState *>(context);
-  if (action == SQLITE_PRAGMA && first != nullptr && second != nullptr &&
-      std::string_view(first) == "table_info" &&
-      std::string_view(second) == "scores") {
-    ++state.tableInfoReads;
-  }
-  return SQLITE_OK;
 }
 
 std::string readFileBytes(const std::filesystem::path &path) {
@@ -787,7 +763,7 @@ void removeAttemptIdentityFromCurrentSchema(sqlite3 *db) {
 void createVersion8ScoreFixture(const std::filesystem::path &path) {
   createVersion4ScoreFixture(path);
   {
-    ScoreDBHelper bootstrap(path);
+    ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
   auto db = openDatabase(path);
@@ -814,7 +790,7 @@ void testVersion8MigrationAddsAttemptIdentity(
   const auto path = root / "migration-v9-attempt-identity" / "score.db";
   createVersion8ScoreFixture(path);
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   auto db = openDatabase(path);
@@ -841,7 +817,7 @@ void testStaleVersionRecognizesAppliedAttemptIdentity(
     const std::filesystem::path &root) {
   const auto path = root / "stale-v8-applied-attempt-identity" / "score.db";
   {
-    ScoreDBHelper bootstrap(path);
+    ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
 
@@ -852,7 +828,7 @@ void testStaleVersionRecognizesAppliedAttemptIdentity(
   execOrAbort(db.get(), "PRAGMA user_version = 8");
   db.reset();
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 9);
@@ -863,7 +839,7 @@ void testStaleVersionRejectsPartialAttemptIdentity(
     const std::filesystem::path &root) {
   const auto path = root / "stale-v8-partial-attempt-identity" / "score.db";
   {
-    ScoreDBHelper bootstrap(path);
+    ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
 
@@ -873,7 +849,7 @@ void testStaleVersionRejectsPartialAttemptIdentity(
   const std::string partialSchema = schemaSnapshot(db.get());
   db.reset();
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(!helper.EnsureSchema());
   db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 8);
@@ -886,7 +862,7 @@ void testCurrentVersionRejectsMissingAttemptIdentityIndexWithoutMutation(
     const std::filesystem::path &root) {
   const auto path = root / "current-v9-missing-attempt-index" / "score.db";
   {
-    ScoreDBHelper bootstrap(path);
+    ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
 
@@ -910,7 +886,7 @@ void testCurrentVersionRejectsMalformedAttemptIdentityIndexes(
       [&](const std::string &name, const std::string &replacementSql) {
         const auto path = root / name / "score.db";
         {
-          ScoreDBHelper bootstrap(path);
+          ScoreRepository bootstrap(path);
           assert(bootstrap.EnsureSchema());
         }
         auto db = openDatabase(path);
@@ -936,7 +912,7 @@ void testCachedHelperRevalidatesAttemptIdentitySchema(
     const std::filesystem::path &root) {
   const auto path =
       root / "cached-current-v9-missing-attempt-index" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const auto pending =
       samplePendingScore(root, "cached-current-v9-missing-attempt-index", 12,
                          "2026-07-14 08:09:10");
@@ -954,8 +930,6 @@ void testCachedHelperRevalidatesAttemptIdentitySchema(
   std::string bindError;
   assert(!helper.BindDatabasePath(path, bindError));
   assert(!bindError.empty());
-  SqliteConnectionHandle connection(helper.Connect());
-  assert(!connection);
   const auto retry = helper.SaveProjectedScore(pending);
   assert(retry.status == result_persistence::ProjectionStatus::StorageFailure);
   assert(scoreSchemaSnapshot(path) == before);
@@ -967,24 +941,18 @@ void testFutureVersionRejectsBeforeAttemptIdentityInspection(
     const std::filesystem::path &root) {
   const auto path = root / "future-v10-before-attempt-inspection" / "score.db";
   {
-    ScoreDBHelper bootstrap(path);
+    ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
   auto db = openDatabase(path);
   execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
   execOrAbort(db.get(), "PRAGMA user_version = 10");
-  AttemptSchemaInspectionAuthorizerState authorizerState;
-  assert(sqlite3_set_authorizer(db.get(), countAttemptSchemaInspection,
-                                &authorizerState) == SQLITE_OK);
-  ScoreDBHelper helper(path);
-  assert(!helper.InsertScore(db.get(), sampleMeta(root, "future-v10"),
-                             sampleState(1, 0)));
-  assert(authorizerState.tableInfoReads == 0);
-  SqliteStatementHandle inspectionProbe;
-  assert(prepareSqliteStatement(db.get(), "PRAGMA table_info(scores)",
-                                inspectionProbe) == SQLITE_OK);
-  assert(authorizerState.tableInfoReads == 1);
-  assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+  db.reset();
+  const auto before = rawDatabaseFamilySnapshot(path);
+  ScoreRepository helper(path);
+  assert(!helper.EnsureSchema());
+  assert(rawDatabaseFamilySnapshot(path) == before);
+  db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 10);
   assert(!indexExists(db.get(), "idx_scores_attempt_id"));
 }
@@ -992,7 +960,7 @@ void testFutureVersionRejectsBeforeAttemptIdentityInspection(
 void testLegacyNullAttemptScoresRemainRepeatable(
     const std::filesystem::path &root) {
   const auto path = root / "legacy-null-score-attempt" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const auto meta = sampleMeta(root, "legacy-null-score-attempt");
   const auto state = sampleState(12, 3);
   const auto provenance = sampleProvenance("legacy-null-score-attempt");
@@ -1008,7 +976,7 @@ void testLegacyNullAttemptScoresRemainRepeatable(
 
 void testProjectedScoreIsIdempotent(const std::filesystem::path &root) {
   const auto path = root / "projected-score-idempotent" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const auto pending = samplePendingScore(root, "projected-score-idempotent", 1,
                                           "2026-07-14 01:02:03");
   const std::uint64_t revisionBefore = helper.GetRevision();
@@ -1040,7 +1008,7 @@ void testProjectedScoreIsIdempotent(const std::filesystem::path &root) {
 void testProjectedScoreConflictDoesNotMutateExistingRow(
     const std::filesystem::path &root) {
   const auto path = root / "projected-score-conflict" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const auto pending = samplePendingScore(root, "projected-score-conflict", 2,
                                           "2026-07-14 02:03:04");
   assert(helper.SaveProjectedScore(pending).status ==
@@ -1090,7 +1058,7 @@ void testProjectedScoreConflictDoesNotMutateExistingRow(
 
 void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
   const auto path = root / "projected-score-timestamp" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const auto pending = samplePendingScore(root, "projected-score-timestamp", 3,
                                           "2024-02-29 23:59:58.987654");
   assert(helper.SaveProjectedScore(pending).status ==
@@ -1109,7 +1077,7 @@ void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
 void testProjectedRetryUpdatesSummaryCachesOnce(
     const std::filesystem::path &root) {
   const auto path = root / "projected-score-summary-once" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   {
     auto db = openDatabase(path);
@@ -1148,7 +1116,7 @@ void testProjectedRetryUpdatesSummaryCachesOnce(
 void testPreviousBestExcludesExactAttemptAtSameTimestamp(
     const std::filesystem::path &root) {
   const auto path = root / "previous-best-exact-attempt" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const std::string sharedTimestamp = "2026-07-14 05:06:07";
   const auto previous = samplePendingScore(root, "previous-best-exact-attempt",
                                            5, sharedTimestamp, 30, 0);
@@ -1194,7 +1162,7 @@ void testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(
   const auto assertCorruptionConflicts =
       [&](const std::string &name, int suffix, const std::string &mutation) {
         const auto path = root / name / "score.db";
-        ScoreDBHelper helper(path);
+        ScoreRepository helper(path);
         const auto pending =
             samplePendingScore(root, name, suffix, "2026-07-14 06:07:08");
         assert(helper.SaveProjectedScore(pending).status ==
@@ -1232,7 +1200,7 @@ void testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(
 void testUnrelatedScoreConstraintIsStorageFailure(
     const std::filesystem::path &root) {
   const auto path = root / "projected-score-unrelated-constraint" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   {
     auto db = openDatabase(path);
@@ -1262,7 +1230,7 @@ void testAttemptIdentityShadowConstraintIsStorageFailure(
     const std::filesystem::path &root) {
   const auto path =
       root / "projected-score-attempt-shadow-constraint" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const auto first =
       samplePendingScore(root, "projected-score-attempt-shadow-constraint", 13,
                          "2026-07-14 09:10:11");
@@ -1300,13 +1268,13 @@ void testVersion4MigrationPreservesOutcomesAndRows(
   const std::string courseBefore = courseOutcome(before.get());
   before.reset();
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.GetDatabasePath() == path);
   assert(helper.EnsureSchema());
 
   auto migrated = openDatabase(path);
   assert(queryInt(migrated.get(), "PRAGMA user_version") ==
-         ScoreDBHelper::kCurrentSchemaVersion);
+         ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
   assert(chartOutcome(migrated.get()) == chartBefore);
@@ -1351,11 +1319,11 @@ void testVersion5MigrationPreservesRawCourseEvidence(
   const std::string raw = legacyCourseKey("Legacy Course", "[]", md5Charts);
   const std::string converted = course_identity::makeCourseKey(md5Charts, "[]");
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   auto migrated = openDatabase(path);
   assert(queryInt(migrated.get(), "PRAGMA user_version") ==
-         ScoreDBHelper::kCurrentSchemaVersion);
+         ScoreRepository::kCurrentSchemaVersion);
   assert(columnExists(migrated.get(), "course_scores", "legacy_course_key"));
   assert(columnExists(migrated.get(), "course_scores", "ln_mode"));
   assert(
@@ -1408,53 +1376,6 @@ void testVersion5MigrationPreservesRawCourseEvidence(
 
 void testVersion6MigrationIsSavepointSafeAndAtomic(
     const std::filesystem::path &root) {
-  const auto commitPath = root / "migration-v6-outer-commit" / "score.db";
-  createVersion5CourseMigrationFixture(commitPath);
-  {
-    auto db = openDatabase(commitPath);
-    execOrAbort(db.get(), "BEGIN TRANSACTION");
-    ScoreDBHelper helper(commitPath);
-    assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-commit"),
-                              sampleState(1, 1)));
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
-    assert(columnExists(db.get(), "scores", "attempt_id"));
-    assert(indexExists(db.get(), "idx_scores_attempt_id"));
-    execOrAbort(db.get(), "COMMIT");
-  }
-  auto committed = openDatabase(commitPath);
-  assert(queryInt(committed.get(), "PRAGMA user_version") ==
-         ScoreDBHelper::kCurrentSchemaVersion);
-  assert(columnExists(committed.get(), "course_scores", "ln_mode"));
-  committed.reset();
-
-  const auto rollbackPath = root / "migration-v6-outer-rollback" / "score.db";
-  createVersion5CourseMigrationFixture(rollbackPath);
-  {
-    auto db = openDatabase(rollbackPath);
-    execOrAbort(db.get(), "BEGIN TRANSACTION");
-    ScoreDBHelper helper(rollbackPath);
-    assert(helper.InsertScore(db.get(), sampleMeta(root, "v6-rollback"),
-                              sampleState(1, 1)));
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(columnExists(db.get(), "course_scores", "legacy_course_key"));
-    assert(columnExists(db.get(), "scores", "attempt_id"));
-    assert(indexExists(db.get(), "idx_scores_attempt_id"));
-    execOrAbort(db.get(), "ROLLBACK");
-  }
-  auto rolledBack = openDatabase(rollbackPath);
-  assert(queryInt(rolledBack.get(), "PRAGMA user_version") == 5);
-  assert(!columnExists(rolledBack.get(), "course_scores", "legacy_course_key"));
-  assert(!columnExists(rolledBack.get(), "course_scores", "ln_mode"));
-  assert(!indexExists(rolledBack.get(),
-                      "idx_course_scores_key_ln_mode_clear_type"));
-  assert(!columnExists(rolledBack.get(), "scores", "attempt_id"));
-  assert(!indexExists(rolledBack.get(), "idx_scores_attempt_id"));
-  assert(queryInt(rolledBack.get(), "SELECT COUNT(*) FROM scores") == 1);
-  rolledBack.reset();
-
   const auto failurePath = root / "migration-v6-failure" / "score.db";
   createVersion5CourseMigrationFixture(failurePath);
   {
@@ -1463,7 +1384,7 @@ void testVersion6MigrationIsSavepointSafeAndAtomic(
                 "CREATE TRIGGER fail_v6_course_update BEFORE UPDATE ON "
                 "course_scores BEGIN SELECT RAISE(ABORT, 'injected'); END");
   }
-  ScoreDBHelper failing(failurePath);
+  ScoreRepository failing(failurePath);
   assert(!failing.EnsureSchema());
   auto failed = openDatabase(failurePath);
   assert(queryInt(failed.get(), "PRAGMA user_version") == 5);
@@ -1494,7 +1415,7 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
   }
 
   {
-    ScoreDBHelper helper(path);
+    ScoreRepository helper(path);
     assert(helper.EnsureSchema());
   }
 
@@ -1507,7 +1428,7 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
                     "chart_sha256='" +
                         std::string(kShaA) + "'") == 0);
     assert(queryInt(migrated.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
+           ScoreRepository::kCurrentSchemaVersion);
     assert(queryInt(migrated.get(),
                     "SELECT COUNT(*) FROM score_sha256_best_score_cache "
                     "WHERE chart_sha256='" +
@@ -1530,12 +1451,12 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
   }
 
   {
-    ScoreDBHelper reopened(path);
+    ScoreRepository reopened(path);
     assert(reopened.EnsureSchema());
   }
   auto idempotent = openDatabase(path);
   assert(queryInt(idempotent.get(), "PRAGMA user_version") ==
-         ScoreDBHelper::kCurrentSchemaVersion);
+         ScoreRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(idempotent.get()) == schemaAfterMigration);
   assert(queryInt(idempotent.get(),
                   "SELECT COUNT(*) FROM score_sha256_clear_rank_cache WHERE "
@@ -1554,7 +1475,7 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
                 "'injected'); END");
     schemaBeforeFailure = schemaSnapshot(db.get());
   }
-  ScoreDBHelper failing(failurePath);
+  ScoreRepository failing(failurePath);
   assert(!failing.EnsureSchema());
   auto failed = openDatabase(failurePath);
   assert(queryInt(failed.get(), "PRAGMA user_version") == 6);
@@ -1568,7 +1489,7 @@ void testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(
 void testCourseWritesUseAuthoritativeKeysAndExactMode(
     const std::filesystem::path &root) {
   const auto path = root / "course-write-v6" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   bms_parser::ChartMeta meta = sampleMeta(root, "course-key-authoritative");
@@ -1611,7 +1532,7 @@ void testCourseWritesUseAuthoritativeKeysAndExactMode(
   CoursePlaySession unkeyable;
   unkeyable.courseId = 73;
   unkeyable.constraintJson = "[]";
-  ScoreDBHelper rejected(rejectedPath);
+  ScoreRepository rejected(rejectedPath);
   assert(!rejected.SaveCourseScore(unkeyable, sampleState(1, 0), 0, 0));
   assert(!std::filesystem::exists(rejectedPath));
 }
@@ -1640,7 +1561,7 @@ void testLegacyClassicLongNoteLampFallback() {
 void testCourseReadsAreKeyAndModeAuthoritative(
     const std::filesystem::path &root) {
   const auto path = root / "course-read-v6" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   const std::string keyA = course_identity::makeCourseKey(
       std::vector<course_identity::ChartIdentity>{
@@ -1736,7 +1657,7 @@ void testCourseReadsAreKeyAndModeAuthoritative(
 void testCourseLampCacheSeparatesKeysIdsAndModes(
     const std::filesystem::path &root) {
   const auto path = root / "course-lamp-v6" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   const std::string keyA = course_identity::makeCourseKey(
       std::vector<course_identity::ChartIdentity>{
@@ -1810,7 +1731,7 @@ void testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(
        .charts = enriched},
   };
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   const CourseScoreRecoveryResult result =
       helper.RecoverCourseRecords(definitions);
   assert(result.ok());
@@ -1845,7 +1766,7 @@ void testCourseRecoveryFailsClosedOnAmbiguityAndFailure(
     const std::filesystem::path &root) {
   const auto path = root / "course-recovery-ambiguous" / "score.db";
   createVersion5CourseMigrationFixture(path);
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   const std::vector<course_identity::ChartIdentity> firstCharts = {
@@ -1902,7 +1823,7 @@ void testCourseRecoveryFailsClosedOnAmbiguityAndFailure(
 
   const auto failurePath = root / "course-recovery-failure" / "score.db";
   createVersion5CourseMigrationFixture(failurePath);
-  ScoreDBHelper failing(failurePath);
+  ScoreRepository failing(failurePath);
   assert(failing.EnsureSchema());
   {
     auto failureDb = openDatabase(failurePath);
@@ -1930,7 +1851,7 @@ void testIgnoredRecoveryUpdateDoesNotAdvanceRevision(
     const std::filesystem::path &root) {
   const auto path = root / "course-recovery-ignored-update" / "score.db";
   createVersion5CourseMigrationFixture(path);
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   auto db = openDatabase(path);
@@ -1966,7 +1887,7 @@ void testFutureVersionNinePlusOneIsRejected(const std::filesystem::path &root) {
     execOrAbort(db.get(), "PRAGMA user_version=10");
   }
   const auto before = rawDatabaseFamilySnapshot(path);
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(!helper.EnsureSchema());
   CoursePlaySession session;
   session.courseId = 7;
@@ -1986,8 +1907,8 @@ void testChartAndCourseRoundTripAndPathIsolation(
     const std::filesystem::path &root) {
   const auto firstPath = root / "profiles" / "one" / "score.db";
   const auto secondPath = root / "profiles" / "two" / "score.db";
-  ScoreDBHelper first(firstPath);
-  ScoreDBHelper second(secondPath);
+  ScoreRepository first(firstPath);
+  ScoreRepository second(secondPath);
   assert(first.EnsureSchema());
   assert(second.EnsureSchema());
 
@@ -2022,7 +1943,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(queryInt(secondDb.get(), "SELECT COUNT(*) FROM scores") == 0);
   assert(queryInt(secondDb.get(), "SELECT COUNT(*) FROM course_scores") == 0);
 
-  ScoreDBHelper retargetable;
+  ScoreRepository retargetable;
   const std::uint64_t revisionBefore = retargetable.GetRevision();
   retargetable.SetDatabasePath(firstPath);
   assert(retargetable.GetDatabasePath() == firstPath);
@@ -2032,7 +1953,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
 void testModifiedPlaybackDoesNotUpdateBestScores(
     const std::filesystem::path &root) {
   const auto path = root / "assisted-clear-cap" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   const auto meta = sampleMeta(root, "assisted-clear-cap");
@@ -2075,7 +1996,7 @@ void testModifiedPlaybackDoesNotUpdateBestScores(
 void testVersion8MigrationReclassifiesBeatorajaValidScores(
     const std::filesystem::path &root) {
   const auto path = root / "migration-v8-beatoraja-eligibility" / "score.db";
-  ScoreDBHelper initial(path);
+  ScoreRepository initial(path);
   assert(initial.EnsureSchema());
 
   const auto meta = sampleMeta(root, "migration-v8-beatoraja-eligibility");
@@ -2116,14 +2037,14 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
     execOrAbort(db.get(), "PRAGMA user_version = 7");
   }
 
-  ScoreDBHelper migrated(path);
+  ScoreRepository migrated(path);
   assert(migrated.EnsureSchema());
   assert(migrated.LoadBestScore(meta).has_value());
   assert(migrated.LoadBestCourseScore(session).has_value());
 
   auto db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") ==
-         ScoreDBHelper::kCurrentSchemaVersion);
+         ScoreRepository::kCurrentSchemaVersion);
   for (const std::string table : {"scores", "course_scores"}) {
     assert(queryInt(db.get(),
                     "SELECT eligibility FROM " + table + " WHERE id=1") ==
@@ -2143,7 +2064,7 @@ void testFutureVersionRejectsWithoutSchemaMutation(
   const std::string before = schemaSnapshot(db.get());
   db.reset();
 
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(!helper.EnsureSchema());
 
   auto after = openDatabase(path);
@@ -2157,11 +2078,7 @@ void testFutureVersionRejectsWithoutSchemaMutation(
 void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
     const std::filesystem::path &root) {
   const auto path = root / "legacy-public-api" / "score.db";
-  ScoreDBHelper helper(path);
-  SqliteConnectionHandle db(helper.Connect());
-  assert(db);
-  assert(helper.CreateScoreTable(db.get()));
-  assert(helper.CreateCourseScoreTable(db.get()));
+  ScoreRepository helper(path);
 
   const auto meta = sampleMeta(root, "legacy-public-api");
   const auto state = sampleState(12, 3);
@@ -2170,10 +2087,11 @@ void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
   session.courseName = "Legacy public API course";
   session.entries.push_back({.meta = meta});
 
-  assert(helper.InsertScore(db.get(), meta, state));
-  assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
+  assert(helper.SaveScore(meta, state));
+  assert(helper.SaveCourseScore(session, state, 1, 1));
+  auto db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") ==
-         ScoreDBHelper::kCurrentSchemaVersion);
+         ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
 }
@@ -2181,13 +2099,15 @@ void testLegacyPublicWriteEntryPointsEnsureUnifiedSchema(
 void testFutureVersionRejectsDirectScoreWrites(
     const std::filesystem::path &root) {
   const auto path = root / "future-direct-write" / "score.db";
-  ScoreDBHelper helper(path);
-  assert(helper.EnsureSchema());
+  {
+    ScoreRepository bootstrap(path);
+    assert(bootstrap.EnsureSchema());
+  }
 
-  SqliteConnectionHandle db(helper.Connect());
-  assert(db);
+  auto db = openDatabase(path);
   execOrAbort(db.get(), "PRAGMA user_version = 99");
   const std::string schemaBefore = schemaSnapshot(db.get());
+  db.reset();
 
   const auto meta = sampleMeta(root, "future-direct-write");
   const auto state = sampleState(9, 1);
@@ -2196,8 +2116,10 @@ void testFutureVersionRejectsDirectScoreWrites(
   session.courseName = "Future direct write course";
   session.entries.push_back({.meta = meta});
 
-  assert(!helper.InsertScore(db.get(), meta, state));
-  assert(!helper.InsertCourseScore(db.get(), session, state, 1, 1));
+  ScoreRepository helper(path);
+  assert(!helper.SaveScore(meta, state));
+  assert(!helper.SaveCourseScore(session, state, 1, 1));
+  db = openDatabase(path);
   assert(queryInt(db.get(), "PRAGMA user_version") == 99);
   assert(schemaSnapshot(db.get()) == schemaBefore);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 0);
@@ -2207,7 +2129,7 @@ void testFutureVersionRejectsDirectScoreWrites(
 void testInvalidProvenanceRejectsScoreWrites(
     const std::filesystem::path &root) {
   const auto path = root / "invalid-provenance-write" / "score.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   const auto meta = sampleMeta(root, "invalid-provenance-write");
@@ -2249,7 +2171,7 @@ void testInvalidProvenanceDoesNotCreateScoreDatabase(
   const auto state = sampleState(7, 1);
 
   const auto chartPath = root / "invalid-chart-no-database" / "score.db";
-  ScoreDBHelper chartHelper(chartPath);
+  ScoreRepository chartHelper(chartPath);
   assert(!chartHelper.SaveScore(meta, state, invalid));
   assert(!std::filesystem::exists(chartPath));
 
@@ -2258,84 +2180,9 @@ void testInvalidProvenanceDoesNotCreateScoreDatabase(
   session.courseName = "Invalid provenance no database";
   session.entries.push_back({.meta = meta});
   const auto coursePath = root / "invalid-course-no-database" / "score.db";
-  ScoreDBHelper courseHelper(coursePath);
+  ScoreRepository courseHelper(coursePath);
   assert(!courseHelper.SaveCourseScore(session, state, 1, 1, invalid));
   assert(!std::filesystem::exists(coursePath));
-}
-
-void testPublicWritesNestInsideCallerTransactions(
-    const std::filesystem::path &root) {
-  const auto meta = sampleMeta(root, "nested-public-write");
-  const auto state = sampleState(13, 2);
-  CoursePlaySession session;
-  session.courseId = 55;
-  session.courseName = "Nested public write course";
-  session.entries.push_back({.meta = meta});
-
-  const auto prepareLegacySchema = [](ScoreDBHelper &helper) {
-    SqliteConnectionHandle db(helper.Connect());
-    assert(db);
-    assert(helper.CreateScoreTable(db.get()));
-    assert(helper.CreateCourseScoreTable(db.get()));
-    assert(queryInt(db.get(), "PRAGMA user_version") == 4);
-    return db;
-  };
-
-  {
-    ScoreDBHelper helper(root / "nested-chart-commit" / "score.db");
-    auto db = prepareLegacySchema(helper);
-    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
-    assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
-    execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
-  }
-
-  {
-    ScoreDBHelper helper(root / "nested-chart-rollback" / "score.db");
-    auto db = prepareLegacySchema(helper);
-    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
-    assert(helper.InsertScore(db.get(), meta, state));
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
-    execOrAbort(db.get(), "ROLLBACK");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 4);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 0);
-    assert(!columnExists(db.get(), "scores", "provenance_json"));
-  }
-
-  {
-    ScoreDBHelper helper(root / "nested-course-commit" / "score.db");
-    auto db = prepareLegacySchema(helper);
-    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
-    assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
-    execOrAbort(db.get(), "COMMIT");
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
-  }
-
-  {
-    ScoreDBHelper helper(root / "nested-course-rollback" / "score.db");
-    auto db = prepareLegacySchema(helper);
-    execOrAbort(db.get(), "BEGIN IMMEDIATE TRANSACTION");
-    assert(helper.InsertCourseScore(db.get(), session, state, 1, 1));
-    assert(queryInt(db.get(), "PRAGMA user_version") ==
-           ScoreDBHelper::kCurrentSchemaVersion);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
-    execOrAbort(db.get(), "ROLLBACK");
-    assert(queryInt(db.get(), "PRAGMA user_version") == 4);
-    assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 0);
-    assert(!columnExists(db.get(), "course_scores", "provenance_json"));
-  }
 }
 
 void testFutureScoreWritesPreservePersistentDatabaseState(
@@ -2359,25 +2206,23 @@ void testFutureScoreWritesPreservePersistentDatabaseState(
 
   assertUnchanged(root / "future-save-score" / "score.db",
                   [&](const auto &path) {
-                    ScoreDBHelper helper(path);
+                    ScoreRepository helper(path);
                     assert(!helper.SaveScore(meta, state, provenance));
                   });
   assertUnchanged(
       root / "future-save-course-score" / "score.db", [&](const auto &path) {
-        ScoreDBHelper helper(path);
+        ScoreRepository helper(path);
         assert(!helper.SaveCourseScore(session, state, 1, 1, provenance));
       });
   assertUnchanged(root / "future-direct-score" / "score.db",
                   [&](const auto &path) {
-                    ScoreDBHelper helper(path);
-                    SqliteConnectionHandle db(helper.Connect());
-                    assert(!db);
+                    ScoreRepository helper(path);
+                    assert(!helper.EnsureSchema());
                   });
   assertUnchanged(root / "future-direct-course-score" / "score.db",
                   [&](const auto &path) {
-                    ScoreDBHelper helper(path);
-                    SqliteConnectionHandle db(helper.Connect());
-                    assert(!db);
+                    ScoreRepository helper(path);
+                    assert(!helper.EnsureSchema());
                   });
 }
 
@@ -2413,18 +2258,17 @@ void testFutureScorePreflightPreservesRawDatabaseFamily(
   for (const FutureDatabaseState databaseState : states) {
     assertRejectedWithoutFamilyMutation(
         databaseState, "connect", [&](const auto &path) {
-          ScoreDBHelper helper(path);
-          SqliteConnectionHandle db(helper.Connect());
-          return !db;
+          ScoreRepository helper(path);
+          return !helper.EnsureSchema();
         });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-chart", [&](const auto &path) {
-          ScoreDBHelper helper(path);
+          ScoreRepository helper(path);
           return !helper.SaveScore(meta, state, provenance);
         });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-course", [&](const auto &path) {
-          ScoreDBHelper helper(path);
+          ScoreRepository helper(path);
           return !helper.SaveCourseScore(session, state, 1, 1, provenance);
         });
   }
@@ -2438,10 +2282,9 @@ void testFutureScorePreflightPreservesRawDatabaseFamily(
   execOrAbort(directDb.get(), "INSERT INTO sentinel VALUES ('unchanged')");
   execOrAbort(directDb.get(), "PRAGMA user_version=99");
   const auto directBefore = rawDatabaseFamilySnapshot(directPath);
-  ScoreDBHelper directHelper(directPath);
-  assert(!directHelper.InsertScore(directDb.get(), meta, state, provenance));
-  assert(!directHelper.InsertCourseScore(directDb.get(), session, state, 1, 1,
-                                         provenance));
+  ScoreRepository directHelper(directPath);
+  assert(!directHelper.SaveScore(meta, state, provenance));
+  assert(!directHelper.SaveCourseScore(session, state, 1, 1, provenance));
   const auto directAfter = rawDatabaseFamilySnapshot(directPath);
   // Reading a live WAL database may update transient reader marks in -shm.
   // Durable files and application-visible state must remain unchanged.
@@ -2465,9 +2308,8 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
     execOrAbort(db.get(), "PRAGMA user_version=-1");
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
-    ScoreDBHelper helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    ScoreRepository helper(path);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -2478,9 +2320,8 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
     staleShm << "stale-shm-without-wal";
     staleShm.close();
     const auto before = rawDatabaseFamilySnapshot(path);
-    ScoreDBHelper helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    ScoreRepository helper(path);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -2489,14 +2330,14 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
     std::filesystem::create_directories(path.parent_path());
     std::ofstream empty(path, std::ios::binary);
     empty.close();
-    ScoreDBHelper helper(path);
+    ScoreRepository helper(path);
     assert(helper.EnsureSchema());
     assert(std::filesystem::file_size(path) > 0);
   }
 
   {
     const auto path = root / "preflight-missing" / "score.db";
-    ScoreDBHelper helper(path);
+    ScoreRepository helper(path);
     assert(helper.EnsureSchema());
     assert(std::filesystem::exists(path));
   }
@@ -2506,10 +2347,9 @@ void testScorePreflightRejectsMalformedStatesAndAllowsCreation(
     const auto path = root / "preflight-live-writer" / "score.db";
     withLiveWalWriter(path, 6, [&] {
       const auto before = rawDatabaseFamilySnapshot(path);
-      ScoreDBHelper helper(path);
-      SqliteConnectionHandle connection(helper.Connect());
+      ScoreRepository helper(path);
+      assert(!helper.EnsureSchema());
       const auto after = rawDatabaseFamilySnapshot(path);
-      assert(!connection);
       assert(after == before);
     });
   }
@@ -2520,14 +2360,6 @@ int denyJournalModeAuthorizer(void *, int action, const char *first,
                               const char *, const char *, const char *) {
   return action == SQLITE_PRAGMA && first != nullptr &&
                  std::string_view(first) == "journal_mode"
-             ? SQLITE_DENY
-             : SQLITE_OK;
-}
-
-int denyUserVersionAuthorizer(void *, int action, const char *first,
-                              const char *, const char *, const char *) {
-  return action == SQLITE_PRAGMA && first != nullptr &&
-                 std::string_view(first) == "user_version"
              ? SQLITE_DENY
              : SQLITE_OK;
 }
@@ -2552,7 +2384,7 @@ void testEquivalentScoreAliasesRetainValidatedSession(
   const auto path = root / "equivalent-alias" / "score.db";
   const auto hardLink = root / "equivalent-alias" / "score-hard-link.db";
   const auto symlink = root / "equivalent-alias" / "score-symlink.db";
-  ScoreDBHelper helper(path);
+  ScoreRepository helper(path);
   assert(helper.EnsureSchema());
 
   std::error_code linkError;
@@ -2597,25 +2429,12 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const std::filesystem::path &root) {
 #if !TARGET_OS_WINDOWS
   {
-    const auto path = root / "wal-without-shm-supported" / "score.db";
-    createWalDatabaseWithVersion(path, 6);
-    assert(std::filesystem::remove(path.string() + "-shm"));
-    const auto before = rawDatabaseFamilySnapshot(path);
-    ScoreDBHelper helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(connection);
-    connection.reset();
-    assert(rawDatabaseFamilySnapshot(path) == before);
-  }
-
-  {
     const auto path = root / "wal-without-shm-future" / "score.db";
     createWalDatabaseWithVersion(path, 99);
     assert(std::filesystem::remove(path.string() + "-shm"));
     const auto before = rawDatabaseFamilySnapshot(path);
-    ScoreDBHelper helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    ScoreRepository helper(path);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 #endif
@@ -2624,9 +2443,8 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
     const auto path = root / "header-shaped-corrupt" / "score.db";
     writeHeaderShapedCorruptDatabase(path);
     const auto before = rawDatabaseFamilySnapshot(path);
-    ScoreDBHelper helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    ScoreRepository helper(path);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 
@@ -2638,9 +2456,8 @@ void testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(
     db.reset();
     const auto before = rawDatabaseFamilySnapshot(path);
     ScopedDenyJournalModeAutoExtension denyJournalMode;
-    ScoreDBHelper helper(path);
-    SqliteConnectionHandle connection(helper.Connect());
-    assert(!connection);
+    ScoreRepository helper(path);
+    assert(!helper.EnsureSchema());
     assert(rawDatabaseFamilySnapshot(path) == before);
   }
 }
@@ -2737,48 +2554,50 @@ void testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(
 #endif
 }
 
-void testScoreTransactionalVersionErrorsDoNotMutateSchema(
-    const std::filesystem::path &root) {
-  {
-    const auto path = root / "transaction-negative-version" / "score.db";
-    auto db = openDatabase(path);
-    execOrAbort(db.get(), "PRAGMA user_version=-1");
-    const std::string beforeSchema = schemaSnapshot(db.get());
-    execOrAbort(db.get(), "BEGIN TRANSACTION");
-    ScoreDBHelper helper(path);
-    assert(!helper.CreateScoreTable(db.get()));
-    assert(queryInt(db.get(), "PRAGMA user_version") == -1);
-    assert(schemaSnapshot(db.get()) == beforeSchema);
-    execOrAbort(db.get(), "ROLLBACK");
-  }
-
-  {
-    const auto path = root / "transaction-version-read-error" / "score.db";
-    auto db = openDatabase(path);
-    const std::string beforeSchema = schemaSnapshot(db.get());
-    execOrAbort(db.get(), "BEGIN TRANSACTION");
-    assert(sqlite3_set_authorizer(db.get(), denyUserVersionAuthorizer,
-                                  nullptr) == SQLITE_OK);
-    ScoreDBHelper helper(path);
-    assert(!helper.CreateScoreTable(db.get()));
-    assert(schemaSnapshot(db.get()) == beforeSchema);
-    assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
-    execOrAbort(db.get(), "ROLLBACK");
-  }
-}
-
 void testLargeWalPreflightPreservesFamily(const std::filesystem::path &root) {
 #if !TARGET_OS_WINDOWS
   const auto walPath = root / "preflight-large-wal" / "score.db";
   createLargeFutureWalDatabase(walPath);
   const auto before = rawDatabaseFamilySnapshot(walPath);
-  ScoreDBHelper helper(walPath);
-  SqliteConnectionHandle connection(helper.Connect());
-  assert(!connection);
+  ScoreRepository helper(walPath);
+  assert(!helper.EnsureSchema());
   assert(rawDatabaseFamilySnapshot(walPath) == before);
 #else
   (void)root;
 #endif
+}
+
+void testValidatedOpenCheckpointPolicy(const std::filesystem::path &root) {
+  const auto policyPath = root / "validated-open-policy" / "score.db";
+  std::filesystem::create_directories(policyPath.parent_path());
+
+  std::string errorMessage;
+  SqliteValidatedOpenPolicy policy{
+      .enableForeignKeys = false,
+      .disableCheckpointOnClose = false,
+  };
+  SqliteConnectionHandle policyConnection(openValidatedSqliteDatabase(
+      policyPath, 3, policy, errorMessage));
+  assert(policyConnection);
+  int noCheckpointOnClose = -1;
+  assert(sqlite3_db_config(policyConnection.get(),
+                           SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, -1,
+                           &noCheckpointOnClose) == SQLITE_OK);
+  assert(noCheckpointOnClose == 0);
+  policyConnection.reset();
+
+  const auto compatibilityPath =
+      root / "validated-open-compatibility" / "score.db";
+  std::filesystem::create_directories(compatibilityPath.parent_path());
+  errorMessage.clear();
+  SqliteConnectionHandle compatibilityConnection(openValidatedSqliteDatabase(
+      compatibilityPath, 3, false, errorMessage));
+  assert(compatibilityConnection);
+  noCheckpointOnClose = -1;
+  assert(sqlite3_db_config(compatibilityConnection.get(),
+                           SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, -1,
+                           &noCheckpointOnClose) == SQLITE_OK);
+  assert(noCheckpointOnClose == 1);
 }
 
 } // namespace
@@ -2825,15 +2644,14 @@ int main() {
   testFutureVersionRejectsDirectScoreWrites(root);
   testInvalidProvenanceRejectsScoreWrites(root);
   testInvalidProvenanceDoesNotCreateScoreDatabase(root);
-  testPublicWritesNestInsideCallerTransactions(root);
   testFutureScoreWritesPreservePersistentDatabaseState(root);
   testFutureScorePreflightPreservesRawDatabaseFamily(root);
   testScorePreflightRejectsMalformedStatesAndAllowsCreation(root);
   testEquivalentScoreAliasesRetainValidatedSession(root);
   testScoreOwnedOpenRejectsRecoveryAndConfigurationRaces(root);
   testOwnedOpenClosesTheApprovalGapAndBoundsSnapshots(root);
-  testScoreTransactionalVersionErrorsDoNotMutateSchema(root);
   testLargeWalPreflightPreservesFamily(root);
+  testValidatedOpenCheckpointPolicy(root);
 
   std::filesystem::remove_all(root);
   std::cout << "score provenance database tests passed\n";

@@ -1,15 +1,14 @@
 #pragma once
 
-#include "CourseIdentity.h"
-#include "ReplayData.h"
-#include "ResultPersistenceModel.h"
-#include "ScoreDBHelper.h"
-#include "bms_parser.hpp"
-#include "sqlite3.h"
+#include "../CourseIdentity.h"
+#include "../ReplayData.h"
+#include "../ResultPersistenceModel.h"
+#include "ScoreRepositoryModels.h"
+#include "../bms_parser.hpp"
 
 #include <cstddef>
 #include <filesystem>
-#include <mutex>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -131,17 +130,15 @@ struct CourseReplayLookup {
   int legacyCourseId = 0;
 };
 
-class ReplayDBHelper {
+class ReplayRepository {
 public:
   static constexpr int kCurrentSchemaVersion = 5;
 
-  ReplayDBHelper() = default;
-  explicit ReplayDBHelper(std::filesystem::path databasePath);
-  ~ReplayDBHelper();
-  ReplayDBHelper(const ReplayDBHelper &) = delete;
-  ReplayDBHelper &operator=(const ReplayDBHelper &) = delete;
-
-  static ReplayDBHelper &GetInstance();
+  ReplayRepository();
+  explicit ReplayRepository(std::filesystem::path databasePath);
+  ~ReplayRepository();
+  ReplayRepository(const ReplayRepository &) = delete;
+  ReplayRepository &operator=(const ReplayRepository &) = delete;
 
   void SetDatabasePath(std::filesystem::path databasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
@@ -152,11 +149,6 @@ public:
   [[nodiscard]] static bool HasActiveWrites();
   void Shutdown();
   bool EnsureSchema();
-  // Compatibility API for standalone helpers. The runtime singleton keeps its
-  // connection private so raw handles cannot outlive a profile switch.
-  sqlite3 *Connect();
-  void Close(sqlite3 *db);
-  bool CreateReplayTables(sqlite3 *db);
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
   result_persistence::StageOutcome StageChartResult(
@@ -183,48 +175,13 @@ public:
       std::span<const course_identity::Definition> definitions,
       std::span<const CourseScoreEvidence> scoreEvidence,
       std::string &errorMessage);
-  // Standalone-helper compatibility path for caller-owned transactions. The
-  // runtime singleton never accepts an external/raw connection.
-  bool RecoverCourseRecords(
-      sqlite3 *db,
-      std::span<const course_identity::Definition> definitions,
-      std::span<const CourseScoreEvidence> scoreEvidence,
-      std::string &errorMessage);
   std::optional<ReplayData>
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
 
 private:
+  struct Impl;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;
   bool EnsureSessionDatabaseLocked();
   void ShutdownLocked();
-  bool CreateReplayTablesOnConnection(sqlite3 *db);
-  std::optional<int>
-  SaveReplayOnConnection(sqlite3 *db, const ReplayData &replay,
-                         const std::string &provenanceJson);
-  std::optional<int> SaveCourseReplayOnConnection(
-      sqlite3 *db, const CourseReplayData &replay,
-      const std::string &courseProvenanceJson,
-      const std::vector<std::string> &stageProvenanceJson);
-  std::vector<ReplaySummary>
-  ListReplaysOnConnection(sqlite3 *db,
-                          const bms_parser::ChartMeta &chartMeta, int limit);
-  std::vector<ReplaySummary>
-  ListCourseReplaysOnConnection(sqlite3 *db,
-                                const CourseReplayLookup &lookup, int limit);
-  std::optional<ReplayData>
-  LoadReplayOnConnection(sqlite3 *db, int replayId,
-                         const bms_parser::ChartMeta &chartMeta);
-  std::optional<CourseReplayData> LoadCourseReplayOnConnection(sqlite3 *db,
-                                                               int replayId);
-  bool RecoverCourseRecordsOnConnection(
-      sqlite3 *db, std::span<const course_identity::Definition> definitions,
-      std::span<const CourseScoreEvidence> scoreEvidence,
-      std::string &errorMessage);
-  std::optional<ReplayData>
-  LoadLatestReplayOnConnection(sqlite3 *db,
-                               const bms_parser::ChartMeta &chartMeta);
-
-  mutable std::mutex sessionMutex_;
-  std::filesystem::path databasePath_;
-  sqlite3 *sessionDatabase_ = nullptr;
+  std::unique_ptr<Impl> impl_;
 };

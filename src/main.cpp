@@ -1462,8 +1462,11 @@ int run() {
   return application_startup::execute(
       context.profileReady(),
       application_startup::Dependencies{
-          .initializeDatabases = [] {
-            return app_database_initializer::initializeApplicationDatabases();
+          .initializeDatabases = [&context] {
+            return app_database_initializer::initializeApplicationDatabases(
+                context.chartRepository, context.scoreRepository,
+                context.replayRepository,
+                context.musicPlaylistRepository);
           },
           .reportFatal = [&context](const application_startup::Result &result) {
             reportStartupFailure(context, result);

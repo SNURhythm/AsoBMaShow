@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ReplayDBHelper.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ReplayRepository.h"
+#include "repositories/ScoreRepository.h"
 
 #include <cstddef>
 #include <functional>
@@ -64,7 +64,7 @@ struct Dependencies {
 
 class Coordinator {
 public:
-  Coordinator(ScoreDBHelper &score, ReplayDBHelper &replay);
+  Coordinator(ScoreRepository &score, ReplayRepository &replay);
   explicit Coordinator(Dependencies dependencies);
 
   SaveOutcome persist(const ChartResultAttempt &attempt);

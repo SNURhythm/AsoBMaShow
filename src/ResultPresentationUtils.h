@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ChartDBHelper.h"
-#include "ReplayDBHelper.h"
+#include "repositories/ChartRepository.h"
+#include "repositories/ReplayRepository.h"
 #include "ReplayData.h"
-#include "ScoreDBHelper.h"
+#include "repositories/ScoreRepository.h"
 #include "scene/play/Pacemaker.h"
 #include "skin/SkinTypes.h"
 
@@ -37,14 +37,14 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
 }
 
 inline std::optional<ReplayData> bestReplayForSnapshot(
-    bms_parser::Chart &chart, const ScoreBestSnapshot &best,
+    ReplayRepository &replays, bms_parser::Chart &chart,
+    const ScoreBestSnapshot &best,
     const std::optional<std::string> &beforeCreatedAt = std::nullopt) {
   if (best.score <= 0 || chart.Meta.TotalNotes <= 0) {
     return std::nullopt;
   }
 
-  const auto summaries =
-      ReplayDBHelper::GetInstance().ListReplays(chart.Meta, 100);
+  const auto summaries = replays.ListReplays(chart.Meta, 100);
   for (const ReplaySummary &summary : summaries) {
     if (summary.courseReplay || summary.autoPlay ||
         summary.finalScore != best.score || summary.eventCount <= 0) {
@@ -55,8 +55,7 @@ inline std::optional<ReplayData> bestReplayForSnapshot(
       continue;
     }
 
-    auto replay =
-        ReplayDBHelper::GetInstance().LoadReplay(summary.id, chart.Meta);
+    auto replay = replays.LoadReplay(summary.id, chart.Meta);
     if (!replay.has_value() || replay->finalScore != best.score) {
       continue;
     }
@@ -100,7 +99,8 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
 }
 
 inline pacemaker::Target pacemakerTargetForReplay(
-    bms_parser::Chart &chart, const ReplayData &replay,
+    ReplayRepository &replays, bms_parser::Chart &chart,
+    const ReplayData &replay,
     const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
@@ -119,7 +119,7 @@ inline pacemaker::Target pacemakerTargetForReplay(
     if (!replay.createdAt.empty()) {
       beforeCreatedAt = replay.createdAt;
     }
-    bestReplay = bestReplayForSnapshot(chart, *best, beforeCreatedAt);
+    bestReplay = bestReplayForSnapshot(replays, chart, *best, beforeCreatedAt);
   }
 
   return pacemaker::targetFromSelection(
@@ -127,11 +127,12 @@ inline pacemaker::Target pacemakerTargetForReplay(
 }
 
 inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
-    bms_parser::Chart &chart, const RhythmState &state,
+    ReplayRepository &replays, bms_parser::Chart &chart,
+    const RhythmState &state,
     const ReplayData &replay, const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest) {
   const pacemaker::Target target =
-      pacemakerTargetForReplay(chart, replay, targetId, previousBest);
+      pacemakerTargetForReplay(replays, chart, replay, targetId, previousBest);
   if (!target.enabled) {
     return std::nullopt;
   }
@@ -145,14 +146,14 @@ inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
 }
 
 inline std::optional<ResultPreviousBestData>
-previousBestForReplayChart(const bms_parser::ChartMeta &meta,
+previousBestForReplayChart(ScoreRepository &scores,
+                           const bms_parser::ChartMeta &meta,
                            const ReplayData &replay) {
   std::optional<std::string> beforeCreatedAt;
   if (!replay.autoPlay && !replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;
   }
-  if (const auto best =
-          ScoreDBHelper::GetInstance().LoadBestScore(meta, beforeCreatedAt);
+  if (const auto best = scores.LoadBestScore(meta, beforeCreatedAt);
       best.has_value()) {
     return previousBestDataFromSnapshot(*best);
   }
@@ -160,8 +161,11 @@ previousBestForReplayChart(const bms_parser::ChartMeta &meta,
 }
 
 inline std::string difficultyLabelForChart(
-    const bms_parser::ChartMeta &meta) {
-  return ChartDBHelper::GetInstance().DifficultyTableLabelsForChart(meta);
+    ChartRepository &charts, const bms_parser::ChartMeta &meta) {
+  auto session = charts.OpenSession();
+  return session.has_value()
+             ? session->DifficultyTableLabelsForChart(meta)
+             : std::string{};
 }
 
 inline bms_parser::ChartMeta courseResultMeta(

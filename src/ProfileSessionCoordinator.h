@@ -10,8 +10,8 @@
 #include <string>
 #include <string_view>
 
-class ReplayDBHelper;
-class ScoreDBHelper;
+class ReplayRepository;
+class ScoreRepository;
 
 struct ProfileSwitchResult {
   ProfileError error = ProfileError::None;
@@ -41,10 +41,10 @@ struct ProfileSessionDependencies {
                      std::string &)>
       saveSettings;
   std::function<bool(const std::filesystem::path &, std::string &)> saveInput;
-  std::function<bool(ScoreDBHelper &, const std::filesystem::path &,
+  std::function<bool(ScoreRepository &, const std::filesystem::path &,
                      std::string &)>
       bindScore;
-  std::function<bool(ReplayDBHelper &, const std::filesystem::path &,
+  std::function<bool(ReplayRepository &, const std::filesystem::path &,
                      std::string &)>
       bindReplay;
   std::function<result_persistence::RecoverySummary()> recoverPendingResults;
@@ -59,8 +59,8 @@ public:
   using RestoreInput = std::function<void(const std::filesystem::path &)>;
   using RefreshCaches = std::function<void()>;
 
-  ProfileSessionCoordinator(PlayerProfileManager &manager, ScoreDBHelper &score,
-                            ReplayDBHelper &replay, Blocker blocker,
+  ProfileSessionCoordinator(PlayerProfileManager &manager, ScoreRepository &score,
+                            ReplayRepository &replay, Blocker blocker,
                             ApplyInput applyInput, RestoreInput restoreInput,
                             RefreshCaches refreshCaches,
                             ProfileSessionDependencies dependencies = {});
@@ -70,8 +70,8 @@ public:
 
 private:
   PlayerProfileManager &manager_;
-  ScoreDBHelper &score_;
-  ReplayDBHelper &replay_;
+  ScoreRepository &score_;
+  ReplayRepository &replay_;
   Blocker blocker_;
   ApplyInput applyInput_;
   RestoreInput restoreInput_;
