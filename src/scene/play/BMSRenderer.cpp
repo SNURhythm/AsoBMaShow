@@ -2387,8 +2387,6 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
-  constexpr uint32_t kDepthStartLaneIndicators = 300;
-  constexpr uint32_t kDepthLaneCover = 320;
   constexpr uint32_t kDepthJudgementIndicator = 330;
   constexpr uint32_t kDepthGauge = 340;
 
@@ -2632,15 +2630,15 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   }
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
-  simpleBatchRenderer.setSubmitDepth(kDepthStartLaneIndicators);
+  simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kLaneCoverDepth);
   simpleBatchRenderer.begin();
-  drawStartLaneIndicators();
+  drawLaneCover();
   simpleBatchRenderer.flush();
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
-  simpleBatchRenderer.setSubmitDepth(kDepthLaneCover);
+  simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kIndicatorDepth);
   simpleBatchRenderer.begin();
-  drawLaneCover();
+  drawStartLaneIndicators();
   simpleBatchRenderer.flush();
   layoutLaneCoverVisibleTimeText();
   if (laneCoverVisibleTimeText != nullptr) {

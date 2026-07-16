@@ -84,7 +84,7 @@ public:
   static constexpr int kMaxLaneBeamLengthPercent = 100;
   static constexpr int kDefaultLaneBeamLengthPercent = 100;
   static constexpr int kMinNoteStartPositionPercent = 0;
-  static constexpr int kMaxNoteStartPositionPercent = 90;
+  static constexpr int kMaxNoteStartPositionPercent = 100;
   static constexpr int kDefaultNoteStartPositionPercent = 0;
   static constexpr float kMinPlayAreaWidth = 4.0f;
   static constexpr float kMaxPlayAreaWidth = 12.0f;

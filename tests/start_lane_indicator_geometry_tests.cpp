@@ -17,6 +17,8 @@ int main() {
   check(colorRoleForKey(1, 7) == ColorRole::Blue, "7K next key is blue");
   check(colorRoleForKey(3, 7) == ColorRole::Blue, "7K center is blue");
   check(colorRoleForScratch() == ColorRole::Red, "scratch is red");
+  check(kIndicatorDepth > kLaneCoverDepth,
+        "overlapping triangle renders above the lane cover");
 
   const auto roomy = placeTriangle(2.0F, 1.0F, 0.0F, 6.0F);
   check(std::fabs(roomy.baseY - (6.0F - kCoverGap)) < 0.0001F,
@@ -26,6 +28,6 @@ int main() {
 
   const auto covered = placeTriangle(2.0F, 1.0F, 0.0F, 0.1F);
   check(covered.baseY > 0.1F, "triangle stops before crossing judge line");
-  check(covered.overlapsCover, "long cover occludes the triangle");
+  check(covered.overlapsCover, "long cover overlaps triangle geometry");
   return failures == 0 ? 0 : 1;
 }

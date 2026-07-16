@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 
 namespace start_lane_indicator {
 
@@ -10,6 +11,8 @@ enum class ColorRole { White, Blue, Red };
 inline constexpr float kWidthLaneRatio = 0.46F;
 inline constexpr float kHeightLaneRatio = 0.40F;
 inline constexpr float kCoverGap = 0.08F;
+inline constexpr uint32_t kLaneCoverDepth = 300;
+inline constexpr uint32_t kIndicatorDepth = 320;
 
 struct Triangle {
   float leftX = 0.0F;
