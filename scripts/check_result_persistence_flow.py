@@ -584,8 +584,9 @@ require(
     "the main target must compile ApplicationResultRecovery.cpp exactly once",
 )
 require(
-    len(re.findall(r"\n\s*ApplicationResultRecovery\.cpp,", ios_project)) == 1,
-    "iOS source membership must contain ApplicationResultRecovery.cpp exactly once",
+    ios_project.count("fileSystemSynchronizedGroups = (") == 1
+    and "B76AAF3F2DA4A1C400E8327C /* ../../../../src */" in ios_project,
+    "iOS target must compile the synchronized src folder",
 )
 
 if failures:

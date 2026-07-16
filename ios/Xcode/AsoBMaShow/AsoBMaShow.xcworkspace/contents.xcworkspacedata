@@ -7,7 +7,4 @@
    <FileRef
       location = "group:Pods/Pods.xcodeproj">
    </FileRef>
-   <FileRef
-      location = "group:../../../../../../Library/Caches/AsoBMaShow/ios-deploy/pods/598cba66a41759f8115db2a0888ed2816b96dd2f-c100a500418c34934e0dfbd140a7d20ae6c91f77/Pods.xcodeproj">
-   </FileRef>
 </Workspace>

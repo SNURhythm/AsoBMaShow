@@ -104,10 +104,8 @@ require_count src/CMakeLists.txt '\bApplicationStartup\.cpp\b' 1 \
 require_count src/CMakeLists.txt '\bApplicationResultRecovery\.cpp\b' 1 \
   "main target result recovery source"
 require_count ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj \
-  '[[:space:]]ApplicationStartup\.cpp,' 1 "iOS startup source membership"
-require_count ios/Xcode/AsoBMaShow/AsoBMaShow.xcodeproj/project.pbxproj \
-  '[[:space:]]ApplicationResultRecovery\.cpp,' 1 \
-  "iOS result recovery source membership"
+  'fileSystemSynchronizedGroups = \(' 1 \
+  "iOS app target synchronized source membership"
 require_order src/main.cpp \
   'runReadyApplicationAfterResultRecovery(ApplicationContext &context)' \
   'SceneManager sceneManager(context)' \
