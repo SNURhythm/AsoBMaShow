@@ -292,6 +292,34 @@ void testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding() {
               simulation.noteState(head.pairId).holding,
           "classic head atomically marks both identities holding");
 }
+
+void testPressDoesNotClaimLongTail() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 0, 1'000'000, 1,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto laneNotes = definition.laneNotes(1);
+  const auto tailId = laneNotes[1];
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+
+  const auto press = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 3'000'000});
+
+  require(press.noteId == gameplay::kInvalidNoteId &&
+              press.soundNoteId == gameplay::kInvalidNoteId,
+          "press near a long tail claims neither note nor sound identity");
+  require(!simulation.lanePressed(1) &&
+              !simulation.noteState(tailId).played &&
+              !simulation.noteState(tailId).holding,
+          "long-tail rejection leaves lane and note state unchanged");
+  require(!press.hasJudge && !press.hasReplayEvent && !press.hasLaneVisual,
+          "long-tail rejection returns no judgement, replay, or visual intent");
+}
 } // namespace
 
 int main() {
@@ -305,5 +333,6 @@ int main() {
   testReleaseSearchStopsAtPracticeEnd();
   testPressCommitsStateAndSoundTogether();
   testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
+  testPressDoesNotClaimLongTail();
   return 0;
 }

@@ -250,6 +250,9 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
   }
 
   const auto &note = definition_.note(selected);
+  if (note.kind == NoteKind::LongTail) {
+    return result;
+  }
   auto &state = noteStates_[selected];
   const JudgeResult judge = config_.judge.judgeAt(note.timingMicros, judgedTime);
   result.noteId = selected;
@@ -263,9 +266,6 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
                        context.laneBeamTimeMicros, judge};
 
   if (judge.judgement != None) {
-    if (judge.isNotePlayed() && note.kind == NoteKind::LongTail) {
-      return result;
-    }
     if (judge.isNotePlayed()) {
       state.played = true;
       state.playedTimeMicros = judgedTime;
