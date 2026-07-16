@@ -78,6 +78,22 @@ void SimpleBatchRenderer::addLine(float x0, float y0, float x1, float y1,
   indices.push_back(baseIndex + 0);
 }
 
+void SimpleBatchRenderer::addTriangle(float x0, float y0, float x1, float y1,
+                                      float x2, float y2, uint32_t color) {
+  if (vertices.size() + 3 > kMaxBatchVertices ||
+      indices.size() + 3 > kMaxBatchIndices) {
+    flush();
+  }
+
+  const uint16_t baseIndex = static_cast<uint16_t>(vertices.size());
+  vertices.push_back({x0, y0, 0.0F, color});
+  vertices.push_back({x1, y1, 0.0F, color});
+  vertices.push_back({x2, y2, 0.0F, color});
+  indices.push_back(baseIndex);
+  indices.push_back(baseIndex + 1);
+  indices.push_back(baseIndex + 2);
+}
+
 void SimpleBatchRenderer::addCircle(float cx, float cy, float radius,
                                     uint32_t color) {
   if (radius <= 0.0f) {

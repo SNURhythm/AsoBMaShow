@@ -21,6 +21,8 @@ public:
                       uint32_t color);
   void addLine(float x0, float y0, float x1, float y1, float thickness,
                uint32_t color);
+  void addTriangle(float x0, float y0, float x1, float y1, float x2, float y2,
+                   uint32_t color);
   void addCircle(float cx, float cy, float radius, uint32_t color);
   void addRectColors(float x, float y, float width, float height,
                      uint32_t topLeftColor, uint32_t topRightColor,

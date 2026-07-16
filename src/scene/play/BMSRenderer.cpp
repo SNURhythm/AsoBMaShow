@@ -5,6 +5,7 @@
 #include "BMSRenderer.h"
 #include "GamePlayTiming.h"
 #include "JudgementTimingText.h"
+#include "StartLaneIndicatorGeometry.h"
 #include "TouchVisualizationTiming.h"
 
 #include "../../CoursePlaySession.h"
@@ -77,15 +78,6 @@ long long latePoorTimingFromWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   const auto it = windows.find(Bad);
   return it == windows.end() ? kDefaultLatePoorTimingMicros : it->second.second;
-}
-
-bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
-  if (keyLaneCount == 0 || keyPosition >= keyLaneCount) {
-    return false;
-  }
-  const size_t mirroredPosition =
-      std::min(keyPosition, keyLaneCount - keyPosition - 1);
-  return (mirroredPosition & 1U) != 0;
 }
 
 int skinAnimationFrame(long long timeMicros, int frameCount, int cycleMs) {
@@ -636,6 +628,7 @@ BMSRenderer::BMSRenderer(
   whiteKeyLaneIndices.reserve(laneOrder.size());
   blueKeyLaneIndices.reserve(laneOrder.size());
   scratchLaneIndices.reserve(2);
+  startLaneIndicatorColorRoles.reserve(laneOrder.size());
   noteTextureBatchRenderers.reserve(16);
   noteTextureBatchLookup.reserve(16);
   std::vector<int> keyLanes;
@@ -649,6 +642,8 @@ BMSRenderer::BMSRenderer(
     const size_t laneIndex = static_cast<size_t>(lane);
     if (isScratch(lane)) {
       scratchLaneIndices.push_back(laneIndex);
+      startLaneIndicatorColorRoles.emplace(
+          lane, start_lane_indicator::colorRoleForScratch());
     } else {
       keyLanes.push_back(lane);
     }
@@ -660,9 +655,11 @@ BMSRenderer::BMSRenderer(
     if (lane < 0) {
       continue;
     }
-    const bool usesBlue =
-        usesBlueSymmetricKeyColor(keyPosition, keyLanes.size());
+    const auto colorRole =
+        start_lane_indicator::colorRoleForKey(keyPosition, keyLanes.size());
+    const bool usesBlue = colorRole == start_lane_indicator::ColorRole::Blue;
     laneUsesBlueSheet.emplace(lane, usesBlue);
+    startLaneIndicatorColorRoles.emplace(lane, colorRole);
     const size_t laneIndex = static_cast<size_t>(lane);
     if (usesBlue) {
       blueKeyLaneIndices.push_back(laneIndex);
@@ -2390,6 +2387,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
+  constexpr uint32_t kDepthStartLaneIndicators = 300;
   constexpr uint32_t kDepthLaneCover = 320;
   constexpr uint32_t kDepthJudgementIndicator = 330;
   constexpr uint32_t kDepthGauge = 340;
@@ -2632,6 +2630,12 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     }
     simpleBatchRenderer.flush();
   }
+
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
+  simpleBatchRenderer.setSubmitDepth(kDepthStartLaneIndicators);
+  simpleBatchRenderer.begin();
+  drawStartLaneIndicators();
+  simpleBatchRenderer.flush();
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthLaneCover);
@@ -3410,6 +3414,16 @@ void BMSRenderer::setReplayGhostRenderingEnabled(bool enabled) {
   replayGhostRenderingEnabled = enabled;
 }
 
+void BMSRenderer::setStartLaneIndicators(std::vector<int> lanes) {
+  std::ranges::sort(lanes);
+  lanes.erase(std::unique(lanes.begin(), lanes.end()), lanes.end());
+  startLaneIndicatorLanes = std::move(lanes);
+}
+
+void BMSRenderer::setStartLaneIndicatorsVisible(bool visible) {
+  startLaneIndicatorsVisible = visible;
+}
+
 void BMSRenderer::setLiveTouchPoint(long long fingerId,
                                     ReplayTouchAction action, float x,
                                     float y, long long songTimeMicros) {
@@ -3481,6 +3495,37 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
   simpleBatchRenderer.addRectVerticalGradient(
       laneToX(lane), judgeY, noteRenderWidth, beamHeight, color.toABGR(),
       fadedColor.toABGR());
+}
+
+void BMSRenderer::drawStartLaneIndicators() {
+  if (!startLaneIndicatorsVisible) {
+    return;
+  }
+
+  for (const int lane : startLaneIndicatorLanes) {
+    const auto colorRole = startLaneIndicatorColorRoles.find(lane);
+    if (colorRole == startLaneIndicatorColorRoles.end()) {
+      continue;
+    }
+    const auto triangle = start_lane_indicator::placeTriangle(
+        laneToX(lane), noteRenderWidth, judgeY, noteVisibleUpperBound);
+    Color color;
+    switch (colorRole->second) {
+    case start_lane_indicator::ColorRole::Blue:
+      color = Color(40, 130, 255, 255);
+      break;
+    case start_lane_indicator::ColorRole::Red:
+      color = Color(255, 55, 65, 255);
+      break;
+    case start_lane_indicator::ColorRole::White:
+    default:
+      color = Color(255, 255, 255, 255);
+      break;
+    }
+    simpleBatchRenderer.addTriangle(
+        triangle.leftX, triangle.baseY, triangle.rightX, triangle.baseY,
+        triangle.tipX, triangle.tipY, color.toABGR());
+  }
 }
 
 void BMSRenderer::layoutLaneCoverVisibleTimeText() {
