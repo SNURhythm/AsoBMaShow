@@ -2208,6 +2208,21 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(second.EnsureSchema());
 
   ReplayData replay = sampleReplay(root, "chart");
+  replay.events.insert(replay.events.begin(),
+                       {.action = ReplayEventAction::Press,
+                        .lane = 1,
+                        .noteTimeMicros = -1,
+                        .songTimeMicros = -1900000,
+                        .judgeTimeMicros = -1900000,
+                        .judgement = None});
+  replay.touchSamples.push_back({.action = ReplayTouchAction::Down,
+                                 .fingerId = 9,
+                                 .songTimeMicros = -1800000,
+                                 .x = 0.25f,
+                                 .y = 0.5f});
+  replay.laneCoverEvents.push_back({.songTimeMicros = -2000000,
+                                    .noteStartPositionPercent = 20,
+                                    .resetVisibleTimeReference = false});
   replay.provenance.playback = {.percent = 75,
                                 .mode = audio::PlaybackMode::PitchShift};
   replay.provenance.judgeWindowScalePercent = 80;
@@ -2223,6 +2238,12 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(loaded->provenance.playback == replay.provenance.playback);
   assert(loaded->provenance.judgeWindowScalePercent == 80);
   assert(loaded->provenance.startingGaugePercent == 37);
+  assert(!loaded->events.empty());
+  assert(loaded->events.front().songTimeMicros == -1900000);
+  assert(!loaded->touchSamples.empty());
+  assert(loaded->touchSamples.front().songTimeMicros == -1800000);
+  assert(!loaded->laneCoverEvents.empty());
+  assert(loaded->laneCoverEvents.front().songTimeMicros == -2000000);
   auto db = openDatabase(firstPath);
   const std::string storedProvenance =
       queryText(db.get(), "SELECT provenance_json FROM replays WHERE id=" +

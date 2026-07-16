@@ -4,7 +4,7 @@
 
 #pragma once
 #include "../../CoursePlaySession.h"
-#include "../../PrepMetronome.h"
+#include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
@@ -91,6 +91,8 @@ private:
   [[nodiscard]] std::optional<NoteTimeRange> practiceNoteRange() const;
   [[nodiscard]] bool practiceInputAllowed(long long chartTimeMicros) const;
   [[nodiscard]] bool practiceReplayEventAllowed(const ReplayEvent &event) const;
+  [[nodiscard]] bool
+  preparationIndicatorActive(long long rawSongTimeMicros) const;
   bool startCourseReplayChartAtCurrentIndex();
   bool startCourseChartAtCurrentIndex();
   bool startNextCourseChart();
@@ -150,6 +152,8 @@ private:
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
                          const JudgeResult &judgeResult);
+  void recordPreparationLaneEvent(ReplayEventAction action, int lane,
+                                  long long songTimeMicros);
   void appendReplayLaneCoverEvent(int noteStartPositionPercent,
                                   long long songTimeMicros,
                                   bool resetVisibleTimeReference);
@@ -205,7 +209,7 @@ private:
   SDL_FingerID floatingLaneCoverFinger = -1;
   float floatingLaneCoverDragOffsetY = 0.0f;
   double currentGameplayBpm = 0.0;
-  prep_metronome::PrepMetronomePlan practiceCountInPlan;
+  preparation::Plan preparationPlan;
   std::unique_ptr<TextView> ownedLaneStateText;
   TextView *laneStateText = nullptr;
   void configurePacemakerTarget();

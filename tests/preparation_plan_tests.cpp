@@ -114,6 +114,8 @@ int main() {
               "indicator is visible immediately before its boundary");
   ASSERT_TRUE(!plan.indicatorVisibleAt(0),
               "indicator end boundary is exclusive");
+  ASSERT_EQ(-1000000LL, plan.chartTimeAtRealTime(1000000),
+            "replay preparation preserves signed midpoint timestamps");
 
   for (const int percent : {50, 100, 200}) {
     const audio::PlaybackRate playback{.percent = percent};
