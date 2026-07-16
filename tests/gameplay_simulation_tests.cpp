@@ -320,6 +320,56 @@ void testPressDoesNotClaimLongTail() {
   require(!press.hasJudge && !press.hasReplayEvent && !press.hasLaneVisual,
           "long-tail rejection returns no judgement, replay, or visual intent");
 }
+
+void testClassicReleaseCommitsOneJudgeAndNoSound() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 1'500'000, 1,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto press = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  const auto release = simulation.releaseLane(
+      1, {.songTimeMicros = 1'500'000,
+          .laneBeamTimeMicros = 2'500'000});
+
+  require(release.noteId == definition.note(press.noteId).pairId,
+          "release resolves the held long-note tail");
+  require(release.soundNoteId == gameplay::kInvalidNoteId,
+          "release does not create an input-triggered keysound");
+  require(release.hasJudge && release.judge.judgement == PGreat,
+          "classic release commits its combined judgement");
+  require(!simulation.noteState(press.noteId).holding &&
+              !simulation.noteState(release.noteId).holding,
+          "release clears both long-note holding identities");
+  require(!simulation.lanePressed(1) &&
+              release.replayEvent.action ==
+                  gameplay::GameplayReplayAction::Release,
+          "release commits lane and replay state together");
+}
+
+void testChargeScratchRequiresBackspinRelease() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 1'500'000, 7,
+              bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  simulation.pressLane(7, {.songTimeMicros = 1'000'000});
+  const auto release = simulation.releaseLane(
+      7, {.songTimeMicros = 1'500'000}, false);
+  require(release.hasJudge && release.judge.judgement == Poor,
+          "non-backspin scratch release is Poor");
+}
 } // namespace
 
 int main() {
@@ -334,5 +384,7 @@ int main() {
   testPressCommitsStateAndSoundTogether();
   testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
   testPressDoesNotClaimLongTail();
+  testClassicReleaseCommitsOneJudgeAndNoSound();
+  testChargeScratchRequiresBackspinRelease();
   return 0;
 }

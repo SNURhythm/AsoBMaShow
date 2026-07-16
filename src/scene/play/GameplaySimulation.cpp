@@ -6,6 +6,19 @@
 #include <utility>
 
 namespace gameplay {
+namespace {
+JudgeResult normalizeReleaseJudge(const JudgeResult &judge) {
+  if (judge.judgement == None || judge.judgement == Kpoor ||
+      judge.judgement == Poor) {
+    return JudgeResult(Bad, judge.Diff);
+  }
+  return judge;
+}
+
+std::int64_t absoluteDistance(std::int64_t value) {
+  return value < 0 ? -value : value;
+}
+} // namespace
 
 GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                                        GameplaySimulationConfig config)
@@ -298,13 +311,86 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
 
 GameplayInputResult
 GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
-                                bool) {
+                                bool isBackSpin) {
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) {
     return result;
   }
-  result.noteId = selectReleaseCandidate(lane, inputTime(context));
+  auto *laneState = findLane(lane);
+  if (laneState == nullptr || !laneState->pressed) {
+    return result;
+  }
+  laneState->pressed = false;
+  const std::int64_t judgedTime = inputTime(context);
+  result.hasLaneVisual = true;
+  result.laneVisual = {LaneVisualAction::Release, lane,
+                       context.laneBeamTimeMicros, JudgeResult(None, 0)};
+
+  const NoteId selected = selectReleaseCandidate(lane, judgedTime);
+  if (selected == kInvalidNoteId) {
+    result.hasReplayEvent = true;
+    result.replayEvent = {
+        .action = GameplayReplayAction::Release,
+        .lane = lane,
+        .songTimeMicros = judgedTime,
+        .judgeTimeMicros = judgedTime,
+    };
+    return result;
+  }
+
+  const auto &tail = definition_.note(selected);
+  auto &tailState = noteStates_[selected];
+  result.noteId = selected;
+  if (tail.kind != NoteKind::LongTail || !tailState.holding ||
+      tail.pairId == kInvalidNoteId) {
+    result.hasReplayEvent = true;
+    result.replayEvent = {
+        .action = GameplayReplayAction::Release,
+        .lane = lane,
+        .songTimeMicros = judgedTime,
+        .judgeTimeMicros = judgedTime,
+    };
+    return result;
+  }
+
+  auto &headState = noteStates_[tail.pairId];
+  tailState.played = true;
+  tailState.playedTimeMicros = judgedTime;
+  tailState.releaseTimeMicros = judgedTime;
+  tailState.holding = false;
+  headState.holding = false;
+
+  const JudgeResult tailJudge =
+      config_.judge.judgeAt(tail.timingMicros, judgedTime);
+  JudgeResult applied = tailJudge;
+  if (tail.longNoteRule == LongNoteRule::Classic) {
+    const auto &head = definition_.note(tail.pairId);
+    const JudgeResult headJudge =
+        config_.judge.judgeAt(head.timingMicros, headState.playedTimeMicros);
+    applied = normalizeReleaseJudge(
+        absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
+            ? tailJudge
+            : headJudge);
+  } else if (tail.scratchLane && !isBackSpin) {
+    applied = JudgeResult(Poor, judgedTime - tail.timingMicros);
+  } else {
+    applied = normalizeReleaseJudge(tailJudge);
+  }
+
+  result.hasJudge = true;
+  result.judge = applied;
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Release,
+      .noteId = selected,
+      .lane = lane,
+      .noteTimeMicros = tail.timingMicros,
+      .songTimeMicros = judgedTime,
+      .judgeTimeMicros = judgedTime,
+      .judgement = applied.judgement,
+      .diffMicros = applied.Diff,
+  };
   return result;
 }
 
