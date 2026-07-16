@@ -91,6 +91,7 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertNotIn("add its path to `membershipExceptions`", guidance)
         self.assertIn("automatically discovers supported files under `src`", guidance)
         self.assertIn("checkout-specific DerivedData", guidance)
+        self.assertIn("stable Firebase archive object root", guidance)
 
     def test_ios_uses_portable_stable_sdl_header_alias(self):
         self.assertTrue(SDL_HEADER_ALIAS.is_symlink())
@@ -146,6 +147,21 @@ class DerivedDataPathTests(unittest.TestCase):
         fastfile = FASTFILE.read_text()
         self.assertIn("ios_derived_data_path.sh", fastfile)
         self.assertIn("clean: !distribute_to_firebase", fastfile)
+
+    def test_firebase_archive_uses_stable_object_root(self):
+        fastfile = FASTFILE.read_text()
+        self.assertIn("def firebase_archive_objroot(derived_data_path)", fastfile)
+        self.assertIn(
+            'File.join(derived_data_path, "Build", '
+            '"FirebaseArchiveIntermediates.noindex")',
+            fastfile,
+        )
+        self.assertIn(
+            'build_options[:xcargs] = "#{xcargs} '
+            'OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}"',
+            fastfile,
+        )
+        self.assertNotIn("SYMROOT=", fastfile)
 
 
 class PodsCacheTests(unittest.TestCase):

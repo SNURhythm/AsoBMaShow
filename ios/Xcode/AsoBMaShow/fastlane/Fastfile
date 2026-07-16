@@ -14,6 +14,7 @@
 # update_fastlane
 
 require "open3"
+require "shellwords"
 
 default_platform(:ios)
 
@@ -71,6 +72,10 @@ def firebase_derived_data_path
   path
 end
 
+def firebase_archive_objroot(derived_data_path)
+  File.join(derived_data_path, "Build", "FirebaseArchiveIntermediates.noindex")
+end
+
 def app_store_key_id
   key_id = ENV["APP_STORE_KEY_ID"].to_s.strip
   key_id.empty? ? "7459U6UPUW" : key_id
@@ -110,7 +115,9 @@ platform :ios do
     }
 
     if distribute_to_firebase
-      build_options[:derived_data_path] = firebase_derived_data_path
+      derived_data_path = firebase_derived_data_path
+      build_options[:derived_data_path] = derived_data_path
+      build_options[:xcargs] = "#{xcargs} OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}"
     end
 
     build_app(**build_options)

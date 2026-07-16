@@ -35,6 +35,13 @@ This reproduces through plain `xcodebuild`; Fastlane is not the limiting
 component. Fastlane's `build_app` already exposes the `clean` and
 `derived_data_path` controls needed by this design.
 
+Separate `xcodebuild archive` invocations expose one additional Xcode
+behavior: even with the same DerivedData path and `clean: false`, Xcode does
+not preserve the default archive object location for reuse. A stable
+Firebase-only `OBJROOT` beneath the checkout-specific DerivedData directory
+allows subsequent archives to reuse those objects. `SYMROOT` must remain under
+Xcode's control because overriding both roots breaks archive packaging.
+
 ## Constraints
 
 - New supported source files under `src/` must join the iOS app target without
@@ -45,8 +52,9 @@ component. Fastlane's `build_app` already exposes the `clean` and
   export behavior must remain unchanged.
 - TestFlight builds must continue to use `clean: true`.
 - Firebase PR archives and `scripts/ios_firebase_deploy.sh --build-only` must
-  retain a stable DerivedData directory and reuse `ArchiveIntermediates` or
-  normal build intermediates within the same checkout.
+  retain a stable DerivedData directory. Firebase archives must also retain a
+  stable object root within it; build-only runs reuse normal build
+  intermediates.
 - Separate checkouts and Git worktrees must not share DerivedData by default.
 - `IOS_DERIVED_DATA_PATH` must remain an explicit override.
 - CocoaPods installation must remain lockfile-controlled and must not place a
@@ -56,8 +64,8 @@ component. Fastlane's `build_app` already exposes the `clean` and
 ## Chosen Approach
 
 Use Xcode's native buildable synchronized-folder model, a portable local Pods
-directory backed by the existing external cache, and a checkout-scoped
-DerivedData path.
+directory backed by the existing external cache, a checkout-scoped
+DerivedData path, and a stable Firebase archive object root.
 
 Generating the whole app project with CMake was rejected because it would also
 require migrating resources, framework references, CocoaPods integration,
@@ -133,7 +141,11 @@ different Git worktrees receive different directories. The helper is shared
 by the build-only shell path and Fastlane so they cannot silently diverge.
 
 Only Firebase builds receive this explicit DerivedData path in Fastlane.
-TestFlight retains its current clean behavior and default archive handling.
+Their archive `OBJROOT` is
+`<DerivedData>/Build/FirebaseArchiveIntermediates.noindex`, which is stable for
+the same checkout and isolated from other worktrees. Fastlane does not
+override `SYMROOT`. TestFlight retains its current clean behavior and default
+archive handling.
 
 ## Failure Handling
 
@@ -159,7 +171,8 @@ Add a focused, fast repository check for the iOS build structure. It verifies:
 - the workspace has exactly one relative Pods project reference;
 - no tracked or project/workspace path contains the machine-specific Pods
   cache location;
-- the build-only and Fastlane paths use the shared DerivedData resolver; and
+- the build-only and Fastlane paths use the shared DerivedData resolver;
+- Firebase archives set a stable `OBJROOT` without overriding `SYMROOT`; and
 - TestFlight's clean condition is unchanged.
 
 Update the existing application-startup and result-persistence checks so they
@@ -184,7 +197,11 @@ Implementation follows a configuration-focused red/green cycle:
    zero `CompileC` actions. Always-out-of-date third-party or packaging phases
    may still run and the final app may relink; those are separate from source
    recompilation.
-7. Run the repository's desktop compile check to ensure project-structure
+7. Run two local, non-uploading `xcodebuild archive` commands against the same
+   DerivedData and Firebase object root with different archive destinations.
+   Confirm the second archive has zero `CompileC` actions. After regenerating
+   the intentionally uncached bgfx project, its targets may rebuild once.
+8. Run the repository's desktop compile check to ensure project-structure
    changes did not disturb the CMake build.
 
 No Fastlane deployment lane is run during verification, so this work cannot
