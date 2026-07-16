@@ -72,9 +72,10 @@ Register the existing `PBXFileSystemSynchronizedRootGroup` for `src/` in the
 owns the folder, Xcode automatically classifies and builds supported files
 that appear below it.
 
-Replace the current allow-list-shaped exception set with the actual target
-exception: `AndroidNatives.cpp`. Keep the existing explicit file-type entry
-that compiles `audio/AudioWrapper.cpp` as Objective-C++.
+Replace the current allow-list-shaped exception set with actual exclusions:
+`AndroidNatives.cpp` plus the non-buildable `CMakeLists.txt` metadata files.
+Keep the existing explicit file-type entry that compiles
+`audio/AudioWrapper.cpp` as Objective-C++.
 
 Headers do not need build-phase entries. Platform implementations that are
 already compiled on iOS behind preprocessor guards retain their current
@@ -84,6 +85,15 @@ replace the explicit CMake source lists used by desktop and test builds.
 Existing architecture checks that look for individual filenames in
 `membershipExceptions` will instead verify that the `src/` synchronized group
 belongs to the app target and that the Android native source is excluded.
+
+## Stable SDL Header Inputs
+
+Keep SDL and SDL_ttf as unchanged submodules. Add a tracked relative `SDL2`
+alias under the existing iOS include root that resolves to `SDL/include`.
+Application compilation then records checkout-stable source headers in its
+dependency files instead of the copied headers in `Build/Products`. The
+upstream SDL packaging phases may continue rewriting framework headers without
+invalidating application object files.
 
 ## CocoaPods Layout and Cache
 
@@ -142,8 +152,10 @@ TestFlight retains its current clean behavior and default archive handling.
 Add a focused, fast repository check for the iOS build structure. It verifies:
 
 - the app target owns the synchronized `src/` group;
-- `AndroidNatives.cpp` is the only source-membership exclusion;
+- `AndroidNatives.cpp` is the only source-file exclusion and each
+  `CMakeLists.txt` under `src` is excluded as build metadata;
 - the Objective-C++ override remains present;
+- the iOS `SDL2` header alias is relative and resolves into the SDL submodule;
 - the workspace has exactly one relative Pods project reference;
 - no tracked or project/workspace path contains the machine-specific Pods
   cache location;

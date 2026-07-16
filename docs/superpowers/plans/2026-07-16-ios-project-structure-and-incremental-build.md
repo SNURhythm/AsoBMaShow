@@ -4,7 +4,7 @@
 
 **Goal:** Make the iOS app target discover supported `src/` files automatically and make local/Firebase PR builds reuse stable, checkout-scoped Xcode intermediates.
 
-**Architecture:** Register the existing synchronized `src/` folder directly on the Xcode app target and retain only the Android source exclusion. Replace the tracked Pods symlink with a timestamp-preserving restore into a normal ignored directory, keep one relative workspace reference, and route Fastlane plus build-only through one checkout-hashed DerivedData resolver.
+**Architecture:** Register the existing synchronized `src/` folder directly on the Xcode app target and retain only the Android source plus CMake metadata exclusions. Replace the tracked Pods symlink with a timestamp-preserving restore into a normal ignored directory, keep one relative workspace reference, route Fastlane plus build-only through one checkout-hashed DerivedData resolver, and resolve SDL headers through a stable checkout-local alias.
 
 **Tech Stack:** Xcode 26 project format, Bash, Python 3 `unittest`, CocoaPods, Fastlane 2.229.1, Git.
 
@@ -35,7 +35,7 @@
 
 **Interfaces:**
 - Consumes: Xcode object IDs `B76AAF3F2DA4A1C400E8327C` for the synchronized `src/` group and `B70027002BF7A8D8000DB8EC` for the app target.
-- Produces: Target-wide synchronized source discovery, one `AndroidNatives.cpp` exception, one relative Pods workspace reference, and `IOSBuildSetupTests` repository guards.
+- Produces: Target-wide synchronized source discovery, narrow platform/build-metadata exceptions, one relative Pods workspace reference, and `IOSBuildSetupTests` repository guards.
 
 - [ ] **Step 1: Write failing project-structure tests**
 
@@ -75,7 +75,7 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertIn("fileSystemSynchronizedGroups = (", target)
         self.assertIn(SRC_GROUP_ID, target)
 
-    def test_android_native_is_only_source_membership_exception(self):
+    def test_only_platform_and_build_metadata_are_membership_exceptions(self):
         exceptions = object_block(
             self.project,
             EXCEPTION_SET_ID,
@@ -88,7 +88,11 @@ class IOSBuildSetupTests(unittest.TestCase):
             for line in exceptions[start:end].splitlines()[1:]
             if line.strip()
         ]
-        self.assertEqual(["AndroidNatives.cpp"], paths)
+        cmake_files = sorted(
+            str(path.relative_to(ROOT / "src"))
+            for path in (ROOT / "src").rglob("CMakeLists.txt")
+        )
+        self.assertEqual(["AndroidNatives.cpp", *cmake_files], paths)
         self.assertIn(f"target = {TARGET_ID}", exceptions)
 
     def test_audio_wrapper_keeps_objective_cpp_override(self):
@@ -134,13 +138,10 @@ Expected: FAIL because the target lacks `fileSystemSynchronizedGroups`, the exce
 
 - [ ] **Step 3: Convert the Xcode target to synchronized membership**
 
-In `project.pbxproj`, replace the contents of the existing `membershipExceptions` list with:
-
-```text
-			membershipExceptions = (
-				AndroidNatives.cpp,
-			);
-```
+In `project.pbxproj`, replace the source allowlist with `AndroidNatives.cpp`
+and every non-buildable `CMakeLists.txt` path currently under `src`. The guard
+derives the metadata paths from the filesystem so supported source files are
+never added to this exception list.
 
 Add this field to the `AsoBMaShow` `PBXNativeTarget` after `dependencies`:
 
@@ -640,6 +641,7 @@ git commit -m "build(ios): restore Pods cache portably"
 **Files:**
 - Modify: `tests/ios_build_setup_tests.py`
 - Modify: `AGENTS.md:17-25`
+- Create: `ios/Xcode/AsoBMaShow/include/SDL2` (relative symlink)
 
 **Interfaces:**
 - Consumes: All outputs from Tasks 1-3.
@@ -687,6 +689,11 @@ Replace the manual source-list bullet in `AGENTS.md` with:
   checkout can build incrementally without colliding with other Git worktrees.
   `IOS_DERIVED_DATA_PATH` remains available as an explicit override.
 ```
+
+Build verification also exposed an upstream SDL packaging phase that rewrites
+copied framework headers on every run. Add a relative `include/SDL2` alias to
+`../../../../SDL/include` and guard it in `IOSBuildSetupTests`. This keeps app
+compiler dependencies stable without editing either SDL submodule.
 
 - [ ] **Step 4: Run all fast repository guards**
 

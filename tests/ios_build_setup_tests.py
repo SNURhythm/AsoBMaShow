@@ -18,6 +18,8 @@ DEPLOY_SCRIPT = ROOT / "scripts/ios_firebase_deploy.sh"
 FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
 IOS_INIT = ROOT / "scripts/ios_init.sh"
+AGENT_GUIDANCE = ROOT / "AGENTS.md"
+SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 
 
 def object_block(project: str, object_id: str, next_section: str) -> str:
@@ -38,7 +40,7 @@ class IOSBuildSetupTests(unittest.TestCase):
         self.assertIn("fileSystemSynchronizedGroups = (", target)
         self.assertIn(SRC_GROUP_ID, target)
 
-    def test_android_native_is_only_source_membership_exception(self):
+    def test_only_platform_and_build_metadata_are_membership_exceptions(self):
         exceptions = object_block(
             self.project,
             EXCEPTION_SET_ID,
@@ -51,7 +53,11 @@ class IOSBuildSetupTests(unittest.TestCase):
             for line in exceptions[start:end].splitlines()[1:]
             if line.strip()
         ]
-        self.assertEqual(["AndroidNatives.cpp"], paths)
+        cmake_files = sorted(
+            str(path.relative_to(ROOT / "src"))
+            for path in (ROOT / "src").rglob("CMakeLists.txt")
+        )
+        self.assertEqual(["AndroidNatives.cpp", *cmake_files], paths)
         self.assertIn(f"target = {TARGET_ID}", exceptions)
 
     def test_audio_wrapper_keeps_objective_cpp_override(self):
@@ -79,6 +85,17 @@ class IOSBuildSetupTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual("", result.stdout.strip())
+
+    def test_agent_guidance_describes_automatic_ios_sources(self):
+        guidance = AGENT_GUIDANCE.read_text(encoding="utf-8")
+        self.assertNotIn("add its path to `membershipExceptions`", guidance)
+        self.assertIn("automatically discovers supported files under `src`", guidance)
+        self.assertIn("checkout-specific DerivedData", guidance)
+
+    def test_ios_uses_portable_stable_sdl_header_alias(self):
+        self.assertTrue(SDL_HEADER_ALIAS.is_symlink())
+        self.assertFalse(os.path.isabs(os.readlink(SDL_HEADER_ALIAS)))
+        self.assertEqual((ROOT / "SDL/include").resolve(), SDL_HEADER_ALIAS.resolve())
 
 
 class DerivedDataPathTests(unittest.TestCase):

@@ -711,6 +711,20 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AndroidNatives.cpp,
+				CMakeLists.txt,
+				audio/CMakeLists.txt,
+				bms_search/CMakeLists.txt,
+				game/CMakeLists.txt,
+				input/CMakeLists.txt,
+				math/CMakeLists.txt,
+				practice/CMakeLists.txt,
+				rendering/CMakeLists.txt,
+				scene/CMakeLists.txt,
+				scene/play/CMakeLists.txt,
+				skin/CMakeLists.txt,
+				utils/CMakeLists.txt,
+				video/CMakeLists.txt,
+				view/CMakeLists.txt,
 			);
 			target = B70027002BF7A8D8000DB8EC /* AsoBMaShow */;
 		};
