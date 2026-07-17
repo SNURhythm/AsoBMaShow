@@ -355,7 +355,34 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
   const auto result = simulation_.advanceTo(*songTime, *songTime);
   if (!result.transactions.empty()) {
     for (const auto &transaction : result.transactions) {
+      const bool requiresSound =
+          config_.inputTriggeredKeysounds &&
+          transaction.soundNoteId != kInvalidNoteId;
+      RealtimeGameplayAudioReservation reservation;
+      if (requiresSound &&
+          (config_.audio.reserve == nullptr ||
+           !config_.audio.reserve(config_.audio.context,
+                                  transaction.soundNoteId, reservation))) {
+        latchFault(RealtimeGameplayFault::AudioCapacityUnavailable);
+        return true;
+      }
       recordTransaction(transaction);
+      if (!requiresSound) {
+        continue;
+      }
+      if (config_.audio.commit == nullptr) {
+        if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
+          config_.audio.cancel(config_.audio.context, reservation,
+                               transaction.soundNoteId);
+        }
+        latchFault(RealtimeGameplayFault::AudioCommitFailed);
+        return true;
+      }
+      if (!config_.audio.commit(config_.audio.context, reservation,
+                                transaction.soundNoteId)) {
+        latchFault(RealtimeGameplayFault::AudioCommitFailed);
+        return true;
+      }
     }
   }
   const auto after = simulation_.snapshot();

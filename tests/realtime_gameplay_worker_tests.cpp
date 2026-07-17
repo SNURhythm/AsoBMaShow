@@ -272,6 +272,35 @@ void testActivationGateRejectsPreparationInputAndDeadlines() {
   worker.stop();
 }
 
+void testAutoplayCommitsGameplayAndKeysoundWithoutFramePump() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.attempt.autoPlay = true;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "autoplay worker starts");
+
+  clock.nowMicros.store(1'000'000, std::memory_order_release);
+  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+          "autoplay commits its keysound without a frame pump");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->noteStates[0].played &&
+                   snapshot->attempt.judgeCounts[PGreat] == 1;
+          }),
+          "autoplay commits note and judgement from audio time");
+
+  clock.nowMicros.store(2'000'000, std::memory_order_release);
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->terminalReason ==
+                                   gameplay::GameplayTerminalReason::ChartComplete;
+          }),
+          "autoplay completes from audio time without a frame pump");
+  worker.stop();
+}
+
 void testStoppedWorkerTransfersCompleteGaugeHistory() {
   FakeClock clock;
   FakeAudio audio;
@@ -301,6 +330,7 @@ int main() {
   testIngressOverflowFailsClosed();
   testSuspendFreezesAutomaticDeadlinesUntilResume();
   testActivationGateRejectsPreparationInputAndDeadlines();
+  testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
   return 0;
 }
