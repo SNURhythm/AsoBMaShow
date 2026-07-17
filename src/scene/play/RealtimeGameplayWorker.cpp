@@ -335,6 +335,41 @@ void RealtimeGameplayWorker::processInput(
   }
 }
 
+bool RealtimeGameplayWorker::commitAutomaticTransactions(
+    std::span<const GameplayInputResult> transactions) {
+  for (const auto &transaction : transactions) {
+    const bool requiresSound =
+        config_.inputTriggeredKeysounds &&
+        transaction.soundNoteId != kInvalidNoteId;
+    RealtimeGameplayAudioReservation reservation;
+    if (requiresSound &&
+        (config_.audio.reserve == nullptr ||
+         !config_.audio.reserve(config_.audio.context,
+                                transaction.soundNoteId, reservation))) {
+      latchFault(RealtimeGameplayFault::AudioCapacityUnavailable);
+      return false;
+    }
+    recordTransaction(transaction);
+    if (!requiresSound) {
+      continue;
+    }
+    if (config_.audio.commit == nullptr) {
+      if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
+        config_.audio.cancel(config_.audio.context, reservation,
+                             transaction.soundNoteId);
+      }
+      latchFault(RealtimeGameplayFault::AudioCommitFailed);
+      return false;
+    }
+    if (!config_.audio.commit(config_.audio.context, reservation,
+                              transaction.soundNoteId)) {
+      latchFault(RealtimeGameplayFault::AudioCommitFailed);
+      return false;
+    }
+  }
+  return true;
+}
+
 bool RealtimeGameplayWorker::advanceAutomatic() {
   if (config_.clock.currentSongTime == nullptr) {
     return false;
@@ -352,37 +387,21 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
   const auto before = simulation_.snapshot();
   const std::size_t replayCountBefore = simulation_.replayEvents().size();
   const auto terminalBefore = simulation_.terminalReason();
-  const auto result = simulation_.advanceTo(*songTime, *songTime);
-  if (!result.transactions.empty()) {
-    for (const auto &transaction : result.transactions) {
-      const bool requiresSound =
-          config_.inputTriggeredKeysounds &&
-          transaction.soundNoteId != kInvalidNoteId;
-      RealtimeGameplayAudioReservation reservation;
-      if (requiresSound &&
-          (config_.audio.reserve == nullptr ||
-           !config_.audio.reserve(config_.audio.context,
-                                  transaction.soundNoteId, reservation))) {
-        latchFault(RealtimeGameplayFault::AudioCapacityUnavailable);
-        return true;
-      }
-      recordTransaction(transaction);
-      if (!requiresSound) {
-        continue;
-      }
-      if (config_.audio.commit == nullptr) {
-        if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
-          config_.audio.cancel(config_.audio.context, reservation,
-                               transaction.soundNoteId);
-        }
-        latchFault(RealtimeGameplayFault::AudioCommitFailed);
-        return true;
-      }
-      if (!config_.audio.commit(config_.audio.context, reservation,
-                                transaction.soundNoteId)) {
-        latchFault(RealtimeGameplayFault::AudioCommitFailed);
-        return true;
-      }
+  const auto practiceEnd = config_.practiceCompletionSongTimeMicros;
+  const std::int64_t advanceTime =
+      practiceEnd.has_value() && *songTime >= *practiceEnd
+          ? *practiceEnd - 1
+          : *songTime;
+  const auto result = simulation_.advanceTo(advanceTime, advanceTime);
+  if (!commitAutomaticTransactions(result.transactions)) {
+    return true;
+  }
+  if (practiceEnd.has_value() && *songTime >= *practiceEnd &&
+      !simulation_.terminal()) {
+    const auto finalized = simulation_.finalizePracticeRange(
+        *practiceEnd - 1, *practiceEnd - 1);
+    if (!commitAutomaticTransactions(finalized.transactions)) {
+      return true;
     }
   }
   const auto after = simulation_.snapshot();

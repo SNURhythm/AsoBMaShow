@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <semaphore>
+#include <span>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -66,6 +67,7 @@ struct RealtimeGameplayWorkerConfig {
   RealtimeGameplayAudioSink audio;
   bool inputTriggeredKeysounds = true;
   std::optional<std::int64_t> activationSongTimeMicros;
+  std::optional<std::int64_t> practiceCompletionSongTimeMicros;
 };
 
 struct RealtimeGameplayTransaction {
@@ -214,6 +216,8 @@ private:
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
   bool advanceAutomatic();
+  bool commitAutomaticTransactions(
+      std::span<const GameplayInputResult> transactions);
   void recordTransaction(const GameplayInputResult &result) noexcept;
   void publishSnapshot();
   void latchFault(RealtimeGameplayFault fault) noexcept;

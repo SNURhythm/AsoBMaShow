@@ -39,6 +39,17 @@ gameplay::GameplayDefinition makeRapidDefinition() {
   return gameplay::buildGameplayDefinition(chart, 0);
 }
 
+gameplay::GameplayDefinition makePracticeDefinition() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(31));
+  addTimeline(*measure, 1'100'000)->SetNote(2, new bms_parser::Note(32));
+  chart.Measures.push_back(measure);
+  return gameplay::buildGameplayDefinition(chart, 0);
+}
+
 struct FakeClock {
   std::atomic<long long> nowMicros{0};
 
@@ -272,6 +283,112 @@ void testActivationGateRejectsPreparationInputAndDeadlines() {
   worker.stop();
 }
 
+void testPracticeCountInPressJudgesFirstInRangeNote() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.allowedNoteRange = gameplay::GameplayTimeRange{
+      .startMicros = 1'000'000, .endMicros = 1'100'000};
+  config.practiceCompletionSongTimeMicros = 1'100'000;
+  gameplay::RealtimeGameplayWorker worker(makePracticeDefinition(),
+                                           std::move(config));
+  require(worker.start(), "practice count-in worker starts");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 999'999}),
+          "count-in press reaches the practice authority");
+  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+          "valid early count-in hit commits its keysound");
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && snapshot->noteStates[0].played &&
+              snapshot->attempt.judgeCounts[PGreat] == 1,
+          "valid early count-in hit judges the first in-range note");
+  worker.stop();
+}
+
+void testPracticeCountInPressOutsideJudgeWindowStaysUnjudged() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.allowedNoteRange = gameplay::GameplayTimeRange{
+      .startMicros = 1'000'000, .endMicros = 1'100'000};
+  config.practiceCompletionSongTimeMicros = 1'100'000;
+  gameplay::RealtimeGameplayWorker worker(makePracticeDefinition(),
+                                           std::move(config));
+  require(worker.start(), "early count-in rejection worker starts");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 499'999}),
+          "far-early count-in press reaches the practice authority");
+  std::this_thread::sleep_for(10ms);
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && !snapshot->noteStates[0].played &&
+              snapshot->attempt.judgeCounts[PGreat] == 0 &&
+              snapshot->attempt.judgeCounts[Poor] == 0 &&
+              audio.commitCount.load() == 0,
+          "count-in press outside every judge window stays unjudged");
+  worker.stop();
+}
+
+void testPracticeCompletesFromAudioClockWithoutFramePump() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.allowedNoteRange = gameplay::GameplayTimeRange{
+      .startMicros = 1'000'000, .endMicros = 1'100'000};
+  config.practiceCompletionSongTimeMicros = 1'100'000;
+  gameplay::RealtimeGameplayWorker worker(makePracticeDefinition(),
+                                           std::move(config));
+  require(worker.start(), "bounded practice worker starts");
+  clock.nowMicros.store(1'100'000, std::memory_order_release);
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->terminalReason ==
+                                   gameplay::GameplayTerminalReason::PracticeComplete;
+          }),
+          "audio clock publishes PracticeComplete without a frame pump");
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && snapshot->noteStates[0].dead &&
+              !snapshot->noteStates[1].played &&
+              snapshot->attempt.judgeCounts[Poor] == 1 &&
+              snapshot->replayEventCount == 1,
+          "practice finalization misses only unresolved in-range identities");
+  worker.stop();
+}
+
+void testPracticeAutoplayCompletesWithoutFramePump() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.allowedNoteRange = gameplay::GameplayTimeRange{
+      .startMicros = 1'000'000, .endMicros = 1'100'000};
+  config.simulation.attempt.autoPlay = true;
+  config.practiceCompletionSongTimeMicros = 1'100'000;
+  gameplay::RealtimeGameplayWorker worker(makePracticeDefinition(),
+                                           std::move(config));
+  require(worker.start(), "bounded practice autoplay starts");
+  clock.nowMicros.store(1'000'000, std::memory_order_release);
+  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+          "practice autoplay commits its in-range keysound");
+  clock.nowMicros.store(1'100'000, std::memory_order_release);
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->terminalReason ==
+                                   gameplay::GameplayTerminalReason::PracticeComplete;
+          }),
+          "practice autoplay completes from audio time");
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && snapshot->noteStates[0].played &&
+              !snapshot->noteStates[1].played &&
+              snapshot->attempt.judgeCounts[PGreat] == 1,
+          "practice autoplay resolves only the selected half-open range");
+  worker.stop();
+}
+
 void testAutoplayCommitsGameplayAndKeysoundWithoutFramePump() {
   FakeClock clock;
   FakeAudio audio;
@@ -330,6 +447,10 @@ int main() {
   testIngressOverflowFailsClosed();
   testSuspendFreezesAutomaticDeadlinesUntilResume();
   testActivationGateRejectsPreparationInputAndDeadlines();
+  testPracticeCountInPressJudgesFirstInRangeNote();
+  testPracticeCountInPressOutsideJudgeWindowStaysUnjudged();
+  testPracticeCompletesFromAudioClockWithoutFramePump();
+  testPracticeAutoplayCompletesWithoutFramePump();
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
   return 0;
