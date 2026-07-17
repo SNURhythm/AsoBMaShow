@@ -412,6 +412,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   }
 
   AudioCallbackState &state = *userData->callbackState;
+  audio::playback::DrainRealtimeCommands(state);
   audio::playback::DrainCommands(state);
 
   if (!userData->stopwatch->isRunning()) {
@@ -664,6 +665,21 @@ long long AudioWrapper::getTimeMicros() const {
   return interpolatedMicros;
 }
 
+std::optional<long long> AudioWrapper::songTimeMicrosAtSteadyMicros(
+    long long steadyMicros) const noexcept {
+  const AudioClockAnchor anchor = readAudioClockAnchor(userData);
+  if (anchor.wallMicros <= 0 || anchor.ratePercent <= 0) {
+    return std::nullopt;
+  }
+  const audio::PlaybackRate rate{.percent = anchor.ratePercent};
+  if (!rate.valid()) {
+    return std::nullopt;
+  }
+  return addMicrosClamped(
+      anchor.micros,
+      rate.chartMicrosFromReal(steadyMicros - anchor.wallMicros));
+}
+
 void AudioWrapper::seekClock(long long micros) {
   std::lock_guard<std::mutex> lock(audioCommandMutex);
   const long long wallMicros = nowMicros();
@@ -848,6 +864,9 @@ void AudioWrapper::clearCallbackState() {
   audio::playback::ClearCallbackSounds(callbackState);
   callbackState.commandReadCursor.store(0, std::memory_order_release);
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
+  callbackState.realtimeCommandReadCursor.store(0, std::memory_order_release);
+  callbackState.realtimeCommandWriteCursor.store(0,
+                                                 std::memory_order_release);
 }
 
 bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
@@ -950,6 +969,43 @@ bool AudioWrapper::scheduleSound(const path_t &path, audio::Bus bus,
   }
 
   return true;
+}
+
+std::optional<audio::RealtimeSoundHandle>
+AudioWrapper::resolveRealtimeSound(const path_t &path) const {
+  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  const auto indexIt = soundDataIndexMap.find(path);
+  if (indexIt == soundDataIndexMap.end() ||
+      indexIt->second >= soundDataList.size() ||
+      soundDataList[indexIt->second] == nullptr) {
+    return std::nullopt;
+  }
+  return audio::RealtimeSoundHandle(soundDataList[indexIt->second]);
+}
+
+std::optional<RealtimeAudioCommandReservation>
+AudioWrapper::tryReserveRealtimeSoundCommand() const noexcept {
+  if (backendState.load(std::memory_order_acquire) !=
+      audio::playback::BackendRunState::Running) {
+    return std::nullopt;
+  }
+  return audio::playback::TryReserveRealtimeCommand(callbackState);
+}
+
+bool AudioWrapper::commitRealtimeKeysound(
+    RealtimeAudioCommandReservation reservation,
+    const audio::RealtimeSoundHandle &handle, size_t startFrame) noexcept {
+  if (backendState.load(std::memory_order_acquire) !=
+          audio::playback::BackendRunState::Running ||
+      !handle.valid()) {
+    return false;
+  }
+  return audio::playback::CommitRealtimeCommand(
+      callbackState, reservation,
+      {.type = AudioCommandType::PlayNow,
+       .soundData = handle.soundData_.get(),
+       .bus = audio::Bus::Keysound,
+       .startFrame = startFrame});
 }
 
 bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,

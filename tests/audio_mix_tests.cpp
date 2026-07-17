@@ -444,6 +444,9 @@ void testStopFailureCannotClearCallbackState() {
   callbackState.commandQueue[0] = {.type = AudioCommandType::PlayNow,
                                    .soundData = &sound};
   callbackState.commandWriteCursor.store(1);
+  callbackState.realtimeCommandQueue[0] = {
+      .type = AudioCommandType::PlayNow, .soundData = &sound};
+  callbackState.realtimeCommandWriteCursor.store(1);
 
   std::atomic<audio::playback::BackendRunState> backendState{
       audio::playback::BackendRunState::Running};
@@ -464,7 +467,10 @@ void testStopFailureCannotClearCallbackState() {
   require(callbackState.playingSoundCount == 1 &&
               callbackState.scheduledSoundCount == 1 &&
               callbackState.commandReadCursor.load() == 0 &&
-              callbackState.commandWriteCursor.load() == 1 && sound.playing,
+              callbackState.commandWriteCursor.load() == 1 &&
+              callbackState.realtimeCommandReadCursor.load() == 0 &&
+              callbackState.realtimeCommandWriteCursor.load() == 1 &&
+              sound.playing,
           "a failed drain cannot mutate any callback-visible playback state");
   require(
       backendState.load() != audio::playback::BackendRunState::Stopped &&
@@ -487,6 +493,9 @@ void testConfirmedStopClearsCallbackStateAfterDrain() {
   callbackState.commandQueue[0] = {.type = AudioCommandType::PlayNow,
                                    .soundData = &sound};
   callbackState.commandWriteCursor.store(1);
+  callbackState.realtimeCommandQueue[0] = {
+      .type = AudioCommandType::PlayNow, .soundData = &sound};
+  callbackState.realtimeCommandWriteCursor.store(1);
 
   std::atomic<audio::playback::BackendRunState> backendState{
       audio::playback::BackendRunState::Running};
@@ -509,7 +518,10 @@ void testConfirmedStopClearsCallbackStateAfterDrain() {
   require(callbackState.playingSoundCount == 0 &&
               callbackState.scheduledSoundCount == 0 &&
               callbackState.commandReadCursor.load() == 0 &&
-              callbackState.commandWriteCursor.load() == 0 && !sound.playing,
+              callbackState.commandWriteCursor.load() == 0 &&
+              callbackState.realtimeCommandReadCursor.load() == 0 &&
+              callbackState.realtimeCommandWriteCursor.load() == 0 &&
+              !sound.playing,
           "stop-all clears callback state only after positive quiescence");
   require(
       backendState.load() == audio::playback::BackendRunState::Stopped &&
@@ -547,6 +559,11 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
                            .bus = audio::Bus::Keysound,
                            .startFrame = 11025};
   state.commandWriteCursor.store(1);
+  state.realtimeCommandQueue[0] = {.type = AudioCommandType::PlayNow,
+                                   .soundData = &sound,
+                                   .bus = audio::Bus::Keysound,
+                                   .startFrame = 11025};
+  state.realtimeCommandWriteCursor.store(1);
 
   std::array<SoundData *, 1> sounds{&sound};
   auto transition =
@@ -556,7 +573,8 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   require(sound.outputFrameCount == 88200 &&
               state.playingSounds[0].sourceFrameQ32 == 44100ULL << 32 &&
               state.scheduledSounds[0].startFrame == 22050 &&
-              state.commandQueue[0].startFrame == 11025,
+              state.commandQueue[0].startFrame == 11025 &&
+              state.realtimeCommandQueue[0].startFrame == 11025,
           "preparing a rate transition does not publish mixed-rate state");
 
   audio::playback::CommitOutputRateTransition(std::move(*transition), state);
@@ -569,6 +587,8 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
           "scheduled offsets retain their elapsed time at 48 kHz");
   require(state.commandQueue[0].startFrame == 12000,
           "queued offsets retain their elapsed time at 48 kHz");
+  require(state.realtimeCommandQueue[0].startFrame == 12000,
+          "realtime queued offsets retain their elapsed time at 48 kHz");
 
   auto restored =
       audio::playback::PrepareOutputRateTransition(sounds, 48000, 44100);
@@ -581,7 +601,8 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   require(state.playingSounds[0].sourceFrameQ32 == 44100ULL << 32 &&
               state.playingSounds[0].outputOffsetFrames == 441 &&
               state.scheduledSounds[0].startFrame == 22050 &&
-              state.commandQueue[0].startFrame == 11025,
+              state.commandQueue[0].startFrame == 11025 &&
+              state.realtimeCommandQueue[0].startFrame == 11025,
           "all nonzero frame domains remain time-correct after 48 to 44.1 kHz");
 }
 
@@ -730,6 +751,63 @@ void testBusFlowAndMixing() {
               "the left channel mixes each voice with its own bus gain");
   requireNear(mixBuffer[1], 0.3375f,
               "the right channel mixes each voice with its own bus gain");
+}
+
+void testRealtimeCommandReservationPublishesAtomically() {
+  SoundData keysound;
+  keysound.channels = 1;
+  keysound.outputData = {16384, 16384};
+  keysound.outputFrameCount = 2;
+
+  AudioCallbackState state;
+  const auto reservation =
+      audio::playback::TryReserveRealtimeCommand(state);
+  require(reservation.has_value(),
+          "realtime producer reserves callback capacity before mutation");
+
+  audio::playback::DrainRealtimeCommands(state);
+  require(state.playingSoundCount == 0,
+          "an unpublished reservation is invisible to the audio callback");
+
+  require(audio::playback::CommitRealtimeCommand(
+              state, *reservation,
+              {.type = AudioCommandType::PlayNow,
+               .soundData = &keysound,
+               .bus = audio::Bus::Keysound}),
+          "the reserved realtime command commits without another capacity "
+          "check");
+  audio::playback::DrainRealtimeCommands(state);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &keysound &&
+              state.playingSounds[0].bus == audio::Bus::Keysound,
+          "the callback observes the complete committed keysound command");
+}
+
+void testRealtimeCommandReservationFailsClosedAtCapacity() {
+  SoundData keysound;
+  keysound.channels = 1;
+  keysound.outputData = {1};
+  keysound.outputFrameCount = 1;
+
+  AudioCallbackState state;
+  for (std::size_t index = 0; index < kRealtimeAudioCommandQueueSize; ++index) {
+    const auto reservation =
+        audio::playback::TryReserveRealtimeCommand(state);
+    require(reservation.has_value(),
+            "every advertised realtime command slot is reservable");
+    require(audio::playback::CommitRealtimeCommand(
+                state, *reservation,
+                {.type = AudioCommandType::PlayNow,
+                 .soundData = &keysound,
+                 .bus = audio::Bus::Keysound}),
+            "a reserved slot commits while capacity remains");
+  }
+  require(!audio::playback::TryReserveRealtimeCommand(state).has_value(),
+          "realtime command exhaustion is reported before gameplay mutation");
+
+  audio::playback::DrainRealtimeCommands(state);
+  require(audio::playback::TryReserveRealtimeCommand(state).has_value(),
+          "callback drain releases realtime command capacity");
 }
 
 void testJukeboxSourceClassificationAndSeekOverlap() {
@@ -912,6 +990,8 @@ int main() {
     testQ32ActiveCursorRejectsUnrepresentableStartFrame();
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
+    testRealtimeCommandReservationPublishesAtomically();
+    testRealtimeCommandReservationFailsClosedAtCapacity();
     testJukeboxSourceClassificationAndSeekOverlap();
     testSchedulerWaitConvertsChartDeltaToWallTime();
 
