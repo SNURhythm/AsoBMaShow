@@ -70,12 +70,6 @@ struct JudgementCounterLayout {
   float gap = 0.0f;
 };
 
-uint64_t noteTextureBatchKey(bgfx::TextureHandle texture,
-                             uint32_t submitDepth) {
-  return (static_cast<uint64_t>(submitDepth) << 16U) |
-         static_cast<uint64_t>(texture.idx);
-}
-
 long long latePoorTimingFromWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   const auto it = windows.find(Bad);
@@ -649,8 +643,6 @@ BMSRenderer::BMSRenderer(
   blueKeyLaneIndices.reserve(laneOrder.size());
   scratchLaneIndices.reserve(2);
   startLaneIndicatorColorRoles.reserve(laneOrder.size());
-  noteTextureBatchRenderers.reserve(16);
-  noteTextureBatchLookup.reserve(16);
   std::vector<int> keyLanes;
   keyLanes.reserve(laneOrder.size());
   for (size_t i = 0; i < laneOrder.size(); ++i) {
@@ -1847,8 +1839,9 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
     hudRevision.fetch_add(1, std::memory_order_release);
   }
 }
-void BMSRenderer::drawLongNote(float headY, float tailY,
-                               bms_parser::LongNote *const &head) {
+void BMSRenderer::drawLongNote(
+    float headY, float tailY, bms_parser::LongNote *const &head,
+    gameplay_note_submission_order::LongNoteOrder order) {
   // assert head
   assert(!head->IsTail() && "head is tail");
   const bool tailMissedWithHead = wasLongNoteTailMissedWithHead(head);
@@ -1913,7 +1906,7 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
 
   // Body
   if (bodyHeight > 0.0f && bgfx::isValid(bodyTexture)) {
-    auto &bodyBatch = longBodyBatchFor(bodyTexture);
+    auto &bodyBatch = noteTextureBatchAtDepth(order.bodyDepth);
     if (bodyFrameCount > 1 && bodyCycleMs > 0) {
       const int frame =
           skinAnimationFrame(currentRenderMicros, bodyFrameCount, bodyCycleMs);
@@ -1931,7 +1924,7 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
 
   if (tailClip.visible && !isClassicLongNote &&
       (!tailReleasedEarly || tailY > judgeY)) {
-    sheetBatchFor(sheet).addRectUV(
+    noteTextureBatchAtDepth(order.endpointDepth).addRectUV(
         laneToX(head->Tail->Lane), tailClip.y, noteRenderWidth,
         tailClip.height, tailUv.u0, tailUv.v0, tailUv.u1,
         clippedBottomV(tailUv.v0, tailUv.v1,
@@ -1943,7 +1936,7 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
     return;
 
   // Head
-  sheetBatchFor(sheet).addRectUV(
+  noteTextureBatchAtDepth(order.endpointDepth).addRectUV(
       laneToX(head->Lane), headClip.y, noteRenderWidth, headClip.height,
       headUv.u0, headUv.v0, headUv.u1,
       clippedBottomV(headUv.v0, headUv.v1,
@@ -1951,7 +1944,8 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
       sheet.texture);
 }
 
-void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
+void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
+                                 uint32_t submitDepth) {
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
                                    noteRenderHeight, judgeY);
   if (note->IsPlayed || !clip.visible ||
@@ -1961,7 +1955,7 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
-  sheetBatchFor(sheet).addRectUV(
+  noteTextureBatchAtDepth(submitDepth).addRectUV(
       laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.note.u0,
       sheet.note.v0, sheet.note.u1,
       clippedBottomV(sheet.note.v0, sheet.note.v1,
@@ -1969,7 +1963,8 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
       sheet.texture);
 }
 
-void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
+void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
+                                    uint32_t submitDepth) {
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
                                    noteRenderHeight, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
@@ -1978,6 +1973,7 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
     return;
   }
 
+  setInvisibleBatchDepth(submitDepth);
   const uint32_t color = Color(255, 149, 36, 224).toABGR();
   const float x = laneToX(note->Lane);
   if (note->IsLongNote()) {
@@ -1998,7 +1994,8 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
 }
 
 void BMSRenderer::drawLandmineNote(float y,
-                                   bms_parser::LandmineNote *const &note) {
+                                   bms_parser::LandmineNote *const &note,
+                                   uint32_t submitDepth) {
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
                                    noteRenderHeight, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
@@ -2008,11 +2005,7 @@ void BMSRenderer::drawLandmineNote(float y,
   }
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
-  noteTextureBatch(
-      sheet.texture,
-      gameplay_scroll_geometry::noteRenderDepth(
-          gameplay_scroll_geometry::NoteRenderLayer::Landmine))
-      .addRectUV(
+  noteTextureBatchAtDepth(submitDepth).addRectUV(
       laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.mine.u0,
       sheet.mine.v0, sheet.mine.u1,
       clippedBottomV(sheet.mine.v0, sheet.mine.v1,
@@ -2477,33 +2470,19 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   applyPendingHudText(micro);
   updateJudgementCounterText();
 
-  constexpr uint32_t kDepthBackground = 100;
-  constexpr uint32_t kDepthBeams = gameplay_scroll_geometry::noteRenderDepth(
-      gameplay_scroll_geometry::NoteRenderLayer::LaneBeam);
-  constexpr uint32_t kDepthInvisibleNotes =
-      gameplay_scroll_geometry::noteRenderDepth(
-          gameplay_scroll_geometry::NoteRenderLayer::Invisible);
-  constexpr uint32_t kDepthLongBodies =
-      gameplay_scroll_geometry::noteRenderDepth(
-          gameplay_scroll_geometry::NoteRenderLayer::LongBody);
-  constexpr uint32_t kDepthNotes = gameplay_scroll_geometry::noteRenderDepth(
-      gameplay_scroll_geometry::NoteRenderLayer::Normal);
-  constexpr uint32_t kDepthGhosts = gameplay_scroll_geometry::noteRenderDepth(
-      gameplay_scroll_geometry::NoteRenderLayer::Ghost);
-  constexpr uint32_t kDepthJudgementIndicator = 330;
-  constexpr uint32_t kDepthGauge = 340;
-  static_assert(kDepthInvisibleNotes < kDepthLongBodies);
-  static_assert(kDepthInvisibleNotes < kDepthNotes);
+  using gameplay_note_submission_order::kBackgroundDepth;
+  using gameplay_note_submission_order::kGaugeDepth;
+  using gameplay_note_submission_order::kGhostDepth;
+  using gameplay_note_submission_order::kJudgementIndicatorDepth;
+  using gameplay_note_submission_order::kLaneBeamDepth;
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
-  simpleBatchRenderer.setSubmitDepth(kDepthBackground);
+  simpleBatchRenderer.setSubmitDepth(kBackgroundDepth);
   gimmickBatchRenderer.setSubmitView(rendering::main_view);
-  gimmickBatchRenderer.setSubmitDepth(kDepthInvisibleNotes);
-  ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
+  ghostBatchRenderer.setSubmitDepth(kGhostDepth);
   simpleBatchRenderer.begin();
-  gimmickBatchRenderer.begin();
   ghostBatchRenderer.begin();
-  beginNoteTextureBatches(kDepthLongBodies, kDepthNotes);
+  beginOrderedNoteBatches();
   // background
   drawRect(playAreaWidth, upperBound - judgeY, playAreaLeftX,
            judgeY, Color(20, 20, 20, 122));
@@ -2526,10 +2505,15 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   float rxhs = visibleTravelHeight * hispeed;
   float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(chartTimeMicros);
+  gameplay_note_submission_order::Allocator submissionOrder;
+  const auto pastLongNoteOrder = submissionOrder.captureLongNote();
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
-    longNoteLookahead[orphanLongNote] = lowerBound;
+    longNoteLookahead[orphanLongNote] = {
+        .headY = lowerBound,
+        .order = pastLongNoteOrder,
+    };
   }
   double futureY = static_cast<double>(judgeY);
   bool futureTraversalStarted = false;
@@ -2575,6 +2559,35 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     if (timeLine->Timing < chartTimeMicros - latePoorTiming) {
       state.currentTimelineIndex = i;
     }
+    const bool rowHasLongHead =
+        i < groupedTimelineNotes.size() &&
+        std::any_of(groupedTimelineNotes[i].begin(),
+                    groupedTimelineNotes[i].end(), [](auto *note) {
+                      if (note == nullptr || !note->IsLongNote()) {
+                        return false;
+                      }
+                      return !static_cast<bms_parser::LongNote *>(note)
+                                  ->IsTail();
+                    });
+    std::optional<gameplay_note_submission_order::LongNoteOrder>
+        rowLongOrder;
+    std::optional<uint32_t> rowPrimaryDepth;
+    const auto ensurePrimaryDepth = [&]() {
+      if (!rowPrimaryDepth.has_value()) {
+        if (rowHasLongHead) {
+          rowLongOrder = submissionOrder.captureLongNote();
+          rowPrimaryDepth = rowLongOrder->endpointDepth;
+        } else {
+          rowPrimaryDepth = submissionOrder.next();
+        }
+      }
+      return *rowPrimaryDepth;
+    };
+    const auto ensureLongOrder = [&]() {
+      (void)ensurePrimaryDepth();
+      assert(rowLongOrder.has_value());
+      return *rowLongOrder;
+    };
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
     // Render notes in grouped lane order (white/blue/scratch) to reduce texture
     // switches while keeping per-lane ordering intact.
@@ -2594,7 +2607,10 @@ void BMSRenderer::render(RenderContext &context, long long micro,
           return false;
         }
         state.orphanLongNotes.insert(longNote);
-        longNoteLookahead[longNote] = lowerBound;
+        longNoteLookahead[longNote] = {
+            .headY = lowerBound,
+            .order = ensureLongOrder(),
+        };
         return true;
       };
       if (timeLine->Timing >= chartTimeMicros - latePoorTiming) {
@@ -2607,7 +2623,8 @@ void BMSRenderer::render(RenderContext &context, long long micro,
         }
         if (note->IsLandmineNote()) {
           if (timeLine->Timing >= chartTimeMicros) {
-            drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
+            drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note),
+                             ensurePrimaryDepth());
           }
           return;
         }
@@ -2622,17 +2639,21 @@ void BMSRenderer::render(RenderContext &context, long long micro,
             // find head's y
             if (auto it = longNoteLookahead.find(longNote->Head);
                 it != longNoteLookahead.end()) {
-              drawLongNote(it->second, y, longNote->Head);
+              drawLongNote(it->second.headY, y, longNote->Head,
+                           it->second.order);
               // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
-              drawLongNote(lowerBound, y, longNote->Head);
+              drawLongNote(lowerBound, y, longNote->Head, pastLongNoteOrder);
             }
           } else {
-            longNoteLookahead[longNote] = y;
+            longNoteLookahead[longNote] = {
+                .headY = y,
+                .order = ensureLongOrder(),
+            };
           }
         } else {
-          drawNormalNote(y, note);
+          drawNormalNote(y, note, ensurePrimaryDepth());
         }
       } else {
         // note has passed the last hittable timing
@@ -2662,7 +2683,10 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
             // setting to lowerBound in all cases is OK because the played
             // state will be correctly handled by drawLongNote
-            longNoteLookahead[longNote] = lowerBound;
+            longNoteLookahead[longNote] = {
+                .headY = lowerBound,
+                .order = ensureLongOrder(),
+            };
           }
         }
       }
@@ -2673,31 +2697,36 @@ void BMSRenderer::render(RenderContext &context, long long micro,
         processNote(note);
       }
     }
+    for (const auto &note : timeLine->LandmineNotes) {
+      if (note == nullptr || note->IsDead) {
+        continue;
+      }
+      if (timeLine->Timing >= chartTimeMicros) {
+        drawLandmineNote(y, note, ensurePrimaryDepth());
+      }
+    }
+    std::optional<uint32_t> rowInvisibleDepth;
     for (const auto &note : timeLine->InvisibleNotes) {
       if (note == nullptr || note->IsDead) {
         continue;
       }
       if (timeLine->Timing >= chartTimeMicros) {
         if (showInvisibleNotes) {
-          drawInvisibleNote(y, note);
+          if (!rowInvisibleDepth.has_value()) {
+            rowInvisibleDepth = submissionOrder.next();
+          }
+          drawInvisibleNote(y, note, *rowInvisibleDepth);
         }
       } else {
         note->IsDead = true;
-      }
-    }
-    for (const auto &note : timeLine->LandmineNotes) {
-      if (note == nullptr || note->IsDead) {
-        continue;
-      }
-      if (timeLine->Timing >= chartTimeMicros) {
-        drawLandmineNote(y, note);
       }
     }
   }
 
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
-    drawLongNote(pair.second, upperBound, pair.first);
+    drawLongNote(pair.second.headY, upperBound, pair.first,
+                 pair.second.order);
   }
   if (replayGhostRenderingEnabled) {
     drawReplayGhosts(rxhs, chartTimeMicros, currentScrollPosition);
@@ -2706,12 +2735,11 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
   // Flush background/measure pass before notes.
   simpleBatchRenderer.flush();
-  flushNoteTextureBatches();
-  gimmickBatchRenderer.flush();
+  flushOrderedNoteBatches();
   ghostBatchRenderer.flush();
 
   if (renderLaneBeams) {
-    simpleBatchRenderer.setSubmitDepth(kDepthBeams);
+    simpleBatchRenderer.setSubmitDepth(kLaneBeamDepth);
     const long long nowMicros =
         useRenderTimeForLaneBeams
             ? micro
@@ -2764,7 +2792,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                                                        : rendering::main_view);
     simpleBatchRenderer.setSubmitDepth(indicatorHudMode
                                            ? 0
-                                           : kDepthJudgementIndicator);
+                                           : kJudgementIndicatorDepth);
     simpleBatchRenderer.begin();
     judgementIndicator.render(simpleBatchRenderer, micro,
                               {.judgeY = judgeY,
@@ -2780,7 +2808,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   if (renderHud) {
     if (gaugeBarPosition == AppSettings::GaugeBarPosition::World) {
       simpleBatchRenderer.setSubmitView(rendering::main_view);
-      simpleBatchRenderer.setSubmitDepth(kDepthGauge);
+      simpleBatchRenderer.setSubmitDepth(kGaugeDepth);
       simpleBatchRenderer.begin();
       drawGaugeBar();
       simpleBatchRenderer.flush();
@@ -3845,45 +3873,35 @@ inline const NoteSheet &BMSRenderer::sheetForLane(int lane) const {
   return graySheet;
 }
 
-rendering::TexBatchRenderer &BMSRenderer::noteTextureBatch(
-    bgfx::TextureHandle texture, uint32_t submitDepth) {
-  const uint64_t key = noteTextureBatchKey(texture, submitDepth);
-  if (const auto it = noteTextureBatchLookup.find(key);
-      it != noteTextureBatchLookup.end()) {
-    return noteTextureBatchRenderers[it->second];
-  }
-
-  const size_t index = noteTextureBatchRenderers.size();
-  auto &renderer = noteTextureBatchRenderers.emplace_back();
-  renderer.setSubmitDepth(submitDepth);
-  renderer.begin();
-  noteTextureBatchLookup.emplace(key, index);
-  return renderer;
-}
-
-rendering::TexBatchRenderer &BMSRenderer::sheetBatchFor(
-    const NoteSheet &sheet) {
-  return noteTextureBatch(sheet.texture, noteSheetSubmitDepth);
-}
-
 rendering::TexBatchRenderer &
-BMSRenderer::longBodyBatchFor(bgfx::TextureHandle texture) {
-  return noteTextureBatch(texture, longBodySubmitDepth);
+BMSRenderer::noteTextureBatchAtDepth(uint32_t submitDepth) {
+  if (activeNoteTextureDepth != submitDepth) {
+    noteTextureBatchRenderer.flush();
+    noteTextureBatchRenderer.setSubmitDepth(submitDepth);
+    activeNoteTextureDepth = submitDepth;
+  }
+  return noteTextureBatchRenderer;
 }
 
-void BMSRenderer::beginNoteTextureBatches(uint32_t bodyDepth,
-                                          uint32_t sheetDepth) {
-  longBodySubmitDepth = bodyDepth;
-  noteSheetSubmitDepth = sheetDepth;
-  for (auto &renderer : noteTextureBatchRenderers) {
-    renderer.begin();
+void BMSRenderer::setInvisibleBatchDepth(uint32_t submitDepth) {
+  if (activeInvisibleDepth == submitDepth) {
+    return;
   }
+  gimmickBatchRenderer.flush();
+  gimmickBatchRenderer.setSubmitDepth(submitDepth);
+  activeInvisibleDepth = submitDepth;
 }
 
-void BMSRenderer::flushNoteTextureBatches() {
-  for (auto &renderer : noteTextureBatchRenderers) {
-    renderer.flush();
-  }
+void BMSRenderer::beginOrderedNoteBatches() {
+  activeNoteTextureDepth = std::numeric_limits<uint32_t>::max();
+  activeInvisibleDepth = std::numeric_limits<uint32_t>::max();
+  noteTextureBatchRenderer.begin();
+  gimmickBatchRenderer.begin();
+}
+
+void BMSRenderer::flushOrderedNoteBatches() {
+  noteTextureBatchRenderer.flush();
+  gimmickBatchRenderer.flush();
 }
 
 void BMSRendererState::reset() {

@@ -3,37 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 
 namespace gameplay_scroll_geometry {
-
-enum class NoteRenderLayer {
-  LaneBeam,
-  Landmine,
-  Invisible,
-  LongBody,
-  Normal,
-  Ghost,
-};
-
-inline constexpr uint32_t noteRenderDepth(NoteRenderLayer layer) {
-  switch (layer) {
-  case NoteRenderLayer::LaneBeam:
-    return 180;
-  case NoteRenderLayer::Landmine:
-    return 184;
-  case NoteRenderLayer::Invisible:
-    return 185;
-  case NoteRenderLayer::LongBody:
-    return 190;
-  case NoteRenderLayer::Normal:
-    return 200;
-  case NoteRenderLayer::Ghost:
-    return 250;
-  }
-  return 0;
-}
 
 inline long long chartRenderTimeMicros(long long visualTimeMicros) {
   return visualTimeMicros;

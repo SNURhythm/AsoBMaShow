@@ -1,4 +1,5 @@
 #include "scene/play/GameplayScrollGeometry.h"
+#include "scene/play/GameplayNoteSubmissionOrder.h"
 
 #include <cmath>
 #include <cstddef>
@@ -180,17 +181,37 @@ int main() {
   requireNear(clippedOutline.rectangles[1].height, 0.5F,
               "the side border is clipped to the visible note height");
 
-  require(noteRenderDepth(NoteRenderLayer::LaneBeam) <
-              noteRenderDepth(NoteRenderLayer::Landmine),
-          "landmines render above lane beams");
-  require(noteRenderDepth(NoteRenderLayer::Landmine) <
-              noteRenderDepth(NoteRenderLayer::Invisible),
-          "landmines render behind invisible-note outlines");
-  require(noteRenderDepth(NoteRenderLayer::Invisible) <
-              noteRenderDepth(NoteRenderLayer::LongBody),
-          "long notes retain their exceptional position above invisibles");
-  require(noteRenderDepth(NoteRenderLayer::LongBody) <
-              noteRenderDepth(NoteRenderLayer::Normal),
-          "normal notes render above long-note bodies");
+  using gameplay_note_submission_order::Allocator;
+  using gameplay_note_submission_order::kFirstOrderedNoteDepth;
+  using gameplay_note_submission_order::kGhostDepth;
+  using gameplay_note_submission_order::kLaneBeamDepth;
+
+  Allocator order;
+  const uint32_t firstRowPrimary = order.next();
+  const uint32_t firstRowInvisible = order.next();
+  const auto longAtSecondRow = order.captureLongNote();
+  const uint32_t secondRowInvisible = order.next();
+  const uint32_t tailRowPrimary = order.next();
+
+  require(firstRowPrimary == kFirstOrderedNoteDepth,
+          "the first row starts at the ordered-note depth band");
+  require(firstRowPrimary < firstRowInvisible,
+          "an invisible phase follows its row's primary phase");
+  require(firstRowInvisible < longAtSecondRow.bodyDepth,
+          "a later row follows every phase of an earlier row");
+  require(longAtSecondRow.bodyDepth < longAtSecondRow.endpointDepth,
+          "long-note endpoints render above their own body");
+  require(longAtSecondRow.endpointDepth < secondRowInvisible,
+          "same-row invisibles follow the long-note endpoints");
+  require(longAtSecondRow.endpointDepth < tailRowPrimary,
+          "deferred long-note endpoints retain head-row order");
+
+  order.reset();
+  require(order.next() == kFirstOrderedNoteDepth,
+          "a new frame resets submission order");
+  require(kLaneBeamDepth < kFirstOrderedNoteDepth,
+          "lane beams stay below ordered notes");
+  require(tailRowPrimary < kGhostDepth,
+          "ordered notes stay below ghosts");
   return 0;
 }
