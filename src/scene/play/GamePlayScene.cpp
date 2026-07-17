@@ -19,6 +19,7 @@
 #include "BMSRenderer.h"
 #include "RhythmLaneInputController.h"
 #include "RealtimeGameplayWorker.h"
+#include "ReplayKeysoundSchedule.h"
 #include "RealtimeTouchInputRouter.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
@@ -1731,6 +1732,19 @@ bool GamePlayScene::reset() {
       *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,
       preparationPlan.metronome.enabled ? &preparationPlan.metronome : nullptr,
       options.clubMode);
+  if (options.replayData != nullptr && !options.autoKeySound) {
+    std::optional<gameplay::GameplayTimeRange> allowedRange;
+    if (const auto range = practiceNoteRange(); range.has_value()) {
+      allowedRange = {.startMicros = range->startMicros,
+                      .endMicros = range->endMicros};
+    }
+    const auto definition =
+        gameplay::buildGameplayDefinition(*chart, options.longNoteMode);
+    const auto replayKeysounds = buildReplayKeysoundSchedule(
+        definition, options.replayData->events, getAudioOffsetMicros(),
+        allowedRange);
+    context.jukebox.appendScheduledAudioEvents(replayKeysounds);
+  }
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
   currentGameplayBpm = chart != nullptr ? chart->Meta.Bpm : 0.0;
   if (renderer != nullptr) {
@@ -1786,7 +1800,6 @@ bool GamePlayScene::reset() {
   renderer->setAutoPlayMarkVisible(
       options.autoPlay ||
       (options.replayData != nullptr && options.replayData->autoPlay));
-  replayKeySoundCursor = 0;
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
@@ -2906,7 +2919,6 @@ void GamePlayScene::update(float dt) {
   }
   touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
-    processReplayKeySounds(gameplayTimeMicros);
     processReplayEvents(gameplayTimeMicros);
     processReplayLaneCoverEvents(gameplayTimeMicros);
   }
@@ -3608,30 +3620,6 @@ GamePlayScene::findReplayNote(const ReplayEvent &event) const {
   const auto it =
       replayNoteLookup.find(replayNoteKey(event.lane, event.noteTimeMicros));
   return it == replayNoteLookup.end() ? nullptr : it->second;
-}
-
-void GamePlayScene::processReplayKeySounds(long long gameplayTimeMicros) {
-  if (!isReplayPlayback() || options.replayData == nullptr ||
-      options.autoKeySound) {
-    return;
-  }
-
-  const auto &events = options.replayData->events;
-  while (replayKeySoundCursor < events.size()) {
-    const auto &event = events[replayKeySoundCursor];
-    if (event.songTimeMicros > gameplayTimeMicros) {
-      break;
-    }
-
-    if (practiceReplayEventAllowed(event) &&
-        event.action == ReplayEventAction::Press) {
-      if (auto *note = findReplayNote(event);
-          note != nullptr && note->Wav != bms_parser::Parser::NoWav) {
-        context.jukebox.playKeySound(note->Wav);
-      }
-    }
-    replayKeySoundCursor++;
-  }
 }
 
 void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {

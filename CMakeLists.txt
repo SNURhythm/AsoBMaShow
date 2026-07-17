@@ -1361,6 +1361,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
 
+    add_executable(replay_keysound_schedule_tests
+        tests/replay_keysound_schedule_tests.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/ReplayKeysoundSchedule.cpp
+    )
+    target_include_directories(replay_keysound_schedule_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_keysound_schedule_tests PRIVATE cxx_std_23)
+
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp
         src/ScoreProvenance.cpp
@@ -1807,6 +1818,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_automatic_authority_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)
+    asobmashow_register_test(replay_keysound_schedule_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
     asobmashow_register_test(practice_result_flow_tests)

@@ -119,7 +119,6 @@ private:
   void finishReplayRecording();
   void publishPracticeGhost();
   void buildReplayNoteLookup();
-  void processReplayKeySounds(long long gameplayTimeMicros);
   void processReplayEvents(long long gameplayTimeMicros);
   void processReplayLaneCoverEvents(long long gameplayTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
@@ -216,7 +215,6 @@ private:
   std::unordered_map<bms_parser::LongNote *, long long>
       hellChargeGaugeBalanceMicros;
   long long lastHellChargeGaugeUpdateMicros = 0;
-  size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;
