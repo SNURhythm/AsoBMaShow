@@ -439,7 +439,7 @@ void testInvalidValuesAreSanitizedWithDiagnostics() {
   const auto path = temp.path() / "settings.json";
   writeFile(
       path,
-      R"({"schemaVersion":1,"audioOffsetMs":9999,"laneLength":"bad","audio":{"masterVolume":-2.0},"video":{"frameCap":14}})");
+      R"({"schemaVersion":1,"audioOffsetMs":9999,"laneLength":"bad","audio":{"masterVolume":-2.0},"video":{"frameCap":1001}})");
   const auto result = AppSettingsStore::Load(path);
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "document with invalid individual values still loads");

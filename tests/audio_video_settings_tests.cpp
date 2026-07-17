@@ -51,7 +51,7 @@ bool sanitizeRejectsOutOfRangeValues() {
   below.video.displayIndex = -1;
   below.video.width = 0;
   below.video.height = -1;
-  below.video.frameCap = 14;
+  below.video.frameCap = 1;
   below.sanitize();
 
   ASSERT_TRUE(below.audio.outputDeviceId == "missing:device",
@@ -69,7 +69,7 @@ bool sanitizeRejectsOutOfRangeValues() {
   ASSERT_TRUE(below.video.displayIndex == 0, "negative display index");
   ASSERT_TRUE(below.video.width == 1280, "invalid width");
   ASSERT_TRUE(below.video.height == 720, "invalid height");
-  ASSERT_TRUE(below.video.frameCap == 0, "frame cap below minimum");
+  ASSERT_TRUE(below.video.frameCap == 1, "minimum frame cap");
 
   AudioVideoSettings above;
   above.audio.requestedSampleRate = 384001;
@@ -100,7 +100,7 @@ bool sanitizeAcceptsBoundaryAndUnsupportedValues() {
   minimum.audio.masterVolume = 0.0f;
   minimum.audio.bgmVolume = 0.0f;
   minimum.audio.keysoundVolume = 0.0f;
-  minimum.video.frameCap = 15;
+  minimum.video.frameCap = 1;
   minimum.sanitize();
 
   ASSERT_TRUE(minimum.audio.requestedSampleRate == 8000, "minimum sample rate");
@@ -109,7 +109,7 @@ bool sanitizeAcceptsBoundaryAndUnsupportedValues() {
   ASSERT_TRUE(minimum.audio.masterVolume == 0.0f, "minimum master volume");
   ASSERT_TRUE(minimum.audio.bgmVolume == 0.0f, "minimum BGM volume");
   ASSERT_TRUE(minimum.audio.keysoundVolume == 0.0f, "minimum keysound volume");
-  ASSERT_TRUE(minimum.video.frameCap == 15, "minimum frame cap");
+  ASSERT_TRUE(minimum.video.frameCap == 1, "minimum frame cap");
 
   AudioVideoSettings maximum;
   maximum.audio.outputDeviceId = "backend:unavailable-but-valid";
@@ -179,7 +179,7 @@ bool appSettingsSanitizesAudioVideoSettings() {
   AppSettings value;
   value.audioVideo.audio.outputDeviceId = "missing:app-device";
   value.audioVideo.audio.requestedBufferFrames = 15;
-  value.audioVideo.video.frameCap = 14;
+  value.audioVideo.video.frameCap = 1;
   value.noteStartPositionPercent = 100;
   value.sanitize();
 
@@ -187,8 +187,8 @@ bool appSettingsSanitizesAudioVideoSettings() {
               "AppSettings preserves device intent");
   ASSERT_TRUE(value.audioVideo.audio.requestedBufferFrames == 0,
               "AppSettings sanitizes buffer frames");
-  ASSERT_TRUE(value.audioVideo.video.frameCap == 0,
-              "AppSettings sanitizes frame cap");
+  ASSERT_TRUE(value.audioVideo.video.frameCap == 1,
+              "AppSettings preserves minimum frame cap");
   ASSERT_TRUE(value.noteStartPositionPercent == 100,
               "AppSettings accepts full lane cover");
 
