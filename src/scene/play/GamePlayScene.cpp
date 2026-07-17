@@ -792,22 +792,27 @@ bool GamePlayScene::realtimeGameplayAuthorityActive() const noexcept {
 
 bool GamePlayScene::startRealtimeGameplayAuthority() {
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_WINDOWS)
-  return false;
-#else
+  if (!options.autoPlay) {
+    return false;
+  }
+#endif
   if (realtimeGameplayAuthorityActive() || chart == nullptr || state == nullptr ||
-      renderer == nullptr || inputHandler == nullptr || options.autoPlay ||
+      renderer == nullptr || (!options.autoPlay && inputHandler == nullptr) ||
       isReplayPlayback() || options.practiceMode ||
       options.practiceSession != nullptr) {
     return false;
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  renderer->refreshGeometry();
-  const auto touchLayout = buildRealtimeTouchLayout(
-      *chart, *renderer, assist_options::isDragMode(options.assistOption));
-  if (!touchLayout.has_value()) {
-    SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
-    return false;
+  std::optional<gameplay::RealtimeTouchLayout> touchLayout;
+  if (!options.autoPlay) {
+    renderer->refreshGeometry();
+    touchLayout = buildRealtimeTouchLayout(
+        *chart, *renderer, assist_options::isDragMode(options.assistOption));
+    if (!touchLayout.has_value()) {
+      SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
+      return false;
+    }
   }
 #endif
 
@@ -849,7 +854,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
           .carriedCombo = state->combo,
           .carriedMaxCombo = state->maxCombo,
           .assistClearMark = state->assistClearMark,
-          .autoPlay = false,
+          .autoPlay = options.autoPlay,
           .replayCapacity = transactionCapacity,
           .automaticResultCapacity = transactionCapacity,
           .gaugeHistoryCapacity = transactionCapacity,
@@ -882,24 +887,28 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   session->worker = std::make_unique<gameplay::RealtimeGameplayWorker>(
       std::move(definition), std::move(workerConfig));
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  session->touchRouter =
-      std::make_unique<gameplay::RealtimeTouchInputRouter>(
-          session->epoch, *touchLayout,
-          gameplay::RealtimeTouchInputSink{
-              .context = session.get(),
-              .emit = &RealtimeGameplaySession::emitTouchInput});
+  if (touchLayout.has_value()) {
+    session->touchRouter =
+        std::make_unique<gameplay::RealtimeTouchInputRouter>(
+            session->epoch, *touchLayout,
+            gameplay::RealtimeTouchInputSink{
+                .context = session.get(),
+                .emit = &RealtimeGameplaySession::emitTouchInput});
+  }
 #endif
-  const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
-  const auto realtimeInputProfile =
-      makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
-                                                 activeInputScopes);
-  session->physicalInputRouter =
-      std::make_unique<input::RealtimePhysicalInputRouter>(
-          realtimeInputProfile, activeInputScopes,
-          [context = session.get()](const auto &transition) {
-            return RealtimeGameplaySession::emitPhysicalInput(context,
-                                                              transition);
-          });
+  if (!options.autoPlay) {
+    const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+    const auto realtimeInputProfile =
+        makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
+                                                   activeInputScopes);
+    session->physicalInputRouter =
+        std::make_unique<input::RealtimePhysicalInputRouter>(
+            realtimeInputProfile, activeInputScopes,
+            [context = session.get()](const auto &transition) {
+              return RealtimeGameplaySession::emitPhysicalInput(context,
+                                                                transition);
+            });
+  }
   session->visualMeasureIndex = state->passedMeasureCount;
   session->visualTimelineIndex = state->passedTimelineCount;
   session->layoutRenderWidth = rendering::render_width;
@@ -913,9 +922,16 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     return false;
   }
 
-  inputHandler->discardPendingTouchEvents();
+  if (inputHandler != nullptr) {
+    inputHandler->discardPendingTouchEvents();
+  }
   realtimeGameplaySession = std::move(session);
   auto &activeSession = *realtimeGameplaySession;
+  if (options.autoPlay) {
+    SDL_Log("Realtime autoplay authority active (epoch %llu)",
+            static_cast<unsigned long long>(realtimeGameplayEpoch));
+    return true;
+  }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   for (const auto deviceClass : {input::DeviceClass::Keyboard,
                                  input::DeviceClass::GameController,
@@ -973,7 +989,6 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   SDL_Log("Realtime gameplay native input authority active (epoch %llu)",
           static_cast<unsigned long long>(realtimeGameplayEpoch));
   return true;
-#endif
 }
 
 void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
