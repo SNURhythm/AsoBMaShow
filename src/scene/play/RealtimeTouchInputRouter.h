@@ -53,6 +53,7 @@ public:
   bool cancelAll(std::int64_t steadyTimestampMicros) noexcept;
   bool updateLayout(RealtimeTouchLayout layout,
                     std::int64_t steadyTimestampMicros) noexcept;
+  void setGameplayEnabled(bool enabled) noexcept;
   void reset() noexcept;
 
 private:
@@ -86,6 +87,7 @@ private:
   std::uint64_t epoch_ = 0;
   RealtimeTouchLayout layout_;
   RealtimeTouchInputSink sink_;
+  bool gameplayEnabled_ = true;
   std::array<FingerState, kRealtimeTouchFingerCapacity> fingers_{};
 };
 

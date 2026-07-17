@@ -800,7 +800,7 @@ void testRealtimePhysicalInputPreservesNativeTimestamp() {
           "timestamps");
 }
 
-void testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane() {
+void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
   InputProfile profile;
   profile.bindings.push_back(
       {.id = "native-controller-lane",
@@ -835,6 +835,7 @@ void testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane() {
        .rawValue = 0.0,
        .normalizedValue = 0.0F},
       400);
+  router.setGameplayEnabled(true, 500);
 
   require(output.size() == 2 &&
               output[0].type ==
@@ -842,9 +843,56 @@ void testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane() {
               output[1].type ==
                   input::RealtimePhysicalInputTransitionType::Release &&
               output[1].lane == 5 &&
-              output[1].steadyTimestampMicros == 300,
-          "disabling realtime input releases every held lane before gating "
-          "later native edges");
+              output[1].steadyTimestampMicros == 500,
+          "a release received while paused is deferred until resume");
+}
+
+void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-controller-held-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 5},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.setGameplayEnabled(false, 300);
+  router.setGameplayEnabled(true, 400);
+  require(output.size() == 1 &&
+              output.front().type ==
+                  input::RealtimePhysicalInputTransitionType::Press,
+          "pausing and resuming does not synthesize a held-lane release");
+
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 0.0,
+       .normalizedValue = 0.0F},
+      500);
+  require(output.size() == 2 &&
+              output.back().type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output.back().steadyTimestampMicros == 500,
+          "a key held through pause releases normally after resume");
 }
 
 void testRealtimePhysicalInputDisconnectReleasesHeldLane() {
@@ -946,7 +994,8 @@ int main() {
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
-  testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane();
+  testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
+  testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;

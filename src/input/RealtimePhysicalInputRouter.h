@@ -2,6 +2,7 @@
 
 #include "LogicalGameplayInputAdapter.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -23,6 +24,7 @@ struct RealtimePhysicalInputTransition {
 
 class RealtimePhysicalInputRouter final : private IRhythmControl {
 public:
+  static constexpr std::size_t kTrackedLaneCapacity = 64;
   using Sink = std::function<bool(const RealtimePhysicalInputTransition &)>;
 
   RealtimePhysicalInputRouter(const InputProfile &,
@@ -51,6 +53,8 @@ private:
   Sink sink_;
   std::int64_t currentTimestampMicros_ = 0;
   bool gameplayEnabled_ = false;
+  std::array<bool, kTrackedLaneCapacity> desiredLanePressed_{};
+  std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
   LogicalGameplayInputPipeline pipeline_;
 };
 

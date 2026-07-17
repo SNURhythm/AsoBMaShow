@@ -173,6 +173,9 @@ bool RealtimeTouchInputRouter::handleScratchMove(
 
 bool RealtimeTouchInputRouter::consume(
     const RealtimeTouchSample &sample) noexcept {
+  if (!gameplayEnabled_) {
+    return true;
+  }
   switch (sample.phase) {
   case RealtimeTouchPhase::Down: {
     auto *finger = allocateFinger(sample.fingerId);
@@ -246,6 +249,10 @@ bool RealtimeTouchInputRouter::consume(
   }
   }
   return false;
+}
+
+void RealtimeTouchInputRouter::setGameplayEnabled(bool enabled) noexcept {
+  gameplayEnabled_ = enabled;
 }
 
 void RealtimeTouchInputRouter::reset() noexcept {

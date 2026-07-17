@@ -34,8 +34,19 @@ void RealtimePhysicalInputRouter::setGameplayEnabled(
     return;
   }
   currentTimestampMicros_ = steadyTimestampMicros;
-  pipeline_.reset();
   gameplayEnabled_ = enabled;
+  if (!enabled) {
+    return;
+  }
+  for (std::size_t lane = 0; lane < desiredLanePressed_.size(); ++lane) {
+    if (desiredLanePressed_[lane] == publishedLanePressed_[lane]) {
+      continue;
+    }
+    (void)emit(desiredLanePressed_[lane]
+                   ? RealtimePhysicalInputTransitionType::Press
+                   : RealtimePhysicalInputTransitionType::Release,
+               static_cast<int>(lane));
+  }
 }
 
 bms_parser::Note *RealtimePhysicalInputRouter::pressLane(
@@ -62,11 +73,31 @@ bms_parser::Note *RealtimePhysicalInputRouter::releaseLane(
 
 bool RealtimePhysicalInputRouter::emit(
     RealtimePhysicalInputTransitionType type, int lane, bool backSpin) {
-  return !gameplayEnabled_ || !sink_ ||
-         sink_({.type = type,
-                .lane = lane,
-                .backSpin = backSpin,
-                .steadyTimestampMicros = currentTimestampMicros_});
+  const bool tracked = lane >= 0 &&
+                       static_cast<std::size_t>(lane) <
+                           desiredLanePressed_.size();
+  if (tracked) {
+    desiredLanePressed_[static_cast<std::size_t>(lane)] =
+        type == RealtimePhysicalInputTransitionType::Press;
+  }
+  if (!gameplayEnabled_ || !sink_) {
+    return true;
+  }
+  if (tracked &&
+      desiredLanePressed_[static_cast<std::size_t>(lane)] ==
+          publishedLanePressed_[static_cast<std::size_t>(lane)]) {
+    return true;
+  }
+  const bool published = sink_({.type = type,
+                                .lane = lane,
+                                .backSpin = backSpin,
+                                .steadyTimestampMicros =
+                                    currentTimestampMicros_});
+  if (published && tracked) {
+    publishedLanePressed_[static_cast<std::size_t>(lane)] =
+        desiredLanePressed_[static_cast<std::size_t>(lane)];
+  }
+  return published;
 }
 
 void RealtimePhysicalInputRouter::emitCommand(

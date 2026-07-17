@@ -1021,6 +1021,9 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (enabled) {
+    if (session.touchRouter != nullptr) {
+      session.touchRouter->setGameplayEnabled(true);
+    }
     session.acceptingTouch.store(true, std::memory_order_release);
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
     return;
@@ -1029,7 +1032,7 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   IOSSetRawTouchEventSink(nullptr, nullptr);
   session.clearUiOwnedFingers();
   if (session.touchRouter != nullptr) {
-    (void)session.touchRouter->cancelAll(nowMicros());
+    session.touchRouter->setGameplayEnabled(false);
   }
 #else
   (void)enabled;
@@ -1041,8 +1044,11 @@ bool GamePlayScene::realtimeTouchHitsUi(float normalizedX,
   float uiX = 0.0F;
   float uiY = 0.0F;
   rendering::normalizedToUi(normalizedX, normalizedY, uiX, uiY);
-  if (pauseButton != nullptr && pauseButton->getVisible() &&
-      isInsideButton(*pauseButton, uiX, uiY)) {
+  if ((pauseButton != nullptr && pauseButton->getVisible() &&
+       isInsideButton(*pauseButton, uiX, uiY)) ||
+      (practiceRestartButton != nullptr &&
+       practiceRestartButton->getVisible() &&
+       isInsideButton(*practiceRestartButton, uiX, uiY))) {
     return true;
   }
   if (renderer == nullptr || courseNoSpeed() ||
