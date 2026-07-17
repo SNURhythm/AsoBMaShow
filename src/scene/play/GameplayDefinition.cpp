@@ -58,6 +58,15 @@ GameplayDefinition::laneNotes(int lane) const noexcept {
              : std::span<const NoteId>();
 }
 
+std::span<const NoteId>
+GameplayDefinition::laneKeysoundNotes(int lane) const noexcept {
+  const auto found =
+      std::ranges::lower_bound(lanes_, lane, {}, &LaneDefinition::lane);
+  return found != lanes_.end() && found->lane == lane
+             ? std::span<const NoteId>(found->keysoundNoteIds)
+             : std::span<const NoteId>();
+}
+
 std::span<const LaneDefinition> GameplayDefinition::lanes() const noexcept {
   return lanes_;
 }
@@ -187,15 +196,20 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
       lane = result.lanes_.insert(lane, LaneDefinition{.lane = note.lane});
     }
     lane->noteIds.push_back(note.id);
+    if (note.kind != NoteKind::LongTail) {
+      lane->keysoundNoteIds.push_back(note.id);
+    }
   }
+  const auto noteTimingLess = [&](NoteId left, NoteId right) {
+    const auto &leftNote = result.notes_[left];
+    const auto &rightNote = result.notes_[right];
+    return leftNote.timingMicros == rightNote.timingMicros
+               ? left < right
+               : leftNote.timingMicros < rightNote.timingMicros;
+  };
   for (auto &lane : result.lanes_) {
-    std::ranges::sort(lane.noteIds, [&](NoteId left, NoteId right) {
-      const auto &leftNote = result.notes_[left];
-      const auto &rightNote = result.notes_[right];
-      return leftNote.timingMicros == rightNote.timingMicros
-                 ? left < right
-                 : leftNote.timingMicros < rightNote.timingMicros;
-    });
+    std::ranges::sort(lane.noteIds, noteTimingLess);
+    std::ranges::sort(lane.keysoundNoteIds, noteTimingLess);
   }
   return result;
 }

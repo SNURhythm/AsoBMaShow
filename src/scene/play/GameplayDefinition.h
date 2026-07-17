@@ -34,6 +34,7 @@ struct NoteDefinition {
 struct LaneDefinition {
   int lane = -1;
   std::vector<NoteId> noteIds;
+  std::vector<NoteId> keysoundNoteIds;
 };
 
 struct GameplayChartMetadata {
@@ -49,6 +50,8 @@ public:
   [[nodiscard]] std::size_t noteCount() const noexcept;
   [[nodiscard]] const NoteDefinition &note(NoteId id) const;
   [[nodiscard]] std::span<const NoteId> laneNotes(int lane) const noexcept;
+  [[nodiscard]] std::span<const NoteId>
+  laneKeysoundNotes(int lane) const noexcept;
   [[nodiscard]] std::span<const LaneDefinition> lanes() const noexcept;
   [[nodiscard]] GameplayChartMetadata metadata() const noexcept;
   [[nodiscard]] std::span<const NoteId>

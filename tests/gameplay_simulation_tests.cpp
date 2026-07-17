@@ -3,6 +3,7 @@
 #include "scene/play/GameplayDefinition.h"
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
+#include "scene/play/ManualKeysoundSelection.h"
 #include "scene/play/RhythmLaneInputController.h"
 
 #include "bms_parser.hpp"
@@ -89,6 +90,86 @@ bms_parser::LongNote *addLongNote(bms_parser::Measure &measure,
   return head;
 }
 
+struct KeysoundEntry {
+  std::int64_t timingMicros = 0;
+  int identity = 0;
+};
+
+void testManualKeysoundSelectionUsesFutureThenLastWithMainTies() {
+  const std::array main{
+      KeysoundEntry{.timingMicros = 100, .identity = 1},
+      KeysoundEntry{.timingMicros = 300, .identity = 3},
+  };
+  const std::array compensation{
+      KeysoundEntry{.timingMicros = 200, .identity = 2},
+      KeysoundEntry{.timingMicros = 300, .identity = 4},
+  };
+  const auto timing = [](const KeysoundEntry &entry) {
+    return entry.timingMicros;
+  };
+
+  const auto between = gameplay::selectManualKeysound(
+      std::span<const KeysoundEntry>(main),
+      std::span<const KeysoundEntry>(compensation), 150, 0, 1'000, timing);
+  require(between.lane == gameplay::ManualKeysoundLane::Compensation &&
+              between.index == 0,
+          "the earliest future candidate wins across candidate lanes");
+
+  const auto equalTime = gameplay::selectManualKeysound(
+      std::span<const KeysoundEntry>(main),
+      std::span<const KeysoundEntry>(compensation), 250, 0, 1'000, timing);
+  require(equalTime.lane == gameplay::ManualKeysoundLane::Main &&
+              equalTime.index == 1,
+          "the main lane wins an equal-time future candidate");
+
+  const auto afterAll = gameplay::selectManualKeysound(
+      std::span<const KeysoundEntry>(main),
+      std::span<const KeysoundEntry>(compensation), 400, 0, 1'000, timing);
+  require(afterAll.lane == gameplay::ManualKeysoundLane::Main &&
+              afterAll.index == 1,
+          "the latest past candidate wins and keeps main-lane ties");
+
+  const auto rangeFiltered = gameplay::selectManualKeysound(
+      std::span<const KeysoundEntry>(main),
+      std::span<const KeysoundEntry>(compensation), 0, 150, 250, timing);
+  require(rangeFiltered.lane ==
+                  gameplay::ManualKeysoundLane::Compensation &&
+              rangeFiltered.index == 0,
+          "half-open range filtering happens before future selection");
+
+  const auto emptyRange = gameplay::selectManualKeysound(
+      std::span<const KeysoundEntry>(main),
+      std::span<const KeysoundEntry>(compensation), 0, 250, 250, timing);
+  require(!emptyRange, "an empty half-open range has no keysound source");
+}
+
+void testDefinitionKeysoundIndexExcludesTailsAndLandmines() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *head = addLongNote(*measure, 1'000'000, 2'000'000, 1,
+                           bms_parser::LongNoteType::ChargeNote);
+  auto *mineTimeline = addTimeline(*measure, 2'500'000);
+  mineTimeline->SetLandmineNote(1, new bms_parser::LandmineNote(5.0F));
+  auto *normalTimeline = addTimeline(*measure, 3'000'000);
+  auto *normal = new bms_parser::Note(9);
+  normalTimeline->SetNote(1, normal);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto keysounds = definition.laneKeysoundNotes(1);
+  require(keysounds.size() == 2 &&
+              definition.note(keysounds[0]).kind ==
+                  gameplay::NoteKind::LongHead &&
+              definition.note(keysounds[1]).kind ==
+                  gameplay::NoteKind::Normal &&
+              definition.note(keysounds[0]).timingMicros ==
+                  head->Timeline->Timing &&
+              definition.note(keysounds[1]).timingMicros ==
+                  normal->Timeline->Timing,
+          "keysound index includes pressable notes and excludes tails and "
+          "landmines");
+}
+
 void testCompiledJudgePreservesResolvedWindows() {
   Judge judge(1);
   judge.applyWindowScale(50, 200);
@@ -132,8 +213,19 @@ void testDefinitionUsesStableIdsAndLaneIndices() {
   require(definition.note(laneOne[0]).timingMicros ==
               head->Timeline->Timing,
           "definition copies timing without retaining mutable note state");
+  const auto laneOneKeysounds = definition.laneKeysoundNotes(1);
+  require(laneOneKeysounds.size() == 1 &&
+              laneOneKeysounds.front() == headDefinition.id,
+          "press keysound index includes the long head but excludes its tail");
+  const auto laneTwoKeysounds = definition.laneKeysoundNotes(2);
+  require(laneTwoKeysounds.size() == 1 &&
+              definition.note(laneTwoKeysounds.front()).kind ==
+                  gameplay::NoteKind::Normal,
+          "press keysound index includes normal notes");
   require(definition.laneNotes(99).empty(),
           "unknown lanes return an empty span without allocation");
+  require(definition.laneKeysoundNotes(99).empty(),
+          "unknown keysound lanes return an empty span without allocation");
 }
 
 void testEmptyValidLaneCommitsPressAndReleaseIntents() {
@@ -1213,6 +1305,8 @@ void testCurrentReleaseParityMatrix() {
 
 int main() {
   testCompiledJudgePreservesResolvedWindows();
+  testManualKeysoundSelectionUsesFutureThenLastWithMainTies();
+  testDefinitionKeysoundIndexExcludesTailsAndLandmines();
   testDefinitionUsesStableIdsAndLaneIndices();
   testEmptyValidLaneCommitsPressAndReleaseIntents();
   testCandidateSelectionIsLaneIndexed();
