@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <utility>
 
 namespace gameplay {
@@ -28,6 +29,7 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                    .gaugeTotal = definition.metadata().gaugeTotal}),
       noteStates_(definition.noteCount()) {
   replayEvents_.reserve(config_.attempt.replayCapacity);
+  automaticResults_.reserve(config_.attempt.automaticResultCapacity);
   scoreState_.configureBoundedGaugeHistory(config_.attempt.replayCapacity);
   scoreState_.configureGauge(
       config_.attempt.initialGaugeType, config_.attempt.gaugeAutoShift,
@@ -79,6 +81,10 @@ GameplaySearchStats GameplaySimulation::lastSearchStats() const noexcept {
   return lastSearchStats_;
 }
 
+GameplaySearchStats GameplaySimulation::lastAdvanceStats() const noexcept {
+  return lastAdvanceStats_;
+}
+
 const GameplayScoreState &GameplaySimulation::scoreState() const noexcept {
   return scoreState_;
 }
@@ -111,6 +117,15 @@ bool GameplaySimulation::replayOverflowed() const noexcept {
   return replayOverflowed_;
 }
 
+std::span<const GameplayInputResult>
+GameplaySimulation::automaticResults() const noexcept {
+  return automaticResults_;
+}
+
+bool GameplaySimulation::automaticResultOverflowed() const noexcept {
+  return automaticResultOverflowed_;
+}
+
 void GameplaySimulation::commitJudge(const JudgeResult &judge) {
   scoreState_.commitJudge(judge);
 }
@@ -126,6 +141,187 @@ bool GameplaySimulation::recordReplay(GameplayReplayEvent &event) {
   }
   replayEvents_.push_back(event);
   return true;
+}
+
+bool GameplaySimulation::recordAutomaticResult(
+    const GameplayInputResult &result) {
+  if (automaticResults_.size() >= config_.attempt.automaticResultCapacity) {
+    automaticResultOverflowed_ = true;
+    return false;
+  }
+  automaticResults_.push_back(result);
+  return true;
+}
+
+void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
+                                         std::int64_t visualTimeMicros) {
+  const auto &note = definition_.note(id);
+  auto &state = noteStates_[id];
+  if (state.played || state.dead) {
+    return;
+  }
+
+  if (note.kind == NoteKind::Landmine) {
+    state.dead = true;
+    state.playedTimeMicros = songTimeMicros;
+    if (!lanePressed(note.lane)) {
+      return;
+    }
+
+    state.played = true;
+    scoreState_.applyGaugeDelta(-note.mineDamage);
+    GameplayInputResult result;
+    result.noteId = id;
+    result.hasReplayEvent = true;
+    result.replayEvent = {
+        .action = GameplayReplayAction::Mine,
+        .noteId = id,
+        .lane = note.lane,
+        .noteTimeMicros = note.timingMicros,
+        .songTimeMicros = songTimeMicros,
+        .judgeTimeMicros = songTimeMicros,
+    };
+    recordReplay(result.replayEvent);
+    recordAutomaticResult(result);
+    return;
+  }
+
+  if (note.kind != NoteKind::Normal || !config_.attempt.autoPlay) {
+    return;
+  }
+
+  state.played = true;
+  state.playedTimeMicros = songTimeMicros;
+  GameplayInputResult press;
+  press.noteId = id;
+  press.soundNoteId = id;
+  press.hasJudge = true;
+  press.judge = JudgeResult(PGreat, 0);
+  press.hasLaneVisual = true;
+  press.laneVisual = {LaneVisualAction::Press, note.lane, visualTimeMicros,
+                      press.judge};
+  commitJudge(press.judge);
+  press.hasReplayEvent = true;
+  press.replayEvent = {
+      .action = GameplayReplayAction::Press,
+      .noteId = id,
+      .lane = note.lane,
+      .noteTimeMicros = note.timingMicros,
+      .songTimeMicros = songTimeMicros,
+      .judgeTimeMicros = songTimeMicros,
+      .judgement = press.judge.judgement,
+      .diffMicros = press.judge.Diff,
+  };
+  recordReplay(press.replayEvent);
+  recordAutomaticResult(press);
+
+  GameplayInputResult release;
+  release.hasLaneVisual = true;
+  release.laneVisual = {LaneVisualAction::Release, note.lane, visualTimeMicros,
+                        JudgeResult(None, 0)};
+  recordAutomaticResult(release);
+}
+
+void GameplaySimulation::processLatePoor(NoteId id,
+                                         std::int64_t songTimeMicros) {
+  const auto &note = definition_.note(id);
+  auto &state = noteStates_[id];
+  if (note.kind != NoteKind::Normal || state.played || state.dead) {
+    return;
+  }
+
+  state.played = true;
+  state.dead = true;
+  state.playedTimeMicros = songTimeMicros;
+  GameplayInputResult result;
+  result.noteId = id;
+  result.hasJudge = true;
+  result.judge = JudgeResult(Poor, songTimeMicros - note.timingMicros);
+  commitJudge(result.judge);
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Miss,
+      .noteId = id,
+      .lane = note.lane,
+      .noteTimeMicros = note.timingMicros,
+      .songTimeMicros = songTimeMicros,
+      .judgeTimeMicros = songTimeMicros,
+      .judgement = result.judge.judgement,
+      .diffMicros = result.judge.Diff,
+  };
+  recordReplay(result.replayEvent);
+  recordAutomaticResult(result);
+}
+
+GameplayAdvanceResult
+GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
+                              std::int64_t visualTimeMicros) {
+  automaticResults_.clear();
+  lastAdvanceStats_ = {};
+  if (hasAdvanced_ && songTimeMicros < lastAdvancedMicros_) {
+    return {automaticResults_, lastAdvancedMicros_};
+  }
+
+  const auto chronological = definition_.chronologicalNotes();
+  while (true) {
+    const bool hasAtTiming = atTimingCursor_ < chronological.size();
+    const bool hasLatePoor = latePoorCursor_ < chronological.size();
+    if (!hasAtTiming && !hasLatePoor) {
+      break;
+    }
+
+    const std::int64_t atTimingDeadline =
+        hasAtTiming
+            ? definition_.note(chronological[atTimingCursor_]).timingMicros
+            : std::numeric_limits<std::int64_t>::max();
+    const std::int64_t latePoorDeadline =
+        hasLatePoor
+            ? definition_.note(chronological[latePoorCursor_]).timingMicros +
+                  config_.judge.latePoorTimingMicros() + 1
+            : std::numeric_limits<std::int64_t>::max();
+    const bool processAtTimingPhase = atTimingDeadline <= latePoorDeadline;
+    const std::int64_t nextDeadline =
+        processAtTimingPhase ? atTimingDeadline : latePoorDeadline;
+    if (nextDeadline > songTimeMicros) {
+      break;
+    }
+
+    ++lastAdvanceStats_.notesExamined;
+    if (processAtTimingPhase) {
+      const NoteId id = chronological[atTimingCursor_++];
+      processAtTiming(id, nextDeadline, visualTimeMicros);
+    } else {
+      const NoteId id = chronological[latePoorCursor_++];
+      processLatePoor(id, nextDeadline);
+    }
+  }
+
+  lastAdvancedMicros_ = songTimeMicros;
+  hasAdvanced_ = true;
+  return {automaticResults_, lastAdvancedMicros_};
+}
+
+GameplayInputResult
+GameplaySimulation::applyPressAt(int mainLane, int compensateLane,
+                                 const GameplayInputContext &context) {
+  if (hasAdvanced_ && context.songTimeMicros < lastAdvancedMicros_) {
+    automaticResults_.clear();
+    lastAdvanceStats_ = {};
+    return {};
+  }
+  advanceTo(context.songTimeMicros, context.laneBeamTimeMicros);
+  return pressLane(mainLane, compensateLane, context);
+}
+
+GameplayInputResult GameplaySimulation::applyReleaseAt(
+    int lane, const GameplayInputContext &context, bool isBackSpin) {
+  if (hasAdvanced_ && context.songTimeMicros < lastAdvancedMicros_) {
+    automaticResults_.clear();
+    lastAdvanceStats_ = {};
+    return {};
+  }
+  advanceTo(context.songTimeMicros, context.laneBeamTimeMicros);
+  return releaseLane(lane, context, isBackSpin);
 }
 
 const NoteRuntimeState &GameplaySimulation::noteState(NoteId id) const {

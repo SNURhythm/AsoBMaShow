@@ -110,6 +110,11 @@ struct GameplayInputResult {
   LaneVisualEvent laneVisual;
 };
 
+struct GameplayAdvanceResult {
+  std::span<const GameplayInputResult> transactions;
+  std::int64_t advancedToMicros = 0;
+};
+
 struct GameplaySearchStats {
   std::size_t notesExamined = 0;
 };
@@ -124,15 +129,26 @@ public:
                                 const GameplayInputContext &context);
   GameplayInputResult releaseLane(int lane, const GameplayInputContext &context,
                                   bool isBackSpin = false);
+  GameplayAdvanceResult advanceTo(std::int64_t songTimeMicros,
+                                  std::int64_t visualTimeMicros);
+  GameplayInputResult applyPressAt(int mainLane, int compensateLane,
+                                   const GameplayInputContext &context);
+  GameplayInputResult applyReleaseAt(int lane,
+                                     const GameplayInputContext &context,
+                                     bool isBackSpin = false);
 
   [[nodiscard]] const NoteRuntimeState &noteState(NoteId id) const;
   [[nodiscard]] bool lanePressed(int lane) const noexcept;
   [[nodiscard]] GameplaySearchStats lastSearchStats() const noexcept;
+  [[nodiscard]] GameplaySearchStats lastAdvanceStats() const noexcept;
   [[nodiscard]] const GameplayScoreState &scoreState() const noexcept;
   [[nodiscard]] GameplayAttemptSnapshot snapshot() const noexcept;
   [[nodiscard]] std::span<const GameplayReplayEvent>
   replayEvents() const noexcept;
   [[nodiscard]] bool replayOverflowed() const noexcept;
+  [[nodiscard]] std::span<const GameplayInputResult>
+  automaticResults() const noexcept;
+  [[nodiscard]] bool automaticResultOverflowed() const noexcept;
 
 private:
   struct LaneRuntimeState {
@@ -151,6 +167,10 @@ private:
                                               std::int64_t inputTimeMicros);
   void commitJudge(const JudgeResult &judge);
   bool recordReplay(GameplayReplayEvent &event);
+  bool recordAutomaticResult(const GameplayInputResult &result);
+  void processAtTiming(NoteId id, std::int64_t songTimeMicros,
+                       std::int64_t visualTimeMicros);
+  void processLatePoor(NoteId id, std::int64_t songTimeMicros);
 
   const GameplayDefinition &definition_;
   GameplaySimulationConfig config_;
@@ -158,8 +178,15 @@ private:
   std::vector<NoteRuntimeState> noteStates_;
   std::vector<LaneRuntimeState> laneStates_;
   std::vector<GameplayReplayEvent> replayEvents_;
+  std::vector<GameplayInputResult> automaticResults_;
   bool replayOverflowed_ = false;
+  bool automaticResultOverflowed_ = false;
+  std::size_t atTimingCursor_ = 0;
+  std::size_t latePoorCursor_ = 0;
+  std::int64_t lastAdvancedMicros_ = 0;
+  bool hasAdvanced_ = false;
   GameplaySearchStats lastSearchStats_;
+  GameplaySearchStats lastAdvanceStats_;
 };
 
 } // namespace gameplay
