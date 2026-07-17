@@ -1,4 +1,5 @@
 #include "ChartViewerScene.h"
+#include "ChartViewerNoteGeometry.h"
 #include "ChartListenStart.h"
 
 #include "../ArchiveFile.h"
@@ -1106,17 +1107,26 @@ private:
     }
     forEachInvisibleNote([&](int lane, const bms_parser::Note *note,
                              const bms_parser::TimeLine *timeline) {
-      (void)note;
       auto yIt = timelineY.find(timeline);
       auto layoutIt = timelineMeasure.find(timeline);
       if (yIt == timelineY.end() || layoutIt == timelineMeasure.end()) {
         return;
       }
       const auto &layout = measureLayouts[layoutIt->second];
-      const float x = laneContentX(layout.column, lane) + 2.0f;
-      const float y = yIt->second - 3.0f;
-      const float width = std::max(5.0f, laneWidth - 4.0f);
-      drawRectClip(x, y, width, 6.0f, invisibleNoteColor());
+      const float x = laneContentX(layout.column, lane) + 2.0F;
+      const float y = yIt->second - 3.0F;
+      const float width = std::max(5.0F, laneWidth - 4.0F);
+      constexpr float height = 6.0F;
+      const bool isLongNote =
+          dynamic_cast<const bms_parser::LongNote *>(note) != nullptr;
+      const auto rectangles =
+          chart_viewer_note_geometry::invisibleNoteRectangles(
+              x, y, width, height, height * 0.12F, isLongNote);
+      for (std::size_t i = 0; i < rectangles.count; ++i) {
+        const auto &rectangle = rectangles.rectangles[i];
+        drawRectClip(rectangle.x, rectangle.y, rectangle.width,
+                     rectangle.height, invisibleNoteColor());
+      }
     });
   }
 

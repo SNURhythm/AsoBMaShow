@@ -560,6 +560,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(lane_cover_number_geometry_tests PRIVATE cxx_std_23)
 
+    add_executable(chart_viewer_note_geometry_tests
+        tests/chart_viewer_note_geometry_tests.cpp
+    )
+    target_include_directories(chart_viewer_note_geometry_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_viewer_note_geometry_tests PRIVATE cxx_std_23)
+
     add_executable(gameplay_scroll_geometry_tests
         tests/gameplay_scroll_geometry_tests.cpp
     )
@@ -1785,6 +1793,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         preparation_plan_tests
         start_lane_indicator_geometry_tests
         lane_cover_number_geometry_tests
+        chart_viewer_note_geometry_tests
         gameplay_scroll_geometry_tests
         club_beat_tests
         gbattle_tests
