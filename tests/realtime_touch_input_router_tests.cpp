@@ -258,6 +258,73 @@ void testPausePreservesHeldFingerWithoutSyntheticRelease() {
           "the real post-resume lift releases the held lane");
 }
 
+void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      12, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 30,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 100'000}) &&
+              router.consume({.fingerId = 30,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 110'000}),
+          "cancelled touch enters its grace period");
+  require(capture.events.size() == 1,
+          "cancellation does not release the lane immediately");
+  require(router.consume({.fingerId = 30,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.49F,
+                          .steadyTimestampMicros = 130'000}) &&
+              router.consume(
+                  {.fingerId = 30,
+                   .phase = gameplay::RealtimeTouchPhase::CancelExpired,
+                   .steadyTimestampMicros = 160'000}) &&
+              router.consume({.fingerId = 30,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.49F,
+                              .steadyTimestampMicros = 170'000}),
+          "continued touch cancels the pending expiry and later lifts");
+  require(capture.events.size() == 2 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().steadyTimestampMicros == 170'000,
+          "continued touch stays held until its real lift");
+
+  require(router.consume({.fingerId = 31,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 200'000}) &&
+              router.consume({.fingerId = 31,
+                              .phase = gameplay::RealtimeTouchPhase::Cancel,
+                              .normalizedX = 0.31F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 210'000}) &&
+              router.consume(
+                  {.fingerId = 31,
+                   .phase = gameplay::RealtimeTouchPhase::CancelExpired,
+                   .steadyTimestampMicros = 259'999}),
+          "expiry before the grace deadline is ignored");
+  require(capture.events.size() == 3,
+          "early cancellation expiry emits no release");
+  require(router.consume(
+              {.fingerId = 31,
+               .phase = gameplay::RealtimeTouchPhase::CancelExpired,
+               .steadyTimestampMicros = 260'000}),
+          "cancel grace expires at fifty milliseconds");
+  require(capture.events.size() == 4 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().steadyTimestampMicros == 260'000,
+          "an uncontinued cancelled touch releases at the grace deadline");
+}
+
 } // namespace
 
 int main() {
@@ -269,5 +336,6 @@ int main() {
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();
   testPausePreservesHeldFingerWithoutSyntheticRelease();
+  testCancelledTouchUsesGraceAndContinuationCancelsExpiry();
   return 0;
 }

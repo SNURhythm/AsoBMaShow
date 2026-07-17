@@ -35,8 +35,7 @@ void QueuedMidiInputBackend::DeviceActivation::rollback() {
   if (backend_ == nullptr) {
     return;
   }
-  device_.connected = false;
-  backend_->enqueueDevice(std::move(device_));
+  backend_->enqueueDeviceDisconnect(std::move(device_));
   backend_ = nullptr;
 }
 
@@ -170,4 +169,10 @@ void QueuedMidiInputBackend::enqueueDevice(input::InputDeviceSnapshot device) {
   if (accepting_) {
     queuedEvents_.emplace_back(std::move(device));
   }
+}
+
+void QueuedMidiInputBackend::enqueueDeviceDisconnect(
+    input::InputDeviceSnapshot device) {
+  device.connected = false;
+  enqueueDevice(std::move(device));
 }

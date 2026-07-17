@@ -231,10 +231,9 @@ public:
 
   void connectionFailed(WinMidiConnection &connection) {
     if (connection.connected.exchange(false)) {
-      publishDevice({.stableId = connection.stableId,
-                     .displayName = connection.displayName,
-                     .deviceClass = input::DeviceClass::Midi,
-                     .connected = false});
+      enqueueDeviceDisconnect({.stableId = connection.stableId,
+                               .displayName = connection.displayName,
+                               .deviceClass = input::DeviceClass::Midi});
     }
     requestRefresh();
   }
@@ -332,10 +331,9 @@ private:
       connection->handle = nullptr;
     }
     if (publishDisconnect) {
-      publishDevice({.stableId = connection->stableId,
-                     .displayName = connection->displayName,
-                     .deviceClass = input::DeviceClass::Midi,
-                     .connected = false});
+      enqueueDeviceDisconnect({.stableId = connection->stableId,
+                               .displayName = connection->displayName,
+                               .deviceClass = input::DeviceClass::Midi});
     }
   }
 

@@ -71,6 +71,21 @@ public:
       activation.commit();
     }
   }
+
+  void activateThenDisconnect(std::string stableId) {
+    const std::string disconnectedId = stableId;
+    auto activation = beginDeviceActivation(
+        {.stableId = std::move(stableId),
+         .displayName = "Activation",
+         .deviceClass = input::DeviceClass::Midi,
+         .connected = true});
+    activation.commit();
+    enqueueDeviceDisconnect(
+        {.stableId = disconnectedId,
+         .displayName = "Activation",
+         .deviceClass = input::DeviceClass::Midi,
+         .connected = true});
+  }
 };
 
 void require(bool condition, std::string_view message) {
@@ -578,6 +593,26 @@ void testBackendRollsBackFailedActivationBeforeLaterPackets() {
   backend.stop();
 }
 
+void testBackendQueuesDisconnectBehindPendingActivation() {
+  std::vector<bool> connectionStates;
+  TestMidiBackend backend({
+      .enqueueInput = [](input::PhysicalInputEvent) {},
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            connectionStates.push_back(device.connected);
+          },
+  });
+  std::string error;
+  require(backend.start(error), "disconnect-order MIDI backend starts");
+  backend.activateThenDisconnect("midi:short-lived");
+  require(connectionStates.empty(),
+          "activation and disconnect both wait for the queue pump");
+  backend.pump();
+  require(connectionStates == std::vector<bool>{true, false},
+          "disconnect remains ordered behind its pending connection");
+  backend.stop();
+}
+
 void testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd() {
   LiveMidiDeviceIdAllocator ids;
   require(ids.claim(1, "midi:core:base") == "midi:core:base",
@@ -681,6 +716,7 @@ int main() {
   testNativeCallbackLifetimeNeverReusesStaleTokens();
   testBackendPublishesConnectBeforeSynchronousActivationPacket();
   testBackendRollsBackFailedActivationBeforeLaterPackets();
+  testBackendQueuesDisconnectBehindPendingActivation();
   testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd();
   testLiveMidiRefreshReleasesReplacementBeforeNewClaims();
   testUtf16MidiNamesConvertToCanonicalUtf8();

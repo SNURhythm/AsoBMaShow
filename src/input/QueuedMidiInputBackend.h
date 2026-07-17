@@ -55,6 +55,7 @@ protected:
                                 std::uint64_t timestampMicros);
   void resetImmediateParser(std::string_view stableId);
   void enqueueDevice(input::InputDeviceSnapshot device);
+  void enqueueDeviceDisconnect(input::InputDeviceSnapshot device);
 
 private:
   static constexpr std::size_t kMaximumPacketBytes = 64 * 1024;

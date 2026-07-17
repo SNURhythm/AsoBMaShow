@@ -28,7 +28,13 @@ struct RealtimeTouchLayout {
   bool dragMode = false;
 };
 
-enum class RealtimeTouchPhase : std::uint8_t { Down, Move, Up, Cancel };
+enum class RealtimeTouchPhase : std::uint8_t {
+  Down,
+  Move,
+  Up,
+  Cancel,
+  CancelExpired
+};
 
 struct RealtimeTouchSample {
   std::int64_t fingerId = 0;
@@ -68,6 +74,7 @@ private:
     int scratchDirection = 0;
     float lastX = 0.0F;
     float lastY = 0.0F;
+    std::int64_t cancelDeadlineMicros = 0;
   };
 
   [[nodiscard]] std::optional<std::size_t>

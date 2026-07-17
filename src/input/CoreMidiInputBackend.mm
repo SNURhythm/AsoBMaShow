@@ -343,10 +343,9 @@ private:
         (void)MIDIPortDisconnectSource(port_, connection->endpoint);
         connection->callbackLifetime.closeAndWait();
         resetImmediateParser(connection->stableId);
-        publishDevice({.stableId = connection->stableId,
-                       .displayName = connection->displayName,
-                       .deviceClass = input::DeviceClass::Midi,
-                       .connected = false});
+        enqueueDeviceDisconnect({.stableId = connection->stableId,
+                                 .displayName = connection->displayName,
+                                 .deviceClass = input::DeviceClass::Midi});
         liveIds_.release(action.key);
         continue;
       }

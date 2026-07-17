@@ -2,8 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace gameplay {
+namespace {
+constexpr std::int64_t kCancelledTouchGraceMicros = 50'000;
+}
 
 RealtimeTouchInputRouter::RealtimeTouchInputRouter(
     std::uint64_t epoch, RealtimeTouchLayout layout,
@@ -113,6 +117,7 @@ bool RealtimeTouchInputRouter::beginLane(
   finger.scratchDirection = 0;
   finger.lastX = sample.normalizedX;
   finger.lastY = sample.normalizedY;
+  finger.cancelDeadlineMicros = 0;
   if (finger.scratch) {
     return true;
   }
@@ -134,6 +139,7 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
   finger.pressed = false;
   finger.scratch = false;
   finger.scratchDirection = 0;
+  finger.cancelDeadlineMicros = 0;
   if (!shouldEmit) {
     return true;
   }
@@ -187,6 +193,12 @@ bool RealtimeTouchInputRouter::consume(
     if (finger == nullptr) {
       return false;
     }
+    if (finger->cancelDeadlineMicros != 0) {
+      finger->cancelDeadlineMicros = 0;
+      finger->lastX = sample.normalizedX;
+      finger->lastY = sample.normalizedY;
+      return true;
+    }
     if (sample.excludedFromGameplay) {
       finger->excluded = true;
       return true;
@@ -214,6 +226,7 @@ bool RealtimeTouchInputRouter::consume(
         return false;
       }
     }
+    finger->cancelDeadlineMicros = 0;
     if (finger->excluded) {
       return true;
     }
@@ -239,8 +252,7 @@ bool RealtimeTouchInputRouter::consume(
     }
     return beginLane(*finger, *lane, sample);
   }
-  case RealtimeTouchPhase::Up:
-  case RealtimeTouchPhase::Cancel: {
+  case RealtimeTouchPhase::Up: {
     auto *finger = findFinger(sample.fingerId);
     if (finger == nullptr) {
       return true;
@@ -249,6 +261,33 @@ bool RealtimeTouchInputRouter::consume(
         finger->excluded
             ? true
             : releaseLane(*finger, sample.steadyTimestampMicros);
+    finger->active = false;
+    return released;
+  }
+  case RealtimeTouchPhase::Cancel: {
+    auto *finger = findFinger(sample.fingerId);
+    if (finger == nullptr) {
+      return true;
+    }
+    finger->cancelDeadlineMicros =
+        sample.steadyTimestampMicros >
+                std::numeric_limits<std::int64_t>::max() -
+                    kCancelledTouchGraceMicros
+            ? std::numeric_limits<std::int64_t>::max()
+            : sample.steadyTimestampMicros + kCancelledTouchGraceMicros;
+    return true;
+  }
+  case RealtimeTouchPhase::CancelExpired: {
+    auto *finger = findFinger(sample.fingerId);
+    if (finger == nullptr || finger->cancelDeadlineMicros == 0 ||
+        sample.steadyTimestampMicros < finger->cancelDeadlineMicros) {
+      return true;
+    }
+    const bool released =
+        finger->excluded
+            ? true
+            : releaseLane(*finger, sample.steadyTimestampMicros);
+    finger->cancelDeadlineMicros = 0;
     finger->active = false;
     return released;
   }

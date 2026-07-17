@@ -27,6 +27,7 @@
 #include "../../input/InputTimestamp.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "../../input/AppleInputTimestamp.h"
+#include "../../input/NativeCallbackLifetime.h"
 #endif
 #include "../../targets.h"
 #include "../../view/Button.h"
@@ -41,6 +42,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -50,6 +52,7 @@
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include <SDL_uikit_rawtouch.h>
+#include <dispatch/dispatch.h>
 #endif
 
 namespace {
@@ -516,6 +519,9 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
   std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::unique_ptr<NativeCallbackLifetime> touchCallbackLifetime;
+#endif
   gameplay::BoundedMpscQueue<input::LogicalInputTransition,
                              kInputCommandCapacity>
       inputCommands;
@@ -773,6 +779,51 @@ struct GamePlayScene::RealtimeGameplaySession {
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  struct CancelledTouchExpiry {
+    void *lifetimeToken = nullptr;
+    gameplay::RealtimeTouchSample sample;
+  };
+
+  static void expireCancelledTouch(void *context) {
+    std::unique_ptr<CancelledTouchExpiry> expiry(
+        static_cast<CancelledTouchExpiry *>(context));
+    if (!expiry) {
+      return;
+    }
+    auto lease = NativeCallbackLifetime::acquire(expiry->lifetimeToken);
+    auto *session = lease.ownerAs<RealtimeGameplaySession>();
+    if (session == nullptr || session->touchRouter == nullptr) {
+      return;
+    }
+    (void)session->touchRouter->consume(expiry->sample);
+  }
+
+  static void scheduleCancelledTouchExpiry(
+      RealtimeGameplaySession &session,
+      const gameplay::RealtimeTouchSample &cancelSample) {
+    if (session.touchCallbackLifetime == nullptr) {
+      return;
+    }
+    auto *expiry = new (std::nothrow) CancelledTouchExpiry{
+        .lifetimeToken = session.touchCallbackLifetime->token(),
+        .sample = cancelSample,
+    };
+    if (expiry == nullptr) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                  "Could not schedule cancelled-touch expiry");
+      return;
+    }
+    expiry->sample.phase = gameplay::RealtimeTouchPhase::CancelExpired;
+    expiry->sample.steadyTimestampMicros =
+        cancelSample.steadyTimestampMicros >
+                std::numeric_limits<std::int64_t>::max() - 50'000
+            ? std::numeric_limits<std::int64_t>::max()
+            : cancelSample.steadyTimestampMicros + 50'000;
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), expiry,
+                     &RealtimeGameplaySession::expireCancelledTouch);
+  }
+
   static void SDLCALL rawTouchSink(const IOSRawTouchEvent *event,
                                    void *context) {
     if (event == nullptr || context == nullptr) {
@@ -813,6 +864,9 @@ struct GamePlayScene::RealtimeGameplaySession {
       session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
     }
     (void)session.touchRouter->consume(sample);
+    if (phase == gameplay::RealtimeTouchPhase::Cancel) {
+      scheduleCancelledTouchExpiry(session, sample);
+    }
   }
 #endif
 };
@@ -874,6 +928,10 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   auto definition =
       gameplay::buildGameplayDefinition(*chart, options.longNoteMode);
   auto session = std::make_unique<RealtimeGameplaySession>();
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  session->touchCallbackLifetime =
+      std::make_unique<NativeCallbackLifetime>(session.get());
+#endif
   session->scene = this;
   session->audio = &context.jukebox.audioRuntime();
   session->inputRegistry = &context.inputDeviceRegistry;
@@ -1124,6 +1182,8 @@ void GamePlayScene::drainRealtimeTouchSamples() {
     case gameplay::RealtimeTouchPhase::Cancel:
       action = ReplayTouchAction::Cancel;
       break;
+    case gameplay::RealtimeTouchPhase::CancelExpired:
+      continue;
     }
     (void)handleTouchInputAtGameplayTime(
         static_cast<SDL_FingerID>(sample.fingerId), action,
