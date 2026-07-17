@@ -20,6 +20,15 @@ void require(bool condition, const char *message) {
   }
 }
 
+bool sameAttemptSnapshot(const gameplay::GameplayAttemptSnapshot &left,
+                         const gameplay::GameplayAttemptSnapshot &right) {
+  return left.judgeCounts == right.judgeCounts &&
+         left.combo == right.combo && left.maxCombo == right.maxCombo &&
+         left.comboBreak == right.comboBreak && left.score == right.score &&
+         left.gauge == right.gauge && left.gaugeType == right.gaugeType &&
+         left.clearTypeRank == right.clearTypeRank;
+}
+
 bms_parser::TimeLine *addTimeline(bms_parser::Measure &measure,
                                   long long timingMicros) {
   auto *timeline = new bms_parser::TimeLine(8, false);
@@ -68,6 +77,7 @@ struct FakeAudio {
   std::atomic_bool allowCommit{true};
   std::atomic<int> reserveCount{0};
   std::atomic<int> commitCount{0};
+  std::atomic<gameplay::NoteId> lastCommitted{gameplay::kInvalidNoteId};
 
   static bool reserve(void *context, gameplay::NoteId noteId,
                       gameplay::RealtimeGameplayAudioReservation &result) {
@@ -88,6 +98,7 @@ struct FakeAudio {
         reservation.value != noteId) {
       return false;
     }
+    self.lastCommitted.store(noteId, std::memory_order_release);
     self.commitCount.fetch_add(1, std::memory_order_release);
     return true;
   }
@@ -248,13 +259,14 @@ void testSuspendFreezesAutomaticDeadlinesUntilResume() {
   worker.stop();
 }
 
-void testActivationGateRejectsPreparationInputAndDeadlines() {
+void testActivationGateAllowsPreparationFeedbackButNoGameplay() {
   FakeClock clock;
   FakeAudio audio;
   auto config = makeConfig(clock, audio);
   config.activationSongTimeMicros = 1'000'000;
   gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
                                            std::move(config));
+  const auto initial = worker.acquireLatestSnapshot()->attempt;
   require(worker.start(), "activation-gate fixture starts");
   require(worker.enqueueInput({.epoch = 7,
                                .type = gameplay::RealtimeGameplayInputType::Press,
@@ -262,14 +274,39 @@ void testActivationGateRejectsPreparationInputAndDeadlines() {
                                .compensateLane = 1,
                                .steadyTimestampMicros = 900'000}),
           "preparation press reaches the serial authority");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return audio.commitCount.load(std::memory_order_acquire) == 1 &&
+                   snapshot && snapshot->transactionSequence >= 1;
+          }),
+          "preparation keysound and visual transaction commit without a "
+          "frame pump");
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    const auto &transaction = snapshot->latestTransaction;
+    require(snapshot->lanePressed[1] &&
+                audio.lastCommitted.load(std::memory_order_acquire) == 0 &&
+                transaction.soundNoteId == 0 &&
+                transaction.noteId == gameplay::kInvalidNoteId &&
+                !transaction.hasJudge && transaction.hasLaneVisual &&
+                transaction.laneVisual.action ==
+                    gameplay::LaneVisualAction::Press &&
+                transaction.hasReplayEvent &&
+                !snapshot->noteStates[0].played &&
+                !snapshot->noteStates[0].dead &&
+                sameAttemptSnapshot(initial, snapshot->attempt),
+            "preparation feedback leaves note, judgement, score, combo, and "
+            "gauge untouched");
+  }
+
   clock.nowMicros.store(999'999, std::memory_order_release);
   std::this_thread::sleep_for(10ms);
   {
     auto snapshot = worker.acquireLatestSnapshot();
     require(snapshot && !snapshot->noteStates[0].played &&
                 !snapshot->noteStates[0].dead &&
-                audio.commitCount.load(std::memory_order_acquire) == 0,
-            "preparation input causes no note, judgement, or keysound");
+                snapshot->attempt.judgeCounts[Poor] == 0,
+            "automatic miss deadlines remain blocked before activation");
   }
 
   require(worker.enqueueInput({.epoch = 7,
@@ -277,9 +314,102 @@ void testActivationGateRejectsPreparationInputAndDeadlines() {
                                .lane = 1,
                                .compensateLane = 1,
                                .steadyTimestampMicros = 1'000'000}),
-          "first active press reaches the serial authority");
-  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
-          "input becomes live exactly at the activation boundary");
+          "held-lane active press reaches the serial authority");
+  std::this_thread::sleep_for(10ms);
+  require(audio.commitCount.load() == 1,
+          "held input crossing activation cannot retrigger sound or "
+          "judgement");
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot && !snapshot->noteStates[0].played,
+            "held input crossing activation leaves the note unresolved");
+  }
+
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Release,
+                               .lane = 1,
+                               .steadyTimestampMicros = 1'001'000}),
+          "post-activation release reaches the authority");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 1'005'000}),
+          "post-activation repress reaches the authority");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return audio.commitCount.load(std::memory_order_acquire) == 2 &&
+                   snapshot && snapshot->noteStates[0].played;
+          }),
+          "release and repress commits the ordinary judged keysound");
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot && snapshot->attempt.judgeCounts[PGreat] == 1,
+            "post-activation repress judges normally");
+  }
+  worker.stop();
+}
+
+void testPreparationReleasePublishesOrderedVisualTransaction() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.activationSongTimeMicros = 1'000'000;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "preparation release fixture starts");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 900'000}) &&
+              worker.enqueueInput({.epoch = 7,
+                                   .type = gameplay::RealtimeGameplayInputType::Release,
+                                   .lane = 1,
+                                   .steadyTimestampMicros = 910'000}),
+          "preparation press and release enter the serial authority");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 2;
+          }),
+          "both preparation transactions publish without a frame pump");
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && !snapshot->lanePressed[1] &&
+              snapshot->transactionCount >= 2 &&
+              snapshot->transactions[0].result.laneVisual.action ==
+                  gameplay::LaneVisualAction::Press &&
+              snapshot->transactions[1].result.laneVisual.action ==
+                  gameplay::LaneVisualAction::Release &&
+              !snapshot->transactions[1].result.hasJudge,
+          "preparation lane visuals preserve press-release order");
+  worker.stop();
+}
+
+void testPreparationAudioReservationFailureDoesNotClaimLane() {
+  FakeClock clock;
+  FakeAudio audio;
+  audio.allowReserve.store(false, std::memory_order_release);
+  auto config = makeConfig(clock, audio);
+  config.activationSongTimeMicros = 1'000'000;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "preparation audio-fault fixture starts");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 900'000}),
+          "preparation audio-fault press enters the authority");
+  require(waitUntil([&] {
+            return worker.fault() ==
+                   gameplay::RealtimeGameplayFault::AudioCapacityUnavailable;
+          }),
+          "preparation audio reservation failure faults the attempt");
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && !snapshot->lanePressed[1] &&
+              !snapshot->noteStates[0].played &&
+              snapshot->transactionSequence == 0,
+          "failed preparation reservation commits no lane or gameplay state");
   worker.stop();
 }
 
@@ -451,7 +581,9 @@ int main() {
   testAudioCapacityFailureDoesNotClaimTheNote();
   testIngressOverflowFailsClosed();
   testSuspendFreezesAutomaticDeadlinesUntilResume();
-  testActivationGateRejectsPreparationInputAndDeadlines();
+  testActivationGateAllowsPreparationFeedbackButNoGameplay();
+  testPreparationReleasePublishesOrderedVisualTransaction();
+  testPreparationAudioReservationFailureDoesNotClaimLane();
   testPracticeCountInPressJudgesFirstInRangeNote();
   testPracticeCountInPressOutsideJudgeWindowStaysUnjudged();
   testPracticeCompletesFromAudioClockWithoutFramePump();

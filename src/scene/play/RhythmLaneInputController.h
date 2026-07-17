@@ -48,8 +48,11 @@ public:
   Result pressLane(int lane, const InputContext &context);
   Result pressLane(int mainLane, int compensateLane,
                    const InputContext &context);
+  Result pressLaneForPreparation(int mainLane, int compensateLane,
+                                 const InputContext &context);
   Result releaseLane(int lane, const InputContext &context,
                      bool isBackSpin = false);
+  Result releaseLaneForPreparation(int lane, const InputContext &context);
   void resetLaneStates();
 
 private:

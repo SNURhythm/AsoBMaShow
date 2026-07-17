@@ -1099,6 +1099,87 @@ GameplaySimulation::pressLane(int lane, const GameplayInputContext &context) {
   return pressLane(lane, lane, context);
 }
 
+NoteId GameplaySimulation::previewPreparationPressSoundNote(
+    int mainLane, int compensateLane,
+    const GameplayInputContext &context) const {
+  if (terminal() ||
+      (config_.allowedNoteRange.has_value() &&
+       context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
+    return kInvalidNoteId;
+  }
+  return selectFallbackPressSoundNote(mainLane, compensateLane,
+                                      inputTime(context));
+}
+
+GameplayInputResult GameplaySimulation::pressLaneForPreparation(
+    int mainLane, int compensateLane,
+    const GameplayInputContext &context) {
+  lastSearchStats_ = {};
+  GameplayInputResult result;
+  if (terminal() ||
+      (config_.allowedNoteRange.has_value() &&
+       context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
+    return result;
+  }
+  auto *mainState = findLane(mainLane);
+  const auto *compensationState = findLane(compensateLane);
+  if ((mainState == nullptr || mainState->pressed) &&
+      (compensateLane == mainLane || compensationState == nullptr ||
+       compensationState->pressed)) {
+    return result;
+  }
+
+  const std::int64_t eventTime = inputTime(context);
+  result.soundNoteId =
+      selectFallbackPressSoundNote(mainLane, compensateLane, eventTime);
+  if (mainState != nullptr) {
+    mainState->pressed = true;
+  }
+  result.hasLaneVisual = true;
+  result.laneVisual = {LaneVisualAction::Press, mainLane,
+                       context.laneBeamTimeMicros, JudgeResult(None, 0)};
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Press,
+      .lane = mainLane,
+      .songTimeMicros = eventTime,
+      .judgeTimeMicros = eventTime,
+  };
+  recordReplay(result.replayEvent);
+  finishTransaction(eventTime);
+  return result;
+}
+
+GameplayInputResult GameplaySimulation::releaseLaneForPreparation(
+    int lane, const GameplayInputContext &context) {
+  lastSearchStats_ = {};
+  GameplayInputResult result;
+  if (terminal() ||
+      (config_.allowedNoteRange.has_value() &&
+       context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
+    return result;
+  }
+  auto *laneState = findLane(lane);
+  if (laneState == nullptr || !laneState->pressed) {
+    return result;
+  }
+  laneState->pressed = false;
+  const std::int64_t eventTime = inputTime(context);
+  result.hasLaneVisual = true;
+  result.laneVisual = {LaneVisualAction::Release, lane,
+                       context.laneBeamTimeMicros, JudgeResult(None, 0)};
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Release,
+      .lane = lane,
+      .songTimeMicros = eventTime,
+      .judgeTimeMicros = eventTime,
+  };
+  recordReplay(result.replayEvent);
+  finishTransaction(eventTime);
+  return result;
+}
+
 NoteId GameplaySimulation::previewPressSoundNote(
     int mainLane, int compensateLane, const GameplayInputContext &context) {
   if (terminal() ||

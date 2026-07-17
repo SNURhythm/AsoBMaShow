@@ -275,31 +275,39 @@ void RealtimeGameplayWorker::processInput(
     latchFault(RealtimeGameplayFault::ClockUnavailable);
     return;
   }
-  if (config_.activationSongTimeMicros.has_value() &&
-      *songTime < *config_.activationSongTimeMicros) {
-    return;
-  }
-
+  const bool preparationInput =
+      config_.activationSongTimeMicros.has_value() &&
+      *songTime < *config_.activationSongTimeMicros;
   const GameplayInputContext context{
       .songTimeMicros = *songTime,
       .laneBeamTimeMicros = input.steadyTimestampMicros,
       .inputDelayMicros = input.inputDelayMicros,
   };
-  simulation_.advanceTo(*songTime, input.steadyTimestampMicros);
-  if (simulation_.terminal()) {
-    return;
+
+  if (!preparationInput) {
+    simulation_.advanceTo(*songTime, input.steadyTimestampMicros);
+    if (simulation_.terminal()) {
+      return;
+    }
   }
 
   if (input.type == RealtimeGameplayInputType::Release) {
-    recordTransaction(
-        simulation_.releaseLane(input.lane, context, input.backSpin));
+    recordTransaction(preparationInput
+                          ? simulation_.releaseLaneForPreparation(input.lane,
+                                                                  context)
+                          : simulation_.releaseLane(input.lane, context,
+                                                    input.backSpin));
     return;
   }
 
   const int compensateLane =
       input.compensateLane >= 0 ? input.compensateLane : input.lane;
-  const NoteId preview = simulation_.previewPressSoundNote(
-      input.lane, compensateLane, context);
+  const NoteId preview =
+      preparationInput
+          ? simulation_.previewPreparationPressSoundNote(
+                input.lane, compensateLane, context)
+          : simulation_.previewPressSoundNote(input.lane, compensateLane,
+                                              context);
   const bool requiresSound =
       config_.inputTriggeredKeysounds && preview != kInvalidNoteId &&
       definition_.note(preview).wav != bms_parser::Parser::NoWav;
@@ -311,8 +319,11 @@ void RealtimeGameplayWorker::processInput(
     return;
   }
 
-  recordTransaction(
-      simulation_.pressLane(input.lane, compensateLane, context));
+  recordTransaction(preparationInput
+                        ? simulation_.pressLaneForPreparation(
+                              input.lane, compensateLane, context)
+                        : simulation_.pressLane(input.lane, compensateLane,
+                                                context));
   if (!requiresSound) {
     return;
   }

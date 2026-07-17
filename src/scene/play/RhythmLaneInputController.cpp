@@ -215,6 +215,62 @@ RhythmLaneInputController::pressLane(int lane, const InputContext &context) {
   return pressLane(lane, lane, context);
 }
 
+RhythmLaneInputController::Result
+RhythmLaneInputController::pressLaneForPreparation(
+    int mainLane, int compensateLane, const InputContext &context) {
+  Result result;
+  if (chart == nullptr ||
+      (allowedNoteRange.has_value() &&
+       context.songTimeMicros >= allowedNoteRange->endMicros)) {
+    return result;
+  }
+  auto mainState = lanePressed.find(mainLane);
+  const auto compensationState = lanePressed.find(compensateLane);
+  if ((mainState == lanePressed.end() || mainState->second) &&
+      (compensateLane == mainLane ||
+       compensationState == lanePressed.end() ||
+       compensationState->second)) {
+    return result;
+  }
+
+  const long long eventTime = inputTimeMicros(context);
+  result.keySoundNote =
+      selectFallbackKeysound(mainLane, compensateLane, eventTime);
+  if (mainState != lanePressed.end()) {
+    mainState->second = true;
+  }
+  if (renderer != nullptr) {
+    renderer->onLanePressed(mainLane, JudgeResult(None, 0),
+                            context.laneBeamTimeMicros);
+  }
+  setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
+                 eventTime, eventTime, JudgeResult(None, 0));
+  return result;
+}
+
+RhythmLaneInputController::Result
+RhythmLaneInputController::releaseLaneForPreparation(
+    int lane, const InputContext &context) {
+  Result result;
+  if (chart == nullptr ||
+      (allowedNoteRange.has_value() &&
+       context.songTimeMicros >= allowedNoteRange->endMicros)) {
+    return result;
+  }
+  auto laneState = lanePressed.find(lane);
+  if (laneState == lanePressed.end() || !laneState->second) {
+    return result;
+  }
+  laneState->second = false;
+  if (renderer != nullptr) {
+    renderer->onLaneReleased(lane, context.laneBeamTimeMicros);
+  }
+  const long long eventTime = inputTimeMicros(context);
+  setReplayEvent(result, ReplayEventAction::Release, lane, nullptr,
+                 eventTime, eventTime, JudgeResult(None, 0));
+  return result;
+}
+
 RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
     int mainLane, int compensateLane, const InputContext &context) {
   Result result;

@@ -924,6 +924,101 @@ void testLongTailIsNotAManualPressKeysound() {
           "realtime press fallback excludes the long tail");
 }
 
+void testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(61));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto before = simulation.snapshot();
+  const gameplay::GameplayInputContext preparation{
+      .songTimeMicros = 900'000,
+      .laneBeamTimeMicros = 90,
+  };
+
+  const auto preview =
+      simulation.previewPreparationPressSoundNote(1, 1, preparation);
+  const auto press =
+      simulation.pressLaneForPreparation(1, 1, preparation);
+  require(preview == press.soundNoteId &&
+              press.soundNoteId != gameplay::kInvalidNoteId &&
+              press.noteId == gameplay::kInvalidNoteId && !press.hasJudge &&
+              press.hasLaneVisual &&
+              press.laneVisual.action == gameplay::LaneVisualAction::Press &&
+              press.hasReplayEvent && simulation.lanePressed(1),
+          "preparation press publishes sound, lane visual, replay, and held "
+          "state only");
+  require(!simulation.noteState(0).played &&
+              !simulation.noteState(0).dead &&
+              sameAttemptSnapshot(before, simulation.snapshot()),
+          "preparation press does not resolve gameplay state");
+
+  const auto duplicate =
+      simulation.pressLaneForPreparation(1, 1, preparation);
+  require(duplicate.soundNoteId == gameplay::kInvalidNoteId &&
+              !duplicate.hasLaneVisual && !duplicate.hasReplayEvent,
+          "a held preparation lane rejects duplicate presses");
+
+  const auto activeWhileHeld =
+      simulation.pressLane(1, {.songTimeMicros = 1'000'000,
+                               .laneBeamTimeMicros = 100});
+  require(activeWhileHeld.noteId == gameplay::kInvalidNoteId &&
+              !simulation.noteState(0).played,
+          "a key held through activation cannot judge automatically");
+
+  const auto release = simulation.releaseLaneForPreparation(
+      1, {.songTimeMicros = 1'010'000, .laneBeamTimeMicros = 101});
+  require(release.hasLaneVisual &&
+              release.laneVisual.action ==
+                  gameplay::LaneVisualAction::Release &&
+              release.hasReplayEvent && !release.hasJudge &&
+              !simulation.lanePressed(1),
+          "preparation release clears the held lane without judgement");
+
+  const auto activeAfterRelease =
+      simulation.pressLane(1, {.songTimeMicros = 1'020'000,
+                               .laneBeamTimeMicros = 102});
+  require(activeAfterRelease.noteId != gameplay::kInvalidNoteId &&
+              activeAfterRelease.hasJudge &&
+              simulation.noteState(activeAfterRelease.noteId).played,
+          "release and repress after activation follows ordinary judgement");
+}
+
+void testLegacyPreparationControllerCommitsSoundAndHeldStateOnly() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  auto *note = new bms_parser::Note(71);
+  timeline->SetNote(1, note);
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, Judge(1));
+
+  const RhythmLaneInputController::InputContext preparation{
+      .songTimeMicros = 900'000,
+      .laneBeamTimeMicros = 90,
+  };
+  const auto press =
+      controller.pressLaneForPreparation(1, 1, preparation);
+  require(press.note == nullptr && press.keySoundNote == note &&
+              !press.hasJudge && press.hasReplayEvent && lanes.at(1) &&
+              !note->IsPlayed && !note->IsDead,
+          "legacy preparation press commits sound, replay, and held state "
+          "without judgement");
+
+  const auto release =
+      controller.releaseLaneForPreparation(1, preparation);
+  require(release.note == nullptr && release.keySoundNote == nullptr &&
+              !release.hasJudge && release.hasReplayEvent && !lanes.at(1) &&
+              !note->IsPlayed && !note->IsDead,
+          "legacy preparation release clears held state without note "
+          "mutation");
+}
+
 struct NoteIdentity {
   bool present = false;
   int lane = -1;
@@ -1460,6 +1555,8 @@ int main() {
   testManualKeysoundFallbackMatchesAcrossAuthorities();
   testFallbackTieAndNoWavDoNotSkipSelection();
   testLongTailIsNotAManualPressKeysound();
+  testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound();
+  testLegacyPreparationControllerCommitsSoundAndHeldStateOnly();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
   return 0;

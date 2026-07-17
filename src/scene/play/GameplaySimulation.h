@@ -150,6 +150,14 @@ public:
                                 const GameplayInputContext &context);
   GameplayInputResult releaseLane(int lane, const GameplayInputContext &context,
                                   bool isBackSpin = false);
+  [[nodiscard]] NoteId previewPreparationPressSoundNote(
+      int mainLane, int compensateLane,
+      const GameplayInputContext &context) const;
+  GameplayInputResult pressLaneForPreparation(
+      int mainLane, int compensateLane,
+      const GameplayInputContext &context);
+  GameplayInputResult releaseLaneForPreparation(
+      int lane, const GameplayInputContext &context);
   GameplayAdvanceResult advanceTo(std::int64_t songTimeMicros,
                                   std::int64_t visualTimeMicros);
   GameplayInputResult applyPressAt(int mainLane, int compensateLane,

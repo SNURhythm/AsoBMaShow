@@ -3349,28 +3349,22 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     return nullptr;
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  if (gameplay::preparationInputUsesVisualOnlyPath(
-          preparationIndicatorActive(rawSongTimeMicros),
-          options.practiceSession != nullptr)) {
-    auto pressedIt = lanePressed.find(mainLane);
-    if (pressedIt == lanePressed.end() || pressedIt->second) {
-      return nullptr;
-    }
-    pressedIt->second = true;
-    renderer->onLanePressed(mainLane, JudgeResult(None, 0), nowMicros());
-    updateLaneStateText();
-    recordPreparationLaneEvent(ReplayEventAction::Press, mainLane,
-                               getGameplayTimeMicros(rawSongTimeMicros));
-    return nullptr;
-  }
   const RhythmLaneInputController::InputContext inputContext{
       .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
       .laneBeamTimeMicros = nowMicros(),
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
+  const bool preparationInput =
+      gameplay::preparationInputUsesVisualOnlyPath(
+          preparationIndicatorActive(rawSongTimeMicros),
+          options.practiceSession != nullptr);
   auto result =
-      laneInputController->pressLane(mainLane, compensateLane, inputContext);
+      preparationInput
+          ? laneInputController->pressLaneForPreparation(
+                mainLane, compensateLane, inputContext)
+          : laneInputController->pressLane(mainLane, compensateLane,
+                                           inputContext);
   updateLaneStateText();
   if (result.keySoundNote != nullptr &&
       result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
@@ -3382,9 +3376,14 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   }
   if (result.hasReplayEvent) {
     const auto &event = result.replayEvent;
-    appendReplayEvent(event.action, event.lane, event.note,
-                      event.songTimeMicros, event.judgeTimeMicros,
-                      event.judge);
+    if (preparationInput) {
+      recordPreparationLaneEvent(event.action, event.lane,
+                                 event.songTimeMicros);
+    } else {
+      appendReplayEvent(event.action, event.lane, event.note,
+                        event.songTimeMicros, event.judgeTimeMicros,
+                        event.judge);
+    }
   }
   return result.note;
 }
@@ -3410,37 +3409,34 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
     return nullptr;
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  if (gameplay::preparationInputUsesVisualOnlyPath(
-          preparationIndicatorActive(rawSongTimeMicros),
-          options.practiceSession != nullptr)) {
-    auto pressedIt = lanePressed.find(lane);
-    if (pressedIt == lanePressed.end() || !pressedIt->second) {
-      return nullptr;
-    }
-    pressedIt->second = false;
-    renderer->onLaneReleased(lane, nowMicros());
-    updateLaneStateText();
-    recordPreparationLaneEvent(ReplayEventAction::Release, lane,
-                               getGameplayTimeMicros(rawSongTimeMicros));
-    return nullptr;
-  }
   const RhythmLaneInputController::InputContext inputContext{
       .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
       .laneBeamTimeMicros = nowMicros(),
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
+  const bool preparationInput =
+      gameplay::preparationInputUsesVisualOnlyPath(
+          preparationIndicatorActive(rawSongTimeMicros),
+          options.practiceSession != nullptr);
   auto result =
-      laneInputController->releaseLane(lane, inputContext, isBackSpin);
+      preparationInput
+          ? laneInputController->releaseLaneForPreparation(lane, inputContext)
+          : laneInputController->releaseLane(lane, inputContext, isBackSpin);
   updateLaneStateText();
   if (result.hasJudge) {
     onJudge(result.judge, !options.autoPlay || isReplayPlayback());
   }
   if (result.hasReplayEvent) {
     const auto &event = result.replayEvent;
-    appendReplayEvent(event.action, event.lane, event.note,
-                      event.songTimeMicros, event.judgeTimeMicros,
-                      event.judge);
+    if (preparationInput) {
+      recordPreparationLaneEvent(event.action, event.lane,
+                                 event.songTimeMicros);
+    } else {
+      appendReplayEvent(event.action, event.lane, event.note,
+                        event.songTimeMicros, event.judgeTimeMicros,
+                        event.judge);
+    }
   }
   return result.note;
 }
