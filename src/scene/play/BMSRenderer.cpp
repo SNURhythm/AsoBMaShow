@@ -1841,7 +1841,11 @@ void BMSRenderer::onJudge(JudgeResult judgeResult, int combo, int score,
 }
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
-    gameplay_note_submission_order::LongNoteOrder order) {
+    gameplay_note_submission_order::LongNoteOrder order,
+    bool renderBudgetReserved) {
+  if (!renderBudgetReserved) {
+    return;
+  }
   // assert head
   assert(!head->IsTail() && "head is tail");
   const bool tailMissedWithHead = wasLongNoteTailMissedWithHead(head);
@@ -1953,6 +1957,11 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
           clip.y, clip.height, lowerBound, upperBound))
     return;
 
+  if (!chartEntityRenderBudget.tryConsume(
+          gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
+    return;
+  }
+
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
   noteTextureBatchAtDepth(submitDepth).addRectUV(
@@ -1973,10 +1982,15 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
     return;
   }
 
-  setInvisibleBatchDepth(submitDepth);
   const uint32_t color = Color(255, 149, 36, 224).toABGR();
   const float x = laneToX(note->Lane);
   if (note->IsLongNote()) {
+    if (!chartEntityRenderBudget.tryConsume(
+            gameplay_chart_entity_render_budget::
+                kSingleRectangleEntityCost)) {
+      return;
+    }
+    setInvisibleBatchDepth(submitDepth);
     gimmickBatchRenderer.addRect(x, clip.y, noteRenderWidth, clip.height,
                                  color);
     return;
@@ -1988,6 +2002,13 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
                    gameplay_scroll_geometry::kInvisibleNoteBorderHeightRatio);
   const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
       x, y, noteRenderWidth, noteRenderHeight, borderThickness, clip);
+  if (outline.count == 0U ||
+      !chartEntityRenderBudget.tryConsume(
+          static_cast<uint32_t>(outline.count))) {
+    return;
+  }
+
+  setInvisibleBatchDepth(submitDepth);
   for (std::size_t i = 0; i < outline.count; ++i) {
     const auto &rect = outline.rectangles[i];
     gimmickBatchRenderer.addRect(rect.x, rect.y, rect.width, rect.height,
@@ -2003,6 +2024,11 @@ void BMSRenderer::drawLandmineNote(float y,
   if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound)) {
+    return;
+  }
+
+  if (!chartEntityRenderBudget.tryConsume(
+          gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
     return;
   }
 
@@ -2257,6 +2283,11 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
     return;
   }
 
+  if (!chartEntityRenderBudget.tryConsume(
+          gameplay_chart_entity_render_budget::kReplayGhostOutlineCost)) {
+    return;
+  }
+
   Color color(255, 255, 255, 220);
   if (event.judgement != PGreat) {
     color = event.judgeTimeMicros < event.noteTimeMicros
@@ -2281,6 +2312,12 @@ void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
   }
 
   constexpr int kSteps = 7;
+  static_assert(kSteps * 2 ==
+                gameplay_chart_entity_render_budget::kReplayMissMarkerCost);
+  if (!chartEntityRenderBudget.tryConsume(
+          gameplay_chart_entity_render_budget::kReplayMissMarkerCost)) {
+    return;
+  }
   const float x = laneToX(marker.lane);
   const float block =
       std::max(0.018f, std::min(noteRenderWidth, noteRenderHeight) * 0.22f);
@@ -2482,6 +2519,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   simpleBatchRenderer.setSubmitDepth(kBackgroundDepth);
   gimmickBatchRenderer.setSubmitView(rendering::main_view);
   ghostBatchRenderer.setSubmitDepth(kGhostDepth);
+  chartEntityRenderBudget.reset();
   simpleBatchRenderer.begin();
   ghostBatchRenderer.begin();
   beginOrderedNoteBatches();
@@ -2511,11 +2549,25 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   const auto pastLongNoteOrder = submissionOrder.captureLongNote();
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
+  const auto rememberLongNoteHead =
+      [&](bms_parser::LongNote *longNote, float headY,
+          const auto &orderProvider) {
+        auto [it, inserted] = longNoteLookahead.try_emplace(longNote);
+        it->second.headY = headY;
+        if (!inserted) {
+          return;
+        }
+        it->second.renderBudgetReserved =
+            chartEntityRenderBudget.tryConsume(
+                gameplay_chart_entity_render_budget::
+                    kLongNoteReservationCost);
+        if (it->second.renderBudgetReserved) {
+          it->second.order = orderProvider();
+        }
+      };
   for (auto *orphanLongNote : state.orphanLongNotes) {
-    longNoteLookahead[orphanLongNote] = {
-        .headY = lowerBound,
-        .order = pastLongNoteOrder,
-    };
+    rememberLongNoteHead(orphanLongNote, lowerBound,
+                         [&]() { return pastLongNoteOrder; });
   }
   double futureY = static_cast<double>(judgeY);
   bool futureTraversalStarted = false;
@@ -2554,7 +2606,10 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
     if (timeLine->IsFirstInMeasure &&
         gameplay_scroll_geometry::shouldDrawMeasureLine(
-            timeLine->Timing, chartTimeMicros, y, judgeY, upperBound)) {
+            timeLine->Timing, chartTimeMicros, y, judgeY, upperBound) &&
+        chartEntityRenderBudget.tryConsume(
+            gameplay_chart_entity_render_budget::
+                kSingleRectangleEntityCost)) {
       drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
                Color(255, 255, 255, 128));
     }
@@ -2609,10 +2664,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
           return false;
         }
         state.orphanLongNotes.insert(longNote);
-        longNoteLookahead[longNote] = {
-            .headY = lowerBound,
-            .order = ensureLongOrder(),
-        };
+        rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
         return true;
       };
       if (timeLine->Timing >= chartTimeMicros - latePoorTiming) {
@@ -2642,17 +2694,20 @@ void BMSRenderer::render(RenderContext &context, long long micro,
             if (auto it = longNoteLookahead.find(longNote->Head);
                 it != longNoteLookahead.end()) {
               drawLongNote(it->second.headY, y, longNote->Head,
-                           it->second.order);
+                           it->second.order,
+                           it->second.renderBudgetReserved);
               // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
-              drawLongNote(lowerBound, y, longNote->Head, pastLongNoteOrder);
+              const bool renderBudgetReserved =
+                  chartEntityRenderBudget.tryConsume(
+                      gameplay_chart_entity_render_budget::
+                          kLongNoteReservationCost);
+              drawLongNote(lowerBound, y, longNote->Head, pastLongNoteOrder,
+                           renderBudgetReserved);
             }
           } else {
-            longNoteLookahead[longNote] = {
-                .headY = y,
-                .order = ensureLongOrder(),
-            };
+            rememberLongNoteHead(longNote, y, ensureLongOrder);
           }
         } else {
           drawNormalNote(y, note, ensurePrimaryDepth());
@@ -2685,10 +2740,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
             // setting to lowerBound in all cases is OK because the played
             // state will be correctly handled by drawLongNote
-            longNoteLookahead[longNote] = {
-                .headY = lowerBound,
-                .order = ensureLongOrder(),
-            };
+            rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
           }
         }
       }
@@ -2728,7 +2780,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
     drawLongNote(pair.second.headY, upperBound, pair.first,
-                 pair.second.order);
+                 pair.second.order, pair.second.renderBudgetReserved);
   }
   if (replayGhostRenderingEnabled) {
     drawReplayGhosts(rxhs, chartTimeMicros, currentScrollPosition);

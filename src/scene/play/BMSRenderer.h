@@ -18,6 +18,7 @@
 #include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
 #include "Pacemaker.h"
+#include "GameplayChartEntityRenderBudget.h"
 #include "GameplayNoteSubmissionOrder.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
@@ -199,9 +200,11 @@ private:
   struct LongNoteLookahead {
     float headY = 0.0F;
     gameplay_note_submission_order::LongNoteOrder order;
+    bool renderBudgetReserved = false;
   };
   std::unordered_map<bms_parser::LongNote *, LongNoteLookahead>
       longNoteLookaheadScratch;
+  gameplay_chart_entity_render_budget::Budget chartEntityRenderBudget;
   BMSRendererState state;
   int scratchLaneCount = 0;
   float playAreaWidth = AppSettings::kDefaultPlayAreaWidth;
@@ -305,7 +308,8 @@ private:
   void drawAutoPlayMark(RenderContext &context) const;
   void drawLongNote(
       float headY, float tailY, bms_parser::LongNote *const &head,
-      gameplay_note_submission_order::LongNoteOrder order);
+      gameplay_note_submission_order::LongNoteOrder order,
+      bool renderBudgetReserved);
   void drawNormalNote(float y, bms_parser::Note *const &note,
                       uint32_t submitDepth);
   void drawInvisibleNote(float y, bms_parser::Note *const &note,
