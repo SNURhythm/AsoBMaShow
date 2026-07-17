@@ -677,10 +677,14 @@ BMSRenderer::BMSRenderer(
   }
   timelines.reserve(timelineCount);
   groupedTimelineNotes.reserve(timelineCount);
+  // Beatoraja traverses only timing, section, and note-bearing rows. Omitting
+  // BGA-only rows is part of its scroll-gimmick geometry because each retained
+  // row participates in the incremental future-Y calculation below.
+  double previousBpm = chart->Meta.Bpm;
+  double previousScroll = 1.0;
   for (const auto &measure : chart->Measures) {
     for (const auto &timeLine : measure->TimeLines) {
-      timelines.push_back(timeLine);
-      auto &timelineNotes = groupedTimelineNotes.emplace_back();
+      std::vector<bms_parser::Note *> timelineNotes;
       timelineNotes.reserve(laneOrder.size());
       auto appendLaneGroup = [&](const std::vector<size_t> &laneGroup) {
         for (size_t laneIndex : laneGroup) {
@@ -695,6 +699,30 @@ BMSRenderer::BMSRenderer(
       appendLaneGroup(whiteKeyLaneIndices);
       appendLaneGroup(blueKeyLaneIndices);
       appendLaneGroup(scratchLaneIndices);
+
+      const bool hasPlayableNote =
+          std::any_of(timeLine->Notes.begin(), timeLine->Notes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool hasInvisibleNote =
+          std::any_of(timeLine->InvisibleNotes.begin(),
+                      timeLine->InvisibleNotes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool hasLandmine =
+          std::any_of(timeLine->LandmineNotes.begin(),
+                      timeLine->LandmineNotes.end(),
+                      [](const auto *note) { return note != nullptr; });
+      const bool keep = gameplay_scroll_geometry::shouldKeepRenderTimeline(
+          previousBpm, timeLine->Bpm, timeLine->GetStopDuration(),
+          previousScroll, timeLine->Scroll, timeLine->IsFirstInMeasure,
+          hasPlayableNote, hasInvisibleNote, hasLandmine);
+      previousBpm = timeLine->Bpm;
+      previousScroll = timeLine->Scroll;
+      if (!keep) {
+        continue;
+      }
+
+      timelines.push_back(timeLine);
+      groupedTimelineNotes.push_back(std::move(timelineNotes));
     }
   }
   buildTimelineScrollPositions();
@@ -1922,8 +1950,6 @@ void BMSRenderer::drawLandmineNote(float y,
 
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
-  timelineScrollSuffixMin.clear();
-  timelineScrollSuffixMax.clear();
   timelineScrollPositions.reserve(timelines.size());
   if (timelines.empty()) {
     return;
@@ -1938,11 +1964,6 @@ void BMSRenderer::buildTimelineScrollPositions() {
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
   }
-
-  auto suffix = gameplay_scroll_geometry::buildScrollSuffixExtrema(
-      timelineScrollPositions);
-  timelineScrollSuffixMin = std::move(suffix.minimum);
-  timelineScrollSuffixMax = std::move(suffix.maximum);
 }
 
 double BMSRenderer::calculateMostPrevalentBpm() const {
@@ -2421,15 +2442,13 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   float rxhs = visibleTravelHeight * hispeed;
   float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(micro);
-  const auto visibleScrollRange =
-      gameplay_scroll_geometry::visibleScrollRange(
-          currentScrollPosition, rxhs, lowerBound, upperBound,
-          noteRenderHeight, judgeY);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
     longNoteLookahead[orphanLongNote] = lowerBound;
   }
+  double futureY = static_cast<double>(judgeY);
+  bool futureTraversalStarted = false;
   // render timeline
   for (size_t i = state.currentTimelineIndex; i < timelines.size(); ++i) {
     const auto &timeLine = timelines[i];
@@ -2437,14 +2456,32 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       break;
     }
     const bool timelineIsFuture = timeLine->Timing >= micro;
-    if (gameplay_scroll_geometry::shouldStopTimelineTraversal(
-            timelineIsFuture, !longNoteLookahead.empty(),
-            timelineScrollSuffixMin, timelineScrollSuffixMax, i,
-            visibleScrollRange)) {
+    // Match Beatoraja's bounded forward walk. In particular, a NaN produced
+    // by equal-microsecond huge-BPM rows makes this direct comparison false.
+    if (timelineIsFuture && futureTraversalStarted &&
+        !gameplay_scroll_geometry::futureTimelineTraversalContinues(
+            futureY, upperBound)) {
       break;
     }
-    y = gameplay_scroll_geometry::renderY(
-        timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
+    if (timelineIsFuture) {
+      if (i > 0) {
+        const auto *previous = timelines[i - 1];
+        futureY = gameplay_scroll_geometry::advanceFutureTimelineY(
+            futureY, timeLine->BeatPosition - previous->BeatPosition,
+            previous->Scroll, previous->Timing,
+            previous->GetStopDuration(), timeLine->Timing, micro,
+            static_cast<double>(rxhs));
+      } else {
+        futureY = gameplay_scroll_geometry::initialFutureTimelineY(
+            futureY, timeLine->BeatPosition, timeLine->Timing, micro,
+            static_cast<double>(rxhs));
+      }
+      y = static_cast<float>(futureY);
+      futureTraversalStarted = true;
+    } else {
+      y = gameplay_scroll_geometry::renderY(
+          timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
+    }
 
     if (timeLine->IsFirstInMeasure &&
         gameplay_scroll_geometry::shouldDrawMeasureLine(
@@ -2460,6 +2497,9 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     // switches while keeping per-lane ordering intact.
     auto processNote = [&](bms_parser::Note *note) {
       if (note == nullptr) {
+        return;
+      }
+      if (timelineIsFuture && !std::isfinite(y)) {
         return;
       }
       auto keepDeadLongNoteBody = [&]() {
