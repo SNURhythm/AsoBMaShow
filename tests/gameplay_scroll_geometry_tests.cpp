@@ -24,14 +24,14 @@ void requireNear(double actual, double expected, const char *message) {
 int main() {
   using namespace gameplay_scroll_geometry;
 
-  require(chartRenderTimeMicros(3'750'075) == 3'750'075,
-          "chart traversal preserves sub-millisecond visual time");
-  require(chartRenderTimeMicros(3'750'999) == 3'750'999,
-          "chart traversal does not collapse one millisecond of content");
-  require(chartRenderTimeMicros(-1'999) == -1'999,
-          "negative preroll preserves sub-millisecond visual time");
+  require(chartRenderTimeMicros(3'750'075) == 3'750'000,
+          "chart geometry truncates to whole milliseconds");
+  require(chartRenderTimeMicros(3'750'999) == 3'750'000,
+          "one millisecond uses one stable chart sample");
+  require(chartRenderTimeMicros(-1'999) == -1'000,
+          "negative preroll matches Java truncation toward zero");
   require(chartRenderTimeMicros(4'000'000) == 4'000'000,
-          "an exact millisecond is unchanged");
+          "an exact millisecond remains unchanged");
 
   requireNear(renderY(10.0, 10.0, 2.0F, 0.5F), 0.5F,
               "equal scroll positions map to the judge line");
