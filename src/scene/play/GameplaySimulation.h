@@ -152,6 +152,8 @@ public:
   [[nodiscard]] std::span<const GameplayInputResult>
   automaticResults() const noexcept;
   [[nodiscard]] bool automaticResultOverflowed() const noexcept;
+  [[nodiscard]] std::span<const std::int64_t>
+  hellChargeBalances() const noexcept;
 
 private:
   struct LaneRuntimeState {
@@ -186,11 +188,18 @@ private:
   void processAtTiming(NoteId id, std::int64_t songTimeMicros,
                        std::int64_t visualTimeMicros);
   void processLatePoor(NoteId id, std::int64_t songTimeMicros);
+  [[nodiscard]] bool hellChargeActiveAt(NoteId headId,
+                                        std::int64_t timeMicros) const;
+  void integrateHellChargeInterval(std::int64_t fromMicros,
+                                   std::int64_t toMicros);
+  void commitGaugeTick(Judgement judgement,
+                       std::int64_t songTimeMicros);
 
   const GameplayDefinition &definition_;
   GameplaySimulationConfig config_;
   GameplayScoreState scoreState_;
   std::vector<NoteRuntimeState> noteStates_;
+  std::vector<std::int64_t> hellChargeBalanceMicros_;
   std::vector<LaneRuntimeState> laneStates_;
   std::vector<GameplayReplayEvent> replayEvents_;
   std::vector<GameplayInputResult> automaticResults_;

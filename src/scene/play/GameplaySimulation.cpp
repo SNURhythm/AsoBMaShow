@@ -8,6 +8,8 @@
 
 namespace gameplay {
 namespace {
+constexpr std::int64_t kHellChargeGaugeTickMicros = 200'000;
+
 JudgeResult normalizeReleaseJudge(const JudgeResult &judge) {
   if (judge.judgement == None || judge.judgement == Kpoor ||
       judge.judgement == Poor) {
@@ -27,7 +29,8 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
       scoreState_({.totalNotes = definition.metadata().totalNotes,
                    .keyMode = definition.metadata().keyMode,
                    .gaugeTotal = definition.metadata().gaugeTotal}),
-      noteStates_(definition.noteCount()) {
+      noteStates_(definition.noteCount()),
+      hellChargeBalanceMicros_(definition.noteCount()) {
   replayEvents_.reserve(config_.attempt.replayCapacity);
   automaticResults_.reserve(config_.attempt.automaticResultCapacity);
   scoreState_.configureBoundedGaugeHistory(config_.attempt.replayCapacity);
@@ -128,6 +131,11 @@ GameplaySimulation::automaticResults() const noexcept {
 
 bool GameplaySimulation::automaticResultOverflowed() const noexcept {
   return automaticResultOverflowed_;
+}
+
+std::span<const std::int64_t>
+GameplaySimulation::hellChargeBalances() const noexcept {
+  return hellChargeBalanceMicros_;
 }
 
 void GameplaySimulation::commitJudge(const JudgeResult &judge) {
@@ -427,6 +435,127 @@ void GameplaySimulation::processLatePoor(NoteId id,
   recordAutomaticResult(commitMiss(id, songTimeMicros, songTimeMicros));
 }
 
+bool GameplaySimulation::hellChargeActiveAt(
+    NoteId headId, std::int64_t timeMicros) const {
+  const auto &head = definition_.note(headId);
+  if (head.pairId == kInvalidNoteId || head.pairId >= noteStates_.size()) {
+    return false;
+  }
+  const auto &tail = definition_.note(head.pairId);
+  if (tail.timingMicros <= head.timingMicros ||
+      timeMicros < head.timingMicros || timeMicros >= tail.timingMicros) {
+    return false;
+  }
+  const auto &tailState = noteStates_[head.pairId];
+  const bool tailJudgedBeforeTiming =
+      tailState.played && tailState.playedTimeMicros < tail.timingMicros;
+  return !tailState.dead || tailJudgedBeforeTiming;
+}
+
+void GameplaySimulation::commitGaugeTick(Judgement judgement,
+                                          std::int64_t songTimeMicros) {
+  scoreState_.applyGaugeJudgementRate(judgement, 0.5F);
+  GameplayInputResult result;
+  result.judge = JudgeResult(judgement, 0);
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Gauge,
+      .noteId = kInvalidNoteId,
+      .lane = -1,
+      .noteTimeMicros = -1,
+      .songTimeMicros = songTimeMicros,
+      .judgeTimeMicros = songTimeMicros,
+      .judgement = judgement,
+      .diffMicros = 0,
+  };
+  recordReplay(result.replayEvent);
+  recordAutomaticResult(result);
+}
+
+void GameplaySimulation::integrateHellChargeInterval(
+    std::int64_t fromMicros, std::int64_t toMicros) {
+  if (toMicros <= fromMicros) {
+    return;
+  }
+
+  const auto heads = definition_.hellChargeHeads();
+  for (const NoteId headId : heads) {
+    if (!hellChargeActiveAt(headId, fromMicros)) {
+      hellChargeBalanceMicros_[headId] = 0;
+    }
+  }
+
+  std::int64_t currentMicros = fromMicros;
+  while (currentMicros < toMicros) {
+    std::int64_t nextCrossingMicros =
+        std::numeric_limits<std::int64_t>::max();
+    for (const NoteId headId : heads) {
+      if (!hellChargeActiveAt(headId, currentMicros)) {
+        continue;
+      }
+      const auto &head = definition_.note(headId);
+      const auto &headState = noteStates_[headId];
+      const bool gaining = headState.holding || lanePressed(head.lane) ||
+                           config_.attempt.autoPlay;
+      const std::int64_t balance = hellChargeBalanceMicros_[headId];
+      const std::int64_t untilCrossing =
+          gaining ? kHellChargeGaugeTickMicros + 1 - balance
+                  : balance + kHellChargeGaugeTickMicros + 1;
+      if (untilCrossing <= toMicros - currentMicros) {
+        nextCrossingMicros =
+            std::min(nextCrossingMicros, currentMicros + untilCrossing);
+      }
+    }
+
+    const std::int64_t intervalEnd =
+        std::min(toMicros, nextCrossingMicros);
+    const std::int64_t activeDelta = intervalEnd - currentMicros;
+    for (const NoteId headId : heads) {
+      if (!hellChargeActiveAt(headId, currentMicros)) {
+        continue;
+      }
+      const auto &head = definition_.note(headId);
+      const auto &headState = noteStates_[headId];
+      const bool gaining = headState.holding || lanePressed(head.lane) ||
+                           config_.attempt.autoPlay;
+      hellChargeBalanceMicros_[headId] +=
+          gaining ? activeDelta : -activeDelta;
+    }
+    currentMicros = intervalEnd;
+
+    while (true) {
+      NoteId nextHeadId = kInvalidNoteId;
+      Judgement nextJudgement = None;
+      for (const NoteId headId : heads) {
+        const std::int64_t balance = hellChargeBalanceMicros_[headId];
+        const Judgement judgement =
+            balance > kHellChargeGaugeTickMicros
+                ? Great
+                : balance < -kHellChargeGaugeTickMicros ? Bad : None;
+        if (judgement != None &&
+            (nextHeadId == kInvalidNoteId || headId < nextHeadId)) {
+          nextHeadId = headId;
+          nextJudgement = judgement;
+        }
+      }
+      if (nextHeadId == kInvalidNoteId) {
+        break;
+      }
+      if (nextJudgement == Great) {
+        hellChargeBalanceMicros_[nextHeadId] -=
+            kHellChargeGaugeTickMicros;
+      } else {
+        hellChargeBalanceMicros_[nextHeadId] +=
+            kHellChargeGaugeTickMicros;
+      }
+      commitGaugeTick(nextJudgement, currentMicros);
+    }
+    if (nextCrossingMicros > toMicros) {
+      break;
+    }
+  }
+}
+
 GameplayAdvanceResult
 GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
                                           std::int64_t visualTimeMicros) {
@@ -510,6 +639,7 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
   }
 
   const auto chronological = definition_.chronologicalNotes();
+  std::int64_t segmentStartMicros = lastAdvancedMicros_;
   while (true) {
     const bool hasAtTiming = atTimingCursor_ < chronological.size();
     const bool hasLatePoor = latePoorCursor_ < chronological.size();
@@ -533,6 +663,8 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
       break;
     }
 
+    integrateHellChargeInterval(segmentStartMicros, nextDeadline);
+    segmentStartMicros = std::max(segmentStartMicros, nextDeadline);
     ++lastAdvanceStats_.notesExamined;
     if (processAtTimingPhase) {
       const NoteId id = chronological[atTimingCursor_++];
@@ -542,6 +674,8 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
       processLatePoor(id, nextDeadline);
     }
   }
+
+  integrateHellChargeInterval(segmentStartMicros, songTimeMicros);
 
   lastAdvancedMicros_ = songTimeMicros;
   hasAdvanced_ = true;

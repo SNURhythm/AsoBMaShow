@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -77,6 +78,42 @@ gameplay::NoteId findNoteId(const gameplay::GameplayDefinition &definition,
   }
   require(false, "requested stable note identity is present");
   return gameplay::kInvalidNoteId;
+}
+
+std::size_t replayActionCount(
+    std::span<const gameplay::GameplayReplayEvent> events,
+    gameplay::GameplayReplayAction action) {
+  return static_cast<std::size_t>(
+      std::ranges::count(events, action,
+                         &gameplay::GameplayReplayEvent::action));
+}
+
+void requireSameHellChargeOutcome(
+    const gameplay::GameplaySimulation &left,
+    const gameplay::GameplaySimulation &right) {
+  const auto leftSnapshot = left.snapshot();
+  const auto rightSnapshot = right.snapshot();
+  require(leftSnapshot.judgeCounts == rightSnapshot.judgeCounts &&
+              leftSnapshot.combo == rightSnapshot.combo &&
+              leftSnapshot.maxCombo == rightSnapshot.maxCombo &&
+              leftSnapshot.comboBreak == rightSnapshot.comboBreak &&
+              leftSnapshot.score == rightSnapshot.score &&
+              leftSnapshot.gaugeType == rightSnapshot.gaugeType &&
+              leftSnapshot.clearTypeRank == rightSnapshot.clearTypeRank &&
+              std::bit_cast<std::uint32_t>(leftSnapshot.gauge) ==
+                  std::bit_cast<std::uint32_t>(rightSnapshot.gauge),
+          "Hell Charge snapshots are bit-identical");
+  require(left.scoreState().gaugeValues == right.scoreState().gaugeValues &&
+              left.scoreState().gaugeSurvivalFailed ==
+                  right.scoreState().gaugeSurvivalFailed &&
+              left.scoreState().gaugeHistory ==
+                  right.scoreState().gaugeHistory,
+          "Hell Charge gauge state and history are bit-identical");
+  require(std::ranges::equal(left.hellChargeBalances(),
+                             right.hellChargeBalances()),
+          "Hell Charge fixed balances are identical");
+  require(std::ranges::equal(left.replayEvents(), right.replayEvents()),
+          "Hell Charge replay events are identical");
 }
 
 void testDefinitionCompilesAutomaticMetadata() {
@@ -680,16 +717,24 @@ void testUnpressedLongNoteDeadlineIdentityMatrix() {
     const float gaugeBefore = simulation.snapshot().gauge;
 
     const auto advanced = simulation.advanceTo(headDeadline, 15'100'000);
+    const std::size_t expectedGaugeTransactions =
+        type == bms_parser::LongNoteType::HellChargeNote ? 2 : 0;
     require(
-        advanced.transactions.size() == 2 &&
-            advanced.transactions[0].noteId == ids.head &&
-            advanced.transactions[1].noteId == ids.tail &&
-            advanced.transactions[0].judge.judgement == Poor &&
-            advanced.transactions[1].judge.judgement == Poor &&
-            advanced.transactions[1].judge.Diff == headDeadline - headMicros &&
-            advanced.transactions[1].replayEvent.noteTimeMicros == tailMicros &&
-            advanced.transactions[1].replayEvent.judgeTimeMicros ==
-                headDeadline,
+        advanced.transactions.size() == expectedGaugeTransactions + 2 &&
+            advanced.transactions[expectedGaugeTransactions].noteId ==
+                ids.head &&
+            advanced.transactions[expectedGaugeTransactions + 1].noteId ==
+                ids.tail &&
+            advanced.transactions[expectedGaugeTransactions]
+                    .judge.judgement == Poor &&
+            advanced.transactions[expectedGaugeTransactions + 1]
+                    .judge.judgement == Poor &&
+            advanced.transactions[expectedGaugeTransactions + 1].judge.Diff ==
+                headDeadline - headMicros &&
+            advanced.transactions[expectedGaugeTransactions + 1]
+                    .replayEvent.noteTimeMicros == tailMicros &&
+            advanced.transactions[expectedGaugeTransactions + 1]
+                    .replayEvent.judgeTimeMicros == headDeadline,
         "unpressed Charge/HCN pair emits one Poor per stable identity");
     require(simulation.noteState(ids.head).played &&
                 simulation.noteState(ids.head).dead &&
@@ -701,17 +746,31 @@ void testUnpressedLongNoteDeadlineIdentityMatrix() {
                 !simulation.noteState(ids.tail).holding,
             "early Charge/HCN tail remains played but not dead");
     const auto snapshot = simulation.snapshot();
+    const std::size_t expectedGaugeReplays = expectedGaugeTransactions;
+    const auto replays = simulation.replayEvents();
     require(snapshot.judgeCounts[Poor] == 2 && snapshot.combo == 0 &&
                 snapshot.comboBreak == 2 && snapshot.gauge < gaugeBefore &&
-                simulation.replayEvents().size() == 2 &&
-                simulation.replayEvents()[0].noteId == ids.head &&
-                simulation.replayEvents()[1].noteId == ids.tail &&
-                simulation.replayEvents()[1].combo == snapshot.combo &&
-                simulation.replayEvents()[1].gauge == snapshot.gauge,
+                replays.size() == expectedGaugeReplays + 2 &&
+                replayActionCount(replays,
+                                  gameplay::GameplayReplayAction::Gauge) ==
+                    expectedGaugeReplays &&
+                replays[expectedGaugeReplays].noteId == ids.head &&
+                replays[expectedGaugeReplays + 1].noteId == ids.tail &&
+                replays[expectedGaugeReplays + 1].combo == snapshot.combo &&
+                replays[expectedGaugeReplays + 1].gauge == snapshot.gauge,
             "Charge/HCN misses commit separately ordered post-state replays");
 
     const auto atFutureTail = simulation.advanceTo(tailMicros, 15'100'001);
-    require(atFutureTail.transactions.empty() &&
+    require((type == bms_parser::LongNoteType::HellChargeNote
+                 ? std::ranges::all_of(
+                       atFutureTail.transactions,
+                       [](const gameplay::GameplayInputResult &result) {
+                         return !result.hasJudge && result.hasReplayEvent &&
+                                result.replayEvent.action ==
+                                    gameplay::GameplayReplayAction::Gauge;
+                       }) &&
+                       !atFutureTail.transactions.empty()
+                 : atFutureTail.transactions.empty()) &&
                 simulation.noteState(ids.tail).played &&
                 !simulation.noteState(ids.tail).dead &&
                 simulation.snapshot().judgeCounts[Poor] == 2,
@@ -778,8 +837,17 @@ void testHeldLongNoteAutomaticReleaseMatrix() {
                                             {.judge = compiledJudge});
     const auto press = simulation.pressLane(1, {.songTimeMicros = headMicros});
     const auto atTail = simulation.advanceTo(tailMicros, 16'100'000);
+    const std::size_t expectedGaugeTransactions =
+        type == bms_parser::LongNoteType::HellChargeNote ? 4 : 0;
     require(press.hasJudge && press.judge.judgement == PGreat &&
-                atTail.transactions.empty() &&
+                atTail.transactions.size() == expectedGaugeTransactions &&
+                std::ranges::all_of(
+                    atTail.transactions,
+                    [](const gameplay::GameplayInputResult &result) {
+                      return !result.hasJudge && result.hasReplayEvent &&
+                             result.replayEvent.action ==
+                                 gameplay::GameplayReplayAction::Gauge;
+                    }) &&
                 simulation.noteState(ids.head).holding &&
                 simulation.noteState(ids.tail).holding &&
                 !simulation.noteState(ids.tail).played &&
@@ -802,9 +870,9 @@ void testHeldLongNoteAutomaticReleaseMatrix() {
     const std::int64_t tailDeadline =
         tailMicros + compiledJudge.latePoorTimingMicros() + 1;
     const auto late = lateSimulation.advanceTo(tailDeadline, 16'100'001);
-    require(late.transactions.size() == 1 &&
-                late.transactions.front().noteId == ids.tail &&
-                late.transactions.front().judge.judgement == Poor &&
+    require(late.transactions.size() == expectedGaugeTransactions + 1 &&
+                late.transactions.back().noteId == ids.tail &&
+                late.transactions.back().judge.judgement == Poor &&
                 lateSimulation.noteState(ids.tail).played &&
                 lateSimulation.noteState(ids.tail).dead &&
                 !lateSimulation.noteState(ids.head).holding &&
@@ -832,17 +900,21 @@ void testAutoplayChargeAndHellChargeReleaseAtTiming() {
                      .attempt = {.autoPlay = true}});
 
     const auto advanced = simulation.advanceTo(tailMicros, 17'000'000);
+    const std::size_t expectedGaugeTransactions =
+        type == bms_parser::LongNoteType::HellChargeNote ? 4 : 0;
+    const std::size_t tailIndex = expectedGaugeTransactions + 1;
     require(
-        advanced.transactions.size() == 2 &&
+        advanced.transactions.size() == expectedGaugeTransactions + 2 &&
             advanced.transactions[0].noteId == ids.head &&
             advanced.transactions[0].soundNoteId == ids.head &&
             advanced.transactions[0].judge.judgement == PGreat &&
             advanced.transactions[0].laneVisual.action ==
                 gameplay::LaneVisualAction::Press &&
-            advanced.transactions[1].noteId == ids.tail &&
-            advanced.transactions[1].soundNoteId == gameplay::kInvalidNoteId &&
-            advanced.transactions[1].judge.judgement == PGreat &&
-            advanced.transactions[1].laneVisual.action ==
+            advanced.transactions[tailIndex].noteId == ids.tail &&
+            advanced.transactions[tailIndex].soundNoteId ==
+                gameplay::kInvalidNoteId &&
+            advanced.transactions[tailIndex].judge.judgement == PGreat &&
+            advanced.transactions[tailIndex].laneVisual.action ==
                 gameplay::LaneVisualAction::Release,
         "autoplay Charge/HCN presses the head and releases the tail at timing");
     require(simulation.noteState(ids.head).played &&
@@ -853,9 +925,10 @@ void testAutoplayChargeAndHellChargeReleaseAtTiming() {
                 simulation.snapshot().judgeCounts[PGreat] == 2 &&
                 simulation.snapshot().combo == 2 &&
                 simulation.snapshot().score == 4 &&
-                simulation.replayEvents().size() == 2 &&
+                simulation.replayEvents().size() ==
+                    expectedGaugeTransactions + 2 &&
                 simulation.replayEvents()[0].noteId == ids.head &&
-                simulation.replayEvents()[1].noteId == ids.tail,
+                simulation.replayEvents()[tailIndex].noteId == ids.tail,
             "autoplay Charge/HCN commits two identity judgements and replays");
   }
 }
@@ -1073,12 +1146,319 @@ void testPracticeFinalizationMatchesHalfOpenIdentityRules() {
           "practice finalization rejects repeated calls without allocation or "
           "mutation");
 }
+
+void testHellChargeStrictThresholdsAndSerialInputState() {
+  constexpr std::int64_t headMicros = 1'000'000;
+  constexpr std::int64_t tailMicros = 2'000'000;
+  constexpr std::int64_t tickMicros = 200'000;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, headMicros, tailMicros, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto ids = longPairIds(definition, 1);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+
+  gameplay::GameplaySimulation gaining(
+      definition,
+      {.judge = compiledJudge,
+       .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
+  const auto headPress = gaining.applyPressAt(
+      1, 1, {.songTimeMicros = headMicros, .laneBeamTimeMicros = 20'000'000});
+  require(headPress.noteId == ids.head && headPress.hasJudge &&
+              headPress.judge.judgement == PGreat,
+          "Hell Charge setup presses the head exactly");
+  const auto gainReplayCount = gaining.replayEvents().size();
+  gaining.advanceTo(headMicros + tickMicros, 20'000'001);
+  require(gaining.hellChargeBalances()[ids.head] == tickMicros &&
+              gaining.replayEvents().size() == gainReplayCount,
+          "exactly positive 200000us stores balance without a tick");
+  const auto gainBefore = gaining.snapshot();
+  const auto gainHistoryCount = gaining.scoreState().gaugeHistory.size();
+  auto expectedGainGauge = gaining.scoreState();
+  expectedGainGauge.applyGaugeJudgementRate(Great, 0.5F);
+  const auto gainTickAdvance =
+      gaining.advanceTo(headMicros + tickMicros + 1, 20'000'002);
+  const auto gainAfter = gaining.snapshot();
+  const auto &gainTick = gaining.replayEvents().back();
+  require(gainTickAdvance.transactions.size() == 1 &&
+              !gainTickAdvance.transactions.front().hasJudge &&
+              gainTickAdvance.transactions.front().judge.judgement == Great &&
+              gainTickAdvance.transactions.front().hasReplayEvent &&
+              gainTickAdvance.transactions.front().replayEvent == gainTick &&
+              gaining.hellChargeBalances()[ids.head] == 1 &&
+              gaining.replayEvents().size() == gainReplayCount + 1 &&
+              gainTick.action == gameplay::GameplayReplayAction::Gauge &&
+              gainTick.noteId == gameplay::kInvalidNoteId &&
+              gainTick.lane == -1 && gainTick.noteTimeMicros == -1 &&
+              gainTick.songTimeMicros == headMicros + tickMicros + 1 &&
+              gainTick.judgeTimeMicros == headMicros + tickMicros + 1 &&
+              gainTick.judgement == Great && gainTick.diffMicros == 0,
+          "positive 200001us emits one timestamped half-rate Great tick");
+  require(gainAfter.judgeCounts == gainBefore.judgeCounts &&
+              gainAfter.combo == gainBefore.combo &&
+              gainAfter.maxCombo == gainBefore.maxCombo &&
+              gainAfter.comboBreak == gainBefore.comboBreak &&
+              gainAfter.score == gainBefore.score &&
+              gaining.scoreState().gaugeValues ==
+                  expectedGainGauge.gaugeValues &&
+              gaining.scoreState().gaugeHistory.size() ==
+                  gainHistoryCount + 1 &&
+              std::bit_cast<std::uint32_t>(
+                  gaining.scoreState().gaugeHistory.back()) ==
+                  std::bit_cast<std::uint32_t>(gainTick.gauge) &&
+              std::bit_cast<std::uint32_t>(gainTick.gauge) ==
+                  std::bit_cast<std::uint32_t>(gainAfter.gauge) &&
+              gainTick.gaugeType == gainAfter.gaugeType &&
+              gainTick.combo == gainAfter.combo &&
+              gainTick.score == gainAfter.score,
+          "Great gauge tick has complete post-state without judge/combo edits");
+
+  gameplay::GameplaySimulation releasedAtT(
+      definition,
+      {.judge = compiledJudge,
+       .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
+  releasedAtT.applyPressAt(1, 1, {.songTimeMicros = headMicros});
+  releasedAtT.applyReleaseAt(
+      1, {.songTimeMicros = headMicros + tickMicros});
+  require(releasedAtT.hellChargeBalances()[ids.head] == tickMicros &&
+              !releasedAtT.lanePressed(1),
+          "release at T integrates through T with the prior held state");
+  releasedAtT.advanceTo(headMicros + tickMicros + 1, 20'000'003);
+  require(releasedAtT.hellChargeBalances()[ids.head] == tickMicros - 1 &&
+              replayActionCount(releasedAtT.replayEvents(),
+                                gameplay::GameplayReplayAction::Gauge) == 0,
+          "release changes Hell Charge direction only after its timestamp");
+
+  gameplay::GameplaySimulation pressedAtT(
+      definition,
+      {.judge = compiledJudge,
+       .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
+  pressedAtT.advanceTo(headMicros + 100'000, 20'000'004);
+  require(pressedAtT.hellChargeBalances()[ids.head] == -100'000,
+          "unheld Hell Charge loses time before a later press");
+  pressedAtT.applyPressAt(1, 1, {.songTimeMicros = headMicros + 100'000});
+  require(pressedAtT.hellChargeBalances()[ids.head] == -100'000 &&
+              pressedAtT.lanePressed(1),
+          "press at T integrates through T before changing lane state");
+  pressedAtT.advanceTo(headMicros + tickMicros, 20'000'005);
+  require(pressedAtT.hellChargeBalances()[ids.head] == 0,
+          "press affects only the later Hell Charge interval");
+
+  gameplay::GameplaySimulation damaged(
+      definition,
+      {.judge = compiledJudge,
+       .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
+  damaged.applyPressAt(1, 1, {.songTimeMicros = headMicros});
+  const auto earlyRelease =
+      damaged.applyReleaseAt(1, {.songTimeMicros = headMicros});
+  require(earlyRelease.noteId == ids.tail &&
+              damaged.noteState(ids.tail).played &&
+              !damaged.noteState(ids.tail).dead &&
+              !damaged.noteState(ids.head).holding,
+          "early Hell Charge release leaves a played live tail");
+  const auto damageReplayCount = damaged.replayEvents().size();
+  damaged.advanceTo(headMicros + tickMicros, 20'000'006);
+  require(damaged.hellChargeBalances()[ids.head] == -tickMicros &&
+              damaged.replayEvents().size() == damageReplayCount,
+          "exactly negative 200000us stores balance without a tick");
+  const auto damageBefore = damaged.snapshot();
+  const auto damageHistoryCount = damaged.scoreState().gaugeHistory.size();
+  auto expectedDamageGauge = damaged.scoreState();
+  expectedDamageGauge.applyGaugeJudgementRate(Bad, 0.5F);
+  const auto damageTickAdvance =
+      damaged.advanceTo(headMicros + tickMicros + 1, 20'000'007);
+  const auto damageAfter = damaged.snapshot();
+  const auto &damageTick = damaged.replayEvents().back();
+  require(damageTickAdvance.transactions.size() == 1 &&
+              !damageTickAdvance.transactions.front().hasJudge &&
+              damageTickAdvance.transactions.front().judge.judgement == Bad &&
+              damageTickAdvance.transactions.front().hasReplayEvent &&
+              damageTickAdvance.transactions.front().replayEvent ==
+                  damageTick &&
+              damaged.hellChargeBalances()[ids.head] == -1 &&
+              damaged.replayEvents().size() == damageReplayCount + 1 &&
+              damageTick.action == gameplay::GameplayReplayAction::Gauge &&
+              damageTick.noteId == gameplay::kInvalidNoteId &&
+              damageTick.lane == -1 && damageTick.noteTimeMicros == -1 &&
+              damageTick.songTimeMicros == headMicros + tickMicros + 1 &&
+              damageTick.judgeTimeMicros == headMicros + tickMicros + 1 &&
+              damageTick.judgement == Bad && damageTick.diffMicros == 0,
+          "negative 200001us emits one timestamped half-rate Bad tick");
+  require(damageAfter.judgeCounts == damageBefore.judgeCounts &&
+              damageAfter.combo == damageBefore.combo &&
+              damageAfter.maxCombo == damageBefore.maxCombo &&
+              damageAfter.comboBreak == damageBefore.comboBreak &&
+              damageAfter.score == damageBefore.score &&
+              damaged.scoreState().gaugeValues ==
+                  expectedDamageGauge.gaugeValues &&
+              damaged.scoreState().gaugeHistory.size() ==
+                  damageHistoryCount + 1 &&
+              std::bit_cast<std::uint32_t>(
+                  damaged.scoreState().gaugeHistory.back()) ==
+                  std::bit_cast<std::uint32_t>(damageTick.gauge) &&
+              std::bit_cast<std::uint32_t>(damageTick.gauge) ==
+                  std::bit_cast<std::uint32_t>(damageAfter.gauge) &&
+              damageTick.gaugeType == damageAfter.gaugeType &&
+              damageTick.combo == damageAfter.combo &&
+              damageTick.score == damageAfter.score,
+          "Bad gauge tick has complete post-state without judge/combo edits");
+
+  damaged.applyPressAt(
+      1, 1, {.songTimeMicros = headMicros + tickMicros + 1});
+  require(damaged.lanePressed(1) &&
+              !damaged.noteState(ids.head).holding &&
+              damaged.noteState(ids.tail).played &&
+              !damaged.noteState(ids.tail).dead,
+          "regrab uses lane state without restoring long-note holding");
+  const auto regrabGaugeCount = replayActionCount(
+      damaged.replayEvents(), gameplay::GameplayReplayAction::Gauge);
+  damaged.advanceTo(headMicros + 2 * tickMicros + 2, 20'000'008);
+  require(damaged.hellChargeBalances()[ids.head] == tickMicros &&
+              replayActionCount(damaged.replayEvents(),
+                                gameplay::GameplayReplayAction::Gauge) ==
+                  regrabGaugeCount,
+          "regrab gain at the exact positive boundary does not tick");
+  damaged.advanceTo(headMicros + 2 * tickMicros + 3, 20'000'009);
+  require(damaged.hellChargeBalances()[ids.head] == 1 &&
+              damaged.replayEvents().back().action ==
+                  gameplay::GameplayReplayAction::Gauge &&
+              damaged.replayEvents().back().judgement == Great,
+          "regrab gains and emits Great while holding remains false");
+  damaged.advanceTo(tailMicros, 20'000'010);
+  require(damaged.noteState(ids.tail).played &&
+              !damaged.noteState(ids.tail).dead &&
+              damaged.hellChargeBalances()[ids.head] != 0,
+          "early-resolved played live tail integrates through tail timing");
+  damaged.advanceTo(tailMicros + 1, 20'000'011);
+  require(damaged.hellChargeBalances()[ids.head] == 0,
+          "inactive Hell Charge balance resets on the next positive interval");
+}
+
+void testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder() {
+  constexpr std::int64_t headMicros = 1'000'000;
+  constexpr std::int64_t tailMicros = 2'000'000;
+  constexpr std::int64_t firstTickMicros = 1'200'001;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 4;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, headMicros, tailMicros, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  addLongNote(*measure, headMicros, tailMicros, 2,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto gainingIds = longPairIds(definition, 1);
+  const auto losingIds = longPairIds(definition, 2);
+  require(gainingIds.head < losingIds.head,
+          "multi-HCN fixture gives the gaining head the lower NoteId");
+  const auto config = gameplay::GameplaySimulationConfig{
+      .judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+      .attempt = {.startingGaugePercent = 50,
+                  .replayCapacity = 64,
+                  .automaticResultCapacity = 64}};
+  gameplay::GameplaySimulation oneShot(definition, config);
+  gameplay::GameplaySimulation chunked(definition, config);
+  const auto setOppositeDirections = [&](gameplay::GameplaySimulation &value) {
+    value.applyPressAt(1, 1, {.songTimeMicros = headMicros});
+    value.applyPressAt(2, 2, {.songTimeMicros = headMicros});
+    value.applyReleaseAt(2, {.songTimeMicros = headMicros});
+  };
+  setOppositeDirections(oneShot);
+  setOppositeDirections(chunked);
+  const auto *const replayStorage = oneShot.replayEvents().data();
+  const auto *const gaugeStorage = oneShot.scoreState().gaugeHistory.data();
+  const auto *const balanceStorage = oneShot.hellChargeBalances().data();
+  const auto *const resultStorage = oneShot.automaticResults().data();
+
+  constexpr std::int64_t targetMicros = 1'800'001;
+  const auto oneShotAdvance = oneShot.advanceTo(targetMicros, 21'000'000);
+  std::vector<gameplay::GameplayReplayEvent> chunkedGaugeResults;
+  for (const auto chunk : std::array<std::int64_t, 8>{
+           1'000'003, 1'199'999, 1'200'001, 1'355'555,
+           1'400'000, 1'600'002, 1'777'777, targetMicros}) {
+    const auto result = chunked.advanceTo(chunk, 21'000'001);
+    for (const auto &transaction : result.transactions) {
+      require(!transaction.hasJudge && transaction.hasReplayEvent &&
+                  transaction.replayEvent.action ==
+                      gameplay::GameplayReplayAction::Gauge,
+              "chunked HCN advances expose replay-only gauge transactions");
+      chunkedGaugeResults.push_back(transaction.replayEvent);
+    }
+  }
+
+  requireSameHellChargeOutcome(oneShot, chunked);
+  require(oneShot.replayEvents().data() == replayStorage &&
+              oneShot.scoreState().gaugeHistory.data() == gaugeStorage &&
+              oneShot.hellChargeBalances().data() == balanceStorage &&
+              oneShot.automaticResults().data() == resultStorage &&
+              !oneShot.replayOverflowed() &&
+              !oneShot.automaticResultOverflowed() &&
+              !oneShot.scoreState().gaugeHistoryOverflowed(),
+          "Hell Charge hot integration keeps all bounded storage fixed");
+  require(oneShot.hellChargeBalances()[gainingIds.head] == 1 &&
+              oneShot.hellChargeBalances()[losingIds.head] == -1,
+          "opposite multi-HCN balances retain deterministic remainders");
+
+  std::vector<gameplay::GameplayReplayEvent> gaugeEvents;
+  for (const auto &event : oneShot.replayEvents()) {
+    if (event.action == gameplay::GameplayReplayAction::Gauge) {
+      gaugeEvents.push_back(event);
+    }
+  }
+  require(gaugeEvents.size() == 8,
+          "four shared crossing times emit two ordered gauge ticks each");
+  require(oneShotAdvance.transactions.size() == gaugeEvents.size() &&
+              chunkedGaugeResults == gaugeEvents,
+          "one-shot and chunked advances expose the same ordered HCN results");
+  for (std::size_t index = 0; index < gaugeEvents.size(); ++index) {
+    require(!oneShotAdvance.transactions[index].hasJudge &&
+                oneShotAdvance.transactions[index].hasReplayEvent &&
+                oneShotAdvance.transactions[index].judge.judgement ==
+                    gaugeEvents[index].judgement &&
+                oneShotAdvance.transactions[index].replayEvent ==
+                    gaugeEvents[index],
+            "one-shot HCN results carry each complete ordered replay");
+  }
+  for (std::size_t crossing = 0; crossing < 4; ++crossing) {
+    const auto expectedTime =
+        firstTickMicros + static_cast<std::int64_t>(crossing) * 200'000;
+    const auto &gain = gaugeEvents[crossing * 2];
+    const auto &loss = gaugeEvents[crossing * 2 + 1];
+    require(gain.songTimeMicros == expectedTime &&
+                loss.songTimeMicros == expectedTime &&
+                gain.judgeTimeMicros == expectedTime &&
+                loss.judgeTimeMicros == expectedTime &&
+                gain.judgement == Great && loss.judgement == Bad &&
+                gain.noteId == gameplay::kInvalidNoteId &&
+                loss.noteId == gameplay::kInvalidNoteId && gain.lane == -1 &&
+                loss.lane == -1,
+            "same-time multi-HCN ticks use ascending NoteId order");
+  }
+  const auto finalSnapshot = oneShot.snapshot();
+  for (std::size_t index = 0; index < gaugeEvents.size(); ++index) {
+    const auto &event = gaugeEvents[index];
+    require(event.gaugeType == finalSnapshot.gaugeType &&
+                event.combo == finalSnapshot.combo &&
+                event.score == finalSnapshot.score &&
+                std::bit_cast<std::uint32_t>(event.gauge) ==
+                    std::bit_cast<std::uint32_t>(
+                        oneShot.scoreState().gaugeHistory[index + 3]),
+            "each multi-HCN replay stores its complete post-gauge state");
+  }
+}
 } // namespace
 
 int main() {
   testDefinitionCompilesAutomaticMetadata();
   testDefinitionUsesDefaultGaugeTotalWhenChartOmitsTotal();
   testDefinitionCompilesChronologicalHellChargeHeads();
+  testHellChargeStrictThresholdsAndSerialInputState();
+  testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder();
   testAttemptInitializesConfiguredAndCarriedState();
   testReplayAndGaugeHistoryCapacityLatchWithoutGrowth();
   testNormalLatePoorUsesStrictDeadlineAndIsIdempotent();
