@@ -6,7 +6,7 @@
 namespace gameplay_scroll_geometry {
 
 inline long long chartRenderTimeMicros(long long visualTimeMicros) {
-  return (visualTimeMicros / 1'000LL) * 1'000LL;
+  return visualTimeMicros;
 }
 
 inline float renderY(double itemScrollPosition,
