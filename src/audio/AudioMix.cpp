@@ -488,7 +488,15 @@ static bool AppendRealtimeActiveSound(AudioCallbackState &state,
     return false;
   }
   if (state.playingSoundCount >= kMaxActiveSounds) {
-    removeActiveSoundAt(state, 0);
+    std::size_t preemptIndex = 0;
+    while (preemptIndex < state.playingSoundCount &&
+           state.playingSounds[preemptIndex].bus != Bus::Keysound) {
+      ++preemptIndex;
+    }
+    if (preemptIndex == state.playingSoundCount) {
+      return false;
+    }
+    removeActiveSoundAt(state, preemptIndex);
   }
   return AppendActiveSound(state, soundData, bus, 0, startFrame);
 }

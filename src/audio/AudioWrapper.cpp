@@ -676,9 +676,14 @@ std::optional<long long> AudioWrapper::songTimeMicrosAtSteadyMicros(
   if (!rate.valid()) {
     return std::nullopt;
   }
-  return addMicrosClamped(
+  const long long interpolatedMicros = addMicrosClamped(
       anchor.micros,
       rate.chartMicrosFromReal(steadyMicros - anchor.wallMicros));
+  if (anchor.endMicros >= anchor.micros &&
+      interpolatedMicros > anchor.endMicros) {
+    return anchor.endMicros;
+  }
+  return interpolatedMicros;
 }
 
 void AudioWrapper::seekClock(long long micros) {

@@ -231,6 +231,39 @@ void testInputDelayCompensationPrecedesWorkerAutomaticDeadline() {
   worker.stop();
 }
 
+void testInputPreadvancePublishesAutomaticTransactions() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  clock.nowMicros.store(2'000'000, std::memory_order_release);
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 2,
+               .compensateLane = 2,
+               .steadyTimestampMicros = 2'000'000}),
+          "late input is queued before the worker's first wake");
+  require(worker.start(), "input-preadvance fixture starts");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->attempt.judgeCounts[Poor] > 0;
+          }),
+          "input preadvance resolves expired notes");
+  auto snapshot = worker.acquireLatestSnapshot();
+  bool publishedPoor = false;
+  for (std::size_t index = 0; snapshot && index < snapshot->transactionCount;
+       ++index) {
+    const auto &result = snapshot->transactions[index].result;
+    publishedPoor = publishedPoor ||
+                    (result.hasJudge && result.judge.judgement == Poor);
+  }
+  require(publishedPoor,
+          "automatic misses produced before an input remain in transaction "
+          "history");
+  worker.stop();
+}
+
 void testSnapshotPublishesHeldLongNoteByLane() {
   FakeClock clock;
   FakeAudio audio;
@@ -649,6 +682,7 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
   testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
+  testInputPreadvancePublishesAutomaticTransactions();
   testSnapshotPublishesHeldLongNoteByLane();
   testAudioCapacityFailureDoesNotClaimTheNote();
   testIngressOverflowFailsClosed();

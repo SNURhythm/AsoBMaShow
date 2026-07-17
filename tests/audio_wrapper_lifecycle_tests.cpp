@@ -1502,7 +1502,7 @@ void testClockAnchorReaderWaitsForACompleteGeneration() {
           "clock reader returns the tuple only after its generation completes");
 }
 
-void testNativeTimestampMapsDirectlyThroughAudioClockAnchor() {
+void testNativeTimestampClampsToPublishedAudioBuffer() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
   AudioWrapper wrapper(&stopwatch,
@@ -1520,9 +1520,11 @@ void testNativeTimestampMapsDirectlyThroughAudioClockAnchor() {
                                                    std::memory_order_relaxed);
 
   const auto mapped = wrapper.songTimeMicrosAtSteadyMicros(5'200'000);
-  require(mapped.has_value() && *mapped == 1'100'000,
-          "native input time maps through the anchor without waiting for a "
-          "render frame or clamping to the submitted audio buffer");
+  require(mapped.has_value() && *mapped == 1'010'000,
+          "native input time cannot advance beyond rendered audio");
+  const auto olderInput = wrapper.songTimeMicrosAtSteadyMicros(4'800'000);
+  require(olderInput.has_value() && *olderInput == 900'000,
+          "an older native input retains its age before the current anchor");
 }
 
 void testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback() {
@@ -1767,7 +1769,7 @@ int main() {
     testRunningMidBufferStopAndRateTransitionDoesNotJump();
     testWallInterpolationUsesTheRatePublishedWithItsAnchor();
     testClockAnchorReaderWaitsForACompleteGeneration();
-    testNativeTimestampMapsDirectlyThroughAudioClockAnchor();
+    testNativeTimestampClampsToPublishedAudioBuffer();
     testConfigurableWrapperRestartsAndRestoresRetainedPcm();
     testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
     testBufferCapabilityProbePublishesOnlyVerifiedCandidates();

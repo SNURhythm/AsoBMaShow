@@ -285,8 +285,11 @@ void RealtimeGameplayWorker::processInput(
   };
 
   if (!preparationInput) {
-    simulation_.advanceTo(*songTime - input.inputDelayMicros,
-                          input.steadyTimestampMicros);
+    const auto advanced = simulation_.advanceTo(
+        *songTime - input.inputDelayMicros, input.steadyTimestampMicros);
+    if (!commitAutomaticTransactions(advanced.transactions)) {
+      return;
+    }
     if (simulation_.terminal()) {
       return;
     }

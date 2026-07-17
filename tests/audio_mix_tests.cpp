@@ -823,7 +823,8 @@ void testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit() {
   AudioCallbackState state;
   for (std::size_t index = 0; index < kMaxActiveSounds; ++index) {
     require(audio::playback::AppendActiveSound(
-                state, &existing, audio::Bus::Keysound, 0),
+                state, &existing,
+                index == 0 ? audio::Bus::Bgm : audio::Bus::Keysound, 0),
             "voice-limit fixture fills every active slot");
   }
   const auto reservation =
@@ -840,11 +841,15 @@ void testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit() {
   require(state.playingSoundCount == kMaxActiveSounds &&
               std::ranges::any_of(
                   std::span(state.playingSounds.get(), state.playingSoundCount),
+                  [](const PlayingSound &voice) {
+                    return voice.bus == audio::Bus::Bgm;
+                  }) &&
+              std::ranges::any_of(
+                  std::span(state.playingSounds.get(), state.playingSoundCount),
                   [&](const PlayingSound &voice) {
                     return voice.soundData == &incoming;
                   }),
-          "realtime admission deterministically preempts instead of silently "
-          "dropping the sound");
+          "realtime admission preempts a keysound while preserving BGM");
 }
 
 void testJukeboxSourceClassificationAndSeekOverlap() {
