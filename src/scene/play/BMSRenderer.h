@@ -302,7 +302,6 @@ private:
   void drawNormalNote(float y, bms_parser::Note *const &note);
   void drawInvisibleNote(float y, bms_parser::Note *const &note);
   void drawLandmineNote(float y, bms_parser::LandmineNote *const &note);
-  bool noteRectangleMayRender(const bms_parser::Note *note, float y) const;
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);

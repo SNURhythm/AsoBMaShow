@@ -159,6 +159,24 @@ bool shouldKeepDeadLongNoteBody(const bms_parser::LongNote *head) {
          !wasLongNoteTailResolvedAtOrAfterTiming(head);
 }
 
+gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
+    const bms_parser::Note *note, long long currentTimeMicros, float y,
+    float noteHeight, float judgeY) {
+  if (note == nullptr || note->Timeline == nullptr) {
+    return {.visible = true,
+            .y = y,
+            .height = noteHeight,
+            .bottomTextureFraction = 1.0F};
+  }
+  return gameplay_scroll_geometry::clipNoteRectangle(
+      note->Timeline->Timing, currentTimeMicros, y, noteHeight, judgeY);
+}
+
+float clippedBottomV(float topV, float bottomV,
+                     float bottomTextureFraction) {
+  return topV + (bottomV - topV) * bottomTextureFraction;
+}
+
 void destroyTextureHandle(bgfx::TextureHandle &texture) {
   if (bgfx::isValid(texture)) {
     bgfx::destroy(texture);
@@ -1840,13 +1858,18 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
       head->Tail->IsPlayed && !tailMissedWithHead;
   if (tailResolvedForRendering && !tailReleasedEarly)
     return;
-  float startY = head->IsPlayed && !head->IsDead ? judgeY : headY;
-  const bool headMayRender = noteRectangleMayRender(head, startY);
-  const bool tailMayRender = noteRectangleMayRender(head->Tail, tailY);
-  if (!headMayRender) {
-    startY = std::max(startY, judgeY);
+  const float headRenderY =
+      head->IsPlayed && !head->IsDead ? judgeY : headY;
+  const auto headClip = noteRenderClip(
+      head, currentRenderMicros, headRenderY, noteRenderHeight, judgeY);
+  const auto tailClip = noteRenderClip(
+      head->Tail, currentRenderMicros, tailY, noteRenderHeight, judgeY);
+  float bodyStartY = headRenderY;
+  if (head->Timeline != nullptr &&
+      head->Timeline->Timing >= currentRenderMicros) {
+    bodyStartY = std::max(bodyStartY, judgeY);
   }
-  const float bodyHeight = tailY - startY;
+  const float bodyHeight = tailY - bodyStartY;
   const float bodyWidth = noteRenderWidth;
 
   const NoteSheet &sheet = sheetForLane(head->Lane);
@@ -1896,79 +1919,87 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
           skinAnimationFrame(currentRenderMicros, bodyFrameCount, bodyCycleMs);
       const float v = (static_cast<float>(frame) + 0.5f) /
                       static_cast<float>(bodyFrameCount);
-      bodyBatch.addRectUV(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
+      bodyBatch.addRectUV(laneToX(head->Lane), bodyStartY, bodyWidth,
+                          bodyHeight,
                           0.0f, v, 1.0f, v, bodyTexture);
     } else {
       float tileV = bodyHeight / bodyRenderHeight;
-      bodyBatch.addRect(laneToX(head->Lane), startY, bodyWidth, bodyHeight,
+      bodyBatch.addRect(laneToX(head->Lane), bodyStartY, bodyWidth, bodyHeight,
                         1.0f, tileV, bodyTexture);
     }
   }
 
-  if (tailMayRender && !isClassicLongNote &&
+  if (tailClip.visible && !isClassicLongNote &&
       (!tailReleasedEarly || tailY > judgeY)) {
-    sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
-                                   noteRenderWidth, noteRenderHeight, tailUv.u0,
-                                   tailUv.v0, tailUv.u1, tailUv.v1,
-                                   sheet.texture);
+    sheetBatchFor(sheet).addRectUV(
+        laneToX(head->Tail->Lane), tailClip.y, noteRenderWidth,
+        tailClip.height, tailUv.u0, tailUv.v0, tailUv.u1,
+        clippedBottomV(tailUv.v0, tailUv.v1,
+                       tailClip.bottomTextureFraction),
+        sheet.texture);
   }
 
-  if (head->IsPlayed || !headMayRender)
+  if (head->IsPlayed || !headClip.visible)
     return;
 
   // Head
-  sheetBatchFor(sheet).addRectUV(laneToX(head->Lane), startY, noteRenderWidth,
-                                 noteRenderHeight, headUv.u0, headUv.v0,
-                                 headUv.u1, headUv.v1, sheet.texture);
-}
-
-bool BMSRenderer::noteRectangleMayRender(const bms_parser::Note *note,
-                                         float y) const {
-  return note == nullptr || note->Timeline == nullptr ||
-         gameplay_scroll_geometry::shouldDrawNoteRectangle(
-             note->Timeline->Timing, currentRenderMicros, y, noteRenderHeight,
-             judgeY);
+  sheetBatchFor(sheet).addRectUV(
+      laneToX(head->Lane), headClip.y, noteRenderWidth, headClip.height,
+      headUv.u0, headUv.v0, headUv.u1,
+      clippedBottomV(headUv.v0, headUv.v1,
+                     headClip.bottomTextureFraction),
+      sheet.texture);
 }
 
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed || !noteRectangleMayRender(note, y) ||
+  const auto clip = noteRenderClip(note, currentRenderMicros, y,
+                                   noteRenderHeight, judgeY);
+  if (note->IsPlayed || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
-          y, noteRenderHeight, lowerBound, upperBound))
+          clip.y, clip.height, lowerBound, upperBound))
     return;
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
 
-  sheetBatchFor(sheet).addRectUV(laneToX(note->Lane), y, noteRenderWidth,
-                                 noteRenderHeight, sheet.note.u0,
-                                 sheet.note.v0, sheet.note.u1, sheet.note.v1,
-                                 sheet.texture);
+  sheetBatchFor(sheet).addRectUV(
+      laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.note.u0,
+      sheet.note.v0, sheet.note.u1,
+      clippedBottomV(sheet.note.v0, sheet.note.v1,
+                     clip.bottomTextureFraction),
+      sheet.texture);
 }
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed || note->IsDead || !noteRectangleMayRender(note, y) ||
+  const auto clip = noteRenderClip(note, currentRenderMicros, y,
+                                   noteRenderHeight, judgeY);
+  if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
-          y, noteRenderHeight, lowerBound, upperBound)) {
+          clip.y, clip.height, lowerBound, upperBound)) {
     return;
   }
 
-  gimmickBatchRenderer.addRect(laneToX(note->Lane), y, noteRenderWidth,
-                               noteRenderHeight,
+  gimmickBatchRenderer.addRect(laneToX(note->Lane), clip.y, noteRenderWidth,
+                               clip.height,
                                Color(255, 149, 36, 224).toABGR());
 }
 
 void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note) {
-  if (note->IsPlayed || note->IsDead || !noteRectangleMayRender(note, y) ||
+  const auto clip = noteRenderClip(note, currentRenderMicros, y,
+                                   noteRenderHeight, judgeY);
+  if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
-          y, noteRenderHeight, lowerBound, upperBound)) {
+          clip.y, clip.height, lowerBound, upperBound)) {
     return;
   }
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
-  sheetBatchFor(sheet).addRectUV(laneToX(note->Lane), y, noteRenderWidth,
-                                 noteRenderHeight, sheet.mine.u0,
-                                 sheet.mine.v0, sheet.mine.u1, sheet.mine.v1,
-                                 sheet.texture);
+  sheetBatchFor(sheet).addRectUV(
+      laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.mine.u0,
+      sheet.mine.v0, sheet.mine.u1,
+      clippedBottomV(sheet.mine.v0, sheet.mine.v1,
+                     clip.bottomTextureFraction),
+      sheet.texture);
 }
 
 void BMSRenderer::buildTimelineScrollPositions() {

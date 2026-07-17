@@ -84,10 +84,42 @@ inline bool noteRectangleIntersectsViewport(float y, float noteHeight,
   return y + noteHeight >= lowerBound && y <= upperBound;
 }
 
+struct NoteRectangleClip {
+  bool visible = false;
+  float y = 0.0F;
+  float height = 0.0F;
+  float bottomTextureFraction = 0.0F;
+};
+
+inline NoteRectangleClip clipNoteRectangle(long long noteTimeMicros,
+                                           long long currentTimeMicros,
+                                           float y, float noteHeight,
+                                           float judgeY) {
+  if (noteTimeMicros < currentTimeMicros || y >= judgeY) {
+    return {.visible = true,
+            .y = y,
+            .height = noteHeight,
+            .bottomTextureFraction = 1.0F};
+  }
+
+  const float top = y + noteHeight;
+  if (noteHeight <= 0.0F || top <= judgeY) {
+    return {};
+  }
+
+  const float clippedHeight = top - judgeY;
+  return {.visible = true,
+          .y = judgeY,
+          .height = clippedHeight,
+          .bottomTextureFraction = clippedHeight / noteHeight};
+}
+
 inline bool shouldDrawNoteRectangle(long long noteTimeMicros,
                                     long long currentTimeMicros, float y,
                                     float noteHeight, float judgeY) {
-  return noteTimeMicros < currentTimeMicros || y + noteHeight >= judgeY;
+  return clipNoteRectangle(noteTimeMicros, currentTimeMicros, y, noteHeight,
+                           judgeY)
+      .visible;
 }
 
 inline bool shouldDrawMeasureLine(long long timelineTimeMicros,

@@ -133,5 +133,26 @@ int main() {
   require(shouldDrawNoteRectangle(999'999, 1'000'000, -1.1F, 1.0F,
                                   0.0F),
           "a past note below the judge line remains visible");
+
+  const auto clippedFuture =
+      clipNoteRectangle(1'100'000, 1'000'000, -0.5F, 1.0F, 0.0F);
+  require(clippedFuture.visible,
+          "a future note crossing the judge line remains drawable");
+  requireNear(clippedFuture.y, 0.0F,
+              "future note geometry starts at the judge line");
+  requireNear(clippedFuture.height, 0.5F,
+              "future note geometry keeps only the visible height");
+  requireNear(clippedFuture.bottomTextureFraction, 0.5F,
+              "future note texture is cropped at the same ratio");
+
+  const auto untouchedPast =
+      clipNoteRectangle(999'999, 1'000'000, -0.5F, 1.0F, 0.0F);
+  require(untouchedPast.visible, "a past note remains drawable");
+  requireNear(untouchedPast.y, -0.5F,
+              "past note geometry stays below the judge line");
+  requireNear(untouchedPast.height, 1.0F,
+              "past note keeps its full height");
+  requireNear(untouchedPast.bottomTextureFraction, 1.0F,
+              "past note keeps its full texture");
   return 0;
 }
