@@ -151,6 +151,7 @@ SDLInputBackend::SDLInputBackend(
 }
 
 bool SDLInputBackend::start(std::string &errorMessage) {
+  const std::lock_guard lock(devicesMutex_);
   if (started_) {
     return true;
   }
@@ -210,6 +211,7 @@ bool SDLInputBackend::start(std::string &errorMessage) {
 }
 
 void SDLInputBackend::stop() {
+  const std::lock_guard lock(devicesMutex_);
   if (!started_ && devices_.empty()) {
     return;
   }
@@ -222,6 +224,15 @@ void SDLInputBackend::stop() {
 }
 
 void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
+  if (event.type == SDL_JOYDEVICEADDED) {
+    addDevice(event.jdevice.which);
+    return;
+  }
+  if (event.type == SDL_JOYDEVICEREMOVED) {
+    removeDevice(event.jdevice.which);
+    return;
+  }
+  const std::lock_guard lock(devicesMutex_);
   switch (event.type) {
   case SDL_KEYDOWN:
   case SDL_KEYUP:
@@ -236,13 +247,6 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
          .rawValue = event.type == SDL_KEYDOWN ? 1.0 : 0.0,
          .normalizedValue = event.type == SDL_KEYDOWN ? 1.0F : 0.0F,
          .timestampMicros = toMicros(event.key.timestamp)});
-    return;
-
-  case SDL_JOYDEVICEADDED:
-    addDevice(event.jdevice.which);
-    return;
-  case SDL_JOYDEVICEREMOVED:
-    removeDevice(event.jdevice.which);
     return;
 
   case SDL_CONTROLLERBUTTONDOWN:
@@ -301,6 +305,60 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
 }
 
 void SDLInputBackend::pump() {}
+
+std::optional<input::PhysicalInputEvent>
+SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
+  if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
+    if (event.type == SDL_KEYDOWN && event.key.repeat != 0) {
+      return std::nullopt;
+    }
+    return input::PhysicalInputEvent{
+        .control = {.deviceId = "keyboard",
+                    .deviceClass = input::DeviceClass::Keyboard,
+                    .kind = input::ControlKind::Key,
+                    .index = static_cast<int>(event.key.keysym.scancode)},
+        .rawValue = event.type == SDL_KEYDOWN ? 1.0 : 0.0,
+        .normalizedValue = event.type == SDL_KEYDOWN ? 1.0F : 0.0F,
+        .timestampMicros = toMicros(event.key.timestamp)};
+  }
+
+  const std::lock_guard lock(devicesMutex_);
+  switch (event.type) {
+  case SDL_CONTROLLERBUTTONDOWN:
+  case SDL_CONTROLLERBUTTONUP: {
+    const auto found = devices_.find(event.cbutton.which);
+    if (found == devices_.end() || !found->second.gameController) {
+      return std::nullopt;
+    }
+    const bool pressed = event.type == SDL_CONTROLLERBUTTONDOWN;
+    return input::PhysicalInputEvent{
+        .control = {.deviceId = found->second.snapshot.stableId,
+                    .deviceClass = input::DeviceClass::GameController,
+                    .kind = input::ControlKind::Button,
+                    .index = event.cbutton.button},
+        .rawValue = pressed ? 1.0 : 0.0,
+        .normalizedValue = pressed ? 1.0F : 0.0F,
+        .timestampMicros = toMicros(event.cbutton.timestamp)};
+  }
+  case SDL_CONTROLLERAXISMOTION: {
+    const auto found = devices_.find(event.caxis.which);
+    if (found == devices_.end() || !found->second.gameController) {
+      return std::nullopt;
+    }
+    const float value = normalizeAxis(event.caxis.value);
+    return input::PhysicalInputEvent{
+        .control = {.deviceId = found->second.snapshot.stableId,
+                    .deviceClass = input::DeviceClass::GameController,
+                    .kind = input::ControlKind::Axis,
+                    .index = event.caxis.axis},
+        .rawValue = static_cast<double>(event.caxis.value),
+        .normalizedValue = value,
+        .timestampMicros = toMicros(event.caxis.timestamp)};
+  }
+  default:
+    return std::nullopt;
+  }
+}
 
 std::optional<SdlInputDeviceInfo> SDLInputBackend::openDevice(int deviceIndex) {
   const bool gameController = provider_->isGameController(deviceIndex);
@@ -382,35 +440,47 @@ void SDLInputBackend::addDevice(int deviceIndex) {
   if (!info) {
     return;
   }
-  if (devices_.contains(info->instanceId)) {
+  bool duplicate = false;
+  {
+    const std::lock_guard lock(devicesMutex_);
+    duplicate = devices_.contains(info->instanceId);
+    if (!duplicate) {
+      const std::string stableId = identity_.connect({.guid = info->guid,
+                                                      .serial = info->serial,
+                                                      .path = info->path,
+                                                      .name = info->name});
+      applyIdentityRemaps(identity_.takeRemappings());
+      const bool publishConnection =
+          identity_.activeOwnerCount(stableId) == 1;
+      registerDevice(std::move(*info), stableId, publishConnection);
+    }
+  }
+  if (duplicate) {
     provider_->closeDevice(info->instanceId);
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                 "Ignoring duplicate SDL input instance %d",
                 static_cast<int>(info->instanceId));
-    return;
   }
-
-  const std::string stableId = identity_.connect({.guid = info->guid,
-                                                  .serial = info->serial,
-                                                  .path = info->path,
-                                                  .name = info->name});
-  applyIdentityRemaps(identity_.takeRemappings());
-  const bool publishConnection = identity_.activeOwnerCount(stableId) == 1;
-  registerDevice(std::move(*info), stableId, publishConnection);
 }
 
 void SDLInputBackend::removeDevice(SDL_JoystickID instanceId) {
-  const auto found = devices_.find(instanceId);
-  if (found == devices_.end()) {
-    return;
+  std::optional<input::InputDeviceSnapshot> disconnected;
+  {
+    const std::lock_guard lock(devicesMutex_);
+    const auto found = devices_.find(instanceId);
+    if (found == devices_.end()) {
+      return;
+    }
+    found->second.snapshot.connected = false;
+    if (identity_.disconnect(found->second.snapshot.stableId)) {
+      disconnected = found->second.snapshot;
+    }
+    devices_.erase(found);
   }
-
-  found->second.snapshot.connected = false;
-  if (identity_.disconnect(found->second.snapshot.stableId)) {
-    publishDevice(found->second.snapshot);
+  if (disconnected.has_value()) {
+    publishDevice(std::move(*disconnected));
   }
   provider_->closeDevice(instanceId);
-  devices_.erase(found);
 }
 
 void SDLInputBackend::publishButton(const DeviceRecord &device, int button,

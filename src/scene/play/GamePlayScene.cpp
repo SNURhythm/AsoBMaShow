@@ -21,6 +21,7 @@
 #include "RealtimeGameplayWorker.h"
 #include "RealtimeTouchInputRouter.h"
 #include "../../input/RhythmInputHandler.h"
+#include "../../input/RealtimePhysicalInputRouter.h"
 #include "../../targets.h"
 #include "../../view/Button.h"
 #include "../../view/UiTheme.h"
@@ -494,16 +495,25 @@ ReplayEventAction replayActionFromRealtime(
 
 struct GamePlayScene::RealtimeGameplaySession {
   static constexpr std::size_t kAuxiliaryTouchCapacity = 4096;
+  static constexpr std::size_t kInputCommandCapacity = 256;
 
   GamePlayScene *scene = nullptr;
   AudioWrapper *audio = nullptr;
   long long audioOffsetMicros = 0;
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
+  std::atomic_bool acceptingNativeInput{false};
+  InputDeviceRegistry *inputRegistry = nullptr;
   std::vector<std::optional<audio::RealtimeSoundHandle>> soundHandles;
   std::vector<bms_parser::Note *> notes;
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
+  std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+  gameplay::BoundedMpscQueue<input::LogicalInputTransition,
+                             kInputCommandCapacity>
+      inputCommands;
+  std::atomic_bool inputCommandOverflow{false};
+  bool sdlInputWatchRegistered = false;
   gameplay::BoundedMpscQueue<gameplay::RealtimeTouchSample,
                              kAuxiliaryTouchCapacity>
       auxiliaryTouches;
@@ -629,6 +639,55 @@ struct GamePlayScene::RealtimeGameplaySession {
            session.worker != nullptr && session.worker->enqueueInput(input);
   }
 
+  static bool emitPhysicalInput(
+      void *context,
+      const input::RealtimePhysicalInputTransition &transition) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (transition.type ==
+        input::RealtimePhysicalInputTransitionType::Command) {
+      if (!session.inputCommands.tryPush(transition.command)) {
+        session.inputCommandOverflow.store(true, std::memory_order_release);
+        return false;
+      }
+      return true;
+    }
+    if (session.worker == nullptr) {
+      return false;
+    }
+    return session.worker->enqueueInput(
+        {.epoch = session.epoch,
+         .type = transition.type ==
+                         input::RealtimePhysicalInputTransitionType::Press
+                     ? gameplay::RealtimeGameplayInputType::Press
+                     : gameplay::RealtimeGameplayInputType::Release,
+         .lane = transition.lane,
+         .compensateLane = transition.lane,
+         .backSpin = transition.backSpin,
+         .steadyTimestampMicros = transition.steadyTimestampMicros});
+  }
+
+  static int SDLCALL sdlInputWatch(void *context, SDL_Event *event) {
+    if (context == nullptr || event == nullptr) {
+      return 0;
+    }
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+        session.inputRegistry == nullptr ||
+        session.physicalInputRouter == nullptr) {
+      return 0;
+    }
+    const auto physical =
+        session.inputRegistry->translateRealtimeSdlInput(*event);
+    if (!physical.has_value() ||
+        (physical->control.deviceClass != input::DeviceClass::Keyboard &&
+         physical->control.deviceClass !=
+             input::DeviceClass::GameController)) {
+      return 0;
+    }
+    session.physicalInputRouter->consume(*physical, nowMicros());
+    return 0;
+  }
+
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   static void SDLCALL rawTouchSink(const IOSRawTouchEvent *event,
                                    void *context) {
@@ -703,6 +762,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   auto session = std::make_unique<RealtimeGameplaySession>();
   session->scene = this;
   session->audio = &context.jukebox.audioRuntime();
+  session->inputRegistry = &context.inputDeviceRegistry;
   session->audioOffsetMicros = getAudioOffsetMicros();
   session->epoch = ++realtimeGameplayEpoch;
   session->notes = buildRealtimeGameplayNoteLookup(*chart);
@@ -773,6 +833,17 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
           gameplay::RealtimeTouchInputSink{
               .context = session.get(),
               .emit = &RealtimeGameplaySession::emitTouchInput});
+  const auto activeInputScopes = makeGameplayInputScopes(chart->Meta.KeyMode);
+  const auto realtimeInputProfile =
+      makeGameplayInputProfileWithEscapeFallback(context.inputProfile,
+                                                 activeInputScopes);
+  session->physicalInputRouter =
+      std::make_unique<input::RealtimePhysicalInputRouter>(
+          realtimeInputProfile, activeInputScopes,
+          [context = session.get()](const auto &transition) {
+            return RealtimeGameplaySession::emitPhysicalInput(context,
+                                                              transition);
+          });
   session->visualMeasureIndex = state->passedMeasureCount;
   session->visualTimelineIndex = state->passedTimelineCount;
   session->layoutRenderWidth = rendering::render_width;
@@ -788,20 +859,31 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
 
   inputHandler->discardPendingTouchEvents();
   realtimeGameplaySession = std::move(session);
-  setRealtimeTouchIngressEnabled(true);
-  SDL_Log("Realtime iOS gameplay touch authority active (epoch %llu)",
+  inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Keyboard,
+                                              false);
+  inputHandler->setRegistryDeviceClassEnabled(
+      input::DeviceClass::GameController, false);
+  auto &activeSession = *realtimeGameplaySession;
+  activeSession.acceptingNativeInput.store(true, std::memory_order_release);
+  SDL_AddEventWatch(&RealtimeGameplaySession::sdlInputWatch, &activeSession);
+  activeSession.sdlInputWatchRegistered = true;
+  setRealtimeGameplayIngressEnabled(true);
+  SDL_Log("Realtime iOS gameplay native input authority active (epoch %llu)",
           static_cast<unsigned long long>(realtimeGameplayEpoch));
   return true;
 #endif
 }
 
-void GamePlayScene::setRealtimeTouchIngressEnabled(bool enabled) {
+void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (!realtimeGameplayAuthorityActive()) {
     IOSSetRawTouchEventSink(nullptr, nullptr);
     return;
   }
   auto &session = *realtimeGameplaySession;
+  if (session.physicalInputRouter != nullptr) {
+    session.physicalInputRouter->setGameplayEnabled(enabled, nowMicros());
+  }
   if (enabled) {
     session.acceptingTouch.store(true, std::memory_order_release);
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
@@ -873,6 +955,22 @@ void GamePlayScene::drainRealtimeTouchSamples() {
                                                std::memory_order_acq_rel)) {
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                 "Realtime touch metadata queue overflowed");
+  }
+}
+
+void GamePlayScene::drainRealtimeInputCommands() {
+  if (!realtimeGameplayAuthorityActive()) {
+    return;
+  }
+  auto &session = *realtimeGameplaySession;
+  input::LogicalInputTransition transition;
+  while (session.inputCommands.tryPop(transition)) {
+    handleLogicalInputCommand(transition);
+  }
+  if (session.inputCommandOverflow.exchange(false,
+                                             std::memory_order_acq_rel)) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                "Realtime input command queue overflowed");
   }
 }
 
@@ -1026,8 +1124,19 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   if (!realtimeGameplayAuthorityActive()) {
     return;
   }
-  setRealtimeTouchIngressEnabled(false);
   auto &session = *realtimeGameplaySession;
+  setRealtimeGameplayIngressEnabled(false);
+  session.acceptingNativeInput.store(false, std::memory_order_release);
+  if (session.sdlInputWatchRegistered) {
+    SDL_DelEventWatch(&RealtimeGameplaySession::sdlInputWatch, &session);
+    session.sdlInputWatchRegistered = false;
+  }
+  if (inputHandler != nullptr) {
+    inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Keyboard,
+                                                true);
+    inputHandler->setRegistryDeviceClassEnabled(
+        input::DeviceClass::GameController, true);
+  }
   drainRealtimeTouchSamples();
   session.worker->stop();
   syncRealtimeGameplaySnapshot();
@@ -1638,7 +1747,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
 }
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
-  setRealtimeTouchIngressEnabled(false);
+  setRealtimeGameplayIngressEnabled(false);
   if (realtimeGameplayAuthorityActive() &&
       !realtimeGameplaySession->worker->suspend()) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
@@ -1672,7 +1781,7 @@ void GamePlayScene::closePauseMenu() {
                  "Realtime gameplay worker failed to resume");
     return;
   }
-  setRealtimeTouchIngressEnabled(true);
+  setRealtimeGameplayIngressEnabled(true);
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
   }
@@ -2613,6 +2722,7 @@ void GamePlayScene::update(float dt) {
     inputHandler->pumpPendingTouchEvents();
   }
   if (realtimeAtFrameStart) {
+    drainRealtimeInputCommands();
     drainRealtimeTouchSamples();
   }
   updateCoursePauseHoldProgress(nowMicros());

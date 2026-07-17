@@ -148,6 +148,8 @@ InputDeviceRegistry::InputDeviceRegistry(
       continue;
     }
 
+    auto *sdlBackend = dynamic_cast<SDLInputBackend *>(backend.get());
+
     std::string errorMessage;
     if (!backend->start(errorMessage)) {
       if (errorMessage.empty()) {
@@ -159,6 +161,9 @@ InputDeviceRegistry::InputDeviceRegistry(
       sinkGate->close();
       backend->stop();
       continue;
+    }
+    if (sdlBackend != nullptr) {
+      sdlInputBackend_ = sdlBackend;
     }
     sinkGate->activate();
     backends_.push_back(std::move(backend));
@@ -200,6 +205,14 @@ void InputDeviceRegistry::resetGyroscopeTurntableSession() {
     backend->resetGyroscopeTurntableSession();
   }
   dispatchPending();
+}
+
+std::optional<input::PhysicalInputEvent>
+InputDeviceRegistry::translateRealtimeSdlInput(const SDL_Event &event) const {
+  if (sdlInputBackend_ == nullptr) {
+    return std::nullopt;
+  }
+  return sdlInputBackend_->translateRealtimeInput(event);
 }
 
 void InputDeviceRegistry::dispatchPending() { pumpInternal(false); }

@@ -1602,6 +1602,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputBindingResolver.cpp
         src/input/InputDefaults.cpp
         src/input/InputNormalizer.cpp
+        src/input/RealtimePhysicalInputRouter.cpp
     )
     target_include_directories(logical_gameplay_input_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

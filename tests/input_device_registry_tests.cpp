@@ -801,6 +801,35 @@ void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
          "keyboard events publish physical scancode edges and microseconds");
 }
 
+void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  provider->devices = {controllerInfo(91, "/dev/input/realtime-pad")};
+  auto registry = makeRegistryWithSdlProvider(provider);
+
+  SDL_Event key{};
+  key.type = SDL_KEYDOWN;
+  key.key.keysym.scancode = SDL_SCANCODE_D;
+  const auto translatedKey = registry.translateRealtimeSdlInput(key);
+
+  SDL_Event button{};
+  button.type = SDL_CONTROLLERBUTTONDOWN;
+  button.cbutton.which = 91;
+  button.cbutton.button = SDL_CONTROLLER_BUTTON_X;
+  const auto translatedButton = registry.translateRealtimeSdlInput(button);
+
+  expect(translatedKey.has_value() &&
+             translatedKey->control.deviceId == "keyboard" &&
+             translatedKey->control.index == SDL_SCANCODE_D,
+         "realtime SDL translation exposes a keyboard edge immediately");
+  expect(translatedButton.has_value() &&
+             translatedButton->control.deviceClass ==
+                 input::DeviceClass::GameController &&
+             translatedButton->control.kind == input::ControlKind::Button &&
+             translatedButton->control.index == SDL_CONTROLLER_BUTTON_X,
+         "realtime SDL translation resolves the connected controller's "
+         "stable identity without pumping the registry");
+}
+
 void testSdlRawJoystickButtonsAxesAndHatEdges() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
   provider->devices = {joystickInfo(55)};
@@ -1480,6 +1509,7 @@ int main() {
   testFailedBackendIsCleanedAndNeverDispatched();
   testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational();
   testSdlKeyboardFiltersRepeatAndUsesScancodes();
+  testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
   testSdlRawJoystickButtonsAxesAndHatEdges();
   testSdlIosAccelerometerMakesTiltAxesMoreSensitive();
   testSdlOpenFailureIsNonFatalAndCanRecoverOnHotplug();

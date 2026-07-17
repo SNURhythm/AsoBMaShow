@@ -1,4 +1,5 @@
 #include "input/LogicalGameplayInputAdapter.h"
+#include "input/RealtimePhysicalInputRouter.h"
 #include "input/InputBindingResolver.h"
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
@@ -754,6 +755,98 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
           "the lane edge is applied before the queued Escape pause fallback");
 }
 
+void testRealtimePhysicalInputPreservesNativeTimestamp() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-key-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 3},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_F}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 9000);
+
+  input::PhysicalInputEvent down{
+      .control = {.deviceId = "keyboard",
+                  .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key,
+                  .index = SDL_SCANCODE_F},
+      .rawValue = 1.0,
+      .normalizedValue = 1.0F};
+  input::PhysicalInputEvent up = down;
+  up.rawValue = 0.0;
+  up.normalizedValue = 0.0F;
+  router.consume(down, 1234567);
+  router.consume(up, 1234999);
+
+  require(output.size() == 2 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[0].lane == 3 &&
+              output[0].steadyTimestampMicros == 1234567 &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 3 &&
+              output[1].steadyTimestampMicros == 1234999,
+          "native physical edges reach realtime lanes with their source "
+          "timestamps");
+}
+
+void testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-controller-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 5},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.setGameplayEnabled(false, 300);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 0.0,
+       .normalizedValue = 0.0F},
+      400);
+
+  require(output.size() == 2 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 5 &&
+              output[1].steadyTimestampMicros == 300,
+          "disabling realtime input releases every held lane before gating "
+          "later native edges");
+}
+
 void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   const audio::PlaybackRate assistedRate{75};
   require(clear_policy::assistClearRequired(assistedRate),
@@ -814,6 +907,8 @@ int main() {
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testRealtimePhysicalInputPreservesNativeTimestamp();
+  testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

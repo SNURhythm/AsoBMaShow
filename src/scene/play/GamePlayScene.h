@@ -66,8 +66,9 @@ private:
   bool reset();
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
-  void setRealtimeTouchIngressEnabled(bool enabled);
+  void setRealtimeGameplayIngressEnabled(bool enabled);
   void drainRealtimeTouchSamples();
+  void drainRealtimeInputCommands();
   void refreshRealtimeTouchLayout();
   void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
   [[nodiscard]] bool realtimeTouchHitsUi(float normalizedX,

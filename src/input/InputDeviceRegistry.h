@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,6 +35,8 @@ public:
   void pump();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
   void resetGyroscopeTurntableSession();
+  [[nodiscard]] std::optional<input::PhysicalInputEvent>
+  translateRealtimeSdlInput(const SDL_Event &) const;
 
   // Input subscriptions never inherit events queued before their sequence
   // boundary.
@@ -68,6 +71,7 @@ private:
 
   std::shared_ptr<QueueState> queueState_;
   std::vector<std::unique_ptr<IInputBackend>> backends_;
+  class SDLInputBackend *sdlInputBackend_ = nullptr;
   std::vector<std::shared_ptr<BackendSinkGate>> backendSinkGates_;
   std::unordered_map<std::string, input::InputDeviceSnapshot> devices_;
   std::map<std::uint64_t, InputSubscription> inputListeners_;

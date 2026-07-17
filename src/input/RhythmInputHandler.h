@@ -12,6 +12,7 @@
 #include "InputDeviceRegistry.h"
 #include "LogicalGameplayInputAdapter.h"
 #include <functional>
+#include <array>
 #include <memory>
 #include <map>
 #include <optional>
@@ -31,6 +32,8 @@ private:
   std::unique_ptr<LogicalGameplayInputPipeline> logicalInputPipeline;
   std::uint64_t inputSubscriptionToken = 0;
   std::uint64_t deviceSubscriptionToken = 0;
+  std::array<bool, 6> registryDeviceClassEnabled{true, true, true,
+                                                  true, true, true};
   int totalLaneCount;
   int scratchLaneCount;
   float playAreaWidth = 8.0f;
@@ -84,6 +87,8 @@ public:
   int touchToLane(Vector3 location);
   void setPlayAreaWidth(float configuredPlayAreaWidth);
   void setDragModeEnabled(bool enabled);
+  void setRegistryDeviceClassEnabled(input::DeviceClass deviceClass,
+                                     bool enabled);
   void setTouchEventCallback(
       std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
 };

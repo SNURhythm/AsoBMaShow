@@ -295,7 +295,10 @@ bool RhythmInputHandler::startListenSDL() {
   }
   inputSubscriptionToken = inputDeviceRegistry->subscribeInput(
       [this](const input::PhysicalInputEvent &event) {
-        if (logicalInputPipeline != nullptr) {
+        const auto deviceClass = static_cast<std::size_t>(event.control.deviceClass);
+        if (logicalInputPipeline != nullptr &&
+            deviceClass < registryDeviceClassEnabled.size() &&
+            registryDeviceClassEnabled[deviceClass]) {
           logicalInputPipeline->consumeRegistryEvent(event);
         }
       });
@@ -455,6 +458,14 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
 
 void RhythmInputHandler::setDragModeEnabled(bool enabled) {
   dragModeEnabled = enabled;
+}
+
+void RhythmInputHandler::setRegistryDeviceClassEnabled(
+    input::DeviceClass deviceClass, bool enabled) {
+  const auto index = static_cast<std::size_t>(deviceClass);
+  if (index < registryDeviceClassEnabled.size()) {
+    registryDeviceClassEnabled[index] = enabled;
+  }
 }
 RhythmInputHandler::RhythmInputHandler(
     IRhythmControl *control, const bms_parser::ChartMeta &meta,

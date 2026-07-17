@@ -6,6 +6,7 @@
 #include <SDL2/SDL_joystick.h>
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -46,6 +47,8 @@ public:
   void stop() override;
   void handleSdlEvent(const SDL_Event &event) override;
   void pump() override;
+  [[nodiscard]] std::optional<input::PhysicalInputEvent>
+  translateRealtimeInput(const SDL_Event &event) const;
 
 private:
   struct DeviceRecord {
@@ -72,5 +75,6 @@ private:
   std::shared_ptr<ISdlInputDeviceProvider> provider_;
   InputDeviceIdentity identity_;
   std::unordered_map<SDL_JoystickID, DeviceRecord> devices_;
+  mutable std::mutex devicesMutex_;
   bool started_ = false;
 };
