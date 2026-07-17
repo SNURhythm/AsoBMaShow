@@ -158,6 +158,8 @@ public:
   bool commitRealtimeKeysound(RealtimeAudioCommandReservation reservation,
                               const audio::RealtimeSoundHandle &handle,
                               size_t startFrame = 0) noexcept;
+  void cancelRealtimeSoundCommand(
+      RealtimeAudioCommandReservation reservation) noexcept;
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
   [[nodiscard]] std::optional<long long>

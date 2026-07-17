@@ -36,6 +36,7 @@ struct RealtimeTouchSample {
   float normalizedX = 0.0F;
   float normalizedY = 0.0F;
   std::int64_t steadyTimestampMicros = 0;
+  bool excludedFromGameplay = false;
 };
 
 struct RealtimeTouchInputSink {
@@ -50,6 +51,8 @@ public:
 
   bool consume(const RealtimeTouchSample &sample) noexcept;
   bool cancelAll(std::int64_t steadyTimestampMicros) noexcept;
+  bool updateLayout(RealtimeTouchLayout layout,
+                    std::int64_t steadyTimestampMicros) noexcept;
   void reset() noexcept;
 
 private:
@@ -57,6 +60,7 @@ private:
     std::int64_t fingerId = 0;
     int lane = -1;
     bool active = false;
+    bool excluded = false;
     bool pressed = false;
     bool scratch = false;
     int scratchDirection = 0;

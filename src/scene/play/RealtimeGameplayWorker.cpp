@@ -83,6 +83,40 @@ void RealtimeGameplayWorker::stop() {
   started_.store(false, std::memory_order_release);
 }
 
+bool RealtimeGameplayWorker::suspend() {
+  if (!running()) {
+    return false;
+  }
+  if (suspendRequested_.exchange(true, std::memory_order_acq_rel)) {
+    return suspended_.load(std::memory_order_acquire);
+  }
+  signal();
+  using namespace std::chrono_literals;
+  while (running()) {
+    if (suspendAcknowledged_.try_acquire_for(10ms)) {
+      return suspended_.load(std::memory_order_acquire);
+    }
+  }
+  return false;
+}
+
+bool RealtimeGameplayWorker::resume() {
+  if (!started_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (!suspendRequested_.exchange(false, std::memory_order_acq_rel)) {
+    return true;
+  }
+  signal();
+  using namespace std::chrono_literals;
+  while (running()) {
+    if (resumeAcknowledged_.try_acquire_for(10ms)) {
+      return !suspended_.load(std::memory_order_acquire);
+    }
+  }
+  return false;
+}
+
 bool RealtimeGameplayWorker::enqueueInput(
     const RealtimeGameplayInput &input) noexcept {
   if (input.epoch != config_.epoch ||
@@ -128,6 +162,14 @@ RealtimeGameplayWorker::copyReplayEventsAfterStop() const {
   return {events.begin(), events.end()};
 }
 
+std::vector<float>
+RealtimeGameplayWorker::copyGaugeHistoryAfterStop() const {
+  if (running()) {
+    return {};
+  }
+  return simulation_.scoreState().gaugeHistory;
+}
+
 void RealtimeGameplayWorker::run() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -145,6 +187,23 @@ void RealtimeGameplayWorker::run() {
       if (fault() != RealtimeGameplayFault::None) {
         break;
       }
+    }
+    if (suspendRequested_.load(std::memory_order_acquire)) {
+      if (changed || fault() != RealtimeGameplayFault::None) {
+        publishSnapshot();
+      }
+      if (!suspended_.exchange(true, std::memory_order_acq_rel)) {
+        suspendAcknowledged_.release();
+      }
+      while (suspendRequested_.load(std::memory_order_acquire) &&
+             !stopRequested_.load(std::memory_order_acquire)) {
+        (void)wake_.try_acquire_for(1ms);
+        wakePending_.store(false, std::memory_order_release);
+      }
+      if (suspended_.exchange(false, std::memory_order_acq_rel)) {
+        resumeAcknowledged_.release();
+      }
+      continue;
     }
     if (fault() == RealtimeGameplayFault::None) {
       changed = advanceAutomatic() || changed;
@@ -184,6 +243,10 @@ void RealtimeGameplayWorker::processInput(
       config_.clock.context, input.steadyTimestampMicros);
   if (!songTime.has_value()) {
     latchFault(RealtimeGameplayFault::ClockUnavailable);
+    return;
+  }
+  if (config_.activationSongTimeMicros.has_value() &&
+      *songTime < *config_.activationSongTimeMicros) {
     return;
   }
 
@@ -226,11 +289,20 @@ void RealtimeGameplayWorker::processInput(
     return;
   }
   if (latestTransaction_.soundNoteId != preview) {
+    if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
+      config_.audio.cancel(config_.audio.context, reservation, preview);
+    }
     latchFault(RealtimeGameplayFault::InternalConsistency);
     return;
   }
-  if (config_.audio.commit == nullptr ||
-      !config_.audio.commit(config_.audio.context, reservation, preview)) {
+  if (config_.audio.commit == nullptr) {
+    if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
+      config_.audio.cancel(config_.audio.context, reservation, preview);
+    }
+    latchFault(RealtimeGameplayFault::AudioCommitFailed);
+    return;
+  }
+  if (!config_.audio.commit(config_.audio.context, reservation, preview)) {
     latchFault(RealtimeGameplayFault::AudioCommitFailed);
   }
 }
@@ -244,6 +316,10 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
   if (!songTime.has_value()) {
     latchFault(RealtimeGameplayFault::ClockUnavailable);
     return true;
+  }
+  if (config_.activationSongTimeMicros.has_value() &&
+      *songTime < *config_.activationSongTimeMicros) {
+    return false;
   }
   const auto before = simulation_.snapshot();
   const std::size_t replayCountBefore = simulation_.replayEvents().size();

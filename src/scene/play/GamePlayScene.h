@@ -67,6 +67,11 @@ private:
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
   void setRealtimeTouchIngressEnabled(bool enabled);
+  void drainRealtimeTouchSamples();
+  void refreshRealtimeTouchLayout();
+  void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
+  [[nodiscard]] bool realtimeTouchHitsUi(float normalizedX,
+                                         float normalizedY) const;
   void syncRealtimeGameplaySnapshot();
   [[nodiscard]] bool realtimeGameplayAuthorityActive() const noexcept;
   void showPlaybackInitializationFailure(const std::string &message);
@@ -166,6 +171,10 @@ private:
                                   bool resetVisibleTimeReference);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
+  bool handleTouchInputAtGameplayTime(SDL_FingerID fingerIndex,
+                                      ReplayTouchAction action,
+                                      Vector3 normalizedLocation,
+                                      long long gameplayTimeMicros);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
                                     Vector3 normalizedLocation,

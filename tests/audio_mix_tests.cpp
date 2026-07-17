@@ -810,6 +810,43 @@ void testRealtimeCommandReservationFailsClosedAtCapacity() {
           "callback drain releases realtime command capacity");
 }
 
+void testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit() {
+  SoundData existing;
+  existing.channels = 1;
+  existing.outputData = {1, 1};
+  existing.outputFrameCount = 2;
+  SoundData incoming;
+  incoming.channels = 1;
+  incoming.outputData = {2, 2};
+  incoming.outputFrameCount = 2;
+
+  AudioCallbackState state;
+  for (std::size_t index = 0; index < kMaxActiveSounds; ++index) {
+    require(audio::playback::AppendActiveSound(
+                state, &existing, audio::Bus::Keysound, 0),
+            "voice-limit fixture fills every active slot");
+  }
+  const auto reservation =
+      audio::playback::TryReserveRealtimeCommand(state);
+  require(reservation.has_value() &&
+              audio::playback::CommitRealtimeCommand(
+                  state, *reservation,
+                  {.type = AudioCommandType::PlayNow,
+                   .soundData = &incoming,
+                   .bus = audio::Bus::Keysound}),
+          "incoming realtime voice commits at the command boundary");
+  audio::playback::DrainRealtimeCommands(state);
+
+  require(state.playingSoundCount == kMaxActiveSounds &&
+              std::ranges::any_of(
+                  std::span(state.playingSounds.get(), state.playingSoundCount),
+                  [&](const PlayingSound &voice) {
+                    return voice.soundData == &incoming;
+                  }),
+          "realtime admission deterministically preempts instead of silently "
+          "dropping the sound");
+}
+
 void testJukeboxSourceClassificationAndSeekOverlap() {
   const auto chartNote =
       makeScheduledAudioEvent(1000, 10, JukeboxAudioSource::ChartNote);
@@ -992,6 +1029,7 @@ int main() {
     testBusFlowAndMixing();
     testRealtimeCommandReservationPublishesAtomically();
     testRealtimeCommandReservationFailsClosedAtCapacity();
+    testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();
     testJukeboxSourceClassificationAndSeekOverlap();
     testSchedulerWaitConvertsChartDeltaToWallTime();
 

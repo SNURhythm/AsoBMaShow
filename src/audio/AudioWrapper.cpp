@@ -985,27 +985,43 @@ AudioWrapper::resolveRealtimeSound(const path_t &path) const {
 
 std::optional<RealtimeAudioCommandReservation>
 AudioWrapper::tryReserveRealtimeSoundCommand() const noexcept {
-  if (backendState.load(std::memory_order_acquire) !=
-      audio::playback::BackendRunState::Running) {
+  if (!deviceLifecycleMutex.try_lock()) {
     return std::nullopt;
   }
-  return audio::playback::TryReserveRealtimeCommand(callbackState);
+  if (backendState.load(std::memory_order_acquire) !=
+      audio::playback::BackendRunState::Running) {
+    deviceLifecycleMutex.unlock();
+    return std::nullopt;
+  }
+  auto reservation =
+      audio::playback::TryReserveRealtimeCommand(callbackState);
+  if (!reservation.has_value()) {
+    deviceLifecycleMutex.unlock();
+  }
+  return reservation;
 }
 
 bool AudioWrapper::commitRealtimeKeysound(
     RealtimeAudioCommandReservation reservation,
     const audio::RealtimeSoundHandle &handle, size_t startFrame) noexcept {
-  if (backendState.load(std::memory_order_acquire) !=
-          audio::playback::BackendRunState::Running ||
-      !handle.valid()) {
-    return false;
-  }
-  return audio::playback::CommitRealtimeCommand(
-      callbackState, reservation,
-      {.type = AudioCommandType::PlayNow,
-       .soundData = handle.soundData_.get(),
-       .bus = audio::Bus::Keysound,
-       .startFrame = startFrame});
+  const bool committed =
+      backendState.load(std::memory_order_acquire) ==
+          audio::playback::BackendRunState::Running &&
+      handle.valid() &&
+      audio::playback::CommitRealtimeCommand(
+          callbackState, reservation,
+          {.type = AudioCommandType::PlayNow,
+           .soundData = handle.soundData_.get(),
+           .bus = audio::Bus::Keysound,
+           .startFrame = startFrame});
+  deviceLifecycleMutex.unlock();
+  return committed;
+}
+
+void AudioWrapper::cancelRealtimeSoundCommand(
+    RealtimeAudioCommandReservation reservation) noexcept {
+  (void)reservation;
+  deviceLifecycleMutex.unlock();
 }
 
 bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,

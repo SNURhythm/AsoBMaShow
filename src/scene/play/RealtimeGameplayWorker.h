@@ -31,6 +31,7 @@ struct RealtimeGameplayInput {
 
 struct RealtimeGameplayAudioReservation {
   std::uintptr_t value = 0;
+  bool requiresCommit = false;
 };
 
 struct RealtimeGameplayClock {
@@ -45,6 +46,7 @@ struct RealtimeGameplayAudioSink {
   bool (*reserve)(void *, NoteId, RealtimeGameplayAudioReservation &) =
       nullptr;
   bool (*commit)(void *, RealtimeGameplayAudioReservation, NoteId) = nullptr;
+  void (*cancel)(void *, RealtimeGameplayAudioReservation, NoteId) = nullptr;
 };
 
 enum class RealtimeGameplayFault : std::uint8_t {
@@ -62,6 +64,7 @@ struct RealtimeGameplayWorkerConfig {
   RealtimeGameplayClock clock;
   RealtimeGameplayAudioSink audio;
   bool inputTriggeredKeysounds = true;
+  std::optional<std::int64_t> activationSongTimeMicros;
 };
 
 struct RealtimeGameplaySnapshot {
@@ -181,12 +184,15 @@ public:
 
   bool start();
   void stop();
+  bool suspend();
+  bool resume();
   bool enqueueInput(const RealtimeGameplayInput &input) noexcept;
   [[nodiscard]] SnapshotLease acquireLatestSnapshot() const noexcept;
   [[nodiscard]] RealtimeGameplayFault fault() const noexcept;
   [[nodiscard]] bool running() const noexcept;
   [[nodiscard]] std::vector<GameplayReplayEvent>
   copyReplayEventsAfterStop() const;
+  [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
 
 private:
   struct SnapshotBuffer {
@@ -213,9 +219,13 @@ private:
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
   std::binary_semaphore wake_{0};
+  std::binary_semaphore suspendAcknowledged_{0};
+  std::binary_semaphore resumeAcknowledged_{0};
   std::atomic_bool wakePending_{false};
   std::atomic_bool started_{false};
   std::atomic_bool stopRequested_{false};
+  std::atomic_bool suspendRequested_{false};
+  std::atomic_bool suspended_{false};
   std::atomic<RealtimeGameplayFault> fault_{RealtimeGameplayFault::None};
   std::thread thread_;
 };

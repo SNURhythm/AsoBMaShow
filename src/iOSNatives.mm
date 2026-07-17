@@ -3948,28 +3948,35 @@ bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
   }
 }
 
-void RunIOSApplicationWorker(IOSApplicationCallback callback, void *context) {
-  if (callback == nullptr) {
-    return;
-  }
-  dispatch_async(
-      dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
-        @autoreleasepool {
-          callback(context);
-        }
-      });
-}
-
-void DispatchIOSApplicationMain(IOSApplicationCallback callback,
-                                void *context) {
-  if (callback == nullptr) {
-    return;
-  }
-  dispatch_async(dispatch_get_main_queue(), ^{
-    @autoreleasepool {
-      callback(context);
+void WaitIOSMainRunLoopForMicros(long long waitMicros) {
+  @autoreleasepool {
+    if (waitMicros <= 0) {
+      return;
     }
-  });
+    if (![NSThread isMainThread]) {
+      [NSThread sleepForTimeInterval:
+                    static_cast<NSTimeInterval>(waitMicros) / 1000000.0];
+      return;
+    }
+
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + std::chrono::microseconds(waitMicros);
+    const auto serviceMode = [deadline](CFStringRef mode) {
+      constexpr auto kRunLoopSlice = std::chrono::milliseconds(1);
+      const auto remaining = deadline - Clock::now();
+      if (remaining <= Clock::duration::zero()) {
+        return;
+      }
+      const auto slice = std::min(remaining, Clock::duration(kRunLoopSlice));
+      CFRunLoopRunInMode(
+          mode, std::chrono::duration<double>(slice).count(), true);
+    };
+
+    while (Clock::now() < deadline) {
+      serviceMode(kCFRunLoopDefaultMode);
+      serviceMode((__bridge CFStringRef)UITrackingRunLoopMode);
+    }
+  }
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

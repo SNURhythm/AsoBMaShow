@@ -199,11 +199,97 @@ void testIngressOverflowFailsClosed() {
           "silently");
 }
 
+void testSuspendFreezesAutomaticDeadlinesUntilResume() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "suspend fixture starts");
+  require(worker.suspend(), "worker acknowledges suspension");
+
+  clock.nowMicros.store(2'000'000, std::memory_order_release);
+  std::this_thread::sleep_for(10ms);
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot && !snapshot->noteStates[0].dead &&
+                !snapshot->noteStates[1].dead &&
+                snapshot->attempt.judgeCounts[Poor] == 0,
+            "paused wall time cannot advance misses or note state");
+  }
+
+  worker.resume();
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->attempt.judgeCounts[Poor] == 2;
+          }),
+          "automatic deadlines continue after resume");
+  worker.stop();
+}
+
+void testActivationGateRejectsPreparationInputAndDeadlines() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.activationSongTimeMicros = 1'000'000;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "activation-gate fixture starts");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 900'000}),
+          "preparation press reaches the serial authority");
+  clock.nowMicros.store(999'999, std::memory_order_release);
+  std::this_thread::sleep_for(10ms);
+  {
+    auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot && !snapshot->noteStates[0].played &&
+                !snapshot->noteStates[0].dead &&
+                audio.commitCount.load(std::memory_order_acquire) == 0,
+            "preparation input causes no note, judgement, or keysound");
+  }
+
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 1'000'000}),
+          "first active press reaches the serial authority");
+  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+          "input becomes live exactly at the activation boundary");
+  worker.stop();
+}
+
+void testStoppedWorkerTransfersCompleteGaugeHistory() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "gauge-history fixture starts");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 1'000'000}),
+          "gauge-history press reaches the worker");
+  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+          "gauge-history transaction commits");
+  worker.stop();
+
+  const auto history = worker.copyGaugeHistoryAfterStop();
+  require(history.size() == 1,
+          "stopped authority exposes every committed gauge sample");
+}
+
 } // namespace
 
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
   testAudioCapacityFailureDoesNotClaimTheNote();
   testIngressOverflowFailsClosed();
+  testSuspendFreezesAutomaticDeadlinesUntilResume();
+  testActivationGateRejectsPreparationInputAndDeadlines();
+  testStoppedWorkerTransfersCompleteGaugeHistory();
   return 0;
 }

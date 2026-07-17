@@ -101,19 +101,19 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
 
   require(router.consume({.fingerId = 3,
                           .phase = gameplay::RealtimeTouchPhase::Down,
-                          .normalizedX = 0.82F,
+                          .normalizedX = 0.75F,
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 10}),
           "scratch touch begins without a key edge");
   require(router.consume({.fingerId = 3,
                           .phase = gameplay::RealtimeTouchPhase::Move,
-                          .normalizedX = 0.82F,
+                          .normalizedX = 0.75F,
                           .normalizedY = 0.48F,
                           .steadyTimestampMicros = 20}),
           "first scratch direction emits a press");
   require(router.consume({.fingerId = 3,
                           .phase = gameplay::RealtimeTouchPhase::Move,
-                          .normalizedX = 0.82F,
+                          .normalizedX = 0.75F,
                           .normalizedY = 0.51F,
                           .steadyTimestampMicros = 30}),
           "direction reversal emits backspin release and press");
@@ -128,11 +128,78 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
           "scratch reversal remains ordered on the realtime ingress");
 }
 
+void testNormalModeRejectsTouchesOutsideProjectedPlayfield() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      5, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 20,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.0F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 50}),
+          "off-playfield touch is safely ignored");
+  require(capture.events.empty(),
+          "normal mode cannot clamp UI touches into the nearest lane");
+}
+
+void testUiExcludedFingerNeverEmitsGameplayEdges() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      6, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+
+  require(router.consume({.fingerId = 21,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 60,
+                          .excludedFromGameplay = true}) &&
+              router.consume({.fingerId = 21,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.5F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 70,
+                              .excludedFromGameplay = true}) &&
+              router.consume({.fingerId = 21,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = 0.5F,
+                              .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 80,
+                              .excludedFromGameplay = true}),
+          "UI-owned touch lifecycle is accepted without gameplay mutation");
+  require(capture.events.empty(),
+          "pause and lane-cover fingers never reach gameplay authority");
+}
+
+void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      8, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
+  require(router.consume({.fingerId = 22,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 90}),
+          "layout fixture presses the old lane");
+  auto replacement = makeLayout();
+  replacement.lanes[0] = 10;
+  require(router.updateLayout(replacement, 100),
+          "resized layout replaces routing atomically");
+  require(capture.events.size() == 2 &&
+              capture.events[1].type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events[1].lane == 0,
+          "layout replacement releases the old projected lane first");
+}
+
 } // namespace
 
 int main() {
   testDirectTouchEmitsTimestampedLaneEdges();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
+  testNormalModeRejectsTouchesOutsideProjectedPlayfield();
+  testUiExcludedFingerNeverEmitsGameplayEdges();
+  testLayoutReplacementCancelsOldLaneBeforeNewMapping();
   return 0;
 }

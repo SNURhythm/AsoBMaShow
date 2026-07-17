@@ -1670,6 +1670,30 @@ void testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork() {
           "the next audio callback renders the committed realtime keysound");
 }
 
+void testRealtimeReservationExcludesLifecycleResetUntilCommit() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<GatedBackend>(control));
+  const path_t sound = PATH("realtime-lifecycle-gate");
+  require(wrapper.loadGeneratedSound(sound, {100, 200, 300, 400}, 1, 44100),
+          "lifecycle-gate fixture retains PCM");
+  const auto handle = wrapper.resolveRealtimeSound(sound);
+  const auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  require(handle.has_value() && reservation.has_value(),
+          "lifecycle-gate fixture reserves a realtime transaction");
+
+  auto stopFuture = std::async(std::launch::async,
+                               [&wrapper] { return wrapper.stopSounds(); });
+  require(stopFuture.wait_for(20ms) == std::future_status::timeout,
+          "backend lifecycle reset waits for the reserved transaction");
+  require(wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "reserved keysound commit remains valid while lifecycle waits");
+  require(stopFuture.wait_for(2s) == std::future_status::ready &&
+              stopFuture.get().success,
+          "lifecycle reset continues after the transaction commits");
+}
+
 } // namespace
 
 int main() {
@@ -1701,6 +1725,7 @@ int main() {
     testConfigurableWrapperRecoversFromAuthoritativeExternalStop();
     testSoundSubmissionsRecoverFromAuthoritativeExternalStop();
     testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork();
+    testRealtimeReservationExcludesLifecycleResetUntilCommit();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

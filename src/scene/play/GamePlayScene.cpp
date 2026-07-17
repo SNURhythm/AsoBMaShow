@@ -440,6 +440,40 @@ buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
   return result;
 }
 
+std::optional<gameplay::RealtimeTouchLayout> buildRealtimeTouchLayout(
+    const bms_parser::Chart &chart, BMSRenderer &renderer, bool dragMode) {
+  const auto touchBounds = renderer.gameplayTouchBoundsUi();
+  const auto lanes = chart.Meta.GetTotalLaneIndices();
+  if (!touchBounds.has_value() || lanes.empty() ||
+      lanes.size() > gameplay::kRealtimeTouchLaneCapacity ||
+      rendering::render_width <= 0 || rendering::render_height <= 0) {
+    return std::nullopt;
+  }
+
+  gameplay::RealtimeTouchLayout layout;
+  const auto normalizedScreenPoint = [](const auto &point) {
+    return gameplay::RealtimeTouchPoint{
+        .x = (point.first * rendering::ui_scale_x +
+              static_cast<float>(rendering::ui_offset_x)) /
+             static_cast<float>(rendering::render_width),
+        .y = (point.second * rendering::ui_scale_y +
+              static_cast<float>(rendering::ui_offset_y)) /
+             static_cast<float>(rendering::render_height),
+    };
+  };
+  layout.bottomLeft = normalizedScreenPoint((*touchBounds)[0]);
+  layout.bottomRight = normalizedScreenPoint((*touchBounds)[1]);
+  layout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
+  layout.topRight = normalizedScreenPoint((*touchBounds)[3]);
+  layout.laneCount = lanes.size();
+  layout.dragMode = dragMode;
+  for (std::size_t index = 0; index < lanes.size(); ++index) {
+    layout.lanes[index] = lanes[index];
+    layout.scratch[index] = chartLaneIsScratch(chart.Meta, lanes[index]);
+  }
+  return layout;
+}
+
 ReplayEventAction replayActionFromRealtime(
     gameplay::GameplayReplayAction action) {
   switch (action) {
@@ -459,6 +493,9 @@ ReplayEventAction replayActionFromRealtime(
 } // namespace
 
 struct GamePlayScene::RealtimeGameplaySession {
+  static constexpr std::size_t kAuxiliaryTouchCapacity = 4096;
+
+  GamePlayScene *scene = nullptr;
   AudioWrapper *audio = nullptr;
   long long audioOffsetMicros = 0;
   std::uint64_t epoch = 0;
@@ -467,8 +504,57 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::vector<bms_parser::Note *> notes;
   std::unique_ptr<gameplay::RealtimeGameplayWorker> worker;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> touchRouter;
+  gameplay::BoundedMpscQueue<gameplay::RealtimeTouchSample,
+                             kAuxiliaryTouchCapacity>
+      auxiliaryTouches;
+  std::atomic_bool auxiliaryTouchOverflow{false};
+  std::array<std::int64_t, gameplay::kRealtimeTouchFingerCapacity>
+      uiOwnedFingers{};
+  std::array<bool, gameplay::kRealtimeTouchFingerCapacity>
+      uiOwnedFingerActive{};
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedTransactionSequence = 0;
+  std::size_t visualMeasureIndex = 0;
+  std::size_t visualTimelineIndex = 0;
+  int layoutRenderWidth = 0;
+  int layoutRenderHeight = 0;
+  float layoutUiScaleX = 0.0F;
+  float layoutUiScaleY = 0.0F;
+  int layoutUiOffsetX = 0;
+  int layoutUiOffsetY = 0;
+
+  bool uiOwnsFinger(const gameplay::RealtimeTouchSample &sample) {
+    const auto find = [&]() -> std::optional<std::size_t> {
+      for (std::size_t index = 0; index < uiOwnedFingers.size(); ++index) {
+        if (uiOwnedFingerActive[index] &&
+            uiOwnedFingers[index] == sample.fingerId) {
+          return index;
+        }
+      }
+      return std::nullopt;
+    };
+    auto ownedIndex = find();
+    if (sample.phase == gameplay::RealtimeTouchPhase::Down &&
+        !ownedIndex.has_value() && scene != nullptr &&
+        scene->realtimeTouchHitsUi(sample.normalizedX, sample.normalizedY)) {
+      for (std::size_t index = 0; index < uiOwnedFingers.size(); ++index) {
+        if (!uiOwnedFingerActive[index]) {
+          uiOwnedFingerActive[index] = true;
+          uiOwnedFingers[index] = sample.fingerId;
+          ownedIndex = index;
+          break;
+        }
+      }
+    }
+    const bool owned = ownedIndex.has_value();
+    if (owned && (sample.phase == gameplay::RealtimeTouchPhase::Up ||
+                  sample.phase == gameplay::RealtimeTouchPhase::Cancel)) {
+      uiOwnedFingerActive[*ownedIndex] = false;
+    }
+    return owned;
+  }
+
+  void clearUiOwnedFingers() noexcept { uiOwnedFingerActive.fill(false); }
 
   static std::optional<std::int64_t>
   mapSteadyToSong(void *context, std::int64_t steadyMicros) {
@@ -497,6 +583,7 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     if (!session.soundHandles[noteId].has_value()) {
       reservation.value = 0;
+      reservation.requiresCommit = false;
       return true;
     }
     const auto reserved = session.audio->tryReserveRealtimeSoundCommand();
@@ -504,6 +591,7 @@ struct GamePlayScene::RealtimeGameplaySession {
       return false;
     }
     reservation.value = reserved->cursor;
+    reservation.requiresCommit = true;
     return true;
   }
 
@@ -520,6 +608,18 @@ struct GamePlayScene::RealtimeGameplaySession {
     }
     return session.audio->commitRealtimeKeysound(
         {.cursor = static_cast<std::uint32_t>(reservation.value)}, *handle);
+  }
+
+  static void cancelAudio(
+      void *context, gameplay::RealtimeGameplayAudioReservation reservation,
+      gameplay::NoteId noteId) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (!reservation.requiresCommit || noteId >= session.soundHandles.size() ||
+        !session.soundHandles[noteId].has_value()) {
+      return;
+    }
+    session.audio->cancelRealtimeSoundCommand(
+        {.cursor = static_cast<std::uint32_t>(reservation.value)});
   }
 
   static bool emitTouchInput(
@@ -557,13 +657,19 @@ struct GamePlayScene::RealtimeGameplaySession {
     default:
       return;
     }
-    (void)session.touchRouter->consume(
-        {.fingerId = event->fingerId,
-         .phase = phase,
-         .normalizedX = event->normalizedX,
-         .normalizedY = event->normalizedY,
-         .steadyTimestampMicros =
-             static_cast<std::int64_t>(event->timestampMicros)});
+    gameplay::RealtimeTouchSample sample{
+        .fingerId = event->fingerId,
+        .phase = phase,
+        .normalizedX = event->normalizedX,
+        .normalizedY = event->normalizedY,
+        .steadyTimestampMicros =
+            static_cast<std::int64_t>(event->timestampMicros),
+    };
+    sample.excludedFromGameplay = session.uiOwnsFinger(sample);
+    if (!session.auxiliaryTouches.tryPush(sample)) {
+      session.auxiliaryTouchOverflow.store(true, std::memory_order_release);
+    }
+    (void)session.touchRouter->consume(sample);
   }
 #endif
 };
@@ -585,40 +691,17 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   }
 
   renderer->refreshGeometry();
-  const auto touchBounds = renderer->gameplayTouchBoundsUi();
-  const auto lanes = chart->Meta.GetTotalLaneIndices();
-  if (!touchBounds.has_value() || lanes.empty() ||
-      lanes.size() > gameplay::kRealtimeTouchLaneCapacity ||
-      rendering::render_width <= 0 || rendering::render_height <= 0) {
+  const auto touchLayout = buildRealtimeTouchLayout(
+      *chart, *renderer, assist_options::isDragMode(options.assistOption));
+  if (!touchLayout.has_value()) {
     SDL_Log("Realtime iOS gameplay input unavailable: invalid touch layout");
     return false;
-  }
-
-  gameplay::RealtimeTouchLayout touchLayout;
-  const auto normalizedScreenPoint = [](const auto &point) {
-    return gameplay::RealtimeTouchPoint{
-        .x = (point.first * rendering::ui_scale_x +
-              static_cast<float>(rendering::ui_offset_x)) /
-             static_cast<float>(rendering::render_width),
-        .y = (point.second * rendering::ui_scale_y +
-              static_cast<float>(rendering::ui_offset_y)) /
-             static_cast<float>(rendering::render_height),
-    };
-  };
-  touchLayout.bottomLeft = normalizedScreenPoint((*touchBounds)[0]);
-  touchLayout.bottomRight = normalizedScreenPoint((*touchBounds)[1]);
-  touchLayout.topLeft = normalizedScreenPoint((*touchBounds)[2]);
-  touchLayout.topRight = normalizedScreenPoint((*touchBounds)[3]);
-  touchLayout.laneCount = lanes.size();
-  touchLayout.dragMode = assist_options::isDragMode(options.assistOption);
-  for (std::size_t index = 0; index < lanes.size(); ++index) {
-    touchLayout.lanes[index] = lanes[index];
-    touchLayout.scratch[index] = chartLaneIsScratch(chart->Meta, lanes[index]);
   }
 
   auto definition =
       gameplay::buildGameplayDefinition(*chart, options.longNoteMode);
   auto session = std::make_unique<RealtimeGameplaySession>();
+  session->scene = this;
   session->audio = &context.jukebox.audioRuntime();
   session->audioOffsetMicros = getAudioOffsetMicros();
   session->epoch = ++realtimeGameplayEpoch;
@@ -673,17 +756,31 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
                 .currentSongTime = &RealtimeGameplaySession::currentSongTime},
       .audio = {.context = session.get(),
                 .reserve = &RealtimeGameplaySession::reserveAudio,
-                .commit = &RealtimeGameplaySession::commitAudio},
+                .commit = &RealtimeGameplaySession::commitAudio,
+                .cancel = &RealtimeGameplaySession::cancelAudio},
       .inputTriggeredKeysounds = !options.autoKeySound,
+      .activationSongTimeMicros =
+          preparationPlan.laneIndicator.enabled()
+              ? std::optional<std::int64_t>(getGameplayTimeMicros(
+                    preparationPlan.laneIndicator.endTimeMicros))
+              : std::nullopt,
   };
   session->worker = std::make_unique<gameplay::RealtimeGameplayWorker>(
       std::move(definition), std::move(workerConfig));
   session->touchRouter =
       std::make_unique<gameplay::RealtimeTouchInputRouter>(
-          session->epoch, touchLayout,
+          session->epoch, *touchLayout,
           gameplay::RealtimeTouchInputSink{
               .context = session.get(),
               .emit = &RealtimeGameplaySession::emitTouchInput});
+  session->visualMeasureIndex = state->passedMeasureCount;
+  session->visualTimelineIndex = state->passedTimelineCount;
+  session->layoutRenderWidth = rendering::render_width;
+  session->layoutRenderHeight = rendering::render_height;
+  session->layoutUiScaleX = rendering::ui_scale_x;
+  session->layoutUiScaleY = rendering::ui_scale_y;
+  session->layoutUiOffsetX = rendering::ui_offset_x;
+  session->layoutUiOffsetY = rendering::ui_offset_y;
   if (!session->worker->start()) {
     SDL_Log("Realtime iOS gameplay worker failed to start");
     return false;
@@ -712,6 +809,7 @@ void GamePlayScene::setRealtimeTouchIngressEnabled(bool enabled) {
   }
   session.acceptingTouch.store(false, std::memory_order_release);
   IOSSetRawTouchEventSink(nullptr, nullptr);
+  session.clearUiOwnedFingers();
   if (session.touchRouter != nullptr) {
     (void)session.touchRouter->cancelAll(nowMicros());
   }
@@ -720,12 +818,132 @@ void GamePlayScene::setRealtimeTouchIngressEnabled(bool enabled) {
 #endif
 }
 
+bool GamePlayScene::realtimeTouchHitsUi(float normalizedX,
+                                        float normalizedY) const {
+  float uiX = 0.0F;
+  float uiY = 0.0F;
+  rendering::normalizedToUi(normalizedX, normalizedY, uiX, uiY);
+  if (pauseButton != nullptr && pauseButton->getVisible() &&
+      isInsideButton(*pauseButton, uiX, uiY)) {
+    return true;
+  }
+  if (renderer == nullptr || courseNoSpeed() ||
+      !context.settings.floatingLaneCoverEnabled) {
+    return false;
+  }
+  return renderer
+      ->laneCoverHandleGrabOffset(
+          normalizedX * static_cast<float>(rendering::render_width),
+          normalizedY * static_cast<float>(rendering::render_height))
+      .has_value();
+}
+
+void GamePlayScene::drainRealtimeTouchSamples() {
+  if (!realtimeGameplayAuthorityActive()) {
+    return;
+  }
+  auto &session = *realtimeGameplaySession;
+  gameplay::RealtimeTouchSample sample;
+  while (session.auxiliaryTouches.tryPop(sample)) {
+    const auto gameplayTime = RealtimeGameplaySession::mapSteadyToSong(
+        &session, sample.steadyTimestampMicros);
+    if (!gameplayTime.has_value()) {
+      continue;
+    }
+    ReplayTouchAction action = ReplayTouchAction::Move;
+    switch (sample.phase) {
+    case gameplay::RealtimeTouchPhase::Down:
+      action = ReplayTouchAction::Down;
+      break;
+    case gameplay::RealtimeTouchPhase::Move:
+      action = ReplayTouchAction::Move;
+      break;
+    case gameplay::RealtimeTouchPhase::Up:
+      action = ReplayTouchAction::Up;
+      break;
+    case gameplay::RealtimeTouchPhase::Cancel:
+      action = ReplayTouchAction::Cancel;
+      break;
+    }
+    (void)handleTouchInputAtGameplayTime(
+        static_cast<SDL_FingerID>(sample.fingerId), action,
+        Vector3(sample.normalizedX, sample.normalizedY, 0.0F), *gameplayTime);
+  }
+  if (session.auxiliaryTouchOverflow.exchange(false,
+                                               std::memory_order_acq_rel)) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                "Realtime touch metadata queue overflowed");
+  }
+}
+
+void GamePlayScene::refreshRealtimeTouchLayout() {
+  if (!realtimeGameplayAuthorityActive() || chart == nullptr ||
+      renderer == nullptr || realtimeGameplaySession->worker == nullptr ||
+      !realtimeGameplaySession->worker->running()) {
+    return;
+  }
+  auto &session = *realtimeGameplaySession;
+  const bool changed =
+      session.layoutRenderWidth != rendering::render_width ||
+      session.layoutRenderHeight != rendering::render_height ||
+      session.layoutUiScaleX != rendering::ui_scale_x ||
+      session.layoutUiScaleY != rendering::ui_scale_y ||
+      session.layoutUiOffsetX != rendering::ui_offset_x ||
+      session.layoutUiOffsetY != rendering::ui_offset_y;
+  if (!changed) {
+    return;
+  }
+  renderer->refreshGeometry();
+  const auto layout = buildRealtimeTouchLayout(
+      *chart, *renderer, assist_options::isDragMode(options.assistOption));
+  if (!layout.has_value() ||
+      !session.touchRouter->updateLayout(*layout, nowMicros())) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                 "Realtime touch layout refresh failed");
+    return;
+  }
+  session.clearUiOwnedFingers();
+  session.layoutRenderWidth = rendering::render_width;
+  session.layoutRenderHeight = rendering::render_height;
+  session.layoutUiScaleX = rendering::ui_scale_x;
+  session.layoutUiScaleY = rendering::ui_scale_y;
+  session.layoutUiOffsetX = rendering::ui_offset_x;
+  session.layoutUiOffsetY = rendering::ui_offset_y;
+}
+
+void GamePlayScene::updateRealtimeVisualTimeline(long long gameplayTimeMicros) {
+  if (!realtimeGameplayAuthorityActive() || chart == nullptr) {
+    return;
+  }
+  auto &session = *realtimeGameplaySession;
+  while (session.visualMeasureIndex < chart->Measures.size()) {
+    const auto *measure = chart->Measures[session.visualMeasureIndex];
+    if (measure == nullptr ||
+        session.visualTimelineIndex >= measure->TimeLines.size()) {
+      ++session.visualMeasureIndex;
+      session.visualTimelineIndex = 0;
+      continue;
+    }
+    const auto *timeline = measure->TimeLines[session.visualTimelineIndex];
+    if (timeline == nullptr) {
+      ++session.visualTimelineIndex;
+      continue;
+    }
+    if (timeline->Timing > gameplayTimeMicros) {
+      return;
+    }
+    applyTimelineBpm(timeline);
+    ++session.visualTimelineIndex;
+  }
+}
+
 void GamePlayScene::syncRealtimeGameplaySnapshot() {
   if (!realtimeGameplayAuthorityActive() || state == nullptr ||
       renderer == nullptr) {
     return;
   }
   auto &session = *realtimeGameplaySession;
+  refreshRealtimeTouchLayout();
   auto snapshot = session.worker->acquireLatestSnapshot();
   if (!snapshot ||
       snapshot->generation == session.appliedSnapshotGeneration) {
@@ -751,7 +969,9 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     }
   }
 
+  auto gaugeHistory = std::move(state->gaugeHistory);
   state->restoreGaugeState(snapshot->gaugeState);
+  state->gaugeHistory = std::move(gaugeHistory);
   state->combo = snapshot->attempt.combo;
   state->maxCombo = snapshot->attempt.maxCombo;
   state->comboBreak = snapshot->attempt.comboBreak;
@@ -808,8 +1028,12 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   }
   setRealtimeTouchIngressEnabled(false);
   auto &session = *realtimeGameplaySession;
+  drainRealtimeTouchSamples();
   session.worker->stop();
   syncRealtimeGameplaySnapshot();
+  if (state != nullptr) {
+    state->gaugeHistory = session.worker->copyGaugeHistoryAfterStop();
+  }
 
   if (transferReplay) {
     const auto capturePolicy = resultCapturePolicy();
@@ -1415,6 +1639,11 @@ void GamePlayScene::showPlaybackInitializationFailure(
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
   setRealtimeTouchIngressEnabled(false);
+  if (realtimeGameplayAuthorityActive() &&
+      !realtimeGameplaySession->worker->suspend()) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                 "Realtime gameplay worker failed to suspend");
+  }
   if (pausePlayback) {
     context.jukebox.pause();
   }
@@ -1436,6 +1665,12 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
 void GamePlayScene::closePauseMenu() {
   if (!isCoursePlayback() && context.jukebox.isPaused()) {
     context.jukebox.resume();
+  }
+  if (realtimeGameplayAuthorityActive() &&
+      !realtimeGameplaySession->worker->resume()) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                 "Realtime gameplay worker failed to resume");
+    return;
   }
   setRealtimeTouchIngressEnabled(true);
   if (pauseLayout != nullptr) {
@@ -2377,6 +2612,9 @@ void GamePlayScene::update(float dt) {
   if (inputHandler != nullptr && !realtimeAtFrameStart) {
     inputHandler->pumpPendingTouchEvents();
   }
+  if (realtimeAtFrameStart) {
+    drainRealtimeTouchSamples();
+  }
   updateCoursePauseHoldProgress(nowMicros());
   if (state == nullptr || !state->isPlaying || state->isEnding) {
     return;
@@ -2395,6 +2633,7 @@ void GamePlayScene::update(float dt) {
   updatePracticeHud(gameplayTimeMicros);
   if (realtimeAtFrameStart) {
     syncRealtimeGameplaySnapshot();
+    updateRealtimeVisualTimeline(gameplayTimeMicros);
   }
   touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
@@ -2419,7 +2658,12 @@ void GamePlayScene::update(float dt) {
                    "Realtime gameplay input fault: %d",
                    static_cast<int>(fault));
       stopRealtimeGameplayAuthority(false);
-      showPauseMenu(true);
+      if (state != nullptr) {
+        state->isEnding = true;
+      }
+      showPlaybackInitializationFailure(
+          "Realtime input integrity failed. This attempt was invalidated; "
+          "return and retry.");
       return;
     }
     if (terminalReason == gameplay::GameplayTerminalReason::None) {
@@ -2436,7 +2680,12 @@ void GamePlayScene::update(float dt) {
                    "Realtime gameplay terminated for integrity reason: %d",
                    static_cast<int>(terminalReason));
       stopRealtimeGameplayAuthority(false);
-      showPauseMenu(true);
+      if (state != nullptr) {
+        state->isEnding = true;
+      }
+      showPlaybackInitializationFailure(
+          "Realtime input integrity failed. This attempt was invalidated; "
+          "return and retry.");
       return;
     }
     stopRealtimeGameplayAuthority(true);
@@ -3477,6 +3726,14 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      Vector3 normalizedLocation) {
   const long long gameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  return handleTouchInputAtGameplayTime(fingerIndex, action,
+                                        normalizedLocation,
+                                        gameplayTimeMicros);
+}
+
+bool GamePlayScene::handleTouchInputAtGameplayTime(
+    SDL_FingerID fingerIndex, ReplayTouchAction action,
+    Vector3 normalizedLocation, long long gameplayTimeMicros) {
   if (!practiceInputAllowed(gameplayTimeMicros)) {
     return false;
   }

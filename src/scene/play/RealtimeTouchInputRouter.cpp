@@ -179,11 +179,15 @@ bool RealtimeTouchInputRouter::consume(
     if (finger == nullptr) {
       return false;
     }
-    const auto lane = laneIndexAt(sample.normalizedX, sample.normalizedY,
-                                  layout_.dragMode);
+    if (sample.excludedFromGameplay) {
+      finger->excluded = true;
+      return true;
+    }
+    const auto lane =
+        laneIndexAt(sample.normalizedX, sample.normalizedY, true);
     if (!lane.has_value()) {
       finger->active = false;
-      return layout_.dragMode;
+      return true;
     }
     if (!beginLane(*finger, *lane, sample)) {
       finger->active = false;
@@ -201,6 +205,15 @@ bool RealtimeTouchInputRouter::consume(
       if (finger == nullptr) {
         return false;
       }
+    }
+    if (finger->excluded) {
+      return true;
+    }
+    if (sample.excludedFromGameplay) {
+      const bool released =
+          releaseLane(*finger, sample.steadyTimestampMicros);
+      finger->excluded = true;
+      return released;
     }
     if (!layout_.dragMode) {
       return !finger->scratch || handleScratchMove(*finger, sample);
@@ -224,7 +237,10 @@ bool RealtimeTouchInputRouter::consume(
     if (finger == nullptr) {
       return true;
     }
-    const bool released = releaseLane(*finger, sample.steadyTimestampMicros);
+    const bool released =
+        finger->excluded
+            ? true
+            : releaseLane(*finger, sample.steadyTimestampMicros);
     finger->active = false;
     return released;
   }
@@ -249,6 +265,16 @@ bool RealtimeTouchInputRouter::cancelAll(
     finger.active = false;
   }
   return success;
+}
+
+bool RealtimeTouchInputRouter::updateLayout(
+    RealtimeTouchLayout layout,
+    std::int64_t steadyTimestampMicros) noexcept {
+  const bool released = cancelAll(steadyTimestampMicros);
+  layout.laneCount =
+      std::min(layout.laneCount, kRealtimeTouchLaneCapacity);
+  layout_ = std::move(layout);
+  return released;
 }
 
 } // namespace gameplay

@@ -480,6 +480,19 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
   return true;
 }
 
+static bool AppendRealtimeActiveSound(AudioCallbackState &state,
+                                      SoundData *soundData, Bus bus,
+                                      size_t startFrame) {
+  if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
+      startFrame > kQ32MaximumWholeFrame) {
+    return false;
+  }
+  if (state.playingSoundCount >= kMaxActiveSounds) {
+    removeActiveSoundAt(state, 0);
+  }
+  return AppendActiveSound(state, soundData, bus, 0, startFrame);
+}
+
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound) {
   if (scheduledSound.soundData == nullptr ||
@@ -570,8 +583,8 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
         readCursor % kRealtimeAudioCommandQueueSize];
     switch (command.type) {
     case AudioCommandType::PlayNow:
-      AppendActiveSound(state, command.soundData, command.bus, 0,
-                        command.startFrame);
+      AppendRealtimeActiveSound(state, command.soundData, command.bus,
+                                command.startFrame);
       break;
     case AudioCommandType::Schedule:
       InsertScheduledSound(state, {.soundData = command.soundData,
