@@ -819,19 +819,22 @@ int legacyManualKeysoundAt(long long inputMicros, bool markLastDead = false) {
 }
 
 int simulationManualKeysoundAt(long long inputMicros,
-                               bool resolveLastFirst = false) {
+                               bool expireLaneFirst = false) {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
   addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(11));
   addTimeline(*measure, 2'000'000)->SetNote(1, new bms_parser::Note(22));
+  addTimeline(*measure, 10'000'000)->SetNote(2, new bms_parser::Note(33));
   chart.Measures.push_back(measure);
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   gameplay::GameplaySimulation simulation(
       definition,
       {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
-  if (resolveLastFirst) {
-    (void)simulation.pressLane(1, {.songTimeMicros = 2'000'000});
-    (void)simulation.releaseLane(1, {.songTimeMicros = 2'010'000});
+  if (expireLaneFirst) {
+    (void)simulation.advanceTo(3'000'000, 3'000'000);
+    const auto laneNotes = definition.laneNotes(1);
+    require(!laneNotes.empty() && simulation.noteState(laneNotes.back()).dead,
+            "realtime dead-note fallback fixture expires the last lane note");
   }
   const auto result = simulation.pressLane(
       1, {.songTimeMicros = inputMicros,
