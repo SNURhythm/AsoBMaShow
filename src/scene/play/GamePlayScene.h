@@ -90,6 +90,7 @@ private:
   void finishPractice();
   void exitPracticeWithoutSummary();
   void completePracticeAttempt();
+  void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void scheduleResultTransition(int delayMillis);
   void updatePracticeHud(long long chartTimeMicros);

@@ -17,6 +17,7 @@
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
 #include "BMSRenderer.h"
+#include "RealtimeGameplayAuthorityPolicy.h"
 #include "RhythmLaneInputController.h"
 #include "RealtimeGameplayWorker.h"
 #include "ReplayKeysoundSchedule.h"
@@ -792,15 +793,38 @@ bool GamePlayScene::realtimeGameplayAuthorityActive() const noexcept {
 }
 
 bool GamePlayScene::startRealtimeGameplayAuthority() {
-#if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_WINDOWS)
-  if (!options.autoPlay) {
+  if (realtimeGameplayAuthorityActive() || chart == nullptr || state == nullptr ||
+      renderer == nullptr) {
     return false;
   }
+
+  std::optional<gameplay::GameplayTimeRange> realtimePracticeRange;
+  if (const auto range = practiceNoteRange(); range.has_value()) {
+    realtimePracticeRange = gameplay::GameplayTimeRange{
+        .startMicros = range->startMicros,
+        .endMicros = range->endMicros,
+    };
+  }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_WINDOWS
+  constexpr bool nativeManualInputAvailable = true;
+#else
+  constexpr bool nativeManualInputAvailable = false;
 #endif
-  if (realtimeGameplayAuthorityActive() || chart == nullptr || state == nullptr ||
-      renderer == nullptr || (!options.autoPlay && inputHandler == nullptr) ||
-      isReplayPlayback() || options.practiceMode ||
-      options.practiceSession != nullptr) {
+  const auto policy = gameplay::makeRealtimeGameplayAuthorityPolicy({
+      .nativeManualInputAvailable = nativeManualInputAvailable,
+      .autoPlay = options.autoPlay,
+      .inputHandlerAvailable = inputHandler != nullptr,
+      .replayPlayback = isReplayPlayback(),
+      .practiceMode = options.practiceMode,
+      .practiceRange = realtimePracticeRange,
+      .startPositionMicros = getStartPositionMicros(),
+      .preparationActivationSongTimeMicros =
+          preparationPlan.laneIndicator.enabled()
+              ? std::optional<std::int64_t>(getGameplayTimeMicros(
+                    preparationPlan.laneIndicator.endTimeMicros))
+              : std::nullopt,
+  });
+  if (!policy.eligible) {
     return false;
   }
 
@@ -861,13 +885,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
           .gaugeHistoryCapacity = transactionCapacity,
       },
   };
-  const long long startPosition = getStartPositionMicros();
-  if (startPosition > 0) {
-    simulationConfig.allowedNoteRange = {
-        .startMicros = startPosition,
-        .endMicros = std::numeric_limits<long long>::max(),
-    };
-  }
+  simulationConfig.allowedNoteRange = policy.allowedNoteRange;
   gameplay::RealtimeGameplayWorkerConfig workerConfig{
       .epoch = session->epoch,
       .simulation = std::move(simulationConfig),
@@ -879,11 +897,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
                 .commit = &RealtimeGameplaySession::commitAudio,
                 .cancel = &RealtimeGameplaySession::cancelAudio},
       .inputTriggeredKeysounds = !options.autoKeySound,
-      .activationSongTimeMicros =
-          preparationPlan.laneIndicator.enabled()
-              ? std::optional<std::int64_t>(getGameplayTimeMicros(
-                    preparationPlan.laneIndicator.endTimeMicros))
-              : std::nullopt,
+      .activationSongTimeMicros = policy.activationSongTimeMicros,
+      .practiceCompletionSongTimeMicros =
+          policy.practiceCompletionSongTimeMicros,
   };
   session->worker = std::make_unique<gameplay::RealtimeGameplayWorker>(
       std::move(definition), std::move(workerConfig));
@@ -1819,7 +1835,9 @@ bool GamePlayScene::reset() {
   }
   updatePracticeHud(context.jukebox.getTimeMicros());
   updateGaugeStatusText();
-  if (inputHandler != nullptr && laneInputController != nullptr) {
+  if (gameplay::shouldAttemptRealtimeGameplayReset(
+          laneInputController != nullptr, inputHandler != nullptr,
+          options.autoPlay)) {
     (void)startRealtimeGameplayAuthority();
   }
   return true;
@@ -2516,6 +2534,19 @@ void GamePlayScene::completePracticeAttempt() {
   publishPracticeGhost();
 }
 
+void GamePlayScene::completePracticeSection(bool realtimeRangeFinalized) {
+  if (!realtimeRangeFinalized) {
+    finalizePracticeRangeMisses();
+  }
+  state->isEnding = true;
+  completePracticeAttempt();
+  if (options.practiceSession->shouldLoop()) {
+    reset();
+  } else {
+    scheduleResultTransition(0);
+  }
+}
+
 void GamePlayScene::finalizePracticeRangeMisses() {
   const auto range = practiceNoteRange();
   if (!range.has_value() || chart == nullptr || state == nullptr) {
@@ -2947,16 +2978,25 @@ void GamePlayScene::update(float dt) {
           "return and retry.");
       return;
     }
-    if (terminalReason == gameplay::GameplayTerminalReason::None) {
+    const auto terminalAction = gameplay::classifyRealtimeGameplayTerminal(
+        terminalReason, options.practiceSession != nullptr);
+    if (terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait) {
       return;
     }
-    if (terminalReason ==
-        gameplay::GameplayTerminalReason::SurvivalGaugeFailed) {
+    if (terminalAction ==
+        gameplay::RealtimeGameplayTerminalAction::SurvivalGaugeFailed) {
       stopRealtimeGameplayAuthority(true);
       (void)finishIfGaugeFailed();
       return;
     }
-    if (terminalReason != gameplay::GameplayTerminalReason::ChartComplete) {
+    if (terminalAction ==
+        gameplay::RealtimeGameplayTerminalAction::CompletePractice) {
+      stopRealtimeGameplayAuthority(true);
+      completePracticeSection(true);
+      return;
+    }
+    if (terminalAction ==
+        gameplay::RealtimeGameplayTerminalAction::IntegrityFailure) {
       SDL_LogError(SDL_LOG_CATEGORY_INPUT,
                    "Realtime gameplay terminated for integrity reason: %d",
                    static_cast<int>(terminalReason));
@@ -2982,18 +3022,8 @@ void GamePlayScene::update(float dt) {
       return;
     }
   }
-  const auto completePracticeSection = [this]() {
-    finalizePracticeRangeMisses();
-    state->isEnding = true;
-    completePracticeAttempt();
-    if (options.practiceSession->shouldLoop()) {
-      reset();
-    } else {
-      scheduleResultTransition(0);
-    }
-  };
   if (practiceSectionComplete) {
-    completePracticeSection();
+    completePracticeSection(false);
     return;
   }
   if (state->passedMeasureCount != chart->Measures.size()) {
@@ -3001,7 +3031,7 @@ void GamePlayScene::update(float dt) {
   }
 
   if (options.practiceSession != nullptr) {
-    completePracticeSection();
+    completePracticeSection(false);
     return;
   }
 
@@ -3319,7 +3349,9 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     return nullptr;
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  if (preparationIndicatorActive(rawSongTimeMicros)) {
+  if (gameplay::preparationInputUsesVisualOnlyPath(
+          preparationIndicatorActive(rawSongTimeMicros),
+          options.practiceSession != nullptr)) {
     auto pressedIt = lanePressed.find(mainLane);
     if (pressedIt == lanePressed.end() || pressedIt->second) {
       return nullptr;
@@ -3378,7 +3410,9 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
     return nullptr;
   }
   const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
-  if (preparationIndicatorActive(rawSongTimeMicros)) {
+  if (gameplay::preparationInputUsesVisualOnlyPath(
+          preparationIndicatorActive(rawSongTimeMicros),
+          options.practiceSession != nullptr)) {
     auto pressedIt = lanePressed.find(lane);
     if (pressedIt == lanePressed.end() || !pressedIt->second) {
       return nullptr;

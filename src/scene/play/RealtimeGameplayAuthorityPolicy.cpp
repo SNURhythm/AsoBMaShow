@@ -29,4 +29,25 @@ RealtimeGameplayAuthorityPolicy makeRealtimeGameplayAuthorityPolicy(
   return result;
 }
 
+RealtimeGameplayTerminalAction classifyRealtimeGameplayTerminal(
+    GameplayTerminalReason reason, bool sessionBackedPractice) noexcept {
+  switch (reason) {
+  case GameplayTerminalReason::None:
+    return RealtimeGameplayTerminalAction::Wait;
+  case GameplayTerminalReason::ChartComplete:
+    return RealtimeGameplayTerminalAction::CompleteChart;
+  case GameplayTerminalReason::PracticeComplete:
+    return sessionBackedPractice
+               ? RealtimeGameplayTerminalAction::CompletePractice
+               : RealtimeGameplayTerminalAction::IntegrityFailure;
+  case GameplayTerminalReason::SurvivalGaugeFailed:
+    return RealtimeGameplayTerminalAction::SurvivalGaugeFailed;
+  case GameplayTerminalReason::ReplayCapacityExceeded:
+  case GameplayTerminalReason::AutomaticResultCapacityExceeded:
+  case GameplayTerminalReason::GaugeHistoryCapacityExceeded:
+    return RealtimeGameplayTerminalAction::IntegrityFailure;
+  }
+  return RealtimeGameplayTerminalAction::IntegrityFailure;
+}
+
 } // namespace gameplay

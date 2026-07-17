@@ -25,9 +25,27 @@ struct RealtimeGameplayAuthorityPolicy {
   std::optional<std::int64_t> activationSongTimeMicros;
 };
 
+enum class RealtimeGameplayTerminalAction {
+  Wait,
+  CompleteChart,
+  CompletePractice,
+  SurvivalGaugeFailed,
+  IntegrityFailure,
+};
+
 [[nodiscard]] RealtimeGameplayAuthorityPolicy
 makeRealtimeGameplayAuthorityPolicy(
     const RealtimeGameplayAuthorityPolicyInput &input) noexcept;
+
+[[nodiscard]] constexpr bool shouldAttemptRealtimeGameplayReset(
+    bool laneControllerAvailable, bool inputHandlerAvailable,
+    bool autoPlay) noexcept {
+  return laneControllerAvailable && (inputHandlerAvailable || autoPlay);
+}
+
+[[nodiscard]] RealtimeGameplayTerminalAction
+classifyRealtimeGameplayTerminal(GameplayTerminalReason reason,
+                                 bool sessionBackedPractice) noexcept;
 
 [[nodiscard]] constexpr bool preparationInputUsesVisualOnlyPath(
     bool indicatorActive, bool sessionBackedPractice) noexcept {

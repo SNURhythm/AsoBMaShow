@@ -67,6 +67,31 @@ void testExistingExclusionsAndNormalActivationRemain() {
   });
   require(!replay.eligible, "replay playback remains excluded");
 
+  const auto unsupportedManual =
+      gameplay::makeRealtimeGameplayAuthorityPolicy({
+          .nativeManualInputAvailable = false,
+          .autoPlay = false,
+          .inputHandlerAvailable = true,
+          .practiceMode = true,
+          .practiceRange = gameplay::GameplayTimeRange{
+              .startMicros = 1'000'000, .endMicros = 2'000'000},
+      });
+  require(!unsupportedManual.eligible,
+          "manual practice keeps fallback on platforms without native input");
+
+  require(gameplay::shouldAttemptRealtimeGameplayReset(true, false, true) &&
+              gameplay::shouldAttemptRealtimeGameplayReset(true, true, false) &&
+              !gameplay::shouldAttemptRealtimeGameplayReset(false, true, true),
+          "loop reset restarts only with a controller and an input authority");
+
+  require(gameplay::classifyRealtimeGameplayTerminal(
+              gameplay::GameplayTerminalReason::PracticeComplete, true) ==
+              gameplay::RealtimeGameplayTerminalAction::CompletePractice &&
+              gameplay::classifyRealtimeGameplayTerminal(
+                  gameplay::GameplayTerminalReason::PracticeComplete, false) ==
+                  gameplay::RealtimeGameplayTerminalAction::IntegrityFailure,
+          "PracticeComplete is accepted only for a session-backed attempt");
+
   const auto normal = gameplay::makeRealtimeGameplayAuthorityPolicy({
       .nativeManualInputAvailable = true,
       .autoPlay = false,
