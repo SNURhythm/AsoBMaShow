@@ -3010,6 +3010,20 @@ void BMSRenderer::setLaneCoverFloatingEnabled(bool enabled) {
   laneCoverFloatingEnabled = enabled;
 }
 
+std::optional<std::array<std::pair<float, float>, 4>>
+BMSRenderer::gameplayTouchBoundsUi() const {
+  const auto bottomLeft = projectLanePointToUi(playAreaLeftX, judgeY);
+  const auto bottomRight =
+      projectLanePointToUi(playAreaLeftX + playAreaWidth, judgeY);
+  const auto topLeft = projectLanePointToUi(playAreaLeftX, upperBound);
+  const auto topRight =
+      projectLanePointToUi(playAreaLeftX + playAreaWidth, upperBound);
+  if (!bottomLeft || !bottomRight || !topLeft || !topRight) {
+    return std::nullopt;
+  }
+  return std::array{*bottomLeft, *bottomRight, *topLeft, *topRight};
+}
+
 void BMSRenderer::setLaneBeamLengthPercent(int percent) {
   laneBeamLengthPercent =
       std::clamp(percent, AppSettings::kMinLaneBeamLengthPercent,

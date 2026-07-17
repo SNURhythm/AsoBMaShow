@@ -19,6 +19,7 @@
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -61,7 +62,13 @@ public:
   EventHandleResult handleEvents(SDL_Event &event) override;
 
 private:
+  struct RealtimeGameplaySession;
   bool reset();
+  bool startRealtimeGameplayAuthority();
+  void stopRealtimeGameplayAuthority(bool transferReplay);
+  void setRealtimeTouchIngressEnabled(bool enabled);
+  void syncRealtimeGameplaySnapshot();
+  [[nodiscard]] bool realtimeGameplayAuthorityActive() const noexcept;
   void showPlaybackInitializationFailure(const std::string &message);
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
@@ -184,6 +191,8 @@ private:
   RhythmLaneInputController *laneInputController = nullptr;
   std::unique_ptr<RhythmInputHandler> ownedInputHandler;
   RhythmInputHandler *inputHandler = nullptr;
+  std::unique_ptr<RealtimeGameplaySession> realtimeGameplaySession;
+  std::uint64_t realtimeGameplayEpoch = 0;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;

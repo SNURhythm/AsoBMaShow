@@ -1,10 +1,15 @@
 #include "RealtimeGameplayWorker.h"
 
 #include "../../bms_parser.hpp"
+#include "../../targets.h"
 
 #include <algorithm>
 #include <chrono>
 #include <utility>
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#include <pthread.h>
+#endif
 
 namespace gameplay {
 
@@ -114,7 +119,19 @@ bool RealtimeGameplayWorker::running() const noexcept {
          !stopRequested_.load(std::memory_order_acquire);
 }
 
+std::vector<GameplayReplayEvent>
+RealtimeGameplayWorker::copyReplayEventsAfterStop() const {
+  if (running()) {
+    return {};
+  }
+  const auto events = simulation_.replayEvents();
+  return {events.begin(), events.end()};
+}
+
 void RealtimeGameplayWorker::run() {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
   using namespace std::chrono_literals;
   while (!stopRequested_.load(std::memory_order_acquire)) {
     (void)wake_.try_acquire_for(1ms);
@@ -173,6 +190,7 @@ void RealtimeGameplayWorker::processInput(
   const GameplayInputContext context{
       .songTimeMicros = *songTime,
       .laneBeamTimeMicros = input.steadyTimestampMicros,
+      .inputDelayMicros = input.inputDelayMicros,
   };
   simulation_.advanceTo(*songTime, input.steadyTimestampMicros);
   if (simulation_.terminal()) {
@@ -264,6 +282,18 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.lanePressed[lane] = simulation_.lanePressed(lane);
     }
     snapshot.attempt = simulation_.snapshot();
+    const auto &scoreState = simulation_.scoreState();
+    snapshot.gaugeState = scoreState.gaugeSnapshot();
+    snapshot.fastCount = scoreState.fastCount;
+    snapshot.slowCount = scoreState.slowCount;
+    for (int judgement = 0; judgement < JudgementCount; ++judgement) {
+      const auto found = scoreState.judgementFastSlowCount.find(
+          static_cast<Judgement>(judgement));
+      snapshot.fastSlowCounts[judgement] =
+          found == scoreState.judgementFastSlowCount.end()
+              ? JudgementFastSlowCount{}
+              : found->second;
+    }
     snapshot.latestTransaction = latestTransaction_;
     snapshot.replayEventCount = simulation_.replayEvents().size();
     snapshot.terminalReason = simulation_.terminalReason();

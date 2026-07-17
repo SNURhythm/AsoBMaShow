@@ -3948,6 +3948,30 @@ bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
   }
 }
 
+void RunIOSApplicationWorker(IOSApplicationCallback callback, void *context) {
+  if (callback == nullptr) {
+    return;
+  }
+  dispatch_async(
+      dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+        @autoreleasepool {
+          callback(context);
+        }
+      });
+}
+
+void DispatchIOSApplicationMain(IOSApplicationCallback callback,
+                                void *context) {
+  if (callback == nullptr) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    @autoreleasepool {
+      callback(context);
+    }
+  });
+}
+
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
   IOSNormalizedSafeAreaInsets insets;
   UIWindow *window = FindActiveWindow();

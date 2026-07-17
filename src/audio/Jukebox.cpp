@@ -2834,6 +2834,15 @@ void Jukebox::playKeySound(int wav) {
   });
 }
 
+std::optional<audio::RealtimeSoundHandle>
+Jukebox::resolveRealtimeKeySound(int wav) const {
+  const auto found = wavTableAbs.find(wav);
+  if (found == wavTableAbs.end()) {
+    return std::nullopt;
+  }
+  return audio.resolveRealtimeSound(found->second);
+}
+
 bool Jukebox::scheduleAudioFromCursor(size_t cursor) {
   while (cursor < audioList.size()) {
     const auto &target = audioList[cursor];

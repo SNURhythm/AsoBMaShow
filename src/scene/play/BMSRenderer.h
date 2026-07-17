@@ -399,6 +399,8 @@ public:
   void setPlayAreaWidth(float width);
   void setLaneBeamsEnabled(bool enabled);
   void setLaneCoverFloatingEnabled(bool enabled);
+  [[nodiscard]] std::optional<std::array<std::pair<float, float>, 4>>
+  gameplayTouchBoundsUi() const;
   void setLaneBeamLengthPercent(int percent);
   void setNoteStartPositionPercent(int percent);
   void applyLaneCoverState(int percent, bool resetVisibleTimeReference);

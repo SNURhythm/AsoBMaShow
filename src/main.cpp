@@ -46,6 +46,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include <SDL_uikit_rawtouch.h>
 // define something for iphone
 #include <dirent.h>
 #include <sys/stat.h>
@@ -462,6 +463,38 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   return EXIT_FAILURE;
 }
 
+#if TARGET_OS_IPHONE
+namespace {
+struct IOSApplicationRunContext {
+  bgfx::Init init;
+  SDL_Window *window = nullptr;
+  int exitCode = EXIT_FAILURE;
+};
+
+void cleanupIOSApplication(void *opaque) {
+  std::unique_ptr<IOSApplicationRunContext> runContext(
+      static_cast<IOSApplicationRunContext *>(opaque));
+  IOSSetApplicationRunsAsynchronously(SDL_FALSE);
+  SDL_iPhoneSetEventPump(SDL_FALSE);
+  if (runContext->window != nullptr) {
+    SDL_DestroyWindow(runContext->window);
+  }
+  s_window = nullptr;
+  s_iosMetalLayer = nullptr;
+  TextInputBox::releaseCachedCursors();
+  SDL_Quit();
+  APP_DEBUG_LOG("iOS application worker exited with code %d",
+                runContext->exitCode);
+}
+
+void runIOSApplication(void *opaque) {
+  auto *runContext = static_cast<IOSApplicationRunContext *>(opaque);
+  runContext->exitCode = runApplication(runContext->init);
+  DispatchIOSApplicationMain(&cleanupIOSApplication, runContext);
+}
+} // namespace
+#endif
+
 int main(int argv, char **args) {
   // Set working directory to executable's directory
   std::filesystem::path exePath;
@@ -696,6 +729,15 @@ int main(int argv, char **args) {
   bgfx_init.platformData = pd;
   SDL_Log("Using bgfx internal multithreaded mode");
 
+#if TARGET_OS_IPHONE
+  auto *runContext = new IOSApplicationRunContext{
+      .init = bgfx_init,
+      .window = win,
+  };
+  IOSSetApplicationRunsAsynchronously(SDL_TRUE);
+  RunIOSApplicationWorker(&runIOSApplication, runContext);
+  return EXIT_SUCCESS;
+#else
   int appExitCode = runApplication(bgfx_init);
 
   SDL_DestroyWindow(win);
@@ -708,6 +750,7 @@ int main(int argv, char **args) {
   APP_DEBUG_LOG("SDL quit");
 
   return appExitCode;
+#endif
 }
 
 static void reportStartupFailure(

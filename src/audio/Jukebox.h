@@ -139,6 +139,8 @@ public:
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
+  [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
+  resolveRealtimeKeySound(int wav) const;
   audio::playback::BackendOperationResult play(long long startMicros = 0);
   audio::playback::BackendOperationResult stop();
   void render();

@@ -26,6 +26,7 @@ struct RealtimeGameplayInput {
   int compensateLane = -1;
   bool backSpin = false;
   std::int64_t steadyTimestampMicros = 0;
+  std::int64_t inputDelayMicros = 0;
 };
 
 struct RealtimeGameplayAudioReservation {
@@ -67,8 +68,12 @@ struct RealtimeGameplaySnapshot {
   std::uint64_t generation = 0;
   std::uint64_t transactionSequence = 0;
   std::vector<NoteRuntimeState> noteStates;
-  std::array<bool, 16> lanePressed{};
+  std::array<bool, 64> lanePressed{};
   GameplayAttemptSnapshot attempt;
+  GaugeStateSnapshot gaugeState;
+  std::array<JudgementFastSlowCount, JudgementCount> fastSlowCounts{};
+  int fastCount = 0;
+  int slowCount = 0;
   GameplayInputResult latestTransaction;
   std::size_t replayEventCount = 0;
   GameplayTerminalReason terminalReason = GameplayTerminalReason::None;
@@ -180,6 +185,8 @@ public:
   [[nodiscard]] SnapshotLease acquireLatestSnapshot() const noexcept;
   [[nodiscard]] RealtimeGameplayFault fault() const noexcept;
   [[nodiscard]] bool running() const noexcept;
+  [[nodiscard]] std::vector<GameplayReplayEvent>
+  copyReplayEventsAfterStop() const;
 
 private:
   struct SnapshotBuffer {

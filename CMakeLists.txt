@@ -1319,6 +1319,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
 
+    add_executable(realtime_touch_input_router_tests
+        tests/realtime_touch_input_router_tests.cpp
+        src/scene/play/RealtimeTouchInputRouter.cpp
+    )
+    target_include_directories(realtime_touch_input_router_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(realtime_touch_input_router_tests PRIVATE cxx_std_23)
+    target_compile_definitions(realtime_touch_input_router_tests PRIVATE
+        BX_CONFIG_DEBUG=1
+    )
+
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp
         src/ScoreProvenance.cpp
@@ -1762,6 +1774,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)
+    asobmashow_register_test(realtime_touch_input_router_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
     asobmashow_register_test(practice_result_flow_tests)
