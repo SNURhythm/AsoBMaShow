@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
-#include <vector>
+#include <limits>
 
 namespace {
 void require(bool condition, const char *message) {
@@ -50,20 +50,49 @@ int main() {
                                  8.5F),
           "a future measure line above the visible lane is hidden");
 
-  const std::vector<double> reentryPositions{
-      0.0, 20'000.0, -10'000.0, 0.5, 50'000.0};
-  const ScrollSuffixExtrema reentrySuffix =
-      buildScrollSuffixExtrema(reentryPositions);
-  require(reentrySuffix.minimum.size() == reentryPositions.size(),
-          "suffix minima cover every timeline");
-  require(reentrySuffix.maximum.size() == reentryPositions.size(),
-          "suffix maxima cover every timeline");
-  requireNear(reentrySuffix.minimum[1], -10'000.0,
-              "suffix minima retain later negative scroll re-entry");
-  requireNear(reentrySuffix.maximum[1], 50'000.0,
-              "suffix maxima retain later huge positive scroll");
-  requireNear(reentrySuffix.minimum[3], 0.5,
-              "suffix minima narrow after the negative excursion");
+  require(!shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0,
+                                    false, false, false, false),
+          "a BGA-only row is omitted from render traversal");
+  require(shouldKeepRenderTimeline(145.0, 290.0, 0.0, 1.0, 1.0,
+                                   false, false, false, false),
+          "a BPM change remains in render traversal");
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, -10'000.0,
+                                   false, false, false, false),
+          "a scroll change remains in render traversal");
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0,
+                                   false, true, false, false),
+          "a playable note remains in render traversal");
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0,
+                                   false, false, true, false),
+          "an invisible note remains in render traversal");
+  require(shouldKeepRenderTimeline(145.0, 145.0, 0.0, 1.0, 1.0,
+                                   false, false, false, true),
+          "a landmine remains in render traversal");
+
+  requireNear(initialFutureTimelineY(0.5, 0.0, 0, 0, 16.0), 0.5,
+              "the zero-time chart origin starts at the judge line");
+  requireNear(advanceFutureTimelineY(0.5, 1.0, 1.0, 0, 0.0,
+                                     1'000, 500, 10.0),
+              5.5,
+              "future Y advances by remaining segment travel");
+  requireNear(advanceFutureTimelineY(0.5, 1.0, 1.0, 0, 1'000.0,
+                                     2'000, 500, 10.0),
+              10.5,
+              "an active stop uses the full section distance");
+
+  const double collapsedY = advanceFutureTimelineY(
+      0.5, 1.0, 20'000.0, 1'000, 0.0, 1'000, 1'000, 10.0);
+  require(std::isnan(collapsedY),
+          "a huge-BPM zero-duration pair forms a traversal boundary");
+  require(futureTimelineTraversalContinues(10.0, 10.0F),
+          "a row exactly at the lane top is processed");
+  require(!futureTimelineTraversalContinues(10.1, 10.0F),
+          "the first row above the lane top ends traversal");
+  require(!futureTimelineTraversalContinues(collapsedY, 10.0F),
+          "a non-finite collapsed row ends traversal");
+  require(futureTimelineTraversalContinues(
+              -std::numeric_limits<double>::infinity(), 10.0F),
+          "the continuation rule preserves direct comparison semantics");
 
   const ScrollRange visible =
       visibleScrollRange(0.0, 1.0F, -1.0F, 10.0F, 1.0F, 0.0F);
@@ -71,30 +100,6 @@ int main() {
               "visible scroll range includes a partially visible note below");
   requireNear(visible.maximum, 10.0,
               "visible scroll range ends at the upper viewport bound");
-  require(renderY(reentryPositions[1], 0.0, 1.0F, 0.0F) > 10.0F,
-          "the first extreme timeline is above the viewport");
-  require(suffixCanReachVisibleRange(reentrySuffix, 1, visible),
-          "an offscreen timeline cannot stop a later visible re-entry");
-  require(!suffixCanReachVisibleRange(reentrySuffix, 4, visible),
-          "traversal stops when the remaining suffix cannot re-enter");
-  require(!shouldStopTimelineTraversal(false, false, reentrySuffix.minimum,
-                                       reentrySuffix.maximum, 4, visible),
-          "a past timeline cannot stop lifecycle traversal");
-  require(shouldStopTimelineTraversal(true, false, reentrySuffix.minimum,
-                                      reentrySuffix.maximum, 4, visible),
-          "an unreachable future suffix stops traversal");
-  require(!shouldStopTimelineTraversal(true, false, reentrySuffix.minimum,
-                                       reentrySuffix.maximum, 1, visible),
-          "a reachable future suffix keeps traversal alive");
-  require(!shouldStopTimelineTraversal(true, true, reentrySuffix.minimum,
-                                       reentrySuffix.maximum, 4, visible),
-          "an open long note keeps traversal alive until its tail");
-
-  const std::vector<double> negativeReentryPositions{0.0, -20'000.0, 0.25};
-  const ScrollSuffixExtrema negativeReentrySuffix =
-      buildScrollSuffixExtrema(negativeReentryPositions);
-  require(suffixCanReachVisibleRange(negativeReentrySuffix, 1, visible),
-          "a negative excursion cannot stop a later visible re-entry");
 
   require(noteRectangleIntersectsViewport(-1.5F, 1.0F, -1.0F, 10.0F),
           "a note crossing the lower viewport bound remains visible");
