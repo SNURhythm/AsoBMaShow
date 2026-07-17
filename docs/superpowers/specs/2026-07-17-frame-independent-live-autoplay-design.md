@@ -6,9 +6,10 @@
 ## Scope
 
 Live, non-replay autoplay will advance independently of engine and render frame
-rate on every platform. Recorded replay playback remains unchanged. Practice
-session autoplay remains on its existing practice authority until that authority
-can use the realtime worker without changing practice-range completion behavior.
+rate on every platform. Replay-watch judgement retains its existing authority,
+while replay-watch keysounds become frame-independent. Practice session
+autoplay remains on its existing practice authority until that authority can use
+the realtime worker without changing practice-range completion behavior.
 
 ## Root cause
 
@@ -48,6 +49,26 @@ delay visuals, but the retained transaction history will replay press/release
 effects in order while score, judgement, replay state, and completion remain
 authoritative in the worker.
 
+## Replay-watch keysounds
+
+Replay-watch judgement is already independent of keysound delivery and remains
+unchanged. Its keysounds are currently triggered by
+`GamePlayScene::processReplayKeySounds()` during scene updates, so a low frame
+rate delays sound even though the recorded judgement time is preserved.
+
+Before Jukebox playback starts, the scene will resolve each eligible recorded
+Press event to its chart note and convert the event's gameplay timestamp to raw
+song time using the active audio offset. Those resolved WAV/time pairs will be
+added as `ReplayKeysound` entries to Jukebox's existing complete timestamped
+audio schedule. The audio callback will therefore activate them at the recorded
+time without waiting for an engine frame.
+
+The scheduled path will preserve the current replay eligibility and note
+resolution rules, classify replay sounds on the keysound bus, and rely on
+Jukebox's existing pause, playback-rate, restart, and seek transitions. The
+scene's per-frame replay-keysound cursor will be removed so it cannot duplicate
+the scheduled sound.
+
 ## Error and lifecycle behavior
 
 Pause and resume use the existing worker suspend handshake. Audio-clock,
@@ -61,6 +82,10 @@ worker replay and gauge history through the existing stop path.
   the fake audio clock advances, without any frame pump or input event.
 - Add a worker regression proving an automatic input-triggered keysound is
   committed exactly once before its transaction is published.
+- Add a replay schedule regression proving Press events resolve to keysound-bus
+  entries at raw song time after applying the audio offset.
+- Verify replay scheduling ignores non-Press events, unresolved notes, and WAV-
+  less notes, matching the existing runtime behavior.
 - Preserve the existing tests for miss/landmine deadlines, pause behavior,
   transaction history, and autoplay long-note behavior.
 - Build the desktop `main` target and run the focused gameplay worker,
