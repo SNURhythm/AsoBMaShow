@@ -77,6 +77,18 @@ int main() {
           "an offscreen timeline cannot stop a later visible re-entry");
   require(!suffixCanReachVisibleRange(reentrySuffix, 4, visible),
           "traversal stops when the remaining suffix cannot re-enter");
+  require(!shouldStopTimelineTraversal(false, false, reentrySuffix.minimum,
+                                       reentrySuffix.maximum, 4, visible),
+          "a past timeline cannot stop lifecycle traversal");
+  require(shouldStopTimelineTraversal(true, false, reentrySuffix.minimum,
+                                      reentrySuffix.maximum, 4, visible),
+          "an unreachable future suffix stops traversal");
+  require(!shouldStopTimelineTraversal(true, false, reentrySuffix.minimum,
+                                       reentrySuffix.maximum, 1, visible),
+          "a reachable future suffix keeps traversal alive");
+  require(!shouldStopTimelineTraversal(true, true, reentrySuffix.minimum,
+                                       reentrySuffix.maximum, 4, visible),
+          "an open long note keeps traversal alive until its tail");
 
   const std::vector<double> negativeReentryPositions{0.0, -20'000.0, 0.25};
   const ScrollSuffixExtrema negativeReentrySuffix =

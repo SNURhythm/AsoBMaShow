@@ -76,6 +76,16 @@ inline bool suffixCanReachVisibleRange(const ScrollSuffixExtrema &suffix,
                                     timelineIndex, visible);
 }
 
+inline bool shouldStopTimelineTraversal(
+    bool timelineIsFuture, bool hasOpenLongNote,
+    std::span<const double> suffixMinimum,
+    std::span<const double> suffixMaximum, std::size_t timelineIndex,
+    ScrollRange visible) {
+  return timelineIsFuture && !hasOpenLongNote &&
+         !suffixCanReachVisibleRange(suffixMinimum, suffixMaximum,
+                                     timelineIndex, visible);
+}
+
 inline bool noteRectangleIntersectsViewport(float y, float noteHeight,
                                             float lowerBound,
                                             float upperBound) {

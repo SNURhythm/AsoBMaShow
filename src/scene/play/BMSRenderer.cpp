@@ -2437,8 +2437,8 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       break;
     }
     const bool timelineIsFuture = timeLine->Timing >= micro;
-    if (timelineIsFuture && longNoteLookahead.empty() &&
-        !gameplay_scroll_geometry::suffixCanReachVisibleRange(
+    if (gameplay_scroll_geometry::shouldStopTimelineTraversal(
+            timelineIsFuture, !longNoteLookahead.empty(),
             timelineScrollSuffixMin, timelineScrollSuffixMax, i,
             visibleScrollRange)) {
       break;
