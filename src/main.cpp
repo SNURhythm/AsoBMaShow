@@ -3,6 +3,7 @@
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
 #include "bgfx_helper.h"
+#include "rendering/BgfxInitLimits.h"
 #include "rendering/ShaderManager.h"
 #include "./audio/decoder.h"
 #include "bx/math.h"
@@ -695,6 +696,7 @@ int main(int argv, char **args) {
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
   bgfx_init.platformData = pd;
+  rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
   SDL_Log("Using bgfx internal multithreaded mode");
 
   int appExitCode = runApplication(bgfx_init);

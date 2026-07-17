@@ -1,4 +1,5 @@
 #include "scene/play/StartLaneIndicatorGeometry.h"
+#include "scene/play/GameplayNoteSubmissionOrder.h"
 
 #include <cmath>
 #include <iostream>
@@ -17,6 +18,8 @@ int main() {
   check(colorRoleForKey(1, 7) == ColorRole::Blue, "7K next key is blue");
   check(colorRoleForKey(3, 7) == ColorRole::Blue, "7K center is blue");
   check(colorRoleForScratch() == ColorRole::Red, "scratch is red");
+  check(kLaneCoverDepth > gameplay_note_submission_order::kGhostDepth,
+        "lane cover renders above ghosts and ordered notes");
   check(kIndicatorDepth > kLaneCoverDepth,
         "overlapping triangle renders above the lane cover");
 

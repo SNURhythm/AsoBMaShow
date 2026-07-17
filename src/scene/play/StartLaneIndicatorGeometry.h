@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameplayNoteSubmissionOrder.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -11,8 +13,10 @@ enum class ColorRole { White, Blue, Red };
 inline constexpr float kWidthLaneRatio = 0.46F;
 inline constexpr float kHeightLaneRatio = 0.40F;
 inline constexpr float kCoverGap = 0.08F;
-inline constexpr uint32_t kLaneCoverDepth = 300;
-inline constexpr uint32_t kIndicatorDepth = 320;
+inline constexpr uint32_t kLaneCoverDepth =
+    gameplay_note_submission_order::kLaneCoverDepth;
+inline constexpr uint32_t kIndicatorDepth =
+    gameplay_note_submission_order::kIndicatorDepth;
 
 struct Triangle {
   float leftX = 0.0F;

@@ -18,11 +18,14 @@
 #include "JudgementIndicatorRenderer.h"
 #include "Judge.h"
 #include "Pacemaker.h"
+#include "GameplayChartEntityRenderBudget.h"
+#include "GameplayNoteSubmissionOrder.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -126,6 +129,7 @@ private:
   std::unique_ptr<TextView> gaugeAutoShiftText;
   std::unique_ptr<TextView> playOptionText;
   std::unique_ptr<TextView> autoPlayMarkText;
+  std::unique_ptr<TextView> laneCoverWhiteNumberText;
   std::unique_ptr<TextView> laneCoverVisibleTimeText;
   static constexpr size_t kJudgementCounterItemCount = 7;
   std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
@@ -193,7 +197,14 @@ private:
   std::vector<TouchPointVisual> liveReleasedTouchSamples;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
-  std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
+  struct LongNoteLookahead {
+    float headY = 0.0F;
+    gameplay_note_submission_order::LongNoteOrder order;
+    bool renderBudgetReserved = false;
+  };
+  std::unordered_map<bms_parser::LongNote *, LongNoteLookahead>
+      longNoteLookaheadScratch;
+  gameplay_chart_entity_render_budget::Budget chartEntityRenderBudget;
   BMSRendererState state;
   int scratchLaneCount = 0;
   float playAreaWidth = AppSettings::kDefaultPlayAreaWidth;
@@ -250,10 +261,9 @@ private:
   rendering::SimpleBatchRenderer simpleBatchRenderer;
   rendering::SimpleBatchRenderer gimmickBatchRenderer;
   rendering::SimpleBatchRenderer ghostBatchRenderer;
-  std::vector<rendering::TexBatchRenderer> noteTextureBatchRenderers;
-  std::unordered_map<uint64_t, size_t> noteTextureBatchLookup;
-  uint32_t longBodySubmitDepth = 0;
-  uint32_t noteSheetSubmitDepth = 0;
+  rendering::TexBatchRenderer noteTextureBatchRenderer;
+  uint32_t activeNoteTextureDepth = std::numeric_limits<uint32_t>::max();
+  uint32_t activeInvisibleDepth = std::numeric_limits<uint32_t>::max();
   int judgementLayoutWidth = 0;
   int judgementLayoutHeight = 0;
   bool judgementLayoutHasTimingDirection = false;
@@ -289,18 +299,23 @@ private:
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawStartLaneIndicators();
   void drawLaneCover();
-  void layoutLaneCoverVisibleTimeText();
+  void layoutLaneCoverNumberTexts();
   void drawTitle(RenderContext &context) const;
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;
   void drawGauge(RenderContext &context) const;
   void drawPlayOption(RenderContext &context) const;
   void drawAutoPlayMark(RenderContext &context) const;
-  void drawLongNote(float headY, float tailY,
-                    bms_parser::LongNote *const &head);
-  void drawNormalNote(float y, bms_parser::Note *const &note);
-  void drawInvisibleNote(float y, bms_parser::Note *const &note);
-  void drawLandmineNote(float y, bms_parser::LandmineNote *const &note);
+  void drawLongNote(
+      float headY, float tailY, bms_parser::LongNote *const &head,
+      gameplay_note_submission_order::LongNoteOrder order,
+      bool renderBudgetReserved);
+  void drawNormalNote(float y, bms_parser::Note *const &note,
+                      uint32_t submitDepth);
+  void drawInvisibleNote(float y, bms_parser::Note *const &note,
+                         uint32_t submitDepth);
+  void drawLandmineNote(float y, bms_parser::LandmineNote *const &note,
+                        uint32_t submitDepth);
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
@@ -356,12 +371,11 @@ private:
   void rebuildPlayAreaGeometry();
   float laneToX(int lane) const;
   const NoteSheet &sheetForLane(int lane) const;
-  rendering::TexBatchRenderer &noteTextureBatch(bgfx::TextureHandle texture,
-                                                uint32_t submitDepth);
-  rendering::TexBatchRenderer &sheetBatchFor(const NoteSheet &sheet);
-  rendering::TexBatchRenderer &longBodyBatchFor(bgfx::TextureHandle texture);
-  void beginNoteTextureBatches(uint32_t bodyDepth, uint32_t sheetDepth);
-  void flushNoteTextureBatches();
+  rendering::TexBatchRenderer &
+  noteTextureBatchAtDepth(uint32_t submitDepth);
+  void setInvisibleBatchDepth(uint32_t submitDepth);
+  void beginOrderedNoteBatches();
+  void flushOrderedNoteBatches();
   void destroyNoteSheetTextures();
   float calculateLanePlaneScreenTopIntersection();
   NoteSheet graySheet;

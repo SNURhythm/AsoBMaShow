@@ -1,5 +1,7 @@
 #include "../src/ApplicationStartup.h"
+#include "../src/rendering/BgfxInitLimits.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -162,11 +164,26 @@ void testDatabaseFailuresFailClosed() {
     }
   }
 }
+
+void testBgfxTransientBuffersAreExpanded() {
+  struct Limits {
+    uint32_t maxTransientVbSize = 0;
+    uint32_t maxTransientIbSize = 0;
+  } limits;
+
+  rendering::applyBgfxTransientBufferLimits(limits);
+
+  expect(limits.maxTransientVbSize == 16U * 1024U * 1024U,
+         "bgfx transient vertex buffer is expanded to 16 MiB");
+  expect(limits.maxTransientIbSize == 4U * 1024U * 1024U,
+         "bgfx transient index buffer is expanded to 4 MiB");
+}
 } // namespace
 
 int main() {
   testSuccessRunsBodyExactlyOnce();
   testProfileFailureShortCircuitsEverything();
   testDatabaseFailuresFailClosed();
+  testBgfxTransientBuffersAreExpanded();
   return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
