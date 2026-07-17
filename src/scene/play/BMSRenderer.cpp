@@ -4,6 +4,7 @@
 
 #include "BMSRenderer.h"
 #include "GamePlayTiming.h"
+#include "GameplayScrollGeometry.h"
 #include "JudgementTimingText.h"
 #include "StartLaneIndicatorGeometry.h"
 #include "TouchVisualizationTiming.h"
@@ -2117,10 +2118,8 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
     if (event.judgeTimeMicros < currentTimeMicros) {
       continue;
     }
-    const float ghostY =
-        judgeY +
-        static_cast<float>(event.judgeScrollPosition - currentScrollPosition) *
-            rxhs;
+    const float ghostY = gameplay_scroll_geometry::renderY(
+        event.judgeScrollPosition, currentScrollPosition, rxhs, judgeY);
     drawGhostNoteOutline(ghostY, event);
   }
 }
@@ -2156,10 +2155,8 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 
   for (auto it = firstVisible; it != lastVisible; ++it) {
     const auto &marker = *it;
-    const float markerY =
-        judgeY +
-        static_cast<float>(marker.noteScrollPosition - currentScrollPosition) *
-            rxhs;
+    const float markerY = gameplay_scroll_geometry::renderY(
+        marker.noteScrollPosition, currentScrollPosition, rxhs, judgeY);
     drawMissMarkerX(markerY, marker);
   }
 }
@@ -2430,42 +2427,19 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   for (size_t i = state.currentTimelineIndex;
        i < timelines.size() && y < upperBound; i++) {
     const auto &timeLine = timelines[i];
-    if (timeLine->Timing >= micro) {
-      if (y < judgeY)
-        y = judgeY;
-      if (i > 0) {
-        if (const auto &prevTimeLine = timelines[i - 1];
-            prevTimeLine->Timing + prevTimeLine->GetStopDuration() > micro) {
-          // when the previous timeline is stopped
-          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
-               prevTimeLine->Scroll * rxhs;
-        } else {
-          y += (timeLine->BeatPosition - prevTimeLine->BeatPosition) *
-               prevTimeLine->Scroll * (timeLine->Timing - micro) /
-               (timeLine->Timing - prevTimeLine->Timing -
-                prevTimeLine->GetStopDuration()) *
-               rxhs;
-        }
-      } else {
-        if (timeLine->Timing > 0) {
-          y += timeLine->BeatPosition * (timeLine->Timing - micro) /
-               timeLine->Timing * rxhs;
-        } else {
-          y += static_cast<float>(gameplay_timing::leadInBeatDistance(
-                                      timeLine->Timing, micro, timeLine->Bpm) *
-                                  timeLine->Scroll * rxhs);
-        }
-      }
+    if (i >= timelineScrollPositions.size()) {
+      break;
+    }
+    y = gameplay_scroll_geometry::renderY(
+        timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
 
-      if (timeLine->IsFirstInMeasure) {
-        // render measure line
-        drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
-                 Color(255, 255, 255, 128));
-      }
-    } else if (timeLine->Timing >= micro - latePoorTiming) {
-      y = judgeY + (micro - timeLine->Timing) /
-                       static_cast<float>(latePoorTiming) * lowerBound;
-    } else {
+    if (timeLine->IsFirstInMeasure &&
+        gameplay_scroll_geometry::shouldDrawMeasureLine(
+            timeLine->Timing, micro, y, judgeY, upperBound)) {
+      drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
+               Color(255, 255, 255, 128));
+    }
+    if (timeLine->Timing < micro - latePoorTiming) {
       state.currentTimelineIndex = i;
     }
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
