@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 
 namespace {
 void require(bool condition, const char *message) {
@@ -90,9 +89,12 @@ int main() {
           "the first row above the lane top ends traversal");
   require(!futureTimelineTraversalContinues(collapsedY, 10.0F),
           "a non-finite collapsed row ends traversal");
-  require(futureTimelineTraversalContinues(
-              -std::numeric_limits<double>::infinity(), 10.0F),
-          "the continuation rule preserves direct comparison semantics");
+  const double reverseFutureY = advanceFutureTimelineY(
+      0.5, 1.0, -20'000.0, 1'000, 0.0, 1'000, 500, 10.0);
+  requireNear(reverseFutureY, -199'999.5,
+              "a future reverse row uses its full signed section distance");
+  require(futureTimelineTraversalContinues(reverseFutureY, 10.0F),
+          "a reverse row below the judge line keeps traversal active");
 
   const ScrollRange visible =
       visibleScrollRange(0.0, 1.0F, -1.0F, 10.0F, 1.0F, 0.0F);
