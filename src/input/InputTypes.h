@@ -25,6 +25,7 @@ enum class ControlKind {
   MidiControl
 };
 enum class ControlDirection { Any, Negative, Positive, Up, Right, Down, Left };
+enum class InputTimestampDomain { SteadyClock, SdlMilliseconds };
 enum class LogicalActionKind {
   Lane,
   ScratchClockwise,
@@ -77,6 +78,7 @@ struct PhysicalInputEvent {
   double rawValue = 0.0;
   float normalizedValue = 0.0f;
   std::uint64_t timestampMicros = 0;
+  InputTimestampDomain timestampDomain = InputTimestampDomain::SteadyClock;
 };
 
 struct LogicalInputTransition {

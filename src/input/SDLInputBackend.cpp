@@ -275,7 +275,8 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
                      .index = static_cast<int>(event.key.keysym.scancode)},
          .rawValue = event.type == SDL_KEYDOWN ? 1.0 : 0.0,
          .normalizedValue = event.type == SDL_KEYDOWN ? 1.0F : 0.0F,
-         .timestampMicros = toMicros(event.key.timestamp)});
+         .timestampMicros = toMicros(event.key.timestamp),
+         .timestampDomain = input::InputTimestampDomain::SdlMilliseconds});
     return;
 
   case SDL_CONTROLLERBUTTONDOWN:
@@ -383,7 +384,8 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
                     .index = static_cast<int>(event.key.keysym.scancode)},
         .rawValue = event.type == SDL_KEYDOWN ? 1.0 : 0.0,
         .normalizedValue = event.type == SDL_KEYDOWN ? 1.0F : 0.0F,
-        .timestampMicros = toMicros(event.key.timestamp)};
+        .timestampMicros = toMicros(event.key.timestamp),
+        .timestampDomain = input::InputTimestampDomain::SdlMilliseconds};
   }
 
   const std::lock_guard lock(devicesMutex_);
@@ -402,7 +404,8 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
                     .index = event.cbutton.button},
         .rawValue = pressed ? 1.0 : 0.0,
         .normalizedValue = pressed ? 1.0F : 0.0F,
-        .timestampMicros = toMicros(event.cbutton.timestamp)};
+        .timestampMicros = toMicros(event.cbutton.timestamp),
+        .timestampDomain = input::InputTimestampDomain::SdlMilliseconds};
   }
   case SDL_CONTROLLERAXISMOTION: {
     const auto found = devices_.find(event.caxis.which);
@@ -417,7 +420,8 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
                     .index = event.caxis.axis},
         .rawValue = static_cast<double>(event.caxis.value),
         .normalizedValue = value,
-        .timestampMicros = toMicros(event.caxis.timestamp)};
+        .timestampMicros = toMicros(event.caxis.timestamp),
+        .timestampDomain = input::InputTimestampDomain::SdlMilliseconds};
   }
   case SDL_JOYBUTTONDOWN:
   case SDL_JOYBUTTONUP: {
@@ -433,7 +437,8 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
                     .index = event.jbutton.button},
         .rawValue = pressed ? 1.0 : 0.0,
         .normalizedValue = pressed ? 1.0F : 0.0F,
-        .timestampMicros = toMicros(event.jbutton.timestamp)};
+        .timestampMicros = toMicros(event.jbutton.timestamp),
+        .timestampDomain = input::InputTimestampDomain::SdlMilliseconds};
   }
   case SDL_JOYAXISMOTION: {
     const auto found = devices_.find(event.jaxis.which);
@@ -452,11 +457,63 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
                     .index = event.jaxis.axis},
         .rawValue = static_cast<double>(event.jaxis.value),
         .normalizedValue = value,
-        .timestampMicros = toMicros(event.jaxis.timestamp)};
+        .timestampMicros = toMicros(event.jaxis.timestamp),
+        .timestampDomain = input::InputTimestampDomain::SdlMilliseconds};
   }
   default:
     return std::nullopt;
   }
+}
+
+std::size_t SDLInputBackend::translateRealtimeInputs(
+    const SDL_Event &event, std::span<input::PhysicalInputEvent> output) {
+  if (output.empty()) {
+    return 0;
+  }
+  if (event.type != SDL_JOYHATMOTION) {
+    const auto translated = translateRealtimeInput(event);
+    if (!translated.has_value()) {
+      return 0;
+    }
+    output.front() = *translated;
+    return 1;
+  }
+
+  const std::lock_guard lock(devicesMutex_);
+  const auto found = devices_.find(event.jhat.which);
+  if (found == devices_.end() || found->second.gameController ||
+      static_cast<std::size_t>(event.jhat.hat) >=
+          found->second.hatValues.size()) {
+    return 0;
+  }
+  auto &device = found->second;
+  const std::size_t hat = static_cast<std::size_t>(event.jhat.hat);
+  const Uint8 previous = device.hatValues[hat];
+  device.hatValues[hat] = event.jhat.value;
+  constexpr std::array directions{
+      std::pair{SDL_HAT_UP, input::ControlDirection::Up},
+      std::pair{SDL_HAT_RIGHT, input::ControlDirection::Right},
+      std::pair{SDL_HAT_DOWN, input::ControlDirection::Down},
+      std::pair{SDL_HAT_LEFT, input::ControlDirection::Left}};
+  std::size_t count = 0;
+  for (const auto &[mask, direction] : directions) {
+    const bool wasPressed = (previous & mask) != 0;
+    const bool pressed = (event.jhat.value & mask) != 0;
+    if (wasPressed == pressed || count >= output.size()) {
+      continue;
+    }
+    output[count++] = {
+        .control = {.deviceId = device.snapshot.stableId,
+                    .deviceClass = input::DeviceClass::Joystick,
+                    .kind = input::ControlKind::Hat,
+                    .index = event.jhat.hat,
+                    .direction = direction},
+        .rawValue = pressed ? 1.0 : 0.0,
+        .normalizedValue = pressed ? 1.0F : 0.0F,
+        .timestampMicros = toMicros(event.jhat.timestamp),
+        .timestampDomain = input::InputTimestampDomain::SdlMilliseconds};
+  }
+  return count;
 }
 
 std::optional<std::string>
@@ -620,7 +677,9 @@ void SDLInputBackend::publishButton(const DeviceRecord &device, int button,
                             .index = button},
                 .rawValue = pressed ? 1.0 : 0.0,
                 .normalizedValue = pressed ? 1.0F : 0.0F,
-                .timestampMicros = toMicros(timestamp)});
+                .timestampMicros = toMicros(timestamp),
+                .timestampDomain =
+                    input::InputTimestampDomain::SdlMilliseconds});
 }
 
 void SDLInputBackend::publishAxis(const DeviceRecord &device, int axis,
@@ -637,7 +696,9 @@ void SDLInputBackend::publishAxis(const DeviceRecord &device, int axis,
                             .index = axis},
                 .rawValue = static_cast<double>(value),
                 .normalizedValue = normalizedValue,
-                .timestampMicros = toMicros(timestamp)});
+                .timestampMicros = toMicros(timestamp),
+                .timestampDomain =
+                    input::InputTimestampDomain::SdlMilliseconds});
 }
 
 void SDLInputBackend::publishHat(DeviceRecord &device, int hat, Uint8 value,
@@ -666,6 +727,8 @@ void SDLInputBackend::publishHat(DeviceRecord &device, int hat, Uint8 value,
                               .direction = direction},
                   .rawValue = pressed ? 1.0 : 0.0,
                   .normalizedValue = pressed ? 1.0F : 0.0F,
-                  .timestampMicros = toMicros(timestamp)});
+                  .timestampMicros = toMicros(timestamp),
+                  .timestampDomain =
+                      input::InputTimestampDomain::SdlMilliseconds});
   }
 }

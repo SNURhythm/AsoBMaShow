@@ -15,11 +15,16 @@ void require(bool condition, const char *message) {
 
 struct InputCapture {
   std::vector<gameplay::RealtimeGameplayInput> events;
+  bool scratchLongNoteHeld = false;
 
   static bool emit(void *context,
                    const gameplay::RealtimeGameplayInput &event) {
     static_cast<InputCapture *>(context)->events.push_back(event);
     return true;
+  }
+
+  static bool longScratchNoteHeld(void *context, int) {
+    return static_cast<InputCapture *>(context)->scratchLongNoteHeld;
   }
 };
 
@@ -128,6 +133,37 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
           "scratch reversal remains ordered on the realtime ingress");
 }
 
+void testScratchLongNoteIgnoresSmallDirectionJitter() {
+  InputCapture capture;
+  gameplay::RealtimeTouchInputRouter router(
+      11, makeLayout(),
+      {.context = &capture,
+       .emit = &InputCapture::emit,
+       .scratchLongNoteHeld = &InputCapture::longScratchNoteHeld});
+  require(router.consume({.fingerId = 24,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.75F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 130}) &&
+              router.consume({.fingerId = 24,
+                              .phase = gameplay::RealtimeTouchPhase::Move,
+                              .normalizedX = 0.75F,
+                              .normalizedY = 0.48F,
+                              .steadyTimestampMicros = 140}),
+          "scratch-LN fixture emits its initial direction press");
+  capture.scratchLongNoteHeld = true;
+  require(router.consume({.fingerId = 24,
+                          .phase = gameplay::RealtimeTouchPhase::Move,
+                          .normalizedX = 0.75F,
+                          .normalizedY = 0.485F,
+                          .steadyTimestampMicros = 150}),
+          "small reverse movement is accepted during a scratch LN");
+  require(capture.events.size() == 1 &&
+              capture.events.front().type ==
+                  gameplay::RealtimeGameplayInputType::Press,
+          "active scratch LN jitter emits neither release nor re-press");
+}
+
 void testNormalModeMapsTouchesBelowProjectedPlayfield() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -228,6 +264,7 @@ int main() {
   testDirectTouchEmitsTimestampedLaneEdges();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
+  testScratchLongNoteIgnoresSmallDirectionJitter();
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();

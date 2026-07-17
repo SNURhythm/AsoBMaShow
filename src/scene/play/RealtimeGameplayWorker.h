@@ -80,6 +80,7 @@ struct RealtimeGameplaySnapshot {
   std::uint64_t transactionSequence = 0;
   std::vector<NoteRuntimeState> noteStates;
   std::array<bool, 64> lanePressed{};
+  std::array<bool, 64> longNoteHoldingByLane{};
   GameplayAttemptSnapshot attempt;
   GaugeStateSnapshot gaugeState;
   std::array<JudgementFastSlowCount, JudgementCount> fastSlowCounts{};

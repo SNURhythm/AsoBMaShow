@@ -59,6 +59,25 @@ gameplay::GameplayDefinition makePracticeDefinition() {
   return gameplay::buildGameplayDefinition(chart, 0);
 }
 
+gameplay::GameplayDefinition makeScratchLongDefinition() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  auto *headTimeline = addTimeline(*measure, 1'000'000);
+  auto *tailTimeline = addTimeline(*measure, 2'000'000);
+  auto *head = new bms_parser::LongNote(
+      41, bms_parser::LongNoteType::ChargeNote);
+  auto *tail = new bms_parser::LongNote(
+      41, bms_parser::LongNoteType::ChargeNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(7, head);
+  tailTimeline->SetNote(7, tail);
+  chart.Measures.push_back(measure);
+  return gameplay::buildGameplayDefinition(chart, 0);
+}
+
 struct FakeClock {
   std::atomic<long long> nowMicros{0};
 
@@ -209,6 +228,27 @@ void testInputDelayCompensationPrecedesWorkerAutomaticDeadline() {
               snapshot->attempt.judgeCounts[PGreat] == 1 &&
               snapshot->attempt.judgeCounts[Poor] == 0,
           "worker judges compensated input before raw-time expiration");
+  worker.stop();
+}
+
+void testSnapshotPublishesHeldLongNoteByLane() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "long-note snapshot worker starts");
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 7,
+               .compensateLane = 7,
+               .steadyTimestampMicros = 1'000'000}),
+          "scratch long-note head enters fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->longNoteHoldingByLane[7];
+          }),
+          "worker snapshot publishes held long-note state for scratch routing");
   worker.stop();
 }
 
@@ -609,6 +649,7 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
   testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
+  testSnapshotPublishesHeldLongNoteByLane();
   testAudioCapacityFailureDoesNotClaimTheNote();
   testIngressOverflowFailsClosed();
   testSuspendFreezesAutomaticDeadlinesUntilResume();

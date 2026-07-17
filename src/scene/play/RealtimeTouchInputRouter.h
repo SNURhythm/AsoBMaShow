@@ -42,6 +42,7 @@ struct RealtimeTouchSample {
 struct RealtimeTouchInputSink {
   void *context = nullptr;
   bool (*emit)(void *, const RealtimeGameplayInput &) = nullptr;
+  bool (*scratchLongNoteHeld)(void *, int lane) = nullptr;
 };
 
 class RealtimeTouchInputRouter {

@@ -448,8 +448,20 @@ void RealtimeGameplayWorker::publishSnapshot() {
     auto &snapshot = snapshots_[index].snapshot;
     snapshot.generation = ++snapshotGeneration_;
     snapshot.transactionSequence = transactionSequence_;
+    snapshot.longNoteHoldingByLane.fill(false);
     for (NoteId id = 0; id < definition_.noteCount(); ++id) {
-      snapshot.noteStates[id] = simulation_.noteState(id);
+      const auto &state = simulation_.noteState(id);
+      snapshot.noteStates[id] = state;
+      const auto &note = definition_.note(id);
+      if (state.holding &&
+          (note.kind == NoteKind::LongHead ||
+           note.kind == NoteKind::LongTail) &&
+          note.lane >= 0 &&
+          static_cast<std::size_t>(note.lane) <
+              snapshot.longNoteHoldingByLane.size()) {
+        snapshot.longNoteHoldingByLane[static_cast<std::size_t>(note.lane)] =
+            true;
+      }
     }
     for (int lane = 0; lane < static_cast<int>(snapshot.lanePressed.size());
          ++lane) {

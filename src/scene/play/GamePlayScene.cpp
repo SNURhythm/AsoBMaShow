@@ -24,6 +24,7 @@
 #include "RealtimeTouchInputRouter.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
+#include "../../input/InputTimestamp.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "../../input/AppleInputTimestamp.h"
 #endif
@@ -34,6 +35,7 @@
 #include "../ResultScene.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <iomanip>
@@ -655,6 +657,16 @@ struct GamePlayScene::RealtimeGameplaySession {
            session.worker != nullptr && session.worker->enqueueInput(input);
   }
 
+  static bool scratchLongNoteHeld(void *context, int lane) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (session.worker == nullptr || lane < 0 || lane >= 64) {
+      return false;
+    }
+    auto snapshot = session.worker->acquireLatestSnapshot();
+    return snapshot && snapshot->longNoteHoldingByLane[
+                           static_cast<std::size_t>(lane)];
+  }
+
   static bool emitPhysicalInput(
       void *context,
       const input::RealtimePhysicalInputTransition &transition) {
@@ -699,16 +711,20 @@ struct GamePlayScene::RealtimeGameplaySession {
                                                     nowMicros());
       return 0;
     }
-    const auto physical =
-        session.inputRegistry->translateRealtimeSdlInput(*event);
-    if (!physical.has_value() ||
-        (physical->control.deviceClass != input::DeviceClass::Keyboard &&
-         physical->control.deviceClass !=
-             input::DeviceClass::GameController &&
-         physical->control.deviceClass != input::DeviceClass::Joystick)) {
-      return 0;
+    std::array<input::PhysicalInputEvent, 4> physicalInputs{};
+    const std::size_t inputCount =
+        session.inputRegistry->translateRealtimeSdlInputs(*event,
+                                                          physicalInputs);
+    const std::int64_t timestamp = nowMicros();
+    for (std::size_t index = 0; index < inputCount; ++index) {
+      const auto &physical = physicalInputs[index];
+      if (physical.control.deviceClass != input::DeviceClass::Keyboard &&
+          physical.control.deviceClass != input::DeviceClass::GameController &&
+          physical.control.deviceClass != input::DeviceClass::Joystick) {
+        continue;
+      }
+      session.physicalInputRouter->consume(physical, timestamp);
     }
-    session.physicalInputRouter->consume(*physical, nowMicros());
     return 0;
   }
 
@@ -723,8 +739,22 @@ struct GamePlayScene::RealtimeGameplaySession {
         !session.registryRealtimeEnabled(event.control.deviceClass)) {
       return;
     }
-    session.physicalInputRouter->consume(
-        event, event.timestampMicros != 0 ? event.timestampMicros : nowMicros());
+    std::int64_t timestamp = nowMicros();
+    if (event.timestampMicros != 0) {
+      if (event.timestampDomain ==
+          input::InputTimestampDomain::SdlMilliseconds) {
+        timestamp = input::rebaseWrappingTimestampMillis(
+            static_cast<std::uint32_t>(event.timestampMicros / 1000U),
+            SDL_GetTicks(), timestamp);
+      } else {
+        timestamp = event.timestampMicros >
+                            static_cast<std::uint64_t>(
+                                std::numeric_limits<std::int64_t>::max())
+                        ? std::numeric_limits<std::int64_t>::max()
+                        : static_cast<std::int64_t>(event.timestampMicros);
+      }
+    }
+    session.physicalInputRouter->consume(event, timestamp);
   }
 
   static void registryRealtimeDevice(
@@ -910,7 +940,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
             session->epoch, *touchLayout,
             gameplay::RealtimeTouchInputSink{
                 .context = session.get(),
-                .emit = &RealtimeGameplaySession::emitTouchInput});
+                .emit = &RealtimeGameplaySession::emitTouchInput,
+                .scratchLongNoteHeld =
+                    &RealtimeGameplaySession::scratchLongNoteHeld});
   }
 #endif
   if (!options.autoPlay) {

@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +41,8 @@ public:
   void setRealtimeInputClaimed(input::DeviceClass deviceClass, bool claimed);
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
   translateRealtimeSdlInput(const SDL_Event &) const;
+  std::size_t translateRealtimeSdlInputs(
+      const SDL_Event &, std::span<input::PhysicalInputEvent> output);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedSdlDevice(const SDL_Event &) const;
 

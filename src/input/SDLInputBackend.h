@@ -56,6 +56,9 @@ public:
                                bool claimed) override;
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
   translateRealtimeInput(const SDL_Event &event) const;
+  std::size_t translateRealtimeInputs(
+      const SDL_Event &event,
+      std::span<input::PhysicalInputEvent> output);
   [[nodiscard]] std::optional<std::string>
   realtimeDisconnectedDeviceId(const SDL_Event &event) const;
 

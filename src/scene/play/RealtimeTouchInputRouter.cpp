@@ -148,7 +148,12 @@ bool RealtimeTouchInputRouter::handleScratchMove(
   finger.lastX = sample.normalizedX;
   finger.lastY = sample.normalizedY;
   const float distance = std::sqrt(dx * dx + dy * dy);
-  const float threshold = finger.scratchDirection == 0 ? 0.001F : 0.002F;
+  const bool longNoteHeld =
+      sink_.scratchLongNoteHeld != nullptr &&
+      sink_.scratchLongNoteHeld(sink_.context, finger.lane);
+  const float threshold = finger.scratchDirection == 0
+                              ? 0.001F
+                              : longNoteHeld ? 0.01F : 0.002F;
   if (distance <= threshold) {
     return true;
   }

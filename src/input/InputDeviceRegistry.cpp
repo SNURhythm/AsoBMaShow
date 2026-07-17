@@ -360,6 +360,14 @@ InputDeviceRegistry::translateRealtimeSdlInput(const SDL_Event &event) const {
   return sdlInputBackend_->translateRealtimeInput(event);
 }
 
+std::size_t InputDeviceRegistry::translateRealtimeSdlInputs(
+    const SDL_Event &event, std::span<input::PhysicalInputEvent> output) {
+  if (sdlInputBackend_ == nullptr) {
+    return 0;
+  }
+  return sdlInputBackend_->translateRealtimeInputs(event, output);
+}
+
 std::optional<std::string> InputDeviceRegistry::realtimeDisconnectedSdlDevice(
     const SDL_Event &event) const {
   if (sdlInputBackend_ == nullptr) {

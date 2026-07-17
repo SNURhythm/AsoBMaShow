@@ -963,6 +963,19 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
   const auto translatedJoystick =
       registry.translateRealtimeSdlInput(joystickButton);
 
+  SDL_Event joystickHat{};
+  joystickHat.type = SDL_JOYHATMOTION;
+  joystickHat.jhat.which = 92;
+  joystickHat.jhat.hat = 0;
+  joystickHat.jhat.value = SDL_HAT_UP | SDL_HAT_RIGHT;
+  std::array<input::PhysicalInputEvent, 4> translatedHat{};
+  const std::size_t translatedHatCount =
+      registry.translateRealtimeSdlInputs(joystickHat, translatedHat);
+  joystickHat.jhat.value = SDL_HAT_RIGHT;
+  std::array<input::PhysicalInputEvent, 4> translatedHatRelease{};
+  const std::size_t translatedHatReleaseCount =
+      registry.translateRealtimeSdlInputs(joystickHat, translatedHatRelease);
+
   SDL_Event removed{};
   removed.type = SDL_JOYDEVICEREMOVED;
   removed.jdevice.which = 91;
@@ -985,6 +998,22 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
                  input::DeviceClass::Joystick &&
              translatedJoystick->control.index == 3,
          "realtime SDL translation exposes raw joystick buttons");
+  expect(translatedHatCount == 2 &&
+             translatedHat[0].control.kind == input::ControlKind::Hat &&
+             translatedHat[0].control.direction ==
+                 input::ControlDirection::Up &&
+             translatedHat[1].control.direction ==
+                 input::ControlDirection::Right &&
+             translatedHat[0].normalizedValue == 1.0F &&
+             translatedHat[1].normalizedValue == 1.0F &&
+             translatedHat[0].timestampDomain ==
+                 input::InputTimestampDomain::SdlMilliseconds &&
+             translatedHatReleaseCount == 1 &&
+             translatedHatRelease[0].control.direction ==
+                 input::ControlDirection::Up &&
+             translatedHatRelease[0].normalizedValue == 0.0F,
+         "realtime SDL translation expands diagonal joystick hats into "
+         "ordered directional edges and preserves their releases");
   expect(disconnected.has_value() && translatedButton.has_value() &&
              *disconnected == translatedButton->control.deviceId,
          "realtime SDL removal resolves the held device before frame cleanup");
