@@ -5,13 +5,8 @@
 
 namespace gameplay_scroll_geometry {
 
-struct RenderTimes {
-  long long rawMicros = 0;
-  long long geometryMicros = 0;
-};
-
-inline RenderTimes splitRenderTimes(long long rawMicros) {
-  return {rawMicros, (rawMicros / 1'000LL) * 1'000LL};
+inline long long chartRenderTimeMicros(long long visualTimeMicros) {
+  return visualTimeMicros;
 }
 
 inline float renderY(double itemScrollPosition,

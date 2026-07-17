@@ -2399,11 +2399,10 @@ void BMSRenderer::render(RenderContext &context, long long micro) {
 
 void BMSRenderer::render(RenderContext &context, long long micro,
                          long long replayTouchTimeMicros) {
-  const auto renderTimes = gameplay_scroll_geometry::splitRenderTimes(micro);
-  const long long rawRenderTimeMicros = renderTimes.rawMicros;
-  const long long geometryTimeMicros = renderTimes.geometryMicros;
-  currentRenderMicros = rawRenderTimeMicros;
-  applyPendingHudText(rawRenderTimeMicros);
+  const long long chartTimeMicros =
+      gameplay_scroll_geometry::chartRenderTimeMicros(micro);
+  currentRenderMicros = micro;
+  applyPendingHudText(micro);
   updateJudgementCounterText();
 
   constexpr uint32_t kDepthBackground = 100;
@@ -2444,8 +2443,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       std::max(0.001f, noteVisibleUpperBound - judgeY);
   float rxhs = visibleTravelHeight * hispeed;
   float y = judgeY;
-  const double currentScrollPosition =
-      scrollPositionAtTime(geometryTimeMicros);
+  const double currentScrollPosition = scrollPositionAtTime(chartTimeMicros);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
@@ -2459,7 +2457,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     if (i >= timelineScrollPositions.size()) {
       break;
     }
-    const bool timelineIsFuture = timeLine->Timing >= geometryTimeMicros;
+    const bool timelineIsFuture = timeLine->Timing >= chartTimeMicros;
     // Match Beatoraja's bounded forward walk. In particular, a NaN produced
     // by equal-microsecond huge-BPM rows makes this direct comparison false.
     if (timelineIsFuture && futureTraversalStarted &&
@@ -2473,8 +2471,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
         futureY = gameplay_scroll_geometry::advanceFutureTimelineY(
             futureY, timeLine->BeatPosition - previous->BeatPosition,
             previous->Scroll, previous->Timing,
-            previous->GetStopDuration(), timeLine->Timing,
-            geometryTimeMicros,
+            previous->GetStopDuration(), timeLine->Timing, chartTimeMicros,
             static_cast<double>(rxhs));
       } else {
         futureY = gameplay_scroll_geometry::initialFutureTimelineY(
@@ -2489,11 +2486,11 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
     if (timeLine->IsFirstInMeasure &&
         gameplay_scroll_geometry::shouldDrawMeasureLine(
-            timeLine->Timing, geometryTimeMicros, y, judgeY, upperBound)) {
+            timeLine->Timing, chartTimeMicros, y, judgeY, upperBound)) {
       drawRect(playAreaWidth, 0.05f, playAreaLeftX, y,
                Color(255, 255, 255, 128));
     }
-    if (timeLine->Timing < geometryTimeMicros - latePoorTiming) {
+    if (timeLine->Timing < chartTimeMicros - latePoorTiming) {
       state.currentTimelineIndex = i;
     }
     //    SDL_Log("BeatPosition: %f", timeLine->BeatPosition);
@@ -2518,7 +2515,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
         longNoteLookahead[longNote] = lowerBound;
         return true;
       };
-      if (timeLine->Timing >= geometryTimeMicros - latePoorTiming) {
+      if (timeLine->Timing >= chartTimeMicros - latePoorTiming) {
         // note is in the hittable timing
         if (note->IsDead) {
           if (keepDeadLongNoteBody()) {
@@ -2527,7 +2524,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
           return;
         }
         if (note->IsLandmineNote()) {
-          if (timeLine->Timing >= geometryTimeMicros) {
+          if (timeLine->Timing >= chartTimeMicros) {
             drawLandmineNote(y, static_cast<bms_parser::LandmineNote *>(note));
           }
           return;
@@ -2598,7 +2595,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       if (note == nullptr || note->IsDead) {
         continue;
       }
-      if (timeLine->Timing >= geometryTimeMicros) {
+      if (timeLine->Timing >= chartTimeMicros) {
         if (showInvisibleNotes) {
           drawInvisibleNote(y, note);
         }
@@ -2610,7 +2607,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
       if (note == nullptr || note->IsDead) {
         continue;
       }
-      if (timeLine->Timing >= geometryTimeMicros) {
+      if (timeLine->Timing >= chartTimeMicros) {
         drawLandmineNote(y, note);
       }
     }
@@ -2621,7 +2618,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     drawLongNote(pair.second, upperBound, pair.first);
   }
   if (replayGhostRenderingEnabled) {
-    drawReplayGhosts(rxhs, geometryTimeMicros, currentScrollPosition);
+    drawReplayGhosts(rxhs, chartTimeMicros, currentScrollPosition);
     drawReplayMissMarkers(rxhs, currentScrollPosition);
   }
 
@@ -2635,7 +2632,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
     simpleBatchRenderer.setSubmitDepth(kDepthBeams);
     const long long nowMicros =
         useRenderTimeForLaneBeams
-            ? rawRenderTimeMicros
+            ? micro
             : std::chrono::duration_cast<std::chrono::microseconds>(
                   std::chrono::steady_clock::now().time_since_epoch())
                   .count();
@@ -2684,7 +2681,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
                                            ? 0
                                            : kDepthJudgementIndicator);
     simpleBatchRenderer.begin();
-    judgementIndicator.render(simpleBatchRenderer, rawRenderTimeMicros,
+    judgementIndicator.render(simpleBatchRenderer, micro,
                               {.judgeY = judgeY,
                                .upperBound = upperBound,
                                .playAreaLeftX = playAreaLeftX,

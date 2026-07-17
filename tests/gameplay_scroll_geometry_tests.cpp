@@ -24,16 +24,13 @@ void requireNear(double actual, double expected, const char *message) {
 int main() {
   using namespace gameplay_scroll_geometry;
 
-  const RenderTimes positiveTimes = splitRenderTimes(3'750'075);
-  require(positiveTimes.rawMicros == 3'750'075,
-          "the raw render clock keeps microsecond precision");
-  require(positiveTimes.geometryMicros == 3'750'000,
-          "chart geometry truncates to Beatoraja milliseconds");
-  require(splitRenderTimes(3'750'999).geometryMicros == 3'750'000,
-          "one millisecond uses one stable geometry sample");
-  require(splitRenderTimes(-1'999).geometryMicros == -1'000,
-          "negative preroll matches Java truncation toward zero");
-  require(splitRenderTimes(4'000'000).geometryMicros == 4'000'000,
+  require(chartRenderTimeMicros(3'750'075) == 3'750'075,
+          "chart traversal preserves sub-millisecond visual time");
+  require(chartRenderTimeMicros(3'750'999) == 3'750'999,
+          "chart traversal does not collapse one millisecond of content");
+  require(chartRenderTimeMicros(-1'999) == -1'999,
+          "negative preroll preserves sub-millisecond visual time");
+  require(chartRenderTimeMicros(4'000'000) == 4'000'000,
           "an exact millisecond is unchanged");
 
   requireNear(renderY(10.0, 10.0, 2.0F, 0.5F), 0.5F,
