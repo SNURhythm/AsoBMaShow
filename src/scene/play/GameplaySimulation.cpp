@@ -51,6 +51,10 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
   for (const auto &lane : definition.lanes()) {
     laneStates_.push_back({.lane = lane.lane});
   }
+  if (config_.allowedNoteRange.has_value() &&
+      config_.allowedNoteRange->startMicros > 0) {
+    initializeAt(config_.allowedNoteRange->startMicros);
+  }
 }
 
 std::int64_t GameplaySimulation::inputTime(
@@ -153,11 +157,147 @@ bool GameplaySimulation::recordAutomaticResult(
   return true;
 }
 
+bool GameplaySimulation::noteAllowed(NoteId id) const noexcept {
+  return !config_.allowedNoteRange.has_value() ||
+         config_.allowedNoteRange->contains(definition_.note(id).timingMicros);
+}
+
+void GameplaySimulation::markMissed(NoteId id, std::int64_t judgeTimeMicros,
+                                    bool dead) {
+  if (id == kInvalidNoteId || id >= noteStates_.size()) {
+    return;
+  }
+  auto &state = noteStates_[id];
+  state.played = true;
+  state.dead = dead;
+  state.playedTimeMicros = judgeTimeMicros;
+  state.holding = false;
+}
+
+void GameplaySimulation::clearPairHolding(NoteId id) {
+  if (id == kInvalidNoteId || id >= noteStates_.size()) {
+    return;
+  }
+  noteStates_[id].holding = false;
+  const NoteId pairId = definition_.note(id).pairId;
+  if (pairId != kInvalidNoteId && pairId < noteStates_.size()) {
+    noteStates_[pairId].holding = false;
+  }
+}
+
+GameplayInputResult
+GameplaySimulation::commitMiss(NoteId id, std::int64_t songTimeMicros,
+                               std::int64_t judgeTimeMicros) {
+  return commitMiss(
+      id, songTimeMicros, judgeTimeMicros,
+      JudgeResult(Poor, judgeTimeMicros - definition_.note(id).timingMicros));
+}
+
+GameplayInputResult GameplaySimulation::commitMiss(NoteId id,
+                                                   std::int64_t songTimeMicros,
+                                                   std::int64_t judgeTimeMicros,
+                                                   const JudgeResult &judge) {
+  const auto &note = definition_.note(id);
+  GameplayInputResult result;
+  result.noteId = id;
+  result.hasJudge = true;
+  result.judge = judge;
+  commitJudge(result.judge);
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Miss,
+      .noteId = id,
+      .lane = note.lane,
+      .noteTimeMicros = note.timingMicros,
+      .songTimeMicros = songTimeMicros,
+      .judgeTimeMicros = judgeTimeMicros,
+      .judgement = result.judge.judgement,
+      .diffMicros = result.judge.Diff,
+  };
+  recordReplay(result.replayEvent);
+  return result;
+}
+
+GameplayInputResult GameplaySimulation::commitAutomaticRelease(
+    NoteId tailId, std::int64_t songTimeMicros, std::int64_t visualTimeMicros) {
+  const auto &tail = definition_.note(tailId);
+  auto &tailState = noteStates_[tailId];
+  const auto &headState = noteStates_[tail.pairId];
+  tailState.played = true;
+  tailState.playedTimeMicros = songTimeMicros;
+  tailState.releaseTimeMicros = songTimeMicros;
+  clearPairHolding(tailId);
+
+  const JudgeResult tailJudge =
+      config_.judge.judgeAt(tail.timingMicros, songTimeMicros);
+  JudgeResult applied = normalizeReleaseJudge(tailJudge);
+  if (tail.longNoteRule == LongNoteRule::Classic) {
+    const auto &head = definition_.note(tail.pairId);
+    const JudgeResult headJudge =
+        config_.judge.judgeAt(head.timingMicros, headState.playedTimeMicros);
+    applied = normalizeReleaseJudge(absoluteDistance(tailJudge.Diff) >
+                                            absoluteDistance(headJudge.Diff)
+                                        ? tailJudge
+                                        : headJudge);
+  }
+
+  GameplayInputResult result;
+  result.noteId = tailId;
+  result.hasJudge = true;
+  result.judge = applied;
+  commitJudge(result.judge);
+  result.hasReplayEvent = true;
+  result.replayEvent = {
+      .action = GameplayReplayAction::Release,
+      .noteId = tailId,
+      .lane = tail.lane,
+      .noteTimeMicros = tail.timingMicros,
+      .songTimeMicros = songTimeMicros,
+      .judgeTimeMicros = songTimeMicros,
+      .judgement = applied.judgement,
+      .diffMicros = applied.Diff,
+  };
+  recordReplay(result.replayEvent);
+  if (config_.attempt.autoPlay) {
+    result.hasLaneVisual = true;
+    result.laneVisual = {LaneVisualAction::Release, tail.lane, visualTimeMicros,
+                         JudgeResult(None, 0)};
+  }
+  return result;
+}
+
+void GameplaySimulation::initializeAt(std::int64_t startMicros) {
+  const auto chronological = definition_.chronologicalNotes();
+  for (const NoteId id : chronological) {
+    const auto &note = definition_.note(id);
+    if (note.timingMicros >= startMicros) {
+      break;
+    }
+    markMissed(id, startMicros, true);
+    if ((note.kind == NoteKind::LongHead || note.kind == NoteKind::LongTail) &&
+        note.pairId != kInvalidNoteId) {
+      markMissed(note.pairId, startMicros, true);
+    }
+  }
+  while (atTimingCursor_ < chronological.size() &&
+         definition_.note(chronological[atTimingCursor_]).timingMicros <
+             startMicros) {
+    ++atTimingCursor_;
+  }
+  while (latePoorCursor_ < chronological.size() &&
+         definition_.note(chronological[latePoorCursor_]).timingMicros <
+             startMicros) {
+    ++latePoorCursor_;
+  }
+  lastAdvancedMicros_ = startMicros;
+  hasAdvanced_ = true;
+}
+
 void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
                                          std::int64_t visualTimeMicros) {
   const auto &note = definition_.note(id);
   auto &state = noteStates_[id];
-  if (state.played || state.dead) {
+  if (state.played || state.dead || !noteAllowed(id)) {
     return;
   }
 
@@ -186,21 +326,42 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     return;
   }
 
-  if (note.kind != NoteKind::Normal || !config_.attempt.autoPlay) {
+  if (note.kind == NoteKind::LongTail) {
+    if (!state.holding || note.pairId == kInvalidNoteId ||
+        (note.longNoteRule != LongNoteRule::Classic &&
+         !config_.attempt.autoPlay)) {
+      return;
+    }
+    recordAutomaticResult(
+        commitAutomaticRelease(id, songTimeMicros, visualTimeMicros));
+    return;
+  }
+
+  if ((note.kind != NoteKind::Normal && note.kind != NoteKind::LongHead) ||
+      !config_.attempt.autoPlay) {
     return;
   }
 
   state.played = true;
   state.playedTimeMicros = songTimeMicros;
+  if (note.kind == NoteKind::LongHead) {
+    state.holding = true;
+    if (note.pairId != kInvalidNoteId) {
+      noteStates_[note.pairId].holding = true;
+    }
+  }
   GameplayInputResult press;
   press.noteId = id;
   press.soundNoteId = id;
-  press.hasJudge = true;
+  press.hasJudge = note.kind == NoteKind::Normal ||
+                   note.longNoteRule != LongNoteRule::Classic;
   press.judge = JudgeResult(PGreat, 0);
   press.hasLaneVisual = true;
   press.laneVisual = {LaneVisualAction::Press, note.lane, visualTimeMicros,
                       press.judge};
-  commitJudge(press.judge);
+  if (press.hasJudge) {
+    commitJudge(press.judge);
+  }
   press.hasReplayEvent = true;
   press.replayEvent = {
       .action = GameplayReplayAction::Press,
@@ -215,6 +376,9 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   recordReplay(press.replayEvent);
   recordAutomaticResult(press);
 
+  if (note.kind == NoteKind::LongHead) {
+    return;
+  }
   GameplayInputResult release;
   release.hasLaneVisual = true;
   release.laneVisual = {LaneVisualAction::Release, note.lane, visualTimeMicros,
@@ -226,31 +390,114 @@ void GameplaySimulation::processLatePoor(NoteId id,
                                          std::int64_t songTimeMicros) {
   const auto &note = definition_.note(id);
   auto &state = noteStates_[id];
-  if (note.kind != NoteKind::Normal || state.played || state.dead) {
+  if (state.played || state.dead || !noteAllowed(id) ||
+      note.kind == NoteKind::Landmine) {
     return;
   }
 
-  state.played = true;
-  state.dead = true;
-  state.playedTimeMicros = songTimeMicros;
-  GameplayInputResult result;
-  result.noteId = id;
-  result.hasJudge = true;
-  result.judge = JudgeResult(Poor, songTimeMicros - note.timingMicros);
-  commitJudge(result.judge);
-  result.hasReplayEvent = true;
-  result.replayEvent = {
-      .action = GameplayReplayAction::Miss,
-      .noteId = id,
-      .lane = note.lane,
-      .noteTimeMicros = note.timingMicros,
-      .songTimeMicros = songTimeMicros,
-      .judgeTimeMicros = songTimeMicros,
-      .judgement = result.judge.judgement,
-      .diffMicros = result.judge.Diff,
-  };
-  recordReplay(result.replayEvent);
-  recordAutomaticResult(result);
+  if (note.kind == NoteKind::Normal) {
+    markMissed(id, songTimeMicros, true);
+    recordAutomaticResult(commitMiss(id, songTimeMicros, songTimeMicros));
+    return;
+  }
+
+  if (note.kind == NoteKind::LongHead) {
+    markMissed(id, songTimeMicros, true);
+    clearPairHolding(id);
+    const auto headMiss = commitMiss(id, songTimeMicros, songTimeMicros);
+    recordAutomaticResult(headMiss);
+    if (note.pairId == kInvalidNoteId || !noteAllowed(note.pairId) ||
+        noteStates_[note.pairId].played) {
+      return;
+    }
+    if (note.longNoteRule == LongNoteRule::Classic) {
+      markMissed(note.pairId, songTimeMicros, false);
+      return;
+    }
+    const bool tailDead =
+        songTimeMicros >= definition_.note(note.pairId).timingMicros;
+    markMissed(note.pairId, songTimeMicros, tailDead);
+    recordAutomaticResult(commitMiss(note.pairId, songTimeMicros,
+                                     songTimeMicros, headMiss.judge));
+    return;
+  }
+
+  markMissed(id, songTimeMicros, true);
+  clearPairHolding(id);
+  recordAutomaticResult(commitMiss(id, songTimeMicros, songTimeMicros));
+}
+
+GameplayAdvanceResult
+GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
+                                          std::int64_t visualTimeMicros) {
+  (void)visualTimeMicros;
+  automaticResults_.clear();
+  lastAdvanceStats_ = {};
+  if (practiceRangeFinalized_) {
+    return {automaticResults_, lastAdvancedMicros_};
+  }
+  practiceRangeFinalized_ = true;
+  if (!config_.allowedNoteRange.has_value()) {
+    return {automaticResults_, lastAdvancedMicros_};
+  }
+
+  const auto &range = *config_.allowedNoteRange;
+  for (const NoteId id : definition_.chronologicalNotes()) {
+    const auto &note = definition_.note(id);
+    if (!range.contains(note.timingMicros) || note.kind == NoteKind::Landmine) {
+      continue;
+    }
+    auto &state = noteStates_[id];
+    if (note.kind == NoteKind::LongHead && state.played &&
+        note.pairId != kInvalidNoteId && !noteStates_[note.pairId].played &&
+        !range.contains(definition_.note(note.pairId).timingMicros)) {
+      clearPairHolding(id);
+      if (note.longNoteRule == LongNoteRule::Classic) {
+        continue;
+      }
+    }
+    if (state.played) {
+      continue;
+    }
+
+    if (note.kind == NoteKind::Normal ||
+        note.longNoteRule != LongNoteRule::Classic) {
+      markMissed(id, finalizationTimeMicros, true);
+      clearPairHolding(id);
+      recordAutomaticResult(
+          commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
+      continue;
+    }
+
+    if (note.kind == NoteKind::LongHead) {
+      markMissed(id, finalizationTimeMicros, true);
+      clearPairHolding(id);
+      if (note.pairId != kInvalidNoteId &&
+          range.contains(definition_.note(note.pairId).timingMicros) &&
+          !noteStates_[note.pairId].played) {
+        markMissed(note.pairId, finalizationTimeMicros, false);
+      }
+      recordAutomaticResult(
+          commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
+      continue;
+    }
+
+    if (note.pairId != kInvalidNoteId &&
+        range.contains(definition_.note(note.pairId).timingMicros) &&
+        !noteStates_[note.pairId].played) {
+      continue;
+    }
+    markMissed(id, finalizationTimeMicros, true);
+    clearPairHolding(id);
+    recordAutomaticResult(
+        commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
+  }
+
+  if (!hasAdvanced_ || finalizationTimeMicros > lastAdvancedMicros_) {
+    lastAdvancedMicros_ = finalizationTimeMicros;
+  }
+  hasAdvanced_ = true;
+  return {automaticResults_, lastAdvancedMicros_};
 }
 
 GameplayAdvanceResult

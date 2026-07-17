@@ -242,6 +242,9 @@ void testExactPendingNoteFinalization() {
   auto *chargeHead =
       addLongNote(*measure, endMicros - 20, endMicros - 10, 4,
                   bms_parser::LongNoteType::ChargeNote);
+  auto *hellChargeHead =
+      addLongNote(*measure, endMicros - 25, endMicros - 15, 7,
+                  bms_parser::LongNoteType::HellChargeNote);
   auto *classicHead =
       addLongNote(*measure, endMicros - 30, endMicros + 10, 5,
                   bms_parser::LongNoteType::LongNote);
@@ -266,13 +269,16 @@ void testExactPendingNoteFinalization() {
 
   const auto misses = finalizePendingPracticeNotes(
       chart, range, endMicros - 1, 0);
-  require(misses.size() == 5,
-          "normal, charge identities, and unpressed classic heads finalize");
+  require(misses.size() == 7,
+          "normal, charge/HCN identities, and unpressed classic heads finalize");
   require(lastValid->IsPlayed && lastValid->IsDead,
           "end-1 pending note becomes a miss");
   require(chargeHead->IsPlayed && chargeHead->IsDead &&
               chargeHead->Tail->IsPlayed && chargeHead->Tail->IsDead,
           "in-range charge identities each finalize as misses");
+  require(hellChargeHead->IsPlayed && hellChargeHead->IsDead &&
+              hellChargeHead->Tail->IsPlayed && hellChargeHead->Tail->IsDead,
+          "in-range Hell Charge identities each finalize as misses");
   require(classicHead->IsPlayed && classicHead->IsDead &&
               !classicHead->Tail->IsPlayed,
           "unpressed crossing classic head finalizes as a miss");

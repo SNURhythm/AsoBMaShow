@@ -6,6 +6,7 @@
 #include "bms_parser.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -40,6 +41,42 @@ bms_parser::LongNote *addLongNote(bms_parser::Measure &measure,
   headTimeline->SetNote(lane, head);
   tailTimeline->SetNote(lane, tail);
   return head;
+}
+
+struct LongPairIds {
+  gameplay::NoteId head = gameplay::kInvalidNoteId;
+  gameplay::NoteId tail = gameplay::kInvalidNoteId;
+};
+
+LongPairIds longPairIds(const gameplay::GameplayDefinition &definition,
+                        int lane) {
+  LongPairIds result;
+  for (const gameplay::NoteId id : definition.laneNotes(lane)) {
+    const auto &note = definition.note(id);
+    if (note.kind == gameplay::NoteKind::LongHead) {
+      result.head = id;
+    } else if (note.kind == gameplay::NoteKind::LongTail) {
+      result.tail = id;
+    }
+  }
+  require(result.head != gameplay::kInvalidNoteId &&
+              result.tail != gameplay::kInvalidNoteId,
+          "long-note pair identities are present");
+  return result;
+}
+
+gameplay::NoteId findNoteId(const gameplay::GameplayDefinition &definition,
+                            int lane, std::int64_t timingMicros,
+                            gameplay::NoteKind kind) {
+  for (const gameplay::NoteId id : definition.chronologicalNotes()) {
+    const auto &note = definition.note(id);
+    if (note.lane == lane && note.timingMicros == timingMicros &&
+        note.kind == kind) {
+      return id;
+    }
+  }
+  require(false, "requested stable note identity is present");
+  return gameplay::kInvalidNoteId;
 }
 
 void testDefinitionCompilesAutomaticMetadata() {
@@ -579,6 +616,463 @@ void testBackwardAdvanceIsIgnoredWithoutRollingBackTime() {
               simulation.snapshot().judgeCounts[Poor] == 1,
           "forward progress remains valid after a rejected backward call");
 }
+
+void testUnpressedLongNoteDeadlineIdentityMatrix() {
+  constexpr std::int64_t headMicros = 1'000'000;
+  constexpr std::int64_t tailMicros = 3'000'000;
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const std::int64_t headDeadline =
+      headMicros + compiledJudge.latePoorTimingMicros() + 1;
+  require(headDeadline < tailMicros,
+          "long-note miss matrix exercises an early future tail");
+
+  {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, headMicros, tailMicros, 1,
+                bms_parser::LongNoteType::LongNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    const auto ids = longPairIds(definition, 1);
+    gameplay::GameplaySimulation simulation(
+        definition,
+        {.judge = compiledJudge,
+         .attempt = {.replayCapacity = 8, .automaticResultCapacity = 8}});
+    const float gaugeBefore = simulation.snapshot().gauge;
+
+    const auto advanced = simulation.advanceTo(headDeadline, 15'000'000);
+    require(advanced.transactions.size() == 1 &&
+                advanced.transactions.front().noteId == ids.head &&
+                advanced.transactions.front().judge.judgement == Poor,
+            "unpressed Classic head emits one head-identity Poor");
+    require(simulation.noteState(ids.head).played &&
+                simulation.noteState(ids.head).dead &&
+                !simulation.noteState(ids.head).holding &&
+                simulation.noteState(ids.tail).played &&
+                !simulation.noteState(ids.tail).dead &&
+                !simulation.noteState(ids.tail).holding &&
+                simulation.noteState(ids.tail).playedTimeMicros == headDeadline,
+            "Classic miss resolves the pair without a second dead identity");
+    const auto snapshot = simulation.snapshot();
+    require(snapshot.judgeCounts[Poor] == 1 && snapshot.combo == 0 &&
+                snapshot.comboBreak == 1 && snapshot.gauge < gaugeBefore &&
+                simulation.replayEvents().size() == 1 &&
+                simulation.replayEvents().front().noteId == ids.head &&
+                simulation.replayEvents().front().combo == snapshot.combo &&
+                simulation.replayEvents().front().gauge == snapshot.gauge,
+            "Classic miss commits one score, gauge, and post-state replay");
+  }
+
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, headMicros, tailMicros, 1, type);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    const auto ids = longPairIds(definition, 1);
+    gameplay::GameplaySimulation simulation(
+        definition,
+        {.judge = compiledJudge,
+         .attempt = {.replayCapacity = 8, .automaticResultCapacity = 8}});
+    const float gaugeBefore = simulation.snapshot().gauge;
+
+    const auto advanced = simulation.advanceTo(headDeadline, 15'100'000);
+    require(
+        advanced.transactions.size() == 2 &&
+            advanced.transactions[0].noteId == ids.head &&
+            advanced.transactions[1].noteId == ids.tail &&
+            advanced.transactions[0].judge.judgement == Poor &&
+            advanced.transactions[1].judge.judgement == Poor &&
+            advanced.transactions[1].judge.Diff == headDeadline - headMicros &&
+            advanced.transactions[1].replayEvent.noteTimeMicros == tailMicros &&
+            advanced.transactions[1].replayEvent.judgeTimeMicros ==
+                headDeadline,
+        "unpressed Charge/HCN pair emits one Poor per stable identity");
+    require(simulation.noteState(ids.head).played &&
+                simulation.noteState(ids.head).dead &&
+                simulation.noteState(ids.tail).played &&
+                !simulation.noteState(ids.tail).dead &&
+                simulation.noteState(ids.tail).playedTimeMicros ==
+                    headDeadline &&
+                !simulation.noteState(ids.head).holding &&
+                !simulation.noteState(ids.tail).holding,
+            "early Charge/HCN tail remains played but not dead");
+    const auto snapshot = simulation.snapshot();
+    require(snapshot.judgeCounts[Poor] == 2 && snapshot.combo == 0 &&
+                snapshot.comboBreak == 2 && snapshot.gauge < gaugeBefore &&
+                simulation.replayEvents().size() == 2 &&
+                simulation.replayEvents()[0].noteId == ids.head &&
+                simulation.replayEvents()[1].noteId == ids.tail &&
+                simulation.replayEvents()[1].combo == snapshot.combo &&
+                simulation.replayEvents()[1].gauge == snapshot.gauge,
+            "Charge/HCN misses commit separately ordered post-state replays");
+
+    const auto atFutureTail = simulation.advanceTo(tailMicros, 15'100'001);
+    require(atFutureTail.transactions.empty() &&
+                simulation.noteState(ids.tail).played &&
+                !simulation.noteState(ids.tail).dead &&
+                simulation.snapshot().judgeCounts[Poor] == 2,
+            "early-resolved Charge/HCN tail stays live through its timing");
+  }
+}
+
+void testHeldLongNoteAutomaticReleaseMatrix() {
+  constexpr std::int64_t headMicros = 1'000'000;
+  constexpr std::int64_t tailMicros = 2'000'000;
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+
+  {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, headMicros, tailMicros, 1,
+                bms_parser::LongNoteType::LongNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    const auto ids = longPairIds(definition, 1);
+    gameplay::GameplaySimulation simulation(definition,
+                                            {.judge = compiledJudge});
+    const auto press = simulation.pressLane(1, {.songTimeMicros = headMicros});
+    require(press.noteId == ids.head && !press.hasJudge &&
+                simulation.noteState(ids.head).holding &&
+                simulation.noteState(ids.tail).holding,
+            "Classic head starts one deferred held judgement");
+
+    const auto released = simulation.advanceTo(tailMicros, 16'000'000);
+    require(released.transactions.size() == 1 &&
+                released.transactions.front().noteId == ids.tail &&
+                released.transactions.front().hasJudge &&
+                released.transactions.front().judge.judgement == PGreat &&
+                released.transactions.front().replayEvent.action ==
+                    gameplay::GameplayReplayAction::Release &&
+                !released.transactions.front().hasLaneVisual,
+            "held Classic tail auto-releases with the combined judgement");
+    require(simulation.noteState(ids.head).played &&
+                !simulation.noteState(ids.head).dead &&
+                !simulation.noteState(ids.head).holding &&
+                simulation.noteState(ids.tail).played &&
+                !simulation.noteState(ids.tail).dead &&
+                !simulation.noteState(ids.tail).holding &&
+                simulation.noteState(ids.tail).releaseTimeMicros ==
+                    tailMicros &&
+                simulation.lanePressed(1) &&
+                simulation.snapshot().judgeCounts[PGreat] == 1 &&
+                simulation.replayEvents().size() == 2,
+            "Classic automatic release resolves pair state once without faking "
+            "input");
+  }
+
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, headMicros, tailMicros, 1, type);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    const auto ids = longPairIds(definition, 1);
+    gameplay::GameplaySimulation simulation(definition,
+                                            {.judge = compiledJudge});
+    const auto press = simulation.pressLane(1, {.songTimeMicros = headMicros});
+    const auto atTail = simulation.advanceTo(tailMicros, 16'100'000);
+    require(press.hasJudge && press.judge.judgement == PGreat &&
+                atTail.transactions.empty() &&
+                simulation.noteState(ids.head).holding &&
+                simulation.noteState(ids.tail).holding &&
+                !simulation.noteState(ids.tail).played &&
+                simulation.snapshot().judgeCounts[PGreat] == 1,
+            "manual Charge/HCN remains holding at tail timing");
+
+    const auto release =
+        simulation.releaseLane(1, {.songTimeMicros = tailMicros});
+    require(release.noteId == ids.tail && release.hasJudge &&
+                release.judge.judgement == PGreat &&
+                !simulation.noteState(ids.head).holding &&
+                !simulation.noteState(ids.tail).holding &&
+                simulation.noteState(ids.tail).played &&
+                simulation.snapshot().judgeCounts[PGreat] == 2,
+            "manual Charge/HCN resolves only on physical release");
+
+    gameplay::GameplaySimulation lateSimulation(definition,
+                                                {.judge = compiledJudge});
+    lateSimulation.pressLane(1, {.songTimeMicros = headMicros});
+    const std::int64_t tailDeadline =
+        tailMicros + compiledJudge.latePoorTimingMicros() + 1;
+    const auto late = lateSimulation.advanceTo(tailDeadline, 16'100'001);
+    require(late.transactions.size() == 1 &&
+                late.transactions.front().noteId == ids.tail &&
+                late.transactions.front().judge.judgement == Poor &&
+                lateSimulation.noteState(ids.tail).played &&
+                lateSimulation.noteState(ids.tail).dead &&
+                !lateSimulation.noteState(ids.head).holding &&
+                !lateSimulation.noteState(ids.tail).holding &&
+                lateSimulation.snapshot().judgeCounts[PGreat] == 1 &&
+                lateSimulation.snapshot().judgeCounts[Poor] == 1,
+            "held Charge/HCN tail eventually resolves as its own late Poor");
+  }
+}
+
+void testAutoplayChargeAndHellChargeReleaseAtTiming() {
+  constexpr std::int64_t headMicros = 1'000'000;
+  constexpr std::int64_t tailMicros = 2'000'000;
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, headMicros, tailMicros, 1, type);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    const auto ids = longPairIds(definition, 1);
+    gameplay::GameplaySimulation simulation(
+        definition, {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+                     .attempt = {.autoPlay = true}});
+
+    const auto advanced = simulation.advanceTo(tailMicros, 17'000'000);
+    require(
+        advanced.transactions.size() == 2 &&
+            advanced.transactions[0].noteId == ids.head &&
+            advanced.transactions[0].soundNoteId == ids.head &&
+            advanced.transactions[0].judge.judgement == PGreat &&
+            advanced.transactions[0].laneVisual.action ==
+                gameplay::LaneVisualAction::Press &&
+            advanced.transactions[1].noteId == ids.tail &&
+            advanced.transactions[1].soundNoteId == gameplay::kInvalidNoteId &&
+            advanced.transactions[1].judge.judgement == PGreat &&
+            advanced.transactions[1].laneVisual.action ==
+                gameplay::LaneVisualAction::Release,
+        "autoplay Charge/HCN presses the head and releases the tail at timing");
+    require(simulation.noteState(ids.head).played &&
+                simulation.noteState(ids.tail).played &&
+                !simulation.noteState(ids.head).holding &&
+                !simulation.noteState(ids.tail).holding &&
+                !simulation.lanePressed(1) &&
+                simulation.snapshot().judgeCounts[PGreat] == 2 &&
+                simulation.snapshot().combo == 2 &&
+                simulation.snapshot().score == 4 &&
+                simulation.replayEvents().size() == 2 &&
+                simulation.replayEvents()[0].noteId == ids.head &&
+                simulation.replayEvents()[1].noteId == ids.tail,
+            "autoplay Charge/HCN commits two identity judgements and replays");
+  }
+}
+
+void testStartInitializationResolvesPreStartWorkWithoutTransactions() {
+  constexpr std::int64_t startMicros = 1'000'000;
+  constexpr std::int64_t endMicros = 3'000'000;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 7;
+  auto *measure = new bms_parser::Measure();
+  auto *normalBefore = addTimeline(*measure, 100'000);
+  normalBefore->SetNote(1, new bms_parser::Note(1));
+  auto *mineBefore = addTimeline(*measure, 200'000);
+  mineBefore->SetLandmineNote(2, new bms_parser::LandmineNote(5.0F));
+  addLongNote(*measure, 300'000, startMicros + 10'000, 3,
+              bms_parser::LongNoteType::LongNote);
+  addLongNote(*measure, 400'000, 500'000, 4,
+              bms_parser::LongNoteType::ChargeNote);
+  auto *atStart = addTimeline(*measure, startMicros);
+  atStart->SetNote(5, new bms_parser::Note(5));
+  auto *future = addTimeline(*measure, 2'000'000);
+  future->SetNote(6, new bms_parser::Note(6));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const auto classic = longPairIds(definition, 3);
+  const auto charge = longPairIds(definition, 4);
+  const auto normalBeforeId =
+      findNoteId(definition, 1, 100'000, gameplay::NoteKind::Normal);
+  const auto mineBeforeId =
+      findNoteId(definition, 2, 200'000, gameplay::NoteKind::Landmine);
+  const auto atStartId =
+      findNoteId(definition, 5, startMicros, gameplay::NoteKind::Normal);
+  const auto futureId =
+      findNoteId(definition, 6, 2'000'000, gameplay::NoteKind::Normal);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = compiledJudge,
+                   .allowedNoteRange =
+                       gameplay::GameplayTimeRange{.startMicros = startMicros,
+                                                   .endMicros = endMicros},
+                   .attempt = {.startingGaugePercent = 37,
+                               .carriedCombo = 3,
+                               .carriedMaxCombo = 4,
+                               .replayCapacity = 16,
+                               .automaticResultCapacity = 16}});
+
+  const auto initialized = simulation.snapshot();
+  require(simulation.noteState(normalBeforeId).played &&
+              simulation.noteState(normalBeforeId).dead &&
+              simulation.noteState(normalBeforeId).playedTimeMicros ==
+                  startMicros &&
+              simulation.noteState(mineBeforeId).played &&
+              simulation.noteState(mineBeforeId).dead &&
+              simulation.noteState(mineBeforeId).playedTimeMicros ==
+                  startMicros,
+          "start initialization resolves pre-start normals and mines");
+  require(simulation.noteState(classic.head).played &&
+              simulation.noteState(classic.head).dead &&
+              simulation.noteState(classic.tail).played &&
+              simulation.noteState(classic.tail).dead &&
+              simulation.noteState(classic.tail).playedTimeMicros ==
+                  startMicros &&
+              simulation.noteState(charge.head).played &&
+              simulation.noteState(charge.head).dead &&
+              simulation.noteState(charge.tail).played &&
+              simulation.noteState(charge.tail).dead,
+          "start initialization resolves both identities of crossing and old "
+          "pairs");
+  require(!simulation.noteState(atStartId).played &&
+              !simulation.noteState(futureId).played &&
+              initialized.judgeCounts[Poor] == 0 && initialized.combo == 3 &&
+              initialized.maxCombo == 4 && initialized.comboBreak == 0 &&
+              initialized.gauge == 37.0F &&
+              simulation.scoreState().gaugeHistory.empty() &&
+              simulation.replayEvents().empty() &&
+              simulation.automaticResults().empty(),
+          "start initialization has no score, gauge, replay, or boundary side "
+          "effects");
+
+  const auto backward = simulation.advanceTo(startMicros - 1, 18'000'000);
+  require(backward.transactions.empty() &&
+              backward.advancedToMicros == startMicros &&
+              simulation.lastAdvanceStats().notesExamined == 0,
+          "start initialization establishes the monotonic attempt position");
+  const std::int64_t atStartDeadline =
+      startMicros + compiledJudge.latePoorTimingMicros() + 1;
+  const auto advanced = simulation.advanceTo(atStartDeadline, 18'000'001);
+  require(advanced.transactions.size() == 1 &&
+              advanced.transactions.front().noteId == atStartId &&
+              simulation.snapshot().judgeCounts[Poor] == 1 &&
+              simulation.replayEvents().size() == 1 &&
+              simulation.lastAdvanceStats().notesExamined == 3 &&
+              simulation.noteState(classic.tail).dead &&
+              !simulation.noteState(futureId).played,
+          "both automatic cursors skip obsolete work without replaying it");
+}
+
+void testPracticeFinalizationMatchesHalfOpenIdentityRules() {
+  constexpr std::int64_t startMicros = 500'000;
+  constexpr std::int64_t endMicros = 1'000'000;
+  constexpr std::int64_t finalizationMicros = endMicros - 1;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 10;
+  auto *measure = new bms_parser::Measure();
+  auto *beforeStart = addTimeline(*measure, startMicros - 1);
+  beforeStart->SetNote(1, new bms_parser::Note(1));
+  addLongNote(*measure, endMicros - 60, endMicros + 20, 6,
+              bms_parser::LongNoteType::LongNote);
+  addLongNote(*measure, endMicros - 50, endMicros - 45, 0,
+              bms_parser::LongNoteType::LongNote);
+  addLongNote(*measure, endMicros - 40, endMicros + 10, 5,
+              bms_parser::LongNoteType::LongNote);
+  addLongNote(*measure, endMicros - 30, endMicros - 25, 4,
+              bms_parser::LongNoteType::HellChargeNote);
+  addLongNote(*measure, endMicros - 20, endMicros - 10, 3,
+              bms_parser::LongNoteType::ChargeNote);
+  auto *mineTimeline = addTimeline(*measure, endMicros - 2);
+  mineTimeline->SetLandmineNote(2, new bms_parser::LandmineNote(5.0F));
+  auto *lastValid = addTimeline(*measure, endMicros - 1);
+  lastValid->SetNote(1, new bms_parser::Note(2));
+  auto *atEnd = addTimeline(*measure, endMicros);
+  atEnd->SetNote(7, new bms_parser::Note(3));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto heldClassic = longPairIds(definition, 6);
+  const auto fullClassic = longPairIds(definition, 0);
+  const auto crossingClassic = longPairIds(definition, 5);
+  const auto hellCharge = longPairIds(definition, 4);
+  const auto charge = longPairIds(definition, 3);
+  const auto mineId =
+      findNoteId(definition, 2, endMicros - 2, gameplay::NoteKind::Landmine);
+  const auto lastValidId =
+      findNoteId(definition, 1, endMicros - 1, gameplay::NoteKind::Normal);
+  const auto atEndId =
+      findNoteId(definition, 7, endMicros, gameplay::NoteKind::Normal);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .allowedNoteRange =
+           gameplay::GameplayTimeRange{.startMicros = startMicros,
+                                       .endMicros = endMicros},
+       .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
+  const auto heldPress = simulation.pressLane(
+      6, {.songTimeMicros = endMicros - 60, .laneBeamTimeMicros = 19'000'000});
+  require(heldPress.noteId == heldClassic.head && !heldPress.hasJudge &&
+              simulation.noteState(heldClassic.head).holding,
+          "practice finalization setup holds a crossing Classic head");
+  const auto *const resultStorage = simulation.automaticResults().data();
+  const auto *const replayStorage = simulation.replayEvents().data();
+  const auto *const gaugeStorage = simulation.scoreState().gaugeHistory.data();
+
+  const auto finalized =
+      simulation.finalizePracticeRange(finalizationMicros, 19'000'001);
+  const std::array expectedIds{
+      fullClassic.head, crossingClassic.head, hellCharge.head, hellCharge.tail,
+      charge.head,      charge.tail,          lastValidId};
+  require(finalized.transactions.size() == expectedIds.size() &&
+              finalized.transactions.data() == resultStorage,
+          "practice finalization emits one fixed-storage transaction per "
+          "judged identity");
+  for (std::size_t index = 0; index < expectedIds.size(); ++index) {
+    require(finalized.transactions[index].noteId == expectedIds[index] &&
+                finalized.transactions[index].hasJudge &&
+                finalized.transactions[index].judge.judgement == Poor &&
+                finalized.transactions[index].hasReplayEvent &&
+                finalized.transactions[index].replayEvent.action ==
+                    gameplay::GameplayReplayAction::Miss,
+            "practice misses preserve chronological stable identity order");
+  }
+  require(simulation.noteState(fullClassic.head).played &&
+              simulation.noteState(fullClassic.head).dead &&
+              simulation.noteState(fullClassic.tail).played &&
+              !simulation.noteState(fullClassic.tail).dead &&
+              simulation.noteState(crossingClassic.head).played &&
+              simulation.noteState(crossingClassic.head).dead &&
+              !simulation.noteState(crossingClassic.tail).played,
+          "practice Classic rules collapse an eligible pair and preserve "
+          "crossing tail");
+  require(simulation.noteState(charge.head).played &&
+              simulation.noteState(charge.head).dead &&
+              simulation.noteState(charge.tail).played &&
+              simulation.noteState(charge.tail).dead &&
+              simulation.noteState(hellCharge.head).played &&
+              simulation.noteState(hellCharge.head).dead &&
+              simulation.noteState(hellCharge.tail).played &&
+              simulation.noteState(hellCharge.tail).dead,
+          "practice Charge and HCN identities finalize separately");
+  require(simulation.noteState(heldClassic.head).played &&
+              !simulation.noteState(heldClassic.head).dead &&
+              !simulation.noteState(heldClassic.head).holding &&
+              !simulation.noteState(heldClassic.tail).played &&
+              !simulation.noteState(heldClassic.tail).holding &&
+              !simulation.noteState(mineId).played &&
+              !simulation.noteState(mineId).dead &&
+              !simulation.noteState(atEndId).played &&
+              !simulation.noteState(atEndId).dead,
+          "practice finalization clears crossing hold and ignores mines and "
+          "end boundary");
+  const auto snapshot = simulation.snapshot();
+  require(
+      snapshot.judgeCounts[Poor] == 7 && snapshot.combo == 0 &&
+          snapshot.comboBreak == 7 && simulation.replayEvents().size() == 8 &&
+          simulation.replayEvents().data() == replayStorage &&
+          simulation.scoreState().gaugeHistory.data() == gaugeStorage,
+      "practice identity misses commit bounded score, gauge, and replay state");
+
+  const auto duplicate =
+      simulation.finalizePracticeRange(finalizationMicros, 19'000'002);
+  require(duplicate.transactions.empty() &&
+              simulation.automaticResults().data() == resultStorage &&
+              simulation.replayEvents().size() == 8 &&
+              simulation.snapshot().judgeCounts[Poor] == 7,
+          "practice finalization rejects repeated calls without allocation or "
+          "mutation");
+}
 } // namespace
 
 int main() {
@@ -595,5 +1089,10 @@ int main() {
   testAutomaticResultCapacityLatchesWithoutGrowth();
   testGlobalAutomaticCursorsDoNotReexamineCompletedIdentities();
   testBackwardAdvanceIsIgnoredWithoutRollingBackTime();
+  testUnpressedLongNoteDeadlineIdentityMatrix();
+  testHeldLongNoteAutomaticReleaseMatrix();
+  testAutoplayChargeAndHellChargeReleaseAtTiming();
+  testStartInitializationResolvesPreStartWorkWithoutTransactions();
+  testPracticeFinalizationMatchesHalfOpenIdentityRules();
   return 0;
 }

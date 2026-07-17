@@ -136,6 +136,9 @@ public:
   GameplayInputResult applyReleaseAt(int lane,
                                      const GameplayInputContext &context,
                                      bool isBackSpin = false);
+  GameplayAdvanceResult
+  finalizePracticeRange(std::int64_t finalizationTimeMicros,
+                        std::int64_t visualTimeMicros);
 
   [[nodiscard]] const NoteRuntimeState &noteState(NoteId id) const;
   [[nodiscard]] bool lanePressed(int lane) const noexcept;
@@ -168,6 +171,18 @@ private:
   void commitJudge(const JudgeResult &judge);
   bool recordReplay(GameplayReplayEvent &event);
   bool recordAutomaticResult(const GameplayInputResult &result);
+  void markMissed(NoteId id, std::int64_t judgeTimeMicros, bool dead);
+  void clearPairHolding(NoteId id);
+  GameplayInputResult commitMiss(NoteId id, std::int64_t songTimeMicros,
+                                 std::int64_t judgeTimeMicros);
+  GameplayInputResult commitMiss(NoteId id, std::int64_t songTimeMicros,
+                                 std::int64_t judgeTimeMicros,
+                                 const JudgeResult &judge);
+  GameplayInputResult commitAutomaticRelease(NoteId tailId,
+                                             std::int64_t songTimeMicros,
+                                             std::int64_t visualTimeMicros);
+  void initializeAt(std::int64_t startMicros);
+  [[nodiscard]] bool noteAllowed(NoteId id) const noexcept;
   void processAtTiming(NoteId id, std::int64_t songTimeMicros,
                        std::int64_t visualTimeMicros);
   void processLatePoor(NoteId id, std::int64_t songTimeMicros);
@@ -185,6 +200,7 @@ private:
   std::size_t latePoorCursor_ = 0;
   std::int64_t lastAdvancedMicros_ = 0;
   bool hasAdvanced_ = false;
+  bool practiceRangeFinalized_ = false;
   GameplaySearchStats lastSearchStats_;
   GameplaySearchStats lastAdvanceStats_;
 };
