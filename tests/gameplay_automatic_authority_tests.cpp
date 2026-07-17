@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -1842,6 +1843,46 @@ void testChartCompletionAndFinalSummaryFreezeAtTrailingTimelineGrace() {
           "chart terminal snapshot and final summary are immutable");
 }
 
+void testOpenEndedStartRangeStillCompletesChart() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)
+      ->SetNote(1, new bms_parser::Note(1));
+  addTimeline(*measure, 2'000'000)
+      ->SetNote(2, new bms_parser::Note(2));
+  addTimeline(*measure, 3'000'000);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = compiledJudge,
+       .allowedNoteRange =
+           gameplay::GameplayTimeRange{
+               .startMicros = 1'500'000,
+               .endMicros = std::numeric_limits<std::int64_t>::max()},
+       .attempt = {.autoPlay = true,
+                   .replayCapacity = 16,
+                   .automaticResultCapacity = 16,
+                   .gaugeHistoryCapacity = 16}});
+  const std::int64_t completionMicros =
+      definition.metadata().finalTimelineTimeMicros +
+      compiledJudge.latePoorTimingMicros() + 1;
+
+  simulation.advanceTo(completionMicros, 22'500'000);
+
+  require(simulation.noteState(definition.chronologicalNotes()[0]).dead &&
+              simulation.noteState(definition.chronologicalNotes()[1])
+                  .played &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ChartComplete,
+          "an open-ended seek range skips earlier notes and still finishes the "
+          "chart");
+}
+
 void testSurvivalFailureFinishesTransactionThenFreezesEveryEntryPoint() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 1;
@@ -2024,6 +2065,7 @@ int main() {
   testStartInitializationResolvesPreStartWorkWithoutTransactions();
   testPracticeFinalizationMatchesHalfOpenIdentityRules();
   testChartCompletionAndFinalSummaryFreezeAtTrailingTimelineGrace();
+  testOpenEndedStartRangeStillCompletesChart();
   testSurvivalFailureFinishesTransactionThenFreezesEveryEntryPoint();
   testCompleteOutcomeMatchesForLargeAndChunkedScheduling();
   return 0;

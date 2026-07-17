@@ -273,7 +273,11 @@ void GameplaySimulation::latchTerminal(GameplayTerminalReason reason,
 
 void GameplaySimulation::maybeLatchChartComplete(
     std::int64_t songTimeMicros) {
-  if (terminal() || config_.allowedNoteRange.has_value() ||
+  const bool hasBoundedNoteRange =
+      config_.allowedNoteRange.has_value() &&
+      config_.allowedNoteRange->endMicros !=
+          std::numeric_limits<std::int64_t>::max();
+  if (terminal() || hasBoundedNoteRange ||
       resolvedIdentityCount_ != definition_.noteCount()) {
     return;
   }

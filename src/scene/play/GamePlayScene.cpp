@@ -895,8 +895,10 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     }
   }
 
-  const std::size_t transactionCapacity = std::max<std::size_t>(
+  const std::size_t automaticCapacity = std::max<std::size_t>(
       4096, definition.noteCount() * 3 + 1024);
+  const std::size_t replayCapacity = gameplay::realtimeGameplayReplayCapacity(
+      definition.noteCount(), definition.metadata().finalTimelineTimeMicros);
   gameplay::GameplaySimulationConfig simulationConfig{
       .judge = gameplay::CompiledGameplayJudge::from(judge),
       .notePriorityMode = context.settings.notePriorityMode,
@@ -910,9 +912,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
           .carriedMaxCombo = state->maxCombo,
           .assistClearMark = state->assistClearMark,
           .autoPlay = options.autoPlay,
-          .replayCapacity = transactionCapacity,
-          .automaticResultCapacity = transactionCapacity,
-          .gaugeHistoryCapacity = transactionCapacity,
+          .replayCapacity = replayCapacity,
+          .automaticResultCapacity = automaticCapacity,
+          .gaugeHistoryCapacity = automaticCapacity,
       },
   };
   simulationConfig.allowedNoteRange = policy.allowedNoteRange;
@@ -1976,7 +1978,8 @@ void GamePlayScene::showPlaybackInitializationFailure(
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
   setRealtimeGameplayIngressEnabled(false);
-  if (realtimeGameplayAuthorityActive() &&
+  if (gameplay::shouldSuspendRealtimeGameplayForPause(pausePlayback) &&
+      realtimeGameplayAuthorityActive() &&
       !realtimeGameplaySession->worker->suspend()) {
     SDL_LogError(SDL_LOG_CATEGORY_INPUT,
                  "Realtime gameplay worker failed to suspend");

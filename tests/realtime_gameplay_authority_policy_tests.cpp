@@ -105,6 +105,24 @@ void testExistingExclusionsAndNormalActivationRemain() {
                   std::numeric_limits<std::int64_t>::max() &&
               normal.activationSongTimeMicros == 500'000,
           "ordinary partial starts retain open range and activation gate");
+
+  require(gameplay::shouldSuspendRealtimeGameplayForPause(true) &&
+              !gameplay::shouldSuspendRealtimeGameplayForPause(false),
+          "realtime scoring suspends only when playback also pauses");
+
+  const std::size_t longSparseReplayCapacity =
+      gameplay::realtimeGameplayReplayCapacity(2, 600'000'000);
+  require(longSparseReplayCapacity > 4096 &&
+              longSparseReplayCapacity > 2 * 3 + 1024,
+          "long sparse charts reserve replay space for input transitions, not "
+          "only notes");
+  require(gameplay::realtimeGameplayReplayCapacity(
+              2, std::numeric_limits<std::int64_t>::max()) ==
+              (1U << 20U) &&
+              gameplay::realtimeGameplayReplayCapacity(400'000, 0) ==
+                  1'201'024,
+          "duration-based replay reserve is bounded without truncating a "
+          "larger note-derived requirement");
 }
 
 } // namespace
