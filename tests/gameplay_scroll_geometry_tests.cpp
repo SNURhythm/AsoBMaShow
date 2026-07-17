@@ -120,5 +120,18 @@ int main() {
           "a note entirely above the viewport is culled");
   require(noteRectangleIntersectsViewport(-0.5F, 1.0F, -1.0F, 10.0F),
           "crossing the judge line does not hide a normal note");
+
+  require(!shouldDrawNoteRectangle(1'100'000, 1'000'000, -1.1F, 1.0F,
+                                   0.0F),
+          "a future note entirely below the judge line is hidden");
+  require(shouldDrawNoteRectangle(1'100'000, 1'000'000, -0.5F, 1.0F,
+                                  0.0F),
+          "a future note crossing the judge line remains visible");
+  require(!shouldDrawNoteRectangle(1'000'000, 1'000'000, -1.1F, 1.0F,
+                                   0.0F),
+          "a current note entirely below the judge line is hidden");
+  require(shouldDrawNoteRectangle(999'999, 1'000'000, -1.1F, 1.0F,
+                                  0.0F),
+          "a past note below the judge line remains visible");
   return 0;
 }

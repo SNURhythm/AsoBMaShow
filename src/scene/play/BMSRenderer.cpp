@@ -1841,6 +1841,11 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
   if (tailResolvedForRendering && !tailReleasedEarly)
     return;
   float startY = head->IsPlayed && !head->IsDead ? judgeY : headY;
+  const bool headMayRender = noteRectangleMayRender(head, startY);
+  const bool tailMayRender = noteRectangleMayRender(head->Tail, tailY);
+  if (!headMayRender) {
+    startY = std::max(startY, judgeY);
+  }
   const float bodyHeight = tailY - startY;
   const float bodyWidth = noteRenderWidth;
 
@@ -1900,14 +1905,15 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
     }
   }
 
-  if (!isClassicLongNote && (!tailReleasedEarly || tailY > judgeY)) {
+  if (tailMayRender && !isClassicLongNote &&
+      (!tailReleasedEarly || tailY > judgeY)) {
     sheetBatchFor(sheet).addRectUV(laneToX(head->Tail->Lane), tailY,
                                    noteRenderWidth, noteRenderHeight, tailUv.u0,
                                    tailUv.v0, tailUv.u1, tailUv.v1,
                                    sheet.texture);
   }
 
-  if (head->IsPlayed)
+  if (head->IsPlayed || !headMayRender)
     return;
 
   // Head
@@ -1915,8 +1921,17 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                                  noteRenderHeight, headUv.u0, headUv.v0,
                                  headUv.u1, headUv.v1, sheet.texture);
 }
+
+bool BMSRenderer::noteRectangleMayRender(const bms_parser::Note *note,
+                                         float y) const {
+  return note == nullptr || note->Timeline == nullptr ||
+         gameplay_scroll_geometry::shouldDrawNoteRectangle(
+             note->Timeline->Timing, currentRenderMicros, y, noteRenderHeight,
+             judgeY);
+}
+
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed ||
+  if (note->IsPlayed || !noteRectangleMayRender(note, y) ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           y, noteRenderHeight, lowerBound, upperBound))
     return;
@@ -1930,7 +1945,7 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
 }
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed || note->IsDead ||
+  if (note->IsPlayed || note->IsDead || !noteRectangleMayRender(note, y) ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           y, noteRenderHeight, lowerBound, upperBound)) {
     return;
@@ -1943,7 +1958,7 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
 
 void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note) {
-  if (note->IsPlayed || note->IsDead ||
+  if (note->IsPlayed || note->IsDead || !noteRectangleMayRender(note, y) ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           y, noteRenderHeight, lowerBound, upperBound)) {
     return;

@@ -84,6 +84,12 @@ inline bool noteRectangleIntersectsViewport(float y, float noteHeight,
   return y + noteHeight >= lowerBound && y <= upperBound;
 }
 
+inline bool shouldDrawNoteRectangle(long long noteTimeMicros,
+                                    long long currentTimeMicros, float y,
+                                    float noteHeight, float judgeY) {
+  return noteTimeMicros < currentTimeMicros || y + noteHeight >= judgeY;
+}
+
 inline bool shouldDrawMeasureLine(long long timelineTimeMicros,
                                   long long currentTimeMicros, float y,
                                   float judgeY, float upperBound) {
