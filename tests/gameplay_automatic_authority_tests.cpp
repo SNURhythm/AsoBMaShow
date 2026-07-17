@@ -88,6 +88,65 @@ std::size_t replayActionCount(
                          &gameplay::GameplayReplayEvent::action));
 }
 
+bool sameAttemptSnapshot(const gameplay::GameplayAttemptSnapshot &left,
+                         const gameplay::GameplayAttemptSnapshot &right) {
+  return left.judgeCounts == right.judgeCounts &&
+         left.combo == right.combo && left.maxCombo == right.maxCombo &&
+         left.comboBreak == right.comboBreak && left.score == right.score &&
+         left.gaugeType == right.gaugeType &&
+         left.clearTypeRank == right.clearTypeRank &&
+         std::bit_cast<std::uint32_t>(left.gauge) ==
+             std::bit_cast<std::uint32_t>(right.gauge);
+}
+
+bool sameFinalSummary(const gameplay::GameplayFinalSummary &left,
+                      const gameplay::GameplayFinalSummary &right) {
+  return left.score == right.score && left.maxCombo == right.maxCombo &&
+         left.comboBreak == right.comboBreak &&
+         left.totalNotes == right.totalNotes &&
+         left.clearTypeRank == right.clearTypeRank &&
+         left.fullComboAchieved == right.fullComboAchieved &&
+         std::bit_cast<std::uint32_t>(left.finalGauge) ==
+             std::bit_cast<std::uint32_t>(right.finalGauge);
+}
+
+void requireSameCompleteOutcome(
+    const gameplay::GameplayDefinition &definition,
+    const gameplay::GameplaySimulation &left,
+    const gameplay::GameplaySimulation &right) {
+  for (const gameplay::NoteId id : definition.chronologicalNotes()) {
+    const auto &leftState = left.noteState(id);
+    const auto &rightState = right.noteState(id);
+    require(leftState.played == rightState.played &&
+                leftState.dead == rightState.dead &&
+                leftState.holding == rightState.holding &&
+                leftState.playedTimeMicros == rightState.playedTimeMicros &&
+                leftState.releaseTimeMicros == rightState.releaseTimeMicros,
+            "one-shot and chunked note states are identical");
+  }
+  for (const auto &lane : definition.lanes()) {
+    require(left.lanePressed(lane.lane) == right.lanePressed(lane.lane),
+            "one-shot and chunked lane states are identical");
+  }
+  require(sameAttemptSnapshot(left.snapshot(), right.snapshot()) &&
+              left.scoreState().gaugeValues ==
+                  right.scoreState().gaugeValues &&
+              left.scoreState().gaugeSurvivalFailed ==
+                  right.scoreState().gaugeSurvivalFailed &&
+              left.scoreState().gaugeHistory ==
+                  right.scoreState().gaugeHistory,
+          "one-shot and chunked score and gauge state are identical");
+  require(std::ranges::equal(left.replayEvents(), right.replayEvents()) &&
+              std::ranges::equal(left.hellChargeBalances(),
+                                 right.hellChargeBalances()),
+          "one-shot and chunked replay and HCN state are identical");
+  require(left.terminalReason() == right.terminalReason() &&
+              sameAttemptSnapshot(left.terminalSnapshot(),
+                                  right.terminalSnapshot()) &&
+              sameFinalSummary(left.finalSummary(), right.finalSummary()),
+          "one-shot and chunked terminal state is identical");
+}
+
 void requireSameHellChargeOutcome(
     const gameplay::GameplaySimulation &left,
     const gameplay::GameplaySimulation &right) {
@@ -272,45 +331,70 @@ void testAttemptInitializesConfiguredAndCarriedState() {
           "carried combo fields survive gauge restoration");
 }
 
-void testReplayAndGaugeHistoryCapacityLatchWithoutGrowth() {
+void testCapacityFaultsLatchIndependentlyWithoutGrowth() {
   bms_parser::Chart chart;
-  chart.Meta.TotalNotes = 2;
+  chart.Meta.TotalNotes = 1;
   chart.Meta.KeyMode = 5;
   chart.Meta.HasTotal = true;
   chart.Meta.Total = 260.0;
   auto *measure = new bms_parser::Measure();
-  auto *first = addTimeline(*measure, 1'000'000);
-  first->SetNote(1, new bms_parser::Note(1));
-  auto *second = addTimeline(*measure, 2'000'000);
-  second->SetNote(2, new bms_parser::Note(2));
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(1));
   chart.Measures.push_back(measure);
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
 
-  gameplay::GameplaySimulation simulation(
+  gameplay::GameplaySimulation replayFault(
       definition,
       {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
-       .attempt = {.replayCapacity = 1, .automaticResultCapacity = 1}});
-  const auto firstPress =
-      simulation.pressLane(1, {.songTimeMicros = 1'000'000});
-  require(firstPress.hasReplayEvent && simulation.replayEvents().size() == 1,
-          "first replay fills the configured fixed storage");
-  const auto *const replayStorage = simulation.replayEvents().data();
-  const auto storedFirst = simulation.replayEvents().front();
+       .attempt = {.replayCapacity = 0,
+                   .automaticResultCapacity = 4,
+                   .gaugeHistoryCapacity = 4}});
+  const auto *const replayStorage = replayFault.replayEvents().data();
+  const auto replayPress =
+      replayFault.pressLane(1, {.songTimeMicros = 1'000'000});
+  require(replayPress.hasJudge && replayPress.hasReplayEvent &&
+              replayPress.replayEvent.score == 2 &&
+              replayPress.replayEvent.combo == 1 &&
+              replayFault.noteState(
+                  definition.chronologicalNotes().front()).played &&
+              replayFault.snapshot().judgeCounts[PGreat] == 1,
+          "replay overflow finishes the note and score transaction");
+  require(replayFault.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ReplayCapacityExceeded &&
+              replayFault.replayOverflowed() &&
+              replayFault.replayEvents().empty() &&
+              replayFault.replayEvents().data() == replayStorage &&
+              !replayFault.automaticResultOverflowed() &&
+              !replayFault.scoreState().gaugeHistoryOverflowed(),
+          "replay capacity fault is isolated and never grows storage");
 
-  const auto secondPress =
-      simulation.pressLane(2, {.songTimeMicros = 2'000'000});
-  require(secondPress.hasJudge && secondPress.hasReplayEvent &&
-              secondPress.replayEvent.score == 4 &&
-              secondPress.replayEvent.combo == 2,
-          "overflowing transaction still returns its committed post-state");
-  require(simulation.replayOverflowed() &&
-              simulation.replayEvents().size() == 1 &&
-              simulation.replayEvents().data() == replayStorage &&
-              simulation.replayEvents().front() == storedFirst,
-          "replay capacity latches without growth or stored-event mutation");
-  require(simulation.scoreState().gaugeHistory.size() == 1 &&
-              simulation.scoreState().gaugeHistoryOverflowed(),
-          "bounded gauge history also latches instead of allocating");
+  gameplay::GameplaySimulation gaugeHistoryFault(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .attempt = {.replayCapacity = 4,
+                   .automaticResultCapacity = 4,
+                   .gaugeHistoryCapacity = 0}});
+  const auto *const gaugeStorage =
+      gaugeHistoryFault.scoreState().gaugeHistory.data();
+  const auto gaugeCapacity =
+      gaugeHistoryFault.scoreState().gaugeHistory.capacity();
+  const auto gaugePress =
+      gaugeHistoryFault.pressLane(1, {.songTimeMicros = 1'000'000});
+  require(gaugePress.hasJudge && gaugePress.hasReplayEvent &&
+              gaugeHistoryFault.replayEvents().size() == 1 &&
+              gaugeHistoryFault.snapshot().judgeCounts[PGreat] == 1,
+          "gauge-history overflow finishes replay and score mutation");
+  require(
+      gaugeHistoryFault.terminalReason() ==
+              gameplay::GameplayTerminalReason::GaugeHistoryCapacityExceeded &&
+          gaugeHistoryFault.scoreState().gaugeHistoryOverflowed() &&
+          gaugeHistoryFault.scoreState().gaugeHistory.empty() &&
+          gaugeHistoryFault.scoreState().gaugeHistory.capacity() ==
+              gaugeCapacity &&
+          gaugeHistoryFault.scoreState().gaugeHistory.data() == gaugeStorage &&
+          !gaugeHistoryFault.replayOverflowed() &&
+          !gaugeHistoryFault.automaticResultOverflowed(),
+      "gauge-history capacity fault is isolated and never grows storage");
 }
 
 void testNormalLatePoorUsesStrictDeadlineAndIsIdempotent() {
@@ -569,25 +653,33 @@ void testAutomaticResultCapacityLatchesWithoutGrowth() {
       definition, {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
                    .attempt = {.autoPlay = true,
                                .replayCapacity = 2,
-                               .automaticResultCapacity = 1}});
+                               .automaticResultCapacity = 0,
+                               .gaugeHistoryCapacity = 2}});
   const auto *const storage = simulation.automaticResults().data();
+  const auto initialResultSize = simulation.automaticResults().size();
   const auto *const replayStorage = simulation.replayEvents().data();
   const auto *const gaugeHistoryStorage =
       simulation.scoreState().gaugeHistory.data();
 
   const auto advanced = simulation.advanceTo(1'000'000, 12'000'000);
-  require(advanced.transactions.size() == 1 &&
-              advanced.transactions.data() == storage &&
+  require(advanced.transactions.empty() &&
               simulation.automaticResults().data() == storage &&
-              simulation.automaticResultOverflowed(),
-          "automatic result capacity latches without reallocating storage");
+              simulation.automaticResults().size() == initialResultSize &&
+              simulation.automaticResultOverflowed() &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::
+                      AutomaticResultCapacityExceeded,
+          "automatic-result capacity latches without reallocating storage");
   require(
       simulation.noteState(definition.chronologicalNotes().front()).played &&
           simulation.snapshot().judgeCounts[PGreat] == 1 &&
           simulation.replayEvents().size() == 1 &&
           simulation.replayEvents().data() == replayStorage &&
-          simulation.scoreState().gaugeHistory.data() == gaugeHistoryStorage,
-      "overflow does not roll back the committed autoplay transaction");
+          simulation.scoreState().gaugeHistory.data() == gaugeHistoryStorage &&
+          !simulation.replayOverflowed() &&
+          !simulation.scoreState().gaugeHistoryOverflowed(),
+      "automatic-result overflow finishes the autoplay transaction and "
+      "isolates its fault");
 }
 
 void testGlobalAutomaticCursorsDoNotReexamineCompletedIdentities() {
@@ -616,9 +708,11 @@ void testGlobalAutomaticCursorsDoNotReexamineCompletedIdentities() {
           "large advance consumes each global identity once per phase");
   const auto repeated = simulation.advanceTo(target, 13'000'001);
   require(repeated.transactions.empty() &&
-              simulation.lastAdvanceStats().notesExamined == 0 &&
-              simulation.snapshot().judgeCounts[Poor] == 1'000,
-          "completed global cursors examine zero identities on repeat");
+              simulation.lastAdvanceStats().notesExamined == 2'000 &&
+              simulation.snapshot().judgeCounts[Poor] == 1'000 &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ChartComplete,
+          "completed global cursors and stats freeze at chart terminal");
 }
 
 void testBackwardAdvanceIsIgnoredWithoutRollingBackTime() {
@@ -1136,6 +1230,11 @@ void testPracticeFinalizationMatchesHalfOpenIdentityRules() {
           simulation.replayEvents().data() == replayStorage &&
           simulation.scoreState().gaugeHistory.data() == gaugeStorage,
       "practice identity misses commit bounded score, gauge, and replay state");
+  require(simulation.terminal() &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::PracticeComplete &&
+              sameAttemptSnapshot(simulation.terminalSnapshot(), snapshot),
+          "practice completion latches only after its final miss transaction");
 
   const auto duplicate =
       simulation.finalizePracticeRange(finalizationMicros, 19'000'002);
@@ -1451,6 +1550,230 @@ void testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder() {
             "each multi-HCN replay stores its complete post-gauge state");
   }
 }
+
+void testChartCompletionAndFinalSummaryFreezeAtTrailingTimelineGrace() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  auto *first = addTimeline(*measure, 1'000'000);
+  first->SetNote(1, new bms_parser::Note(1));
+  auto *second = addTimeline(*measure, 2'000'000);
+  second->SetNote(2, new bms_parser::Note(2));
+  addTimeline(*measure, 3'000'000);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const std::int64_t completionMicros =
+      definition.metadata().finalTimelineTimeMicros +
+      compiledJudge.latePoorTimingMicros() + 1;
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = compiledJudge,
+       .attempt = {.initialGaugeType = GaugeType::Easy,
+                   .startingGaugePercent = 100,
+                   .autoPlay = true,
+                   .replayCapacity = 16,
+                   .automaticResultCapacity = 16,
+                   .gaugeHistoryCapacity = 16}});
+
+  const auto before = simulation.advanceTo(completionMicros - 1, 22'000'000);
+  require(!simulation.terminal() &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::None &&
+              simulation.noteState(definition.chronologicalNotes()[0])
+                  .played &&
+              simulation.noteState(definition.chronologicalNotes()[1])
+                  .played &&
+              before.advancedToMicros == completionMicros - 1,
+          "resolved identities do not complete before empty trailing timeline "
+          "grace");
+
+  const auto completed = simulation.advanceTo(completionMicros, 22'000'001);
+  const auto terminalSnapshot = simulation.terminalSnapshot();
+  const auto summary = simulation.finalSummary();
+  require(completed.transactions.empty() && simulation.terminal() &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ChartComplete &&
+              sameAttemptSnapshot(terminalSnapshot, simulation.snapshot()),
+          "chart completion latches exactly at compiled trailing grace after "
+          "all identities resolve");
+  require(summary.score == 4 && summary.maxCombo == 2 &&
+              summary.comboBreak == 0 && summary.totalNotes == 2 &&
+              summary.finalGauge == terminalSnapshot.gauge &&
+              summary.clearTypeRank == terminalSnapshot.clearTypeRank &&
+              summary.fullComboAchieved,
+          "parser-free final summary exposes replay and full-combo promotion "
+          "inputs");
+
+  const auto repeated =
+      simulation.advanceTo(completionMicros + 1, 22'000'002);
+  require(repeated.transactions.empty() &&
+              repeated.advancedToMicros == completionMicros &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ChartComplete &&
+              sameAttemptSnapshot(simulation.terminalSnapshot(),
+                                  terminalSnapshot) &&
+              sameFinalSummary(simulation.finalSummary(), summary),
+          "chart terminal snapshot and final summary are immutable");
+}
+
+void testSurvivalFailureFinishesTransactionThenFreezesEveryEntryPoint() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  constexpr std::int64_t noteMicros = 1'000'000;
+  auto *timeline = addTimeline(*measure, noteMicros);
+  timeline->SetNote(1, new bms_parser::Note(1));
+  addTimeline(*measure, 4'000'000);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const std::int64_t missMicros =
+      noteMicros + compiledJudge.latePoorTimingMicros() + 1;
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = compiledJudge,
+       .allowedNoteRange =
+           gameplay::GameplayTimeRange{.startMicros = 0,
+                                       .endMicros = 5'000'000},
+       .attempt = {.initialGaugeType = GaugeType::Hard,
+                   .startingGaugePercent = 1,
+                   .replayCapacity = 8,
+                   .automaticResultCapacity = 8,
+                   .gaugeHistoryCapacity = 8}});
+
+  const auto failed = simulation.advanceTo(missMicros, 23'000'000);
+  require(failed.transactions.size() == 1 &&
+              failed.transactions.front().noteId ==
+                  definition.chronologicalNotes().front() &&
+              failed.transactions.front().hasJudge &&
+              failed.transactions.front().judge.judgement == Poor &&
+              failed.transactions.front().hasReplayEvent &&
+              simulation.noteState(
+                  definition.chronologicalNotes().front()).played &&
+              simulation.noteState(
+                  definition.chronologicalNotes().front()).dead &&
+              simulation.snapshot().judgeCounts[Poor] == 1 &&
+              simulation.snapshot().gauge == 0.0F &&
+              simulation.replayEvents().size() == 1 &&
+              simulation.automaticResults().size() == 1 &&
+              simulation.scoreState().gaugeHistory.size() == 1,
+          "survival failure transaction finishes note, score, gauge, replay, "
+          "and result mutation");
+  require(simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::SurvivalGaugeFailed &&
+              sameAttemptSnapshot(simulation.terminalSnapshot(),
+                                  simulation.snapshot()),
+          "survival failure latches at the completed transaction boundary");
+
+  const auto frozenSnapshot = simulation.snapshot();
+  const auto frozenTerminalSnapshot = simulation.terminalSnapshot();
+  const auto frozenSummary = simulation.finalSummary();
+  const auto frozenNote =
+      simulation.noteState(definition.chronologicalNotes().front());
+  const std::vector<gameplay::GameplayReplayEvent> frozenReplays(
+      simulation.replayEvents().begin(), simulation.replayEvents().end());
+  const std::vector<float> frozenGaugeHistory(
+      simulation.scoreState().gaugeHistory.begin(),
+      simulation.scoreState().gaugeHistory.end());
+  const auto *const frozenResultStorage = simulation.automaticResults().data();
+  const auto frozenResultSize = simulation.automaticResults().size();
+  const auto frozenSearch = simulation.lastSearchStats();
+  const auto frozenAdvance = simulation.lastAdvanceStats();
+
+  const auto directPress =
+      simulation.pressLane(2, {.songTimeMicros = missMicros + 1});
+  const auto directRelease =
+      simulation.releaseLane(1, {.songTimeMicros = missMicros + 2});
+  const auto wrappedPress = simulation.applyPressAt(
+      2, 2, {.songTimeMicros = missMicros + 3});
+  const auto wrappedRelease = simulation.applyReleaseAt(
+      1, {.songTimeMicros = missMicros + 4});
+  const auto laterAdvance = simulation.advanceTo(missMicros + 5, 23'000'001);
+  const auto laterFinalize =
+      simulation.finalizePracticeRange(missMicros + 6, 23'000'002);
+
+  require(!directPress.hasReplayEvent && !directRelease.hasReplayEvent &&
+              !wrappedPress.hasReplayEvent && !wrappedRelease.hasReplayEvent &&
+              laterAdvance.transactions.empty() &&
+              laterFinalize.transactions.empty() &&
+              laterAdvance.advancedToMicros == missMicros &&
+              laterFinalize.advancedToMicros == missMicros,
+          "all low-level, wrapper, advance, and finalization entry points are "
+          "empty after terminal");
+  const auto &noteAfter =
+      simulation.noteState(definition.chronologicalNotes().front());
+  require(noteAfter.played == frozenNote.played &&
+              noteAfter.dead == frozenNote.dead &&
+              noteAfter.holding == frozenNote.holding &&
+              noteAfter.playedTimeMicros == frozenNote.playedTimeMicros &&
+              noteAfter.releaseTimeMicros == frozenNote.releaseTimeMicros &&
+              !simulation.lanePressed(1) && !simulation.lanePressed(2) &&
+              sameAttemptSnapshot(simulation.snapshot(), frozenSnapshot) &&
+              sameAttemptSnapshot(simulation.terminalSnapshot(),
+                                  frozenTerminalSnapshot) &&
+              sameFinalSummary(simulation.finalSummary(), frozenSummary) &&
+              std::ranges::equal(simulation.replayEvents(), frozenReplays) &&
+              simulation.scoreState().gaugeHistory == frozenGaugeHistory &&
+              simulation.automaticResults().data() == frozenResultStorage &&
+              simulation.automaticResults().size() == frozenResultSize &&
+              simulation.lastSearchStats().notesExamined ==
+                  frozenSearch.notesExamined &&
+              simulation.lastAdvanceStats().notesExamined ==
+                  frozenAdvance.notesExamined,
+          "terminal state cannot be mutated by any later entry point");
+}
+
+void testCompleteOutcomeMatchesForLargeAndChunkedScheduling() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 4;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 1'700'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  auto *firstNormal = addTimeline(*measure, 1'200'000);
+  firstNormal->SetNote(2, new bms_parser::Note(2));
+  auto *secondNormal = addTimeline(*measure, 2'000'000);
+  secondNormal->SetNote(3, new bms_parser::Note(3));
+  addTimeline(*measure, 2'400'000);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const auto config = gameplay::GameplaySimulationConfig{
+      .judge = compiledJudge,
+      .attempt = {.startingGaugePercent = 80,
+                  .replayCapacity = 64,
+                  .automaticResultCapacity = 64,
+                  .gaugeHistoryCapacity = 64}};
+  gameplay::GameplaySimulation oneShot(definition, config);
+  gameplay::GameplaySimulation chunked(definition, config);
+  const auto applyIdenticalInputs = [](gameplay::GameplaySimulation &value) {
+    value.applyPressAt(1, 1, {.songTimeMicros = 1'000'000});
+    value.applyReleaseAt(1, {.songTimeMicros = 1'050'000});
+  };
+  applyIdenticalInputs(oneShot);
+  applyIdenticalInputs(chunked);
+
+  const std::int64_t completionMicros =
+      definition.metadata().finalTimelineTimeMicros +
+      compiledJudge.latePoorTimingMicros() + 1;
+  oneShot.advanceTo(completionMicros, 24'000'000);
+  for (const std::int64_t chunk : std::array<std::int64_t, 7>{
+           1'100'000, 1'200'001, 1'450'000, 1'700'001,
+           2'000'000, 2'300'000, completionMicros}) {
+    chunked.advanceTo(chunk, 24'000'000);
+  }
+
+  require(oneShot.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ChartComplete &&
+              chunked.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ChartComplete,
+          "large and chunked schedules both reach chart completion");
+  requireSameCompleteOutcome(definition, oneShot, chunked);
+}
 } // namespace
 
 int main() {
@@ -1460,7 +1783,7 @@ int main() {
   testHellChargeStrictThresholdsAndSerialInputState();
   testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder();
   testAttemptInitializesConfiguredAndCarriedState();
-  testReplayAndGaugeHistoryCapacityLatchWithoutGrowth();
+  testCapacityFaultsLatchIndependentlyWithoutGrowth();
   testNormalLatePoorUsesStrictDeadlineAndIsIdempotent();
   testLandmineDetonatesOrExpiresFromPriorLaneState();
   testSameTimeAutomaticWorkPrecedesPressAndRelease();
@@ -1474,5 +1797,8 @@ int main() {
   testAutoplayChargeAndHellChargeReleaseAtTiming();
   testStartInitializationResolvesPreStartWorkWithoutTransactions();
   testPracticeFinalizationMatchesHalfOpenIdentityRules();
+  testChartCompletionAndFinalSummaryFreezeAtTrailingTimelineGrace();
+  testSurvivalFailureFinishesTransactionThenFreezesEveryEntryPoint();
+  testCompleteOutcomeMatchesForLargeAndChunkedScheduling();
   return 0;
 }

@@ -33,7 +33,8 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
       hellChargeBalanceMicros_(definition.noteCount()) {
   replayEvents_.reserve(config_.attempt.replayCapacity);
   automaticResults_.reserve(config_.attempt.automaticResultCapacity);
-  scoreState_.configureBoundedGaugeHistory(config_.attempt.replayCapacity);
+  scoreState_.configureBoundedGaugeHistory(
+      config_.attempt.gaugeHistoryCapacity);
   scoreState_.configureGauge(
       config_.attempt.initialGaugeType, config_.attempt.gaugeAutoShift,
       config_.attempt.gaugeProfile,
@@ -138,8 +139,56 @@ GameplaySimulation::hellChargeBalances() const noexcept {
   return hellChargeBalanceMicros_;
 }
 
+GameplayTerminalReason GameplaySimulation::terminalReason() const noexcept {
+  return terminalReason_;
+}
+
+bool GameplaySimulation::terminal() const noexcept {
+  return terminalReason_ != GameplayTerminalReason::None;
+}
+
+GameplayAttemptSnapshot
+GameplaySimulation::terminalSnapshot() const noexcept {
+  return terminalSnapshot_;
+}
+
+GameplayFinalSummary GameplaySimulation::finalSummary() const noexcept {
+  return finalSummary_;
+}
+
 void GameplaySimulation::commitJudge(const JudgeResult &judge) {
+  const bool wasSurvivalFailed = scoreState_.activeGaugeFailed();
+  const bool wasGaugeHistoryOverflowed =
+      scoreState_.gaugeHistoryOverflowed();
   scoreState_.commitJudge(judge);
+  observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
+}
+
+void GameplaySimulation::applyGaugeDelta(float delta) {
+  const bool wasSurvivalFailed = scoreState_.activeGaugeFailed();
+  const bool wasGaugeHistoryOverflowed =
+      scoreState_.gaugeHistoryOverflowed();
+  scoreState_.applyGaugeDelta(delta);
+  observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
+}
+
+void GameplaySimulation::applyGaugeJudgementRate(Judgement judgement,
+                                                 float rate) {
+  const bool wasSurvivalFailed = scoreState_.activeGaugeFailed();
+  const bool wasGaugeHistoryOverflowed =
+      scoreState_.gaugeHistoryOverflowed();
+  scoreState_.applyGaugeJudgementRate(judgement, rate);
+  observeGaugeMutation(wasSurvivalFailed, wasGaugeHistoryOverflowed);
+}
+
+void GameplaySimulation::observeGaugeMutation(
+    bool wasSurvivalFailed, bool wasGaugeHistoryOverflowed) {
+  transactionSurvivalFailed_ =
+      transactionSurvivalFailed_ ||
+      (!wasSurvivalFailed && scoreState_.activeGaugeFailed());
+  transactionGaugeHistoryCapacityExceeded_ =
+      transactionGaugeHistoryCapacityExceeded_ ||
+      (!wasGaugeHistoryOverflowed && scoreState_.gaugeHistoryOverflowed());
 }
 
 bool GameplaySimulation::recordReplay(GameplayReplayEvent &event) {
@@ -147,8 +196,9 @@ bool GameplaySimulation::recordReplay(GameplayReplayEvent &event) {
   event.gaugeType = scoreState_.gaugeType;
   event.combo = scoreState_.combo;
   event.score = scoreState_.getScore();
-  if (replayEvents_.size() == replayEvents_.capacity()) {
+  if (replayEvents_.size() >= config_.attempt.replayCapacity) {
     replayOverflowed_ = true;
+    transactionReplayCapacityExceeded_ = true;
     return false;
   }
   replayEvents_.push_back(event);
@@ -159,10 +209,83 @@ bool GameplaySimulation::recordAutomaticResult(
     const GameplayInputResult &result) {
   if (automaticResults_.size() >= config_.attempt.automaticResultCapacity) {
     automaticResultOverflowed_ = true;
+    transactionAutomaticResultCapacityExceeded_ = true;
     return false;
   }
   automaticResults_.push_back(result);
   return true;
+}
+
+void GameplaySimulation::markIdentityResolved(NoteId id) {
+  if (id == kInvalidNoteId || id >= noteStates_.size()) {
+    return;
+  }
+  const auto &state = noteStates_[id];
+  if (!state.played && !state.dead) {
+    ++resolvedIdentityCount_;
+  }
+}
+
+void GameplaySimulation::finishTransaction(
+    std::int64_t boundaryTimeMicros) {
+  GameplayTerminalReason reason = GameplayTerminalReason::None;
+  if (transactionSurvivalFailed_) {
+    reason = GameplayTerminalReason::SurvivalGaugeFailed;
+  } else if (transactionGaugeHistoryCapacityExceeded_) {
+    reason = GameplayTerminalReason::GaugeHistoryCapacityExceeded;
+  } else if (transactionReplayCapacityExceeded_) {
+    reason = GameplayTerminalReason::ReplayCapacityExceeded;
+  } else if (transactionAutomaticResultCapacityExceeded_) {
+    reason = GameplayTerminalReason::AutomaticResultCapacityExceeded;
+  }
+  transactionSurvivalFailed_ = false;
+  transactionGaugeHistoryCapacityExceeded_ = false;
+  transactionReplayCapacityExceeded_ = false;
+  transactionAutomaticResultCapacityExceeded_ = false;
+  latchTerminal(reason, boundaryTimeMicros);
+}
+
+void GameplaySimulation::latchTerminal(GameplayTerminalReason reason,
+                                       std::int64_t boundaryTimeMicros) {
+  if (reason == GameplayTerminalReason::None || terminal()) {
+    return;
+  }
+  if (!hasAdvanced_ || boundaryTimeMicros > lastAdvancedMicros_) {
+    lastAdvancedMicros_ = boundaryTimeMicros;
+  }
+  hasAdvanced_ = true;
+  terminalReason_ = reason;
+  terminalSnapshot_ = snapshot();
+  const int totalNotes = definition_.metadata().totalNotes;
+  finalSummary_ = {
+      .score = terminalSnapshot_.score,
+      .maxCombo = terminalSnapshot_.maxCombo,
+      .comboBreak = terminalSnapshot_.comboBreak,
+      .totalNotes = totalNotes,
+      .finalGauge = terminalSnapshot_.gauge,
+      .clearTypeRank = terminalSnapshot_.clearTypeRank,
+      .fullComboAchieved = totalNotes > 0 &&
+                           terminalSnapshot_.comboBreak == 0 &&
+                           terminalSnapshot_.maxCombo >= totalNotes,
+  };
+}
+
+void GameplaySimulation::maybeLatchChartComplete(
+    std::int64_t songTimeMicros) {
+  if (terminal() || config_.allowedNoteRange.has_value() ||
+      resolvedIdentityCount_ != definition_.noteCount()) {
+    return;
+  }
+  const std::int64_t completionMicros =
+      definition_.metadata().finalTimelineTimeMicros +
+      config_.judge.latePoorTimingMicros() + 1;
+  if (songTimeMicros >= completionMicros) {
+    latchTerminal(GameplayTerminalReason::ChartComplete, songTimeMicros);
+  }
+}
+
+GameplayAdvanceResult GameplaySimulation::emptyAdvanceResult() const noexcept {
+  return {std::span<const GameplayInputResult>{}, lastAdvancedMicros_};
 }
 
 bool GameplaySimulation::noteAllowed(NoteId id) const noexcept {
@@ -175,6 +298,7 @@ void GameplaySimulation::markMissed(NoteId id, std::int64_t judgeTimeMicros,
   if (id == kInvalidNoteId || id >= noteStates_.size()) {
     return;
   }
+  markIdentityResolved(id);
   auto &state = noteStates_[id];
   state.played = true;
   state.dead = dead;
@@ -231,6 +355,7 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   const auto &tail = definition_.note(tailId);
   auto &tailState = noteStates_[tailId];
   const auto &headState = noteStates_[tail.pairId];
+  markIdentityResolved(tailId);
   tailState.played = true;
   tailState.playedTimeMicros = songTimeMicros;
   tailState.releaseTimeMicros = songTimeMicros;
@@ -303,6 +428,9 @@ void GameplaySimulation::initializeAt(std::int64_t startMicros) {
 
 void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
                                          std::int64_t visualTimeMicros) {
+  if (terminal()) {
+    return;
+  }
   const auto &note = definition_.note(id);
   auto &state = noteStates_[id];
   if (state.played || state.dead || !noteAllowed(id)) {
@@ -310,6 +438,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   }
 
   if (note.kind == NoteKind::Landmine) {
+    markIdentityResolved(id);
     state.dead = true;
     state.playedTimeMicros = songTimeMicros;
     if (!lanePressed(note.lane)) {
@@ -317,7 +446,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     }
 
     state.played = true;
-    scoreState_.applyGaugeDelta(-note.mineDamage);
+    applyGaugeDelta(-note.mineDamage);
     GameplayInputResult result;
     result.noteId = id;
     result.hasReplayEvent = true;
@@ -331,6 +460,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     };
     recordReplay(result.replayEvent);
     recordAutomaticResult(result);
+    finishTransaction(songTimeMicros);
     return;
   }
 
@@ -342,6 +472,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     }
     recordAutomaticResult(
         commitAutomaticRelease(id, songTimeMicros, visualTimeMicros));
+    finishTransaction(songTimeMicros);
     return;
   }
 
@@ -350,6 +481,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     return;
   }
 
+  markIdentityResolved(id);
   state.played = true;
   state.playedTimeMicros = songTimeMicros;
   if (note.kind == NoteKind::LongHead) {
@@ -383,8 +515,9 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   };
   recordReplay(press.replayEvent);
   recordAutomaticResult(press);
+  finishTransaction(songTimeMicros);
 
-  if (note.kind == NoteKind::LongHead) {
+  if (terminal() || note.kind == NoteKind::LongHead) {
     return;
   }
   GameplayInputResult release;
@@ -392,10 +525,14 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   release.laneVisual = {LaneVisualAction::Release, note.lane, visualTimeMicros,
                         JudgeResult(None, 0)};
   recordAutomaticResult(release);
+  finishTransaction(songTimeMicros);
 }
 
 void GameplaySimulation::processLatePoor(NoteId id,
                                          std::int64_t songTimeMicros) {
+  if (terminal()) {
+    return;
+  }
   const auto &note = definition_.note(id);
   auto &state = noteStates_[id];
   if (state.played || state.dead || !noteAllowed(id) ||
@@ -406,6 +543,7 @@ void GameplaySimulation::processLatePoor(NoteId id,
   if (note.kind == NoteKind::Normal) {
     markMissed(id, songTimeMicros, true);
     recordAutomaticResult(commitMiss(id, songTimeMicros, songTimeMicros));
+    finishTransaction(songTimeMicros);
     return;
   }
 
@@ -416,10 +554,16 @@ void GameplaySimulation::processLatePoor(NoteId id,
     recordAutomaticResult(headMiss);
     if (note.pairId == kInvalidNoteId || !noteAllowed(note.pairId) ||
         noteStates_[note.pairId].played) {
+      finishTransaction(songTimeMicros);
       return;
     }
     if (note.longNoteRule == LongNoteRule::Classic) {
       markMissed(note.pairId, songTimeMicros, false);
+      finishTransaction(songTimeMicros);
+      return;
+    }
+    finishTransaction(songTimeMicros);
+    if (terminal()) {
       return;
     }
     const bool tailDead =
@@ -427,12 +571,14 @@ void GameplaySimulation::processLatePoor(NoteId id,
     markMissed(note.pairId, songTimeMicros, tailDead);
     recordAutomaticResult(commitMiss(note.pairId, songTimeMicros,
                                      songTimeMicros, headMiss.judge));
+    finishTransaction(songTimeMicros);
     return;
   }
 
   markMissed(id, songTimeMicros, true);
   clearPairHolding(id);
   recordAutomaticResult(commitMiss(id, songTimeMicros, songTimeMicros));
+  finishTransaction(songTimeMicros);
 }
 
 bool GameplaySimulation::hellChargeActiveAt(
@@ -454,7 +600,7 @@ bool GameplaySimulation::hellChargeActiveAt(
 
 void GameplaySimulation::commitGaugeTick(Judgement judgement,
                                           std::int64_t songTimeMicros) {
-  scoreState_.applyGaugeJudgementRate(judgement, 0.5F);
+  applyGaugeJudgementRate(judgement, 0.5F);
   GameplayInputResult result;
   result.judge = JudgeResult(judgement, 0);
   result.hasReplayEvent = true;
@@ -470,11 +616,12 @@ void GameplaySimulation::commitGaugeTick(Judgement judgement,
   };
   recordReplay(result.replayEvent);
   recordAutomaticResult(result);
+  finishTransaction(songTimeMicros);
 }
 
 void GameplaySimulation::integrateHellChargeInterval(
     std::int64_t fromMicros, std::int64_t toMicros) {
-  if (toMicros <= fromMicros) {
+  if (terminal() || toMicros <= fromMicros) {
     return;
   }
 
@@ -549,6 +696,9 @@ void GameplaySimulation::integrateHellChargeInterval(
             kHellChargeGaugeTickMicros;
       }
       commitGaugeTick(nextJudgement, currentMicros);
+      if (terminal()) {
+        return;
+      }
     }
     if (nextCrossingMicros > toMicros) {
       break;
@@ -560,6 +710,9 @@ GameplayAdvanceResult
 GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
                                           std::int64_t visualTimeMicros) {
   (void)visualTimeMicros;
+  if (terminal()) {
+    return emptyAdvanceResult();
+  }
   automaticResults_.clear();
   lastAdvanceStats_ = {};
   if (practiceRangeFinalized_) {
@@ -595,6 +748,10 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
       clearPairHolding(id);
       recordAutomaticResult(
           commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
+      finishTransaction(finalizationTimeMicros);
+      if (terminal()) {
+        return {automaticResults_, lastAdvancedMicros_};
+      }
       continue;
     }
 
@@ -608,6 +765,10 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
       }
       recordAutomaticResult(
           commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
+      finishTransaction(finalizationTimeMicros);
+      if (terminal()) {
+        return {automaticResults_, lastAdvancedMicros_};
+      }
       continue;
     }
 
@@ -620,18 +781,27 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
     clearPairHolding(id);
     recordAutomaticResult(
         commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
+    finishTransaction(finalizationTimeMicros);
+    if (terminal()) {
+      return {automaticResults_, lastAdvancedMicros_};
+    }
   }
 
   if (!hasAdvanced_ || finalizationTimeMicros > lastAdvancedMicros_) {
     lastAdvancedMicros_ = finalizationTimeMicros;
   }
   hasAdvanced_ = true;
+  latchTerminal(GameplayTerminalReason::PracticeComplete,
+                finalizationTimeMicros);
   return {automaticResults_, lastAdvancedMicros_};
 }
 
 GameplayAdvanceResult
 GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
                               std::int64_t visualTimeMicros) {
+  if (terminal()) {
+    return emptyAdvanceResult();
+  }
   automaticResults_.clear();
   lastAdvanceStats_ = {};
   if (hasAdvanced_ && songTimeMicros < lastAdvancedMicros_) {
@@ -664,6 +834,9 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
     }
 
     integrateHellChargeInterval(segmentStartMicros, nextDeadline);
+    if (terminal()) {
+      return {automaticResults_, lastAdvancedMicros_};
+    }
     segmentStartMicros = std::max(segmentStartMicros, nextDeadline);
     ++lastAdvanceStats_.notesExamined;
     if (processAtTimingPhase) {
@@ -673,35 +846,54 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
       const NoteId id = chronological[latePoorCursor_++];
       processLatePoor(id, nextDeadline);
     }
+    if (terminal()) {
+      return {automaticResults_, lastAdvancedMicros_};
+    }
   }
 
   integrateHellChargeInterval(segmentStartMicros, songTimeMicros);
+  if (terminal()) {
+    return {automaticResults_, lastAdvancedMicros_};
+  }
 
   lastAdvancedMicros_ = songTimeMicros;
   hasAdvanced_ = true;
+  maybeLatchChartComplete(songTimeMicros);
   return {automaticResults_, lastAdvancedMicros_};
 }
 
 GameplayInputResult
 GameplaySimulation::applyPressAt(int mainLane, int compensateLane,
                                  const GameplayInputContext &context) {
+  if (terminal()) {
+    return {};
+  }
   if (hasAdvanced_ && context.songTimeMicros < lastAdvancedMicros_) {
     automaticResults_.clear();
     lastAdvanceStats_ = {};
     return {};
   }
   advanceTo(context.songTimeMicros, context.laneBeamTimeMicros);
+  if (terminal()) {
+    return {};
+  }
   return pressLane(mainLane, compensateLane, context);
 }
 
 GameplayInputResult GameplaySimulation::applyReleaseAt(
     int lane, const GameplayInputContext &context, bool isBackSpin) {
+  if (terminal()) {
+    return {};
+  }
   if (hasAdvanced_ && context.songTimeMicros < lastAdvancedMicros_) {
     automaticResults_.clear();
     lastAdvanceStats_ = {};
     return {};
   }
   advanceTo(context.songTimeMicros, context.laneBeamTimeMicros);
+  if (terminal()) {
+    return {};
+  }
   return releaseLane(lane, context, isBackSpin);
 }
 
@@ -874,6 +1066,9 @@ GameplaySimulation::pressLane(int lane, const GameplayInputContext &context) {
 GameplayInputResult
 GameplaySimulation::pressLane(int mainLane, int compensateLane,
                               const GameplayInputContext &context) {
+  if (terminal()) {
+    return {};
+  }
   lastSearchStats_ = {};
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
@@ -906,6 +1101,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     result.hasLaneVisual = true;
     result.laneVisual = {LaneVisualAction::Press, mainLane,
                          context.laneBeamTimeMicros, JudgeResult(None, 0)};
+    finishTransaction(judgedTime);
     return result;
   }
 
@@ -927,6 +1123,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
 
   if (judge.judgement != None) {
     if (judge.isNotePlayed()) {
+      markIdentityResolved(selected);
       state.played = true;
       state.playedTimeMicros = judgedTime;
       if (note.kind == NoteKind::LongHead) {
@@ -956,6 +1153,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
         .diffMicros = judge.Diff,
     };
     recordReplay(result.replayEvent);
+    finishTransaction(judgedTime);
   }
   return result;
 }
@@ -963,6 +1161,9 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
 GameplayInputResult
 GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
                                 bool isBackSpin) {
+  if (terminal()) {
+    return {};
+  }
   lastSearchStats_ = {};
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
@@ -989,6 +1190,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
         .judgeTimeMicros = judgedTime,
     };
     recordReplay(result.replayEvent);
+    finishTransaction(judgedTime);
     return result;
   }
 
@@ -1005,10 +1207,12 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
         .judgeTimeMicros = judgedTime,
     };
     recordReplay(result.replayEvent);
+    finishTransaction(judgedTime);
     return result;
   }
 
   auto &headState = noteStates_[tail.pairId];
+  markIdentityResolved(selected);
   tailState.played = true;
   tailState.playedTimeMicros = judgedTime;
   tailState.releaseTimeMicros = judgedTime;
@@ -1047,6 +1251,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
       .diffMicros = applied.Diff,
   };
   recordReplay(result.replayEvent);
+  finishTransaction(judgedTime);
   return result;
 }
 

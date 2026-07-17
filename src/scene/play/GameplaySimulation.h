@@ -44,6 +44,7 @@ struct GameplayAttemptOptions {
   bool autoPlay = false;
   std::size_t replayCapacity = 4096;
   std::size_t automaticResultCapacity = 4096;
+  std::size_t gaugeHistoryCapacity = 4096;
 };
 
 struct GameplayAttemptSnapshot {
@@ -55,6 +56,26 @@ struct GameplayAttemptSnapshot {
   float gauge = 0.0F;
   GaugeType gaugeType = GaugeType::Normal;
   int clearTypeRank = kClearTypeFailedRank;
+};
+
+enum class GameplayTerminalReason {
+  None,
+  ChartComplete,
+  PracticeComplete,
+  SurvivalGaugeFailed,
+  ReplayCapacityExceeded,
+  AutomaticResultCapacityExceeded,
+  GaugeHistoryCapacityExceeded,
+};
+
+struct GameplayFinalSummary {
+  int score = 0;
+  int maxCombo = 0;
+  int comboBreak = 0;
+  int totalNotes = 0;
+  float finalGauge = 0.0F;
+  int clearTypeRank = kClearTypeFailedRank;
+  bool fullComboAchieved = false;
 };
 
 struct GameplaySimulationConfig {
@@ -154,6 +175,10 @@ public:
   [[nodiscard]] bool automaticResultOverflowed() const noexcept;
   [[nodiscard]] std::span<const std::int64_t>
   hellChargeBalances() const noexcept;
+  [[nodiscard]] GameplayTerminalReason terminalReason() const noexcept;
+  [[nodiscard]] bool terminal() const noexcept;
+  [[nodiscard]] GameplayAttemptSnapshot terminalSnapshot() const noexcept;
+  [[nodiscard]] GameplayFinalSummary finalSummary() const noexcept;
 
 private:
   struct LaneRuntimeState {
@@ -171,8 +196,18 @@ private:
   [[nodiscard]] NoteId selectReleaseCandidate(int lane,
                                               std::int64_t inputTimeMicros);
   void commitJudge(const JudgeResult &judge);
+  void applyGaugeDelta(float delta);
+  void applyGaugeJudgementRate(Judgement judgement, float rate);
+  void observeGaugeMutation(bool wasSurvivalFailed,
+                            bool wasGaugeHistoryOverflowed);
   bool recordReplay(GameplayReplayEvent &event);
   bool recordAutomaticResult(const GameplayInputResult &result);
+  void markIdentityResolved(NoteId id);
+  void finishTransaction(std::int64_t boundaryTimeMicros);
+  void latchTerminal(GameplayTerminalReason reason,
+                     std::int64_t boundaryTimeMicros);
+  void maybeLatchChartComplete(std::int64_t songTimeMicros);
+  [[nodiscard]] GameplayAdvanceResult emptyAdvanceResult() const noexcept;
   void markMissed(NoteId id, std::int64_t judgeTimeMicros, bool dead);
   void clearPairHolding(NoteId id);
   GameplayInputResult commitMiss(NoteId id, std::int64_t songTimeMicros,
@@ -205,11 +240,19 @@ private:
   std::vector<GameplayInputResult> automaticResults_;
   bool replayOverflowed_ = false;
   bool automaticResultOverflowed_ = false;
+  bool transactionSurvivalFailed_ = false;
+  bool transactionReplayCapacityExceeded_ = false;
+  bool transactionAutomaticResultCapacityExceeded_ = false;
+  bool transactionGaugeHistoryCapacityExceeded_ = false;
   std::size_t atTimingCursor_ = 0;
   std::size_t latePoorCursor_ = 0;
+  std::size_t resolvedIdentityCount_ = 0;
   std::int64_t lastAdvancedMicros_ = 0;
   bool hasAdvanced_ = false;
   bool practiceRangeFinalized_ = false;
+  GameplayTerminalReason terminalReason_ = GameplayTerminalReason::None;
+  GameplayAttemptSnapshot terminalSnapshot_;
+  GameplayFinalSummary finalSummary_;
   GameplaySearchStats lastSearchStats_;
   GameplaySearchStats lastAdvanceStats_;
 };
