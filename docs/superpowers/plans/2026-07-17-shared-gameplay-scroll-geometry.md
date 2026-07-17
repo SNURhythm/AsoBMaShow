@@ -2,24 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the post-judge-line constant-speed note workaround with the same chart-scroll geometry used by ghosts, share that transform with every timeline visual, and hide passed geometry while preserving active long-note bodies.
+**Goal:** Make normal and long notes use replay-ghost scroll geometry after crossing the judge line without hiding them, and make measure lines share that geometry while disappearing after they pass.
 
-**Architecture:** Add a renderer-independent `GameplayScrollGeometry.h` policy with pure scroll-to-Y, visibility, visible-range, and active-long-note anchoring functions. `BMSRenderer` will precompute timeline scroll-position suffix bounds, place every timeline/replay visual through the shared policy, and use timing only as the lifecycle gate that prevents passed visuals from re-entering.
+**Architecture:** Add a small renderer-independent geometry helper containing the shared scroll-to-Y transform and the measure-line visibility rule. `BMSRenderer` computes every timeline Y directly from its cached scroll position; existing note, long-note, landmine, and invisible-note lifecycle code remains intact.
 
 **Tech Stack:** C++23, CMake/CTest, existing `BMSRenderer` and bgfx batch renderers.
 
 ## Global Constraints
 
-- Normal notes, long-note endpoints, measure lines, landmines, invisible notes, replay ghosts, and replay miss markers must use `judgeY + (itemScrollPosition - currentScrollPosition) * rxhs`.
-- Timeline geometry is hidden after its timeline timing passes the current render time and whenever its transformed anchor is below the judge line or above the lane.
-- An active long-note body whose head has passed remains anchored at the judge line until its tail passes.
-- Remove the `latePoorTiming` rendering workaround; do not change judgement windows or note-state transitions.
-- Do not change replay formats, chart parsing, lane-cover settings, or playback timing.
+- Normal and long notes remain visible after crossing the judge line while their existing late-window/state lifecycle keeps them alive.
+- Notes use `judgeY + (timelineScrollPosition - currentScrollPosition) * rxhs` on both sides of the judge line.
+- Measure lines use the same transform and are hidden once their timeline timing is past or their anchor is outside the lane at or above the judge line.
+- Landmines and invisible notes inherit the corrected timeline Y but keep their existing expiration logic unchanged.
+- Replay ghosts and miss markers retain their lifecycle and visibility behavior; only their duplicated Y expression is routed through the helper.
+- Keep `latePoorTiming` for note lifecycle; remove only its constant-speed Y interpolation.
+- Do not change replay formats, judgement logic, chart parsing, lane-cover settings, or playback timing.
 - Do not edit `src/bms_parser.hpp` or `src/bms_parser.cpp`.
 
 ---
 
-### Task 1: Define and test the shared scroll geometry policy
+### Task 1: Define the corrected shared geometry contract
 
 **Files:**
 - Create: `src/scene/play/GameplayScrollGeometry.h`
@@ -28,13 +30,9 @@
 
 **Interfaces:**
 - Produces: `gameplay_scroll_geometry::renderY(double, double, float, float) -> float`
-- Produces: `gameplay_scroll_geometry::hasPassed(long long, long long) -> bool`
-- Produces: `gameplay_scroll_geometry::placeTimelineItem(...) -> TimelinePlacement`
-- Produces: `gameplay_scroll_geometry::visibleScrollRange(...) -> ScrollRange`
-- Produces: `gameplay_scroll_geometry::rangeIntersects(...) -> bool`
-- Produces: `gameplay_scroll_geometry::activeLongNoteHeadY(...) -> float`
+- Produces: `gameplay_scroll_geometry::shouldDrawMeasureLine(long long, long long, float, float, float) -> bool`
 
-- [ ] **Step 1: Add the failing geometry regression test**
+- [ ] **Step 1: Write the failing regression test**
 
 Create `tests/gameplay_scroll_geometry_tests.cpp` with:
 
@@ -66,65 +64,34 @@ int main() {
   requireNear(renderY(12.0, 10.0, 2.0F, 0.5F), 4.5F,
               "positive scroll distance maps above the judge line");
   requireNear(renderY(8.0, 10.0, 2.0F, 0.5F), -3.5F,
-              "negative scroll distance maps below the judge line");
+              "a passed note keeps its chart-scroll position below the line");
 
-  const auto atLine = placeTimelineItem(10.0, 10.0, 2.0F, 0.5F, 8.5F,
-                                        1'000'000, 1'000'000);
-  requireNear(atLine.y, 0.5F, "timeline placement uses shared scroll Y");
-  require(atLine.visible, "an item at the current timing remains visible");
+  const float stoppedBefore = renderY(12.0, 10.0, 2.0F, 0.5F);
+  const float stoppedAfter = renderY(12.0, 10.0, 2.0F, 0.5F);
+  requireNear(stoppedBefore, stoppedAfter,
+              "elapsed time cannot move a note while chart scroll is stopped");
 
-  const auto passed = placeTimelineItem(10.0, 10.0, 2.0F, 0.5F, 8.5F,
-                                        999'999, 1'000'000);
-  require(!passed.visible, "a passed timeline item is hidden");
-
-  const auto belowJudge = placeTimelineItem(9.0, 10.0, 2.0F, 0.5F, 8.5F,
-                                            1'100'000, 1'000'000);
-  require(!belowJudge.visible,
-          "a future item below the judge-line anchor is hidden");
-
-  const auto aboveLane = placeTimelineItem(15.0, 10.0, 2.0F, 0.5F, 8.5F,
-                                           1'100'000, 1'000'000);
-  require(!aboveLane.visible, "an item above the visible lane is hidden");
-
-  const auto stoppedEarly = placeTimelineItem(12.0, 10.0, 2.0F, 0.5F, 8.5F,
-                                              2'000'000, 1'000'000);
-  const auto stoppedLater = placeTimelineItem(12.0, 10.0, 2.0F, 0.5F, 8.5F,
-                                              2'000'000, 1'100'000);
-  requireNear(stoppedEarly.y, stoppedLater.y,
-              "elapsed time does not move geometry while scroll is stopped");
-
-  requireNear(activeLongNoteHeadY(999'999, 1'000'000, -2.0F, 0.5F),
-              0.5F, "a passed active long-note head anchors at the judge line");
-  requireNear(activeLongNoteHeadY(1'000'000, 1'000'000, 0.5F, 0.5F),
-              0.5F, "a current long-note head keeps its transformed Y");
-
-  const auto range = visibleScrollRange(10.0, 2.0F, 0.5F, 8.5F);
-  require(std::fabs(range.first - 10.0) < 0.0001 &&
-              std::fabs(range.last - 14.0) < 0.0001,
-          "visible lane converts back to a scroll-position range");
-  require(rangeIntersects(9.0, 12.0, range),
-          "a negative-scroll suffix that re-enters the lane remains eligible");
-  require(!rangeIntersects(14.5, 20.0, range),
-          "a suffix wholly above the visible range can be skipped");
+  require(shouldDrawMeasureLine(1'000'000, 1'000'000, 0.5F, 0.5F,
+                                8.5F),
+          "a measure line at the current timing remains visible");
+  require(!shouldDrawMeasureLine(999'999, 1'000'000, -0.5F, 0.5F,
+                                 8.5F),
+          "a passed measure line is hidden");
+  require(!shouldDrawMeasureLine(1'100'000, 1'000'000, -0.5F, 0.5F,
+                                 8.5F),
+          "a future measure line below the judge line is hidden");
+  require(!shouldDrawMeasureLine(1'100'000, 1'000'000, 9.0F, 0.5F,
+                                 8.5F),
+          "a future measure line above the visible lane is hidden");
   return 0;
 }
 ```
 
-Add this target beside `start_lane_indicator_geometry_tests` in `CMakeLists.txt`:
+Register `gameplay_scroll_geometry_tests` beside
+`start_lane_indicator_geometry_tests` in `CMakeLists.txt`, include `src`, use
+C++23, and add it to the existing `foreach(test_target IN ITEMS ...)` list.
 
-```cmake
-    add_executable(gameplay_scroll_geometry_tests
-        tests/gameplay_scroll_geometry_tests.cpp
-    )
-    target_include_directories(gameplay_scroll_geometry_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(gameplay_scroll_geometry_tests PRIVATE cxx_std_23)
-```
-
-Add `gameplay_scroll_geometry_tests` to the `foreach(test_target IN ITEMS ...)` registration list immediately after `start_lane_indicator_geometry_tests`.
-
-- [ ] **Step 2: Run the focused target and verify the RED state**
+- [ ] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -132,28 +99,17 @@ Run:
 cmake --build cmake-build-debug --target gameplay_scroll_geometry_tests -j 6
 ```
 
-Expected: compilation fails because `scene/play/GameplayScrollGeometry.h` does not exist. Confirm the failure is the missing production interface, not a CMake or test syntax error.
+Expected: compilation fails because `GameplayScrollGeometry.h` or the corrected
+`shouldDrawMeasureLine` interface is missing.
 
-- [ ] **Step 3: Implement the minimal shared geometry policy**
+- [ ] **Step 3: Implement the minimal helper**
 
 Create `src/scene/play/GameplayScrollGeometry.h` with:
 
 ```cpp
 #pragma once
 
-#include <algorithm>
-
 namespace gameplay_scroll_geometry {
-
-struct TimelinePlacement {
-  float y = 0.0F;
-  bool visible = false;
-};
-
-struct ScrollRange {
-  double first = 0.0;
-  double last = 0.0;
-};
 
 inline float renderY(double itemScrollPosition,
                      double currentScrollPosition, float rxhs,
@@ -162,55 +118,17 @@ inline float renderY(double itemScrollPosition,
          static_cast<float>(itemScrollPosition - currentScrollPosition) * rxhs;
 }
 
-inline bool hasPassed(long long itemTimeMicros,
-                      long long currentTimeMicros) {
-  return itemTimeMicros < currentTimeMicros;
-}
-
-inline bool isWithinVisibleLane(float y, float judgeY, float upperBound) {
-  return y >= judgeY && y <= upperBound;
-}
-
-inline TimelinePlacement placeTimelineItem(
-    double itemScrollPosition, double currentScrollPosition, float rxhs,
-    float judgeY, float upperBound, long long itemTimeMicros,
-    long long currentTimeMicros) {
-  const float y =
-      renderY(itemScrollPosition, currentScrollPosition, rxhs, judgeY);
-  return {.y = y,
-          .visible = !hasPassed(itemTimeMicros, currentTimeMicros) &&
-                     isWithinVisibleLane(y, judgeY, upperBound)};
-}
-
-inline float activeLongNoteHeadY(long long headTimeMicros,
-                                 long long currentTimeMicros,
-                                 float transformedY, float judgeY) {
-  return hasPassed(headTimeMicros, currentTimeMicros) ? judgeY : transformedY;
-}
-
-inline ScrollRange visibleScrollRange(double currentScrollPosition,
-                                      float rxhs, float judgeY,
-                                      float upperBound) {
-  if (rxhs <= 0.0F) {
-    return {.first = currentScrollPosition,
-            .last = currentScrollPosition};
-  }
-  const double first = currentScrollPosition;
-  const double last =
-      currentScrollPosition +
-      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
-  return {.first = std::min(first, last), .last = std::max(first, last)};
-}
-
-inline bool rangeIntersects(double minimum, double maximum,
-                            const ScrollRange &visible) {
-  return minimum <= visible.last && maximum >= visible.first;
+inline bool shouldDrawMeasureLine(long long timelineTimeMicros,
+                                  long long currentTimeMicros, float y,
+                                  float judgeY, float upperBound) {
+  return timelineTimeMicros >= currentTimeMicros && y >= judgeY &&
+         y <= upperBound;
 }
 
 } // namespace gameplay_scroll_geometry
 ```
 
-- [ ] **Step 4: Run the focused geometry test and verify GREEN**
+- [ ] **Step 4: Verify GREEN and commit the tested boundary**
 
 Run:
 
@@ -219,314 +137,89 @@ cmake --build cmake-build-debug --target gameplay_scroll_geometry_tests -j 6
 ctest --test-dir cmake-build-debug --output-on-failure -R '^gameplay_scroll_geometry_tests$'
 ```
 
-Expected: the target builds and CTest reports `100% tests passed, 0 tests failed`.
+Expected: `100% tests passed, 0 tests failed`.
 
-- [ ] **Step 5: Commit the tested geometry boundary**
+Commit:
 
 ```bash
 git add CMakeLists.txt src/scene/play/GameplayScrollGeometry.h tests/gameplay_scroll_geometry_tests.cpp
-git commit -m "test: define shared gameplay scroll geometry"
+git commit -m "test: define gameplay scroll geometry"
 ```
 
 ---
 
-### Task 2: Route every timeline and replay visual through the shared policy
+### Task 2: Apply the transform without changing note expiration
 
 **Files:**
 - Modify: `src/scene/play/BMSRenderer.cpp`
-- Modify: `src/scene/play/BMSRenderer.h`
-- Test: `tests/gameplay_scroll_geometry_tests.cpp`
 
 **Interfaces:**
-- Consumes: every function in `gameplay_scroll_geometry` from Task 1.
-- Produces: `BMSRenderer` timeline and replay geometry with one scroll transform and no `latePoorTiming` render state.
+- Consumes: `gameplay_scroll_geometry::renderY` and `shouldDrawMeasureLine`.
+- Preserves: `latePoorTiming`, `orphanLongNotes`, long-note state handling, landmine expiration, and invisible-note expiration.
 
-- [ ] **Step 1: Remove the constant-speed render dependency**
+- [ ] **Step 1: Include the shared helper and reuse it for replay Y**
 
-In `BMSRenderer.cpp`, add:
+Add:
 
 ```cpp
 #include "GameplayScrollGeometry.h"
 ```
 
-Delete `kDefaultLatePoorTimingMicros`, `latePoorTimingFromWindows`, and the constructor initializer:
-
-```cpp
-latePoorTiming(latePoorTimingFromWindows(timingWindows)),
-```
-
-Delete this field from `BMSRenderer.h`:
-
-```cpp
-long long latePoorTiming;
-```
-
-The constructor keeps `timingWindows` because `judgementIndicator` still consumes it.
-
-- [ ] **Step 2: Precompute safe suffix bounds for scroll re-entry**
-
-Add these fields after `timelineScrollPositions` in `BMSRenderer.h`:
-
-```cpp
-std::vector<double> timelineScrollSuffixMin;
-std::vector<double> timelineScrollSuffixMax;
-```
-
-Replace `buildTimelineScrollPositions()` with:
-
-```cpp
-void BMSRenderer::buildTimelineScrollPositions() {
-  timelineScrollPositions.clear();
-  timelineScrollSuffixMin.clear();
-  timelineScrollSuffixMax.clear();
-  timelineScrollPositions.reserve(timelines.size());
-  if (timelines.empty()) {
-    return;
-  }
-
-  double position = timelines.front()->BeatPosition;
-  timelineScrollPositions.push_back(position);
-  for (size_t i = 1; i < timelines.size(); ++i) {
-    const auto *prevTimeline = timelines[i - 1];
-    const auto *timeline = timelines[i];
-    position += (timeline->BeatPosition - prevTimeline->BeatPosition) *
-                prevTimeline->Scroll;
-    timelineScrollPositions.push_back(position);
-  }
-
-  timelineScrollSuffixMin.resize(timelineScrollPositions.size());
-  timelineScrollSuffixMax.resize(timelineScrollPositions.size());
-  for (size_t i = timelineScrollPositions.size(); i-- > 0;) {
-    const double current = timelineScrollPositions[i];
-    if (i + 1 < timelineScrollPositions.size()) {
-      timelineScrollSuffixMin[i] =
-          std::min(current, timelineScrollSuffixMin[i + 1]);
-      timelineScrollSuffixMax[i] =
-          std::max(current, timelineScrollSuffixMax[i + 1]);
-    } else {
-      timelineScrollSuffixMin[i] = current;
-      timelineScrollSuffixMax[i] = current;
-    }
-  }
-}
-```
-
-- [ ] **Step 3: Share the transform and judge-line visibility with replay visuals**
-
-In `drawReplayGhosts`, replace the hand-built visible bounds with:
-
-```cpp
-const auto visibleRange = gameplay_scroll_geometry::visibleScrollRange(
-    currentScrollPosition, rxhs, judgeY, upperBound);
-const double firstVisibleScrollPosition = visibleRange.first;
-const double lastVisibleScrollPosition = visibleRange.last;
-```
-
-Replace the `ghostY` calculation with:
+Replace only the `ghostY` and `markerY` expressions with:
 
 ```cpp
 const float ghostY = gameplay_scroll_geometry::renderY(
     event.judgeScrollPosition, currentScrollPosition, rxhs, judgeY);
 ```
 
-Change `drawReplayMissMarkers` in both declaration and definition to accept
-`long long currentTimeMicros` between `rxhs` and `currentScrollPosition`. Use
-the same `visibleScrollRange` and `renderY` calls as ghosts, and add this first
-inside its marker loop:
+```cpp
+const float markerY = gameplay_scroll_geometry::renderY(
+    marker.noteScrollPosition, currentScrollPosition, rxhs, judgeY);
+```
+
+Do not change ghost or miss-marker filtering, bounds, or timing.
+
+- [ ] **Step 2: Compute every timeline Y from cached chart scroll**
+
+At the start of each timeline-loop iteration, after obtaining `timeLine`, add:
 
 ```cpp
-if (gameplay_scroll_geometry::hasPassed(marker.noteTimeMicros,
-                                        currentTimeMicros)) {
-  continue;
+if (i >= timelineScrollPositions.size()) {
+  break;
+}
+y = gameplay_scroll_geometry::renderY(
+    timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
+```
+
+Delete the incremental future-timeline Y block and delete only this
+constant-speed late-timeline assignment:
+
+```cpp
+y = judgeY + (micro - timeLine->Timing) /
+                 static_cast<float>(latePoorTiming) * lowerBound;
+```
+
+Keep the surrounding `timeLine->Timing >= micro - latePoorTiming` condition so
+normal and long notes continue rendering during the existing late window.
+
+- [ ] **Step 3: Gate measure lines with the corrected lifecycle**
+
+Replace the measure-line condition with:
+
+```cpp
+if (timeLine->IsFirstInMeasure &&
+    gameplay_scroll_geometry::shouldDrawMeasureLine(
+        timeLine->Timing, micro, y, judgeY, upperBound)) {
+  drawRect(playAreaWidth, 0.05F, playAreaLeftX, y,
+           Color(255, 255, 255, 128));
 }
 ```
 
-Change the render call to:
+Leave the grouped-note dispatch and the separate invisible-note and landmine
+loops unchanged. Because they already consume `y`, they inherit the shared
+transform while preserving expiration.
 
-```cpp
-drawReplayMissMarkers(rxhs, micro, currentScrollPosition);
-```
-
-Replace the first visibility condition in both `drawGhostNoteOutline` and
-`drawMissMarkerX` with:
-
-```cpp
-if (!gameplay_scroll_geometry::isWithinVisibleLane(y, judgeY, upperBound)) {
-  return;
-}
-```
-
-- [ ] **Step 4: Replace the timeline loop's incremental and late-window Y calculations**
-
-Immediately after `currentScrollPosition` is calculated in `render`, initialize
-the active long-note head positions and visible range with:
-
-```cpp
-auto &longNoteLookahead = longNoteLookaheadScratch;
-longNoteLookahead.clear();
-for (auto *orphanLongNote : state.orphanLongNotes) {
-  longNoteLookahead[orphanLongNote] = judgeY;
-}
-const auto visibleScrollRange =
-    gameplay_scroll_geometry::visibleScrollRange(
-        currentScrollPosition, rxhs, judgeY, upperBound);
-```
-
-Use an unconditional index loop and begin each iteration with:
-
-```cpp
-for (size_t i = state.currentTimelineIndex; i < timelines.size(); ++i) {
-  const auto *timeLine = timelines[i];
-  if (i >= timelineScrollPositions.size() ||
-      i >= timelineScrollSuffixMin.size() ||
-      i >= timelineScrollSuffixMax.size()) {
-    break;
-  }
-
-  const auto placement = gameplay_scroll_geometry::placeTimelineItem(
-      timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY,
-      upperBound, timeLine->Timing, micro);
-  y = placement.y;
-  const bool timelinePassed =
-      gameplay_scroll_geometry::hasPassed(timeLine->Timing, micro);
-
-  if (!timelinePassed &&
-      !gameplay_scroll_geometry::rangeIntersects(
-          timelineScrollSuffixMin[i], timelineScrollSuffixMax[i],
-          visibleScrollRange)) {
-    break;
-  }
-
-  if (!timelinePassed && timeLine->IsFirstInMeasure && placement.visible) {
-    drawRect(playAreaWidth, 0.05F, playAreaLeftX, y,
-             Color(255, 255, 255, 128));
-  } else if (timelinePassed) {
-    state.currentTimelineIndex = i;
-  }
-```
-
-Delete the old incremental future-timeline calculation and the entire
-`micro - latePoorTiming` branch.
-
-- [ ] **Step 5: Apply the placement lifecycle to notes, long notes, landmines, and invisible notes**
-
-Within `processNote`, make `keepDeadLongNoteBody` retain bodies at the shared
-active-head anchor:
-
-```cpp
-auto keepDeadLongNoteBody = [&]() {
-  if (!note->IsLongNote()) {
-    return false;
-  }
-  auto *longNote = static_cast<bms_parser::LongNote *>(note);
-  if (!shouldKeepDeadLongNoteBody(longNote)) {
-    return false;
-  }
-  state.orphanLongNotes.insert(longNote);
-  longNoteLookahead[longNote] =
-      gameplay_scroll_geometry::activeLongNoteHeadY(
-          timeLine->Timing, micro, y, judgeY);
-  return true;
-};
-```
-
-Replace `if (timeLine->Timing >= micro - latePoorTiming)` with
-`if (!timelinePassed)`. In that branch:
-
-- draw normal notes only under `if (placement.visible)`;
-- draw grouped landmines only under `if (placement.visible)`;
-- store long-note heads only when `y >= judgeY`;
-- draw a long-note tail only when `placement.visible`; if the matching head is
-  absent, use `judgeY` as its body start; and
-- if a future long-note tail has `y < judgeY`, erase its matching lookup entry
-  without drawing it.
-
-The resulting long-note dispatch is:
-
-```cpp
-if (note->IsLongNote()) {
-  auto *longNote = static_cast<bms_parser::LongNote *>(note);
-  if (longNote->IsTail()) {
-    if (longNote->Head == nullptr) {
-      return;
-    }
-    if (placement.visible) {
-      if (auto it = longNoteLookahead.find(longNote->Head);
-          it != longNoteLookahead.end()) {
-        drawLongNote(it->second, y, longNote->Head);
-        longNoteLookahead.erase(it);
-      } else {
-        drawLongNote(judgeY, y, longNote->Head);
-      }
-    } else if (y < judgeY) {
-      longNoteLookahead.erase(longNote->Head);
-    }
-  } else if (y >= judgeY) {
-    longNoteLookahead[longNote] = y;
-  }
-} else if (placement.visible) {
-  drawNormalNote(y, note);
-}
-```
-
-Keep the existing passed-long-note state transitions, but set a passed head's
-lookahead value to `judgeY` instead of `lowerBound`. Normal notes and landmines
-perform no draw in the passed branch.
-
-Gate the separate invisible-note and landmine vectors with the same placement:
-
-```cpp
-if (!timelinePassed) {
-  if (showInvisibleNotes && placement.visible) {
-    drawInvisibleNote(y, note);
-  }
-} else {
-  note->IsDead = true;
-}
-```
-
-```cpp
-if (!timelinePassed && placement.visible) {
-  drawLandmineNote(y, note);
-}
-```
-
-- [ ] **Step 6: Hide passed long-note endpoints while keeping the body anchored**
-
-At the start of `drawLongNote`, after the existing tail-state booleans, add:
-
-```cpp
-const bool headPassed =
-    head->Timeline != nullptr && gameplay_scroll_geometry::hasPassed(
-                                     head->Timeline->Timing,
-                                     currentRenderMicros);
-```
-
-Replace the `startY` calculation with:
-
-```cpp
-const float transformedHeadY =
-    gameplay_scroll_geometry::activeLongNoteHeadY(
-        head->Timeline != nullptr ? head->Timeline->Timing
-                                  : currentRenderMicros,
-        currentRenderMicros, headY, judgeY);
-float startY = (head->IsPlayed && !head->IsDead) || headPassed
-                   ? judgeY
-                   : transformedHeadY;
-```
-
-Replace the final head guard with:
-
-```cpp
-if (head->IsPlayed || headPassed) {
-  return;
-}
-```
-
-This leaves the body and current/future tail drawing intact while suppressing
-the already-passed head sprite.
-
-- [ ] **Step 7: Run focused and compile verification**
+- [ ] **Step 4: Verify behavior, compilation, and the absence of the workaround**
 
 Run:
 
@@ -535,22 +228,38 @@ cmake --build cmake-build-debug --target gameplay_scroll_geometry_tests -j 6
 ctest --test-dir cmake-build-debug --output-on-failure -R '^gameplay_scroll_geometry_tests$'
 cmake --build cmake-build-debug --target main -j 6
 git diff --check
+rg -n "\(micro - timeLine->Timing\).*latePoorTiming|latePoorTiming\) \* lowerBound" src/scene/play/BMSRenderer.cpp
 ```
 
-Expected: focused tests report `100% tests passed`, the desktop `main` target
-exits successfully, and `git diff --check` prints no errors.
+Expected: focused tests pass, `main` builds, `git diff --check` is clean, and
+the final search returns no matches. `latePoorTiming` itself must still exist.
 
-Also run:
+- [ ] **Step 5: Commit the renderer change**
 
 ```bash
-rg -n "latePoorTiming|micro - timeLine->Timing" src/scene/play/BMSRenderer.cpp src/scene/play/BMSRenderer.h
+git add src/scene/play/BMSRenderer.cpp
+git commit -m "fix: keep late notes on chart scroll geometry"
 ```
 
-Expected: no matches.
+---
 
-- [ ] **Step 8: Commit the renderer integration**
+### Task 3: Final verification
+
+**Files:**
+- Verify: all files changed by Tasks 1 and 2
+
+**Interfaces:**
+- Consumes: the complete branch state.
+- Produces: fresh evidence that the focused behavior, full test suite, and desktop build pass together.
+
+- [ ] **Step 1: Run fresh complete verification**
 
 ```bash
-git add src/scene/play/BMSRenderer.cpp src/scene/play/BMSRenderer.h
-git commit -m "fix: share gameplay scroll geometry"
+cmake --build cmake-build-debug --target main gameplay_scroll_geometry_tests -j 6
+ctest --test-dir cmake-build-debug --output-on-failure -j 6
+git diff HEAD~2 --check
+git status --short
 ```
+
+Expected: build exits 0, all tests pass, the diff check is clean, and the
+working tree is clean after the two implementation commits.

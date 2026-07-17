@@ -15,10 +15,10 @@ notes can therefore diverge even though they belong to the same timeline.
 
 ## Goal
 
-Use one chart-scroll-to-render-Y transform for all gameplay timeline geometry
-and replay geometry. Hide timeline visuals after they pass the judge line,
-while preserving the visible body of an active long note whose head has
-already passed.
+Use the replay ghost chart-scroll-to-render-Y transform for normal and long
+notes and for measure lines. Normal and long notes remain visible after they
+pass the judge line for as long as their existing renderer lifecycle keeps
+them alive. Measure lines disappear after passing the judge line.
 
 ## Shared Geometry
 
@@ -35,10 +35,12 @@ judgeY + (itemScrollPosition - currentScrollPosition) * rxhs
 - normal note positions;
 - long-note head and tail positions;
 - measure lines;
-- landmines;
-- invisible notes;
 - replay ghost outlines; and
 - replay miss markers.
+
+Landmines and invisible notes already share their containing timeline's Y
+coordinate, so they inherit the corrected transform without new lifecycle
+logic. Their existing expiration behavior remains authoritative.
 
 Timeline items obtain `itemScrollPosition` from the existing
 `timelineScrollPositions` cache. Replay items continue to retain the scroll
@@ -51,26 +53,25 @@ math can be tested without constructing bgfx or a full `BMSRenderer`.
 
 ## Visibility and Lifecycle
 
-Ordinary notes, measure lines, landmines, and invisible notes render only while
-their timeline has not passed the current render time and their transformed
-geometry intersects the visible lane at or above the judge line. This matches
-the replay ghost lifecycle: scroll coordinates determine position, while the
-item's timing prevents past geometry from re-entering during unusual scroll
-sequences.
+The timeline renderer continues to use its existing `latePoorTiming` window
+and note state for lifecycle decisions. A normal or long note that has crossed
+the judge line is still drawn when it is alive; only its Y position changes
+from elapsed-time interpolation to the shared chart-scroll transform. Played,
+dead, active, released, and malformed long notes retain their current state
+handling.
 
-The constant-speed `latePoorTiming` render branch will be removed. Judgement
-windows remain gameplay logic; they will no longer control how far a visual
-travels below the judge line.
+Measure lines use the same transformed timeline Y but render only while their
+timeline timing is current or future and their anchor is within the visible
+lane at or above the judge line. This prevents a passed measure line from
+re-entering during unusual scroll sequences.
 
-Long notes are the one lifecycle exception. If a long-note head has passed but
-its tail is still current or future, the body remains visible from the judge
-line to the tail's shared-geometry Y position. The passed head endpoint is not
-drawn. Once the tail passes, the body and tail are removed normally. Played,
-dead, and malformed long notes retain their existing safety checks.
+Landmines and invisible notes receive the corrected timeline Y automatically.
+No new visibility gate is added for them: their existing expiration branches
+continue to hide or retire them.
 
-Geometry above the lane or below the judge line is culled before adding render
-batches. Negative-scroll and stop sequences still use their real chart scroll
-coordinates; no constant-speed fallback or clamping changes their position.
+Negative-scroll and stop sequences use their real chart scroll coordinates;
+the post-judge constant-speed Y fallback is removed without removing the
+existing late-note lifecycle window.
 
 ## Scope
 
@@ -87,10 +88,11 @@ visibility rules:
 - positive and negative scroll deltas map symmetrically around the judge line;
 - changes in current scroll coordinate, including a stopped coordinate, drive
   item movement instead of elapsed late-window time;
-- passed timeline geometry is rejected at the judge line;
-- future geometry outside the visible lane is rejected; and
-- an active long-note body anchors its passed head at the judge line while its
-  future tail keeps the shared transformed position.
+- a passed normal or long note retains its shared transformed Y rather than
+  being hidden or moved by elapsed late-window time;
+- a passed measure line is rejected;
+- future measure-line geometry outside the visible lane is rejected; and
+- landmine and invisible-note expiration code remains unchanged.
 
 After the focused regression test passes, run the existing desktop compile
 check with `cmake --build cmake-build-debug --target main -j 6`.
