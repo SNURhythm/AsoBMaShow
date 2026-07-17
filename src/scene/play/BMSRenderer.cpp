@@ -1880,7 +1880,9 @@ void BMSRenderer::drawLongNote(float headY, float tailY,
                                  headUv.u1, headUv.v1, sheet.texture);
 }
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed)
+  if (note->IsPlayed ||
+      !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
+          y, noteRenderHeight, lowerBound, upperBound))
     return;
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
@@ -1892,7 +1894,9 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note) {
 }
 
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
-  if (note->IsPlayed || note->IsDead) {
+  if (note->IsPlayed || note->IsDead ||
+      !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
+          y, noteRenderHeight, lowerBound, upperBound)) {
     return;
   }
 
@@ -1903,7 +1907,9 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
 
 void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note) {
-  if (note->IsPlayed || note->IsDead) {
+  if (note->IsPlayed || note->IsDead ||
+      !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
+          y, noteRenderHeight, lowerBound, upperBound)) {
     return;
   }
 
@@ -1916,6 +1922,8 @@ void BMSRenderer::drawLandmineNote(float y,
 
 void BMSRenderer::buildTimelineScrollPositions() {
   timelineScrollPositions.clear();
+  timelineScrollSuffixMin.clear();
+  timelineScrollSuffixMax.clear();
   timelineScrollPositions.reserve(timelines.size());
   if (timelines.empty()) {
     return;
@@ -1930,6 +1938,11 @@ void BMSRenderer::buildTimelineScrollPositions() {
                 prevTimeline->Scroll;
     timelineScrollPositions.push_back(position);
   }
+
+  auto suffix = gameplay_scroll_geometry::buildScrollSuffixExtrema(
+      timelineScrollPositions);
+  timelineScrollSuffixMin = std::move(suffix.minimum);
+  timelineScrollSuffixMax = std::move(suffix.maximum);
 }
 
 double BMSRenderer::calculateMostPrevalentBpm() const {
@@ -2090,16 +2103,11 @@ void BMSRenderer::drawReplayGhosts(float rxhs, long long currentTimeMicros,
     return;
   }
 
-  double firstVisibleScrollPosition =
-      currentScrollPosition +
-      static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
-          static_cast<double>(rxhs);
-  double lastVisibleScrollPosition =
-      currentScrollPosition +
-      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
-  if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
-    std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
-  }
+  const auto visible = gameplay_scroll_geometry::visibleScrollRange(
+      currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+      judgeY);
+  const double firstVisibleScrollPosition = visible.minimum;
+  const double lastVisibleScrollPosition = visible.maximum;
 
   const auto firstVisible = std::lower_bound(
       replayGhostEvents.begin(), replayGhostEvents.end(),
@@ -2130,16 +2138,11 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
     return;
   }
 
-  double firstVisibleScrollPosition =
-      currentScrollPosition +
-      static_cast<double>(lowerBound - judgeY - noteRenderHeight) /
-          static_cast<double>(rxhs);
-  double lastVisibleScrollPosition =
-      currentScrollPosition +
-      static_cast<double>(upperBound - judgeY) / static_cast<double>(rxhs);
-  if (firstVisibleScrollPosition > lastVisibleScrollPosition) {
-    std::swap(firstVisibleScrollPosition, lastVisibleScrollPosition);
-  }
+  const auto visible = gameplay_scroll_geometry::visibleScrollRange(
+      currentScrollPosition, rxhs, lowerBound, upperBound, noteRenderHeight,
+      judgeY);
+  const double firstVisibleScrollPosition = visible.minimum;
+  const double lastVisibleScrollPosition = visible.maximum;
 
   const auto firstVisible = std::lower_bound(
       replayMissMarkers.begin(), replayMissMarkers.end(),
@@ -2418,16 +2421,26 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   float rxhs = visibleTravelHeight * hispeed;
   float y = judgeY;
   const double currentScrollPosition = scrollPositionAtTime(micro);
+  const auto visibleScrollRange =
+      gameplay_scroll_geometry::visibleScrollRange(
+          currentScrollPosition, rxhs, lowerBound, upperBound,
+          noteRenderHeight, judgeY);
   auto &longNoteLookahead = longNoteLookaheadScratch;
   longNoteLookahead.clear();
   for (auto *orphanLongNote : state.orphanLongNotes) {
     longNoteLookahead[orphanLongNote] = lowerBound;
   }
   // render timeline
-  for (size_t i = state.currentTimelineIndex;
-       i < timelines.size() && y < upperBound; i++) {
+  for (size_t i = state.currentTimelineIndex; i < timelines.size(); ++i) {
     const auto &timeLine = timelines[i];
     if (i >= timelineScrollPositions.size()) {
+      break;
+    }
+    const bool timelineIsFuture = timeLine->Timing >= micro;
+    if (timelineIsFuture && longNoteLookahead.empty() &&
+        !gameplay_scroll_geometry::suffixCanReachVisibleRange(
+            timelineScrollSuffixMin, timelineScrollSuffixMax, i,
+            visibleScrollRange)) {
       break;
     }
     y = gameplay_scroll_geometry::renderY(

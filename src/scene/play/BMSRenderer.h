@@ -193,6 +193,8 @@ private:
   std::vector<TouchPointVisual> liveReleasedTouchSamples;
   JudgementIndicatorRenderer judgementIndicator;
   std::vector<double> timelineScrollPositions;
+  std::vector<double> timelineScrollSuffixMin;
+  std::vector<double> timelineScrollSuffixMax;
   std::unordered_map<bms_parser::LongNote *, float> longNoteLookaheadScratch;
   BMSRendererState state;
   int scratchLaneCount = 0;
