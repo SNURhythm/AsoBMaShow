@@ -126,6 +126,7 @@ private:
   std::unique_ptr<TextView> gaugeAutoShiftText;
   std::unique_ptr<TextView> playOptionText;
   std::unique_ptr<TextView> autoPlayMarkText;
+  std::unique_ptr<TextView> laneCoverWhiteNumberText;
   std::unique_ptr<TextView> laneCoverVisibleTimeText;
   static constexpr size_t kJudgementCounterItemCount = 7;
   std::array<std::unique_ptr<TextView>, kJudgementCounterItemCount>
@@ -289,7 +290,7 @@ private:
   void drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawStartLaneIndicators();
   void drawLaneCover();
-  void layoutLaneCoverVisibleTimeText();
+  void layoutLaneCoverNumberTexts();
   void drawTitle(RenderContext &context) const;
   void drawJudgement(RenderContext context) const;
   void drawScore(RenderContext &context) const;

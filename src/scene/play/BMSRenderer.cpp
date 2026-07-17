@@ -6,6 +6,7 @@
 #include "GamePlayTiming.h"
 #include "GameplayScrollGeometry.h"
 #include "JudgementTimingText.h"
+#include "LaneCoverNumberGeometry.h"
 #include "StartLaneIndicatorGeometry.h"
 #include "TouchVisualizationTiming.h"
 
@@ -906,6 +907,13 @@ BMSRenderer::BMSRenderer(
   playOptionText->setVisible(false);
   autoPlayMarkText = createAutoPlayMarkText();
   autoPlayMarkText->setVisible(false);
+  laneCoverWhiteNumberText = std::make_unique<TextView>(kHudFontPath, 24);
+  laneCoverWhiteNumberText->setAlign(TextView::CENTER);
+  laneCoverWhiteNumberText->setVAlign(TextView::MIDDLE);
+  laneCoverWhiteNumberText->setOverflow(TextView::TextOverflow::Hidden);
+  laneCoverWhiteNumberText->setColor(
+      ui_theme::sdl(Color(255, 255, 255, 255)));
+  laneCoverWhiteNumberText->setVisible(false);
   laneCoverVisibleTimeText = std::make_unique<TextView>(kHudFontPath, 24);
   laneCoverVisibleTimeText->setAlign(TextView::CENTER);
   laneCoverVisibleTimeText->setVAlign(TextView::MIDDLE);
@@ -2668,7 +2676,10 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   simpleBatchRenderer.begin();
   drawStartLaneIndicators();
   simpleBatchRenderer.flush();
-  layoutLaneCoverVisibleTimeText();
+  layoutLaneCoverNumberTexts();
+  if (laneCoverWhiteNumberText != nullptr) {
+    laneCoverWhiteNumberText->render(context);
+  }
   if (laneCoverVisibleTimeText != nullptr) {
     laneCoverVisibleTimeText->render(context);
   }
@@ -3568,14 +3579,20 @@ void BMSRenderer::drawStartLaneIndicators() {
   }
 }
 
-void BMSRenderer::layoutLaneCoverVisibleTimeText() {
-  if (laneCoverVisibleTimeText == nullptr) {
+void BMSRenderer::layoutLaneCoverNumberTexts() {
+  if (laneCoverWhiteNumberText == nullptr ||
+      laneCoverVisibleTimeText == nullptr) {
     return;
   }
 
+  const auto hideLabels = [this] {
+    laneCoverWhiteNumberText->setVisible(false);
+    laneCoverVisibleTimeText->setVisible(false);
+  };
+
   const float coverHeight = upperBound - noteVisibleUpperBound;
   if (coverHeight <= std::max(0.18f, noteRenderHeight * 1.2f)) {
-    laneCoverVisibleTimeText->setVisible(false);
+    hideLabels();
     return;
   }
 
@@ -3584,7 +3601,7 @@ void BMSRenderer::layoutLaneCoverVisibleTimeText() {
   const float labelBottomWorldY =
       handleVisible ? handle.y + handle.height : noteVisibleUpperBound;
   if (labelBottomWorldY >= upperBound) {
-    laneCoverVisibleTimeText->setVisible(false);
+    hideLabels();
     return;
   }
 
@@ -3597,33 +3614,53 @@ void BMSRenderer::layoutLaneCoverVisibleTimeText() {
   const auto coverTop =
       projectLanePointToUi(playAreaLeftX + playAreaWidth * 0.5f, upperBound);
   if (!center || !left || !right || !coverTop) {
-    laneCoverVisibleTimeText->setVisible(false);
+    hideLabels();
     return;
   }
 
+  laneCoverWhiteNumberText->setText(
+      lane_cover_number::whiteNumberLabel(noteStartPositionPercent));
   laneCoverVisibleTimeText->setText(laneCoverVisibleTimeLabel());
   const int maxProjectedWidth =
       static_cast<int>(std::round(std::abs(right->first - left->first)));
-  const int textWidth = std::clamp(laneCoverVisibleTimeText->textureWidth() + 28,
-                                   72, std::max(72, maxProjectedWidth - 24));
+  const int whiteWidth =
+      std::max(72, laneCoverWhiteNumberText->textureWidth() + 28);
+  const int greenWidth =
+      std::max(72, laneCoverVisibleTimeText->textureWidth() + 28);
+  constexpr int kNumberGap = 12;
+  const int pairWidth = whiteWidth + kNumberGap + greenWidth;
+  if (pairWidth > maxProjectedWidth - 24 ||
+      pairWidth > rendering::window_width) {
+    hideLabels();
+    return;
+  }
+
+  auto pair = lane_cover_number::centerPair(
+      static_cast<int>(std::round(center->first)), whiteWidth, greenWidth,
+      kNumberGap);
+  const int pairLeft = std::clamp(
+      pair.whiteX, 0, std::max(0, rendering::window_width - pairWidth));
+  const int horizontalShift = pairLeft - pair.whiteX;
   constexpr int kTextHeight = 34;
-  const int x = std::clamp(
-      static_cast<int>(std::round(center->first)) - textWidth / 2, 0,
-      std::max(0, rendering::window_width - textWidth));
   constexpr int kLabelEdgeGap = 6;
   const int labelBottomY =
       static_cast<int>(std::round(center->second)) - kLabelEdgeGap;
   const int coverTopY =
       static_cast<int>(std::floor(std::min(coverTop->second, center->second)));
   if (labelBottomY - kTextHeight < coverTopY) {
-    laneCoverVisibleTimeText->setVisible(false);
+    hideLabels();
     return;
   }
   const int y = std::clamp(
       labelBottomY - kTextHeight, 0,
       std::max(0, rendering::window_height - kTextHeight));
-  laneCoverVisibleTimeText->setPositionNoLayout(x, y);
-  laneCoverVisibleTimeText->setSize(textWidth, kTextHeight);
+  laneCoverWhiteNumberText->setPositionNoLayout(pair.whiteX + horizontalShift,
+                                                y);
+  laneCoverWhiteNumberText->setSize(whiteWidth, kTextHeight);
+  laneCoverWhiteNumberText->setVisible(true);
+  laneCoverVisibleTimeText->setPositionNoLayout(pair.greenX + horizontalShift,
+                                                y);
+  laneCoverVisibleTimeText->setSize(greenWidth, kTextHeight);
   laneCoverVisibleTimeText->setVisible(true);
 }
 
