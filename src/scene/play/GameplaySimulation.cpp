@@ -1,4 +1,5 @@
 #include "GameplaySimulation.h"
+#include "ManualKeysoundSelection.h"
 
 #include <algorithm>
 #include <array>
@@ -1024,6 +1025,41 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
   return selected;
 }
 
+NoteId GameplaySimulation::selectFallbackPressSoundNote(
+    int mainLane, int compensateLane,
+    std::int64_t inputTimeMicros) const {
+  const auto *mainState = findLane(mainLane);
+  const auto *compensationState = findLane(compensateLane);
+  const auto mainNotes = mainState != nullptr && !mainState->pressed
+                             ? definition_.laneKeysoundNotes(mainLane)
+                             : std::span<const NoteId>();
+  const auto compensationNotes =
+      compensateLane != mainLane && compensationState != nullptr &&
+              !compensationState->pressed
+          ? definition_.laneKeysoundNotes(compensateLane)
+          : std::span<const NoteId>();
+  const std::int64_t rangeStart =
+      config_.allowedNoteRange.has_value()
+          ? config_.allowedNoteRange->startMicros
+          : std::numeric_limits<std::int64_t>::min();
+  const std::int64_t rangeEnd =
+      config_.allowedNoteRange.has_value()
+          ? config_.allowedNoteRange->endMicros
+          : std::numeric_limits<std::int64_t>::max();
+  const auto selected = selectManualKeysound(
+      mainNotes, compensationNotes, inputTimeMicros, rangeStart, rangeEnd,
+      [&](NoteId id) { return definition_.note(id).timingMicros; });
+  switch (selected.lane) {
+  case ManualKeysoundLane::Main:
+    return mainNotes[selected.index];
+  case ManualKeysoundLane::Compensation:
+    return compensationNotes[selected.index];
+  case ManualKeysoundLane::None:
+    return kInvalidNoteId;
+  }
+  return kInvalidNoteId;
+}
+
 NoteId
 GameplaySimulation::selectReleaseCandidate(int lane,
                                            std::int64_t inputTimeMicros) {
@@ -1077,7 +1113,13 @@ NoteId GameplaySimulation::previewPressSoundNote(
        compensateState->pressed)) {
     return kInvalidNoteId;
   }
-  return selectPressCandidate(mainLane, compensateLane, inputTime(context));
+  const std::int64_t judgedTime = inputTime(context);
+  const NoteId judgeCandidate =
+      selectPressCandidate(mainLane, compensateLane, judgedTime);
+  return judgeCandidate != kInvalidNoteId
+             ? judgeCandidate
+             : selectFallbackPressSoundNote(mainLane, compensateLane,
+                                            judgedTime);
 }
 
 GameplayInputResult
@@ -1104,6 +1146,8 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
   const NoteId selected =
       selectPressCandidate(mainLane, compensateLane, judgedTime);
   if (selected == kInvalidNoteId) {
+    result.soundNoteId = selectFallbackPressSoundNote(
+        mainLane, compensateLane, judgedTime);
     if (mainState != nullptr) {
       mainState->pressed = true;
     }

@@ -1,8 +1,12 @@
 #include "RhythmLaneInputController.h"
 #include "BMSRenderer.h"
+#include "ManualKeysoundSelection.h"
 #include "../../CoursePlaySession.h"
 
+#include <algorithm>
 #include <array>
+#include <limits>
+#include <span>
 #include <utility>
 
 namespace {
@@ -122,7 +126,88 @@ RhythmLaneInputController::RhythmLaneInputController(
       it != judge.timingWindows.end()) {
     latePoorTiming = it->second.second;
   }
+  indexKeysoundNotes();
   resetLaneStates();
+}
+
+void RhythmLaneInputController::indexKeysoundNotes() {
+  keysoundNotesByLane.clear();
+  if (chart == nullptr) {
+    return;
+  }
+  for (const auto *measure : chart->Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (auto *note : timeline->Notes) {
+        if (note == nullptr || note->IsLandmineNote()) {
+          continue;
+        }
+        const auto *longNote =
+            dynamic_cast<const bms_parser::LongNote *>(note);
+        if (longNote != nullptr && longNote->IsTail()) {
+          continue;
+        }
+        keysoundNotesByLane[note->Lane].push_back(note);
+      }
+    }
+  }
+  for (auto &[lane, notes] : keysoundNotesByLane) {
+    (void)lane;
+    std::stable_sort(notes.begin(), notes.end(),
+                     [](const bms_parser::Note *left,
+                        const bms_parser::Note *right) {
+                       return noteTimingMicros(left) <
+                              noteTimingMicros(right);
+                     });
+  }
+}
+
+bms_parser::Note *RhythmLaneInputController::selectFallbackKeysound(
+    int mainLane, int compensateLane, long long inputTime) const {
+  const auto notesFor = [&](int lane, bool available) {
+    if (!available) {
+      return std::span<bms_parser::Note *const>();
+    }
+    const auto found = keysoundNotesByLane.find(lane);
+    return found == keysoundNotesByLane.end()
+               ? std::span<bms_parser::Note *const>()
+               : std::span<bms_parser::Note *const>(found->second);
+  };
+  const auto mainState = lanePressed.find(mainLane);
+  const auto compensationState = lanePressed.find(compensateLane);
+  const auto mainNotes = notesFor(
+      mainLane, mainState != lanePressed.end() && !mainState->second);
+  const auto compensationNotes = notesFor(
+      compensateLane,
+      compensateLane != mainLane && compensationState != lanePressed.end() &&
+          !compensationState->second);
+  const long long rangeStart =
+      allowedNoteRange.has_value()
+          ? allowedNoteRange->startMicros
+          : std::numeric_limits<long long>::min();
+  const long long rangeEnd =
+      allowedNoteRange.has_value()
+          ? allowedNoteRange->endMicros
+          : std::numeric_limits<long long>::max();
+  const auto selected = gameplay::selectManualKeysound<bms_parser::Note *>(
+      mainNotes, compensationNotes, inputTime, rangeStart, rangeEnd,
+      [](const bms_parser::Note *note) {
+        return noteTimingMicros(note);
+      });
+  switch (selected.lane) {
+  case gameplay::ManualKeysoundLane::Main:
+    return mainNotes[selected.index];
+  case gameplay::ManualKeysoundLane::Compensation:
+    return compensationNotes[selected.index];
+  case gameplay::ManualKeysoundLane::None:
+    return nullptr;
+  }
+  return nullptr;
 }
 
 RhythmLaneInputController::Result
@@ -182,7 +267,10 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
           continue;
         }
         auto *note = timeline->Notes[lane];
-        if (note == nullptr || note->IsPlayed || note->IsLandmineNote()) {
+        const auto *longNote =
+            dynamic_cast<const bms_parser::LongNote *>(note);
+        if (note == nullptr || note->IsPlayed || note->IsLandmineNote() ||
+            (longNote != nullptr && longNote->IsTail())) {
           continue;
         }
         const JudgeResult noteJudge = judge.judgeNow(note, inputTime);
@@ -224,6 +312,8 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
     return result;
   }
 
+  result.keySoundNote =
+      selectFallbackKeysound(mainLane, compensateLane, inputTime);
   if (mainLaneIt != lanePressed.end()) {
     mainLaneIt->second = true;
   }

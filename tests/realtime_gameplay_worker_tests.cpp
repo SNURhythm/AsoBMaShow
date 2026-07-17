@@ -324,13 +324,18 @@ void testPracticeCountInPressOutsideJudgeWindowStaysUnjudged() {
                                .compensateLane = 1,
                                .steadyTimestampMicros = 499'999}),
           "far-early count-in press reaches the practice authority");
-  std::this_thread::sleep_for(10ms);
+  require(waitUntil([&] {
+            return audio.commitCount.load(std::memory_order_acquire) == 1;
+          }),
+          "far-early count-in press commits the first in-range manual "
+          "keysound");
   auto snapshot = worker.acquireLatestSnapshot();
   require(snapshot && !snapshot->noteStates[0].played &&
-              snapshot->attempt.judgeCounts[PGreat] == 0 &&
-              snapshot->attempt.judgeCounts[Poor] == 0 &&
-              audio.commitCount.load() == 0,
-          "count-in press outside every judge window stays unjudged");
+              snapshot->attempt.judgeCounts ==
+                  std::array<int, JudgementCount>{} &&
+              audio.commitCount.load() == 1,
+          "count-in press outside every judge window sounds but stays "
+          "unjudged");
   worker.stop();
 }
 

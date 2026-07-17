@@ -673,6 +673,7 @@ void testPressDoesNotClaimLongTail() {
   chart.Measures.push_back(measure);
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   const auto laneNotes = definition.laneNotes(1);
+  const auto headId = laneNotes[0];
   const auto tailId = laneNotes[1];
   gameplay::GameplaySimulation simulation(
       definition,
@@ -683,8 +684,9 @@ void testPressDoesNotClaimLongTail() {
           .laneBeamTimeMicros = 3'000'000});
 
   require(press.noteId == gameplay::kInvalidNoteId &&
-              press.soundNoteId == gameplay::kInvalidNoteId,
-          "press near a long tail claims neither note nor sound identity");
+              press.soundNoteId == headId,
+          "press near a long tail claims no note and reuses the pressable "
+          "head keysound");
   require(simulation.lanePressed(1) &&
               !simulation.noteState(tailId).played &&
               !simulation.noteState(tailId).holding,
@@ -792,6 +794,134 @@ void testChargeScratchRequiresBackspinRelease() {
       7, {.songTimeMicros = 1'500'000}, false);
   require(release.hasJudge && release.judge.judgement == Poor,
           "non-backspin scratch release is Poor");
+}
+
+int legacyManualKeysoundAt(long long inputMicros, bool markLastDead = false) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *firstTimeline = addTimeline(*measure, 1'000'000);
+  firstTimeline->SetNote(1, new bms_parser::Note(11));
+  auto *lastTimeline = addTimeline(*measure, 2'000'000);
+  auto *last = new bms_parser::Note(22);
+  lastTimeline->SetNote(1, last);
+  chart.Measures.push_back(measure);
+  if (markLastDead) {
+    last->IsPlayed = true;
+    last->IsDead = true;
+  }
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, Judge(1));
+  const auto result = controller.pressLane(
+      1, {.songTimeMicros = inputMicros,
+          .laneBeamTimeMicros = inputMicros});
+  return result.keySoundNote == nullptr ? bms_parser::Parser::NoWav
+                                        : result.keySoundNote->Wav;
+}
+
+int simulationManualKeysoundAt(long long inputMicros,
+                               bool resolveLastFirst = false) {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(11));
+  addTimeline(*measure, 2'000'000)->SetNote(1, new bms_parser::Note(22));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  if (resolveLastFirst) {
+    (void)simulation.pressLane(1, {.songTimeMicros = 2'000'000});
+    (void)simulation.releaseLane(1, {.songTimeMicros = 2'010'000});
+  }
+  const auto result = simulation.pressLane(
+      1, {.songTimeMicros = inputMicros,
+          .laneBeamTimeMicros = inputMicros});
+  return result.soundNoteId == gameplay::kInvalidNoteId
+             ? bms_parser::Parser::NoWav
+             : definition.note(result.soundNoteId).wav;
+}
+
+void testManualKeysoundFallbackMatchesAcrossAuthorities() {
+  for (const auto [inputMicros, expectedWav] : {
+           std::pair{0LL, 11},
+           std::pair{1'000'000LL, 11},
+           std::pair{1'100'000LL, 11},
+           std::pair{1'490'000LL, 22},
+           std::pair{3'000'000LL, 22},
+       }) {
+    require(legacyManualKeysoundAt(inputMicros) == expectedWav &&
+                simulationManualKeysoundAt(inputMicros) == expectedWav,
+            "legacy and realtime select the same next-or-last keysound");
+  }
+  require(legacyManualKeysoundAt(3'000'000, true) == 22 &&
+              simulationManualKeysoundAt(3'000'000, true) == 22,
+          "the last pressed or dead note remains a fallback source");
+}
+
+void testFallbackTieAndNoWavDoNotSkipSelection() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 2'000'000)
+      ->SetNote(1, new bms_parser::Note(41));
+  addTimeline(*measure, 2'000'000)
+      ->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
+  addTimeline(*measure, 3'000'000)
+      ->SetNote(2, new bms_parser::Note(42));
+  chart.Measures.push_back(measure);
+
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController legacy(&chart, nullptr, lanes, Judge(1));
+  const auto oldResult = legacy.pressLane(
+      2, 1, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 1'000'000});
+  require(oldResult.keySoundNote != nullptr &&
+              oldResult.keySoundNote->Lane == 2 &&
+              oldResult.keySoundNote->Wav == bms_parser::Parser::NoWav,
+          "main-lane equal-time NoWav is selected without skipping");
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto newResult = simulation.pressLane(
+      2, 1, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 1'000'000});
+  require(newResult.soundNoteId != gameplay::kInvalidNoteId &&
+              definition.note(newResult.soundNoteId).lane == 2 &&
+              definition.note(newResult.soundNoteId).wav ==
+                  bms_parser::Parser::NoWav,
+          "realtime keeps the same main-lane NoWav selection");
+}
+
+void testLongTailIsNotAManualPressKeysound() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *head = addLongNote(*measure, 1'000'000, 2'000'000, 1,
+                           bms_parser::LongNoteType::ChargeNote);
+  head->Wav = 51;
+  head->Tail->Wav = 52;
+  chart.Measures.push_back(measure);
+
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController legacy(&chart, nullptr, lanes, Judge(1));
+  const auto oldResult = legacy.pressLane(
+      1, {.songTimeMicros = 2'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  require(oldResult.note == nullptr && oldResult.keySoundNote == head,
+          "legacy skips a judgeable long tail and falls back to its head");
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto newResult = simulation.pressLane(
+      1, {.songTimeMicros = 2'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  require(newResult.noteId == gameplay::kInvalidNoteId &&
+              newResult.soundNoteId != gameplay::kInvalidNoteId &&
+              definition.note(newResult.soundNoteId).kind ==
+                  gameplay::NoteKind::LongHead,
+          "realtime press fallback excludes the long tail");
 }
 
 struct NoteIdentity {
@@ -1327,6 +1457,9 @@ int main() {
   testParitySummaryDetectsPerturbedIdentityAndPayload();
   testEmptyValidLaneMatchesCurrentController();
   testTwoLaneEqualTimePressMatchesCurrentController();
+  testManualKeysoundFallbackMatchesAcrossAuthorities();
+  testFallbackTieAndNoWavDoNotSkipSelection();
+  testLongTailIsNotAManualPressKeysound();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
   return 0;

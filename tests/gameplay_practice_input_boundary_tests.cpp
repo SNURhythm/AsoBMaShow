@@ -229,6 +229,43 @@ void testActualInputAndJudgeRange() {
           "ordinary gameplay remains unrestricted");
 }
 
+void testManualKeysoundFallbackRespectsPracticeRangeAndDeadHeads() {
+  constexpr long long startMicros = 1'000'000;
+  constexpr long long endMicros = 2'000'000;
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *before = addNote(*measure, 500'000, 1);
+  before->Wav = 5;
+  auto *inside = addLongNote(*measure, 1'500'000, 1'700'000, 1,
+                             bms_parser::LongNoteType::ChargeNote);
+  inside->Wav = 15;
+  inside->Tail->Wav = 17;
+  auto *atEnd = addNote(*measure, endMicros, 1);
+  atEnd->Wav = 20;
+  auto *mineTimeline = addTimeline(*measure, 1'800'000);
+  mineTimeline->SetLandmineNote(1, new bms_parser::LandmineNote(5.0F));
+  chart.Measures.push_back(measure);
+
+  inside->IsPlayed = true;
+  inside->IsDead = true;
+  inside->Tail->IsPlayed = true;
+  inside->Tail->IsDead = true;
+  std::unordered_map<int, bool> lanePressed;
+  RhythmLaneInputController controller(
+      &chart, nullptr, lanePressed, Judge(chart.Meta.Rank), 0,
+      NoteTimeRange{.startMicros = startMicros, .endMicros = endMicros});
+  const auto result = controller.pressLane(
+      1, {.songTimeMicros = endMicros - 1,
+          .laneBeamTimeMicros = endMicros - 1});
+
+  require(result.note == nullptr && result.keySoundNote == inside &&
+              result.keySoundNote != before &&
+              result.keySoundNote != inside->Tail &&
+              result.keySoundNote != atEnd,
+          "practice fallback includes the dead head but excludes outside, "
+          "tail, and mine identities");
+}
+
 void testExactPendingNoteFinalization() {
   constexpr long long startMicros = 500'000;
   constexpr long long endMicros = 1'000'000;
@@ -381,6 +418,7 @@ void testPressedCrossingClassicReplayAnalyticsStream() {
 int main() {
   testControllerUsesResolvedEffectiveJudge();
   testActualInputAndJudgeRange();
+  testManualKeysoundFallbackRespectsPracticeRangeAndDeadHeads();
   testExactPendingNoteFinalization();
   testPressedCrossingClassicReplayAnalyticsStream();
   return 0;

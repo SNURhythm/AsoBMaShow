@@ -196,6 +196,9 @@ private:
   inputTime(const GameplayInputContext &context) const noexcept;
   [[nodiscard]] NoteId selectPressCandidate(int mainLane, int compensateLane,
                                             std::int64_t inputTimeMicros);
+  [[nodiscard]] NoteId
+  selectFallbackPressSoundNote(int mainLane, int compensateLane,
+                               std::int64_t inputTimeMicros) const;
   [[nodiscard]] NoteId selectReleaseCandidate(int lane,
                                               std::int64_t inputTimeMicros);
   void commitJudge(const JudgeResult &judge);

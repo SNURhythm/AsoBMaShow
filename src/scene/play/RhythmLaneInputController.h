@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 class BMSRenderer;
 
@@ -59,7 +60,13 @@ private:
   Judge judge;
   std::optional<NoteTimeRange> allowedNoteRange;
   long long latePoorTiming = 0;
+  std::unordered_map<int, std::vector<bms_parser::Note *>>
+      keysoundNotesByLane;
 
+  void indexKeysoundNotes();
+  [[nodiscard]] bms_parser::Note *
+  selectFallbackKeysound(int mainLane, int compensateLane,
+                         long long inputTime) const;
   long long inputTimeMicros(const InputContext &context) const;
   Result pressNote(bms_parser::Note *note, long long pressedTime,
                    long long songTimeMicros);
