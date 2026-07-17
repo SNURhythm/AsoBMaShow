@@ -576,6 +576,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_scroll_geometry_tests PRIVATE cxx_std_23)
 
+    add_executable(gameplay_chart_entity_render_budget_tests
+        tests/gameplay_chart_entity_render_budget_tests.cpp
+    )
+    target_include_directories(gameplay_chart_entity_render_budget_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_chart_entity_render_budget_tests PRIVATE
+        cxx_std_23
+    )
+
     add_executable(club_beat_tests
         tests/club_beat_tests.cpp
         src/audio/ClubBeat.cpp
@@ -1795,6 +1805,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         lane_cover_number_geometry_tests
         chart_viewer_note_geometry_tests
         gameplay_scroll_geometry_tests
+        gameplay_chart_entity_render_budget_tests
         club_beat_tests
         gbattle_tests
         replay_summary_list_tests
