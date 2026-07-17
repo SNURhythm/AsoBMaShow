@@ -2,11 +2,14 @@
 
 #include "CompiledGameplayJudge.h"
 #include "GameplayDefinition.h"
+#include "GameplayScoreState.h"
 #include "../../AppSettings.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace gameplay {
@@ -28,11 +31,38 @@ struct GameplayTimeRange {
   }
 };
 
+struct GameplayAttemptOptions {
+  GaugeType initialGaugeType = GaugeType::Normal;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  std::optional<int> startingGaugePercent;
+  std::optional<GaugeStateSnapshot> carriedGauge;
+  int carriedCombo = 0;
+  int carriedMaxCombo = 0;
+  bool assistClearMark = false;
+  bool autoPlay = false;
+  std::size_t replayCapacity = 4096;
+  std::size_t automaticResultCapacity = 4096;
+};
+
+struct GameplayAttemptSnapshot {
+  std::array<int, JudgementCount> judgeCounts{};
+  int combo = 0;
+  int maxCombo = 0;
+  int comboBreak = 0;
+  int score = 0;
+  float gauge = 0.0F;
+  GaugeType gaugeType = GaugeType::Normal;
+  int clearTypeRank = kClearTypeFailedRank;
+};
+
 struct GameplaySimulationConfig {
   CompiledGameplayJudge judge;
   AppSettings::NotePriorityMode notePriorityMode =
       AppSettings::NotePriorityMode::Lowest;
   std::optional<GameplayTimeRange> allowedNoteRange;
+  GameplayAttemptOptions attempt;
 };
 
 struct GameplayInputContext {
@@ -52,6 +82,12 @@ struct GameplayReplayEvent {
   std::int64_t judgeTimeMicros = 0;
   Judgement judgement = None;
   std::int64_t diffMicros = 0;
+  float gauge = 0.0F;
+  GaugeType gaugeType = GaugeType::Normal;
+  int combo = 0;
+  int score = 0;
+
+  bool operator==(const GameplayReplayEvent &) const = default;
 };
 
 enum class LaneVisualAction { Press, Release };
@@ -92,6 +128,11 @@ public:
   [[nodiscard]] const NoteRuntimeState &noteState(NoteId id) const;
   [[nodiscard]] bool lanePressed(int lane) const noexcept;
   [[nodiscard]] GameplaySearchStats lastSearchStats() const noexcept;
+  [[nodiscard]] const GameplayScoreState &scoreState() const noexcept;
+  [[nodiscard]] GameplayAttemptSnapshot snapshot() const noexcept;
+  [[nodiscard]] std::span<const GameplayReplayEvent>
+  replayEvents() const noexcept;
+  [[nodiscard]] bool replayOverflowed() const noexcept;
 
 private:
   struct LaneRuntimeState {
@@ -108,11 +149,16 @@ private:
                                             std::int64_t inputTimeMicros);
   [[nodiscard]] NoteId selectReleaseCandidate(int lane,
                                               std::int64_t inputTimeMicros);
+  void commitJudge(const JudgeResult &judge);
+  bool recordReplay(GameplayReplayEvent &event);
 
   const GameplayDefinition &definition_;
   GameplaySimulationConfig config_;
+  GameplayScoreState scoreState_;
   std::vector<NoteRuntimeState> noteStates_;
   std::vector<LaneRuntimeState> laneStates_;
+  std::vector<GameplayReplayEvent> replayEvents_;
+  bool replayOverflowed_ = false;
   GameplaySearchStats lastSearchStats_;
 };
 

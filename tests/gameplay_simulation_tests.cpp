@@ -8,6 +8,7 @@
 #include "bms_parser.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <unordered_map>
@@ -21,6 +22,48 @@ void require(bool condition, const char *message) {
     std::cerr << message << '\n';
     std::exit(1);
   }
+}
+
+bool sameAttemptSnapshot(const gameplay::GameplayAttemptSnapshot &left,
+                         const gameplay::GameplayAttemptSnapshot &right) {
+  return left.judgeCounts == right.judgeCounts &&
+         left.combo == right.combo && left.maxCombo == right.maxCombo &&
+         left.comboBreak == right.comboBreak && left.score == right.score &&
+         left.gauge == right.gauge && left.gaugeType == right.gaugeType &&
+         left.clearTypeRank == right.clearTypeRank;
+}
+
+void requireSameScoreState(const GameplayScoreState &left,
+                           const GameplayScoreState &right) {
+  require(left.isPlaying == right.isPlaying &&
+              left.isEnding == right.isEnding &&
+              left.passedMeasureCount == right.passedMeasureCount &&
+              left.passedTimelineCount == right.passedTimelineCount,
+          "score lifecycle state matches standalone commits");
+  require(left.judgeCount == right.judgeCount &&
+              left.judgementFastSlowCount == right.judgementFastSlowCount &&
+              left.combo == right.combo && left.maxCombo == right.maxCombo &&
+              left.comboBreak == right.comboBreak &&
+              left.getScore() == right.getScore(),
+          "judge, score, and combo state matches standalone commits");
+  require(left.gaugeHistory == right.gaugeHistory &&
+              left.currentGauge == right.currentGauge &&
+              left.gaugeType == right.gaugeType &&
+              left.selectedGaugeType == right.selectedGaugeType &&
+              left.gaugeAutoShiftLowerBound ==
+                  right.gaugeAutoShiftLowerBound &&
+              left.gaugeProfile == right.gaugeProfile &&
+              left.gaugeAutoShift == right.gaugeAutoShift &&
+              left.assistClearMark == right.assistClearMark &&
+              left.gaugeValues == right.gaugeValues &&
+              left.gaugeSurvivalFailed == right.gaugeSurvivalFailed &&
+              left.getClearTypeRank() == right.getClearTypeRank() &&
+              left.gaugeHistoryOverflowed() ==
+                  right.gaugeHistoryOverflowed(),
+          "gauge and clear state matches standalone commits");
+  require(left.fastCount == right.fastCount &&
+              left.slowCount == right.slowCount,
+          "fast and slow totals match standalone commits");
 }
 
 bms_parser::TimeLine *addTimeline(bms_parser::Measure &measure,
@@ -381,6 +424,131 @@ void testPressCommitsStateAndSoundTogether() {
   require(duplicate.noteId == gameplay::kInvalidNoteId &&
               duplicate.soundNoteId == gameplay::kInvalidNoteId,
           "held-lane duplicate produces neither note nor sound");
+}
+
+void testTransactionsOwnScoreGaugeAndPostStateReplay() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 260.0;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetNote(1, new bms_parser::Note(42));
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto press = simulation.pressLane(
+      1, {.songTimeMicros = 1'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+
+  require(press.hasJudge && simulation.scoreState().getScore() == 2,
+          "accepted press commits EX score before return");
+  require(simulation.scoreState().combo == 1,
+          "accepted press commits combo before return");
+  require(press.replayEvent.score == 2 && press.replayEvent.combo == 1 &&
+              press.replayEvent.gauge ==
+                  simulation.scoreState().currentGauge &&
+              press.replayEvent.gaugeType ==
+                  simulation.scoreState().gaugeType,
+          "replay payload snapshots post-transaction state");
+  require(simulation.replayEvents().size() == 1 &&
+              simulation.replayEvents().front() == press.replayEvent,
+          "simulation owns replay accumulation");
+
+  const auto postJudge = simulation.snapshot();
+  require(postJudge.judgeCounts[PGreat] == 1 && postJudge.score == 2 &&
+              postJudge.combo == 1 && postJudge.maxCombo == 1 &&
+              postJudge.gauge == simulation.scoreState().currentGauge &&
+              postJudge.gaugeType == simulation.scoreState().gaugeType &&
+              postJudge.clearTypeRank ==
+                  simulation.scoreState().getClearTypeRank(),
+          "attempt snapshot mirrors the complete committed score state");
+
+  const auto emptyPress = simulation.pressLane(
+      3, {.songTimeMicros = 1'100'000,
+          .laneBeamTimeMicros = 2'100'000});
+  const auto emptyRelease = simulation.releaseLane(
+      3, {.songTimeMicros = 1'200'000,
+          .laneBeamTimeMicros = 2'200'000});
+  require(!emptyPress.hasJudge && !emptyRelease.hasJudge &&
+              sameAttemptSnapshot(postJudge, simulation.snapshot()),
+          "empty-lane press and release preserve post-judge attempt state");
+  require(emptyPress.replayEvent.score == postJudge.score &&
+              emptyPress.replayEvent.combo == postJudge.combo &&
+              emptyPress.replayEvent.gauge == postJudge.gauge &&
+              emptyPress.replayEvent.gaugeType == postJudge.gaugeType &&
+              emptyRelease.replayEvent.score == postJudge.score &&
+              emptyRelease.replayEvent.combo == postJudge.combo &&
+              emptyRelease.replayEvent.gauge == postJudge.gauge &&
+              emptyRelease.replayEvent.gaugeType == postJudge.gaugeType,
+          "empty-lane replay payloads capture unchanged post-state");
+  require(simulation.replayEvents().size() == 3 &&
+              simulation.replayEvents()[1] == emptyPress.replayEvent &&
+              simulation.replayEvents()[2] == emptyRelease.replayEvent,
+          "empty-lane transactions append complete replay events in order");
+}
+
+void testBadAndPoorTransactionsMatchStandaloneScoreState() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 4;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 260.0;
+  auto *measure = new bms_parser::Measure();
+  auto *first = addTimeline(*measure, 1'000'000);
+  first->SetNote(1, new bms_parser::Note(1));
+  auto *bad = addTimeline(*measure, 2'000'000);
+  bad->SetNote(2, new bms_parser::Note(2));
+  addLongNote(*measure, 3'000'000, 3'500'000, 7,
+              bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto metadata = definition.metadata();
+  GameplayScoreState standalone({.totalNotes = metadata.totalNotes,
+                                 .keyMode = metadata.keyMode,
+                                 .gaugeTotal = metadata.gaugeTotal});
+  standalone.configureBoundedGaugeHistory(4096);
+
+  const auto commitBoth = [&](const gameplay::GameplayInputResult &result) {
+    require(result.hasJudge, "combo parity transaction produces a judgement");
+    standalone.commitJudge(result.judge);
+    requireSameScoreState(simulation.scoreState(), standalone);
+  };
+
+  commitBoth(simulation.pressLane(1, {.songTimeMicros = 1'000'000}));
+  const auto badPress =
+      simulation.pressLane(2, {.songTimeMicros = 2'200'000});
+  require(badPress.judge.judgement == Bad,
+          "late normal-note press supplies the Bad combo break");
+  commitBoth(badPress);
+  commitBoth(simulation.pressLane(7, {.songTimeMicros = 3'000'000}));
+  const auto poorRelease =
+      simulation.releaseLane(7, {.songTimeMicros = 3'500'000}, false);
+  require(poorRelease.judge.judgement == Poor,
+          "non-backspin scratch release supplies the Poor combo break");
+  commitBoth(poorRelease);
+
+  require(simulation.scoreState().judgeCount.at(Bad) == 1 &&
+              simulation.scoreState().judgeCount.at(Poor) == 1 &&
+              simulation.scoreState().comboBreak == 2 &&
+              simulation.scoreState().combo == 0,
+          "Bad and Poor each commit a combo break");
+  require(simulation.replayEvents().size() == 4 &&
+              simulation.replayEvents().back() == poorRelease.replayEvent &&
+              poorRelease.replayEvent.combo == 0 &&
+              poorRelease.replayEvent.score ==
+                  simulation.scoreState().getScore() &&
+              poorRelease.replayEvent.gauge ==
+                  simulation.scoreState().currentGauge,
+          "combo-break replay snapshots the final post-transaction state");
 }
 
 void testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding() {
@@ -1055,6 +1223,8 @@ int main() {
   testEqualTimeFollowsLatePriorityModes();
   testReleaseSearchStopsAtPracticeEnd();
   testPressCommitsStateAndSoundTogether();
+  testTransactionsOwnScoreGaugeAndPostStateReplay();
+  testBadAndPoorTransactionsMatchStandaloneScoreState();
   testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
   testPressDoesNotClaimLongTail();
   testLongTailCannotMaskLaterPressCandidateForAnyPriorityMode();

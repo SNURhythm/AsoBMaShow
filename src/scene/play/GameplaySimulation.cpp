@@ -23,7 +23,28 @@ std::int64_t absoluteDistance(std::int64_t value) {
 GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                                        GameplaySimulationConfig config)
     : definition_(definition), config_(std::move(config)),
+      scoreState_({.totalNotes = definition.metadata().totalNotes,
+                   .keyMode = definition.metadata().keyMode,
+                   .gaugeTotal = definition.metadata().gaugeTotal}),
       noteStates_(definition.noteCount()) {
+  replayEvents_.reserve(config_.attempt.replayCapacity);
+  scoreState_.configureBoundedGaugeHistory(config_.attempt.replayCapacity);
+  scoreState_.configureGauge(
+      config_.attempt.initialGaugeType, config_.attempt.gaugeAutoShift,
+      config_.attempt.gaugeProfile,
+      config_.attempt.gaugeAutoShiftLowerBound);
+  if (config_.attempt.startingGaugePercent.has_value()) {
+    scoreState_.setStartingGaugePercent(
+        *config_.attempt.startingGaugePercent);
+  }
+  if (config_.attempt.carriedGauge.has_value()) {
+    auto carriedGauge = *config_.attempt.carriedGauge;
+    carriedGauge.gaugeProfile = scoreState_.gaugeProfile;
+    scoreState_.restoreGaugeState(carriedGauge);
+  }
+  scoreState_.combo = config_.attempt.carriedCombo;
+  scoreState_.maxCombo = config_.attempt.carriedMaxCombo;
+  scoreState_.setAssistClearMark(config_.attempt.assistClearMark);
   laneStates_.reserve(definition.lanes().size());
   for (const auto &lane : definition.lanes()) {
     laneStates_.push_back({.lane = lane.lane});
@@ -56,6 +77,55 @@ bool GameplaySimulation::lanePressed(int lane) const noexcept {
 
 GameplaySearchStats GameplaySimulation::lastSearchStats() const noexcept {
   return lastSearchStats_;
+}
+
+const GameplayScoreState &GameplaySimulation::scoreState() const noexcept {
+  return scoreState_;
+}
+
+GameplayAttemptSnapshot GameplaySimulation::snapshot() const noexcept {
+  GameplayAttemptSnapshot result;
+  for (int index = 0; index < JudgementCount; ++index) {
+    const auto judgement = static_cast<Judgement>(index);
+    const auto count = scoreState_.judgeCount.find(judgement);
+    if (count != scoreState_.judgeCount.end()) {
+      result.judgeCounts[index] = count->second;
+    }
+  }
+  result.combo = scoreState_.combo;
+  result.maxCombo = scoreState_.maxCombo;
+  result.comboBreak = scoreState_.comboBreak;
+  result.score = scoreState_.getScore();
+  result.gauge = scoreState_.currentGauge;
+  result.gaugeType = scoreState_.gaugeType;
+  result.clearTypeRank = scoreState_.getClearTypeRank();
+  return result;
+}
+
+std::span<const GameplayReplayEvent>
+GameplaySimulation::replayEvents() const noexcept {
+  return replayEvents_;
+}
+
+bool GameplaySimulation::replayOverflowed() const noexcept {
+  return replayOverflowed_;
+}
+
+void GameplaySimulation::commitJudge(const JudgeResult &judge) {
+  scoreState_.commitJudge(judge);
+}
+
+bool GameplaySimulation::recordReplay(GameplayReplayEvent &event) {
+  event.gauge = scoreState_.currentGauge;
+  event.gaugeType = scoreState_.gaugeType;
+  event.combo = scoreState_.combo;
+  event.score = scoreState_.getScore();
+  if (replayEvents_.size() == replayEvents_.capacity()) {
+    replayOverflowed_ = true;
+    return false;
+  }
+  replayEvents_.push_back(event);
+  return true;
 }
 
 const NoteRuntimeState &GameplaySimulation::noteState(NoteId id) const {
@@ -255,6 +325,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
         .songTimeMicros = judgedTime,
         .judgeTimeMicros = judgedTime,
     };
+    recordReplay(result.replayEvent);
     result.hasLaneVisual = true;
     result.laneVisual = {LaneVisualAction::Press, mainLane,
                          context.laneBeamTimeMicros, JudgeResult(None, 0)};
@@ -293,6 +364,9 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     } else {
       result.hasJudge = true;
     }
+    if (result.hasJudge) {
+      commitJudge(result.judge);
+    }
     result.hasReplayEvent = true;
     result.replayEvent = {
         .action = GameplayReplayAction::Press,
@@ -304,6 +378,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
         .judgement = judge.judgement,
         .diffMicros = judge.Diff,
     };
+    recordReplay(result.replayEvent);
   }
   return result;
 }
@@ -336,6 +411,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
         .songTimeMicros = judgedTime,
         .judgeTimeMicros = judgedTime,
     };
+    recordReplay(result.replayEvent);
     return result;
   }
 
@@ -351,6 +427,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
         .songTimeMicros = judgedTime,
         .judgeTimeMicros = judgedTime,
     };
+    recordReplay(result.replayEvent);
     return result;
   }
 
@@ -380,6 +457,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
 
   result.hasJudge = true;
   result.judge = applied;
+  commitJudge(result.judge);
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Release,
@@ -391,6 +469,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
       .judgement = applied.judgement,
       .diffMicros = applied.Diff,
   };
+  recordReplay(result.replayEvent);
   return result;
 }
 
