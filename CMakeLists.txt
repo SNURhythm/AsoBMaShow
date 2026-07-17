@@ -1349,6 +1349,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE avrt)
     endif()
 
+    add_executable(realtime_gameplay_authority_policy_tests
+        tests/realtime_gameplay_authority_policy_tests.cpp
+        src/scene/play/RealtimeGameplayAuthorityPolicy.cpp
+    )
+    target_include_directories(realtime_gameplay_authority_policy_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(realtime_gameplay_authority_policy_tests PRIVATE
+        cxx_std_23
+    )
+
     add_executable(realtime_touch_input_router_tests
         tests/realtime_touch_input_router_tests.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp
@@ -1817,6 +1828,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
     asobmashow_register_test(realtime_gameplay_worker_tests)
+    asobmashow_register_test(realtime_gameplay_authority_policy_tests)
     asobmashow_register_test(realtime_touch_input_router_tests)
     asobmashow_register_test(replay_keysound_schedule_tests)
     asobmashow_register_test(practice_analytics_tests)
