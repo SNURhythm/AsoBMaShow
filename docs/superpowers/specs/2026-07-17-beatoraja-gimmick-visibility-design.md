@@ -88,10 +88,12 @@ timeline loop handles two regions:
    Existing `latePoorTiming`, dead/played state, invisible expiration,
    landmine expiration, and orphan-long-note state remain authoritative.
 2. Future timelines start from `judgeY` and advance with Beatoraja's retained
-   predecessor formula. Before processing the next future row, traversal ends
-   when the previous future Y no longer satisfies `y <= upperBound`. This exact
-   comparison also stops on `NaN` and positive infinity while retaining Java's
-   behavior for negative infinity.
+   predecessor formula. The first retained row has no predecessor, so it is
+   seeded from the shared absolute transform; this preserves ordinary-chart
+   movement and ghost alignment during negative preroll. Before processing the
+   next future row, traversal ends when the previous future Y no longer
+   satisfies `y <= upperBound`. This exact comparison also stops on `NaN` and
+   positive infinity while retaining Java's behavior for negative infinity.
 
 A zero-duration incremental segment returns `NaN` explicitly. This documents
 the compatibility boundary instead of relying on an incidental C++

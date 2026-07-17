@@ -30,7 +30,7 @@
 
 **Interfaces:**
 - Produces: `shouldKeepRenderTimeline(double, double, double, double, double, bool, bool, bool, bool) -> bool`
-- Produces: `initialFutureTimelineY(double, double, long long, long long, double) -> double`
+- Produces: `initialFutureTimelineY(double, double, float, float) -> float`
 - Produces: `advanceFutureTimelineY(double, double, double, long long, double, long long, long long, double) -> double`
 - Produces: `futureTimelineTraversalContinues(double, float) -> bool`
 - Removes: suffix-extrema construction and suffix-reachability traversal.
@@ -61,8 +61,8 @@ re-entry assertions. Add these assertions after the measure-line tests:
                                    false, false, false, true),
           "a landmine remains in render traversal");
 
-  requireNear(initialFutureTimelineY(0.5, 0.0, 0, 0, 16.0), 0.5,
-              "the zero-time chart origin starts at the judge line");
+  requireNear(initialFutureTimelineY(0.0, -0.5, 2.0F, 0.5F), 1.5F,
+              "a zero-time first row moves during negative preroll");
   requireNear(advanceFutureTimelineY(0.5, 1.0, 1.0, 0, 0.0,
                                      1'000, 500, 10.0),
               5.5,
@@ -119,17 +119,10 @@ inline bool shouldKeepRenderTimeline(
          hasInvisibleNote || hasLandmine;
 }
 
-inline double initialFutureTimelineY(double currentY, double beatPosition,
-                                     long long timelineTimeMicros,
-                                     long long currentTimeMicros,
-                                     double rxhs) {
-  if (timelineTimeMicros == 0) {
-    return currentY;
-  }
-  return currentY + beatPosition *
-                        static_cast<double>(timelineTimeMicros -
-                                            currentTimeMicros) /
-                        static_cast<double>(timelineTimeMicros) * rxhs;
+inline float initialFutureTimelineY(double timelineScrollPosition,
+                                    double currentScrollPosition, float rxhs,
+                                    float judgeY) {
+  return renderY(timelineScrollPosition, currentScrollPosition, rxhs, judgeY);
 }
 
 inline double advanceFutureTimelineY(
@@ -258,8 +251,7 @@ At the beginning of each iteration, after `timelineIsFuture` is known, add:
             static_cast<double>(rxhs));
       } else {
         futureY = gameplay_scroll_geometry::initialFutureTimelineY(
-            futureY, timeLine->BeatPosition, timeLine->Timing, micro,
-            static_cast<double>(rxhs));
+            timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
       }
       y = static_cast<float>(futureY);
       futureTraversalStarted = true;

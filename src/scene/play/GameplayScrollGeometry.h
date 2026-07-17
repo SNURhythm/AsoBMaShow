@@ -21,17 +21,10 @@ inline bool shouldKeepRenderTimeline(
          hasInvisibleNote || hasLandmine;
 }
 
-inline double initialFutureTimelineY(double currentY, double beatPosition,
-                                     long long timelineTimeMicros,
-                                     long long currentTimeMicros,
-                                     double rxhs) {
-  if (timelineTimeMicros == 0) {
-    return currentY;
-  }
-  return currentY + beatPosition *
-                        static_cast<double>(timelineTimeMicros -
-                                            currentTimeMicros) /
-                        static_cast<double>(timelineTimeMicros) * rxhs;
+inline float initialFutureTimelineY(double timelineScrollPosition,
+                                    double currentScrollPosition, float rxhs,
+                                    float judgeY) {
+  return renderY(timelineScrollPosition, currentScrollPosition, rxhs, judgeY);
 }
 
 inline double advanceFutureTimelineY(

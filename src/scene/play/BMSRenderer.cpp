@@ -2473,8 +2473,7 @@ void BMSRenderer::render(RenderContext &context, long long micro,
             static_cast<double>(rxhs));
       } else {
         futureY = gameplay_scroll_geometry::initialFutureTimelineY(
-            futureY, timeLine->BeatPosition, timeLine->Timing, micro,
-            static_cast<double>(rxhs));
+            timelineScrollPositions[i], currentScrollPosition, rxhs, judgeY);
       }
       y = static_cast<float>(futureY);
       futureTraversalStarted = true;

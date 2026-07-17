@@ -68,8 +68,8 @@ int main() {
                                    false, false, false, true),
           "a landmine remains in render traversal");
 
-  requireNear(initialFutureTimelineY(0.5, 0.0, 0, 0, 16.0), 0.5,
-              "the zero-time chart origin starts at the judge line");
+  requireNear(initialFutureTimelineY(0.0, -0.5, 2.0F, 0.5F), 1.5F,
+              "a zero-time first row moves during negative preroll");
   requireNear(advanceFutureTimelineY(0.5, 1.0, 1.0, 0, 0.0,
                                      1'000, 500, 10.0),
               5.5,
