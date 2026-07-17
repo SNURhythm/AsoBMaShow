@@ -7,6 +7,8 @@
 
 namespace gameplay_scroll_geometry {
 
+inline constexpr float kInvisibleNoteBorderHeightRatio = 0.15F;
+
 inline long long chartRenderTimeMicros(long long visualTimeMicros) {
   return visualTimeMicros;
 }

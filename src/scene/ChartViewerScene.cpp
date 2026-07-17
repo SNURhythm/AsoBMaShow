@@ -1119,9 +1119,12 @@ private:
       constexpr float height = 6.0F;
       const bool isLongNote =
           dynamic_cast<const bms_parser::LongNote *>(note) != nullptr;
+      const float borderThickness =
+          height *
+          chart_viewer_note_geometry::kInvisibleNoteBorderHeightRatio;
       const auto rectangles =
           chart_viewer_note_geometry::invisibleNoteRectangles(
-              x, y, width, height, height * 0.12F, isLongNote);
+              x, y, width, height, borderThickness, isLongNote);
       for (std::size_t i = 0; i < rectangles.count; ++i) {
         const auto &rectangle = rectangles.rectangles[i];
         drawRectClip(rectangle.x, rectangle.y, rectangle.width,

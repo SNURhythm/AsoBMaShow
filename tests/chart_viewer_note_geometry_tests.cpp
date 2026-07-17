@@ -23,9 +23,12 @@ int main() {
   };
 
   const auto normal =
-      invisibleNoteRectangles(10.0F, 20.0F, 8.0F, 6.0F, 0.72F, false);
+      invisibleNoteRectangles(10.0F, 20.0F, 8.0F, 6.0F,
+                              6.0F * kInvisibleNoteBorderHeightRatio, false);
   check(normal.count == 4,
         "a normal invisible note produces four border rectangles");
+  check(near(normal.rectangles[0].height, 0.9F),
+        "the chart-viewer invisible-note border uses the thicker ratio");
   bool centerCovered = false;
   for (std::size_t i = 0; i < normal.count; ++i) {
     const auto &rectangle = normal.rectangles[i];
@@ -39,7 +42,8 @@ int main() {
   check(!centerCovered, "a normal invisible note leaves its center empty");
 
   const auto longNote =
-      invisibleNoteRectangles(10.0F, 20.0F, 8.0F, 6.0F, 0.72F, true);
+      invisibleNoteRectangles(10.0F, 20.0F, 8.0F, 6.0F,
+                              6.0F * kInvisibleNoteBorderHeightRatio, true);
   check(longNote.count == 1,
         "an invisible long note produces one solid rectangle");
   check(near(longNote.rectangles[0].x, 10.0F) &&
@@ -49,7 +53,8 @@ int main() {
         "the invisible long-note rectangle covers the full marker");
 
   const auto narrow =
-      invisibleNoteRectangles(0.0F, 0.0F, 0.5F, 6.0F, 0.72F, false);
+      invisibleNoteRectangles(0.0F, 0.0F, 0.5F, 6.0F,
+                              6.0F * kInvisibleNoteBorderHeightRatio, false);
   check(narrow.count == 4,
         "a narrow normal invisible note retains four border rectangles");
   check(near(narrow.rectangles[0].height, 0.25F) &&

@@ -6,6 +6,8 @@
 
 namespace chart_viewer_note_geometry {
 
+inline constexpr float kInvisibleNoteBorderHeightRatio = 0.15F;
+
 struct Rectangle {
   float x = 0.0F;
   float y = 0.0F;

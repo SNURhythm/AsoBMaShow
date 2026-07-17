@@ -1983,7 +1983,9 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
   }
 
   const float borderThickness =
-      std::max(0.015F, noteRenderHeight * 0.12F);
+      std::max(0.015F,
+               noteRenderHeight *
+                   gameplay_scroll_geometry::kInvisibleNoteBorderHeightRatio);
   const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
       x, y, noteRenderWidth, noteRenderHeight, borderThickness, clip);
   for (std::size_t i = 0; i < outline.count; ++i) {
