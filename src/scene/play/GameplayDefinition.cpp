@@ -2,10 +2,13 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../bms_parser.hpp"
+#include "GameplayScoreState.h"
 
 #include <algorithm>
+#include <numeric>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 namespace gameplay {
 namespace {
@@ -59,9 +62,32 @@ std::span<const LaneDefinition> GameplayDefinition::lanes() const noexcept {
   return lanes_;
 }
 
+GameplayChartMetadata GameplayDefinition::metadata() const noexcept {
+  return metadata_;
+}
+
+std::span<const NoteId>
+GameplayDefinition::chronologicalNotes() const noexcept {
+  return chronologicalNoteIds_;
+}
+
+std::span<const NoteId>
+GameplayDefinition::hellChargeHeads() const noexcept {
+  return hellChargeHeadIds_;
+}
+
 GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
                                            int longNoteModeOverride) {
   GameplayDefinition result;
+  result.metadata_ = {
+      .totalNotes = chart.Meta.TotalNotes,
+      .keyMode = chart.Meta.KeyMode,
+      .gaugeTotal =
+          chart.Meta.HasTotal
+              ? chart.Meta.Total
+              : beatorajaDefaultGaugeTotal(chart.Meta.KeyMode,
+                                           chart.Meta.TotalNotes),
+  };
   std::unordered_map<const bms_parser::Note *, NoteId> ids;
 
   const auto validLanes = chart.Meta.GetTotalLaneIndices();
@@ -105,6 +131,9 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
       if (timeline == nullptr) {
         continue;
       }
+      result.metadata_.finalTimelineTimeMicros =
+          std::max(result.metadata_.finalTimelineTimeMicros,
+                   static_cast<std::int64_t>(timeline->Timing));
       for (const auto *note : timeline->Notes) {
         append(note);
       }
@@ -124,6 +153,27 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
     const auto found = ids.find(pair);
     if (found != ids.end()) {
       result.notes_[id].pairId = found->second;
+    }
+  }
+
+  result.chronologicalNoteIds_.resize(result.notes_.size());
+  std::iota(result.chronologicalNoteIds_.begin(),
+            result.chronologicalNoteIds_.end(), NoteId{0});
+  std::ranges::sort(result.chronologicalNoteIds_,
+                    [&](NoteId left, NoteId right) {
+                      return std::pair{result.notes_[left].timingMicros, left} <
+                             std::pair{result.notes_[right].timingMicros,
+                                       right};
+                    });
+  if (!result.chronologicalNoteIds_.empty()) {
+    result.metadata_.finalNoteTimeMicros =
+        result.notes_[result.chronologicalNoteIds_.back()].timingMicros;
+  }
+  for (const NoteId id : result.chronologicalNoteIds_) {
+    const auto &note = result.notes_[id];
+    if (note.kind == NoteKind::LongHead &&
+        note.longNoteRule == LongNoteRule::HellCharge) {
+      result.hellChargeHeadIds_.push_back(id);
     }
   }
 

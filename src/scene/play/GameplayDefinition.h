@@ -36,18 +36,33 @@ struct LaneDefinition {
   std::vector<NoteId> noteIds;
 };
 
+struct GameplayChartMetadata {
+  int totalNotes = 0;
+  int keyMode = 7;
+  double gaugeTotal = 100.0;
+  std::int64_t finalNoteTimeMicros = 0;
+  std::int64_t finalTimelineTimeMicros = 0;
+};
+
 class GameplayDefinition {
 public:
   [[nodiscard]] std::size_t noteCount() const noexcept;
   [[nodiscard]] const NoteDefinition &note(NoteId id) const;
   [[nodiscard]] std::span<const NoteId> laneNotes(int lane) const noexcept;
   [[nodiscard]] std::span<const LaneDefinition> lanes() const noexcept;
+  [[nodiscard]] GameplayChartMetadata metadata() const noexcept;
+  [[nodiscard]] std::span<const NoteId>
+  chronologicalNotes() const noexcept;
+  [[nodiscard]] std::span<const NoteId> hellChargeHeads() const noexcept;
 
 private:
   friend GameplayDefinition buildGameplayDefinition(
       const bms_parser::Chart &, int);
+  GameplayChartMetadata metadata_;
   std::vector<NoteDefinition> notes_;
   std::vector<LaneDefinition> lanes_;
+  std::vector<NoteId> chronologicalNoteIds_;
+  std::vector<NoteId> hellChargeHeadIds_;
 };
 
 GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
