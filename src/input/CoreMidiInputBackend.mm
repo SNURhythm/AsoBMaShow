@@ -2,13 +2,12 @@
 
 #if defined(__APPLE__)
 
+#include "AppleInputTimestamp.h"
 #include "LiveMidiDeviceIdAllocator.h"
 #include "NativeCallbackLifetime.h"
 #include "QueuedMidiInputBackend.h"
 
 #include <CoreMIDI/CoreMIDI.h>
-#include <mach/mach_time.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -137,15 +136,6 @@ std::string hex64(std::uint64_t value) {
   return result;
 }
 
-mach_timebase_info_data_t machTimebase() {
-  mach_timebase_info_data_t value{};
-  if (mach_timebase_info(&value) != KERN_SUCCESS || value.denom == 0) {
-    value.numer = 1;
-    value.denom = 1;
-  }
-  return value;
-}
-
 std::vector<CoreMidiSourceDescriptor> enumerateSources() {
   struct Candidate {
     MIDIEndpointRef endpoint = 0;
@@ -222,24 +212,15 @@ std::vector<CoreMidiSourceDescriptor> enumerateSources() {
 }
 
 std::uint64_t nowMicros() {
-  static const mach_timebase_info_data_t timebase = machTimebase();
-  const std::uint64_t ticks = mach_absolute_time();
-  const auto nanos =
-      static_cast<unsigned __int128>(ticks) * timebase.numer / timebase.denom;
-  return static_cast<std::uint64_t>(nanos / 1000U);
+  return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
 }
 
 std::uint64_t midiTimestampMicros(MIDITimeStamp timestamp) {
   if (timestamp == 0) {
     return nowMicros();
   }
-  static const mach_timebase_info_data_t timebase = machTimebase();
-  const auto nanos = static_cast<unsigned __int128>(timestamp) *
-                     timebase.numer / timebase.denom;
-  const auto micros = nanos / 1000U;
-  return micros > std::numeric_limits<std::uint64_t>::max()
-             ? std::numeric_limits<std::uint64_t>::max()
-             : static_cast<std::uint64_t>(micros);
+  return static_cast<std::uint64_t>(input::apple::steadyMicrosFromHostMicros(
+      input::apple::hostTicksToMicros(timestamp)));
 }
 
 class CoreMidiInputBackend final : public QueuedMidiInputBackend {
@@ -362,7 +343,7 @@ private:
         (void)MIDIPortDisconnectSource(port_, connection->endpoint);
         connection->callbackLifetime.closeAndWait();
         resetImmediateParser(connection->stableId);
-        enqueueDevice({.stableId = connection->stableId,
+        publishDevice({.stableId = connection->stableId,
                        .displayName = connection->displayName,
                        .deviceClass = input::DeviceClass::Midi,
                        .connected = false});

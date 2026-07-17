@@ -9,9 +9,37 @@
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include <pthread.h>
+#elif TARGET_OS_WINDOWS
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#include <avrt.h>
 #endif
 
 namespace gameplay {
+
+#if TARGET_OS_WINDOWS
+namespace {
+class MmcssGameplayScope {
+public:
+  MmcssGameplayScope() {
+    handle_ = AvSetMmThreadCharacteristicsW(L"Games", &taskIndex_);
+    if (handle_ != nullptr) {
+      (void)AvSetMmThreadPriority(handle_, AVRT_PRIORITY_HIGH);
+    }
+  }
+
+  ~MmcssGameplayScope() {
+    if (handle_ != nullptr) {
+      (void)AvRevertMmThreadCharacteristics(handle_);
+    }
+  }
+
+private:
+  DWORD taskIndex_ = 0;
+  HANDLE handle_ = nullptr;
+};
+} // namespace
+#endif
 
 RealtimeGameplayWorker::SnapshotLease::SnapshotLease(
     const RealtimeGameplayWorker *owner, std::size_t index,
@@ -173,6 +201,8 @@ RealtimeGameplayWorker::copyGaugeHistoryAfterStop() const {
 void RealtimeGameplayWorker::run() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#elif TARGET_OS_WINDOWS
+  const MmcssGameplayScope mmcss;
 #endif
   using namespace std::chrono_literals;
   while (!stopRequested_.load(std::memory_order_acquire)) {
@@ -261,9 +291,8 @@ void RealtimeGameplayWorker::processInput(
   }
 
   if (input.type == RealtimeGameplayInputType::Release) {
-    latestTransaction_ =
-        simulation_.releaseLane(input.lane, context, input.backSpin);
-    ++transactionSequence_;
+    recordTransaction(
+        simulation_.releaseLane(input.lane, context, input.backSpin));
     return;
   }
 
@@ -282,9 +311,8 @@ void RealtimeGameplayWorker::processInput(
     return;
   }
 
-  latestTransaction_ =
-      simulation_.pressLane(input.lane, compensateLane, context);
-  ++transactionSequence_;
+  recordTransaction(
+      simulation_.pressLane(input.lane, compensateLane, context));
   if (!requiresSound) {
     return;
   }
@@ -326,8 +354,9 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
   const auto terminalBefore = simulation_.terminalReason();
   const auto result = simulation_.advanceTo(*songTime, *songTime);
   if (!result.transactions.empty()) {
-    latestTransaction_ = result.transactions.back();
-    transactionSequence_ += result.transactions.size();
+    for (const auto &transaction : result.transactions) {
+      recordTransaction(transaction);
+    }
   }
   const auto after = simulation_.snapshot();
   return !result.transactions.empty() || before.judgeCounts != after.judgeCounts ||
@@ -337,6 +366,17 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
          before.clearTypeRank != after.clearTypeRank ||
          replayCountBefore != simulation_.replayEvents().size() ||
          terminalBefore != simulation_.terminalReason();
+}
+
+void RealtimeGameplayWorker::recordTransaction(
+    const GameplayInputResult &result) noexcept {
+  latestTransaction_ = result;
+  ++transactionSequence_;
+  transactionHistory_[(transactionSequence_ - 1) %
+                      transactionHistory_.size()] = {
+      .sequence = transactionSequence_, .result = result};
+  transactionHistoryCount_ =
+      std::min(transactionHistoryCount_ + 1, transactionHistory_.size());
 }
 
 void RealtimeGameplayWorker::publishSnapshot() {
@@ -371,6 +411,17 @@ void RealtimeGameplayWorker::publishSnapshot() {
               : found->second;
     }
     snapshot.latestTransaction = latestTransaction_;
+    snapshot.transactionCount = transactionHistoryCount_;
+    if (transactionHistoryCount_ != 0) {
+      const std::uint64_t firstSequence =
+          transactionSequence_ - transactionHistoryCount_ + 1;
+      for (std::size_t offset = 0; offset < transactionHistoryCount_;
+           ++offset) {
+        const std::uint64_t sequence = firstSequence + offset;
+        snapshot.transactions[offset] =
+            transactionHistory_[(sequence - 1) % transactionHistory_.size()];
+      }
+    }
     snapshot.replayEventCount = simulation_.replayEvents().size();
     snapshot.terminalReason = simulation_.terminalReason();
     latestSnapshot_.store(index, std::memory_order_release);

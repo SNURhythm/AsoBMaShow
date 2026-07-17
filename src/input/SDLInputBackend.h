@@ -2,9 +2,12 @@
 
 #include "IInputBackend.h"
 #include "InputDeviceIdentity.h"
+#include "RealtimeControllerDeviceMap.h"
 
 #include <SDL2/SDL_joystick.h>
 
+#include <array>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,6 +26,7 @@ struct SdlInputDeviceInfo {
   int buttons = 0;
   int axes = 0;
   int hats = 0;
+  int playerIndex = -1;
 };
 
 class ISdlInputDeviceProvider {
@@ -41,12 +45,15 @@ class SDLInputBackend final : public IInputBackend {
 public:
   explicit SDLInputBackend(
       input::InputBackendSink sink,
-      std::shared_ptr<ISdlInputDeviceProvider> provider = {});
+      std::shared_ptr<ISdlInputDeviceProvider> provider = {},
+      std::shared_ptr<RealtimeControllerDeviceMap> realtimeControllerMap = {});
 
   bool start(std::string &errorMessage) override;
   void stop() override;
   void handleSdlEvent(const SDL_Event &event) override;
   void pump() override;
+  void setRealtimeInputClaimed(input::DeviceClass deviceClass,
+                               bool claimed) override;
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
   translateRealtimeInput(const SDL_Event &event) const;
   [[nodiscard]] std::optional<std::string>
@@ -57,6 +64,7 @@ private:
     input::InputDeviceSnapshot snapshot;
     bool gameController = false;
     bool iosAccelerometer = false;
+    int playerIndex = -1;
     std::vector<Uint8> hatValues;
   };
 
@@ -73,10 +81,14 @@ private:
                    std::uint32_t timestamp);
   void publishHat(DeviceRecord &device, int hat, Uint8 value,
                   std::uint32_t timestamp);
+  [[nodiscard]] bool
+  nativeRealtimeOwns(input::DeviceClass deviceClass) const noexcept;
 
   std::shared_ptr<ISdlInputDeviceProvider> provider_;
+  std::shared_ptr<RealtimeControllerDeviceMap> realtimeControllerMap_;
   InputDeviceIdentity identity_;
   std::unordered_map<SDL_JoystickID, DeviceRecord> devices_;
   mutable std::mutex devicesMutex_;
+  std::array<std::atomic_bool, 6> realtimeInputClaimed_{};
   bool started_ = false;
 };

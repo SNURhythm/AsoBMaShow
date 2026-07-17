@@ -144,6 +144,17 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
               snapshot->replayEventCount == 3,
           "the same serial transactions publish notes, score, combo, and "
           "replay progress");
+  require(snapshot->transactionCount == 3 &&
+              snapshot->transactions[0].result.hasLaneVisual &&
+              snapshot->transactions[0].result.laneVisual.action ==
+                  gameplay::LaneVisualAction::Press &&
+              snapshot->transactions[1].result.hasLaneVisual &&
+              snapshot->transactions[1].result.laneVisual.action ==
+                  gameplay::LaneVisualAction::Release &&
+              snapshot->transactions[2].result.hasLaneVisual &&
+              snapshot->transactions[2].result.laneVisual.action ==
+                  gameplay::LaneVisualAction::Press,
+          "a slow renderer can replay every rapid lane transition in order");
   require(worker.fault() == gameplay::RealtimeGameplayFault::None,
           "normal rapid input remains valid");
   worker.stop();

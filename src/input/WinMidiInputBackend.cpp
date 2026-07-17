@@ -10,6 +10,7 @@
 #include <mmsystem.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -214,17 +215,29 @@ public:
     if (length == 0) {
       return;
     }
-    std::vector<std::uint8_t> bytes(length);
+    std::array<std::uint8_t, 3> bytes{};
     for (std::size_t index = 0; index < length; ++index) {
       bytes[index] =
           static_cast<std::uint8_t>((packedMessage >> (index * 8U)) & 0xFFU);
     }
-    enqueuePacket(connection.stableId, std::move(bytes),
-                  connection.startedAtMicros +
-                      static_cast<std::uint64_t>(elapsedMillis) * 1000ULL);
+    publishPacketImmediately(
+        connection.stableId,
+        std::span<const std::uint8_t>(bytes.data(), length),
+        connection.startedAtMicros +
+            static_cast<std::uint64_t>(elapsedMillis) * 1000ULL);
   }
 
   void requestRefresh() { refreshRequested_.store(true); }
+
+  void connectionFailed(WinMidiConnection &connection) {
+    if (connection.connected.exchange(false)) {
+      publishDevice({.stableId = connection.stableId,
+                     .displayName = connection.displayName,
+                     .deviceClass = input::DeviceClass::Midi,
+                     .connected = false});
+    }
+    requestRefresh();
+  }
 
 private:
   static constexpr auto kRefreshInterval = std::chrono::seconds(1);
@@ -243,7 +256,7 @@ private:
           *connection, static_cast<DWORD>(parameter1),
           static_cast<DWORD>(parameter2));
     } else if (message == MIM_ERROR || message == MIM_CLOSE) {
-      connection->backend->requestRefresh();
+      connection->backend->connectionFailed(*connection);
     }
   }
 
@@ -252,8 +265,14 @@ private:
     std::set<std::string> currentStableIds;
     for (const auto &device : devices) {
       currentStableIds.insert(device.stableId);
-      if (connections_.contains(device.stableId)) {
-        continue;
+      if (const auto existing = connections_.find(device.stableId);
+          existing != connections_.end()) {
+        if (existing->second->connected.load()) {
+          continue;
+        }
+        auto failedConnection = std::move(existing->second);
+        connections_.erase(existing);
+        closeConnection(std::move(failedConnection), false);
       }
 
       auto connection = std::make_unique<WinMidiConnection>(this);
@@ -313,7 +332,7 @@ private:
       connection->handle = nullptr;
     }
     if (publishDisconnect) {
-      enqueueDevice({.stableId = connection->stableId,
+      publishDevice({.stableId = connection->stableId,
                      .displayName = connection->displayName,
                      .deviceClass = input::DeviceClass::Midi,
                      .connected = false});

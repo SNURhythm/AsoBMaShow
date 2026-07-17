@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdint>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -21,6 +23,21 @@ std::string joystickGuid(SDL_Joystick *joystick) {
   SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), buffer.data(),
                             static_cast<int>(buffer.size()));
   return buffer.data();
+}
+
+int xinputPlayerIndex(std::string_view path) {
+  constexpr std::string_view prefix = "XInput#";
+  if (!path.starts_with(prefix)) {
+    return -1;
+  }
+  int playerIndex = -1;
+  const char *begin = path.data() + prefix.size();
+  const char *end = path.data() + path.size();
+  const auto parsed = std::from_chars(begin, end, playerIndex);
+  return parsed.ec == std::errc{} && parsed.ptr == end && playerIndex >= 0 &&
+                 playerIndex < RealtimeControllerDeviceMap::kMaxPlayers
+             ? playerIndex
+             : -1;
 }
 
 class SdlInputDeviceProvider final : public ISdlInputDeviceProvider {
@@ -93,16 +110,19 @@ public:
     const char *path = controller != nullptr
                            ? SDL_GameControllerPath(controller)
                            : SDL_JoystickPath(joystick);
+    const std::string pathValue = copySdlString(path);
     SdlInputDeviceInfo result{
         .instanceId = instanceId,
         .gameController = asGameController,
         .guid = joystickGuid(joystick),
         .serial = copySdlString(serial),
-        .path = copySdlString(path),
+        .path = pathValue,
         .name = copySdlString(name),
         .buttons = std::max(0, SDL_JoystickNumButtons(joystick)),
         .axes = std::max(0, SDL_JoystickNumAxes(joystick)),
-        .hats = std::max(0, SDL_JoystickNumHats(joystick))};
+        .hats = std::max(0, SDL_JoystickNumHats(joystick)),
+        .playerIndex =
+            controller != nullptr ? xinputPlayerIndex(pathValue) : -1};
     openDevices_.emplace(
         instanceId, OpenDevice{.controller = controller, .joystick = joystick});
     return result;
@@ -143,8 +163,10 @@ float normalizeAxis(Sint16 value) {
 
 SDLInputBackend::SDLInputBackend(
     input::InputBackendSink sink,
-    std::shared_ptr<ISdlInputDeviceProvider> provider)
-    : IInputBackend(std::move(sink)), provider_(std::move(provider)) {
+    std::shared_ptr<ISdlInputDeviceProvider> provider,
+    std::shared_ptr<RealtimeControllerDeviceMap> realtimeControllerMap)
+    : IInputBackend(std::move(sink)), provider_(std::move(provider)),
+      realtimeControllerMap_(std::move(realtimeControllerMap)) {
   if (!provider_) {
     provider_ = std::make_shared<SdlInputDeviceProvider>();
   }
@@ -217,6 +239,10 @@ void SDLInputBackend::stop() {
   }
   for (const auto &[instanceId, device] : devices_) {
     identity_.disconnect(device.snapshot.stableId);
+    if (realtimeControllerMap_ && device.gameController) {
+      realtimeControllerMap_->clear(device.playerIndex,
+                                    device.snapshot.stableId);
+    }
     provider_->closeDevice(instanceId);
   }
   devices_.clear();
@@ -236,6 +262,9 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   switch (event.type) {
   case SDL_KEYDOWN:
   case SDL_KEYUP:
+    if (nativeRealtimeOwns(input::DeviceClass::Keyboard)) {
+      return;
+    }
     if (event.type == SDL_KEYDOWN && event.key.repeat != 0) {
       return;
     }
@@ -253,6 +282,10 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   case SDL_CONTROLLERBUTTONUP: {
     const auto found = devices_.find(event.cbutton.which);
     if (found != devices_.end() && found->second.gameController) {
+      if (found->second.playerIndex >= 0 &&
+          nativeRealtimeOwns(input::DeviceClass::GameController)) {
+        return;
+      }
       publishButton(found->second, event.cbutton.button,
                     event.type == SDL_CONTROLLERBUTTONDOWN,
                     event.cbutton.timestamp);
@@ -262,6 +295,10 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
   case SDL_CONTROLLERAXISMOTION: {
     const auto found = devices_.find(event.caxis.which);
     if (found != devices_.end() && found->second.gameController) {
+      if (found->second.playerIndex >= 0 &&
+          nativeRealtimeOwns(input::DeviceClass::GameController)) {
+        return;
+      }
       publishAxis(found->second, event.caxis.axis, event.caxis.value,
                   event.caxis.timestamp);
     }
@@ -305,6 +342,33 @@ void SDLInputBackend::handleSdlEvent(const SDL_Event &event) {
 }
 
 void SDLInputBackend::pump() {}
+
+void SDLInputBackend::setRealtimeInputClaimed(
+    input::DeviceClass deviceClass, bool claimed) {
+  const auto index = static_cast<std::size_t>(deviceClass);
+  if (index < realtimeInputClaimed_.size()) {
+    realtimeInputClaimed_[index].store(claimed, std::memory_order_release);
+  }
+}
+
+bool SDLInputBackend::nativeRealtimeOwns(
+    input::DeviceClass deviceClass) const noexcept {
+  if (!realtimeControllerMap_) {
+    return false;
+  }
+  const auto index = static_cast<std::size_t>(deviceClass);
+  if (index >= realtimeInputClaimed_.size() ||
+      !realtimeInputClaimed_[index].load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (deviceClass == input::DeviceClass::Keyboard) {
+    return realtimeControllerMap_->keyboardRealtimeAvailable();
+  }
+  if (deviceClass == input::DeviceClass::GameController) {
+    return realtimeControllerMap_->controllerRealtimeAvailable();
+  }
+  return false;
+}
 
 std::optional<input::PhysicalInputEvent>
 SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
@@ -452,11 +516,16 @@ void SDLInputBackend::registerDevice(SdlInputDeviceInfo info,
                    .hats = advertisedHats},
       .gameController = info.gameController,
       .iosAccelerometer = iosAccelerometer,
+      .playerIndex = info.playerIndex,
       .hatValues = std::vector<Uint8>(
           static_cast<std::size_t>(std::max(0, advertisedHats)),
           SDL_HAT_CENTERED)};
   if (publishConnection) {
     publishDevice(record.snapshot);
+  }
+  if (realtimeControllerMap_ && record.gameController) {
+    realtimeControllerMap_->assign(record.playerIndex,
+                                   record.snapshot.stableId);
   }
   devices_.emplace(info.instanceId, std::move(record));
 }
@@ -476,6 +545,10 @@ void SDLInputBackend::applyIdentityRemaps(
         oldSnapshot->connected = false;
       }
       device.snapshot.stableId = remapping.toStableId;
+      if (realtimeControllerMap_ && device.gameController) {
+        realtimeControllerMap_->assign(device.playerIndex,
+                                       device.snapshot.stableId);
+      }
       if (!newSnapshot) {
         newSnapshot = device.snapshot;
       }
@@ -526,6 +599,10 @@ void SDLInputBackend::removeDevice(SDL_JoystickID instanceId) {
     found->second.snapshot.connected = false;
     if (identity_.disconnect(found->second.snapshot.stableId)) {
       disconnected = found->second.snapshot;
+    }
+    if (realtimeControllerMap_ && found->second.gameController) {
+      realtimeControllerMap_->clear(found->second.playerIndex,
+                                    found->second.snapshot.stableId);
     }
     devices_.erase(found);
   }

@@ -1136,6 +1136,32 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(input_binding_resolver_tests PRIVATE SDL2)
     endif()
 
+    add_executable(windows_realtime_input_mapping_tests
+        tests/windows_realtime_input_mapping_tests.cpp
+        src/input/WindowsRealtimeInputMapping.cpp
+    )
+    target_include_directories(windows_realtime_input_mapping_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(windows_realtime_input_mapping_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(windows_realtime_input_mapping_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(input_timestamp_tests
+        tests/input_timestamp_tests.cpp
+    )
+    target_include_directories(input_timestamp_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(input_timestamp_tests PRIVATE cxx_std_23)
+
     add_executable(input_capture_controller_tests
         tests/input_capture_controller_tests.cpp
         src/input/InputCaptureController.cpp
@@ -1152,6 +1178,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(input_capture_controller_tests PRIVATE cxx_std_23)
     asobmashow_add_midi_backend(input_capture_controller_tests)
     asobmashow_add_gyroscope_backend(input_capture_controller_tests)
+    asobmashow_add_windows_realtime_input_backend(input_capture_controller_tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -1318,6 +1345,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
         BX_CONFIG_DEBUG=1
     )
+    if(WIN32)
+        target_link_libraries(realtime_gameplay_worker_tests PRIVATE avrt)
+    endif()
 
     add_executable(realtime_touch_input_router_tests
         tests/realtime_touch_input_router_tests.cpp
@@ -1588,6 +1618,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(input_device_registry_tests PRIVATE cxx_std_23)
     asobmashow_add_midi_backend(input_device_registry_tests)
     asobmashow_add_gyroscope_backend(input_device_registry_tests)
+    asobmashow_add_windows_realtime_input_backend(input_device_registry_tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -1791,6 +1822,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
+    asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
+    asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)

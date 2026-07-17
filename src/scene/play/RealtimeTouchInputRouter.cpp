@@ -183,8 +183,8 @@ bool RealtimeTouchInputRouter::consume(
       finger->excluded = true;
       return true;
     }
-    const auto lane =
-        laneIndexAt(sample.normalizedX, sample.normalizedY, true);
+    const auto lane = laneIndexAt(sample.normalizedX, sample.normalizedY,
+                                  layout_.dragMode);
     if (!lane.has_value()) {
       finger->active = false;
       return true;

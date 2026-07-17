@@ -630,6 +630,7 @@ AudioWrapper::~AudioWrapper() {
                     "Audio shutdown could not confirm callback drain: %s",
                     unloaded.diagnostic.c_str());
     std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+    closeRealtimeSoundGateAndWait();
     std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
     backend.reset();
@@ -725,6 +726,7 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
     }
     return false;
   }
+  closeRealtimeSoundGateAndWait();
 
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
   const long long rebasedMicros =
@@ -985,18 +987,20 @@ AudioWrapper::resolveRealtimeSound(const path_t &path) const {
 
 std::optional<RealtimeAudioCommandReservation>
 AudioWrapper::tryReserveRealtimeSoundCommand() const noexcept {
-  if (!deviceLifecycleMutex.try_lock()) {
+  if (!realtimeSoundGateOpen.load(std::memory_order_acquire)) {
     return std::nullopt;
   }
-  if (backendState.load(std::memory_order_acquire) !=
-      audio::playback::BackendRunState::Running) {
-    deviceLifecycleMutex.unlock();
+  realtimeSoundReservations.fetch_add(1, std::memory_order_acq_rel);
+  if (!realtimeSoundGateOpen.load(std::memory_order_acquire) ||
+      backendState.load(std::memory_order_acquire) !=
+          audio::playback::BackendRunState::Running) {
+    releaseRealtimeSoundReservation();
     return std::nullopt;
   }
   auto reservation =
       audio::playback::TryReserveRealtimeCommand(callbackState);
   if (!reservation.has_value()) {
-    deviceLifecycleMutex.unlock();
+    releaseRealtimeSoundReservation();
   }
   return reservation;
 }
@@ -1014,14 +1018,35 @@ bool AudioWrapper::commitRealtimeKeysound(
            .soundData = handle.soundData_.get(),
            .bus = audio::Bus::Keysound,
            .startFrame = startFrame});
-  deviceLifecycleMutex.unlock();
+  releaseRealtimeSoundReservation();
   return committed;
 }
 
 void AudioWrapper::cancelRealtimeSoundCommand(
     RealtimeAudioCommandReservation reservation) noexcept {
   (void)reservation;
-  deviceLifecycleMutex.unlock();
+  releaseRealtimeSoundReservation();
+}
+
+void AudioWrapper::openRealtimeSoundGate() noexcept {
+  realtimeSoundGateOpen.store(true, std::memory_order_release);
+}
+
+void AudioWrapper::closeRealtimeSoundGateAndWait() noexcept {
+  realtimeSoundGateOpen.store(false, std::memory_order_release);
+  std::uint32_t reservations =
+      realtimeSoundReservations.load(std::memory_order_acquire);
+  while (reservations != 0) {
+    realtimeSoundReservations.wait(reservations, std::memory_order_acquire);
+    reservations =
+        realtimeSoundReservations.load(std::memory_order_acquire);
+  }
+}
+
+void AudioWrapper::releaseRealtimeSoundReservation() const noexcept {
+  if (realtimeSoundReservations.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    realtimeSoundReservations.notify_all();
+  }
 }
 
 bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
@@ -1036,6 +1061,7 @@ bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
   }
 
   if (!backend) {
+    closeRealtimeSoundGateAndWait();
     backendState.store(audio::playback::BackendRunState::Unknown,
                        std::memory_order_release);
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
@@ -1051,6 +1077,7 @@ bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
                  path_t_to_utf8(path).c_str(), observed.diagnostic.c_str());
     return false;
   }
+  closeRealtimeSoundGateAndWait();
 
   auto &soundData = soundDataList[indexIt->second];
   const uint64_t sequence =
@@ -1081,6 +1108,7 @@ audio::playback::BackendOperationResult AudioWrapper::startDevice() {
 audio::playback::BackendOperationResult
 AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
   if (!backend) {
+    closeRealtimeSoundGateAndWait();
     backendState.store(audio::playback::BackendRunState::Unknown,
                        std::memory_order_release);
     return {.success = false, .diagnostic = "Audio backend is unavailable"};
@@ -1094,9 +1122,11 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
   backendState.store(observed.state, std::memory_order_release);
   if (observed.state == audio::playback::BackendRunState::Running &&
       currentSampleRate.load(std::memory_order_acquire) == targetSampleRate) {
+    openRealtimeSoundGate();
     return {.success = true};
   }
 
+  closeRealtimeSoundGateAndWait();
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
   std::vector<SoundData *> sounds;
   sounds.reserve(soundDataList.size());
@@ -1110,6 +1140,7 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
       *backend, sounds, callbackState, targetSampleRate, currentSampleRate,
       audioClockFrameCursor, backendState);
   if (result.success) {
+    openRealtimeSoundGate();
     if (const auto *configurable =
             dynamic_cast<const ConfigurableBackendLifecycle *>(backend.get())) {
       runtimeState_ = configurable->runtimeState();
@@ -1129,6 +1160,7 @@ audio::playback::BackendOperationResult AudioWrapper::stopSounds() {
 
 audio::playback::BackendOperationResult
 AudioWrapper::stopSoundsWithLifecycleAndCommandLocked() {
+  closeRealtimeSoundGateAndWait();
   if (!backend) {
     backendState.store(audio::playback::BackendRunState::Stopped,
                        std::memory_order_release);
@@ -1234,6 +1266,7 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
       errorMessage = "Audio playback must be suspended before reconfiguration";
       return false;
     }
+    closeRealtimeSoundGateAndWait();
     backend.reset();
     backendState.store(audio::playback::BackendRunState::Stopped,
                        std::memory_order_release);
@@ -1307,6 +1340,7 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
       std::make_unique<ConfigurableBackendLifecycle>(std::move(candidate));
   backendState.store(audio::playback::BackendRunState::Running,
                      std::memory_order_release);
+  openRealtimeSoundGate();
   return true;
 }
 

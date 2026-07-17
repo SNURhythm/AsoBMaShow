@@ -3,6 +3,10 @@
 #include "MidiInputBackendFactory.h"
 #include "GyroscopeInputBackendFactory.h"
 #include "SDLInputBackend.h"
+#if defined(_WIN32)
+#include "RealtimeControllerDeviceMap.h"
+#include "WindowsRealtimeInputBackend.h"
+#endif
 
 #include <SDL2/SDL_log.h>
 
@@ -19,6 +23,35 @@ input::InputDeviceSnapshot keyboardSnapshot() {
           .displayName = "Keyboard",
           .deviceClass = input::DeviceClass::Keyboard,
           .connected = true};
+}
+
+std::vector<InputDeviceRegistry::BackendFactory> defaultBackendFactories() {
+  std::vector<InputDeviceRegistry::BackendFactory> factories;
+#if defined(_WIN32)
+  auto controllerMap = std::make_shared<RealtimeControllerDeviceMap>();
+  factories.emplace_back(
+      [controllerMap](input::InputBackendSink sink) {
+        return std::make_unique<SDLInputBackend>(std::move(sink), nullptr,
+                                                 controllerMap);
+      });
+#else
+  factories.emplace_back([](input::InputBackendSink sink) {
+    return std::make_unique<SDLInputBackend>(std::move(sink));
+  });
+#endif
+  factories.emplace_back([](input::InputBackendSink sink) {
+    return makeMidiInputBackend(std::move(sink));
+  });
+  factories.emplace_back([](input::InputBackendSink sink) {
+    return makeGyroscopeInputBackend(std::move(sink));
+  });
+#if defined(_WIN32)
+  factories.emplace_back(
+      [controllerMap](input::InputBackendSink sink) {
+        return makeWindowsRealtimeInputBackend(std::move(sink), controllerMap);
+      });
+#endif
+  return factories;
 }
 
 } // namespace
@@ -215,16 +248,7 @@ struct InputDeviceRegistry::BackendSinkGate {
 };
 
 InputDeviceRegistry::InputDeviceRegistry()
-    : InputDeviceRegistry({[](input::InputBackendSink sink) {
-                             return std::make_unique<SDLInputBackend>(
-                                 std::move(sink));
-                           },
-                           [](input::InputBackendSink sink) {
-                             return makeMidiInputBackend(std::move(sink));
-                           },
-                           [](input::InputBackendSink sink) {
-                             return makeGyroscopeInputBackend(std::move(sink));
-                           }}) {}
+    : InputDeviceRegistry(defaultBackendFactories()) {}
 
 InputDeviceRegistry::InputDeviceRegistry(
     std::vector<BackendFactory> backendFactories)
@@ -317,7 +341,15 @@ void InputDeviceRegistry::resetGyroscopeTurntableSession() {
 
 void InputDeviceRegistry::setRealtimeInputClaimed(
     input::DeviceClass deviceClass, bool claimed) {
-  queueState_->setRealtimeClaimed(deviceClass, claimed);
+  if (claimed) {
+    queueState_->setRealtimeClaimed(deviceClass, true);
+  }
+  for (const auto &backend : backends_) {
+    backend->setRealtimeInputClaimed(deviceClass, claimed);
+  }
+  if (!claimed) {
+    queueState_->setRealtimeClaimed(deviceClass, false);
+  }
 }
 
 std::optional<input::PhysicalInputEvent>

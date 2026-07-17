@@ -189,6 +189,10 @@ public:
   audio::playback::BackendOperationResult unloadSounds();
 
 private:
+  void openRealtimeSoundGate() noexcept;
+  void closeRealtimeSoundGateAndWait() noexcept;
+  void releaseRealtimeSoundReservation() const noexcept;
+
   std::unique_ptr<audio::IBackendFactory> backendFactory;
   std::unique_ptr<audio::playback::IBackendLifecycle> backend;
 
@@ -208,6 +212,8 @@ private:
   std::atomic<int> currentSampleRate{44100};
   std::atomic<audio::playback::BackendRunState> backendState{
       audio::playback::BackendRunState::Unknown};
+  std::atomic_bool realtimeSoundGateOpen{false};
+  mutable std::atomic<std::uint32_t> realtimeSoundReservations{0};
   std::atomic<long long> audioClockBaseMicros{0};
   std::atomic<int64_t> audioClockFrameCursor{0};
   std::atomic<long long> audioClockAnchorMicros{0};

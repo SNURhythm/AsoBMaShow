@@ -6,6 +6,7 @@
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 
+#include "AppleInputTimestamp.h"
 #include "GyroscopeInputBackendCore.h"
 #include "IOSGyroscopeMotionAdapter.h"
 #include "NativeCallbackLifetime.h"
@@ -13,8 +14,6 @@
 #include <CoreMotion/CoreMotion.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_log.h>
-#include <mach/mach_time.h>
-
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -30,33 +29,21 @@ namespace {
 constexpr std::uint64_t kFirstSampleTimeoutMicros = 10000000;
 constexpr NSTimeInterval kMotionUpdateIntervalSeconds = 1.0 / 120.0;
 
-mach_timebase_info_data_t machTimebase() {
-  mach_timebase_info_data_t value{};
-  if (mach_timebase_info(&value) != KERN_SUCCESS || value.denom == 0) {
-    value.numer = 1;
-    value.denom = 1;
-  }
-  return value;
-}
-
 std::uint64_t nowMicros() {
-  static const mach_timebase_info_data_t timebase = machTimebase();
-  const auto nanoseconds = static_cast<unsigned __int128>(mach_absolute_time()) *
-                           timebase.numer / timebase.denom;
-  return static_cast<std::uint64_t>(nanoseconds / 1000U);
+  return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
 }
 
-std::uint64_t sampleMicros(NSTimeInterval timestamp,
-                           std::uint64_t fallback) {
+std::uint64_t sampleMicros(NSTimeInterval timestamp) {
   if (!std::isfinite(timestamp) || timestamp <= 0.0) {
-    return fallback;
+    return nowMicros();
   }
   const long double micros = static_cast<long double>(timestamp) * 1000000.0L;
   if (micros >=
       static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
-    return std::numeric_limits<std::uint64_t>::max();
+    return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
   }
-  return static_cast<std::uint64_t>(micros);
+  return static_cast<std::uint64_t>(input::apple::steadyMicrosFromHostMicros(
+      static_cast<std::uint64_t>(micros)));
 }
 
 bool isBackgroundEvent(const SDL_Event &event) {
@@ -359,8 +346,7 @@ private:
       return;
     }
 
-    const std::uint64_t timestampMicros =
-        sampleMicros(motion.timestamp, nowMicros());
+    const std::uint64_t timestampMicros = sampleMicros(motion.timestamp);
     const CMRotationRate rate = motion.rotationRate;
     const CMAcceleration gravity = motion.gravity;
     bool firstSample = false;

@@ -76,6 +76,9 @@ struct BackendControl {
   bool blockStart = false;
   bool startEntered = false;
   bool releaseStart = false;
+  bool blockObserve = false;
+  bool observeEntered = false;
+  bool releaseObserve = false;
   bool failStop = false;
   int failStopCall = -1;
   int failObserveCall = -1;
@@ -102,7 +105,12 @@ public:
   audio::playback::BackendStateObservation observeState() const override {
     const int observeCall =
         control->observeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    std::lock_guard lock(control->mutex);
+    std::unique_lock lock(control->mutex);
+    control->observeEntered = true;
+    control->condition.notify_all();
+    control->condition.wait(lock, [this] {
+      return !control->blockObserve || control->releaseObserve;
+    });
     if (control->failObserveCall == observeCall) {
       return {.state = audio::playback::BackendRunState::Unknown,
               .diagnostic = "gated observation failure"};
@@ -1694,6 +1702,47 @@ void testRealtimeReservationExcludesLifecycleResetUntilCommit() {
           "lifecycle reset continues after the transaction commits");
 }
 
+void testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<GatedBackend>(control));
+  const path_t sound = PATH("realtime-no-lifecycle-contention");
+  require(wrapper.loadGeneratedSound(sound, {100, 200, 300, 400}, 1, 44100),
+          "realtime contention fixture retains PCM");
+  const auto handle = wrapper.resolveRealtimeSound(sound);
+  require(handle.has_value(), "realtime contention fixture resolves a handle");
+
+  {
+    std::lock_guard lock(control->mutex);
+    control->blockObserve = true;
+    control->observeEntered = false;
+    control->releaseObserve = false;
+  }
+  auto ordinarySubmission = std::async(
+      std::launch::async,
+      [&wrapper, &sound] { return wrapper.playSound(sound, audio::Bus::Bgm); });
+  {
+    std::unique_lock lock(control->mutex);
+    require(control->condition.wait_for(
+                lock, 2s, [&] { return control->observeEntered; }),
+            "ordinary lifecycle work holds its mutex for the fixture");
+  }
+
+  const auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  {
+    std::lock_guard lock(control->mutex);
+    control->releaseObserve = true;
+  }
+  control->condition.notify_all();
+  require(ordinarySubmission.get(), "ordinary submission completes");
+  require(reservation.has_value(),
+          "realtime audio capacity remains available without taking the "
+          "lifecycle mutex");
+  require(wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "lock-free reservation still commits the matching keysound");
+}
+
 } // namespace
 
 int main() {
@@ -1726,6 +1775,7 @@ int main() {
     testSoundSubmissionsRecoverFromAuthoritativeExternalStop();
     testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork();
     testRealtimeReservationExcludesLifecycleResetUntilCommit();
+    testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

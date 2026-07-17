@@ -175,7 +175,10 @@ private:
   bool handleTouchInputAtGameplayTime(SDL_FingerID fingerIndex,
                                       ReplayTouchAction action,
                                       Vector3 normalizedLocation,
-                                      long long gameplayTimeMicros);
+                                      long long gameplayTimeMicros,
+                                      std::optional<long long>
+                                          visualGameplayTimeMicros =
+                                              std::nullopt);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
                                     Vector3 normalizedLocation,

@@ -16,6 +16,7 @@
 namespace gameplay {
 
 inline constexpr std::size_t kRealtimeGameplayIngressSize = 4096;
+inline constexpr std::size_t kRealtimeGameplayTransactionHistorySize = 256;
 
 enum class RealtimeGameplayInputType : std::uint8_t { Press, Release };
 
@@ -67,6 +68,11 @@ struct RealtimeGameplayWorkerConfig {
   std::optional<std::int64_t> activationSongTimeMicros;
 };
 
+struct RealtimeGameplayTransaction {
+  std::uint64_t sequence = 0;
+  GameplayInputResult result;
+};
+
 struct RealtimeGameplaySnapshot {
   std::uint64_t generation = 0;
   std::uint64_t transactionSequence = 0;
@@ -78,6 +84,10 @@ struct RealtimeGameplaySnapshot {
   int fastCount = 0;
   int slowCount = 0;
   GameplayInputResult latestTransaction;
+  std::array<RealtimeGameplayTransaction,
+             kRealtimeGameplayTransactionHistorySize>
+      transactions{};
+  std::size_t transactionCount = 0;
   std::size_t replayEventCount = 0;
   GameplayTerminalReason terminalReason = GameplayTerminalReason::None;
 };
@@ -204,6 +214,7 @@ private:
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
   bool advanceAutomatic();
+  void recordTransaction(const GameplayInputResult &result) noexcept;
   void publishSnapshot();
   void latchFault(RealtimeGameplayFault fault) noexcept;
   void releaseSnapshot(std::size_t index) const noexcept;
@@ -218,6 +229,10 @@ private:
   std::uint64_t snapshotGeneration_ = 0;
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
+  std::array<RealtimeGameplayTransaction,
+             kRealtimeGameplayTransactionHistorySize>
+      transactionHistory_{};
+  std::size_t transactionHistoryCount_ = 0;
   std::binary_semaphore wake_{0};
   std::binary_semaphore suspendAcknowledged_{0};
   std::binary_semaphore resumeAcknowledged_{0};

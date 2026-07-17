@@ -30,6 +30,9 @@ public:
   virtual void stop() = 0;
   virtual void handleSdlEvent(const SDL_Event &) {}
   virtual void pump() = 0;
+  // Platform realtime sources can remain dormant during ordinary UI input
+  // and activate only while gameplay owns a device class.
+  virtual void setRealtimeInputClaimed(input::DeviceClass, bool) {}
   virtual void configureGyroscopeTurntable(input::GyroscopeTurntableConfig) {}
   virtual void resetGyroscopeTurntableSession() {}
 

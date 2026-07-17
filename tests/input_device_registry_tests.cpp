@@ -74,6 +74,11 @@ public:
 
   void pump() override { ++pumpCalls; }
 
+  void setRealtimeInputClaimed(input::DeviceClass deviceClass,
+                               bool claimed) override {
+    realtimeClaims.emplace_back(deviceClass, claimed);
+  }
+
   void
   configureGyroscopeTurntable(input::GyroscopeTurntableConfig config) override {
     gyroscopeConfigs.push_back(config);
@@ -105,6 +110,7 @@ public:
   bool publishHandledKeyboardEvents = false;
   bool publishGyroscopeReleaseOnControl = false;
   std::vector<input::GyroscopeTurntableConfig> gyroscopeConfigs;
+  std::vector<std::pair<input::DeviceClass, bool>> realtimeClaims;
 
 private:
   void publishGyroscopeRelease() {
@@ -700,11 +706,18 @@ void testRealtimeInputSubscriptionRunsBeforeRegistryPump() {
          "realtime input listeners can revoke themselves during delivery");
 
   registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  expect(backend->realtimeClaims ==
+             std::vector<std::pair<input::DeviceClass, bool>>{
+                 {input::DeviceClass::Keyboard, true}},
+         "realtime claims activate platform input backends");
   backend->sendInput(fakeKeyEvent(35));
   registry.pump();
   expect(frameEvents == std::vector<int>({31, 32, 33, 34}),
          "claimed realtime input is omitted from ordinary frame delivery");
   registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, false);
+  expect(backend->realtimeClaims.back() ==
+             std::pair{input::DeviceClass::Keyboard, false},
+         "realtime claim release deactivates platform input backends");
   backend->sendInput(fakeKeyEvent(36));
   registry.pump();
   expect(frameEvents == std::vector<int>({31, 32, 33, 34, 36}),
@@ -875,6 +888,55 @@ void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
              inputEvents[1].normalizedValue == 0.0F &&
              inputEvents[1].timestampMicros == 8000,
          "keyboard events publish physical scancode edges and microseconds");
+}
+
+void testSdlInputYieldsClaimedClassesToNativeRealtimeSource() {
+  auto provider = std::make_shared<FakeSdlDeviceProvider>();
+  auto xinput = controllerInfo(101, "XInput#0");
+  xinput.playerIndex = 0;
+  provider->devices = {xinput, controllerInfo(102, "hid#dualshock")};
+  auto realtimeMap = std::make_shared<RealtimeControllerDeviceMap>();
+  realtimeMap->setKeyboardRealtimeAvailable(true);
+  std::vector<input::PhysicalInputEvent> events;
+  SDLInputBackend backend(
+      {.enqueueInput =
+           [&](input::PhysicalInputEvent event) {
+             events.push_back(std::move(event));
+           },
+       .enqueueDevice = [](input::InputDeviceSnapshot) {}},
+      provider, realtimeMap);
+  std::string error;
+  expect(backend.start(error), "SDL suppression fixture starts");
+
+  SDL_Event event{};
+  event.type = SDL_KEYDOWN;
+  event.key.keysym.scancode = SDL_SCANCODE_A;
+  backend.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  backend.handleSdlEvent(event);
+  expect(events.empty(),
+         "claimed native keyboard input is not replayed through SDL");
+
+  realtimeMap->setControllerRealtimeAvailable(true);
+  backend.setRealtimeInputClaimed(input::DeviceClass::GameController, true);
+  SDL_Event controller{};
+  controller.type = SDL_CONTROLLERBUTTONDOWN;
+  controller.cbutton.which = 101;
+  controller.cbutton.button = SDL_CONTROLLER_BUTTON_A;
+  backend.handleSdlEvent(controller);
+  expect(events.empty(),
+         "claimed XInput controller edges are not replayed through SDL");
+  controller.cbutton.which = 102;
+  backend.handleSdlEvent(controller);
+  expect(events.size() == 1 &&
+             events.front().control.deviceClass ==
+                 input::DeviceClass::GameController,
+         "non-XInput controllers retain SDL fallback delivery");
+
+  backend.setRealtimeInputClaimed(input::DeviceClass::Keyboard, false);
+  backend.handleSdlEvent(event);
+  expect(events.size() == 2,
+         "SDL keyboard delivery resumes after native ownership ends");
+  backend.stop();
 }
 
 void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
@@ -1609,6 +1671,7 @@ int main() {
   testFailedBackendIsCleanedAndNeverDispatched();
   testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational();
   testSdlKeyboardFiltersRepeatAndUsesScancodes();
+  testSdlInputYieldsClaimedClassesToNativeRealtimeSource();
   testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch();
   testSdlRawJoystickButtonsAxesAndHatEdges();
   testSdlIosAccelerometerMakesTiltAxesMoreSensitive();

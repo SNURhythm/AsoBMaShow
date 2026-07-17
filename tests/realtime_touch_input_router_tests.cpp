@@ -128,19 +128,22 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
           "scratch reversal remains ordered on the realtime ingress");
 }
 
-void testNormalModeRejectsTouchesOutsideProjectedPlayfield() {
+void testNormalModeMapsTouchesBelowProjectedPlayfield() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
       5, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
 
   require(router.consume({.fingerId = 20,
                           .phase = gameplay::RealtimeTouchPhase::Down,
-                          .normalizedX = 0.0F,
-                          .normalizedY = 0.5F,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.98F,
                           .steadyTimestampMicros = 50}),
-          "off-playfield touch is safely ignored");
-  require(capture.events.empty(),
-          "normal mode cannot clamp UI touches into the nearest lane");
+          "normal-mode touch below the judge line is accepted");
+  require(capture.events.size() == 1 &&
+              capture.events[0].type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[0].lane == 1,
+          "normal mode preserves horizontal lane mapping below the playfield");
 }
 
 void testUiExcludedFingerNeverEmitsGameplayEdges() {
@@ -198,7 +201,7 @@ int main() {
   testDirectTouchEmitsTimestampedLaneEdges();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();
-  testNormalModeRejectsTouchesOutsideProjectedPlayfield();
+  testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();
   return 0;
