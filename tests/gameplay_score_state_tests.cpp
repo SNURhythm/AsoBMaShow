@@ -29,9 +29,48 @@ void requireSame(const GameplayScoreState &left,
                   std::bit_cast<std::uint32_t>(right.currentGauge),
           "gauge state is bit-identical");
 }
+
+void testConfiguredGaugeHistoryUsesLogicalLimit() {
+  GameplayScoreState state(
+      {.totalNotes = 10, .keyMode = 7, .gaugeTotal = 100.0});
+  state.gaugeHistory.reserve(8);
+  state.configureBoundedGaugeHistory(2);
+  const auto *const storage = state.gaugeHistory.data();
+  const auto allocatedCapacity = state.gaugeHistory.capacity();
+  require(allocatedCapacity >= 8,
+          "fixture has allocator capacity above the logical limit");
+
+  state.applyGaugeDelta(1.0F);
+  state.applyGaugeDelta(1.0F);
+  require(state.gaugeHistory.size() == 2 &&
+              !state.gaugeHistoryOverflowed(),
+          "configured history accepts exactly its logical limit");
+
+  state.applyGaugeDelta(1.0F);
+  require(state.gaugeHistory.size() == 2 &&
+              state.gaugeHistoryOverflowed() &&
+              state.gaugeHistory.data() == storage &&
+              state.gaugeHistory.capacity() == allocatedCapacity,
+          "logical history overflow latches without storage growth");
+}
+
+void testRhythmStateGaugeHistoryRemainsUnboundedByDefault() {
+  bms_parser::Chart chart;
+  RhythmState state(&chart, false);
+  state.gaugeHistory.reserve(1);
+  state.applyGaugeDelta(1.0F);
+  state.applyGaugeDelta(1.0F);
+  state.applyGaugeDelta(1.0F);
+  require(state.gaugeHistory.size() == 3 &&
+              !state.gaugeHistoryOverflowed(),
+          "default RhythmState compatibility keeps growable gauge history");
+}
 } // namespace
 
 int main() {
+  testConfiguredGaugeHistoryUsesLogicalLimit();
+  testRhythmStateGaugeHistoryRemainsUnboundedByDefault();
+
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 432;
   chart.Meta.KeyMode = 7;

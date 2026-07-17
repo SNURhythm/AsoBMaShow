@@ -899,6 +899,7 @@ public:
 
   void configureBoundedGaugeHistory(std::size_t capacity) {
     gaugeHistory.reserve(capacity);
+    gaugeHistoryCapacity_ = capacity;
     boundedGaugeHistory_ = true;
   }
 
@@ -1148,7 +1149,8 @@ public:
 
 private:
   void recordGaugeHistory(float value) {
-    if (!boundedGaugeHistory_ || gaugeHistory.size() < gaugeHistory.capacity()) {
+    if (!boundedGaugeHistory_ ||
+        gaugeHistory.size() < gaugeHistoryCapacity_) {
       gaugeHistory.push_back(value);
       return;
     }
@@ -1237,5 +1239,6 @@ private:
   int gaugeKeyMode = 7;
   double gaugeTotal = 100.0;
   bool boundedGaugeHistory_ = false;
+  std::size_t gaugeHistoryCapacity_ = 0;
   bool gaugeHistoryOverflowed_ = false;
 };

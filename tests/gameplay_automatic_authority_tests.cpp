@@ -333,13 +333,15 @@ void testAttemptInitializesConfiguredAndCarriedState() {
 
 void testCapacityFaultsLatchIndependentlyWithoutGrowth() {
   bms_parser::Chart chart;
-  chart.Meta.TotalNotes = 1;
+  chart.Meta.TotalNotes = 2;
   chart.Meta.KeyMode = 5;
   chart.Meta.HasTotal = true;
   chart.Meta.Total = 260.0;
   auto *measure = new bms_parser::Measure();
   auto *timeline = addTimeline(*measure, 1'000'000);
   timeline->SetNote(1, new bms_parser::Note(1));
+  auto *secondTimeline = addTimeline(*measure, 2'000'000);
+  secondTimeline->SetNote(2, new bms_parser::Note(2));
   chart.Measures.push_back(measure);
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
 
@@ -373,28 +375,123 @@ void testCapacityFaultsLatchIndependentlyWithoutGrowth() {
       {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
        .attempt = {.replayCapacity = 4,
                    .automaticResultCapacity = 4,
-                   .gaugeHistoryCapacity = 0}});
+                   .gaugeHistoryCapacity = 1}});
+  const auto firstGaugePress =
+      gaugeHistoryFault.pressLane(1, {.songTimeMicros = 1'000'000});
+  require(firstGaugePress.hasJudge &&
+              gaugeHistoryFault.scoreState().gaugeHistory.size() == 1 &&
+              !gaugeHistoryFault.scoreState().gaugeHistoryOverflowed() &&
+              !gaugeHistoryFault.terminal(),
+          "nonzero gauge-history limit accepts exactly one transaction");
   const auto *const gaugeStorage =
       gaugeHistoryFault.scoreState().gaugeHistory.data();
   const auto gaugeCapacity =
       gaugeHistoryFault.scoreState().gaugeHistory.capacity();
   const auto gaugePress =
-      gaugeHistoryFault.pressLane(1, {.songTimeMicros = 1'000'000});
+      gaugeHistoryFault.pressLane(2, {.songTimeMicros = 2'000'000});
   require(gaugePress.hasJudge && gaugePress.hasReplayEvent &&
-              gaugeHistoryFault.replayEvents().size() == 1 &&
-              gaugeHistoryFault.snapshot().judgeCounts[PGreat] == 1,
+              gaugeHistoryFault.replayEvents().size() == 2 &&
+              gaugeHistoryFault.snapshot().judgeCounts[PGreat] == 2,
           "gauge-history overflow finishes replay and score mutation");
   require(
       gaugeHistoryFault.terminalReason() ==
               gameplay::GameplayTerminalReason::GaugeHistoryCapacityExceeded &&
           gaugeHistoryFault.scoreState().gaugeHistoryOverflowed() &&
-          gaugeHistoryFault.scoreState().gaugeHistory.empty() &&
+          gaugeHistoryFault.scoreState().gaugeHistory.size() == 1 &&
           gaugeHistoryFault.scoreState().gaugeHistory.capacity() ==
               gaugeCapacity &&
           gaugeHistoryFault.scoreState().gaugeHistory.data() == gaugeStorage &&
           !gaugeHistoryFault.replayOverflowed() &&
           !gaugeHistoryFault.automaticResultOverflowed(),
       "gauge-history capacity fault is isolated and never grows storage");
+}
+
+void testSimultaneousFaultPrecedenceAndFirstReasonImmutability() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  constexpr std::int64_t noteMicros = 1'000'000;
+  auto *timeline = addTimeline(*measure, noteMicros);
+  timeline->SetNote(1, new bms_parser::Note(1));
+  addTimeline(*measure, 4'000'000);
+  chart.Measures.push_back(measure);
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const std::int64_t missMicros =
+      noteMicros + compiledJudge.latePoorTimingMicros() + 1;
+  const auto zeroStorageAttempt = gameplay::GameplayAttemptOptions{
+      .replayCapacity = 0,
+      .automaticResultCapacity = 0,
+      .gaugeHistoryCapacity = 0,
+  };
+
+  auto survivalAttempt = zeroStorageAttempt;
+  survivalAttempt.initialGaugeType = GaugeType::Hard;
+  survivalAttempt.startingGaugePercent = 1;
+  gameplay::GameplaySimulation survival(
+      definition, {.judge = compiledJudge, .attempt = survivalAttempt});
+  const auto survivalResult =
+      survival.advanceTo(missMicros, 12'500'000);
+  const auto survivalTerminal = survival.terminalSnapshot();
+  require(
+      survivalResult.transactions.empty() &&
+          survival.terminalReason() ==
+              gameplay::GameplayTerminalReason::SurvivalGaugeFailed &&
+          survival.noteState(definition.chronologicalNotes().front()).played &&
+          survival.noteState(definition.chronologicalNotes().front()).dead &&
+          survivalTerminal.judgeCounts[Poor] == 1 &&
+          survivalTerminal.comboBreak == 1 &&
+          survivalTerminal.gauge == 0.0F &&
+          survival.scoreState().gaugeHistoryOverflowed() &&
+          survival.replayOverflowed() &&
+          survival.automaticResultOverflowed() &&
+          survival.scoreState().gaugeHistory.empty() &&
+          survival.replayEvents().empty() &&
+          survival.automaticResults().empty(),
+      "survival outranks simultaneous gauge, replay, and result faults after "
+      "the complete miss transaction");
+  const auto survivalRepeated =
+      survival.advanceTo(missMicros + 1, 12'500'001);
+  require(survivalRepeated.transactions.empty() &&
+              survival.terminalReason() ==
+                  gameplay::GameplayTerminalReason::SurvivalGaugeFailed &&
+              sameAttemptSnapshot(survival.terminalSnapshot(),
+                                  survivalTerminal),
+          "first survival reason remains immutable after simultaneous faults");
+
+  gameplay::GameplaySimulation integrity(
+      definition,
+      {.judge = compiledJudge, .attempt = zeroStorageAttempt});
+  const auto integrityResult =
+      integrity.advanceTo(missMicros, 12'600'000);
+  const auto integrityTerminal = integrity.terminalSnapshot();
+  require(
+      integrityResult.transactions.empty() &&
+          integrity.terminalReason() ==
+              gameplay::GameplayTerminalReason::
+                  GaugeHistoryCapacityExceeded &&
+          integrity.noteState(definition.chronologicalNotes().front()).played &&
+          integrity.noteState(definition.chronologicalNotes().front()).dead &&
+          integrityTerminal.judgeCounts[Poor] == 1 &&
+          integrityTerminal.comboBreak == 1 && integrityTerminal.gauge > 0.0F &&
+          integrity.scoreState().gaugeHistoryOverflowed() &&
+          integrity.replayOverflowed() &&
+          integrity.automaticResultOverflowed() &&
+          integrity.scoreState().gaugeHistory.empty() &&
+          integrity.replayEvents().empty() &&
+          integrity.automaticResults().empty(),
+      "gauge-history fault outranks simultaneous replay and result faults "
+      "after the complete miss transaction");
+  const auto integrityRepeated =
+      integrity.finalizePracticeRange(missMicros + 1, 12'600'001);
+  require(integrityRepeated.transactions.empty() &&
+              integrity.terminalReason() ==
+                  gameplay::GameplayTerminalReason::
+                      GaugeHistoryCapacityExceeded &&
+              sameAttemptSnapshot(integrity.terminalSnapshot(),
+                                  integrityTerminal),
+          "first integrity reason remains immutable after later finalization");
 }
 
 void testNormalLatePoorUsesStrictDeadlineAndIsIdempotent() {
@@ -1784,6 +1881,7 @@ int main() {
   testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder();
   testAttemptInitializesConfiguredAndCarriedState();
   testCapacityFaultsLatchIndependentlyWithoutGrowth();
+  testSimultaneousFaultPrecedenceAndFirstReasonImmutability();
   testNormalLatePoorUsesStrictDeadlineAndIsIdempotent();
   testLandmineDetonatesOrExpiresFromPriorLaneState();
   testSameTimeAutomaticWorkPrecedesPressAndRelease();
