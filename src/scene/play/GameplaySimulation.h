@@ -160,6 +160,9 @@ public:
   GameplayAdvanceResult
   finalizePracticeRange(std::int64_t finalizationTimeMicros,
                         std::int64_t visualTimeMicros);
+  [[nodiscard]] NoteId
+  previewPressSoundNote(int mainLane, int compensateLane,
+                        const GameplayInputContext &context);
 
   [[nodiscard]] const NoteRuntimeState &noteState(NoteId id) const;
   [[nodiscard]] bool lanePressed(int lane) const noexcept;

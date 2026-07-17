@@ -1063,6 +1063,23 @@ GameplaySimulation::pressLane(int lane, const GameplayInputContext &context) {
   return pressLane(lane, lane, context);
 }
 
+NoteId GameplaySimulation::previewPressSoundNote(
+    int mainLane, int compensateLane, const GameplayInputContext &context) {
+  if (terminal() ||
+      (config_.allowedNoteRange.has_value() &&
+       context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
+    return kInvalidNoteId;
+  }
+  const auto *mainState = findLane(mainLane);
+  const auto *compensateState = findLane(compensateLane);
+  if ((mainState == nullptr || mainState->pressed) &&
+      (compensateLane == mainLane || compensateState == nullptr ||
+       compensateState->pressed)) {
+    return kInvalidNoteId;
+  }
+  return selectPressCandidate(mainLane, compensateLane, inputTime(context));
+}
+
 GameplayInputResult
 GameplaySimulation::pressLane(int mainLane, int compensateLane,
                               const GameplayInputContext &context) {

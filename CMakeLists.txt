@@ -1302,6 +1302,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         BX_CONFIG_DEBUG=1
     )
 
+    add_executable(realtime_gameplay_worker_tests
+        tests/realtime_gameplay_worker_tests.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/Judge.cpp
+        src/scene/play/RealtimeGameplayWorker.cpp
+    )
+    target_include_directories(realtime_gameplay_worker_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(realtime_gameplay_worker_tests PRIVATE cxx_std_23)
+    target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
+        BX_CONFIG_DEBUG=1
+    )
+
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp
         src/ScoreProvenance.cpp
@@ -1744,6 +1761,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)
     asobmashow_register_test(gameplay_simulation_tests)
     asobmashow_register_test(gameplay_automatic_authority_tests)
+    asobmashow_register_test(realtime_gameplay_worker_tests)
     asobmashow_register_test(practice_analytics_tests)
     asobmashow_register_test(practice_result_model_tests)
     asobmashow_register_test(practice_result_flow_tests)
