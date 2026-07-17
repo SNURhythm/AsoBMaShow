@@ -886,6 +886,91 @@ void testBackwardAdvanceIsIgnoredWithoutRollingBackTime() {
           "forward progress remains valid after a rejected backward call");
 }
 
+void testInputDelayCompensationPrecedesAutomaticDeadlines() {
+  constexpr std::int64_t noteMicros = 1'000'000;
+  constexpr std::int64_t tailMicros = 2'000'000;
+  const auto compiledJudge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const std::int64_t delayMicros =
+      compiledJudge.latePoorTimingMicros() + 1;
+
+  bms_parser::Chart normalChart;
+  normalChart.Meta.TotalNotes = 1;
+  auto *normalMeasure = new bms_parser::Measure();
+  addTimeline(*normalMeasure, noteMicros)
+      ->SetNote(1, new bms_parser::Note(1));
+  addTimeline(*normalMeasure, 4'000'000);
+  normalChart.Measures.push_back(normalMeasure);
+  const auto normalDefinition =
+      gameplay::buildGameplayDefinition(normalChart, 0);
+  gameplay::GameplaySimulation normal(
+      normalDefinition, {.judge = compiledJudge,
+                         .attempt = {.replayCapacity = 8,
+                                     .automaticResultCapacity = 8}});
+
+  const auto press = normal.applyPressAt(
+      1, 1,
+      {.songTimeMicros = noteMicros + delayMicros,
+       .laneBeamTimeMicros = 14'500'000,
+       .inputDelayMicros = delayMicros});
+  require(press.noteId != gameplay::kInvalidNoteId && press.hasJudge &&
+              press.judge.judgement == PGreat &&
+              normal.snapshot().judgeCounts[PGreat] == 1 &&
+              normal.snapshot().judgeCounts[Poor] == 0,
+          "compensated press is judged before its raw-time miss deadline");
+
+  bms_parser::Chart chargeChart;
+  chargeChart.Meta.TotalNotes = 2;
+  auto *chargeMeasure = new bms_parser::Measure();
+  addLongNote(*chargeMeasure, noteMicros, tailMicros, 1,
+              bms_parser::LongNoteType::ChargeNote);
+  addTimeline(*chargeMeasure, 4'000'000);
+  chargeChart.Measures.push_back(chargeMeasure);
+  const auto chargeDefinition =
+      gameplay::buildGameplayDefinition(chargeChart, 0);
+  gameplay::GameplaySimulation charge(
+      chargeDefinition, {.judge = compiledJudge,
+                         .attempt = {.replayCapacity = 8,
+                                     .automaticResultCapacity = 8}});
+  const auto chargePress = charge.applyPressAt(
+      1, 1, {.songTimeMicros = noteMicros, .laneBeamTimeMicros = 14'500'001});
+  const auto release = charge.applyReleaseAt(
+      1,
+      {.songTimeMicros = tailMicros + delayMicros,
+       .laneBeamTimeMicros = 14'500'002,
+       .inputDelayMicros = delayMicros});
+  require(chargePress.hasJudge && release.noteId != gameplay::kInvalidNoteId &&
+              release.hasJudge && release.judge.judgement == PGreat &&
+              charge.snapshot().judgeCounts[Poor] == 0,
+          "compensated release is judged before its raw-time miss deadline");
+}
+
+void testPracticeRangeExcludesHellChargeStartedBeforeRange() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 500'000, 2'000'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto ids = longPairIds(definition, 1);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .allowedNoteRange = gameplay::GameplayTimeRange{
+           .startMicros = 1'000'000, .endMicros = 3'000'000},
+       .attempt = {.replayCapacity = 8,
+                   .automaticResultCapacity = 8,
+                   .gaugeHistoryCapacity = 8}});
+  const auto before = simulation.snapshot();
+
+  const auto advanced = simulation.advanceTo(1'300'000, 14'600'000);
+  require(advanced.transactions.empty() && simulation.replayEvents().empty() &&
+              simulation.scoreState().gaugeHistory.empty() &&
+              simulation.hellChargeBalances()[ids.head] == 0 &&
+              sameAttemptSnapshot(before, simulation.snapshot()),
+          "practice advancement excludes an HCN whose head predates the range");
+}
+
 void testUnpressedLongNoteDeadlineIdentityMatrix() {
   constexpr std::int64_t headMicros = 1'000'000;
   constexpr std::int64_t tailMicros = 3'000'000;
@@ -1931,6 +2016,8 @@ int main() {
   testAutomaticResultCapacityLatchesWithoutGrowth();
   testGlobalAutomaticCursorsDoNotReexamineCompletedIdentities();
   testBackwardAdvanceIsIgnoredWithoutRollingBackTime();
+  testPracticeRangeExcludesHellChargeStartedBeforeRange();
+  testInputDelayCompensationPrecedesAutomaticDeadlines();
   testUnpressedLongNoteDeadlineIdentityMatrix();
   testHeldLongNoteAutomaticReleaseMatrix();
   testAutoplayChargeAndHellChargeReleaseAtTiming();

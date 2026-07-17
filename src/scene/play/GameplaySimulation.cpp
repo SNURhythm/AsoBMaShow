@@ -584,6 +584,9 @@ void GameplaySimulation::processLatePoor(NoteId id,
 
 bool GameplaySimulation::hellChargeActiveAt(
     NoteId headId, std::int64_t timeMicros) const {
+  if (!noteAllowed(headId)) {
+    return false;
+  }
   const auto &head = definition_.note(headId);
   if (head.pairId == kInvalidNoteId || head.pairId >= noteStates_.size()) {
     return false;
@@ -869,12 +872,13 @@ GameplaySimulation::applyPressAt(int mainLane, int compensateLane,
   if (terminal()) {
     return {};
   }
-  if (hasAdvanced_ && context.songTimeMicros < lastAdvancedMicros_) {
+  const std::int64_t judgedTime = inputTime(context);
+  if (hasAdvanced_ && judgedTime < lastAdvancedMicros_) {
     automaticResults_.clear();
     lastAdvanceStats_ = {};
     return {};
   }
-  advanceTo(context.songTimeMicros, context.laneBeamTimeMicros);
+  advanceTo(judgedTime, context.laneBeamTimeMicros);
   if (terminal()) {
     return {};
   }
@@ -886,12 +890,13 @@ GameplayInputResult GameplaySimulation::applyReleaseAt(
   if (terminal()) {
     return {};
   }
-  if (hasAdvanced_ && context.songTimeMicros < lastAdvancedMicros_) {
+  const std::int64_t judgedTime = inputTime(context);
+  if (hasAdvanced_ && judgedTime < lastAdvancedMicros_) {
     automaticResults_.clear();
     lastAdvanceStats_ = {};
     return {};
   }
-  advanceTo(context.songTimeMicros, context.laneBeamTimeMicros);
+  advanceTo(judgedTime, context.laneBeamTimeMicros);
   if (terminal()) {
     return {};
   }

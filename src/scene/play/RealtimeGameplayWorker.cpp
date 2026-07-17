@@ -285,7 +285,8 @@ void RealtimeGameplayWorker::processInput(
   };
 
   if (!preparationInput) {
-    simulation_.advanceTo(*songTime, input.steadyTimestampMicros);
+    simulation_.advanceTo(*songTime - input.inputDelayMicros,
+                          input.steadyTimestampMicros);
     if (simulation_.terminal()) {
       return;
     }

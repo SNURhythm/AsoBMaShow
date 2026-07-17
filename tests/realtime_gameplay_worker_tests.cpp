@@ -182,6 +182,36 @@ void testRapidInputsCommitStateAndSoundWithoutFramePump() {
   worker.stop();
 }
 
+void testInputDelayCompensationPrecedesWorkerAutomaticDeadline() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  const auto judge = gameplay::CompiledGameplayJudge::from(Judge(1));
+  const std::int64_t inputDelayMicros = judge.latePoorTimingMicros() + 1;
+  require(worker.start(), "compensated-input worker starts");
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 1,
+               .compensateLane = 1,
+               .steadyTimestampMicros = 1'000'000 + inputDelayMicros,
+               .inputDelayMicros = inputDelayMicros}),
+          "compensated press enters fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 1;
+          }),
+          "compensated press publishes a worker transaction");
+  auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && snapshot->noteStates[0].played &&
+              !snapshot->noteStates[0].dead &&
+              snapshot->attempt.judgeCounts[PGreat] == 1 &&
+              snapshot->attempt.judgeCounts[Poor] == 0,
+          "worker judges compensated input before raw-time expiration");
+  worker.stop();
+}
+
 void testAudioCapacityFailureDoesNotClaimTheNote() {
   FakeClock clock;
   FakeAudio audio;
@@ -578,6 +608,7 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
 
 int main() {
   testRapidInputsCommitStateAndSoundWithoutFramePump();
+  testInputDelayCompensationPrecedesWorkerAutomaticDeadline();
   testAudioCapacityFailureDoesNotClaimTheNote();
   testIngressOverflowFailsClosed();
   testSuspendFreezesAutomaticDeadlinesUntilResume();
