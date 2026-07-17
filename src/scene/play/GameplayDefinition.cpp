@@ -49,6 +49,18 @@ const NoteDefinition &GameplayDefinition::note(NoteId id) const {
   return notes_[id];
 }
 
+std::size_t GameplayDefinition::keysoundSourceCount() const noexcept {
+  return keysoundSources_.size();
+}
+
+const KeysoundSourceDefinition &
+GameplayDefinition::keysoundSource(NoteId id) const {
+  if (id >= keysoundSources_.size()) {
+    throw std::out_of_range("gameplay keysound source id");
+  }
+  return keysoundSources_[id];
+}
+
 std::span<const NoteId>
 GameplayDefinition::laneNotes(int lane) const noexcept {
   const auto found = std::ranges::lower_bound(
@@ -165,6 +177,39 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
     }
   }
 
+  result.keysoundSources_.reserve(result.notes_.size());
+  for (const auto &note : result.notes_) {
+    result.keysoundSources_.push_back({
+        .id = note.id,
+        .lane = note.lane,
+        .timingMicros = note.timingMicros,
+        .wav = note.wav,
+    });
+  }
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      for (const auto *note : timeline->InvisibleNotes) {
+        if (note == nullptr) {
+          continue;
+        }
+        const NoteId id =
+            static_cast<NoteId>(result.keysoundSources_.size());
+        result.keysoundSources_.push_back({
+            .id = id,
+            .lane = note->Lane,
+            .timingMicros = note->Timeline->Timing,
+            .wav = note->Wav,
+        });
+      }
+    }
+  }
+
   result.chronologicalNoteIds_.resize(result.notes_.size());
   std::iota(result.chronologicalNoteIds_.begin(),
             result.chronologicalNoteIds_.end(), NoteId{0});
@@ -200,6 +245,17 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
       lane->keysoundNoteIds.push_back(note.id);
     }
   }
+  for (NoteId id = static_cast<NoteId>(result.notes_.size());
+       id < result.keysoundSources_.size(); ++id) {
+    const auto &source = result.keysoundSources_[id];
+    auto lane = std::ranges::lower_bound(
+        result.lanes_, source.lane, {}, &LaneDefinition::lane);
+    if (lane == result.lanes_.end() || lane->lane != source.lane) {
+      lane = result.lanes_.insert(lane,
+                                  LaneDefinition{.lane = source.lane});
+    }
+    lane->keysoundNoteIds.push_back(id);
+  }
   const auto noteTimingLess = [&](NoteId left, NoteId right) {
     const auto &leftNote = result.notes_[left];
     const auto &rightNote = result.notes_[right];
@@ -207,9 +263,16 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
                ? left < right
                : leftNote.timingMicros < rightNote.timingMicros;
   };
+  const auto keysoundTimingLess = [&](NoteId left, NoteId right) {
+    const auto &leftSource = result.keysoundSources_[left];
+    const auto &rightSource = result.keysoundSources_[right];
+    return leftSource.timingMicros == rightSource.timingMicros
+               ? left < right
+               : leftSource.timingMicros < rightSource.timingMicros;
+  };
   for (auto &lane : result.lanes_) {
     std::ranges::sort(lane.noteIds, noteTimingLess);
-    std::ranges::sort(lane.keysoundNoteIds, noteTimingLess);
+    std::ranges::sort(lane.keysoundNoteIds, keysoundTimingLess);
   }
   return result;
 }

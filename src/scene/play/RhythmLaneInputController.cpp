@@ -154,6 +154,11 @@ void RhythmLaneInputController::indexKeysoundNotes() {
         }
         keysoundNotesByLane[note->Lane].push_back(note);
       }
+      for (auto *note : timeline->InvisibleNotes) {
+        if (note != nullptr) {
+          keysoundNotesByLane[note->Lane].push_back(note);
+        }
+      }
     }
   }
   for (auto &[lane, notes] : keysoundNotesByLane) {

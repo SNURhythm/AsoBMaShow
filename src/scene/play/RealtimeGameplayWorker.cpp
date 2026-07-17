@@ -314,7 +314,8 @@ void RealtimeGameplayWorker::processInput(
                                               context);
   const bool requiresSound =
       config_.inputTriggeredKeysounds && preview != kInvalidNoteId &&
-      definition_.note(preview).wav != bms_parser::Parser::NoWav;
+      definition_.keysoundSource(preview).wav !=
+          bms_parser::Parser::NoWav;
   RealtimeGameplayAudioReservation reservation;
   if (requiresSound &&
       (config_.audio.reserve == nullptr ||

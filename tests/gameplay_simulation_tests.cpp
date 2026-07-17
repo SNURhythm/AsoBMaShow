@@ -841,7 +841,7 @@ int simulationManualKeysoundAt(long long inputMicros,
           .laneBeamTimeMicros = inputMicros});
   return result.soundNoteId == gameplay::kInvalidNoteId
              ? bms_parser::Parser::NoWav
-             : definition.note(result.soundNoteId).wav;
+             : definition.keysoundSource(result.soundNoteId).wav;
 }
 
 void testManualKeysoundFallbackMatchesAcrossAuthorities() {
@@ -859,6 +859,45 @@ void testManualKeysoundFallbackMatchesAcrossAuthorities() {
   require(legacyManualKeysoundAt(3'000'000, true) == 22 &&
               simulationManualKeysoundAt(3'000'000, true) == 22,
           "the last pressed or dead note remains a fallback source");
+}
+
+void testInvisibleNotesChangeManualKeysoundWithoutJudgement() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)
+      ->SetNote(1, new bms_parser::Note(11));
+  auto *invisibleTimeline = addTimeline(*measure, 2'000'000);
+  auto *invisible = new bms_parser::Note(77);
+  invisibleTimeline->SetInvisibleNote(1, invisible);
+  chart.Measures.push_back(measure);
+
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController legacy(&chart, nullptr, lanes, Judge(1));
+  const auto legacyResult = legacy.pressLane(
+      1, {.songTimeMicros = 2'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  require(legacyResult.note == nullptr && !legacyResult.hasJudge &&
+              legacyResult.keySoundNote == invisible,
+          "legacy lookup honors an invisible keysound without judging it");
+
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto keysounds = definition.laneKeysoundNotes(1);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  const auto realtimeResult = simulation.pressLane(
+      1, {.songTimeMicros = 2'000'000,
+          .laneBeamTimeMicros = 2'000'000});
+  require(definition.noteCount() == 1 &&
+              definition.keysoundSourceCount() == 2 &&
+              definition.laneNotes(1).size() == 1 && keysounds.size() == 2 &&
+              realtimeResult.noteId == gameplay::kInvalidNoteId &&
+              !realtimeResult.hasJudge &&
+              realtimeResult.soundNoteId == keysounds.back() &&
+              definition.keysoundSource(realtimeResult.soundNoteId).wav == 77,
+          "realtime lookup compiles invisible keysounds outside judgement "
+          "identities");
 }
 
 void testFallbackTieAndNoWavDoNotSkipSelection() {
@@ -1556,6 +1595,7 @@ int main() {
   testEmptyValidLaneMatchesCurrentController();
   testTwoLaneEqualTimePressMatchesCurrentController();
   testManualKeysoundFallbackMatchesAcrossAuthorities();
+  testInvisibleNotesChangeManualKeysoundWithoutJudgement();
   testFallbackTieAndNoWavDoNotSkipSelection();
   testLongTailIsNotAManualPressKeysound();
   testPreparationTransactionsOnlyChangeLaneReplayVisualAndSound();

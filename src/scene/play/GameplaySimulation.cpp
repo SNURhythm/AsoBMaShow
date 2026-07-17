@@ -1057,7 +1057,9 @@ NoteId GameplaySimulation::selectFallbackPressSoundNote(
           : std::numeric_limits<std::int64_t>::max();
   const auto selected = selectManualKeysound(
       mainNotes, compensationNotes, inputTimeMicros, rangeStart, rangeEnd,
-      [&](NoteId id) { return definition_.note(id).timingMicros; });
+      [&](NoteId id) {
+        return definition_.keysoundSource(id).timingMicros;
+      });
   switch (selected.lane) {
   case ManualKeysoundLane::Main:
     return mainNotes[selected.index];

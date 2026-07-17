@@ -31,6 +31,13 @@ struct NoteDefinition {
   float mineDamage = 0.0F;
 };
 
+struct KeysoundSourceDefinition {
+  NoteId id = kInvalidNoteId;
+  int lane = -1;
+  std::int64_t timingMicros = 0;
+  int wav = 0;
+};
+
 struct LaneDefinition {
   int lane = -1;
   std::vector<NoteId> noteIds;
@@ -49,6 +56,9 @@ class GameplayDefinition {
 public:
   [[nodiscard]] std::size_t noteCount() const noexcept;
   [[nodiscard]] const NoteDefinition &note(NoteId id) const;
+  [[nodiscard]] std::size_t keysoundSourceCount() const noexcept;
+  [[nodiscard]] const KeysoundSourceDefinition &
+  keysoundSource(NoteId id) const;
   [[nodiscard]] std::span<const NoteId> laneNotes(int lane) const noexcept;
   [[nodiscard]] std::span<const NoteId>
   laneKeysoundNotes(int lane) const noexcept;
@@ -63,6 +73,7 @@ private:
       const bms_parser::Chart &, int);
   GameplayChartMetadata metadata_;
   std::vector<NoteDefinition> notes_;
+  std::vector<KeysoundSourceDefinition> keysoundSources_;
   std::vector<LaneDefinition> lanes_;
   std::vector<NoteId> chronologicalNoteIds_;
   std::vector<NoteId> hellChargeHeadIds_;

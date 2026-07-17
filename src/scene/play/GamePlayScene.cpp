@@ -943,10 +943,11 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
     SDL_Log("Realtime gameplay input unavailable: note identity mismatch");
     return false;
   }
-  session->soundHandles.resize(definition.noteCount());
+  session->soundHandles.resize(definition.keysoundSourceCount());
   if (!options.autoKeySound) {
-    for (gameplay::NoteId id = 0; id < definition.noteCount(); ++id) {
-      const int wav = definition.note(id).wav;
+    for (gameplay::NoteId id = 0; id < definition.keysoundSourceCount();
+         ++id) {
+      const int wav = definition.keysoundSource(id).wav;
       if (wav != bms_parser::Parser::NoWav) {
         session->soundHandles[id] =
             context.jukebox.resolveRealtimeKeySound(wav);
