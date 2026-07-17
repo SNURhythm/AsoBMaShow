@@ -355,9 +355,61 @@ SDLInputBackend::translateRealtimeInput(const SDL_Event &event) const {
         .normalizedValue = value,
         .timestampMicros = toMicros(event.caxis.timestamp)};
   }
+  case SDL_JOYBUTTONDOWN:
+  case SDL_JOYBUTTONUP: {
+    const auto found = devices_.find(event.jbutton.which);
+    if (found == devices_.end() || found->second.gameController) {
+      return std::nullopt;
+    }
+    const bool pressed = event.type == SDL_JOYBUTTONDOWN;
+    return input::PhysicalInputEvent{
+        .control = {.deviceId = found->second.snapshot.stableId,
+                    .deviceClass = input::DeviceClass::Joystick,
+                    .kind = input::ControlKind::Button,
+                    .index = event.jbutton.button},
+        .rawValue = pressed ? 1.0 : 0.0,
+        .normalizedValue = pressed ? 1.0F : 0.0F,
+        .timestampMicros = toMicros(event.jbutton.timestamp)};
+  }
+  case SDL_JOYAXISMOTION: {
+    const auto found = devices_.find(event.jaxis.which);
+    if (found == devices_.end() || found->second.gameController) {
+      return std::nullopt;
+    }
+    float value = normalizeAxis(event.jaxis.value);
+    if (found->second.iosAccelerometer &&
+        (event.jaxis.axis == 0 || event.jaxis.axis == 1)) {
+      value = std::clamp(value * kIosAccelerometerTiltAxisGain, -1.0F, 1.0F);
+    }
+    return input::PhysicalInputEvent{
+        .control = {.deviceId = found->second.snapshot.stableId,
+                    .deviceClass = input::DeviceClass::Joystick,
+                    .kind = input::ControlKind::Axis,
+                    .index = event.jaxis.axis},
+        .rawValue = static_cast<double>(event.jaxis.value),
+        .normalizedValue = value,
+        .timestampMicros = toMicros(event.jaxis.timestamp)};
+  }
   default:
     return std::nullopt;
   }
+}
+
+std::optional<std::string>
+SDLInputBackend::realtimeDisconnectedDeviceId(const SDL_Event &event) const {
+  SDL_JoystickID instanceId = -1;
+  if (event.type == SDL_JOYDEVICEREMOVED) {
+    instanceId = event.jdevice.which;
+  } else if (event.type == SDL_CONTROLLERDEVICEREMOVED) {
+    instanceId = event.cdevice.which;
+  } else {
+    return std::nullopt;
+  }
+  const std::lock_guard lock(devicesMutex_);
+  const auto device = devices_.find(instanceId);
+  return device == devices_.end()
+             ? std::nullopt
+             : std::optional<std::string>{device->second.snapshot.stableId};
 }
 
 std::optional<SdlInputDeviceInfo> SDLInputBackend::openDevice(int deviceIndex) {

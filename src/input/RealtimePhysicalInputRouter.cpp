@@ -20,6 +20,13 @@ void RealtimePhysicalInputRouter::consume(
   (void)pipeline_.consumeRegistryEvent(event);
 }
 
+void RealtimePhysicalInputRouter::disconnectDevice(
+    std::string_view deviceId, std::int64_t steadyTimestampMicros) {
+  const std::lock_guard lock(mutex_);
+  currentTimestampMicros_ = steadyTimestampMicros;
+  pipeline_.disconnectDevice(deviceId);
+}
+
 void RealtimePhysicalInputRouter::setGameplayEnabled(
     bool enabled, std::int64_t steadyTimestampMicros) {
   const std::lock_guard lock(mutex_);

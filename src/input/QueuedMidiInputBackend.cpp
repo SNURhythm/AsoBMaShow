@@ -105,6 +105,7 @@ void QueuedMidiInputBackend::openQueue() {
   queuedPacketBytes_ = 0;
   connectedDevices_.clear();
   parsers_.clear();
+  immediateParsers_.clear();
 }
 
 void QueuedMidiInputBackend::closeQueue() {
@@ -115,6 +116,7 @@ void QueuedMidiInputBackend::closeQueue() {
   queuedPacketBytes_ = 0;
   connectedDevices_.clear();
   parsers_.clear();
+  immediateParsers_.clear();
 }
 
 void QueuedMidiInputBackend::enqueuePacket(std::string stableId,
@@ -136,6 +138,28 @@ void QueuedMidiInputBackend::enqueuePacket(std::string stableId,
   queuedEvents_.emplace_back(Packet{.stableId = std::move(stableId),
                                     .bytes = std::move(bytes),
                                     .timestampMicros = timestampMicros});
+}
+
+void QueuedMidiInputBackend::publishPacketImmediately(
+    std::string_view stableId, std::span<const std::uint8_t> bytes,
+    std::uint64_t timestampMicros) {
+  if (stableId.empty() || bytes.empty() || bytes.size() > kMaximumPacketBytes) {
+    return;
+  }
+  const std::lock_guard lock(queueMutex_);
+  if (!accepting_) {
+    return;
+  }
+  auto events = immediateParsers_[std::string(stableId)].consume(
+      stableId, bytes, timestampMicros);
+  for (auto &event : events) {
+    publishInput(std::move(event));
+  }
+}
+
+void QueuedMidiInputBackend::resetImmediateParser(std::string_view stableId) {
+  const std::lock_guard lock(queueMutex_);
+  immediateParsers_.erase(std::string(stableId));
 }
 
 void QueuedMidiInputBackend::enqueueDevice(input::InputDeviceSnapshot device) {

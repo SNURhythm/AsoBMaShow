@@ -35,12 +35,21 @@ public:
   void pump();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
   void resetGyroscopeTurntableSession();
+  // Claimed classes are delivered to realtime listeners but omitted from the
+  // ordinary frame queue, preventing delayed duplicate gameplay edges.
+  void setRealtimeInputClaimed(input::DeviceClass deviceClass, bool claimed);
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
   translateRealtimeSdlInput(const SDL_Event &) const;
+  [[nodiscard]] std::optional<std::string>
+  realtimeDisconnectedSdlDevice(const SDL_Event &) const;
 
   // Input subscriptions never inherit events queued before their sequence
   // boundary.
   std::uint64_t subscribeInput(InputListener listener);
+  // Runs on the producing native callback thread before that input is queued
+  // for ordinary frame dispatch. Unsubscribe waits for an active callback.
+  std::uint64_t subscribeRealtimeInput(InputListener listener);
+  std::uint64_t subscribeRealtimeDevices(DeviceListener listener);
   std::uint64_t subscribeDevices(DeviceListener listener);
   // Removing a subscription cancels any events not yet delivered to that
   // listener.

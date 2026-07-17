@@ -49,6 +49,8 @@ public:
   void pump() override;
   [[nodiscard]] std::optional<input::PhysicalInputEvent>
   translateRealtimeInput(const SDL_Event &event) const;
+  [[nodiscard]] std::optional<std::string>
+  realtimeDisconnectedDeviceId(const SDL_Event &event) const;
 
 private:
   struct DeviceRecord {

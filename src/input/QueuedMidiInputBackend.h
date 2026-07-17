@@ -8,7 +8,9 @@
 #include <deque>
 #include <mutex>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -48,6 +50,10 @@ protected:
   void closeQueue();
   void enqueuePacket(std::string stableId, std::vector<std::uint8_t> bytes,
                      std::uint64_t timestampMicros);
+  void publishPacketImmediately(std::string_view stableId,
+                                std::span<const std::uint8_t> bytes,
+                                std::uint64_t timestampMicros);
+  void resetImmediateParser(std::string_view stableId);
   void enqueueDevice(input::InputDeviceSnapshot device);
 
 private:
@@ -69,4 +75,5 @@ private:
 
   std::unordered_map<std::string, input::InputDeviceSnapshot> connectedDevices_;
   std::unordered_map<std::string, MidiMessageParser> parsers_;
+  std::unordered_map<std::string, MidiMessageParser> immediateParsers_;
 };

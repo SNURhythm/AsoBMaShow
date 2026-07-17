@@ -251,7 +251,7 @@ public:
 
   bool start(std::string &errorMessage) override {
     errorMessage.clear();
-    if (started_) {
+    if (started_.load(std::memory_order_acquire)) {
       return true;
     }
 
@@ -272,29 +272,28 @@ public:
       return false;
     }
 
-    started_ = true;
-    refreshSources();
+    started_.store(true, std::memory_order_release);
+    refreshSourcesSynchronized();
     return true;
   }
 
   void stop() override {
-    if (!started_ && port_ == 0 && !notificationLifetime_) {
+    if (!started_.exchange(false, std::memory_order_acq_rel) && port_ == 0 &&
+        !notificationLifetime_) {
       closeQueue();
       return;
     }
-    started_ = false;
     shutdownNative();
     closeQueue();
   }
 
-  void pump() override {
-    if (started_ && refreshRequested_.exchange(false)) {
-      refreshSources();
-    }
-    QueuedMidiInputBackend::pump();
-  }
+  void pump() override { QueuedMidiInputBackend::pump(); }
 
-  void requestRefresh() { refreshRequested_.store(true); }
+  void requestRefresh() {
+    if (started_.load(std::memory_order_acquire)) {
+      refreshSourcesSynchronized();
+    }
+  }
 
   void acceptPackets(CoreMidiConnection &connection,
                      const MIDIPacketList &packetList) {
@@ -306,10 +305,10 @@ public:
       if (!connection.connected.load()) {
         return;
       }
-      enqueuePacket(connection.stableId,
-                    std::vector<std::uint8_t>(packet->data,
-                                              packet->data + packet->length),
-                    midiTimestampMicros(packet->timeStamp));
+      publishPacketImmediately(
+          connection.stableId,
+          std::span<const std::uint8_t>(packet->data, packet->length),
+          midiTimestampMicros(packet->timeStamp));
       packet = MIDIPacketNext(packet);
     }
   }
@@ -325,6 +324,14 @@ private:
     if (connection != nullptr && connection->connected.load()) {
       connection->backend->acceptPackets(*connection, *packetList);
     }
+  }
+
+  void refreshSourcesSynchronized() {
+    const std::lock_guard lock(sourcesMutex_);
+    if (!started_.load(std::memory_order_acquire) || port_ == 0) {
+      return;
+    }
+    refreshSources();
   }
 
   void refreshSources() {
@@ -354,6 +361,7 @@ private:
         connection->connected.store(false);
         (void)MIDIPortDisconnectSource(port_, connection->endpoint);
         connection->callbackLifetime.closeAndWait();
+        resetImmediateParser(connection->stableId);
         enqueueDevice({.stableId = connection->stableId,
                        .displayName = connection->displayName,
                        .deviceClass = input::DeviceClass::Midi,
@@ -400,6 +408,7 @@ private:
       notificationLifetime_->closeAndWait();
       notificationLifetime_.reset();
     }
+    const std::lock_guard sourcesLock(sourcesMutex_);
     for (auto &[endpoint, connection] : connections_) {
       connection->connected.store(false);
       if (port_ != 0) {
@@ -415,17 +424,16 @@ private:
     }
     client_ = 0;
     liveIds_.clear();
-    refreshRequested_.store(false);
   }
 
   MIDIClientRef client_ = 0;
   MIDIPortRef port_ = 0;
   std::unique_ptr<NativeCallbackLifetime> notificationLifetime_;
+  std::mutex sourcesMutex_;
   std::map<MIDIEndpointRef, std::unique_ptr<CoreMidiConnection>> connections_;
   LiveMidiDeviceIdAllocator liveIds_;
-  std::atomic_bool refreshRequested_ = false;
   bool notificationSubscribed_ = false;
-  bool started_ = false;
+  std::atomic_bool started_ = false;
 };
 
 void CoreMidiClientService::dispatch() {

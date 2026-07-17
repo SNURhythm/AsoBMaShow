@@ -8,17 +8,19 @@
 
 #include "GyroscopeInputBackendCore.h"
 #include "IOSGyroscopeMotionAdapter.h"
+#include "NativeCallbackLifetime.h"
 
+#include <CoreMotion/CoreMotion.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_log.h>
-#include <SDL2/SDL_sensor.h>
 #include <mach/mach_time.h>
 
-#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,7 +28,7 @@
 namespace {
 
 constexpr std::uint64_t kFirstSampleTimeoutMicros = 10000000;
-constexpr char kCorrectedMotionSensorName[] = "Corrected Device Motion";
+constexpr NSTimeInterval kMotionUpdateIntervalSeconds = 1.0 / 120.0;
 
 mach_timebase_info_data_t machTimebase() {
   mach_timebase_info_data_t value{};
@@ -42,6 +44,19 @@ std::uint64_t nowMicros() {
   const auto nanoseconds = static_cast<unsigned __int128>(mach_absolute_time()) *
                            timebase.numer / timebase.denom;
   return static_cast<std::uint64_t>(nanoseconds / 1000U);
+}
+
+std::uint64_t sampleMicros(NSTimeInterval timestamp,
+                           std::uint64_t fallback) {
+  if (!std::isfinite(timestamp) || timestamp <= 0.0) {
+    return fallback;
+  }
+  const long double micros = static_cast<long double>(timestamp) * 1000000.0L;
+  if (micros >=
+      static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
+    return std::numeric_limits<std::uint64_t>::max();
+  }
+  return static_cast<std::uint64_t>(micros);
 }
 
 bool isBackgroundEvent(const SDL_Event &event) {
@@ -62,16 +77,52 @@ bool isForegroundEvent(const SDL_Event &event) {
            event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED));
 }
 
-int findCorrectedMotionSensor() {
-  const int sensorCount = SDL_NumSensors();
-  for (int index = 0; index < sensorCount; ++index) {
-    const char *name = SDL_SensorGetDeviceName(index);
-    if (SDL_SensorGetDeviceType(index) == SDL_SENSOR_UNKNOWN &&
-        name != nullptr && std::strcmp(name, kCorrectedMotionSensorName) == 0) {
-      return index;
-    }
+input::ios_gyroscope::MagneticAccuracy
+magneticAccuracy(CMMagneticFieldCalibrationAccuracy accuracy) {
+  using input::ios_gyroscope::MagneticAccuracy;
+  switch (accuracy) {
+  case CMMagneticFieldCalibrationAccuracyLow:
+    return MagneticAccuracy::Low;
+  case CMMagneticFieldCalibrationAccuracyMedium:
+    return MagneticAccuracy::Medium;
+  case CMMagneticFieldCalibrationAccuracyHigh:
+    return MagneticAccuracy::High;
+  case CMMagneticFieldCalibrationAccuracyUncalibrated:
+  default:
+    return MagneticAccuracy::Uncalibrated;
   }
-  return -1;
+}
+
+input::ios_gyroscope::ReferenceFrameChoice
+probeReferenceFrame(CMMotionManager *manager) {
+  return input::ios_gyroscope::probeReferenceFrameForAttempt(
+      TARGET_OS_SIMULATOR != 0, [manager] {
+        const CMAttitudeReferenceFrame frames =
+            [CMMotionManager availableAttitudeReferenceFrames];
+        return input::ios_gyroscope::ReferenceFrameAvailability{
+            .deviceMotionAvailable = manager.deviceMotionAvailable,
+            .arbitraryCorrectedZVerticalAvailable =
+                (frames &
+                 CMAttitudeReferenceFrameXArbitraryCorrectedZVertical) != 0,
+            .magneticNorthZVerticalAvailable =
+                (frames & CMAttitudeReferenceFrameXMagneticNorthZVertical) !=
+                0,
+        };
+      });
+}
+
+CMAttitudeReferenceFrame nativeReferenceFrame(
+    input::ios_gyroscope::ReferenceFrameChoice choice) {
+  switch (choice) {
+  case input::ios_gyroscope::ReferenceFrameChoice::
+      ArbitraryCorrectedZVertical:
+    return CMAttitudeReferenceFrameXArbitraryCorrectedZVertical;
+  case input::ios_gyroscope::ReferenceFrameChoice::MagneticNorthZVertical:
+    return CMAttitudeReferenceFrameXMagneticNorthZVertical;
+  case input::ios_gyroscope::ReferenceFrameChoice::Unsupported:
+    return static_cast<CMAttitudeReferenceFrame>(0);
+  }
+  return static_cast<CMAttitudeReferenceFrame>(0);
 }
 
 class IOSGyroscopeInputBackend final : public IInputBackend {
@@ -83,78 +134,110 @@ public:
 
   bool start(std::string &errorMessage) override {
     errorMessage.clear();
-    if (started_) {
-      return true;
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (started_) {
+        return true;
+      }
     }
 
-    const bool sensorSubsystemReady =
-        (SDL_WasInit(SDL_INIT_SENSOR) & SDL_INIT_SENSOR) != 0;
-    if (sensorSubsystemReady) {
-      sensorIndex_ = findCorrectedMotionSensor();
-    }
-    const bool supported = sensorSubsystemReady && sensorIndex_ >= 0;
+    motionManager_ = [[CMMotionManager alloc] init];
+    motionQueue_ = [[NSOperationQueue alloc] init];
+    motionQueue_.maxConcurrentOperationCount = 1;
+    motionQueue_.qualityOfService = NSQualityOfServiceUserInteractive;
+    motionQueue_.name = @"AsoBMaShow realtime gyroscope";
+    callbackLifetime_ = std::make_unique<NativeCallbackLifetime>(this);
+
+    const bool supported = input::ios_gyroscope::hasRequiredMotionHardware(
+        TARGET_OS_SIMULATOR != 0, motionManager_.deviceMotionAvailable,
+        motionManager_.gyroAvailable, motionManager_.magnetometerAvailable);
     SDL_LogInfo(SDL_LOG_CATEGORY_INPUT,
-                "iOS SDL corrected motion sensor: subsystem=%d index=%d "
-                "supported=%d",
-                sensorSubsystemReady, sensorIndex_, supported);
+                "iOS asynchronous corrected motion: hardware=%d frame=%d",
+                supported, static_cast<int>(probeReferenceFrame(motionManager_)));
 
-    started_ = true;
     const std::uint64_t now = nowMicros();
-    core_.start(supported, now);
-    if (supported) {
-      core_.sensorAvailable();
+    {
+      const std::lock_guard lock(coreMutex_);
+      started_ = true;
+      core_.start(supported, now);
+      if (supported) {
+        core_.sensorAvailable();
+      }
     }
     drainCommands(now);
     return true;
   }
 
   void stop() override {
-    if (!started_) {
-      stopNativeSensor();
-      return;
-    }
     const std::uint64_t now = nowMicros();
-    core_.stop(now);
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (started_) {
+        core_.stop(now);
+        started_ = false;
+      }
+    }
     drainCommands(now);
     stopNativeSensor();
-    sensorIndex_ = -1;
-    started_ = false;
+    if (callbackLifetime_) {
+      callbackLifetime_->closeAndWait();
+      callbackLifetime_.reset();
+    }
+    [motionQueue_ cancelAllOperations];
+    motionQueue_ = nil;
+    motionManager_ = nil;
   }
 
   void handleSdlEvent(const SDL_Event &event) override {
-    if (!started_) {
-      return;
-    }
     const std::uint64_t now = nowMicros();
-    if (isBackgroundEvent(event)) {
-      core_.setForeground(false, now);
-      drainCommands(now);
-    } else if (isForegroundEvent(event)) {
-      core_.setForeground(true, now);
+    bool changed = false;
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (!started_) {
+        return;
+      }
+      if (isBackgroundEvent(event)) {
+        core_.setForeground(false, now);
+        changed = true;
+      } else if (isForegroundEvent(event)) {
+        core_.setForeground(true, now);
+        changed = true;
+      }
+    }
+    if (changed) {
       drainCommands(now);
     }
   }
 
   void pump() override {
-    if (!started_) {
-      return;
-    }
     const std::uint64_t now = nowMicros();
-    pollLatestMotion(now);
-    if (nativeRetryAtMicros_.has_value() &&
-        now >= *nativeRetryAtMicros_) {
+    bool restartForMissingFirstSample = false;
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (!started_) {
+        return;
+      }
+      if (nativeRetryAtMicros_.has_value() &&
+          now >= *nativeRetryAtMicros_) {
+        nativeRetryAtMicros_.reset();
+        restartForMissingFirstSample = true;
+      }
+      core_.pump(now);
+    }
+    if (restartForMissingFirstSample) {
       startNativeSensor(now);
     }
-    core_.pump(now);
     drainCommands(now);
   }
 
   void configureGyroscopeTurntable(
       input::GyroscopeTurntableConfig config) override {
+    const std::lock_guard lock(coreMutex_);
     core_.configure(config, nowMicros());
   }
 
   void resetGyroscopeTurntableSession() override {
+    const std::lock_guard lock(coreMutex_);
     core_.resetSession(nowMicros());
   }
 
@@ -175,7 +258,12 @@ private:
 
   void drainCommands(std::uint64_t now) {
     while (true) {
-      switch (core_.takeCommand()) {
+      input::GyroscopeSensorCommand command;
+      {
+        const std::lock_guard lock(coreMutex_);
+        command = core_.takeCommand();
+      }
+      switch (command) {
       case input::GyroscopeSensorCommand::Start:
         startNativeSensor(now);
         break;
@@ -190,82 +278,139 @@ private:
 
   void startNativeSensor(std::uint64_t now) {
     stopNativeSensor();
-    if (sensorIndex_ < 0) {
+    if (motionManager_ == nil || motionQueue_ == nil ||
+        callbackLifetime_ == nullptr) {
+      const std::lock_guard lock(coreMutex_);
       core_.sensorStartFailed(now);
       return;
     }
 
-    correctedMotionSensor_ = SDL_SensorOpen(sensorIndex_);
-    if (correctedMotionSensor_ == nullptr) {
-      SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
-                  "iOS SDL corrected motion sensor could not open: %s",
-                  SDL_GetError());
+    const auto choice = probeReferenceFrame(motionManager_);
+    const CMAttitudeReferenceFrame referenceFrame =
+        nativeReferenceFrame(choice);
+    if (referenceFrame == 0) {
+      const std::lock_guard lock(coreMutex_);
       core_.sensorStartFailed(now);
       return;
     }
 
-    publishStartupDiagnostic("waiting for SDL corrected motion sample");
-    awaitingFirstSample_ = true;
-    nativeRetryAtMicros_ = now + kFirstSampleTimeoutMicros;
+    const std::uint64_t generation =
+        nativeGeneration_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    {
+      const std::lock_guard lock(coreMutex_);
+      accuracyTracker_.reset();
+      awaitingFirstSample_ = true;
+      nativeRetryAtMicros_ = now + kFirstSampleTimeoutMicros;
+    }
+    publishStartupDiagnostic("waiting for asynchronous corrected motion");
+
+    motionManager_.deviceMotionUpdateInterval = kMotionUpdateIntervalSeconds;
+    motionManager_.showsDeviceMovementDisplay = YES;
+    void *callbackToken = callbackLifetime_->token();
+    [motionManager_
+        startDeviceMotionUpdatesUsingReferenceFrame:referenceFrame
+                                            toQueue:motionQueue_
+                                         withHandler:^(CMDeviceMotion *motion,
+                                                       NSError *error) {
+                                           auto lease =
+                                               NativeCallbackLifetime::acquire(
+                                                   callbackToken);
+                                           if (auto *backend = lease.ownerAs<
+                                                   IOSGyroscopeInputBackend>()) {
+                                             backend->acceptMotion(
+                                                 motion, error, generation);
+                                           }
+                                         }];
   }
 
   void stopNativeSensor() {
-    if (correctedMotionSensor_ != nullptr) {
-      SDL_SensorClose(correctedMotionSensor_);
-      correctedMotionSensor_ = nullptr;
-    }
+    nativeGeneration_.fetch_add(1, std::memory_order_acq_rel);
+    [motionManager_ stopDeviceMotionUpdates];
+    const std::lock_guard lock(coreMutex_);
+    accuracyTracker_.reset();
     nativeRetryAtMicros_.reset();
-    lastTimestampMicros_.reset();
     awaitingFirstSample_ = false;
   }
 
-  void pollLatestMotion(std::uint64_t now) {
-    if (correctedMotionSensor_ == nullptr) {
+  void acceptMotion(CMDeviceMotion *motion, NSError *error,
+                    std::uint64_t generation) {
+    if (generation != nativeGeneration_.load(std::memory_order_acquire)) {
+      return;
+    }
+    if (error != nil || motion == nil) {
+      if (error != nil) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                    "iOS asynchronous corrected motion error: %s",
+                    error.localizedDescription.UTF8String);
+      }
+      const std::uint64_t timestampMicros = nowMicros();
+      {
+        const std::lock_guard lock(coreMutex_);
+        if (!started_ || generation !=
+                             nativeGeneration_.load(std::memory_order_acquire)) {
+          return;
+        }
+        awaitingFirstSample_ = false;
+        nativeRetryAtMicros_.reset();
+        core_.sensorRuntimeFailed(timestampMicros);
+      }
+      stopNativeSensor();
+      drainCommands(timestampMicros);
       return;
     }
 
-    std::array<float, 8> data{};
-    Uint64 timestampMicros = 0;
-    if (SDL_SensorGetDataWithTimestamp(
-            correctedMotionSensor_, &timestampMicros, data.data(),
-            static_cast<int>(data.size())) != 0 ||
-        timestampMicros == 0 ||
-        (lastTimestampMicros_.has_value() &&
-         timestampMicros <= *lastTimestampMicros_)) {
-      return;
+    const std::uint64_t timestampMicros =
+        sampleMicros(motion.timestamp, nowMicros());
+    const CMRotationRate rate = motion.rotationRate;
+    const CMAcceleration gravity = motion.gravity;
+    bool firstSample = false;
+    {
+      const std::lock_guard lock(coreMutex_);
+      if (!started_ || generation !=
+                           nativeGeneration_.load(std::memory_order_acquire)) {
+        return;
+      }
+      const auto accuracy = accuracyTracker_.observe(
+          magneticAccuracy(motion.magneticField.accuracy));
+      if (awaitingFirstSample_) {
+        awaitingFirstSample_ = false;
+        nativeRetryAtMicros_.reset();
+        core_.sensorStartSucceeded(timestampMicros);
+        firstSample = true;
+      }
+      core_.observe(
+          {.headingDegrees =
+               input::ios_gyroscope::headingDegreesFromYawRadians(
+                   motion.attitude.yaw),
+           .clockwiseRateDegreesPerSecond =
+               input::ios_gyroscope::
+                   clockwiseWorldVerticalRateDegreesPerSecond(
+                       {.x = rate.x, .y = rate.y, .z = rate.z},
+                       {.x = gravity.x, .y = gravity.y, .z = gravity.z}),
+           .sensorTimestampSeconds = motion.timestamp,
+           .accuracyGeneration = accuracy.generation,
+           .usableAccuracy = accuracy.usable,
+           .discontinuity = false},
+          timestampMicros);
+      // Advancing on every native sample makes both press and delayed release
+      // independent of the render loop.
+      core_.pump(timestampMicros);
     }
-    lastTimestampMicros_ = timestampMicros;
-
-    if (awaitingFirstSample_) {
-      awaitingFirstSample_ = false;
-      nativeRetryAtMicros_.reset();
-      core_.sensorStartSucceeded(now);
+    if (firstSample) {
       SDL_LogInfo(SDL_LOG_CATEGORY_INPUT,
-                  "iOS gyroscope received its first SDL corrected motion "
-                  "sample.");
+                  "iOS gyroscope received its first asynchronous corrected "
+                  "motion sample.");
     }
-
-    core_.observe(
-        {.headingDegrees =
-             input::ios_gyroscope::headingDegreesFromYawRadians(data[0]),
-         .clockwiseRateDegreesPerSecond =
-             input::ios_gyroscope::
-                 clockwiseWorldVerticalRateDegreesPerSecond(
-                     {.x = data[1], .y = data[2], .z = data[3]},
-                     {.x = data[4], .y = data[5], .z = data[6]}),
-         .sensorTimestampSeconds =
-             static_cast<double>(timestampMicros) / 1000000.0,
-         .accuracyGeneration = 0,
-         .usableAccuracy = true,
-         .discontinuity = false},
-        now);
   }
 
   input::GyroscopeInputBackendCore core_;
-  SDL_Sensor *correctedMotionSensor_ = nullptr;
-  std::optional<Uint64> lastTimestampMicros_;
+  std::mutex coreMutex_;
+  input::ios_gyroscope::AccuracyGenerationTracker accuracyTracker_;
+  CMMotionManager *motionManager_ = nil;
+  NSOperationQueue *motionQueue_ = nil;
+  std::unique_ptr<NativeCallbackLifetime> callbackLifetime_;
+  std::atomic_uint64_t nativeGeneration_{0};
   std::optional<std::uint64_t> nativeRetryAtMicros_;
-  int sensorIndex_ = -1;
   bool awaitingFirstSample_ = false;
   bool started_ = false;
 };

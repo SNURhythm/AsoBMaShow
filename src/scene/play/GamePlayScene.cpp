@@ -514,6 +514,8 @@ struct GamePlayScene::RealtimeGameplaySession {
       inputCommands;
   std::atomic_bool inputCommandOverflow{false};
   bool sdlInputWatchRegistered = false;
+  std::uint64_t realtimeInputSubscription = 0;
+  std::uint64_t realtimeDeviceSubscription = 0;
   gameplay::BoundedMpscQueue<gameplay::RealtimeTouchSample,
                              kAuxiliaryTouchCapacity>
       auxiliaryTouches;
@@ -676,16 +678,56 @@ struct GamePlayScene::RealtimeGameplaySession {
         session.physicalInputRouter == nullptr) {
       return 0;
     }
+    if (const auto disconnected =
+            session.inputRegistry->realtimeDisconnectedSdlDevice(*event);
+        disconnected.has_value()) {
+      session.physicalInputRouter->disconnectDevice(*disconnected,
+                                                    nowMicros());
+      return 0;
+    }
     const auto physical =
         session.inputRegistry->translateRealtimeSdlInput(*event);
     if (!physical.has_value() ||
         (physical->control.deviceClass != input::DeviceClass::Keyboard &&
          physical->control.deviceClass !=
-             input::DeviceClass::GameController)) {
+             input::DeviceClass::GameController &&
+         physical->control.deviceClass != input::DeviceClass::Joystick)) {
       return 0;
     }
     session.physicalInputRouter->consume(*physical, nowMicros());
     return 0;
+  }
+
+  static void registryRealtimeInput(
+      void *context, const input::PhysicalInputEvent &event) {
+    if (context == nullptr) {
+      return;
+    }
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+        session.physicalInputRouter == nullptr ||
+        (event.control.deviceClass != input::DeviceClass::Midi &&
+         event.control.deviceClass != input::DeviceClass::Gyroscope)) {
+      return;
+    }
+    session.physicalInputRouter->consume(
+        event, event.timestampMicros != 0 ? event.timestampMicros : nowMicros());
+  }
+
+  static void registryRealtimeDevice(
+      void *context, const input::InputDeviceSnapshot &device) {
+    if (context == nullptr || device.connected) {
+      return;
+    }
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (!session.acceptingNativeInput.load(std::memory_order_acquire) ||
+        session.physicalInputRouter == nullptr ||
+        (device.deviceClass != input::DeviceClass::Midi &&
+         device.deviceClass != input::DeviceClass::Gyroscope)) {
+      return;
+    }
+    session.physicalInputRouter->disconnectDevice(device.stableId,
+                                                  nowMicros());
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -863,8 +905,30 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
                                               false);
   inputHandler->setRegistryDeviceClassEnabled(
       input::DeviceClass::GameController, false);
+  inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Joystick,
+                                              false);
+  inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Midi, false);
+  inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Gyroscope,
+                                              false);
+  for (const auto deviceClass : {input::DeviceClass::Keyboard,
+                                 input::DeviceClass::GameController,
+                                 input::DeviceClass::Joystick,
+                                 input::DeviceClass::Midi,
+                                 input::DeviceClass::Gyroscope}) {
+    context.inputDeviceRegistry.setRealtimeInputClaimed(deviceClass, true);
+  }
   auto &activeSession = *realtimeGameplaySession;
   activeSession.acceptingNativeInput.store(true, std::memory_order_release);
+  activeSession.realtimeInputSubscription =
+      context.inputDeviceRegistry.subscribeRealtimeInput(
+          [session = &activeSession](const auto &event) {
+            RealtimeGameplaySession::registryRealtimeInput(session, event);
+          });
+  activeSession.realtimeDeviceSubscription =
+      context.inputDeviceRegistry.subscribeRealtimeDevices(
+          [session = &activeSession](const auto &device) {
+            RealtimeGameplaySession::registryRealtimeDevice(session, device);
+          });
   SDL_AddEventWatch(&RealtimeGameplaySession::sdlInputWatch, &activeSession);
   activeSession.sdlInputWatchRegistered = true;
   setRealtimeGameplayIngressEnabled(true);
@@ -1131,11 +1195,33 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
     SDL_DelEventWatch(&RealtimeGameplaySession::sdlInputWatch, &session);
     session.sdlInputWatchRegistered = false;
   }
+  if (session.realtimeInputSubscription != 0) {
+    context.inputDeviceRegistry.unsubscribe(session.realtimeInputSubscription);
+    session.realtimeInputSubscription = 0;
+  }
+  if (session.realtimeDeviceSubscription != 0) {
+    context.inputDeviceRegistry.unsubscribe(
+        session.realtimeDeviceSubscription);
+    session.realtimeDeviceSubscription = 0;
+  }
+  for (const auto deviceClass : {input::DeviceClass::Keyboard,
+                                 input::DeviceClass::GameController,
+                                 input::DeviceClass::Joystick,
+                                 input::DeviceClass::Midi,
+                                 input::DeviceClass::Gyroscope}) {
+    context.inputDeviceRegistry.setRealtimeInputClaimed(deviceClass, false);
+  }
   if (inputHandler != nullptr) {
     inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Keyboard,
                                                 true);
     inputHandler->setRegistryDeviceClassEnabled(
         input::DeviceClass::GameController, true);
+    inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Joystick,
+                                                true);
+    inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Midi,
+                                                true);
+    inputHandler->setRegistryDeviceClassEnabled(input::DeviceClass::Gyroscope,
+                                                true);
   }
   drainRealtimeTouchSamples();
   session.worker->stop();

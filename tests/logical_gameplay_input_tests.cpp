@@ -847,6 +847,44 @@ void testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane() {
           "later native edges");
 }
 
+void testRealtimePhysicalInputDisconnectReleasesHeldLane() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-midi-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 2},
+       .control = {.deviceId = "midi:one",
+                   .deviceClass = input::DeviceClass::Midi,
+                   .kind = input::ControlKind::MidiNote,
+                   .index = 60}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "midi:one",
+                   .deviceClass = input::DeviceClass::Midi,
+                   .kind = input::ControlKind::MidiNote,
+                   .index = 60},
+       .rawValue = 127.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.disconnectDevice("midi:one", 250);
+
+  require(output.size() == 2 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 2 &&
+              output[1].steadyTimestampMicros == 250,
+          "native disconnect releases held realtime lanes immediately");
+}
+
 void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   const audio::PlaybackRate assistedRate{75};
   require(clear_policy::assistClearRequired(assistedRate),
@@ -909,6 +947,7 @@ int main() {
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
   testRealtimePhysicalInputPreservesNativeTimestamp();
   testRealtimePhysicalInputDisableAtomicallyReleasesHeldLane();
+  testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

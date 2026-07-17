@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <string_view>
 #include <vector>
 
 namespace input {
@@ -31,6 +32,8 @@ public:
   operator=(const RealtimePhysicalInputRouter &) = delete;
 
   void consume(const PhysicalInputEvent &, std::int64_t steadyTimestampMicros);
+  void disconnectDevice(std::string_view deviceId,
+                        std::int64_t steadyTimestampMicros);
   void setGameplayEnabled(bool enabled,
                           std::int64_t steadyTimestampMicros);
 

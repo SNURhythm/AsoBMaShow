@@ -665,6 +665,82 @@ void testReentrantPumpPreservesQueuedEventFifo() {
          "nested pump appends new work after the outer pending FIFO");
 }
 
+void testRealtimeInputSubscriptionRunsBeforeRegistryPump() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  std::vector<int> realtimeEvents;
+  std::vector<int> frameEvents;
+  const auto realtimeToken = registry.subscribeRealtimeInput(
+      [&](const auto &event) { realtimeEvents.push_back(event.control.index); });
+  registry.subscribeInput(
+      [&](const auto &event) { frameEvents.push_back(event.control.index); });
+
+  backend->sendInput(fakeKeyEvent(31));
+  expect(realtimeEvents == std::vector<int>{31} && frameEvents.empty(),
+         "realtime input subscriptions run inline without a registry pump");
+
+  registry.pump();
+  expect(frameEvents == std::vector<int>{31},
+         "ordinary input subscriptions retain frame-dispatched delivery");
+
+  registry.unsubscribe(realtimeToken);
+  backend->sendInput(fakeKeyEvent(32));
+  expect(realtimeEvents == std::vector<int>{31},
+         "unsubscribed realtime input is revoked before unsubscribe returns");
+
+  int selfCallbacks = 0;
+  std::uint64_t selfToken = 0;
+  selfToken = registry.subscribeRealtimeInput([&](const auto &) {
+    ++selfCallbacks;
+    registry.unsubscribe(selfToken);
+  });
+  backend->sendInput(fakeKeyEvent(33));
+  backend->sendInput(fakeKeyEvent(34));
+  expect(selfCallbacks == 1,
+         "realtime input listeners can revoke themselves during delivery");
+
+  registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, true);
+  backend->sendInput(fakeKeyEvent(35));
+  registry.pump();
+  expect(frameEvents == std::vector<int>({31, 32, 33, 34}),
+         "claimed realtime input is omitted from ordinary frame delivery");
+  registry.setRealtimeInputClaimed(input::DeviceClass::Keyboard, false);
+  backend->sendInput(fakeKeyEvent(36));
+  registry.pump();
+  expect(frameEvents == std::vector<int>({31, 32, 33, 34, 36}),
+         "unclaimed input resumes ordinary delivery without a backlog");
+}
+
+void testRealtimeDeviceSubscriptionRunsBeforeRegistryPump() {
+  FakeBackend *backend = nullptr;
+  auto registry = makeRegistryWithFakeBackend(backend);
+  std::vector<bool> realtimeConnections;
+  std::vector<bool> frameConnections;
+  const auto realtimeToken = registry.subscribeRealtimeDevices(
+      [&](const auto &device) {
+        if (device.stableId == "midi:realtime-device") {
+          realtimeConnections.push_back(device.connected);
+        }
+      });
+  registry.subscribeDevices([&](const auto &device) {
+    if (device.stableId == "midi:realtime-device") {
+      frameConnections.push_back(device.connected);
+    }
+  });
+
+  backend->sendDevice({.stableId = "midi:realtime-device",
+                       .displayName = "Realtime MIDI",
+                       .deviceClass = input::DeviceClass::Midi,
+                       .connected = false});
+  expect(realtimeConnections == std::vector<bool>{false} &&
+             frameConnections.empty(),
+         "realtime device subscriptions run inline without a registry pump");
+  registry.pump();
+  expect(frameConnections == std::vector<bool>{false},
+         "ordinary device subscriptions remain frame-dispatched");
+  registry.unsubscribe(realtimeToken);
+}
+
 void testFailedBackendIsCleanedAndNeverDispatched() {
   const auto state = std::make_shared<TrackedBackendState>();
   {
@@ -803,7 +879,8 @@ void testSdlKeyboardFiltersRepeatAndUsesScancodes() {
 
 void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
   auto provider = std::make_shared<FakeSdlDeviceProvider>();
-  provider->devices = {controllerInfo(91, "/dev/input/realtime-pad")};
+  provider->devices = {controllerInfo(91, "/dev/input/realtime-pad"),
+                       joystickInfo(92)};
   auto registry = makeRegistryWithSdlProvider(provider);
 
   SDL_Event key{};
@@ -817,6 +894,19 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
   button.cbutton.button = SDL_CONTROLLER_BUTTON_X;
   const auto translatedButton = registry.translateRealtimeSdlInput(button);
 
+  SDL_Event joystickButton{};
+  joystickButton.type = SDL_JOYBUTTONDOWN;
+  joystickButton.jbutton.which = 92;
+  joystickButton.jbutton.button = 3;
+  const auto translatedJoystick =
+      registry.translateRealtimeSdlInput(joystickButton);
+
+  SDL_Event removed{};
+  removed.type = SDL_JOYDEVICEREMOVED;
+  removed.jdevice.which = 91;
+  const auto disconnected =
+      registry.realtimeDisconnectedSdlDevice(removed);
+
   expect(translatedKey.has_value() &&
              translatedKey->control.deviceId == "keyboard" &&
              translatedKey->control.index == SDL_SCANCODE_D,
@@ -828,6 +918,14 @@ void testRealtimeSdlTranslationDoesNotWaitForRegistryDispatch() {
              translatedButton->control.index == SDL_CONTROLLER_BUTTON_X,
          "realtime SDL translation resolves the connected controller's "
          "stable identity without pumping the registry");
+  expect(translatedJoystick.has_value() &&
+             translatedJoystick->control.deviceClass ==
+                 input::DeviceClass::Joystick &&
+             translatedJoystick->control.index == 3,
+         "realtime SDL translation exposes raw joystick buttons");
+  expect(disconnected.has_value() && translatedButton.has_value() &&
+             *disconnected == translatedButton->control.deviceId,
+         "realtime SDL removal resolves the held device before frame cleanup");
 }
 
 void testSdlRawJoystickButtonsAxesAndHatEdges() {
@@ -1506,6 +1604,8 @@ int main() {
   testInputSubscriptionsAreSafeDuringSamePumpMutation();
   testDeviceSubscriptionsAreSafeDuringSamePumpMutation();
   testReentrantPumpPreservesQueuedEventFifo();
+  testRealtimeInputSubscriptionRunsBeforeRegistryPump();
+  testRealtimeDeviceSubscriptionRunsBeforeRegistryPump();
   testFailedBackendIsCleanedAndNeverDispatched();
   testSdlEnumerationFailureKeepsKeyboardAndHotplugOperational();
   testSdlKeyboardFiltersRepeatAndUsesScancodes();
