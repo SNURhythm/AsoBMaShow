@@ -492,6 +492,47 @@ void testSimultaneousFaultPrecedenceAndFirstReasonImmutability() {
               sameAttemptSnapshot(integrity.terminalSnapshot(),
                                   integrityTerminal),
           "first integrity reason remains immutable after later finalization");
+
+  const auto replayResultAttempt = gameplay::GameplayAttemptOptions{
+      .replayCapacity = 0,
+      .automaticResultCapacity = 0,
+      .gaugeHistoryCapacity = 2,
+  };
+  gameplay::GameplaySimulation replayResult(
+      definition,
+      {.judge = compiledJudge, .attempt = replayResultAttempt});
+  const auto replayResultAdvance =
+      replayResult.advanceTo(missMicros, 12'700'000);
+  const auto replayResultTerminal = replayResult.terminalSnapshot();
+  require(
+      replayResultAdvance.transactions.empty() &&
+          replayResult.terminalReason() ==
+              gameplay::GameplayTerminalReason::ReplayCapacityExceeded &&
+          replayResult.noteState(definition.chronologicalNotes().front())
+              .played &&
+          replayResult.noteState(definition.chronologicalNotes().front()).dead &&
+          replayResultTerminal.judgeCounts[Poor] == 1 &&
+          replayResultTerminal.comboBreak == 1 &&
+          replayResultTerminal.gauge > 0.0F &&
+          replayResult.scoreState().gaugeHistory.size() == 1 &&
+          !replayResult.scoreState().gaugeHistoryOverflowed() &&
+          replayResult.replayOverflowed() &&
+          replayResult.automaticResultOverflowed() &&
+          replayResult.replayEvents().empty() &&
+          replayResult.automaticResults().empty(),
+      "replay fault outranks simultaneous result overflow after committing "
+      "the note, score, gauge, and bounded payload attempts");
+  const auto replayResultRepeated =
+      replayResult.advanceTo(missMicros + 1, 12'700'001);
+  require(replayResultRepeated.transactions.empty() &&
+              replayResult.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ReplayCapacityExceeded &&
+              sameAttemptSnapshot(replayResult.terminalSnapshot(),
+                                  replayResultTerminal) &&
+              replayResult.scoreState().gaugeHistory.size() == 1 &&
+              replayResult.replayEvents().empty() &&
+              replayResult.automaticResults().empty(),
+          "first replay reason remains immutable after result overflow");
 }
 
 void testNormalLatePoorUsesStrictDeadlineAndIsIdempotent() {
