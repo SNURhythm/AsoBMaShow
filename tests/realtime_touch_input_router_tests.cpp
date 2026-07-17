@@ -1,8 +1,21 @@
 #include "scene/play/RealtimeTouchInputRouter.h"
+#include "scene/play/RealtimeTouchPresentation.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
+
+namespace rendering {
+int window_width = design_width;
+int window_height = design_height;
+int render_width = design_width;
+int render_height = design_height;
+float ui_scale_x = 1.0F;
+float ui_scale_y = 1.0F;
+int ui_offset_x = 0;
+int ui_offset_y = 0;
+} // namespace rendering
 
 namespace {
 
@@ -11,6 +24,40 @@ void require(bool condition, const char *message) {
     std::cerr << message << '\n';
     std::exit(1);
   }
+}
+
+void requireNear(float actual, float expected, const char *message) {
+  require(std::abs(actual - expected) < 0.0001F, message);
+}
+
+void testTouchPresentationUsesUiNormalizedCoordinates() {
+  rendering::window_width = 1920;
+  rendering::window_height = 1080;
+  rendering::render_width = 2400;
+  rendering::render_height = 1200;
+  rendering::ui_scale_x = 1.0F;
+  rendering::ui_scale_y = 1.0F;
+  rendering::ui_offset_x = 240;
+  rendering::ui_offset_y = 60;
+
+  const auto topLeft =
+      gameplay::realtimeTouchPresentationPoint(0.1F, 0.05F);
+  const auto center = gameplay::realtimeTouchPresentationPoint(0.5F, 0.5F);
+  const auto bottomRight =
+      gameplay::realtimeTouchPresentationPoint(0.9F, 0.95F);
+
+  requireNear(topLeft.x, 0.0F,
+              "presentation removes the horizontal UI viewport offset");
+  requireNear(topLeft.y, 0.0F,
+              "presentation removes the vertical UI viewport offset");
+  requireNear(center.x, 0.5F,
+              "presentation preserves the UI viewport center x");
+  requireNear(center.y, 0.5F,
+              "presentation preserves the UI viewport center y");
+  requireNear(bottomRight.x, 1.0F,
+              "presentation maps the UI viewport right edge to one");
+  requireNear(bottomRight.y, 1.0F,
+              "presentation maps the UI viewport bottom edge to one");
 }
 
 struct InputCapture {
@@ -328,6 +375,7 @@ void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
 } // namespace
 
 int main() {
+  testTouchPresentationUsesUiNormalizedCoordinates();
   testDirectTouchEmitsTimestampedLaneEdges();
   testDragModeChangesLaneWithoutWaitingForAFrame();
   testScratchFlickEmitsAtomicBackspinAndPressPair();

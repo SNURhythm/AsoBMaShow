@@ -22,6 +22,7 @@
 #include "RealtimeGameplayWorker.h"
 #include "ReplayKeysoundSchedule.h"
 #include "RealtimeTouchInputRouter.h"
+#include "RealtimeTouchPresentation.h"
 #include "../../input/RhythmInputHandler.h"
 #include "../../input/RealtimePhysicalInputRouter.h"
 #include "../../input/InputTimestamp.h"
@@ -1185,10 +1186,12 @@ void GamePlayScene::drainRealtimeTouchSamples() {
     case gameplay::RealtimeTouchPhase::CancelExpired:
       continue;
     }
+    const auto presentationPoint = gameplay::realtimeTouchPresentationPoint(
+        sample.normalizedX, sample.normalizedY);
     (void)handleTouchInputAtGameplayTime(
         static_cast<SDL_FingerID>(sample.fingerId), action,
-        Vector3(sample.normalizedX, sample.normalizedY, 0.0F), *gameplayTime,
-        visualGameplayTimeMicros);
+        Vector3(presentationPoint.x, presentationPoint.y, 0.0F),
+        *gameplayTime, visualGameplayTimeMicros);
   }
   if (session.auxiliaryTouchOverflow.exchange(false,
                                                std::memory_order_acq_rel)) {
