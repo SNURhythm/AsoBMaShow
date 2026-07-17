@@ -2008,7 +2008,11 @@ void BMSRenderer::drawLandmineNote(float y,
   }
 
   const NoteSheet &sheet = sheetForLane(note->Lane);
-  sheetBatchFor(sheet).addRectUV(
+  noteTextureBatch(
+      sheet.texture,
+      gameplay_scroll_geometry::noteRenderDepth(
+          gameplay_scroll_geometry::NoteRenderLayer::Landmine))
+      .addRectUV(
       laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.mine.u0,
       sheet.mine.v0, sheet.mine.u1,
       clippedBottomV(sheet.mine.v0, sheet.mine.v1,
@@ -2474,11 +2478,18 @@ void BMSRenderer::render(RenderContext &context, long long micro,
   updateJudgementCounterText();
 
   constexpr uint32_t kDepthBackground = 100;
-  constexpr uint32_t kDepthBeams = 180;
-  constexpr uint32_t kDepthInvisibleNotes = 185;
-  constexpr uint32_t kDepthLongBodies = 190;
-  constexpr uint32_t kDepthNotes = 200;
-  constexpr uint32_t kDepthGhosts = 250;
+  constexpr uint32_t kDepthBeams = gameplay_scroll_geometry::noteRenderDepth(
+      gameplay_scroll_geometry::NoteRenderLayer::LaneBeam);
+  constexpr uint32_t kDepthInvisibleNotes =
+      gameplay_scroll_geometry::noteRenderDepth(
+          gameplay_scroll_geometry::NoteRenderLayer::Invisible);
+  constexpr uint32_t kDepthLongBodies =
+      gameplay_scroll_geometry::noteRenderDepth(
+          gameplay_scroll_geometry::NoteRenderLayer::LongBody);
+  constexpr uint32_t kDepthNotes = gameplay_scroll_geometry::noteRenderDepth(
+      gameplay_scroll_geometry::NoteRenderLayer::Normal);
+  constexpr uint32_t kDepthGhosts = gameplay_scroll_geometry::noteRenderDepth(
+      gameplay_scroll_geometry::NoteRenderLayer::Ghost);
   constexpr uint32_t kDepthJudgementIndicator = 330;
   constexpr uint32_t kDepthGauge = 340;
   static_assert(kDepthInvisibleNotes < kDepthLongBodies);

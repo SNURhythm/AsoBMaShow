@@ -179,5 +179,18 @@ int main() {
               "the left border starts at the clip boundary");
   requireNear(clippedOutline.rectangles[1].height, 0.5F,
               "the side border is clipped to the visible note height");
+
+  require(noteRenderDepth(NoteRenderLayer::LaneBeam) <
+              noteRenderDepth(NoteRenderLayer::Landmine),
+          "landmines render above lane beams");
+  require(noteRenderDepth(NoteRenderLayer::Landmine) <
+              noteRenderDepth(NoteRenderLayer::Invisible),
+          "landmines render behind invisible-note outlines");
+  require(noteRenderDepth(NoteRenderLayer::Invisible) <
+              noteRenderDepth(NoteRenderLayer::LongBody),
+          "long notes retain their exceptional position above invisibles");
+  require(noteRenderDepth(NoteRenderLayer::LongBody) <
+              noteRenderDepth(NoteRenderLayer::Normal),
+          "normal notes render above long-note bodies");
   return 0;
 }
