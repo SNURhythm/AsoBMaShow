@@ -2862,16 +2862,9 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   if (state == nullptr || state->isEnding) {
     return;
   }
-  const int judgementCount = ++state->judgeCount[judgeResult.judgement];
-  if (judgeResult.isComboBreak()) {
-    state->combo = 0;
-    state->comboBreak++;
-  } else if (judgeResult.judgement != Kpoor) {
-    state->combo++;
-    if (state->combo > state->maxCombo) {
-      state->maxCombo = state->combo;
-    }
-  }
+  const int previousCount = state->judgeCount[judgeResult.judgement];
+  state->commitJudge(judgeResult);
+  const int judgementCount = previousCount + 1;
   renderer->onJudge(judgeResult, state->combo, state->getScore(),
                     getVisualTimeMicros(
                         getGameplayTimeMicros(context.jukebox.getTimeMicros())),
@@ -2882,9 +2875,6 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   // UE_LOG(LogTemp, Warning, TEXT("Judge: %s, Combo: %d, Diff: %lld"),
   // *JudgeResult.ToString(), state->Combo, JudgeResult.Diff);
 
-  state->recordFastSlow(judgeResult);
-
-  state->applyGaugeJudgement(judgeResult.judgement);
   updateGaugeStatusText();
   updatePacemakerStatus();
 }

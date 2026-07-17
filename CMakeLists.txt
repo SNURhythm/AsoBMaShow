@@ -1205,6 +1205,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(practice_rule_override_tests PRIVATE cxx_std_23)
 
+    add_executable(gameplay_score_state_tests
+        tests/gameplay_score_state_tests.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(gameplay_score_state_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_score_state_tests PRIVATE cxx_std_23)
+
     add_executable(practice_session_tests
         tests/practice_session_tests.cpp
         src/ScoreProvenance.cpp
@@ -1710,6 +1719,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(practice_configuration_tests)
     asobmashow_register_test(practice_rule_override_tests)
+    asobmashow_register_test(gameplay_score_state_tests)
     asobmashow_register_test(practice_session_tests)
     asobmashow_register_test(gameplay_practice_boundary_tests)
     asobmashow_register_test(gameplay_playback_startup_tests)
