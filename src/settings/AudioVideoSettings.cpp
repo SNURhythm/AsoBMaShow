@@ -11,7 +11,7 @@ constexpr std::uint32_t kMinSampleRate = 8000;
 constexpr std::uint32_t kMaxSampleRate = 384000;
 constexpr std::uint32_t kMinBufferFrames = 16;
 constexpr std::uint32_t kMaxBufferFrames = 8192;
-constexpr std::uint32_t kMinFrameCap = 15;
+constexpr std::uint32_t kMinFrameCap = 1;
 constexpr std::uint32_t kMaxFrameCap = 1000;
 
 std::uint32_t sanitizeOptionalRange(std::uint32_t value, std::uint32_t minimum,

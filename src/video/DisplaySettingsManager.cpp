@@ -142,7 +142,7 @@ std::optional<std::string> DisplaySettingsManager::unsupportedReason(
     return "The requested display size is invalid.";
   }
   if (candidate.frameCap != 0 &&
-      (candidate.frameCap < 15 || candidate.frameCap > 1000)) {
+      (candidate.frameCap < 1 || candidate.frameCap > 1000)) {
     return "The requested frame cap is outside the supported range.";
   }
 
