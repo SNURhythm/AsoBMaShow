@@ -2812,6 +2812,13 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
   }
   std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
 }
+
+void Jukebox::appendScheduledAudioEvents(
+    std::span<const ScheduledAudioEvent> events) {
+  audioList.insert(audioList.end(), events.begin(), events.end());
+  std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
+}
+
 void Jukebox::playKeySound(int wav) {
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
@@ -2832,6 +2839,15 @@ void Jukebox::playKeySound(int wav) {
           audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound));
     }
   });
+}
+
+std::optional<audio::RealtimeSoundHandle>
+Jukebox::resolveRealtimeKeySound(int wav) const {
+  const auto found = wavTableAbs.find(wav);
+  if (found == wavTableAbs.end()) {
+    return std::nullopt;
+  }
+  return audio.resolveRealtimeSound(found->second);
 }
 
 bool Jukebox::scheduleAudioFromCursor(size_t cursor) {

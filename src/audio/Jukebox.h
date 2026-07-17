@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -136,9 +137,13 @@ public:
                 const prep_metronome::PrepMetronomePlan *prepMetronomePlan =
                     nullptr,
                 bool clubMode = false);
+  void appendScheduledAudioEvents(
+      std::span<const ScheduledAudioEvent> events);
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
   void playKeySound(int wav);
+  [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
+  resolveRealtimeKeySound(int wav) const;
   audio::playback::BackendOperationResult play(long long startMicros = 0);
   audio::playback::BackendOperationResult stop();
   void render();

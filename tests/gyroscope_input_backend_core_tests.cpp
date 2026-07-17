@@ -425,6 +425,23 @@ void testActiveStallAndLifecycleOrdering() {
           "stopped backend never schedules another retry");
 }
 
+void testNativeRuntimeFailureReleasesWithoutWaitingForPump() {
+  Harness harness;
+  startRunning(harness, 0);
+  activateClockwise(harness, 0);
+  harness.clearEvents();
+
+  harness.core.sensorRuntimeFailed(250000);
+  require(harness.inputs.size() == 1 &&
+              harness.inputs.front().normalizedValue == 0.0F &&
+              harness.inputs.front().timestampMicros == 250000 &&
+              harness.devices.size() == 1 &&
+              !harness.devices.front().connected &&
+              harness.core.takeCommand() ==
+                  input::GyroscopeSensorCommand::Stop,
+          "native callback failure immediately releases and disconnects");
+}
+
 } // namespace
 
 int main() {
@@ -434,6 +451,7 @@ int main() {
     testWatchdogDisconnectRetryAndReconnect();
     testTransientCorrectedFrameRecoveryReprobesAndRebaselines();
     testActiveStallAndLifecycleOrdering();
+    testNativeRuntimeFailureReleasesWithoutWaitingForPump();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "gyroscope_input_backend_core_tests: " << error.what() << '\n';

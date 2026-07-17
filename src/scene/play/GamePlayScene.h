@@ -19,6 +19,7 @@
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -61,7 +62,19 @@ public:
   EventHandleResult handleEvents(SDL_Event &event) override;
 
 private:
+  struct RealtimeGameplaySession;
   bool reset();
+  bool startRealtimeGameplayAuthority();
+  void stopRealtimeGameplayAuthority(bool transferReplay);
+  void setRealtimeGameplayIngressEnabled(bool enabled);
+  void drainRealtimeTouchSamples();
+  void drainRealtimeInputCommands();
+  void refreshRealtimeTouchLayout();
+  void updateRealtimeVisualTimeline(long long gameplayTimeMicros);
+  [[nodiscard]] bool realtimeTouchHitsUi(float normalizedX,
+                                         float normalizedY) const;
+  void syncRealtimeGameplaySnapshot();
+  [[nodiscard]] bool realtimeGameplayAuthorityActive() const noexcept;
   void showPlaybackInitializationFailure(const std::string &message);
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
@@ -77,6 +90,7 @@ private:
   void finishPractice();
   void exitPracticeWithoutSummary();
   void completePracticeAttempt();
+  void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void scheduleResultTransition(int delayMillis);
   void updatePracticeHud(long long chartTimeMicros);
@@ -106,7 +120,6 @@ private:
   void finishReplayRecording();
   void publishPracticeGhost();
   void buildReplayNoteLookup();
-  void processReplayKeySounds(long long gameplayTimeMicros);
   void processReplayEvents(long long gameplayTimeMicros);
   void processReplayLaneCoverEvents(long long gameplayTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
@@ -159,6 +172,13 @@ private:
                                   bool resetVisibleTimeReference);
   bool handleTouchInput(SDL_FingerID fingerIndex, ReplayTouchAction action,
                         Vector3 normalizedLocation);
+  bool handleTouchInputAtGameplayTime(SDL_FingerID fingerIndex,
+                                      ReplayTouchAction action,
+                                      Vector3 normalizedLocation,
+                                      long long gameplayTimeMicros,
+                                      std::optional<long long>
+                                          visualGameplayTimeMicros =
+                                              std::nullopt);
   bool handleFloatingLaneCoverInput(SDL_FingerID fingerIndex,
                                     ReplayTouchAction action,
                                     Vector3 normalizedLocation,
@@ -184,6 +204,8 @@ private:
   RhythmLaneInputController *laneInputController = nullptr;
   std::unique_ptr<RhythmInputHandler> ownedInputHandler;
   RhythmInputHandler *inputHandler = nullptr;
+  std::unique_ptr<RealtimeGameplaySession> realtimeGameplaySession;
+  std::uint64_t realtimeGameplayEpoch = 0;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;
@@ -194,7 +216,6 @@ private:
   std::unordered_map<bms_parser::LongNote *, long long>
       hellChargeGaugeBalanceMicros;
   long long lastHellChargeGaugeUpdateMicros = 0;
-  size_t replayKeySoundCursor = 0;
   size_t replayEventCursor = 0;
   size_t replayLaneCoverCursor = 0;
   bool touchVisualizerLoaded = false;

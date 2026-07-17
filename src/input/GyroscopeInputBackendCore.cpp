@@ -116,6 +116,16 @@ void GyroscopeInputBackendCore::sensorStartFailed(std::uint64_t nowMicros) {
   enterCooldown(nowMicros);
 }
 
+void GyroscopeInputBackendCore::sensorRuntimeFailed(
+    std::uint64_t nowMicros) {
+  if (!backendStarted_ || !supported_ ||
+      (phase_ != SensorPhase::Running &&
+       phase_ != SensorPhase::StartPending)) {
+    return;
+  }
+  enterCooldown(nowMicros);
+}
+
 void GyroscopeInputBackendCore::observe(const GyroscopeMotionSample &sample,
                                         std::uint64_t nowMicros) {
   if (!backendStarted_ || !foreground_ || phase_ != SensorPhase::Running) {

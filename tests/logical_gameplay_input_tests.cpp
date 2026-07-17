@@ -1,4 +1,5 @@
 #include "input/LogicalGameplayInputAdapter.h"
+#include "input/RealtimePhysicalInputRouter.h"
 #include "input/InputBindingResolver.h"
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
@@ -754,6 +755,184 @@ void testEscapeFallbackRunsInTheOrderedLogicalPipeline() {
           "the lane edge is applied before the queued Escape pause fallback");
 }
 
+void testRealtimePhysicalInputPreservesNativeTimestamp() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-key-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 3},
+       .control = {.deviceId = "keyboard",
+                   .deviceClass = input::DeviceClass::Keyboard,
+                   .kind = input::ControlKind::Key,
+                   .index = SDL_SCANCODE_F}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 9000);
+
+  input::PhysicalInputEvent down{
+      .control = {.deviceId = "keyboard",
+                  .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key,
+                  .index = SDL_SCANCODE_F},
+      .rawValue = 1.0,
+      .normalizedValue = 1.0F};
+  input::PhysicalInputEvent up = down;
+  up.rawValue = 0.0;
+  up.normalizedValue = 0.0F;
+  router.consume(down, 1234567);
+  router.consume(up, 1234999);
+
+  require(output.size() == 2 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[0].lane == 3 &&
+              output[0].steadyTimestampMicros == 1234567 &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 3 &&
+              output[1].steadyTimestampMicros == 1234999,
+          "native physical edges reach realtime lanes with their source "
+          "timestamps");
+}
+
+void testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-controller-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 5},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.setGameplayEnabled(false, 300);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 0.0,
+       .normalizedValue = 0.0F},
+      400);
+  router.setGameplayEnabled(true, 500);
+
+  require(output.size() == 2 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 5 &&
+              output[1].steadyTimestampMicros == 500,
+          "a release received while paused is deferred until resume");
+}
+
+void testRealtimePhysicalInputHeldThroughPauseStaysPressed() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-controller-held-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 5},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.setGameplayEnabled(false, 300);
+  router.setGameplayEnabled(true, 400);
+  require(output.size() == 1 &&
+              output.front().type ==
+                  input::RealtimePhysicalInputTransitionType::Press,
+          "pausing and resuming does not synthesize a held-lane release");
+
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 0.0,
+       .normalizedValue = 0.0F},
+      500);
+  require(output.size() == 2 &&
+              output.back().type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output.back().steadyTimestampMicros == 500,
+          "a key held through pause releases normally after resume");
+}
+
+void testRealtimePhysicalInputDisconnectReleasesHeldLane() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-midi-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 2},
+       .control = {.deviceId = "midi:one",
+                   .deviceClass = input::DeviceClass::Midi,
+                   .kind = input::ControlKind::MidiNote,
+                   .index = 60}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &transition) {
+        output.push_back(transition);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "midi:one",
+                   .deviceClass = input::DeviceClass::Midi,
+                   .kind = input::ControlKind::MidiNote,
+                   .index = 60},
+       .rawValue = 127.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.disconnectDevice("midi:one", 250);
+
+  require(output.size() == 2 &&
+              output[0].type ==
+                  input::RealtimePhysicalInputTransitionType::Press &&
+              output[1].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[1].lane == 2 &&
+              output[1].steadyTimestampMicros == 250,
+          "native disconnect releases held realtime lanes immediately");
+}
+
 void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   const audio::PlaybackRate assistedRate{75};
   require(clear_policy::assistClearRequired(assistedRate),
@@ -814,6 +993,10 @@ int main() {
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
   testEscapeFallbackRunsInTheOrderedLogicalPipeline();
+  testRealtimePhysicalInputPreservesNativeTimestamp();
+  testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
+  testRealtimePhysicalInputHeldThroughPauseStaysPressed();
+  testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

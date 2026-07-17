@@ -2,13 +2,12 @@
 
 #if defined(__APPLE__)
 
+#include "AppleInputTimestamp.h"
 #include "LiveMidiDeviceIdAllocator.h"
 #include "NativeCallbackLifetime.h"
 #include "QueuedMidiInputBackend.h"
 
 #include <CoreMIDI/CoreMIDI.h>
-#include <mach/mach_time.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -137,15 +136,6 @@ std::string hex64(std::uint64_t value) {
   return result;
 }
 
-mach_timebase_info_data_t machTimebase() {
-  mach_timebase_info_data_t value{};
-  if (mach_timebase_info(&value) != KERN_SUCCESS || value.denom == 0) {
-    value.numer = 1;
-    value.denom = 1;
-  }
-  return value;
-}
-
 std::vector<CoreMidiSourceDescriptor> enumerateSources() {
   struct Candidate {
     MIDIEndpointRef endpoint = 0;
@@ -222,24 +212,15 @@ std::vector<CoreMidiSourceDescriptor> enumerateSources() {
 }
 
 std::uint64_t nowMicros() {
-  static const mach_timebase_info_data_t timebase = machTimebase();
-  const std::uint64_t ticks = mach_absolute_time();
-  const auto nanos =
-      static_cast<unsigned __int128>(ticks) * timebase.numer / timebase.denom;
-  return static_cast<std::uint64_t>(nanos / 1000U);
+  return static_cast<std::uint64_t>(input::apple::steadyNowMicros());
 }
 
 std::uint64_t midiTimestampMicros(MIDITimeStamp timestamp) {
   if (timestamp == 0) {
     return nowMicros();
   }
-  static const mach_timebase_info_data_t timebase = machTimebase();
-  const auto nanos = static_cast<unsigned __int128>(timestamp) *
-                     timebase.numer / timebase.denom;
-  const auto micros = nanos / 1000U;
-  return micros > std::numeric_limits<std::uint64_t>::max()
-             ? std::numeric_limits<std::uint64_t>::max()
-             : static_cast<std::uint64_t>(micros);
+  return static_cast<std::uint64_t>(input::apple::steadyMicrosFromHostMicros(
+      input::apple::hostTicksToMicros(timestamp)));
 }
 
 class CoreMidiInputBackend final : public QueuedMidiInputBackend {
@@ -251,7 +232,7 @@ public:
 
   bool start(std::string &errorMessage) override {
     errorMessage.clear();
-    if (started_) {
+    if (started_.load(std::memory_order_acquire)) {
       return true;
     }
 
@@ -272,29 +253,28 @@ public:
       return false;
     }
 
-    started_ = true;
-    refreshSources();
+    started_.store(true, std::memory_order_release);
+    refreshSourcesSynchronized();
     return true;
   }
 
   void stop() override {
-    if (!started_ && port_ == 0 && !notificationLifetime_) {
+    if (!started_.exchange(false, std::memory_order_acq_rel) && port_ == 0 &&
+        !notificationLifetime_) {
       closeQueue();
       return;
     }
-    started_ = false;
     shutdownNative();
     closeQueue();
   }
 
-  void pump() override {
-    if (started_ && refreshRequested_.exchange(false)) {
-      refreshSources();
-    }
-    QueuedMidiInputBackend::pump();
-  }
+  void pump() override { QueuedMidiInputBackend::pump(); }
 
-  void requestRefresh() { refreshRequested_.store(true); }
+  void requestRefresh() {
+    if (started_.load(std::memory_order_acquire)) {
+      refreshSourcesSynchronized();
+    }
+  }
 
   void acceptPackets(CoreMidiConnection &connection,
                      const MIDIPacketList &packetList) {
@@ -306,10 +286,10 @@ public:
       if (!connection.connected.load()) {
         return;
       }
-      enqueuePacket(connection.stableId,
-                    std::vector<std::uint8_t>(packet->data,
-                                              packet->data + packet->length),
-                    midiTimestampMicros(packet->timeStamp));
+      publishPacketImmediately(
+          connection.stableId,
+          std::span<const std::uint8_t>(packet->data, packet->length),
+          midiTimestampMicros(packet->timeStamp));
       packet = MIDIPacketNext(packet);
     }
   }
@@ -325,6 +305,14 @@ private:
     if (connection != nullptr && connection->connected.load()) {
       connection->backend->acceptPackets(*connection, *packetList);
     }
+  }
+
+  void refreshSourcesSynchronized() {
+    const std::lock_guard lock(sourcesMutex_);
+    if (!started_.load(std::memory_order_acquire) || port_ == 0) {
+      return;
+    }
+    refreshSources();
   }
 
   void refreshSources() {
@@ -354,10 +342,10 @@ private:
         connection->connected.store(false);
         (void)MIDIPortDisconnectSource(port_, connection->endpoint);
         connection->callbackLifetime.closeAndWait();
-        enqueueDevice({.stableId = connection->stableId,
-                       .displayName = connection->displayName,
-                       .deviceClass = input::DeviceClass::Midi,
-                       .connected = false});
+        resetImmediateParser(connection->stableId);
+        enqueueDeviceDisconnect({.stableId = connection->stableId,
+                                 .displayName = connection->displayName,
+                                 .deviceClass = input::DeviceClass::Midi});
         liveIds_.release(action.key);
         continue;
       }
@@ -400,6 +388,7 @@ private:
       notificationLifetime_->closeAndWait();
       notificationLifetime_.reset();
     }
+    const std::lock_guard sourcesLock(sourcesMutex_);
     for (auto &[endpoint, connection] : connections_) {
       connection->connected.store(false);
       if (port_ != 0) {
@@ -415,17 +404,16 @@ private:
     }
     client_ = 0;
     liveIds_.clear();
-    refreshRequested_.store(false);
   }
 
   MIDIClientRef client_ = 0;
   MIDIPortRef port_ = 0;
   std::unique_ptr<NativeCallbackLifetime> notificationLifetime_;
+  std::mutex sourcesMutex_;
   std::map<MIDIEndpointRef, std::unique_ptr<CoreMidiConnection>> connections_;
   LiveMidiDeviceIdAllocator liveIds_;
-  std::atomic_bool refreshRequested_ = false;
   bool notificationSubscribed_ = false;
-  bool started_ = false;
+  std::atomic_bool started_ = false;
 };
 
 void CoreMidiClientService::dispatch() {

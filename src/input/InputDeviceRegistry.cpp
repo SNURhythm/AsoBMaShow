@@ -3,10 +3,15 @@
 #include "MidiInputBackendFactory.h"
 #include "GyroscopeInputBackendFactory.h"
 #include "SDLInputBackend.h"
+#if defined(_WIN32)
+#include "RealtimeControllerDeviceMap.h"
+#include "WindowsRealtimeInputBackend.h"
+#endif
 
 #include <SDL2/SDL_log.h>
 
 #include <algorithm>
+#include <array>
 #include <deque>
 #include <mutex>
 #include <utility>
@@ -20,25 +25,154 @@ input::InputDeviceSnapshot keyboardSnapshot() {
           .connected = true};
 }
 
+std::vector<InputDeviceRegistry::BackendFactory> defaultBackendFactories() {
+  std::vector<InputDeviceRegistry::BackendFactory> factories;
+#if defined(_WIN32)
+  auto controllerMap = std::make_shared<RealtimeControllerDeviceMap>();
+  factories.emplace_back(
+      [controllerMap](input::InputBackendSink sink) {
+        return std::make_unique<SDLInputBackend>(std::move(sink), nullptr,
+                                                 controllerMap);
+      });
+#else
+  factories.emplace_back([](input::InputBackendSink sink) {
+    return std::make_unique<SDLInputBackend>(std::move(sink));
+  });
+#endif
+  factories.emplace_back([](input::InputBackendSink sink) {
+    return makeMidiInputBackend(std::move(sink));
+  });
+  factories.emplace_back([](input::InputBackendSink sink) {
+    return makeGyroscopeInputBackend(std::move(sink));
+  });
+#if defined(_WIN32)
+  factories.emplace_back(
+      [controllerMap](input::InputBackendSink sink) {
+        return makeWindowsRealtimeInputBackend(std::move(sink), controllerMap);
+      });
+#endif
+  return factories;
+}
+
 } // namespace
 
 struct InputDeviceRegistry::QueueState {
-  void enqueue(QueuedPayload payload) {
-    const std::lock_guard lock(mutex);
-    if (accepting) {
-      queue.push_back(
-          {.sequence = nextSequence++, .payload = std::move(payload)});
-    }
-  }
+  struct RealtimeInputSubscriptionState {
+    explicit RealtimeInputSubscriptionState(InputListener inputListener)
+        : listener(std::move(inputListener)) {}
+    InputListener listener;
+  };
 
-  void enqueue(std::deque<QueuedPayload> payloads) {
+  struct RealtimeDeviceSubscriptionState {
+    explicit RealtimeDeviceSubscriptionState(DeviceListener deviceListener)
+        : listener(std::move(deviceListener)) {}
+    DeviceListener listener;
+  };
+
+  void enqueue(QueuedPayload payload) {
     const std::lock_guard lock(mutex);
     if (!accepting) {
       return;
     }
+    const std::uint64_t sequence = nextSequence++;
+    if (const auto *event =
+            std::get_if<input::PhysicalInputEvent>(&payload)) {
+      const std::uint64_t lastEligibleToken =
+          realtimeInputListeners.empty() ? 0
+                                         : realtimeInputListeners.rbegin()->first;
+      std::uint64_t previousToken = 0;
+      while (previousToken < lastEligibleToken) {
+        const auto listener = realtimeInputListeners.upper_bound(previousToken);
+        if (listener == realtimeInputListeners.end() ||
+            listener->first > lastEligibleToken) {
+          break;
+        }
+        previousToken = listener->first;
+        // Keep the callable alive if it unsubscribes itself recursively.
+        const auto listenerState = listener->second;
+        try {
+          listenerState->listener(*event);
+        } catch (...) {
+          SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                       "Realtime input listener threw an exception");
+        }
+      }
+      const auto deviceClass =
+          static_cast<std::size_t>(event->control.deviceClass);
+      if (deviceClass < realtimeInputClaimed.size() &&
+          realtimeInputClaimed[deviceClass]) {
+        return;
+      }
+    } else if (const auto *device =
+                   std::get_if<input::InputDeviceSnapshot>(&payload)) {
+      const std::uint64_t lastEligibleToken =
+          realtimeDeviceListeners.empty()
+              ? 0
+              : realtimeDeviceListeners.rbegin()->first;
+      std::uint64_t previousToken = 0;
+      while (previousToken < lastEligibleToken) {
+        const auto listener =
+            realtimeDeviceListeners.upper_bound(previousToken);
+        if (listener == realtimeDeviceListeners.end() ||
+            listener->first > lastEligibleToken) {
+          break;
+        }
+        previousToken = listener->first;
+        const auto listenerState = listener->second;
+        try {
+          listenerState->listener(*device);
+        } catch (...) {
+          SDL_LogError(SDL_LOG_CATEGORY_INPUT,
+                       "Realtime device listener threw an exception");
+        }
+      }
+    }
+    QueuedEvent event{.sequence = sequence, .payload = std::move(payload)};
+    if (queue.empty() || queue.back().sequence < sequence) {
+      queue.push_back(std::move(event));
+      return;
+    }
+    const auto position = std::ranges::upper_bound(
+        queue, sequence, {}, &QueuedEvent::sequence);
+    queue.insert(position, std::move(event));
+  }
+
+  void enqueue(std::deque<QueuedPayload> payloads) {
     for (auto &payload : payloads) {
-      queue.push_back(
-          {.sequence = nextSequence++, .payload = std::move(payload)});
+      enqueue(std::move(payload));
+    }
+  }
+
+  void subscribeRealtime(std::uint64_t token, InputListener listener) {
+    const std::lock_guard lock(mutex);
+    if (accepting) {
+      realtimeInputListeners.emplace(
+          token, std::make_shared<RealtimeInputSubscriptionState>(
+                     std::move(listener)));
+    }
+  }
+
+  void unsubscribeRealtime(std::uint64_t token) {
+    const std::lock_guard lock(mutex);
+    realtimeInputListeners.erase(token);
+    realtimeDeviceListeners.erase(token);
+  }
+
+  void subscribeRealtimeDevices(std::uint64_t token,
+                                DeviceListener listener) {
+    const std::lock_guard lock(mutex);
+    if (accepting) {
+      realtimeDeviceListeners.emplace(
+          token, std::make_shared<RealtimeDeviceSubscriptionState>(
+                     std::move(listener)));
+    }
+  }
+
+  void setRealtimeClaimed(input::DeviceClass deviceClass, bool claimed) {
+    const std::lock_guard lock(mutex);
+    const auto index = static_cast<std::size_t>(deviceClass);
+    if (index < realtimeInputClaimed.size()) {
+      realtimeInputClaimed[index] = claimed;
     }
   }
 
@@ -58,10 +192,17 @@ struct InputDeviceRegistry::QueueState {
     const std::lock_guard lock(mutex);
     accepting = false;
     queue.clear();
+    realtimeInputListeners.clear();
+    realtimeDeviceListeners.clear();
   }
 
-  std::mutex mutex;
+  std::recursive_mutex mutex;
   std::deque<QueuedEvent> queue;
+  std::map<std::uint64_t, std::shared_ptr<RealtimeInputSubscriptionState>>
+      realtimeInputListeners;
+  std::map<std::uint64_t, std::shared_ptr<RealtimeDeviceSubscriptionState>>
+      realtimeDeviceListeners;
+  std::array<bool, 6> realtimeInputClaimed{};
   std::uint64_t nextSequence = 1;
   bool accepting = true;
 };
@@ -107,16 +248,7 @@ struct InputDeviceRegistry::BackendSinkGate {
 };
 
 InputDeviceRegistry::InputDeviceRegistry()
-    : InputDeviceRegistry({[](input::InputBackendSink sink) {
-                             return std::make_unique<SDLInputBackend>(
-                                 std::move(sink));
-                           },
-                           [](input::InputBackendSink sink) {
-                             return makeMidiInputBackend(std::move(sink));
-                           },
-                           [](input::InputBackendSink sink) {
-                             return makeGyroscopeInputBackend(std::move(sink));
-                           }}) {}
+    : InputDeviceRegistry(defaultBackendFactories()) {}
 
 InputDeviceRegistry::InputDeviceRegistry(
     std::vector<BackendFactory> backendFactories)
@@ -148,6 +280,8 @@ InputDeviceRegistry::InputDeviceRegistry(
       continue;
     }
 
+    auto *sdlBackend = dynamic_cast<SDLInputBackend *>(backend.get());
+
     std::string errorMessage;
     if (!backend->start(errorMessage)) {
       if (errorMessage.empty()) {
@@ -159,6 +293,9 @@ InputDeviceRegistry::InputDeviceRegistry(
       sinkGate->close();
       backend->stop();
       continue;
+    }
+    if (sdlBackend != nullptr) {
+      sdlInputBackend_ = sdlBackend;
     }
     sinkGate->activate();
     backends_.push_back(std::move(backend));
@@ -200,6 +337,43 @@ void InputDeviceRegistry::resetGyroscopeTurntableSession() {
     backend->resetGyroscopeTurntableSession();
   }
   dispatchPending();
+}
+
+void InputDeviceRegistry::setRealtimeInputClaimed(
+    input::DeviceClass deviceClass, bool claimed) {
+  if (claimed) {
+    queueState_->setRealtimeClaimed(deviceClass, true);
+  }
+  for (const auto &backend : backends_) {
+    backend->setRealtimeInputClaimed(deviceClass, claimed);
+  }
+  if (!claimed) {
+    queueState_->setRealtimeClaimed(deviceClass, false);
+  }
+}
+
+std::optional<input::PhysicalInputEvent>
+InputDeviceRegistry::translateRealtimeSdlInput(const SDL_Event &event) const {
+  if (sdlInputBackend_ == nullptr) {
+    return std::nullopt;
+  }
+  return sdlInputBackend_->translateRealtimeInput(event);
+}
+
+std::size_t InputDeviceRegistry::translateRealtimeSdlInputs(
+    const SDL_Event &event, std::span<input::PhysicalInputEvent> output) {
+  if (sdlInputBackend_ == nullptr) {
+    return 0;
+  }
+  return sdlInputBackend_->translateRealtimeInputs(event, output);
+}
+
+std::optional<std::string> InputDeviceRegistry::realtimeDisconnectedSdlDevice(
+    const SDL_Event &event) const {
+  if (sdlInputBackend_ == nullptr) {
+    return std::nullopt;
+  }
+  return sdlInputBackend_->realtimeDisconnectedDeviceId(event);
 }
 
 void InputDeviceRegistry::dispatchPending() { pumpInternal(false); }
@@ -276,6 +450,20 @@ std::uint64_t InputDeviceRegistry::subscribeInput(InputListener listener) {
   return token;
 }
 
+std::uint64_t
+InputDeviceRegistry::subscribeRealtimeInput(InputListener listener) {
+  const std::uint64_t token = nextSubscriptionToken_++;
+  queueState_->subscribeRealtime(token, std::move(listener));
+  return token;
+}
+
+std::uint64_t
+InputDeviceRegistry::subscribeRealtimeDevices(DeviceListener listener) {
+  const std::uint64_t token = nextSubscriptionToken_++;
+  queueState_->subscribeRealtimeDevices(token, std::move(listener));
+  return token;
+}
+
 std::uint64_t InputDeviceRegistry::subscribeDevices(DeviceListener listener) {
   const std::uint64_t token = nextSubscriptionToken_++;
   deviceListeners_.emplace(token, std::move(listener));
@@ -283,6 +471,7 @@ std::uint64_t InputDeviceRegistry::subscribeDevices(DeviceListener listener) {
 }
 
 void InputDeviceRegistry::unsubscribe(std::uint64_t token) {
+  queueState_->unsubscribeRealtime(token);
   inputListeners_.erase(token);
   deviceListeners_.erase(token);
 }

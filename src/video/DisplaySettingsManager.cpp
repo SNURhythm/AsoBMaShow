@@ -84,7 +84,7 @@ DisplaySettingsManager::captureEffectiveSettings() const {
 ApplyResult DisplaySettingsManager::applySafeStartupIntent() {
   const std::uint32_t candidateCap = persistedIntent.frameCap;
   const auto effectiveBefore = captureEffectiveSettings();
-  if (candidateCap != 0 && (candidateCap < 15 || candidateCap > 1000)) {
+  if (candidateCap != 0 && (candidateCap < 1 || candidateCap > 1000)) {
     return {.status = ApplyStatus::Unsupported,
             .effective = effectiveBefore,
             .message =
@@ -142,7 +142,7 @@ std::optional<std::string> DisplaySettingsManager::unsupportedReason(
     return "The requested display size is invalid.";
   }
   if (candidate.frameCap != 0 &&
-      (candidate.frameCap < 15 || candidate.frameCap > 1000)) {
+      (candidate.frameCap < 1 || candidate.frameCap > 1000)) {
     return "The requested frame cap is outside the supported range.";
   }
 

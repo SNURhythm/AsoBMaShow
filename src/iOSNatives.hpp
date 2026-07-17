@@ -83,11 +83,11 @@ using IOSNativeTextEditorCallback =
 using IOSDownloadProgressCallback =
     void (*)(void *context, std::uint64_t downloadedBytes,
              std::uint64_t totalBytes);
-
 // get Documents path
 std::string GetIOSDocumentsPath();
 void *GetIOSWindowHandle(void *uiwindow);
 void RegisterTouchEvent();
+void WaitIOSMainRunLoopForMicros(long long waitMicros);
 void RestoreIOSViewportAfterKeyboardFocus();
 int GetIOSNativeTextEditorHeight();
 std::vector<std::string> ListDocumentFilesRecursively();

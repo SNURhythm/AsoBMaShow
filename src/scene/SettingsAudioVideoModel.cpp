@@ -285,8 +285,8 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   }
 
   model.frameCaps.selectedValue = std::to_string(intent.frameCap);
-  constexpr std::array<std::uint32_t, 9> kCommonFrameCaps = {
-      0, 30, 60, 75, 90, 120, 144, 165, 240};
+  constexpr std::array<std::uint32_t, 12> kCommonFrameCaps = {
+      0, 1, 5, 15, 30, 60, 75, 90, 120, 144, 165, 240};
   if (std::ranges::find(kCommonFrameCaps, intent.frameCap) ==
       kCommonFrameCaps.end()) {
     addChoiceIfMissing(model.frameCaps,

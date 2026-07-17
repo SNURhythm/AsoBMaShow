@@ -75,6 +75,11 @@ struct AudioCommand {
 constexpr size_t kMaxActiveSounds = 512;
 constexpr size_t kMaxScheduledSounds = 65536;
 constexpr size_t kAudioCommandQueueSize = 4096;
+constexpr size_t kRealtimeAudioCommandQueueSize = 1024;
+
+struct RealtimeAudioCommandReservation {
+  std::uint32_t cursor = 0;
+};
 
 struct AudioCallbackState {
   AudioCallbackState();
@@ -86,6 +91,9 @@ struct AudioCallbackState {
   std::unique_ptr<AudioCommand[]> commandQueue;
   std::atomic<std::uint32_t> commandReadCursor{0};
   std::atomic<std::uint32_t> commandWriteCursor{0};
+  std::unique_ptr<AudioCommand[]> realtimeCommandQueue;
+  std::atomic<std::uint32_t> realtimeCommandReadCursor{0};
+  std::atomic<std::uint32_t> realtimeCommandWriteCursor{0};
 };
 
 namespace audio::playback {
@@ -151,6 +159,12 @@ bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
 void ClearCallbackSounds(AudioCallbackState &state);
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command);
+std::optional<RealtimeAudioCommandReservation>
+TryReserveRealtimeCommand(const AudioCallbackState &state) noexcept;
+bool CommitRealtimeCommand(
+    AudioCallbackState &state, RealtimeAudioCommandReservation reservation,
+    const AudioCommand &command) noexcept;
+void DrainRealtimeCommands(AudioCallbackState &state) noexcept;
 void DrainCommands(AudioCallbackState &state);
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,

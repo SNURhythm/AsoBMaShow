@@ -51,6 +51,12 @@ public:
     enqueuePacket(std::move(stableId), std::move(bytes), timestampMicros);
   }
 
+  void immediatePacket(std::string_view stableId,
+                       std::span<const std::uint8_t> bytes,
+                       std::uint64_t timestampMicros) {
+    publishPacketImmediately(stableId, bytes, timestampMicros);
+  }
+
   void activate(std::string stableId, bool success, bool emitPacket) {
     const std::string packetDeviceId = stableId;
     auto activation = beginDeviceActivation(
@@ -64,6 +70,21 @@ public:
     if (success) {
       activation.commit();
     }
+  }
+
+  void activateThenDisconnect(std::string stableId) {
+    const std::string disconnectedId = stableId;
+    auto activation = beginDeviceActivation(
+        {.stableId = std::move(stableId),
+         .displayName = "Activation",
+         .deviceClass = input::DeviceClass::Midi,
+         .connected = true});
+    activation.commit();
+    enqueueDeviceDisconnect(
+        {.stableId = disconnectedId,
+         .displayName = "Activation",
+         .deviceClass = input::DeviceClass::Midi,
+         .connected = true});
   }
 };
 
@@ -321,6 +342,32 @@ void testBackendQueuesNativePacketsUntilMainThreadPump() {
   backend.stop();
 }
 
+void testBackendCanPublishNativePacketsImmediately() {
+  std::vector<input::PhysicalInputEvent> inputs;
+  TestMidiBackend backend({
+      .enqueueInput =
+          [&](input::PhysicalInputEvent event) {
+            inputs.push_back(std::move(event));
+          },
+      .enqueueDevice = [](input::InputDeviceSnapshot) {},
+  });
+  std::string error;
+  require(backend.start(error), "immediate MIDI backend starts");
+
+  constexpr std::array<std::uint8_t, 3> note{0x93, 64, 111};
+  backend.immediatePacket("midi:immediate", note, 111111);
+  require(inputs.size() == 1,
+          "native MIDI packet publishes without waiting for pump");
+  requireMidiEvent(inputs.front(), "midi:immediate",
+                   input::ControlKind::MidiNote, 3 * 128 + 64, 111.0,
+                   111.0F / 127.0F, 111111);
+
+  backend.stop();
+  backend.immediatePacket("midi:immediate", note, 111112);
+  require(inputs.size() == 1,
+          "stopped MIDI backend rejects delayed immediate callbacks");
+}
+
 void testBackendIsolatesParsersAndDropsPacketsAfterDisconnect() {
   std::vector<input::PhysicalInputEvent> inputs;
   std::vector<input::InputDeviceSnapshot> devices;
@@ -546,6 +593,26 @@ void testBackendRollsBackFailedActivationBeforeLaterPackets() {
   backend.stop();
 }
 
+void testBackendQueuesDisconnectBehindPendingActivation() {
+  std::vector<bool> connectionStates;
+  TestMidiBackend backend({
+      .enqueueInput = [](input::PhysicalInputEvent) {},
+      .enqueueDevice =
+          [&](input::InputDeviceSnapshot device) {
+            connectionStates.push_back(device.connected);
+          },
+  });
+  std::string error;
+  require(backend.start(error), "disconnect-order MIDI backend starts");
+  backend.activateThenDisconnect("midi:short-lived");
+  require(connectionStates.empty(),
+          "activation and disconnect both wait for the queue pump");
+  backend.pump();
+  require(connectionStates == std::vector<bool>{true, false},
+          "disconnect remains ordered behind its pending connection");
+  backend.stop();
+}
+
 void testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd() {
   LiveMidiDeviceIdAllocator ids;
   require(ids.claim(1, "midi:core:base") == "midi:core:base",
@@ -639,6 +706,7 @@ int main() {
   testResetAndDeviceSwitchClearPartialState();
   testMalformedBytesRecoverAtNextValidStatus();
   testBackendQueuesNativePacketsUntilMainThreadPump();
+  testBackendCanPublishNativePacketsImmediately();
   testBackendIsolatesParsersAndDropsPacketsAfterDisconnect();
   testBackendCloseRevokesQueuedNativeWork();
   testBackendOverflowForcesAReleaseBoundary();
@@ -648,6 +716,7 @@ int main() {
   testNativeCallbackLifetimeNeverReusesStaleTokens();
   testBackendPublishesConnectBeforeSynchronousActivationPacket();
   testBackendRollsBackFailedActivationBeforeLaterPackets();
+  testBackendQueuesDisconnectBehindPendingActivation();
   testLiveMidiDeviceIdsStayUniqueAcrossIdenticalDeviceReadd();
   testLiveMidiRefreshReleasesReplacementBeforeNewClaims();
   testUtf16MidiNamesConvertToCanonicalUtf8();

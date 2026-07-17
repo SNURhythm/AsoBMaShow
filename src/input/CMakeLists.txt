@@ -12,6 +12,7 @@ target_sources(main PRIVATE
     InputDeviceRegistry.cpp
     SDLInputBackend.cpp
     LogicalGameplayInputAdapter.cpp
+    RealtimePhysicalInputRouter.cpp
 )
 
 function(asobmashow_add_midi_backend target_name)
@@ -68,6 +69,16 @@ function(asobmashow_add_gyroscope_backend target_name)
     endif()
 endfunction()
 
+function(asobmashow_add_windows_realtime_input_backend target_name)
+    if(WIN32)
+        target_sources(${target_name} PRIVATE
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/WindowsRealtimeInputBackend.cpp
+            ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/WindowsRealtimeInputMapping.cpp
+        )
+        target_link_libraries(${target_name} PRIVATE rtworkq user32)
+    endif()
+endfunction()
+
 if(APPLE)
     find_library(CORE_MIDI_FRAMEWORK CoreMIDI REQUIRED)
 endif()
@@ -78,3 +89,4 @@ endif()
 
 asobmashow_add_midi_backend(main)
 asobmashow_add_gyroscope_backend(main)
+asobmashow_add_windows_realtime_input_backend(main)

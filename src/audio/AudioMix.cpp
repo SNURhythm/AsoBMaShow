@@ -9,7 +9,9 @@
 AudioCallbackState::AudioCallbackState()
     : playingSounds(std::make_unique<PlayingSound[]>(kMaxActiveSounds)),
       scheduledSounds(std::make_unique<ScheduledSound[]>(kMaxScheduledSounds)),
-      commandQueue(std::make_unique<AudioCommand[]>(kAudioCommandQueueSize)) {}
+      commandQueue(std::make_unique<AudioCommand[]>(kAudioCommandQueueSize)),
+      realtimeCommandQueue(
+          std::make_unique<AudioCommand[]>(kRealtimeAudioCommandQueueSize)) {}
 
 namespace audio {
 namespace {
@@ -339,6 +341,10 @@ StopBackendAndClearCallbackState(IBackendLifecycle &backend,
   ClearCallbackSounds(callbackState);
   callbackState.commandReadCursor.store(0, std::memory_order_release);
   callbackState.commandWriteCursor.store(0, std::memory_order_release);
+  callbackState.realtimeCommandReadCursor.store(0,
+                                                std::memory_order_release);
+  callbackState.realtimeCommandWriteCursor.store(0,
+                                                 std::memory_order_release);
   return {.success = true};
 }
 
@@ -441,6 +447,20 @@ void CommitOutputRateTransition(OutputRateTransition transition,
                            transition.targetSampleRate),
         command.soundData);
   }
+
+  const std::uint32_t realtimeReadCursor =
+      state.realtimeCommandReadCursor.load(std::memory_order_acquire);
+  const std::uint32_t realtimeWriteCursor =
+      state.realtimeCommandWriteCursor.load(std::memory_order_acquire);
+  for (std::uint32_t cursor = realtimeReadCursor;
+       cursor != realtimeWriteCursor; ++cursor) {
+    auto &command = state.realtimeCommandQueue[
+        cursor % kRealtimeAudioCommandQueueSize];
+    command.startFrame = clampFrameToSound(
+        RemapFramePosition(command.startFrame, transition.previousSampleRate,
+                           transition.targetSampleRate),
+        command.soundData);
+  }
 }
 
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
@@ -458,6 +478,27 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
       .outputOffsetFrames = outputOffsetFrames,
   };
   return true;
+}
+
+static bool AppendRealtimeActiveSound(AudioCallbackState &state,
+                                      SoundData *soundData, Bus bus,
+                                      size_t startFrame) {
+  if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
+      startFrame > kQ32MaximumWholeFrame) {
+    return false;
+  }
+  if (state.playingSoundCount >= kMaxActiveSounds) {
+    std::size_t preemptIndex = 0;
+    while (preemptIndex < state.playingSoundCount &&
+           state.playingSounds[preemptIndex].bus != Bus::Keysound) {
+      ++preemptIndex;
+    }
+    if (preemptIndex == state.playingSoundCount) {
+      return false;
+    }
+    removeActiveSoundAt(state, preemptIndex);
+  }
+  return AppendActiveSound(state, soundData, bus, 0, startFrame);
 }
 
 bool InsertScheduledSound(AudioCallbackState &state,
@@ -511,6 +552,63 @@ bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command) {
   state.commandQueue[writeCursor % kAudioCommandQueueSize] = command;
   state.commandWriteCursor.store(writeCursor + 1, std::memory_order_release);
   return true;
+}
+
+std::optional<RealtimeAudioCommandReservation>
+TryReserveRealtimeCommand(const AudioCallbackState &state) noexcept {
+  const std::uint32_t readCursor =
+      state.realtimeCommandReadCursor.load(std::memory_order_acquire);
+  const std::uint32_t writeCursor =
+      state.realtimeCommandWriteCursor.load(std::memory_order_relaxed);
+  if (writeCursor - readCursor >= kRealtimeAudioCommandQueueSize) {
+    return std::nullopt;
+  }
+  return RealtimeAudioCommandReservation{.cursor = writeCursor};
+}
+
+bool CommitRealtimeCommand(
+    AudioCallbackState &state, RealtimeAudioCommandReservation reservation,
+    const AudioCommand &command) noexcept {
+  const std::uint32_t writeCursor =
+      state.realtimeCommandWriteCursor.load(std::memory_order_relaxed);
+  if (writeCursor != reservation.cursor) {
+    return false;
+  }
+  state.realtimeCommandQueue[writeCursor % kRealtimeAudioCommandQueueSize] =
+      command;
+  state.realtimeCommandWriteCursor.store(writeCursor + 1,
+                                         std::memory_order_release);
+  return true;
+}
+
+void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
+  std::uint32_t readCursor =
+      state.realtimeCommandReadCursor.load(std::memory_order_relaxed);
+  const std::uint32_t writeCursor =
+      state.realtimeCommandWriteCursor.load(std::memory_order_acquire);
+  while (readCursor != writeCursor) {
+    const AudioCommand &command = state.realtimeCommandQueue[
+        readCursor % kRealtimeAudioCommandQueueSize];
+    switch (command.type) {
+    case AudioCommandType::PlayNow:
+      AppendRealtimeActiveSound(state, command.soundData, command.bus,
+                                command.startFrame);
+      break;
+    case AudioCommandType::Schedule:
+      InsertScheduledSound(state, {.soundData = command.soundData,
+                                   .bus = command.bus,
+                                   .startMicros = command.startMicros,
+                                   .sequence = command.sequence,
+                                   .startFrame = command.startFrame});
+      break;
+    case AudioCommandType::StopAll:
+      ClearCallbackSounds(state);
+      break;
+    }
+    ++readCursor;
+  }
+  state.realtimeCommandReadCursor.store(readCursor,
+                                        std::memory_order_release);
 }
 
 void DrainCommands(AudioCallbackState &state) {

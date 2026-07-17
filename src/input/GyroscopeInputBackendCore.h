@@ -21,6 +21,7 @@ public:
   void setForeground(bool foreground, std::uint64_t nowMicros);
   void sensorStartSucceeded(std::uint64_t nowMicros);
   void sensorStartFailed(std::uint64_t nowMicros);
+  void sensorRuntimeFailed(std::uint64_t nowMicros);
   void observe(const GyroscopeMotionSample &sample, std::uint64_t nowMicros);
   void pump(std::uint64_t nowMicros);
   void configure(GyroscopeTurntableConfig config, std::uint64_t nowMicros);

@@ -229,6 +229,43 @@ void testActualInputAndJudgeRange() {
           "ordinary gameplay remains unrestricted");
 }
 
+void testManualKeysoundFallbackRespectsPracticeRangeAndDeadHeads() {
+  constexpr long long startMicros = 1'000'000;
+  constexpr long long endMicros = 2'000'000;
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  auto *before = addNote(*measure, 500'000, 1);
+  before->Wav = 5;
+  auto *inside = addLongNote(*measure, 1'500'000, 1'700'000, 1,
+                             bms_parser::LongNoteType::ChargeNote);
+  inside->Wav = 15;
+  inside->Tail->Wav = 17;
+  auto *atEnd = addNote(*measure, endMicros, 1);
+  atEnd->Wav = 20;
+  auto *mineTimeline = addTimeline(*measure, 1'800'000);
+  mineTimeline->SetLandmineNote(1, new bms_parser::LandmineNote(5.0F));
+  chart.Measures.push_back(measure);
+
+  inside->IsPlayed = true;
+  inside->IsDead = true;
+  inside->Tail->IsPlayed = true;
+  inside->Tail->IsDead = true;
+  std::unordered_map<int, bool> lanePressed;
+  RhythmLaneInputController controller(
+      &chart, nullptr, lanePressed, Judge(chart.Meta.Rank), 0,
+      NoteTimeRange{.startMicros = startMicros, .endMicros = endMicros});
+  const auto result = controller.pressLane(
+      1, {.songTimeMicros = endMicros - 1,
+          .laneBeamTimeMicros = endMicros - 1});
+
+  require(result.note == nullptr && result.keySoundNote == inside &&
+              result.keySoundNote != before &&
+              result.keySoundNote != inside->Tail &&
+              result.keySoundNote != atEnd,
+          "practice fallback includes the dead head but excludes outside, "
+          "tail, and mine identities");
+}
+
 void testExactPendingNoteFinalization() {
   constexpr long long startMicros = 500'000;
   constexpr long long endMicros = 1'000'000;
@@ -242,6 +279,9 @@ void testExactPendingNoteFinalization() {
   auto *chargeHead =
       addLongNote(*measure, endMicros - 20, endMicros - 10, 4,
                   bms_parser::LongNoteType::ChargeNote);
+  auto *hellChargeHead =
+      addLongNote(*measure, endMicros - 25, endMicros - 15, 7,
+                  bms_parser::LongNoteType::HellChargeNote);
   auto *classicHead =
       addLongNote(*measure, endMicros - 30, endMicros + 10, 5,
                   bms_parser::LongNoteType::LongNote);
@@ -266,13 +306,16 @@ void testExactPendingNoteFinalization() {
 
   const auto misses = finalizePendingPracticeNotes(
       chart, range, endMicros - 1, 0);
-  require(misses.size() == 5,
-          "normal, charge identities, and unpressed classic heads finalize");
+  require(misses.size() == 7,
+          "normal, charge/HCN identities, and unpressed classic heads finalize");
   require(lastValid->IsPlayed && lastValid->IsDead,
           "end-1 pending note becomes a miss");
   require(chargeHead->IsPlayed && chargeHead->IsDead &&
               chargeHead->Tail->IsPlayed && chargeHead->Tail->IsDead,
           "in-range charge identities each finalize as misses");
+  require(hellChargeHead->IsPlayed && hellChargeHead->IsDead &&
+              hellChargeHead->Tail->IsPlayed && hellChargeHead->Tail->IsDead,
+          "in-range Hell Charge identities each finalize as misses");
   require(classicHead->IsPlayed && classicHead->IsDead &&
               !classicHead->Tail->IsPlayed,
           "unpressed crossing classic head finalizes as a miss");
@@ -375,6 +418,7 @@ void testPressedCrossingClassicReplayAnalyticsStream() {
 int main() {
   testControllerUsesResolvedEffectiveJudge();
   testActualInputAndJudgeRange();
+  testManualKeysoundFallbackRespectsPracticeRangeAndDeadHeads();
   testExactPendingNoteFinalization();
   testPressedCrossingClassicReplayAnalyticsStream();
   return 0;

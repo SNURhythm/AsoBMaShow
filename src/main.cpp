@@ -46,6 +46,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include <SDL_uikit_rawtouch.h>
 // define something for iphone
 #include <dirent.h>
 #include <sys/stat.h>
@@ -1421,7 +1422,15 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       const auto waitDuration =
           context.framePacer.remaining(std::chrono::steady_clock::now());
       if (waitDuration > std::chrono::steady_clock::duration::zero()) {
+#if TARGET_OS_IPHONE
+        const auto waitMicros = std::max<long long>(
+            1, std::chrono::duration_cast<std::chrono::microseconds>(
+                   waitDuration)
+                   .count());
+        WaitIOSMainRunLoopForMicros(waitMicros);
+#else
         std::this_thread::sleep_for(waitDuration);
+#endif
       }
     } else {
       SDL_Delay(1);

@@ -76,6 +76,9 @@ struct BackendControl {
   bool blockStart = false;
   bool startEntered = false;
   bool releaseStart = false;
+  bool blockObserve = false;
+  bool observeEntered = false;
+  bool releaseObserve = false;
   bool failStop = false;
   int failStopCall = -1;
   int failObserveCall = -1;
@@ -102,7 +105,12 @@ public:
   audio::playback::BackendStateObservation observeState() const override {
     const int observeCall =
         control->observeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    std::lock_guard lock(control->mutex);
+    std::unique_lock lock(control->mutex);
+    control->observeEntered = true;
+    control->condition.notify_all();
+    control->condition.wait(lock, [this] {
+      return !control->blockObserve || control->releaseObserve;
+    });
     if (control->failObserveCall == observeCall) {
       return {.state = audio::playback::BackendRunState::Unknown,
               .diagnostic = "gated observation failure"};
@@ -1494,6 +1502,31 @@ void testClockAnchorReaderWaitsForACompleteGeneration() {
           "clock reader returns the tuple only after its generation completes");
 }
 
+void testNativeTimestampClampsToPublishedAudioBuffer() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  auto *callbackData = static_cast<UserData *>(control->renderUserData);
+  require(callbackData != nullptr, "native timestamp fixture has clock data");
+
+  callbackData->audioClockAnchorMicros->store(1'000'000,
+                                              std::memory_order_relaxed);
+  callbackData->audioClockAnchorWallMicros->store(5'000'000,
+                                                  std::memory_order_relaxed);
+  callbackData->audioClockAnchorEndMicros->store(1'010'000,
+                                                 std::memory_order_relaxed);
+  callbackData->audioClockAnchorRatePercent->store(50,
+                                                   std::memory_order_relaxed);
+
+  const auto mapped = wrapper.songTimeMicrosAtSteadyMicros(5'200'000);
+  require(mapped.has_value() && *mapped == 1'010'000,
+          "native input time cannot advance beyond rendered audio");
+  const auto olderInput = wrapper.songTimeMicrosAtSteadyMicros(4'800'000);
+  require(olderInput.has_value() && *olderInput == 900'000,
+          "an older native input retains its age before the current anchor");
+}
+
 void testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -1611,6 +1644,107 @@ void testSoundSubmissionsRecoverFromAuthoritativeExternalStop() {
       "scheduleSound observes and restarts the native stream before submit");
 }
 
+void testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("realtime-keysound");
+  require(wrapper.loadGeneratedSound(sound, {16384, 16384, 16384, 16384}, 1,
+                                     44100),
+          "realtime fixture retains production PCM");
+
+  const auto handle = wrapper.resolveRealtimeSound(sound);
+  require(handle.has_value() && handle->valid(),
+          "chart setup pre-resolves a stable realtime sound handle");
+  require(!wrapper.resolveRealtimeSound(PATH("missing-realtime-sound"))
+               .has_value(),
+          "missing chart sounds fail during setup, not on the input path");
+
+  const auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  require(reservation.has_value(),
+          "the gameplay transaction reserves audio capacity first");
+  require(wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "the pre-resolved handle commits into its reserved slot");
+
+  require(control->renderCallback != nullptr &&
+              control->renderUserData != nullptr,
+          "realtime fixture exposes the production callback");
+  stopwatch.start();
+  std::array<std::int16_t, 8> output{};
+  control->renderCallback(output.data(), 4, 2, control->renderUserData);
+  stopwatch.pause();
+  require(std::ranges::any_of(output, [](std::int16_t sample) {
+            return sample != 0;
+          }),
+          "the next audio callback renders the committed realtime keysound");
+}
+
+void testRealtimeReservationExcludesLifecycleResetUntilCommit() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<GatedBackend>(control));
+  const path_t sound = PATH("realtime-lifecycle-gate");
+  require(wrapper.loadGeneratedSound(sound, {100, 200, 300, 400}, 1, 44100),
+          "lifecycle-gate fixture retains PCM");
+  const auto handle = wrapper.resolveRealtimeSound(sound);
+  const auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  require(handle.has_value() && reservation.has_value(),
+          "lifecycle-gate fixture reserves a realtime transaction");
+
+  auto stopFuture = std::async(std::launch::async,
+                               [&wrapper] { return wrapper.stopSounds(); });
+  require(stopFuture.wait_for(20ms) == std::future_status::timeout,
+          "backend lifecycle reset waits for the reserved transaction");
+  require(wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "reserved keysound commit remains valid while lifecycle waits");
+  require(stopFuture.wait_for(2s) == std::future_status::ready &&
+              stopFuture.get().success,
+          "lifecycle reset continues after the transaction commits");
+}
+
+void testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<GatedBackend>(control));
+  const path_t sound = PATH("realtime-no-lifecycle-contention");
+  require(wrapper.loadGeneratedSound(sound, {100, 200, 300, 400}, 1, 44100),
+          "realtime contention fixture retains PCM");
+  const auto handle = wrapper.resolveRealtimeSound(sound);
+  require(handle.has_value(), "realtime contention fixture resolves a handle");
+
+  {
+    std::lock_guard lock(control->mutex);
+    control->blockObserve = true;
+    control->observeEntered = false;
+    control->releaseObserve = false;
+  }
+  auto ordinarySubmission = std::async(
+      std::launch::async,
+      [&wrapper, &sound] { return wrapper.playSound(sound, audio::Bus::Bgm); });
+  {
+    std::unique_lock lock(control->mutex);
+    require(control->condition.wait_for(
+                lock, 2s, [&] { return control->observeEntered; }),
+            "ordinary lifecycle work holds its mutex for the fixture");
+  }
+
+  const auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  {
+    std::lock_guard lock(control->mutex);
+    control->releaseObserve = true;
+  }
+  control->condition.notify_all();
+  require(ordinarySubmission.get(), "ordinary submission completes");
+  require(reservation.has_value(),
+          "realtime audio capacity remains available without taking the "
+          "lifecycle mutex");
+  require(wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "lock-free reservation still commits the matching keysound");
+}
+
 } // namespace
 
 int main() {
@@ -1635,11 +1769,15 @@ int main() {
     testRunningMidBufferStopAndRateTransitionDoesNotJump();
     testWallInterpolationUsesTheRatePublishedWithItsAnchor();
     testClockAnchorReaderWaitsForACompleteGeneration();
+    testNativeTimestampClampsToPublishedAudioBuffer();
     testConfigurableWrapperRestartsAndRestoresRetainedPcm();
     testConfigurableWrapperReleasesOldStreamBeforeOpenAndRollback();
     testBufferCapabilityProbePublishesOnlyVerifiedCandidates();
     testConfigurableWrapperRecoversFromAuthoritativeExternalStop();
     testSoundSubmissionsRecoverFromAuthoritativeExternalStop();
+    testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork();
+    testRealtimeReservationExcludesLifecycleResetUntilCommit();
+    testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << "audio_wrapper_lifecycle_tests: " << error.what() << '\n';

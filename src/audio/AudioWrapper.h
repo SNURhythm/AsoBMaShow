@@ -110,6 +110,25 @@ struct UserData {
   PlateReverb *reverb;
   SoftKneeCompressor *compressor;
 };
+
+class AudioWrapper;
+
+namespace audio {
+
+class RealtimeSoundHandle {
+public:
+  [[nodiscard]] bool valid() const noexcept { return soundData_ != nullptr; }
+
+private:
+  friend class ::AudioWrapper;
+  explicit RealtimeSoundHandle(std::shared_ptr<SoundData> soundData)
+      : soundData_(std::move(soundData)) {}
+
+  std::shared_ptr<SoundData> soundData_;
+};
+
+} // namespace audio
+
 class AudioWrapper : public audio::IAudioRuntime {
 public:
   AudioWrapper(Stopwatch *stopwatch);
@@ -132,8 +151,19 @@ public:
   bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
   bool stageScheduledSound(const path_t &path, audio::Bus bus,
                            long long startMicros);
+  [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
+  resolveRealtimeSound(const path_t &path) const;
+  [[nodiscard]] std::optional<RealtimeAudioCommandReservation>
+  tryReserveRealtimeSoundCommand() const noexcept;
+  bool commitRealtimeKeysound(RealtimeAudioCommandReservation reservation,
+                              const audio::RealtimeSoundHandle &handle,
+                              size_t startFrame = 0) noexcept;
+  void cancelRealtimeSoundCommand(
+      RealtimeAudioCommandReservation reservation) noexcept;
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
   long long getTimeMicros() const;
+  [[nodiscard]] std::optional<long long>
+  songTimeMicrosAtSteadyMicros(long long steadyMicros) const noexcept;
   void seekClock(long long micros);
   bool setPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
   [[nodiscard]] audio::PlaybackRate playbackRate() const;
@@ -159,6 +189,10 @@ public:
   audio::playback::BackendOperationResult unloadSounds();
 
 private:
+  void openRealtimeSoundGate() noexcept;
+  void closeRealtimeSoundGateAndWait() noexcept;
+  void releaseRealtimeSoundReservation() const noexcept;
+
   std::unique_ptr<audio::IBackendFactory> backendFactory;
   std::unique_ptr<audio::playback::IBackendLifecycle> backend;
 
@@ -178,6 +212,8 @@ private:
   std::atomic<int> currentSampleRate{44100};
   std::atomic<audio::playback::BackendRunState> backendState{
       audio::playback::BackendRunState::Unknown};
+  std::atomic_bool realtimeSoundGateOpen{false};
+  mutable std::atomic<std::uint32_t> realtimeSoundReservations{0};
   std::atomic<long long> audioClockBaseMicros{0};
   std::atomic<int64_t> audioClockFrameCursor{0};
   std::atomic<long long> audioClockAnchorMicros{0};

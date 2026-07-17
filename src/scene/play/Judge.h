@@ -2,51 +2,11 @@
 // ReSharper disable IdentifierTypo
 #pragma once
 #include "../../bms_parser.hpp"
+#include "Judgement.h"
 #include "NoteTimeRange.h"
 #include <map>
 #include <optional>
 #include <string>
-enum Judgement { PGreat, Great, Good, Bad, Kpoor, Poor, None, JudgementCount };
-
-enum class CourseJudgementConstraint { None, NoGood, NoGreat };
-
-class JudgeResult {
-public:
-  JudgeResult(Judgement Judgement, long long Diff)
-      : judgement(Judgement), Diff(Diff) {}
-
-  Judgement judgement = None;
-  long long Diff;
-
-  [[nodiscard]] bool isComboBreak() const {
-    return judgement == Bad || judgement == Poor;
-  }
-
-  [[nodiscard]] bool isNotePlayed() const {
-    return judgement != Kpoor && judgement != None;
-  }
-
-  [[nodiscard]] std::string toString() const {
-    switch (judgement) {
-    case PGreat:
-      return "PGREAT";
-    case Great:
-      return "GREAT";
-    case Good:
-      return "GOOD";
-    case Bad:
-      return "BAD";
-    case Kpoor:
-      return "KPOOR";
-    case Poor:
-      return "POOR";
-    case None:
-      return "NONE";
-    default:
-      return "NONE";
-    }
-  }
-};
 
 class Judge {
 private:

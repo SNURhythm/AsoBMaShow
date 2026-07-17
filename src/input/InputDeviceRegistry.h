@@ -6,6 +6,8 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,10 +36,23 @@ public:
   void pump();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
   void resetGyroscopeTurntableSession();
+  // Claimed classes are delivered to realtime listeners but omitted from the
+  // ordinary frame queue, preventing delayed duplicate gameplay edges.
+  void setRealtimeInputClaimed(input::DeviceClass deviceClass, bool claimed);
+  [[nodiscard]] std::optional<input::PhysicalInputEvent>
+  translateRealtimeSdlInput(const SDL_Event &) const;
+  std::size_t translateRealtimeSdlInputs(
+      const SDL_Event &, std::span<input::PhysicalInputEvent> output);
+  [[nodiscard]] std::optional<std::string>
+  realtimeDisconnectedSdlDevice(const SDL_Event &) const;
 
   // Input subscriptions never inherit events queued before their sequence
   // boundary.
   std::uint64_t subscribeInput(InputListener listener);
+  // Runs on the producing native callback thread before that input is queued
+  // for ordinary frame dispatch. Unsubscribe waits for an active callback.
+  std::uint64_t subscribeRealtimeInput(InputListener listener);
+  std::uint64_t subscribeRealtimeDevices(DeviceListener listener);
   std::uint64_t subscribeDevices(DeviceListener listener);
   // Removing a subscription cancels any events not yet delivered to that
   // listener.
@@ -68,6 +83,7 @@ private:
 
   std::shared_ptr<QueueState> queueState_;
   std::vector<std::unique_ptr<IInputBackend>> backends_;
+  class SDLInputBackend *sdlInputBackend_ = nullptr;
   std::vector<std::shared_ptr<BackendSinkGate>> backendSinkGates_;
   std::unordered_map<std::string, input::InputDeviceSnapshot> devices_;
   std::map<std::uint64_t, InputSubscription> inputListeners_;

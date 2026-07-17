@@ -235,7 +235,7 @@ void testUnsupportedFieldsRejectWithoutBackendCalls() {
               display::ApplyStatus::Unsupported,
           "invalid display mode is rejected");
   invalid = initialSettings();
-  invalid.frameCap = 1;
+  invalid.frameCap = 1001;
   require(invalidManager.beginPreview(invalid, Clock::time_point{}).status ==
               display::ApplyStatus::Unsupported,
           "invalid frame cap is rejected");
@@ -493,6 +493,19 @@ void testPersistedIntentRemainsSeparateFromCapturedRuntime() {
           "equal-to-persisted Apply still mutates differing runtime");
 }
 
+void testLowFrameCapPersistsAcrossStartup() {
+  FakeBackend backend;
+  FakeFrameCapRuntime frameCapRuntime;
+  auto persisted = initialSettings();
+  persisted.frameCap = 5;
+  display::DisplaySettingsManager manager(backend, frameCapRuntime, persisted);
+
+  const auto startup = manager.applySafeStartupIntent();
+  require(startup.status == display::ApplyStatus::Applied &&
+              frameCapRuntime.cap == 5,
+          "startup accepts a persisted low frame cap");
+}
+
 void testUnsupportedPersistedDisplayIntentStaysPendingSafely() {
   FakeBackend backend;
   FakeFrameCapRuntime frameCapRuntime;
@@ -686,6 +699,7 @@ int main() {
   testSecondPreviewStopsWhenFirstCannotRestore();
   testFrameCapRuntimeAcrossEveryPreviewTerminalPath();
   testPersistedIntentRemainsSeparateFromCapturedRuntime();
+  testLowFrameCapPersistsAcrossStartup();
   testUnsupportedPersistedDisplayIntentStaysPendingSafely();
   testRealFramePacerIsTheManagedFrameCapRuntime();
   testExternalResizeIsRecapturedBeforeApply();
