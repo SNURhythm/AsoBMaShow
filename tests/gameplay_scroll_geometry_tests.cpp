@@ -1,6 +1,7 @@
 #include "scene/play/GameplayScrollGeometry.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 
@@ -154,5 +155,29 @@ int main() {
               "past note keeps its full height");
   requireNear(untouchedPast.bottomTextureFraction, 1.0F,
               "past note keeps its full texture");
+
+  const auto fullOutline = noteOutlineRectangles(
+      2.0F, -0.5F, 1.0F, 1.0F, 0.1F, untouchedPast);
+  require(fullOutline.count == 4,
+          "an unclipped invisible note has four border segments");
+  bool centerCovered = false;
+  for (std::size_t i = 0; i < fullOutline.count; ++i) {
+    const auto &rect = fullOutline.rectangles[i];
+    centerCovered = centerCovered ||
+                    (2.5F > rect.x && 2.5F < rect.x + rect.width &&
+                     0.0F > rect.y && 0.0F < rect.y + rect.height);
+  }
+  require(!centerCovered, "the invisible-note outline leaves its center empty");
+
+  const auto clippedOutline = noteOutlineRectangles(
+      2.0F, -0.5F, 1.0F, 1.0F, 0.1F, clippedFuture);
+  require(clippedOutline.count == 3,
+          "judge-line clipping removes the hidden bottom border");
+  requireNear(clippedOutline.rectangles[0].y, 0.4F,
+              "the visible top border keeps its original position");
+  requireNear(clippedOutline.rectangles[1].y, 0.0F,
+              "the left border starts at the clip boundary");
+  requireNear(clippedOutline.rectangles[1].height, 0.5F,
+              "the side border is clipped to the visible note height");
   return 0;
 }

@@ -1978,9 +1978,23 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note) {
     return;
   }
 
-  gimmickBatchRenderer.addRect(laneToX(note->Lane), clip.y, noteRenderWidth,
-                               clip.height,
-                               Color(255, 149, 36, 224).toABGR());
+  const uint32_t color = Color(255, 149, 36, 224).toABGR();
+  const float x = laneToX(note->Lane);
+  if (note->IsLongNote()) {
+    gimmickBatchRenderer.addRect(x, clip.y, noteRenderWidth, clip.height,
+                                 color);
+    return;
+  }
+
+  const float borderThickness =
+      std::max(0.015F, noteRenderHeight * 0.12F);
+  const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
+      x, y, noteRenderWidth, noteRenderHeight, borderThickness, clip);
+  for (std::size_t i = 0; i < outline.count; ++i) {
+    const auto &rect = outline.rectangles[i];
+    gimmickBatchRenderer.addRect(rect.x, rect.y, rect.width, rect.height,
+                                 color);
+  }
 }
 
 void BMSRenderer::drawLandmineNote(float y,
@@ -2461,16 +2475,19 @@ void BMSRenderer::render(RenderContext &context, long long micro,
 
   constexpr uint32_t kDepthBackground = 100;
   constexpr uint32_t kDepthBeams = 180;
+  constexpr uint32_t kDepthInvisibleNotes = 185;
   constexpr uint32_t kDepthLongBodies = 190;
   constexpr uint32_t kDepthNotes = 200;
   constexpr uint32_t kDepthGhosts = 250;
   constexpr uint32_t kDepthJudgementIndicator = 330;
   constexpr uint32_t kDepthGauge = 340;
+  static_assert(kDepthInvisibleNotes < kDepthLongBodies);
+  static_assert(kDepthInvisibleNotes < kDepthNotes);
 
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(kDepthBackground);
   gimmickBatchRenderer.setSubmitView(rendering::main_view);
-  gimmickBatchRenderer.setSubmitDepth(kDepthNotes + 1);
+  gimmickBatchRenderer.setSubmitDepth(kDepthInvisibleNotes);
   ghostBatchRenderer.setSubmitDepth(kDepthGhosts);
   simpleBatchRenderer.begin();
   gimmickBatchRenderer.begin();

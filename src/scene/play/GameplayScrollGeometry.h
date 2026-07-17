@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <limits>
 
 namespace gameplay_scroll_geometry {
@@ -91,6 +93,18 @@ struct NoteRectangleClip {
   float bottomTextureFraction = 0.0F;
 };
 
+struct RenderRectangle {
+  float x = 0.0F;
+  float y = 0.0F;
+  float width = 0.0F;
+  float height = 0.0F;
+};
+
+struct NoteOutlineRectangles {
+  std::array<RenderRectangle, 4> rectangles{};
+  std::size_t count = 0;
+};
+
 inline NoteRectangleClip clipNoteRectangle(long long noteTimeMicros,
                                            long long currentTimeMicros,
                                            float y, float noteHeight,
@@ -112,6 +126,43 @@ inline NoteRectangleClip clipNoteRectangle(long long noteTimeMicros,
           .y = judgeY,
           .height = clippedHeight,
           .bottomTextureFraction = clippedHeight / noteHeight};
+}
+
+inline NoteOutlineRectangles noteOutlineRectangles(
+    float x, float y, float width, float height, float borderThickness,
+    const NoteRectangleClip &clip) {
+  NoteOutlineRectangles outline;
+  if (!clip.visible || width <= 0.0F || height <= 0.0F ||
+      clip.height <= 0.0F) {
+    return outline;
+  }
+
+  const float border = std::min(
+      {borderThickness, width * 0.5F, height * 0.5F});
+  if (border <= 0.0F) {
+    return outline;
+  }
+
+  const std::array<RenderRectangle, 4> candidates{
+      RenderRectangle{x, y, width, border},
+      RenderRectangle{x, y + height - border, width, border},
+      RenderRectangle{x, y, border, height},
+      RenderRectangle{x + width - border, y, border, height}};
+  const float clipBottom = clip.y;
+  const float clipTop = clip.y + clip.height;
+  for (const auto &candidate : candidates) {
+    const float bottom = std::max(candidate.y, clipBottom);
+    const float top = std::min(candidate.y + candidate.height, clipTop);
+    if (top <= bottom) {
+      continue;
+    }
+    outline.rectangles[outline.count++] = {
+        .x = candidate.x,
+        .y = bottom,
+        .width = candidate.width,
+        .height = top - bottom};
+  }
+  return outline;
 }
 
 inline bool shouldDrawNoteRectangle(long long noteTimeMicros,
