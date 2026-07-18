@@ -125,6 +125,25 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 }
 
 int main() {
+  ASSERT_EQ(
+      static_cast<int>(
+          main_menu_library::EmptyLibraryBootstrapMode::DefaultFolder),
+      static_cast<int>(main_menu_library::emptyLibraryBootstrapMode(
+          TargetPlatform::iOS)),
+      "iOS empty library uses the default folder");
+  ASSERT_EQ(
+      static_cast<int>(
+          main_menu_library::EmptyLibraryBootstrapMode::DefaultFolder),
+      static_cast<int>(main_menu_library::emptyLibraryBootstrapMode(
+          TargetPlatform::Android)),
+      "Android empty library uses the default folder");
+  ASSERT_EQ(
+      static_cast<int>(
+          main_menu_library::EmptyLibraryBootstrapMode::FolderPicker),
+      static_cast<int>(main_menu_library::emptyLibraryBootstrapMode(
+          TargetPlatform::MacOS)),
+      "desktop empty library uses the folder picker");
+
   sqlite3 *db = nullptr;
   if (sqlite3_open(":memory:", &db) != SQLITE_OK) {
     std::cerr << "open failed" << std::endl;

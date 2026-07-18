@@ -1948,71 +1948,66 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
     if (!pauseTask()) {
       return;
     }
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    std::string folder;
-    std::string bookmark;
-    std::string errorMessage;
-    if (PickIOSFolder(folder, bookmark, errorMessage)) {
-      taskSession->InsertEntry(std::filesystem::path(folder), bookmark);
-      entries = taskSession->SelectEffectiveEntries();
-    } else {
-      if (!errorMessage.empty()) {
-        SDL_Log("Failed to pick iOS library folder: %s", errorMessage.c_str());
-      }
-      auto path = ChartRepository::DefaultBmsFolderPath();
+    constexpr auto bootstrapMode =
+        main_menu_library::emptyLibraryBootstrapMode(TARGET_PLATFORM);
+    if constexpr (bootstrapMode ==
+                  main_menu_library::EmptyLibraryBootstrapMode::DefaultFolder) {
+      const auto path = ChartRepository::DefaultBmsFolderPath();
       ensureLibraryFolderExists(path);
-      entries.push_back({
-          .path = fspath_to_path_t(path),
-          .iosBookmark = "",
-      });
-    }
-#elif TARGET_OS_ANDROID
-    auto path = ChartRepository::DefaultBmsFolderPath();
-    ensureLibraryFolderExists(path);
-    taskSession->InsertEntry(path);
-    entries = taskSession->SelectEffectiveEntries();
-#else
-    char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
-    std::string folder;
-    if (folder_c == nullptr) {
-      std::cerr << "tinyfd_selectFolderDialog error: " << strerror(errno)
-                << std::endl;
-      std::cout << "Failed to open folder select dialog.\n";
+      if (!taskSession->InsertEntry(path)) {
+        throw std::runtime_error("Failed to add default library folder");
+      }
+      entries = taskSession->SelectEffectiveEntries();
+      if (entries.empty()) {
+        throw std::runtime_error(
+            "Default library folder was not available after insertion");
+      }
+    } else {
+      char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
+      std::string folder;
+      if (folder_c == nullptr) {
+        std::cerr << "tinyfd_selectFolderDialog error: " << strerror(errno)
+                  << std::endl;
+        std::cout << "Failed to open folder select dialog.\n";
 
-      while (folder.empty()) {
-        if (stopToken.stop_requested()) {
+        while (folder.empty()) {
+          if (stopToken.stop_requested()) {
+            return;
+          }
+
+          std::cout << "Enter bms folder path: ";
+          std::cin >> folder;
+          if (std::cin.eof() || std::cin.fail()) {
+            break;
+          }
+          if (folder.empty()) {
+            continue;
+          }
+
+          if (!expandCurrentUserHomeShortcut(folder)) {
+            std::cout
+                << "Could not expand ~ because no home directory is set.\n";
+            folder.clear();
+            continue;
+          }
+          std::ifstream test(folder);
+          if (!test) {
+            folder.clear();
+          }
+        }
+
+        if (folder.empty()) {
           return;
         }
-
-        std::cout << "Enter bms folder path: ";
-        std::cin >> folder;
-        if (std::cin.eof() || std::cin.fail()) {
-          break;
-        }
-        if (folder.empty()) {
-          continue;
-        }
-
-        if (!expandCurrentUserHomeShortcut(folder)) {
-          std::cout << "Could not expand ~ because no home directory is set.\n";
-          folder.clear();
-          continue;
-        }
-        std::ifstream test(folder);
-        if (!test)
-          folder = "";
+      } else {
+        folder = folder_c;
       }
-
-      if (folder.empty()) {
-        return;
+      const std::filesystem::path path(folder);
+      if (!taskSession->InsertEntry(path)) {
+        throw std::runtime_error("Failed to add selected library folder");
       }
-    } else {
-      folder = folder_c;
+      entries = taskSession->SelectEffectiveEntries();
     }
-    std::filesystem::path path(folder);
-    taskSession->InsertEntry(path);
-    entries = taskSession->SelectEffectiveEntries();
-#endif
   }
 
   if (stopToken.stop_requested()) {
