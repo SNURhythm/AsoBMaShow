@@ -170,17 +170,38 @@ void testNumericAndRowBounds() {
   expectMalformed(Json::array({invalid}),
                   "EX score above chart maximum is rejected");
 
-  for (int badPoints : {-1, 101}) {
-    invalid = row();
-    invalid["minbp"] = badPoints;
-    expectMalformed(Json::array({invalid}), "out-of-range BP is rejected");
-  }
-  for (int maxCombo : {-1, 101}) {
-    invalid = row();
-    invalid["maxcombo"] = maxCombo;
-    expectMalformed(Json::array({invalid}),
-                    "out-of-range max combo is rejected");
-  }
+  auto lateKpoor = row("Late KPOOR", 2, 0, 102);
+  lateKpoor["maxcombo"] = nullptr;
+  auto outcome = parse(Json::array({lateKpoor}));
+  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
+             outcome.ranking &&
+             outcome.ranking->entries.front().badPoints == 102,
+         "BP above note count is accepted for LR2 KPOOR accounting");
+
+  auto legacyCombo = row("Legacy Combo", 190, 8, 0);
+  legacyCombo["maxcombo"] = 105;
+  outcome = parse(Json::array({legacyCombo}));
+  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
+             outcome.ranking &&
+             outcome.ranking->entries.front().maxCombo == 105,
+         "legacy max combo above server note count is accepted");
+
+  invalid = row();
+  invalid["minbp"] = -1;
+  expectMalformed(Json::array({invalid}), "negative BP is rejected");
+  invalid = row();
+  invalid["minbp"] =
+      static_cast<std::uint64_t>(std::numeric_limits<int>::max()) + 1;
+  expectMalformed(Json::array({invalid}),
+                  "BP outside integer range is rejected");
+  invalid = row();
+  invalid["maxcombo"] = -1;
+  expectMalformed(Json::array({invalid}), "negative max combo is rejected");
+  invalid = row();
+  invalid["maxcombo"] =
+      static_cast<std::uint64_t>(std::numeric_limits<int>::max()) + 1;
+  expectMalformed(Json::array({invalid}),
+                  "max combo outside integer range is rejected");
 
   invalid = row();
   invalid["date"] = -1;
@@ -192,7 +213,7 @@ void testNumericAndRowBounds() {
 
   auto unknownTime = row();
   unknownTime["date"] = 0;
-  auto outcome = parse(Json::array({unknownTime}));
+  outcome = parse(Json::array({unknownTime}));
   expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
              outcome.ranking &&
              !outcome.ranking->entries.front().achievedAtUnixMillis,

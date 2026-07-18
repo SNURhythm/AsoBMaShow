@@ -169,8 +169,7 @@ parseRow(const Json &row, const IrChartQuery &query, bool &currentUserSeen) {
       static_cast<std::int64_t>(query.totalNotes) * 2;
   if (perfectGreat + great > query.totalNotes || score < 0 ||
       score > maximumScore || score > std::numeric_limits<int>::max() ||
-      *minBp < 0 || *minBp > query.totalNotes ||
-      *minBp > std::numeric_limits<int>::max() || *date < 0) {
+      *minBp < 0 || *minBp > std::numeric_limits<int>::max() || *date < 0) {
     return std::nullopt;
   }
   const auto clearType = mapClearIndex(*clear);
@@ -185,8 +184,7 @@ parseRow(const Json &row, const IrChartQuery &query, bool &currentUserSeen) {
   std::optional<int> maxCombo;
   if (!maxComboValue->is_null()) {
     const auto parsed = jsonInteger(*maxComboValue);
-    if (!parsed || *parsed < 0 || *parsed > query.totalNotes ||
-        *parsed > std::numeric_limits<int>::max()) {
+    if (!parsed || *parsed < 0 || *parsed > std::numeric_limits<int>::max()) {
       return std::nullopt;
     }
     maxCombo = static_cast<int>(*parsed);
