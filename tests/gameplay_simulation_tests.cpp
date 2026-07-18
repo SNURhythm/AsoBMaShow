@@ -51,6 +51,7 @@ void requireSameScoreState(const GameplayScoreState &left,
               left.getScore() == right.getScore(),
           "judge, score, and combo state matches standalone commits");
   require(left.gaugeHistory == right.gaugeHistory &&
+              left.gaugeHistories == right.gaugeHistories &&
               left.currentGauge == right.currentGauge &&
               left.gaugeType == right.gaugeType &&
               left.selectedGaugeType == right.selectedGaugeType &&

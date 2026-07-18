@@ -1351,8 +1351,10 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
   }
 
   auto gaugeHistory = std::move(state->gaugeHistory);
+  auto gaugeHistories = std::move(state->gaugeHistories);
   state->restoreGaugeState(snapshot->gaugeState);
   state->gaugeHistory = std::move(gaugeHistory);
+  state->gaugeHistories = std::move(gaugeHistories);
   state->combo = snapshot->attempt.combo;
   state->maxCombo = snapshot->attempt.maxCombo;
   state->comboBreak = snapshot->attempt.comboBreak;
@@ -1458,6 +1460,7 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   syncRealtimeGameplaySnapshot();
   if (state != nullptr) {
     state->gaugeHistory = session.worker->copyGaugeHistoryAfterStop();
+    state->gaugeHistories = session.worker->copyGaugeHistoriesAfterStop();
   }
 
   if (transferReplay) {
@@ -3962,6 +3965,12 @@ void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
   }
   if (!state->gaugeHistory.empty()) {
     state->gaugeHistory.back() = event.gauge;
+  }
+  auto &typedHistory = state->gaugeHistoryFor(event.gaugeType);
+  if (!typedHistory.empty()) {
+    typedHistory.back() = event.gauge;
+  } else {
+    typedHistory.push_back(event.gauge);
   }
   updateGaugeStatusText();
 }

@@ -81,6 +81,30 @@ int main() {
     return 1;
   }
 
+  ReplayData gasHistoryReplay = bestClearReplay;
+  gasHistoryReplay.events = {
+      {.action = ReplayEventAction::Gauge,
+       .songTimeMicros = 500,
+       .judgement = Great,
+       .gauge = 75.0f,
+       .gaugeType = GaugeType::ExHard},
+      {.action = ReplayEventAction::Gauge,
+       .songTimeMicros = 1000,
+       .judgement = Bad,
+       .gauge = 50.0f,
+       .gaugeType = GaugeType::Hard},
+  };
+  const RhythmState gasHistoryResult =
+      replay_result::BuildResultState(chart, gasHistoryReplay);
+  if (gasHistoryResult.gaugeHistoryFor(GaugeType::Hard).size() != 2 ||
+      gasHistoryResult.gaugeHistoryFor(GaugeType::Hard).back() != 50.0f ||
+      gasHistoryResult.gaugeHistoryFor(GaugeType::ExHard).size() != 2 ||
+      gasHistoryResult.gaugeHistoryFor(GaugeType::ExHard).front() != 75.0f) {
+    std::cerr << "replay result must rebuild complete per-gauge GAS histories"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData firstCourseStage;
   firstCourseStage.initialGaugeType = GaugeType::Hard;
   firstCourseStage.events.push_back({.action = ReplayEventAction::Gauge,

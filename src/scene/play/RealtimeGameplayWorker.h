@@ -206,6 +206,7 @@ public:
   [[nodiscard]] std::vector<GameplayReplayEvent>
   copyReplayEventsAfterStop() const;
   [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
+  [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
 
 private:
   struct SnapshotBuffer {

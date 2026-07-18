@@ -672,8 +672,11 @@ void testAutoplayCommitsGameplayAndKeysoundWithoutFramePump() {
 void testStoppedWorkerTransfersCompleteGaugeHistory() {
   FakeClock clock;
   FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.attempt.initialGaugeType = GaugeType::Hard;
+  config.simulation.attempt.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
-                                           makeConfig(clock, audio));
+                                           std::move(config));
   require(worker.start(), "gauge-history fixture starts");
   require(worker.enqueueInput({.epoch = 7,
                                .type = gameplay::RealtimeGameplayInputType::Press,
@@ -688,6 +691,11 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
   const auto history = worker.copyGaugeHistoryAfterStop();
   require(history.size() == 1,
           "stopped authority exposes every committed gauge sample");
+  const auto histories = worker.copyGaugeHistoriesAfterStop();
+  for (const auto &gaugeHistory : histories) {
+    require(gaugeHistory.size() == 1,
+            "stopped authority transfers every GAS candidate series");
+  }
 }
 
 void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {

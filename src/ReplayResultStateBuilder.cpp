@@ -83,6 +83,12 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
   } else {
     state.gaugeHistory.push_back(event.gauge);
   }
+  auto &typedHistory = state.gaugeHistoryFor(event.gaugeType);
+  if (!typedHistory.empty()) {
+    typedHistory.back() = event.gauge;
+  } else {
+    typedHistory.push_back(event.gauge);
+  }
 }
 } // namespace
 

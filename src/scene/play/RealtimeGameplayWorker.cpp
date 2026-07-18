@@ -198,6 +198,14 @@ RealtimeGameplayWorker::copyGaugeHistoryAfterStop() const {
   return simulation_.scoreState().gaugeHistory;
 }
 
+GaugeHistoryCollection
+RealtimeGameplayWorker::copyGaugeHistoriesAfterStop() const {
+  if (running()) {
+    return {};
+  }
+  return simulation_.scoreState().gaugeHistories;
+}
+
 void RealtimeGameplayWorker::run() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
