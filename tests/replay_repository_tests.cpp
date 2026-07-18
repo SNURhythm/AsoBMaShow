@@ -1064,7 +1064,7 @@ void testVersion4MarkerAcceptsExactVersion5ResultOutbox(
       sampleChartAttempt(root, "exact-v5-outbox-with-v4-marker", 50);
   {
     ReplayRepository helper(path);
-    assert(helper.StageChartResult(attempt).status ==
+    assert(helper.StageChartResult(attempt, {}).status ==
            result_persistence::StageStatus::Staged);
   }
 
@@ -1143,7 +1143,7 @@ void testVersion4MarkerAcceptsExactMixedCaseIdentifiers(
       sampleChartAttempt(root, "mixed-case-v5-outbox-with-v4-marker", 54);
   {
     ReplayRepository helper(path);
-    assert(helper.StageChartResult(attempt).status ==
+    assert(helper.StageChartResult(attempt, {}).status ==
            result_persistence::StageStatus::Staged);
   }
 
@@ -1186,7 +1186,7 @@ void testCurrentVersionAcceptsExactMixedCaseIdentifiersOnCachedPaths(
   const auto attempt =
       sampleChartAttempt(root, "current-v5-mixed-case-outbox", 55);
   ReplayRepository helper(path);
-  assert(helper.StageChartResult(attempt).status ==
+  assert(helper.StageChartResult(attempt, {}).status ==
          result_persistence::StageStatus::Staged);
 
   auto db = openDatabase(path);
@@ -1244,7 +1244,7 @@ void testVersion4MarkerRejectsPartialOrMalformedVersion5Artifacts(
         sampleChartAttempt(root, "partial-v5-outbox-missing-index", 51);
     {
       ReplayRepository helper(path);
-      assert(helper.StageChartResult(attempt).status ==
+      assert(helper.StageChartResult(attempt, {}).status ==
              result_persistence::StageStatus::Staged);
     }
     auto db = openDatabase(path);
@@ -1353,7 +1353,7 @@ void testCurrentVersionRejectsMalformedVersion5Artifacts(
         sampleChartAttempt(root, "current-v5-outbox-missing-index", 52);
     {
       ReplayRepository helper(path);
-      assert(helper.StageChartResult(attempt).status ==
+      assert(helper.StageChartResult(attempt, {}).status ==
              result_persistence::StageStatus::Staged);
     }
     auto db = openDatabase(path);
@@ -1371,7 +1371,7 @@ void testCurrentVersionRejectsMalformedVersion5Artifacts(
         sampleChartAttempt(root, "current-v5-malformed-outbox", 53);
     {
       ReplayRepository helper(path);
-      assert(helper.StageChartResult(attempt).status ==
+      assert(helper.StageChartResult(attempt, {}).status ==
              result_persistence::StageStatus::Staged);
     }
     auto db = openDatabase(path);
@@ -1456,7 +1456,7 @@ void testStageChartResultIsAtomicAndReturnsTimestamp(
   const auto path = root / "stage-chart-result" / "replay.db";
   ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "stage-chart-result", 1);
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
   assert(staged.receipt.has_value());
   assert(staged.receipt->attemptId == attempt.attemptId);
@@ -1498,8 +1498,8 @@ void testIdenticalAttemptIsIdempotent(const std::filesystem::path &root) {
   const auto path = root / "stage-idempotent" / "replay.db";
   ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "stage-idempotent", 2);
-  const auto first = helper.StageChartResult(attempt);
-  const auto second = helper.StageChartResult(attempt);
+  const auto first = helper.StageChartResult(attempt, {});
+  const auto second = helper.StageChartResult(attempt, {});
   assert(first.status == result_persistence::StageStatus::Staged);
   assert(second.status == result_persistence::StageStatus::AlreadyStaged);
   assert(first.receipt.has_value() && second.receipt.has_value());
@@ -1522,7 +1522,7 @@ void testRestageRejectsCorruptRetainedOutbox(
 
   const auto pendingOnlyCorruption =
       sampleChartAttempt(root, "restage-pending-only-corruption", 40);
-  assert(helper.StageChartResult(pendingOnlyCorruption).status ==
+  assert(helper.StageChartResult(pendingOnlyCorruption, {}).status ==
          result_persistence::StageStatus::Staged);
   auto db = openDatabase(path);
   execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET fast=fast+1 "
@@ -1531,7 +1531,7 @@ void testRestageRejectsCorruptRetainedOutbox(
   db.reset();
 
   const auto pendingOnlyRestage =
-      helper.StageChartResult(pendingOnlyCorruption);
+      helper.StageChartResult(pendingOnlyCorruption, {});
   assert(pendingOnlyRestage.status ==
          result_persistence::StageStatus::IntegrityConflict);
   assert(!pendingOnlyRestage.receipt.has_value());
@@ -1545,7 +1545,7 @@ void testRestageRejectsCorruptRetainedOutbox(
 
   const auto semanticCorruption =
       sampleChartAttempt(root, "restage-semantic-corruption", 41);
-  assert(helper.StageChartResult(semanticCorruption).status ==
+  assert(helper.StageChartResult(semanticCorruption, {}).status ==
          result_persistence::StageStatus::Staged);
   db = openDatabase(path);
   execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET score=score+1 "
@@ -1553,7 +1553,7 @@ void testRestageRejectsCorruptRetainedOutbox(
                             semanticCorruption.attemptId + "'");
   db.reset();
 
-  const auto semanticRestage = helper.StageChartResult(semanticCorruption);
+  const auto semanticRestage = helper.StageChartResult(semanticCorruption, {});
   assert(semanticRestage.status ==
          result_persistence::StageStatus::IntegrityConflict);
   assert(!semanticRestage.receipt.has_value());
@@ -1571,14 +1571,14 @@ void testChangedPayloadForSameAttemptConflicts(
   const auto path = root / "stage-conflict" / "replay.db";
   ReplayRepository helper(path);
   const auto original = sampleChartAttempt(root, "stage-conflict", 3);
-  assert(helper.StageChartResult(original).status ==
+  assert(helper.StageChartResult(original, {}).status ==
          result_persistence::StageStatus::Staged);
 
   auto changed = original;
   ++changed.replay.events.front().diffMicros;
   changed.payloadFingerprint = result_persistence::payloadFingerprint(
       changed.replay, changed.score);
-  const auto conflict = helper.StageChartResult(changed);
+  const auto conflict = helper.StageChartResult(changed, {});
   assert(conflict.status == result_persistence::StageStatus::IntegrityConflict);
   assert(!conflict.receipt.has_value());
   assert(!conflict.diagnostic.empty());
@@ -1601,7 +1601,7 @@ void testStageRejectsSemanticResultConflicts(
   const auto expectConflict = [&](auto attempt) {
     attempt.payloadFingerprint =
         result_persistence::payloadFingerprint(attempt.replay, attempt.score);
-    const auto outcome = helper.StageChartResult(attempt);
+    const auto outcome = helper.StageChartResult(attempt, {});
     assert(outcome.status ==
            result_persistence::StageStatus::IntegrityConflict);
     assert(!outcome.receipt.has_value());
@@ -1631,7 +1631,7 @@ void testStageRejectsSemanticResultConflicts(
   md5OnlyIdentity.replay.provenance = md5OnlyIdentity.score.provenance;
   md5OnlyIdentity.payloadFingerprint = result_persistence::payloadFingerprint(
       md5OnlyIdentity.replay, md5OnlyIdentity.score);
-  const auto md5OnlyOutcome = helper.StageChartResult(md5OnlyIdentity);
+  const auto md5OnlyOutcome = helper.StageChartResult(md5OnlyIdentity, {});
   assert(md5OnlyOutcome.status ==
          result_persistence::StageStatus::IntegrityConflict);
   assert(!md5OnlyOutcome.receipt.has_value());
@@ -1660,7 +1660,7 @@ void testStageAcceptsStandard9KeysGaugeMaximum(
   attempt.payloadFingerprint =
       result_persistence::payloadFingerprint(attempt.replay, attempt.score);
 
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
   const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
   assert(pending.status == result_persistence::PendingReadStatus::Found);
@@ -1680,7 +1680,7 @@ void testStageAcceptsNonLongNoteChartMode(
   attempt.payloadFingerprint =
       result_persistence::payloadFingerprint(attempt.replay, attempt.score);
 
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
   const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
   assert(pending.status == result_persistence::PendingReadStatus::Found);
@@ -1702,7 +1702,7 @@ void testStageAcceptsUnforcedLongNoteChartMode(
   attempt.payloadFingerprint =
       result_persistence::payloadFingerprint(attempt.replay, attempt.score);
 
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
   const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
   assert(pending.status == result_persistence::PendingReadStatus::Found);
@@ -1727,7 +1727,7 @@ void testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(
   attempt.payloadFingerprint =
       result_persistence::payloadFingerprint(attempt.replay, attempt.score);
 
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
   const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
   assert(pending.status == result_persistence::PendingReadStatus::Found);
@@ -1741,27 +1741,27 @@ void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
   const auto path = root / "stage-acknowledged" / "replay.db";
   ReplayRepository helper(path);
   const auto attempt = sampleChartAttempt(root, "stage-acknowledged", 4);
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.receipt.has_value());
 
-  const auto wrongReplay = helper.AcknowledgePendingChartScore(
+  const auto wrongReplay = helper.AcknowledgePendingChartScoreAndActivateIr(
       attempt.attemptId, staged.receipt->replayId + 1);
   assert(wrongReplay.status ==
          result_persistence::AcknowledgeStatus::IntegrityConflict);
   assert(helper.LoadPendingChartScore(attempt.attemptId).status ==
          result_persistence::PendingReadStatus::Found);
 
-  const auto acknowledged = helper.AcknowledgePendingChartScore(
+  const auto acknowledged = helper.AcknowledgePendingChartScoreAndActivateIr(
       attempt.attemptId, staged.receipt->replayId);
   assert(acknowledged.status ==
          result_persistence::AcknowledgeStatus::Acknowledged);
   assert(acknowledged.diagnostic.empty());
-  const auto repeated = helper.AcknowledgePendingChartScore(
+  const auto repeated = helper.AcknowledgePendingChartScoreAndActivateIr(
       attempt.attemptId, staged.receipt->replayId);
   assert(repeated.status ==
          result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
 
-  const auto restaged = helper.StageChartResult(attempt);
+  const auto restaged = helper.StageChartResult(attempt, {});
   assert(restaged.status == result_persistence::StageStatus::AlreadyStaged);
   assert(restaged.receipt.has_value());
   assert(restaged.receipt->replayId == staged.receipt->replayId);
@@ -1771,7 +1771,7 @@ void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
   ++changed.score.fast;
   changed.payloadFingerprint = result_persistence::payloadFingerprint(
       changed.replay, changed.score);
-  assert(helper.StageChartResult(changed).status ==
+  assert(helper.StageChartResult(changed, {}).status ==
          result_persistence::StageStatus::IntegrityConflict);
 
   auto db = openDatabase(path);
@@ -1794,7 +1794,7 @@ void testOutboxInsertFailureRollsBackReplayAndChildren(
   db.reset();
 
   const auto attempt = sampleChartAttempt(root, "stage-outbox-rollback", 5);
-  const auto failed = helper.StageChartResult(attempt);
+  const auto failed = helper.StageChartResult(attempt, {});
   assert(failed.status == result_persistence::StageStatus::StorageFailure);
   assert(!failed.receipt.has_value());
 
@@ -1813,7 +1813,7 @@ void testPendingReadsDistinguishMissingFailureAndConflict(
   const auto attempt = sampleChartAttempt(root, "pending-read-status", 6);
   assert(helper.LoadPendingChartScore(attempt.attemptId).status ==
          result_persistence::PendingReadStatus::NotFound);
-  assert(helper.StageChartResult(attempt).status ==
+  assert(helper.StageChartResult(attempt, {}).status ==
          result_persistence::StageStatus::Staged);
 
   auto db = openDatabase(path);
@@ -1861,8 +1861,8 @@ void testRecoverySnapshotKeepsMalformedRowsAndContinues(
       sampleChartAttempt(root, "pending-batch-malformed-a", 7);
   const auto validAttempt =
       sampleChartAttempt(root, "pending-batch-malformed-b", 8);
-  assert(helper.StageChartResult(malformedAttempt).receipt.has_value());
-  assert(helper.StageChartResult(validAttempt).receipt.has_value());
+  assert(helper.StageChartResult(malformedAttempt, {}).receipt.has_value());
+  assert(helper.StageChartResult(validAttempt, {}).receipt.has_value());
 
   auto db = openDatabase(path);
   execOrAbort(db.get(),
@@ -1904,9 +1904,9 @@ void testRecoverySnapshotPrioritizesNeverAttemptedRows(
   const auto first = sampleChartAttempt(root, "pending-fair-a", 1);
   const auto second = sampleChartAttempt(root, "pending-fair-b", 2);
   const auto third = sampleChartAttempt(root, "pending-fair-c", 3);
-  assert(helper.StageChartResult(first).receipt.has_value());
-  assert(helper.StageChartResult(second).receipt.has_value());
-  assert(helper.StageChartResult(third).receipt.has_value());
+  assert(helper.StageChartResult(first, {}).receipt.has_value());
+  assert(helper.StageChartResult(second, {}).receipt.has_value());
+  assert(helper.StageChartResult(third, {}).receipt.has_value());
 
   const auto marked = helper.RecordPendingChartScoreRecoveryAttempt(
       first.attemptId,
@@ -1940,7 +1940,7 @@ void testPendingSemanticConflictsAreRetainedByAcknowledgement(
   ReplayRepository helper(path);
   const auto attempt =
       sampleChartAttempt(root, "pending-semantic-conflicts", 20);
-  const auto staged = helper.StageChartResult(attempt);
+  const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
   assert(staged.receipt.has_value());
 
@@ -1950,7 +1950,7 @@ void testPendingSemanticConflictsAreRetainedByAcknowledgement(
            result_persistence::PendingReadStatus::IntegrityConflict);
     assert(!pending.value.has_value());
     assert(!pending.diagnostic.empty());
-    const auto acknowledged = helper.AcknowledgePendingChartScore(
+    const auto acknowledged = helper.AcknowledgePendingChartScoreAndActivateIr(
         attempt.attemptId, staged.receipt->replayId);
     assert(acknowledged.status ==
            result_persistence::AcknowledgeStatus::IntegrityConflict);
@@ -2043,7 +2043,7 @@ void testPendingBatchHardCapsAt256(const std::filesystem::path &root) {
   for (int suffix = 0; suffix < 257; ++suffix) {
     const auto attempt = sampleChartAttempt(
         root, "pending-cap-" + std::to_string(suffix), suffix);
-    assert(helper.StageChartResult(attempt).status ==
+    assert(helper.StageChartResult(attempt, {}).status ==
            result_persistence::StageStatus::Staged);
   }
 
@@ -2068,9 +2068,9 @@ void testMalformedPendingIdentitiesCanRotate(
   const auto first = sampleChartAttempt(root, "pending-malformed-id-a", 30);
   const auto second = sampleChartAttempt(root, "pending-malformed-id-b", 31);
   const auto valid = sampleChartAttempt(root, "pending-malformed-id-c", 32);
-  assert(helper.StageChartResult(first).receipt.has_value());
-  assert(helper.StageChartResult(second).receipt.has_value());
-  assert(helper.StageChartResult(valid).receipt.has_value());
+  assert(helper.StageChartResult(first, {}).receipt.has_value());
+  assert(helper.StageChartResult(second, {}).receipt.has_value());
+  assert(helper.StageChartResult(valid, {}).receipt.has_value());
 
   constexpr std::string_view firstRawId = "!malformed-attempt-a";
   constexpr std::string_view secondRawId = "!malformed-attempt-b";
@@ -2801,7 +2801,7 @@ void testFutureVersionCurrentPlusOneIsRejected(
     assert(!error.empty());
   });
   assertUnchanged("stage", [&](ReplayRepository &helper, const auto &) {
-    assert(helper.StageChartResult(attempt).status ==
+    assert(helper.StageChartResult(attempt, {}).status ==
            result_persistence::StageStatus::StorageFailure);
   });
   assertUnchanged("load-pending", [&](ReplayRepository &helper, const auto &) {
@@ -2813,7 +2813,7 @@ void testFutureVersionCurrentPlusOneIsRejected(
     assert(!batch.storageAvailable);
   });
   assertUnchanged("acknowledge", [&](ReplayRepository &helper, const auto &) {
-    assert(helper.AcknowledgePendingChartScore(attempt.attemptId, 1).status ==
+    assert(helper.AcknowledgePendingChartScoreAndActivateIr(attempt.attemptId, 1).status ==
            result_persistence::AcknowledgeStatus::StorageFailure);
   });
   assertUnchanged("mark-recovery", [&](ReplayRepository &helper, const auto &) {
@@ -4234,6 +4234,156 @@ ir::IrOutboxDraft sampleIrDraft(std::string attemptId, std::int64_t createdAt,
   };
 }
 
+ir::IrOutboxDraft automaticIrDraft(
+    const result_persistence::ChartResultAttempt &attempt,
+    std::string providerId, std::int64_t createdAt) {
+  return {
+      .providerId = std::move(providerId),
+      .attemptId = attempt.attemptId,
+      .chartMd5 = attempt.score.chartMd5,
+      .chartSha256 = attempt.score.chartSha256,
+      .payloadJson = R"({"score":123})",
+      .createdAtUnixMillis = createdAt,
+  };
+}
+
+void testStageChartResultAtomicallyStagesIrDrafts(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-stage-atomic" / "replay.db";
+  ReplayRepository helper(path);
+  const auto attempt = sampleChartAttempt(root, "ir-stage-atomic", 81);
+  const std::array drafts{
+      automaticIrDraft(attempt, "tachi", 10'000),
+      automaticIrDraft(attempt, "archive_readonly", 10'001),
+  };
+
+  const auto staged = helper.StageChartResult(attempt, drafts);
+  assert(staged.status == result_persistence::StageStatus::Staged);
+  assert(staged.receipt && staged.receipt->scorePending);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 1);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_outbox") == 2);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM ir_outbox WHERE state=0 AND "
+                  "local_result_ready=0 AND next_request_user_intent=0") == 2);
+  db.reset();
+  assert(helper.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max())
+             .entries.empty());
+
+  const auto repeated = helper.StageChartResult(attempt, drafts);
+  assert(repeated.status == result_persistence::StageStatus::AlreadyStaged);
+  auto changed = drafts;
+  changed[0].payloadJson = R"({"score":999})";
+  assert(helper.StageChartResult(attempt, changed).status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  assert(helper.StageChartResult(
+                   attempt, std::span<const ir::IrOutboxDraft>(drafts).first(1))
+             .status == result_persistence::StageStatus::IntegrityConflict);
+
+  const auto invalidPath = root / "ir-stage-invalid" / "replay.db";
+  ReplayRepository invalid(invalidPath);
+  assert(invalid.EnsureSchema());
+  const auto invalidAttempt =
+      sampleChartAttempt(root, "ir-stage-invalid", 82);
+  auto duplicateProviders = std::array{
+      automaticIrDraft(invalidAttempt, "tachi", 20'000),
+      automaticIrDraft(invalidAttempt, "tachi", 20'001),
+  };
+  assert(invalid.StageChartResult(invalidAttempt, duplicateProviders).status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  auto mismatched =
+      automaticIrDraft(invalidAttempt, "tachi", 20'002);
+  mismatched.attemptId = "123e4567-e89b-42d3-a456-426614174099";
+  assert(invalid.StageChartResult(invalidAttempt, {&mismatched, 1}).status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  auto malformed = automaticIrDraft(invalidAttempt, "tachi", 20'003);
+  malformed.payloadJson = "{bad-json";
+  assert(invalid.StageChartResult(invalidAttempt, {&malformed, 1}).status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  invalid.Shutdown();
+  db = openDatabase(invalidPath);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 0);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 0);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_outbox") == 0);
+
+  const auto failurePath = root / "ir-stage-rollback" / "replay.db";
+  ReplayRepository failing(failurePath);
+  assert(failing.EnsureSchema());
+  failing.Shutdown();
+  db = openDatabase(failurePath);
+  execOrAbort(db.get(),
+              "CREATE TRIGGER fail_second_ir_draft BEFORE INSERT ON ir_outbox "
+              "WHEN NEW.provider_id='archive_readonly' BEGIN SELECT RAISE(ABORT, "
+              "'forced IR draft failure'); END");
+  db.reset();
+  const auto failedAttempt =
+      sampleChartAttempt(root, "ir-stage-rollback", 83);
+  const std::array failedDrafts{
+      automaticIrDraft(failedAttempt, "tachi", 30'000),
+      automaticIrDraft(failedAttempt, "archive_readonly", 30'001),
+  };
+  assert(failing.StageChartResult(failedAttempt, failedDrafts).status ==
+         result_persistence::StageStatus::StorageFailure);
+  failing.Shutdown();
+  db = openDatabase(failurePath);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 0);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 0);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_outbox") == 0);
+}
+
+void testAcknowledgementActivatesIrAtomically(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-activate-atomic" / "replay.db";
+  ReplayRepository helper(path);
+  const auto attempt = sampleChartAttempt(root, "ir-activate-atomic", 84);
+  const auto draft = automaticIrDraft(attempt, "tachi", 40'000);
+  const auto staged = helper.StageChartResult(attempt, {&draft, 1});
+  assert(staged.status == result_persistence::StageStatus::Staged &&
+         staged.receipt);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "CREATE TRIGGER fail_ir_activation BEFORE UPDATE OF local_result_ready "
+      "ON ir_outbox BEGIN SELECT RAISE(ABORT, 'forced activation failure'); "
+      "END");
+  db.reset();
+
+  const auto failed = helper.AcknowledgePendingChartScoreAndActivateIr(
+      attempt.attemptId, staged.receipt->replayId);
+  assert(failed.status == result_persistence::AcknowledgeStatus::StorageFailure);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
+  assert(queryInt(db.get(),
+                  "SELECT local_result_ready FROM ir_outbox") == 0);
+  execOrAbort(db.get(), "DROP TRIGGER fail_ir_activation");
+  db.reset();
+
+  const auto activated = helper.AcknowledgePendingChartScoreAndActivateIr(
+      attempt.attemptId, staged.receipt->replayId);
+  assert(activated.status == result_persistence::AcknowledgeStatus::Acknowledged);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(),
+                  "SELECT COUNT(*) FROM pending_chart_score_writes") == 0);
+  assert(queryInt(db.get(),
+                  "SELECT local_result_ready FROM ir_outbox") == 1);
+  db.reset();
+  assert(helper.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max())
+             .entries.size() == 1);
+  assert(helper.AcknowledgePendingChartScoreAndActivateIr(
+                    attempt.attemptId, staged.receipt->replayId)
+             .status ==
+         result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
+}
+
 void testVersion5MigrationAddsIrOutbox(const std::filesystem::path &root) {
   const auto path = root / "ir-outbox-migration" / "replay.db";
   ReplayRepository helper(path);
@@ -4588,6 +4738,8 @@ int main() {
   testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(root);
   testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(root);
   testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(root);
+  testStageChartResultAtomicallyStagesIrDrafts(root);
+  testAcknowledgementActivatesIrAtomically(root);
   testVersion5MigrationAddsIrOutbox(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);

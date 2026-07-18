@@ -15,6 +15,7 @@
 #include <bit>
 #include <cctype>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -1514,7 +1515,8 @@ std::optional<int> replay_repository_detail::SaveReplayOnConnection(
 }
 
 result_persistence::StageOutcome ReplayRepository::StageChartResult(
-    const result_persistence::ChartResultAttempt &attempt) {
+    const result_persistence::ChartResultAttempt &attempt,
+    std::span<const ir::IrOutboxDraft> irDrafts) {
   using result_persistence::PendingReadStatus;
   using result_persistence::StageOutcome;
   using result_persistence::StageReceipt;
@@ -1527,6 +1529,18 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
   if (!provenanceJson.has_value()) {
     return {.status = StageStatus::IntegrityConflict,
             .diagnostic = std::move(validationDiagnostic)};
+  }
+  const auto draftValidation =
+      replay_repository_detail::ValidateIrDraftsForAttempt(attempt, irDrafts);
+  if (draftValidation.status !=
+      replay_repository_detail::IrDraftStageStatus::Succeeded) {
+    return {
+        .status = draftValidation.status ==
+                          replay_repository_detail::IrDraftStageStatus::StorageFailure
+                      ? StageStatus::StorageFailure
+                      : StageStatus::IntegrityConflict,
+        .diagnostic = draftValidation.diagnostic,
+    };
   }
 
   std::lock_guard lock(impl_->sessionMutex);
@@ -1586,6 +1600,18 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
                     "pending score differs from the staged result payload"};
       }
     }
+    const auto verified = replay_repository_detail::VerifyIrDraftsOnConnection(
+        impl_->sessionDatabase, attempt.attemptId, irDrafts);
+    if (verified.status !=
+        replay_repository_detail::IrDraftStageStatus::Succeeded) {
+      return {
+          .status = verified.status == replay_repository_detail::
+                                           IrDraftStageStatus::StorageFailure
+                        ? StageStatus::StorageFailure
+                        : StageStatus::IntegrityConflict,
+          .diagnostic = verified.diagnostic,
+      };
+    }
     if (!transaction.commit(transactionError)) {
       logSqlErrorText("finishing idempotent chart result staging",
                       transactionError);
@@ -1618,6 +1644,19 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
                                *provenanceJson, *createdAt)) {
     return {.status = StageStatus::StorageFailure,
             .diagnostic = "could not stage the pending score"};
+  }
+  const auto draftsStaged =
+      replay_repository_detail::InsertInactiveIrDraftsOnConnection(
+          impl_->sessionDatabase, irDrafts);
+  if (draftsStaged.status !=
+      replay_repository_detail::IrDraftStageStatus::Succeeded) {
+    return {
+        .status = draftsStaged.status == replay_repository_detail::
+                                             IrDraftStageStatus::StorageFailure
+                      ? StageStatus::StorageFailure
+                      : StageStatus::IntegrityConflict,
+        .diagnostic = draftsStaged.diagnostic,
+    };
   }
   if (!transaction.commit(transactionError)) {
     logSqlErrorText("committing chart result staging", transactionError);
@@ -1720,8 +1759,8 @@ ReplayRepository::ListPendingChartScores(std::size_t limit) {
 }
 
 result_persistence::AcknowledgeOutcome
-ReplayRepository::AcknowledgePendingChartScore(std::string_view attemptId,
-                                             int replayId) {
+ReplayRepository::AcknowledgePendingChartScoreAndActivateIr(
+    std::string_view attemptId, int replayId) {
   using result_persistence::AcknowledgeStatus;
   using result_persistence::PendingReadStatus;
   profile_database_activity::WriteGuard writeGuard;
@@ -1773,6 +1812,24 @@ ReplayRepository::AcknowledgePendingChartScore(std::string_view attemptId,
       return {.status = AcknowledgeStatus::StorageFailure,
               .diagnostic = "could not acknowledge the pending score"};
     }
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    SqliteStatementHandle activateStmt;
+    if (!prepareSqliteStatementLogged(
+            impl_->sessionDatabase,
+            "UPDATE ir_outbox SET local_result_ready=1,"
+            "next_attempt_at_ms=COALESCE(next_attempt_at_ms,?),"
+            "updated_at_ms=? WHERE attempt_id=? AND local_result_ready=0",
+            activateStmt, "preparing automatic IR activation",
+            logSqlErrorText) ||
+        sqlite3_bind_int64(activateStmt.get(), 1, now) != SQLITE_OK ||
+        sqlite3_bind_int64(activateStmt.get(), 2, now) != SQLITE_OK ||
+        !bindTextView(activateStmt.get(), 3, attemptId) ||
+        sqlite3_step(activateStmt.get()) != SQLITE_DONE) {
+      return {.status = AcknowledgeStatus::StorageFailure,
+              .diagnostic = "could not activate automatic IR work"};
+    }
     if (!transaction.commit(transactionError)) {
       return {.status = AcknowledgeStatus::StorageFailure,
               .diagnostic = "could not commit score acknowledgement"};
@@ -1791,6 +1848,29 @@ ReplayRepository::AcknowledgePendingChartScore(std::string_view attemptId,
     return {.status = AcknowledgeStatus::IntegrityConflict,
             .diagnostic =
                 "acknowledged score has no matching durable replay identity"};
+  }
+  SqliteStatementHandle inactiveStmt;
+  if (!prepareSqliteStatementLogged(
+          impl_->sessionDatabase,
+          "SELECT COUNT(*) FROM ir_outbox WHERE attempt_id=? AND "
+          "local_result_ready=0",
+          inactiveStmt, "checking automatic IR activation", logSqlErrorText) ||
+      !bindTextView(inactiveStmt.get(), 1, attemptId) ||
+      sqlite3_step(inactiveStmt.get()) != SQLITE_ROW ||
+      sqlite3_column_type(inactiveStmt.get(), 0) != SQLITE_INTEGER) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "could not verify automatic IR activation"};
+  }
+  const sqlite3_int64 inactiveCount =
+      sqlite3_column_int64(inactiveStmt.get(), 0);
+  if (inactiveCount < 0 || sqlite3_step(inactiveStmt.get()) != SQLITE_DONE) {
+    return {.status = AcknowledgeStatus::StorageFailure,
+            .diagnostic = "automatic IR activation count is invalid"};
+  }
+  if (inactiveCount != 0) {
+    return {.status = AcknowledgeStatus::IntegrityConflict,
+            .diagnostic =
+                "acknowledged result still has inactive automatic IR work"};
   }
   if (!transaction.commit(transactionError)) {
     return {.status = AcknowledgeStatus::StorageFailure,

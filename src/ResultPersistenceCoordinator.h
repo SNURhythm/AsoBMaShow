@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -53,11 +54,14 @@ struct RecoverySummary {
 [[nodiscard]] RecoverySummary recoveryFailureSummary(std::string diagnostic);
 
 struct Dependencies {
-  std::function<StageOutcome(const ChartResultAttempt &)> stage;
+  std::function<StageOutcome(const ChartResultAttempt &,
+                             std::span<const ir::IrOutboxDraft>)>
+      stage;
   std::function<PendingReadOutcome(std::string_view)> loadPending;
   std::function<PendingBatchOutcome(std::size_t)> listPending;
   std::function<ProjectionOutcome(const PendingChartScoreWrite &)> project;
-  std::function<AcknowledgeOutcome(std::string_view, int)> acknowledge;
+  std::function<AcknowledgeOutcome(std::string_view, int)>
+      acknowledgeAndActivate;
   std::function<RecoveryMarkOutcome(std::string_view, RecoveryAttemptKind)>
       recordRecoveryAttempt;
 };
@@ -67,7 +71,8 @@ public:
   Coordinator(ScoreRepository &score, ReplayRepository &replay);
   explicit Coordinator(Dependencies dependencies);
 
-  SaveOutcome persist(const ChartResultAttempt &attempt);
+  SaveOutcome persist(const ChartResultAttempt &attempt,
+                      std::span<const ir::IrOutboxDraft> irDrafts = {});
   RecoverySummary recoverAll(std::size_t limit = 256);
 
 private:

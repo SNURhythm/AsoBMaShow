@@ -4,6 +4,7 @@
 #include "../sqlite3.h"
 
 #include <mutex>
+#include <span>
 
 struct ReplayRepository::Impl {
   explicit Impl(std::filesystem::path path = {});
@@ -14,6 +15,17 @@ struct ReplayRepository::Impl {
 };
 
 namespace replay_repository_detail {
+
+enum class IrDraftStageStatus {
+  Succeeded,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct IrDraftStageOutcome {
+  IrDraftStageStatus status = IrDraftStageStatus::StorageFailure;
+  std::string diagnostic;
+};
 
 sqlite3 *OpenDatabase(const std::filesystem::path &path,
                       std::string &errorMessage);
@@ -50,5 +62,13 @@ bool RecoverCourseRecordsOnConnection(
 std::optional<ReplayData>
 LoadLatestReplayOnConnection(sqlite3 *database,
                              const bms_parser::ChartMeta &chartMeta);
+IrDraftStageOutcome ValidateIrDraftsForAttempt(
+    const result_persistence::ChartResultAttempt &attempt,
+    std::span<const ir::IrOutboxDraft> drafts);
+IrDraftStageOutcome InsertInactiveIrDraftsOnConnection(
+    sqlite3 *database, std::span<const ir::IrOutboxDraft> drafts);
+IrDraftStageOutcome VerifyIrDraftsOnConnection(
+    sqlite3 *database, std::string_view attemptId,
+    std::span<const ir::IrOutboxDraft> drafts);
 
 } // namespace replay_repository_detail

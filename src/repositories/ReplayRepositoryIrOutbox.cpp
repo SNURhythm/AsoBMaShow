@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <vector>
 #include <utility>
 
 namespace {
@@ -187,6 +188,143 @@ ir::IrOutboxMutationOutcome mutationFromChanges(sqlite3 *db) {
 }
 
 } // namespace
+
+replay_repository_detail::IrDraftStageOutcome
+replay_repository_detail::ValidateIrDraftsForAttempt(
+    const result_persistence::ChartResultAttempt &attempt,
+    std::span<const ir::IrOutboxDraft> drafts) {
+  using replay_repository_detail::IrDraftStageStatus;
+  std::vector<const ir::IrOutboxDraft *> sorted;
+  sorted.reserve(drafts.size());
+  for (const ir::IrOutboxDraft &draft : drafts) {
+    std::string diagnostic;
+    if (!ir::validateIrOutboxDraft(draft, diagnostic)) {
+      return {.status = IrDraftStageStatus::IntegrityConflict,
+              .diagnostic = std::move(diagnostic)};
+    }
+    if (draft.attemptId != attempt.attemptId) {
+      return {.status = IrDraftStageStatus::IntegrityConflict,
+              .diagnostic = "IR draft attempt identity does not match the "
+                            "chart result"};
+    }
+    if (draft.chartMd5 != attempt.score.chartMd5 ||
+        draft.chartSha256 != attempt.score.chartSha256) {
+      return {.status = IrDraftStageStatus::IntegrityConflict,
+              .diagnostic =
+                  "IR draft chart identity does not match the chart result"};
+    }
+    sorted.push_back(&draft);
+  }
+  std::ranges::sort(sorted, {}, &ir::IrOutboxDraft::providerId);
+  for (std::size_t index = 1; index < sorted.size(); ++index) {
+    if (sorted[index - 1]->providerId == sorted[index]->providerId) {
+      return {.status = IrDraftStageStatus::IntegrityConflict,
+              .diagnostic =
+                  "automatic IR drafts contain a duplicate provider ID"};
+    }
+  }
+  return {.status = IrDraftStageStatus::Succeeded};
+}
+
+replay_repository_detail::IrDraftStageOutcome
+replay_repository_detail::InsertInactiveIrDraftsOnConnection(
+    sqlite3 *database, std::span<const ir::IrOutboxDraft> drafts) {
+  using replay_repository_detail::IrDraftStageStatus;
+  if (drafts.empty()) {
+    return {.status = IrDraftStageStatus::Succeeded};
+  }
+  SqliteStatementHandle insert;
+  constexpr const char *query =
+      "INSERT INTO ir_outbox("
+      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,state,"
+      "local_result_ready,next_request_user_intent,created_at_ms,updated_at_ms)"
+      " VALUES(?,?,?,?,?,0,0,0,?,?)";
+  if (prepareSqliteStatement(database, query, insert) != SQLITE_OK) {
+    return {.status = IrDraftStageStatus::StorageFailure,
+            .diagnostic = "could not prepare automatic IR draft staging"};
+  }
+  for (const ir::IrOutboxDraft &draft : drafts) {
+    if (sqlite3_reset(insert.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(insert.get()) != SQLITE_OK ||
+        !bindSqliteText(insert.get(), 1, draft.providerId) ||
+        !bindSqliteText(insert.get(), 2, draft.attemptId) ||
+        (draft.chartMd5.empty()
+             ? sqlite3_bind_null(insert.get(), 3) != SQLITE_OK
+             : !bindSqliteText(insert.get(), 3, draft.chartMd5)) ||
+        !bindSqliteText(insert.get(), 4, draft.chartSha256) ||
+        !bindSqliteText(insert.get(), 5, draft.payloadJson) ||
+        sqlite3_bind_int64(insert.get(), 6, draft.createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_bind_int64(insert.get(), 7, draft.createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_step(insert.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return {.status = IrDraftStageStatus::StorageFailure,
+              .diagnostic = "could not stage an automatic IR draft"};
+    }
+  }
+  return {.status = IrDraftStageStatus::Succeeded};
+}
+
+replay_repository_detail::IrDraftStageOutcome
+replay_repository_detail::VerifyIrDraftsOnConnection(
+    sqlite3 *database, std::string_view attemptId,
+    std::span<const ir::IrOutboxDraft> drafts) {
+  using replay_repository_detail::IrDraftStageStatus;
+  SqliteStatementHandle statement;
+  const std::string query = std::string("SELECT ") + kIrOutboxColumns +
+                            " FROM ir_outbox WHERE attempt_id=? ORDER BY "
+                            "provider_id";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 1, attemptId.data(),
+                        static_cast<int>(attemptId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK) {
+    return {.status = IrDraftStageStatus::StorageFailure,
+            .diagnostic = "could not prepare automatic IR draft validation"};
+  }
+  std::vector<ir::IrOutboxEntry> stored;
+  int result = SQLITE_OK;
+  while ((result = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    ir::IrOutboxEntry entry;
+    std::string diagnostic;
+    if (!decodeIrOutboxRow(statement.get(), entry, diagnostic)) {
+      return {.status = IrDraftStageStatus::IntegrityConflict,
+              .diagnostic = std::move(diagnostic)};
+    }
+    stored.push_back(std::move(entry));
+  }
+  if (result != SQLITE_DONE) {
+    return {.status = IrDraftStageStatus::StorageFailure,
+            .diagnostic = "automatic IR draft validation did not complete"};
+  }
+
+  std::vector<const ir::IrOutboxDraft *> expected;
+  expected.reserve(drafts.size());
+  for (const ir::IrOutboxDraft &draft : drafts) {
+    expected.push_back(&draft);
+  }
+  std::ranges::sort(expected, {}, &ir::IrOutboxDraft::providerId);
+  if (stored.size() != expected.size()) {
+    return {.status = IrDraftStageStatus::IntegrityConflict,
+            .diagnostic =
+                "stored automatic IR drafts differ from the staged set"};
+  }
+  for (std::size_t index = 0; index < stored.size(); ++index) {
+    const ir::IrOutboxEntry &entry = stored[index];
+    const ir::IrOutboxDraft &draft = *expected[index];
+    if (entry.providerId != draft.providerId ||
+        entry.attemptId != draft.attemptId ||
+        entry.chartMd5 != draft.chartMd5 ||
+        entry.chartSha256 != draft.chartSha256 ||
+        entry.payloadJson != draft.payloadJson ||
+        entry.createdAtUnixMillis != draft.createdAtUnixMillis) {
+      return {.status = IrDraftStageStatus::IntegrityConflict,
+              .diagnostic =
+                  "stored automatic IR draft differs from the staged draft"};
+    }
+  }
+  return {.status = IrDraftStageStatus::Succeeded};
+}
 
 ir::IrOutboxInsertOutcome ReplayRepository::EnqueueReadyIrOutboxDraft(
     const ir::IrOutboxDraft &draft, bool userIntent) {

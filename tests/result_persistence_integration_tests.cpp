@@ -6,6 +6,7 @@
 #include "../src/Utils.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -13,6 +14,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -65,6 +67,18 @@ int queryInt(sqlite3 *database, const std::string &sql) {
   assert(prepareResult == SQLITE_OK);
   assert(sqlite3_step(statement.get()) == SQLITE_ROW);
   return sqlite3_column_int(statement.get(), 0);
+}
+
+void execOrAbort(sqlite3 *database, const std::string &sql) {
+  char *message = nullptr;
+  const int result = sqlite3_exec(database, sql.c_str(), nullptr, nullptr,
+                                  &message);
+  if (result != SQLITE_OK) {
+    std::cerr << "SQL failed: " << (message ? message : "unknown error")
+              << " | " << sql << '\n';
+  }
+  sqlite3_free(message);
+  assert(result == SQLITE_OK);
 }
 
 std::string quoteSql(std::string_view value) {
@@ -188,6 +202,18 @@ ChartResultAttempt sampleAttempt(const std::filesystem::path &root,
           .payloadFingerprint = payloadFingerprint(replay, score)};
 }
 
+ir::IrOutboxDraft automaticIrDraft(const ChartResultAttempt &attempt,
+                                   std::int64_t createdAtUnixMillis) {
+  return {
+      .providerId = "tachi",
+      .attemptId = attempt.attemptId,
+      .chartMd5 = attempt.score.chartMd5,
+      .chartSha256 = attempt.score.chartSha256,
+      .payloadJson = R"({"score":123})",
+      .createdAtUnixMillis = createdAtUnixMillis,
+  };
+}
+
 void assertDatabaseCounts(const std::filesystem::path &replayPath,
                           const std::filesystem::path &scorePath,
                           int replayCount, int scoreCount, int pendingCount) {
@@ -244,7 +270,7 @@ void testCrashAfterStageRecoversExactlyOneScore() {
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-stage-crash", 2);
 
-  const StageOutcome staged = replay.StageChartResult(fixed);
+  const StageOutcome staged = replay.StageChartResult(fixed, {});
   assert(staged.status == StageStatus::Staged);
   assert(staged.receipt.has_value());
   assertDatabaseCounts(replayPath, scorePath, 1, 0, 1);
@@ -272,7 +298,7 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-before-ack", 3);
 
-  const StageOutcome staged = replay.StageChartResult(fixed);
+  const StageOutcome staged = replay.StageChartResult(fixed, {});
   assert(staged.status == StageStatus::Staged);
   const PendingReadOutcome pendingScore =
       replay.LoadPendingChartScore(fixed.attemptId);
@@ -292,6 +318,56 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   assertDatabaseCounts(replayPath, scorePath, 1, 1, 0);
 }
 
+void testActivationFailureRetainsPendingAndRecoveryActivatesIr() {
+  TemporaryDirectory temporary("ir-activation-recovery");
+  const auto replayPath = temporary.path() / "replay.db";
+  const auto scorePath = temporary.path() / "score.db";
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
+  const ChartResultAttempt fixed =
+      sampleAttempt(temporary.path(), "fixed-ir-activation", 5);
+  const std::array drafts{automaticIrDraft(fixed, 50'000)};
+
+  const StageOutcome staged = replay.StageChartResult(fixed, drafts);
+  assert(staged.status == StageStatus::Staged);
+  const PendingReadOutcome pending =
+      replay.LoadPendingChartScore(fixed.attemptId);
+  assert(pending.status == PendingReadStatus::Found && pending.value);
+  assert(score.SaveProjectedScore(*pending.value).status ==
+         ProjectionStatus::Inserted);
+
+  replay.Shutdown();
+  auto database = openDatabase(replayPath);
+  execOrAbort(database.get(),
+              "CREATE TRIGGER fail_ir_activation BEFORE UPDATE OF "
+              "local_result_ready ON ir_outbox BEGIN SELECT RAISE(ABORT, "
+              "'forced IR activation failure'); END");
+  database.reset();
+
+  Coordinator coordinator(score, replay);
+  const SaveOutcome failed = coordinator.persist(fixed, drafts);
+  assert(failed.state == SaveState::PendingAcknowledgement);
+  assertDatabaseCounts(replayPath, scorePath, 1, 1, 1);
+  database = openDatabase(replayPath);
+  assert(queryInt(database.get(),
+                  "SELECT local_result_ready FROM ir_outbox") == 0);
+  execOrAbort(database.get(), "DROP TRIGGER fail_ir_activation");
+  database.reset();
+  assert(replay.ListDueIrOutbox(100'000).entries.empty());
+
+  const RecoverySummary recovered = coordinator.recoverAll();
+  assert(recovered.attempted == 1);
+  assert(recovered.saved == 1);
+  assert(recovered.pending == 0);
+  assert(recovered.conflicts == 0);
+  assertDatabaseCounts(replayPath, scorePath, 1, 1, 0);
+  const auto due = replay.ListDueIrOutbox(
+      std::numeric_limits<std::int64_t>::max());
+  assert(due.status == ir::IrOutboxBatchStatus::Loaded);
+  assert(due.entries.size() == 1);
+  assert(due.entries.front().localResultReady);
+}
+
 void testProfileSwitchCannotAcquireGateMidPersist() {
   TemporaryDirectory temporary("profile-gate");
   ReplayRepository replay(temporary.path() / "replay.db");
@@ -307,9 +383,10 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
 
   Dependencies dependencies{
       .stage =
-          [&](const ChartResultAttempt &value) {
+          [&](const ChartResultAttempt &value,
+              std::span<const ir::IrOutboxDraft> drafts) {
             stageObservedWriteLease = profile_database_activity::writesActive();
-            return replay.StageChartResult(value);
+            return replay.StageChartResult(value, drafts);
           },
       .loadPending =
           [&](std::string_view id) { return replay.LoadPendingChartScore(id); },
@@ -330,9 +407,9 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
             }
             return score.SaveProjectedScore(value);
           },
-      .acknowledge =
+      .acknowledgeAndActivate =
           [&](std::string_view id, int replayId) {
-            return replay.AcknowledgePendingChartScore(id, replayId);
+            return replay.AcknowledgePendingChartScoreAndActivateIr(id, replayId);
           },
       .recordRecoveryAttempt =
           [&](std::string_view id, RecoveryAttemptKind kind) {
@@ -391,7 +468,7 @@ void testSuccessfulBoundedRecoveryReportsRemainingBacklog() {
     const ChartResultAttempt attempt =
         sampleAttempt(temporary.path(),
                       "bounded-backlog-" + std::to_string(suffix), suffix);
-    assert(replay.StageChartResult(attempt).status == StageStatus::Staged);
+    assert(replay.StageChartResult(attempt, {}).status == StageStatus::Staged);
   }
   assertDatabaseCounts(replayPath, scorePath, 3, 0, 3);
 
@@ -427,7 +504,7 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
     const ChartResultAttempt conflict =
         sampleAttempt(temporary.path(),
                       "persistent-conflict-" + std::to_string(suffix), suffix);
-    const StageOutcome staged = replay.StageChartResult(conflict);
+    const StageOutcome staged = replay.StageChartResult(conflict, {});
     assert(staged.status == StageStatus::Staged);
     const PendingReadOutcome loaded =
         replay.LoadPendingChartScore(conflict.attemptId);
@@ -442,7 +519,7 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
 
   const ChartResultAttempt valid =
       sampleAttempt(temporary.path(), "never-attempted-valid", 256);
-  assert(replay.StageChartResult(valid).status == StageStatus::Staged);
+  assert(replay.StageChartResult(valid, {}).status == StageStatus::Staged);
   assertDatabaseCounts(replayPath, scorePath, 257, 256, 257);
 
   Coordinator coordinator(score, replay);
@@ -480,6 +557,7 @@ int main() {
   testPersistCreatesOneReplayOneScoreNoPending();
   testCrashAfterStageRecoversExactlyOneScore();
   testCommittedScoreBeforeAckRecoversWithoutDuplicate();
+  testActivationFailureRetainsPendingAndRecoveryActivatesIr();
   testProfileSwitchCannotAcquireGateMidPersist();
   testSuccessfulBoundedRecoveryReportsRemainingBacklog();
   testRecoveryRetainsConflictAndProcessesLaterValidRow();

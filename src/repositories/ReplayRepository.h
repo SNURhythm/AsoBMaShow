@@ -153,13 +153,15 @@ public:
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
   result_persistence::StageOutcome StageChartResult(
-      const result_persistence::ChartResultAttempt &attempt);
+      const result_persistence::ChartResultAttempt &attempt,
+      std::span<const ir::IrOutboxDraft> irDrafts);
   result_persistence::PendingReadOutcome
   LoadPendingChartScore(std::string_view attemptId);
   result_persistence::PendingBatchOutcome
   ListPendingChartScores(std::size_t limit = 256);
   result_persistence::AcknowledgeOutcome
-  AcknowledgePendingChartScore(std::string_view attemptId, int replayId);
+  AcknowledgePendingChartScoreAndActivateIr(std::string_view attemptId,
+                                            int replayId);
   result_persistence::RecoveryMarkOutcome
   RecordPendingChartScoreRecoveryAttempt(
       std::string_view attemptId,
