@@ -2,17 +2,23 @@
 
 ## Goal
 
-Add durable Internet Ranking (IR) submission to AsoBMaShow without making
-gameplay, result persistence, or the result scene depend on Tachi-specific
-protocol details. The first provider is Bokutachi through Tachi's Direct
-Manual endpoint, but the internal model, driver boundary, queue, worker, and UI
-must support additional IR providers without restructuring the result flow.
+Add durable Internet Ranking (IR) submission and chart-ranking reads to
+AsoBMaShow without making gameplay, result persistence, chart selection, or
+the result scene depend on Tachi-specific protocol details. The first provider
+is Bokutachi through Tachi's Direct Manual and beatoraja-compatible endpoints,
+but the internal models, driver boundary, queue, services, and UI must support
+additional read-only or read/write IR providers without restructuring the
+result flow.
 
 ## Approved Requirements
 
 - Use a canonical, provider-neutral submission model and modular provider
   drivers.
+- Give each driver explicit read-only and operation capability flags so a
+  provider can expose rankings without supporting score submission.
 - Implement Bokutachi with Tachi Direct Manual and Batch Manual JSON.
+- Fetch Bokutachi personal-best rankings for a chart and expose them from both
+  chart selection and the result scene.
 - Store provider enablement, auto-submit choice, and API credentials per player
   profile.
 - Support automatic submission, explicit initial submission, and manual retry.
@@ -27,19 +33,23 @@ must support additional IR providers without restructuring the result flow.
 
 The first implementation covers completed, locally persisted, single-chart
 BMS results that the existing result-capture policy makes available through
-`result_persistence::ChartResultAttempt`. The existing policy already excludes
-autoplay, practice, replay playback, and course playback from this result
-persistence path.
+`result_persistence::ChartResultAttempt`, plus on-demand Bokutachi ranking
+reads for selected or completed BMS charts. The existing policy already
+excludes autoplay, practice, replay playback, and course playback from the
+result persistence path; it does not prevent a supported chart's remote
+ranking from being viewed.
 
 The Tachi driver supports the documented `bms:7K` and `bms:14K` playtypes.
 Other key modes remain valid local results but are reported as unsupported for
 this provider and are not placed into an automatic retry loop.
 
-OAuth, account creation, browser login, course submission, leaderboards,
+OAuth, account creation, browser login, course submission, course rankings,
 server-side changes, platform background-execution entitlements, and arbitrary
-third-party plugin loading are out of scope. The worker runs while the app is
-active and resumes durable work on startup, foregrounding, and profile
-activation.
+third-party plugin loading are out of scope. LR2IR network or archive parsing
+is explicitly deferred because the live service is unavailable; the driver
+contract is prepared for a future read-only, archive-backed implementation.
+The worker runs while the app is active and resumes durable work on startup,
+foregrounding, and profile activation.
 
 ## Existing Repository Foundations
 
@@ -58,6 +68,9 @@ The design builds on these current boundaries:
   active score and replay databases.
 - `AppSettingsStore` persists ordinary per-profile settings, while profile
   archives currently include `settings.json`, `scores.db`, and `replays.db`.
+- `MainMenuScene` already has a right action rail and an `OverlayPortal` for
+  modal UI; `ResultScene` already has a named `resultActions` row and a
+  full-screen root where the same modal component can be attached.
 
 ## Chosen Architecture
 
@@ -82,12 +95,28 @@ ReplayRepository::StageChartResult
         v
 IrSubmissionService worker
         |
-        +-- TachiDirectManualDriver
+        +-- TachiDriver
         +-- future provider drivers
+
+selected/completed chart
+        |
+        v
+canonical IrChartQuery
+        |
+        v
+IrRankingService (memory cache)
+        |
+        v
+IrDriver::fetchChartRanking
+        |
+        v
+IrRankingModal
 ```
 
 Provider-specific JSON and HTTP interpretation stay in the provider driver.
-The result flow sees canonical submissions and generic queue status only.
+The result flow sees canonical submissions and generic queue status only. The
+chart-selection and result scenes see canonical ranking models and modal
+state, never Tachi response objects.
 
 ### Outbox placement
 
@@ -117,17 +146,22 @@ src/ir/
     IrDriver.h
     IrOutboxModels.h/.cpp
     IrSubmissionService.h/.cpp
+    IrRankingModels.h/.cpp
+    IrRankingService.h/.cpp
+    IrRankingModal.h/.cpp
     IrCredentialStore.h/.cpp
     IrHttpClient.h/.cpp
     tachi/
-        TachiDirectManualDriver.h/.cpp
+        TachiDriver.h/.cpp
         TachiBatchManual.h/.cpp
         TachiResponseParser.h/.cpp
+        TachiRankingParser.h/.cpp
 ```
 
 The exact private file split may be adjusted during implementation to keep
-translation units cohesive. The public boundaries remain the canonical model,
-driver interface, credential store, and submission service.
+translation units cohesive. The public boundaries remain the canonical
+models, driver interface, credential store, submission service, ranking
+service, and ranking modal.
 
 All new supported source files must be added to the applicable desktop and
 mobile CMake targets. The iOS file-system-synchronized group discovers normal
@@ -177,27 +211,102 @@ The canonical model does not include a server URL, API key, HTTP headers,
 Tachi names, JSON, or queue state. Drivers validate provider support before
 producing an outbox draft.
 
-## Driver Boundary
+## Canonical Ranking Models
 
-Each provider has a stable identifier and implements these conceptual
-operations:
+Ranking reads use a separate provider-neutral query and result model:
 
 ```cpp
+struct IrChartQuery {
+  int keyMode = 0;
+  std::string chartMd5;
+  std::string chartSha256;
+  int totalNotes = 0;
+};
+
+struct IrChartRankingEntry {
+  int rank = 0;
+  std::string playerName;
+  int score = 0;
+  int maxScore = 0;
+  int clearType = kClearTypeFailedRank;
+  std::optional<int> badPoints;
+  std::optional<int> maxCombo;
+  std::optional<std::int64_t> achievedAtUnixMillis;
+  bool currentUser = false;
+};
+
+struct IrChartRanking {
+  std::string providerId;
+  IrChartQuery chart;
+  std::vector<IrChartRankingEntry> entries;
+  std::int64_t fetchedAtUnixMillis = 0;
+};
+```
+
+The query is built from the selected chart record or completed result. It is
+immutable for one request. `rank` is the one-based provider rank assigned by
+the driver while normalizing the response. The ranking service and UI preserve
+the driver's order and never apply provider-specific sorting themselves.
+Missing optional provider fields remain absent rather than being presented as
+zero.
+
+Ranking models contain no API key, Authorization header, raw response body,
+provider URL, or mutable UI object. The local PB or current play is a separate
+comparison model and is never inserted into `entries`.
+
+## Driver Boundary
+
+Each provider has a stable identifier, declares its supported operations, and
+implements only those operations:
+
+```cpp
+struct IrDriverCapabilities {
+  bool readOnly = false;
+  bool chartRankings = false;
+  bool scoreSubmission = false;
+  bool deferredSubmission = false;
+};
+
 class IrDriver {
 public:
   virtual ~IrDriver() = default;
   virtual std::string_view providerId() const noexcept = 0;
-  virtual BuildDraftOutcome buildDraft(const IrSubmission &) const = 0;
+  virtual IrDriverCapabilities capabilities() const noexcept = 0;
+  virtual BuildDraftOutcome buildDraft(const IrSubmission &) const;
   virtual DeliveryOutcome submit(const IrOutboxEntry &,
                                  const IrProviderRuntimeConfig &,
                                  IrHttpClient &,
-                                 std::stop_token) const = 0;
+                                 std::stop_token) const;
   virtual DeliveryOutcome poll(const IrOutboxEntry &,
                                const IrProviderRuntimeConfig &,
                                IrHttpClient &,
-                               std::stop_token) const = 0;
+                               std::stop_token) const;
+  virtual ChartRankingOutcome fetchChartRanking(
+      const IrChartQuery &,
+      const IrProviderRuntimeConfig &,
+      IrHttpClient &,
+      std::stop_token) const;
 };
 ```
+
+The base implementations return a typed `unsupported operation` outcome.
+Driver registration rejects contradictory declarations:
+
+- `readOnly` requires `scoreSubmission == false` and
+  `deferredSubmission == false`.
+- `deferredSubmission` requires `scoreSubmission == true`.
+- A capability set must expose at least one operation.
+
+The submission service also checks capabilities before asking for a draft or
+calling submit/poll, so a read-only driver cannot create or deliver an outbox
+row even if profile data is malformed. The ranking service calls only drivers
+with `chartRankings == true`.
+
+The Bokutachi driver sets `readOnly` to false and all three operation flags to
+true. No LR2IR driver is registered in this implementation. A future
+archive-backed LR2IR driver will set `readOnly` and `chartRankings` to true,
+leave both submission flags false, and implement ranking reads without
+submission stubs.
 
 `BuildDraftOutcome` distinguishes a valid serialized payload from an
 unsupported play or invalid canonical input. Unsupported input is a local,
@@ -207,6 +316,10 @@ user-readable result, not a network failure and not a retryable queue row.
 remote work, transient failure, blocked configuration/authentication, and
 permanent rejection. Technical response bodies remain inside the driver and
 are reduced to bounded, sanitized diagnostics before reaching the queue.
+
+`ChartRankingOutcome` distinguishes success, chart not found, authentication
+required, transient failure, unsupported chart, and malformed or oversized
+provider data. It returns only normalized entries and bounded diagnostics.
 
 ## Profile Settings and Credentials
 
@@ -227,6 +340,11 @@ or HTTPS origins without embedded user information, query strings, or
 fragments. HTTPS is the normal production choice; HTTP is allowed only for an
 explicitly entered development or self-hosted instance and is labeled as
 insecure in the UI.
+
+Settings presentation is capability-aware. Auto Submit, submission status,
+and outbox actions are never shown for a read-only driver. Provider enablement
+still controls ranking reads, and future drivers may define non-secret
+read-specific configuration without pretending to support submission.
 
 The API key is stored separately in a versioned, atomically written
 `ir-credentials.json` inside the profile directory. The credential store is
@@ -257,6 +375,8 @@ CREATE TABLE ir_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   provider_id TEXT NOT NULL,
   attempt_id TEXT NOT NULL,
+  chart_md5 TEXT,
+  chart_sha256 TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   state INTEGER NOT NULL,
   local_result_ready INTEGER NOT NULL DEFAULT 0,
@@ -294,6 +414,9 @@ interval rather than being counted as a transport failure.
 not contain the API key, Authorization header, server URL, response cookies,
 or other credentials. Persisting the provider payload makes retries stable
 across chart removal, metadata changes, and future mapping changes.
+`chart_md5` and `chart_sha256` repeat non-secret canonical identity needed for
+provider-neutral status lookup and precise ranking-cache invalidation without
+parsing provider JSON.
 
 The row states are:
 
@@ -495,6 +618,50 @@ response. Changing the configured server affects new POSTs but never moves an
 existing deferred import to another origin. A manual retry while awaiting
 completion triggers a poll, never a second POST.
 
+### Chart rankings
+
+For a chart with a valid lowercase SHA-256 digest, the Bokutachi driver reads
+the server's beatoraja-compatible personal-best leaderboard:
+
+```text
+GET <server-origin>/ir/beatoraja/charts/<sha256>/scores
+Authorization: Bearer <current-api-key>
+```
+
+The request does not follow redirects. HTTP 404 becomes the normal `chart not
+found` empty state. HTTP 401/403 becomes `authentication required`; transport,
+408, 429, and 5xx failures are transient. Other invalid responses become
+bounded, sanitized errors and are not cached.
+
+The driver requires `success: true` and an array body. Tachi's compatibility
+route does not guarantee SQL response order or return its stored rank, so the
+driver validates every row and reconstructs current Tachi BMS PB ordering:
+EX score descending, clear index descending, BP descending, then achievement
+time ascending with unknown times last. Entries with an identical complete
+ranking tuple share a competition rank; validated player-name UTF-8 byte order
+provides only a deterministic display order within that tie. The driver then
+normalizes fields as follows. BP descending is intentional here: it reproduces
+the current Tachi BMS ranking-value and materialized-view source rather than
+substituting a client preference.
+
+- An empty `player` value is the authenticated user and is displayed as
+  `You`; other player names must be valid UTF-8 with 1 through 64 Unicode code
+  points and no control characters.
+- EX score is reconstructed as `(epg + lpg) * 2 + egr + lgr` and validated
+  against `notes * 2`.
+- Returned note count must equal the query's positive `totalNotes`; score, BP,
+  combo, clear index, and time must be in their valid ranges.
+- The beatoraja clear index maps to AsoBMaShow's canonical clear rank.
+- `minbp`, `maxcombo`, and `date` populate BP, max combo, and achievement time
+  when valid.
+- Invalid rows fail the whole response instead of shifting ranks in a
+  partially displayed remote list.
+- At most one empty player value may mark the authenticated user.
+
+The ranking request accepts at most 8 MiB and 20,000 entries. Exceeding either
+limit produces an oversized-response error rather than truncating the
+leaderboard.
+
 ## Retry Classification
 
 Automatic retries use `consecutive_failure_count` and a persisted capped
@@ -559,6 +726,41 @@ Application shutdown stops and joins the worker before repositories are shut
 down. Foregrounding and configuration changes wake it. No UI thread waits for
 a normal upload or poll.
 
+## Ranking Read Service
+
+`ApplicationContext` owns one `IrRankingService` beside the submission
+service. Ranking reads are on-demand, non-durable work and never enter
+`ir_outbox`. The service owns one `std::jthread`, a condition variable, at most
+one latest pending or active request, a per-request stop source,
+request-generation counter, and a mutex-protected in-memory cache.
+
+Opening a ranking modal submits an immutable request containing the active
+profile ID, provider ID, validated server origin, chart query, and local
+comparison snapshot. The service returns a matching successful cache entry
+immediately or starts a cancellable background request. Refresh bypasses and
+replaces the cache entry, cancels an older generation, and queues the new
+generation. Closing the modal cancels its active or pending request without
+waiting on the UI thread.
+
+Successful responses are cached for five minutes using a monotonic clock. A
+cache key contains profile ID, provider ID, server origin, key mode, and chart
+SHA-256 plus total note count. The API key is never part of the key or cached
+value. Failed, authentication-required, unsupported, and chart-not-found
+outcomes are not cached.
+
+Every completion carries its request generation and full cache key. The UI
+accepts it only if the modal is still open for that generation and chart. This
+prevents a slow response from an earlier chart, profile, server, or key from
+replacing current content.
+
+Profile switching and application shutdown request cancellation and join the
+active read before replacing profile-bound configuration or destroying the
+service. Server URL changes, key replacement/removal, and provider disablement
+cancel the active request and clear affected cache entries. When a score
+submission succeeds, its profile, provider, request origin, and chart identity
+invalidate the matching ranking cache entry so the next modal opening reads
+the updated remote state.
+
 ## UI Behavior
 
 ### IR settings
@@ -574,11 +776,55 @@ Add an `IR` settings tab for the active profile with:
 - A short note that credentials are device-local and excluded from profile
   export.
 
+These submission-specific controls are shown because Bokutachi is read/write.
+A future read-only provider omits Auto Submit, queue counts, Retry All, and
+discard controls while retaining its enablement and read-specific settings.
+
 Each settings action writes exactly one store atomically before reconfiguring
 the service: ordinary controls update `settings.json`, while Replace Key and
 Remove Key update only `ir-credentials.json`. If that write fails, the UI and
 effective runtime configuration retain the previous value and display a
 sanitized error. No action attempts a transaction across the two files.
+
+### Chart selection
+
+The existing right action rail gains a `Rankings` button. It is enabled when
+Bokutachi is enabled and the selected BMS chart has a supported key mode,
+positive note count, and valid SHA-256 identity. Local file availability is
+not required. A missing key does not disable the button; opening the modal
+presents the authentication-required state and points the user to IR settings.
+
+Clicking the button snapshots the selected chart and current local PB before
+opening the modal. Ranking reads never start merely because selection moves,
+so fast chart navigation cannot generate a stream of network requests. The
+modal blocks list input until it is closed, making the chart snapshot stable.
+
+### Ranking modal
+
+Both entry points use the same `IrRankingModal`. It is a safe-area-aware,
+full-screen overlay with a large centered panel rather than another permanent
+column in either scene. Back/Escape, the platform back action, clicking the
+scrim, or the explicit Close button cancels the active request and closes it.
+
+The modal contains:
+
+- Chart title and `Bokutachi Ranking` header.
+- Last successful fetch time, Refresh, and Close controls.
+- A comparison card above the leaderboard. Chart selection supplies the local
+  PB; the result scene supplies `This Play`. The comparison is never assigned
+  a remote rank or inserted into the server entries.
+- A virtualized list with rank, player, EX score and rate, lamp, BP, and max
+  combo.
+- A highlighted authenticated-user row labeled `You`.
+
+On compact widths, each row keeps rank/player, EX rate, and lamp visible.
+Selecting the row expands its BP, combo, and achievement time. The wide layout
+shows those fields as columns without expansion.
+
+The modal has explicit loading, empty/chart-not-found,
+authentication-required, offline/transient failure, malformed/oversized
+response, and retry presentations. Refresh bypasses the five-minute cache. No
+modal state claims a local comparison has an official remote rank.
 
 ### Result scene
 
@@ -592,6 +838,11 @@ For a supported normal result, show a compact provider-neutral IR status:
 - `Authentication required` with `Retry` after the key is updated.
 - `Failed` with `Retry` and a bounded user-readable reason.
 - `Unsupported` with the local reason and no retry button.
+
+The normal result action row also gains `Rankings`. It opens the shared modal
+for the completed chart with the current play as its separate comparison card.
+It performs no implicit submission and is available independently of the
+auto-submit toggle whenever Bokutachi ranking reads are enabled for the chart.
 
 The existing local result persistence decision remains higher priority. IR
 controls do not appear as successful until the local result is durable, and IR
@@ -616,6 +867,12 @@ response bodies or credentials.
 - Server error text is bounded and sanitized before persistence or display.
 - Provider payloads contain score and chart-hash data and therefore remain
   inside the profile database and credential-authorized submission flow.
+- Ranking requests send chart identity only; the local comparison score is not
+  uploaded by opening the modal.
+- Remote player names and scores live only in the bounded five-minute memory
+  cache and active modal. They are not written to SQLite, settings, archives,
+  diagnostics, or logs.
+- Ranking cache keys and values contain no API key or raw response body.
 
 ## Error Handling
 
@@ -634,6 +891,11 @@ IR startup recovery is warning-level. Existing local score/replay startup
 readiness remains authoritative, and a network outage never prevents the app
 from starting.
 
+Ranking read failures are scene-local and non-fatal. They never change outbox
+state, block chart selection, block leaving the result screen, or affect local
+score persistence. Request-generation checks turn late or cancelled
+completions into no-ops.
+
 ## Testing Strategy
 
 ### Canonical model and Tachi mapping
@@ -647,6 +909,21 @@ from starting.
 - Parse immediate success, converter rejection, mixed warnings, malformed
   JSON, and 202 responses.
 
+### Driver capabilities and ranking mapping
+
+- Accept the Bokutachi capability set and reject read-only/submission and
+  deferred-without-submission contradictions.
+- Prove a registered read-only fake driver cannot build a draft, create an
+  outbox row, or receive submit/poll calls while it can serve rankings.
+- Build chart queries from selected and completed charts and reject invalid
+  key modes, hashes, and note counts.
+- Parse Bokutachi ranking success, empty user name as `You`, every clear index,
+  EX score/rate, BP, combo, timestamp, chart-not-found, authentication,
+  malformed rows, oversized bodies, and too many entries.
+- Reconstruct Tachi's BMS PB ordering and competition ranks deterministically,
+  and fail the whole result when any row would make the remote rank sequence
+  ambiguous.
+
 ### Repository and migration
 
 - Create and migrate the outbox schema in `replays.db`.
@@ -656,6 +933,8 @@ from starting.
   transaction makes an automatic row claimable, including crash recovery
   after score projection.
 - Prove `(provider_id, attempt_id)` idempotency.
+- Retain canonical chart hashes needed for status lookup and ranking-cache
+  invalidation without parsing provider payload JSON.
 - Recover stale uploads, preserve deferred import IDs, and retain retry times.
 - Preserve the origin that accepted a deferred import even when profile
   settings later select another server.
@@ -675,6 +954,19 @@ from starting.
 - Prove profile switching and shutdown cancel or drain the worker without
   updating the wrong profile database.
 
+### Ranking service
+
+- Use a fake monotonic clock, fake credential lookup, fake driver, and
+  controllable HTTP completion.
+- Verify fetch-on-open, five-minute successful cache reuse, Refresh bypass,
+  and no caching of errors or chart-not-found outcomes.
+- Verify cache separation by profile, provider, origin, key mode, chart, and
+  note count; the API key must not appear in a key or value.
+- Verify close, profile switch, provider disable, origin change, key change,
+  and shutdown cancellation discard late generations.
+- Verify successful submission invalidates only the matching
+  profile/provider/origin/chart entry.
+
 ### Credential hygiene
 
 - Verify the API key is absent from every outbox column, serialized Batch
@@ -689,6 +981,13 @@ from starting.
   network and SQLite.
 - Verify Submit, Retry, Retry All, Remove Key, disable auto-submit, and discard
   actions.
+- Verify the chart-selection and result `Rankings` buttons open the same modal
+  with local PB and `This Play` comparison models respectively.
+- Verify comparison rows never receive a remote rank, the `You` row is
+  highlighted, Refresh and Retry work, compact rows expand, and large lists
+  remain virtualized.
+- Verify loading, empty, authentication, transient, malformed, and oversized
+  presentations without blocking either scene.
 - Build the desktop target and focused tests, then run the repository's iOS and
   Android build-only verification paths without deployment.
 
@@ -704,10 +1003,17 @@ from starting.
   terminal remote result.
 - Manual retry uses the current credential and does not resubmit an already
   deferred import.
+- Chart selection and the result scene can open the same Bokutachi ranking
+  modal without prefetching during chart navigation.
+- Rankings reconstruct Bokutachi's provider ordering, keep the local
+  comparison outside that order, and refresh after the five-minute cache
+  expires or the user requests it.
+- A read-only driver cannot create or deliver an outbox row.
 - No API key is present in SQLite, profile exports, provider payloads,
-  diagnostics, or logs.
-- Tachi-specific code remains behind the driver boundary, and adding another
-  provider does not require changes to gameplay result capture.
+  ranking caches, diagnostics, or logs.
+- Tachi-specific submission and ranking code remains behind the driver
+  boundary, and adding a later archive-backed read-only provider does not
+  require changes to gameplay result capture or modal presentation.
 
 ## Protocol References
 
@@ -723,3 +1029,13 @@ from starting.
   <https://docs.tachi.ac/game-support/games/bms-7K/>
 - Tachi BMS 14K support:
   <https://docs.tachi.ac/game-support/games/bms-14K/>
+- Tachi beatoraja chart-ranking route:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/ir/beatoraja/charts/_chartSHA256/router.ts>
+- Tachi beatoraja ranking conversion:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/ir/beatoraja/charts/_chartSHA256/convert-scores.ts>
+- Tachi BMS PB ranking keys:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/game-implementations/games/_common.ts#L82-L89>
+- Tachi competition-rank materialization:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/db/migrations/20260518160000_chart_leaderboard_materialized.sql>
+- Deferred LR2IR read-only reference:
+  <https://github.com/SayakaIsBaka/lr2ir-read-only/tree/bb53fe823bc286ef4691b2d94a48bbeef029f989>
