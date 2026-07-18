@@ -676,16 +676,24 @@ void testPermanentFailureRetryAllAndDeferredPreservation() {
   makeFailed(harness, 11);
   makeFailed(harness, 12);
   const auto deferredId = makeAwaiting(harness, 13);
+  const auto pending = harness.repository.EnqueueReadyIrOutboxDraft(
+      draft(22, harness.now.load() + 60'000), false);
+  expect(pending.entry.has_value(), "delayed pending fixture inserts");
   harness.service->start(profile(false));
   const auto retried = harness.service->retryAll("fake");
   expect(retried.status == ir::IrOutboxMutationStatus::Updated &&
-             retried.affectedRows == 3,
-         "Retry All resets failed rows and schedules deferred poll");
+             retried.affectedRows == 4,
+         "Retry All resets pending and failed rows and schedules deferred poll");
   expect(load(harness, 11).state == ir::IrOutboxState::Pending &&
              load(harness, 11).nextRequestUserIntent &&
              load(harness, 12).state == ir::IrOutboxState::Pending &&
              load(harness, 12).nextRequestUserIntent,
          "Retry All marks new POSTs as explicit user intent");
+  const auto retriedPending = load(harness, 22);
+  expect(retriedPending.state == ir::IrOutboxState::Pending &&
+             retriedPending.nextAttemptAtUnixMillis == harness.now.load() &&
+             retriedPending.nextRequestUserIntent,
+         "Retry All makes delayed pending work due with user intent");
   const auto deferred = load(harness, 13);
   expect(deferred.id == deferredId &&
              deferred.state == ir::IrOutboxState::AwaitingRemoteResult &&
