@@ -273,7 +273,7 @@ ChartRankingOutcome rankingParseFailure(ChartRankingStatus status,
 struct RankingPageCursor {
   std::string chartSha256;
   std::string chartId;
-  std::int64_t userId = 0;
+  std::optional<std::int64_t> userId;
   int startRanking = 0;
   int loadedEntries = 0;
   int lastRank = 0;
@@ -319,14 +319,19 @@ parseRankingPageCursor(std::string_view token,
       return std::nullopt;
     }
     const auto version = cursorInteger(document, "v");
-    const auto userId = cursorInteger(document, "userID");
+    const auto userIdValue = document.find("userID");
+    std::optional<std::int64_t> userId;
+    if (userIdValue != document.end() && !userIdValue->is_null()) {
+      userId = cursorInteger(document, "userID");
+    }
     const auto startRanking = cursorInteger(document, "startRanking");
     const auto loadedEntries = cursorInteger(document, "loadedEntries");
     const auto lastRank = cursorInteger(document, "lastRank");
     const auto outOf = cursorInteger(document, "outOf");
     const auto chartSha = document.find("chartSHA256");
     const auto chartId = document.find("chartID");
-    if (!version || *version != 1 || !userId || *userId <= 0 ||
+    if (!version || *version != 1 || userIdValue == document.end() ||
+        (!userIdValue->is_null() && !userId) || (userId && *userId <= 0) ||
         !startRanking || *startRanking <= 1 ||
         *startRanking > std::numeric_limits<int>::max() || !loadedEntries ||
         *loadedEntries <= 0 ||
@@ -347,7 +352,7 @@ parseRankingPageCursor(std::string_view token,
     return RankingPageCursor{
         .chartSha256 = chartSha->get<std::string>(),
         .chartId = chartId->get<std::string>(),
-        .userId = *userId,
+        .userId = userId,
         .startRanking = static_cast<int>(*startRanking),
         .loadedEntries = static_cast<int>(*loadedEntries),
         .lastRank = static_cast<int>(*lastRank),
@@ -360,12 +365,14 @@ parseRankingPageCursor(std::string_view token,
 
 std::string makeRankingPageCursor(const IrChartQuery &query,
                                   std::string_view chartId,
-                                  std::int64_t userId, int startRanking,
-                                  int loadedEntries, int lastRank, int outOf) {
+                                  std::optional<std::int64_t> userId,
+                                  int startRanking, int loadedEntries,
+                                  int lastRank, int outOf) {
   return nlohmann::json{{"v", 1},
                         {"chartSHA256", query.chartSha256},
                         {"chartID", chartId},
-                        {"userID", userId},
+                        {"userID", userId ? nlohmann::json(*userId)
+                                           : nlohmann::json(nullptr)},
                         {"startRanking", startRanking},
                         {"loadedEntries", loadedEntries},
                         {"lastRank", lastRank},
@@ -375,8 +382,8 @@ std::string makeRankingPageCursor(const IrChartQuery &query,
 
 ChartRankingOutcome fetchNativeRankingPage(
     const IrChartQuery &query, std::string_view origin, std::string_view game,
-    std::string_view chartId, std::int64_t userId, int startRanking,
-    int loadedEntries, std::optional<int> expectedOutOf,
+    std::string_view chartId, std::optional<std::int64_t> userId,
+    int startRanking, int loadedEntries, std::optional<int> expectedOutOf,
     const IrProviderRuntimeConfig &config, IrHttpClient &http,
     std::stop_token stopToken) {
   if (stopToken.stop_requested()) {
@@ -388,7 +395,7 @@ ChartRankingOutcome fetchNativeRankingPage(
       .url = std::string(origin) + "/api/v1/games/" + std::string(game) +
              "/charts/" + encodePathSegment(chartId) +
              "/pbs?startRanking=" + std::to_string(startRanking),
-      .headers = {{"Authorization", "Bearer " + config.apiKey}},
+      .headers = {},
       .maximumResponseBytes = kMaximumRankingResponseBytes,
       .followRedirects = false,
   };
@@ -546,9 +553,10 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
     return rankingFailure(ChartRankingStatus::Unsupported,
                           "Bokutachi supports BMS 7K and 14K rankings only");
   }
-  if (!validCredential(config.apiKey)) {
+  const bool authenticated = !config.apiKey.empty();
+  if (authenticated && !validCredential(config.apiKey)) {
     return rankingFailure(ChartRankingStatus::AuthenticationRequired,
-                          "Tachi API key is missing or invalid");
+                          "Tachi API key is invalid");
   }
   const auto origin = normalizeServerOrigin(config.serverOrigin);
   if (!origin) {
@@ -565,9 +573,6 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   IrChartQuery normalizedQuery = query;
   normalizedQuery.chartSha256 = *sha256;
   const std::string game(nativeBmsGame(query.keyMode));
-  const std::vector<std::pair<std::string, std::string>> bearerHeader{
-      {"Authorization", "Bearer " + config.apiKey}};
-
   std::optional<std::string> chartId =
       cacheStore_ ? cacheStore_->chartId(*origin, game, *sha256) : std::nullopt;
   const bool usedCachedChartId = chartId.has_value();
@@ -579,8 +584,7 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
     const IrHttpRequest resolveRequest{
         .method = IrHttpMethod::Post,
         .url = *origin + "/api/v1/games/" + game + "/charts/resolve",
-        .headers = {{"Authorization", "Bearer " + config.apiKey},
-                    {"Content-Type", "application/json"}},
+        .headers = {{"Content-Type", "application/json"}},
         .body = "{\"identifier\":\"" + *sha256 +
                 "\",\"matchType\":\"bmsChartHash\"}",
         .maximumResponseBytes = kMaximumTachiResponseBytes,
@@ -616,9 +620,11 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
     }
   }
 
-  std::optional<std::int64_t> userId =
-      cacheStore_ ? cacheStore_->userId(*origin) : std::nullopt;
-  if (!userId) {
+  std::optional<std::int64_t> userId;
+  if (authenticated) {
+    userId = cacheStore_ ? cacheStore_->userId(*origin) : std::nullopt;
+  }
+  if (authenticated && !userId) {
     if (stopToken.stop_requested()) {
       return rankingFailure(ChartRankingStatus::Cancelled,
                             "Tachi ranking request was cancelled");
@@ -626,7 +632,7 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
     const IrHttpRequest identityRequest{
         .method = IrHttpMethod::Get,
         .url = *origin + "/api/v1/status",
-        .headers = bearerHeader,
+        .headers = {{"Authorization", "Bearer " + config.apiKey}},
         .maximumResponseBytes = kMaximumTachiResponseBytes,
         .followRedirects = false,
     };
@@ -653,7 +659,7 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   }
 
   auto page =
-      fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId, *userId,
+      fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId, userId,
                              1, 0, std::nullopt, config, http, stopToken);
   if (page.status != ChartRankingStatus::ChartNotFound || !usedCachedChartId) {
     return page;
@@ -668,7 +674,7 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
     return *failure;
   }
   return fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId,
-                                *userId, 1, 0, std::nullopt, config, http,
+                                userId, 1, 0, std::nullopt, config, http,
                                 stopToken);
 }
 
@@ -683,10 +689,6 @@ ChartRankingOutcome TachiDriver::fetchChartRankingPage(
   if (query.keyMode != 7 && query.keyMode != 14) {
     return rankingFailure(ChartRankingStatus::Unsupported,
                           "Bokutachi supports BMS 7K and 14K rankings only");
-  }
-  if (!validCredential(config.apiKey)) {
-    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
-                          "Tachi API key is missing or invalid");
   }
   const auto origin = normalizeServerOrigin(config.serverOrigin);
   const auto sha256 = normalizedSha256(query.chartSha256);

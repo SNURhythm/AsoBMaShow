@@ -164,6 +164,18 @@ void testNativePbRetainsAuthenticJudgements() {
   REQUIRE(entry.achievedAtUnixMillis == 1784341271000LL);
 }
 
+void testAnonymousPageNeverMarksCurrentUser() {
+  const auto result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({pb(42, 1, 2), pb(7, 2, 2)}),
+           Json::array({user(42, "CachedUser"), user(7, "OtherUser")})),
+      query(), "chart-id", std::nullopt);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(result.page.has_value());
+  REQUIRE(result.page->entries.size() == 2);
+  REQUIRE(!result.page->entries[0].currentUser);
+  REQUIRE(!result.page->entries[1].currentUser);
+}
+
 void testMissingOptionalMetricsStayUnavailable() {
   auto score = pb(7, 1, 1, 1000, "HARD CLEAR");
   score["scoreData"]["optional"] = {{"enumIndexes", Json::object()}};
@@ -386,6 +398,7 @@ void testNamesAndPageOrdering() {
 int main() {
   testIdentityAndChartResolution();
   testNativePbRetainsAuthenticJudgements();
+  testAnonymousPageNeverMarksCurrentUser();
   testMissingOptionalMetricsStayUnavailable();
   testInconsistentOrPartialTimingStaysUnavailable();
   testEachTimingPairDegradesIndependently();

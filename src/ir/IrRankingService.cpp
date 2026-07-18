@@ -254,23 +254,18 @@ struct IrRankingService::Impl {
 
       const std::string credential = lookupCredential(
           options, work.request.profileId, work.request.providerId);
-      ChartRankingOutcome outcome;
-      if (credential.empty()) {
-        outcome = {.status = ChartRankingStatus::AuthenticationRequired,
-                   .diagnostic = "IR API key is required"};
-      } else {
-        const IrProviderRuntimeConfig runtime{
-            .profileId = work.request.profileId,
-            .serverOrigin = work.key.serverOrigin,
-            .apiKey = credential};
-        outcome = work.nextPage
-                      ? drivers.fetchChartRankingPage(
-                            work.request.providerId, work.request.chart,
-                            work.pageToken, runtime, http, requestToken)
-                      : drivers.fetchChartRanking(work.request.providerId,
-                                                  work.request.chart, runtime,
-                                                  http, requestToken);
-      }
+      const IrProviderRuntimeConfig runtime{
+          .profileId = work.request.profileId,
+          .serverOrigin = work.key.serverOrigin,
+          .apiKey = credential};
+      ChartRankingOutcome outcome =
+          work.nextPage
+              ? drivers.fetchChartRankingPage(
+                    work.request.providerId, work.request.chart,
+                    work.pageToken, runtime, http, requestToken)
+              : drivers.fetchChartRanking(work.request.providerId,
+                                          work.request.chart, runtime, http,
+                                          requestToken);
       outcome.diagnostic =
           redactCredential(std::move(outcome.diagnostic), credential);
 

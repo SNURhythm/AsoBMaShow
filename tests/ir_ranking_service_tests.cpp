@@ -358,7 +358,7 @@ void testFetchCacheExpiryAndRefresh() {
          "refresh bypasses and replaces a fresh cache entry");
 }
 
-void testFailuresAndMissingCredentialAreNotCached() {
+void testFailuresAreNotCachedAndMissingCredentialCallsDriver() {
   const std::vector<ir::ChartRankingStatus> statuses{
       ir::ChartRankingStatus::ChartNotFound,
       ir::ChartRankingStatus::AuthenticationRequired,
@@ -383,12 +383,13 @@ void testFailuresAndMissingCredentialAreNotCached() {
 
   Harness missing;
   missing.setCredential("profile-a", "fake", {});
-  const auto generation = missing.service->open(request());
-  expect(missing.waitFor(generation,
-                         ir::IrRankingSnapshotState::AuthenticationRequired) &&
-             missing.driver("fake")->calls().empty(),
-         "missing execution-time credential yields authentication required "
-         "without driver call");
+  missing.openAndWait(request());
+  const auto calls = missing.driver("fake")->calls();
+  expect(calls.size() == 1 && calls.front().credential.empty() &&
+             missing.service->snapshot().state ==
+                 ir::IrRankingSnapshotState::Succeeded,
+         "missing execution-time credential is delegated as an anonymous "
+         "ranking request");
 }
 
 void testLatestRequestCloseAndLateCompletion() {
@@ -715,7 +716,7 @@ void testInvalidationAndShutdown() {
 int main() {
   static_assert(ir::kIrRankingCacheTtl == std::chrono::minutes(5));
   testFetchCacheExpiryAndRefresh();
-  testFailuresAndMissingCredentialAreNotCached();
+  testFailuresAreNotCachedAndMissingCredentialCallsDriver();
   testLatestRequestCloseAndLateCompletion();
   testPaginationAppendsWithoutDiscardingVisibleRows();
   testPaginationFailureKeepsRowsAndStopsAutomaticRetry();

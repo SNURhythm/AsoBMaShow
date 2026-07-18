@@ -589,9 +589,8 @@ void testRankingRequestAndStatusClassification() {
            "ranking fetch uses the native BMS chart resolver");
     expect(resolve.headers ==
                std::vector<std::pair<std::string, std::string>>{
-                   {"Authorization", "Bearer fresh-api-key"},
                    {"Content-Type", "application/json"}},
-           "native chart resolution sends bearer auth and JSON");
+           "native chart resolution is public and sends JSON metadata only");
     expect(
         resolve.body ==
             R"({"identifier":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","matchType":"bmsChartHash"})",
@@ -603,6 +602,10 @@ void testRankingRequestAndStatusClassification() {
     expect(identity.method == ir::IrHttpMethod::Get &&
                identity.url == "https://boku.tachi.ac/api/v1/status",
            "ranking fetch obtains the authenticated numeric user ID");
+    expect(identity.headers ==
+               std::vector<std::pair<std::string, std::string>>{
+                   {"Authorization", "Bearer fresh-api-key"}},
+           "only the optional identity lookup receives bearer auth");
 
     const auto &page = http.requests[2];
     expect(page.method == ir::IrHttpMethod::Get,
@@ -610,10 +613,7 @@ void testRankingRequestAndStatusClassification() {
     expect(page.url == "https://boku.tachi.ac/api/v1/games/bms-7k/charts/"
                        "chart-id/pbs?startRanking=1",
            "ranking fetch reads native PB documents");
-    expect(page.headers ==
-               std::vector<std::pair<std::string, std::string>>{
-                   {"Authorization", "Bearer fresh-api-key"}},
-           "native PB request sends only bearer auth");
+    expect(page.headers.empty(), "native PB request is public");
     expect(page.maximumResponseBytes == 8 * 1024 * 1024,
            "ranking page response is capped at eight MiB");
   }
@@ -895,15 +895,74 @@ void testCancelledIdentityResponseIsNotCached() {
          "cancelled identity response cannot repopulate cached user ID");
 }
 
+void testAnonymousRankingAndPagination() {
+  CacheTempDirectory temp;
+  auto cache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  std::string diagnostic;
+  expect(cache->activate(temp.cachePath(), diagnostic) &&
+             cache->rememberUserId("https://boku.tachi.ac", 42, diagnostic),
+         "anonymous ranking fixture persists a prior authenticated user");
+  const ir::tachi::TachiDriver driver(cache);
+  FakeHttpClient http;
+  auto config = runtimeConfig();
+  config.apiKey.clear();
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(1, 3, 42), rankingPb(2, 3, 7)}),
+           nlohmann::json::array({{{"id", 42}, {"username", "CachedUser"}},
+                                  {{"id", 7}, {"username", "OtherUser"}}}))});
+
+  auto result = driver.fetchChartRanking(rankingQuery(), config, http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->entries.size() == 2 &&
+             result.ranking->nextPageToken.has_value(),
+         "anonymous ranking fetch returns a paged public leaderboard");
+  expect(result.ranking && !result.ranking->entries[0].currentUser &&
+             !result.ranking->entries[1].currentUser,
+         "anonymous ranking ignores a cached authenticated user identity");
+  expect(http.requests.size() == 2 &&
+             http.requests[0].url.ends_with("/charts/resolve") &&
+             http.requests[0].headers ==
+                 std::vector<std::pair<std::string, std::string>>{
+                     {"Content-Type", "application/json"}} &&
+             http.requests[1].url.ends_with("/pbs?startRanking=1") &&
+             http.requests[1].headers.empty(),
+         "anonymous ranking skips identity and sends no authorization header");
+  const auto cursor = result.ranking
+                          ? result.ranking->nextPageToken.value_or("")
+                          : std::string{};
+  expect(cursor.find(R"("userID":null)") != std::string::npos &&
+             cursor.find("fresh-api-key") == std::string::npos,
+         "anonymous continuation token carries no identity or credential");
+
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(3, 3, 9)}),
+           nlohmann::json::array({{{"id", 9}, {"username", "LastUser"}}}))});
+  result =
+      driver.fetchChartRankingPage(rankingQuery(), cursor, config, http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->entries.size() == 1 &&
+             !result.ranking->entries.front().currentUser &&
+             !result.ranking->nextPageToken,
+         "anonymous continuation succeeds without current-user highlighting");
+  expect(http.requests.size() == 3 && http.requests.back().headers.empty() &&
+             http.requests.back().url.ends_with("?startRanking=3"),
+         "anonymous continuation performs one public PB request");
+}
+
 void testRankingPreflightNeverLeaksCredentials() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
   auto config = runtimeConfig();
-  config.apiKey.clear();
+  config.apiKey = "invalid credential";
   auto result = driver.fetchChartRanking(rankingQuery(), config, http, {});
   expect(result.status == ir::ChartRankingStatus::AuthenticationRequired,
-         "missing ranking credential requests authentication");
-  expect(http.requests.empty(), "missing ranking credential never sends");
+         "a configured malformed ranking credential requests authentication");
+  expect(http.requests.empty(), "malformed ranking credential never sends");
 
   config = runtimeConfig();
   config.serverOrigin = "https://example.test/path";
@@ -940,6 +999,7 @@ int main() {
   testRankingPrerequisitesPersistAcrossFetches();
   testStaleCachedChartIsResolvedOnce();
   testCancelledIdentityResponseIsNotCached();
+  testAnonymousRankingAndPagination();
   testRankingPreflightNeverLeaksCredentials();
 
   if (failures != 0) {

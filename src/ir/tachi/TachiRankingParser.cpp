@@ -193,7 +193,8 @@ parseUsers(const Json &users) {
 
 std::optional<IrChartRankingEntry>
 parsePb(const Json &pb, const IrChartQuery &query,
-        std::string_view expectedChartId, std::int64_t authenticatedUserId,
+        std::string_view expectedChartId,
+        std::optional<std::int64_t> authenticatedUserId,
         const std::map<std::int64_t, std::string> &users, int &outOf) {
   if (!pb.is_object()) {
     return std::nullopt;
@@ -381,7 +382,7 @@ parsePb(const Json &pb, const IrChartQuery &query,
       .badPoints = badPoints,
       .maxCombo = maxCombo,
       .achievedAtUnixMillis = achievedAt,
-      .currentUser = *userId == authenticatedUserId,
+      .currentUser = authenticatedUserId && *userId == *authenticatedUserId,
   };
 }
 
@@ -464,7 +465,8 @@ parseChartResolveResponse(std::string_view body,
 TachiRankingPageOutcome
 parseRankingPageResponse(std::string_view body, const IrChartQuery &query,
                          std::string_view expectedChartId,
-                         std::int64_t authenticatedUserId) noexcept {
+                         std::optional<std::int64_t>
+                             authenticatedUserId) noexcept {
   try {
     if (body.size() > kMaximumRankingResponseBytes) {
       return {.status = ChartRankingStatus::OversizedResponse,
@@ -474,7 +476,7 @@ parseRankingPageResponse(std::string_view body, const IrChartQuery &query,
     if (query.totalNotes <= 0 ||
         query.totalNotes > std::numeric_limits<int>::max() / 2 ||
         !gameFor(query) || !validChartId(expectedChartId) ||
-        authenticatedUserId <= 0) {
+        (authenticatedUserId && *authenticatedUserId <= 0)) {
       return {.diagnostic =
                   malformedDiagnostic("Tachi ranking request is invalid")};
     }
