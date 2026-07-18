@@ -666,6 +666,219 @@ void ResultScene::addResultPersistenceStatus() {
   resultPersistenceStatus = status;
 }
 
+ir::IrResultPresentation ResultScene::makeIrResultPresentation() const {
+  ir::IrDriverCapabilities capabilities;
+  if (const auto driver = context.irDrivers.find(ir::kTachiProviderId)) {
+    capabilities = driver->capabilities();
+  }
+  ir::IrProviderSettings settings;
+  if (const auto found = context.settings.irProviders.find(
+          std::string(ir::kTachiProviderId));
+      found != context.settings.irProviders.end()) {
+    settings = found->second;
+  }
+  ir::IrAttemptStatusSnapshot snapshot;
+  if (persistenceOptions.irSubmission && context.irSubmissionService) {
+    snapshot = context.irSubmissionService->status(
+        ir::kTachiProviderId, persistenceOptions.irSubmission->attemptId);
+  }
+  return ir::makeIrResultPresentation(
+      {.providerId = std::string(ir::kTachiProviderId),
+       .providerDisplayName = "Bokutachi",
+       .capabilities = capabilities,
+       .settings = std::move(settings),
+       .saveOutcome = persistenceOptions.outcome,
+       .submission = persistenceOptions.irSubmission,
+       .snapshot = std::move(snapshot)});
+}
+
+void ResultScene::addIrResultStatus() {
+  if (rootLayout == nullptr || irResultStatus != nullptr) {
+    return;
+  }
+  normalResultActions = rootLayout->findViewByName("resultActions");
+
+  auto *status = new View();
+  status->setName("irResultStatus");
+  status->setWidthPercent(100.0F);
+  status->setHeight(72.0F);
+  status->setMinHeight(72.0F);
+  status->setFlexShrink(0.0F);
+  status->setPadding(Edge::Top, 8.0F);
+  status->setPadding(Edge::Bottom, 8.0F);
+  status->setPadding(Edge::Left, 14.0F);
+  status->setPadding(Edge::Right, 14.0F);
+  status->setFlexDirection(FlexDirection::Row);
+  status->setAlignItems(YGAlignCenter);
+  status->setGap(16.0F);
+  status->setBackgroundColor(ui_theme::resultPanelStrong());
+  status->setCornerRadius(ui_theme::panelRadius());
+  status->setBorderColor(ui_theme::hairlineStrong());
+  status->setBorderWidth(1);
+
+  auto *copy = new View();
+  copy->setFlexDirection(FlexDirection::Column);
+  copy->setFlex(1.0F);
+  copy->setMinWidth(0.0F);
+  copy->setGap(2.0F);
+  irResultStatusText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  irResultStatusText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  irResultStatusText->setWrap(true);
+  irResultStatusText->setWidthPercent(100.0F);
+  copy->addView(irResultStatusText);
+  irResultDetailText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  irResultDetailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  irResultDetailText->setWrap(true);
+  irResultDetailText->setWidthPercent(100.0F);
+  copy->addView(irResultDetailText);
+  status->addView(copy);
+
+  const auto makeAction = [](const std::string &label, const Color &accent,
+                             std::function<void()> action) {
+    auto *button = new Button(0, 0, 196, 52);
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    button->setContentView(text);
+    button->setSize(196, 52);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(
+        ui_theme::withAlpha(accent, 72), ui_theme::withAlpha(accent, 104),
+        ui_theme::withAlpha(accent, 136));
+    button->setBorderColors(
+        ui_theme::withAlpha(accent, 170), ui_theme::withAlpha(accent, 210),
+        accent);
+    button->setStyledBorderWidth(1);
+    button->setOnClickListener(std::move(action));
+    return button;
+  };
+  irResultSubmitButton = makeAction(
+      "Submit", ui_theme::cyan(), [this]() { submitIrResult(); });
+  status->addView(irResultSubmitButton);
+  irResultRetryButton = makeAction(
+      "Retry", ui_theme::lime(), [this]() { retryIrResult(); });
+  status->addView(irResultRetryButton);
+
+  status->setDisplay(YGDisplayNone);
+  status->setVisible(false);
+  if (normalResultActions != nullptr) {
+    rootLayout->insertViewBefore(status, normalResultActions);
+  } else {
+    rootLayout->addView(status);
+  }
+  irResultStatus = status;
+}
+
+void ResultScene::updateIrResultPresentation(bool force) {
+  const ir::IrResultPresentation presentation = makeIrResultPresentation();
+  if (!force && irObservedSnapshotInitialized &&
+      presentation.snapshotRevision == irObservedSnapshotRevision) {
+    return;
+  }
+  irObservedSnapshotInitialized = true;
+  irObservedSnapshotRevision = presentation.snapshotRevision;
+  if (irResultStatus == nullptr) {
+    addIrResultStatus();
+  }
+  if (irResultStatus == nullptr) {
+    return;
+  }
+
+  irResultStatus->setVisible(presentation.visible);
+  irResultStatus->setDisplay(presentation.visible ? YGDisplayFlex
+                                                  : YGDisplayNone);
+  if (!presentation.visible) {
+    if (rootLayout != nullptr) {
+      rootLayout->applyYogaLayout();
+    }
+    return;
+  }
+
+  if (auto *visuals = rootLayout->findViewByName("resultVisuals")) {
+    visuals->setMinHeight(176.0F);
+  }
+  if (irResultStatusText != nullptr) {
+    irResultStatusText->setText(presentation.providerDisplayName + " · " +
+                                presentation.statusText);
+  }
+  if (irResultDetailText != nullptr) {
+    irResultDetailText->setText(irActionDiagnostic.empty()
+                                    ? presentation.detailText
+                                    : irActionDiagnostic);
+  }
+  if (irResultSubmitButton != nullptr) {
+    irResultSubmitButton->setVisible(presentation.canSubmit);
+    irResultSubmitButton->setDisplay(presentation.canSubmit ? YGDisplayFlex
+                                                            : YGDisplayNone);
+  }
+  if (irResultRetryButton != nullptr) {
+    irResultRetryButton->setVisible(presentation.canRetry);
+    irResultRetryButton->setDisplay(presentation.canRetry ? YGDisplayFlex
+                                                          : YGDisplayNone);
+  }
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ResultScene::submitIrResult() {
+  const ir::IrResultPresentation presentation = makeIrResultPresentation();
+  if (!presentation.canSubmit || !persistenceOptions.irSubmission) {
+    return;
+  }
+  if (!context.irSubmissionService) {
+    irActionDiagnostic = "The IR submission service is unavailable.";
+    updateIrResultPresentation(true);
+    return;
+  }
+  const auto draft = context.irDrivers.buildDraft(
+      ir::kTachiProviderId, *persistenceOptions.irSubmission);
+  if (draft.status != ir::BuildDraftStatus::Built || !draft.draft) {
+    irActionDiagnostic = draft.diagnostic.empty()
+                             ? "This result could not be prepared for IR."
+                             : ir::sanitizeDiagnostic(draft.diagnostic);
+    updateIrResultPresentation(true);
+    return;
+  }
+  const auto enqueued = context.irSubmissionService->enqueueManual(*draft.draft);
+  if (enqueued.status == ir::IrOutboxInsertStatus::Inserted ||
+      enqueued.status == ir::IrOutboxInsertStatus::AlreadyExists) {
+    irActionDiagnostic.clear();
+  } else {
+    irActionDiagnostic =
+        enqueued.diagnostic.empty()
+            ? "This result could not be added to the submission queue."
+            : ir::sanitizeDiagnostic(enqueued.diagnostic);
+  }
+  updateIrResultPresentation(true);
+}
+
+void ResultScene::retryIrResult() {
+  const ir::IrResultPresentation presentation = makeIrResultPresentation();
+  if (!presentation.canRetry || presentation.rowId <= 0) {
+    return;
+  }
+  if (!context.irSubmissionService) {
+    irActionDiagnostic = "The IR submission service is unavailable.";
+    updateIrResultPresentation(true);
+    return;
+  }
+  const auto retried = context.irSubmissionService->retry(presentation.rowId);
+  if (retried.status == ir::IrOutboxMutationStatus::Updated) {
+    irActionDiagnostic.clear();
+  } else {
+    irActionDiagnostic =
+        retried.diagnostic.empty()
+            ? "This submission could not be scheduled for retry."
+            : ir::sanitizeDiagnostic(retried.diagnostic);
+  }
+  updateIrResultPresentation(true);
+}
+
 void ResultScene::retryResultPersistence() {
   if (persistenceOptions.attempt == nullptr ||
       !persistenceOptions.outcome.retryable()) {
@@ -673,8 +886,17 @@ void ResultScene::retryResultPersistence() {
   }
 
   persistenceContinueChosen = false;
-  persistenceOptions.outcome =
-      context.resultPersistence.persist(*persistenceOptions.attempt);
+  std::vector<ir::IrOutboxDraft> automaticDrafts;
+  if (persistenceOptions.irSubmission) {
+    automaticDrafts = context.irDrivers.buildAutomaticDrafts(
+        context.settings.irProviders, *persistenceOptions.irSubmission);
+  }
+  persistenceOptions.outcome = context.resultPersistence.persist(
+      *persistenceOptions.attempt, automaticDrafts);
+  if (persistenceOptions.outcome.saved() && !automaticDrafts.empty() &&
+      context.irSubmissionService) {
+    context.irSubmissionService->notifyOutboxChanged();
+  }
   SDL_Log("Result persistence retry state=%d diagnostic=%s",
           static_cast<int>(persistenceOptions.outcome.state),
           persistenceOptions.outcome.diagnostic.c_str());
@@ -685,6 +907,7 @@ void ResultScene::retryResultPersistence() {
       [this]() {
         refreshResultSummary();
         updateResultPersistencePresentation();
+        updateIrResultPresentation(true);
         return true;
       },
       0, true);
@@ -1657,6 +1880,7 @@ void ResultScene::init() {
   skin->buildLayout("Result", rootLayout, &data);
   addTimingAnalytics(std::move(analyticsModel));
   addResultPersistenceStatus();
+  addIrResultStatus();
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();
     buildCourseExitConfirmation();
@@ -1673,6 +1897,7 @@ void ResultScene::init() {
   }
 
   updateResultPersistencePresentation();
+  updateIrResultPresentation(true);
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
 
@@ -1696,6 +1921,15 @@ void ResultScene::init() {
 void ResultScene::update(float dt) {
   (void)dt;
   updatePracticeSectionAction();
+  if (persistenceOptions.irSubmission && context.irSubmissionService) {
+    const auto snapshot = context.irSubmissionService->status(
+        ir::kTachiProviderId, persistenceOptions.irSubmission->attemptId);
+    if (!irObservedSnapshotInitialized ||
+        snapshot.revision != irObservedSnapshotRevision) {
+      irActionDiagnostic.clear();
+      updateIrResultPresentation();
+    }
+  }
 }
 
 void ResultScene::renderScene() {
@@ -1721,6 +1955,14 @@ void ResultScene::cleanupScene() {
   resultPersistenceStatus = nullptr;
   persistenceStatusMessage = nullptr;
   persistenceRetryButton = nullptr;
+  irResultStatus = nullptr;
+  irResultStatusText = nullptr;
+  irResultDetailText = nullptr;
+  irResultSubmitButton = nullptr;
+  irResultRetryButton = nullptr;
+  irObservedSnapshotInitialized = false;
+  irObservedSnapshotRevision = 0;
+  irActionDiagnostic.clear();
   timingAnalyticsView = nullptr;
   courseExitConfirmation = nullptr;
   exportPhotoButton = nullptr;

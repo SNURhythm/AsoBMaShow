@@ -2,6 +2,7 @@
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrSubmission.h"
+#include "../ir/IrResultPresentation.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
@@ -97,6 +98,11 @@ private:
   void continueWithoutSaving();
   void applyResultPersistenceReceipt();
   void updateResultPersistencePresentation();
+  void addIrResultStatus();
+  void updateIrResultPresentation(bool force = false);
+  void submitIrResult();
+  void retryIrResult();
+  [[nodiscard]] ir::IrResultPresentation makeIrResultPresentation() const;
   void refreshResultSummary();
   void addTimingAnalytics(std::optional<practice::ResultModel> analyticsModel);
   void addRetryButtons();
@@ -154,6 +160,11 @@ private:
   View *resultPersistenceStatus = nullptr;
   TextView *persistenceStatusMessage = nullptr;
   Button *persistenceRetryButton = nullptr;
+  View *irResultStatus = nullptr;
+  TextView *irResultStatusText = nullptr;
+  TextView *irResultDetailText = nullptr;
+  Button *irResultSubmitButton = nullptr;
+  Button *irResultRetryButton = nullptr;
   PracticeAnalyticsView *timingAnalyticsView = nullptr;
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
@@ -169,4 +180,7 @@ private:
   bool courseTransitionStarted = false;
   bool courseStageRestRecorded = false;
   long long courseStageResultShownMicros = 0;
+  std::uint64_t irObservedSnapshotRevision = 0;
+  bool irObservedSnapshotInitialized = false;
+  std::string irActionDiagnostic;
 };
