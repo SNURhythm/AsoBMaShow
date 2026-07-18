@@ -12,6 +12,7 @@
 #include "rendering/common.h"
 #include "scene/PracticeAnalyticsPresentation.h"
 #include "scene/PracticeAnalyticsView.h"
+#include "scene/ResultLayoutGeometry.h"
 #include "skin/DefaultSkin.h"
 #include "targets.h"
 #include "view/UiTheme.h"
@@ -484,14 +485,16 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                                               &analyticsModel,
                                           const std::filesystem::path &path) {
   const int width = rendering::render_width;
-  const int analyticsExtraHeight =
+  const bool mobileTarget =
+      TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
+  const auto layoutMetrics = result_layout::metricsFor(
+      static_cast<float>(rendering::window_height), mobileTarget);
+  const int height =
       analyticsModel.has_value()
-          ? static_cast<int>(std::lround(
-                practice_analytics_presentation::kPhotoAnalyticsExtraHeight *
-                static_cast<float>(width) /
-                static_cast<float>(std::max(1, rendering::window_width))))
-          : 0;
-  const int height = rendering::render_height + analyticsExtraHeight;
+          ? result_layout::photoCanvasPixelHeight(
+                width, rendering::render_height,
+                static_cast<float>(rendering::window_width), layoutMetrics)
+          : rendering::render_height;
   if (width <= 0 || height <= 0 || width > UINT16_MAX || height > UINT16_MAX) {
     return {.success = false,
             .outputPath = path,
@@ -559,6 +562,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   ResultSkinData resultSkinData = {&state, &meta, &context};
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
   resultSkinData.showControls = false;
+  resultSkinData.showResultGraph = !analyticsModel.has_value();
   resultSkinData.playModeLabel = playModeLabel;
   resultSkinData.laneOrderLabel = laneOrderLabel;
   resultSkinData.difficultyLabel = difficultyLabel;
@@ -570,36 +574,88 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
   if (analyticsModel.has_value()) {
-    constexpr float kAnalyticsGap = 12.0f;
-    constexpr float kAnalyticsStackHeight =
-        practice_analytics_presentation::kPhotoSharedAnalyticsHeight +
-        practice_analytics_presentation::kPhotoCompactAnalyticsHeight * 2.0f +
-        kAnalyticsGap * 2.0f;
-    auto *analyticsStack = new View();
-    analyticsStack->setName("timingAnalyticsExport");
-    analyticsStack->setWidthPercent(100.0f);
-    analyticsStack->setHeight(kAnalyticsStackHeight);
-    analyticsStack->setMinHeight(kAnalyticsStackHeight);
-    analyticsStack->setFlexShrink(0.0f);
-    analyticsStack->setFlexDirection(FlexDirection::Column);
-    analyticsStack->setAlignItems(YGAlignStretch);
-    analyticsStack->setGap(kAnalyticsGap);
-    for (const auto mode :
-         practice_analytics_presentation::exportAnalyticsModes()) {
+    const float visualHeight = layoutMetrics.photoPrimaryHeight +
+                               layoutMetrics.photoSecondaryHeight +
+                               layoutMetrics.photoGridGap;
+    auto *photoVisuals = new View();
+    photoVisuals->setName("resultPhotoVisuals");
+    photoVisuals->setWidthPercent(100.0f);
+    photoVisuals->setHeight(visualHeight);
+    photoVisuals->setMinHeight(visualHeight);
+    photoVisuals->setFlexShrink(0.0f);
+    photoVisuals->setFlexDirection(FlexDirection::Column);
+    photoVisuals->setAlignItems(YGAlignStretch);
+    photoVisuals->setGap(layoutMetrics.photoGridGap);
+
+    auto makeRow = [&](float rowHeight) {
+      auto *row = new View();
+      row->setWidthPercent(100.0f);
+      row->setHeight(rowHeight);
+      row->setMinHeight(rowHeight);
+      row->setFlexShrink(0.0f);
+      row->setFlexDirection(FlexDirection::Row);
+      row->setAlignItems(YGAlignStretch);
+      row->setGap(layoutMetrics.photoGridGap);
+      photoVisuals->addView(row);
+      return row;
+    };
+    auto *primaryRow = makeRow(layoutMetrics.photoPrimaryHeight);
+    primaryRow->setName("resultPhotoPrimaryRow");
+    auto *secondaryRow = makeRow(layoutMetrics.photoSecondaryHeight);
+    secondaryRow->setName("resultPhotoSecondaryRow");
+
+    const auto prepareCell = [](View *cell) {
+      cell->setWidth(0.0f);
+      cell->setMinWidth(0.0f);
+      cell->setFlexBasis(0.0f);
+      cell->setFlexGrow(1.0f);
+      cell->setFlexShrink(1.0f);
+      return cell;
+    };
+    const auto makeGraphCell = [&]() {
+      auto *graph = new View();
+      graph->setName("graph");
+      graph->setBackgroundColor(ui_theme::resultPanelSubtle());
+      graph->setCornerRadius(ui_theme::panelRadius());
+      graph->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+      graph->setBorderColor(ui_theme::hairlineSubtle());
+      graph->setBorderWidth(1);
+      return prepareCell(graph);
+    };
+    const auto makeAnalyticsCell = [&](PracticeAnalyticsMode mode) {
       auto *analyticsView = new PracticeAnalyticsView(*analyticsModel);
       analyticsView->setMode(mode);
       analyticsView->setPhotoExportPresentation(
           practice_analytics_presentation::
               photoExportShowsSharedInformation(mode));
-      const float cardHeight =
-          practice_analytics_presentation::photoExportAnalyticsHeight(mode);
-      analyticsView->setHeight(cardHeight);
-      analyticsView->setMinHeight(cardHeight);
-      analyticsView->setFlexGrow(0.0f);
-      analyticsView->setFlexShrink(0.0f);
-      analyticsStack->addView(analyticsView);
+      return prepareCell(analyticsView);
+    };
+
+    const auto visualOrder = result_layout::photoVisualOrder();
+    for (std::size_t index = 0; index < visualOrder.size(); ++index) {
+      View *cell = nullptr;
+      switch (visualOrder[index]) {
+      case result_layout::PhotoVisual::Gauge:
+        cell = makeGraphCell();
+        graphPlaceHolder = cell;
+        break;
+      case result_layout::PhotoVisual::Histogram:
+        cell = makeAnalyticsCell(PracticeAnalyticsMode::Histogram);
+        break;
+      case result_layout::PhotoVisual::Lanes:
+        cell = makeAnalyticsCell(PracticeAnalyticsMode::Lanes);
+        break;
+      case result_layout::PhotoVisual::Sections:
+        cell = makeAnalyticsCell(PracticeAnalyticsMode::Sections);
+        break;
+      }
+      if (index < 2) {
+        primaryRow->addView(cell);
+      } else {
+        secondaryRow->addView(cell);
+      }
     }
-    resultRoot->addView(analyticsStack);
+    resultRoot->addView(photoVisuals);
   }
   resultRoot->applyYogaLayout();
 
