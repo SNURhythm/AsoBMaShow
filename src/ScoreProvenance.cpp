@@ -425,8 +425,12 @@ RulesetDescriptor rulesetFromJson(const Json &value) {
     throw std::runtime_error("Ruleset version cannot be negative.");
   }
 
-  RulesetDescriptor result =
-      version == 0 ? RulesetDescriptor::Legacy() : RulesetDescriptor::Current();
+  RulesetDescriptor result = version == 0
+                                 ? RulesetDescriptor::Legacy()
+                             : version == 2
+                                 ? RulesetDescriptor::For(
+                                       GameplayRuleset::Beatoraja)
+                                 : RulesetDescriptor::Current();
   result.version = version;
   result.scoringModel = value.value("scoringModel", result.scoringModel);
   result.judgementModel = value.value("judgementModel", result.judgementModel);
@@ -531,7 +535,7 @@ scoreEligibilityForProvenance(const ScoreProvenance &provenance) {
         return stage.judgeRankSource == JudgeRankSource::Unknown;
       });
   const bool modified =
-      provenance.ruleset != RulesetDescriptor::Current() ||
+      !isSupportedRulesetDescriptor(provenance.ruleset) ||
       provenance.autoPlay || provenance.practice ||
       assist_options::isEnabled(provenance.assistOption) ||
       unknownJudgeSource || !provenance.playback.neutral() ||
@@ -571,17 +575,6 @@ uniqueStageForChart(const ScoreProvenance &provenance,
 }
 
 } // namespace score_provenance
-
-RulesetDescriptor RulesetDescriptor::Current() { return {}; }
-
-RulesetDescriptor RulesetDescriptor::Legacy() {
-  return {
-      .version = 0,
-      .scoringModel = "legacy-unknown",
-      .judgementModel = "legacy-unknown",
-      .gaugeModel = "legacy-unknown",
-  };
-}
 
 ScoreProvenance ScoreProvenance::Legacy() {
   ScoreProvenance result;

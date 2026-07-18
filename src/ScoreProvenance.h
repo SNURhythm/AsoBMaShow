@@ -4,6 +4,7 @@
 #include "audio/PlaybackRate.h"
 #include "bms_parser.hpp"
 #include "scene/play/Judge.h"
+#include "scene/play/GameplayRuleset.h"
 #include "scene/play/RhythmState.h"
 
 #include <cstdint>
@@ -36,20 +37,6 @@ enum class InputDeviceCategory : int {
   Midi = 4,
   Unknown = 5,
   Gyroscope = 6,
-};
-
-struct RulesetDescriptor {
-  static constexpr int kCurrentVersion = 2;
-
-  int version = kCurrentVersion;
-  std::string scoringModel = "asobmashow-v1";
-  std::string judgementModel = "bms-rank-v1";
-  std::string gaugeModel = "beatoraja-profile-gauge-v2";
-
-  bool operator==(const RulesetDescriptor &) const = default;
-
-  static RulesetDescriptor Current();
-  static RulesetDescriptor Legacy();
 };
 
 struct JudgeWindowProvenance {

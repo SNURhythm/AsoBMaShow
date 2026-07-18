@@ -1274,6 +1274,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(score_provenance_tests PRIVATE cxx_std_23)
 
+    add_executable(gameplay_ruleset_tests
+        tests/gameplay_ruleset_tests.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(gameplay_ruleset_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(gameplay_ruleset_tests PRIVATE cxx_std_23)
+
     add_executable(input_profile_tests
         tests/input_profile_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -2050,6 +2058,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_provenance_contract PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
     )
+    asobmashow_register_test(gameplay_ruleset_tests)
     asobmashow_register_test(input_profile_tests foundation_input_profile)
     if (NOT IOS AND NOT PLATFORM_ANDROID)
         asobmashow_register_test(platform_document_handoff_tests foundation_platform_document_handoff)

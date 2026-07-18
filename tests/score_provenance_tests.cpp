@@ -44,7 +44,7 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.inputDevices = {InputDeviceCategory::Touch,
                         InputDeviceCategory::Keyboard,
                         InputDeviceCategory::Touch, InputDeviceCategory::Midi};
-  input.ruleset = RulesetDescriptor::Current();
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   return input;
 }
 
@@ -55,13 +55,25 @@ sampleVerifiedProvenance(const std::string &hashSuffix = "one") {
 
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
+  assert(rules.id == "lr2");
   assert(rules.version == RulesetDescriptor::kCurrentVersion);
   assert(rules.scoringModel == "asobmashow-v1");
-  assert(rules.judgementModel == "bms-rank-v1");
-  assert(rules.gaugeModel == "beatoraja-profile-gauge-v2");
+  assert(rules.judgementModel == "lr2-v1");
+  assert(rules.gaugeModel == "lr2-gauge-v1");
+  assert(isSupportedRulesetDescriptor(rules));
+
+  const RulesetDescriptor beatoraja =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  assert(beatoraja.id == "beatoraja");
+  assert(beatoraja.version == 2);
+  assert(beatoraja.scoringModel == "asobmashow-v1");
+  assert(beatoraja.judgementModel == "bms-rank-v1");
+  assert(beatoraja.gaugeModel == "beatoraja-profile-gauge-v2");
+  assert(isSupportedRulesetDescriptor(beatoraja));
 
   const RulesetDescriptor legacy = RulesetDescriptor::Legacy();
   assert(legacy.version == 0);
+  assert(!isSupportedRulesetDescriptor(legacy));
 }
 
 void testSchemaAndInputDeviceVocabularyContract() {
@@ -390,7 +402,8 @@ void testPlayStartCaptureIsImmutableAndShared() {
   options.startingGaugePercent = 37;
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard,
                                    InputDeviceCategory::Midi};
-  options.rulesetDescriptor = RulesetDescriptor::Current();
+  options.rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
 
   Judge effectiveJudge(meta.Rank);
   const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
@@ -656,7 +669,8 @@ void testConstrainedPlayCapturesEffectiveWindowsAsVerified() {
 
 void testCourseSessionAggregatesRecordedStagesByIndex() {
   CoursePlaySession session;
-  session.rulesetDescriptor = RulesetDescriptor::Current();
+  session.rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
 
   ScoreProvenance first = sampleVerifiedProvenance("course-first");
   ScoreProvenance second = sampleVerifiedProvenance("course-second");
@@ -683,7 +697,8 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
 
   StartOptions options;
   options.courseSession = std::make_shared<CoursePlaySession>();
-  options.courseSession->rulesetDescriptor = RulesetDescriptor::Current();
+  options.courseSession->rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   options.courseSession->rulesetDescriptor.scoringModel = "course-override";
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
   bms_parser::ChartMeta meta;
