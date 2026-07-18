@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace ir {
@@ -31,6 +32,7 @@ struct IrResultPresentationInput {
   IrProviderSettings settings;
   result_persistence::SaveOutcome saveOutcome;
   std::shared_ptr<const IrSubmission> submission;
+  std::optional<BuildDraftOutcome> draftOutcome;
   IrAttemptStatusSnapshot snapshot;
 };
 
@@ -39,6 +41,7 @@ struct IrResultPresentation {
   std::string providerDisplayName;
   IrResultState state = IrResultState::Hidden;
   bool visible = false;
+  bool showSubmit = false;
   bool canSubmit = false;
   bool canRetry = false;
   bool blocksResultActions = false;

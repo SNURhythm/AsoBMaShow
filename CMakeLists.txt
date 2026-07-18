@@ -651,9 +651,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(tachi_batch_manual_tests
         tests/tachi_batch_manual_tests.cpp
+        src/FileChecksum.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
         src/Uuid.cpp
     )
     target_include_directories(tachi_batch_manual_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -661,6 +665,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(tachi_driver_tests
         tests/tachi_driver_tests.cpp
+        src/FileChecksum.cpp
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -671,6 +676,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/tachi/TachiRankingParser.cpp
         src/ir/tachi/TachiResponseParser.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
         src/Uuid.cpp
     )
     target_include_directories(tachi_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1018,6 +1026,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp

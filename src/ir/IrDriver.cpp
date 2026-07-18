@@ -8,6 +8,7 @@ namespace {
 
 BuildDraftOutcome unsupportedBuild(std::string_view diagnostic) {
   return {.status = BuildDraftStatus::Unsupported,
+          .reason = SubmissionEligibilityReason::InvalidSubmission,
           .diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
@@ -108,6 +109,7 @@ IrDriverRegistry::buildDraft(std::string_view providerId,
     return driver->buildDraft(submission);
   } catch (...) {
     return {.status = BuildDraftStatus::Invalid,
+            .reason = SubmissionEligibilityReason::InvalidSubmission,
             .diagnostic = "IR draft construction failed"};
   }
 }

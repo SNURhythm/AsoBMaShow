@@ -44,10 +44,28 @@ void testNoRowIsNotSubmittedAndAllowsManualSubmit() {
   REQUIRE(presentation.visible);
   REQUIRE(presentation.state == ir::IrResultState::NotSubmitted);
   REQUIRE(presentation.statusText == "Not submitted");
+  REQUIRE(presentation.showSubmit);
   REQUIRE(presentation.canSubmit);
   REQUIRE(!presentation.canRetry);
   REQUIRE(!presentation.blocksResultActions);
   REQUIRE(!presentation.persistenceDecisionRequired);
+}
+
+void testIneligibleResultKeepsDisabledSubmitAndDiagnostic() {
+  auto input = baseInput();
+  input.draftOutcome = ir::BuildDraftOutcome{
+      .status = ir::BuildDraftStatus::Unsupported,
+      .reason = ir::SubmissionEligibilityReason::RulesetMismatch,
+      .diagnostic = "Beatoraja ruleset scores cannot be submitted.",
+  };
+  const auto presentation = ir::makeIrResultPresentation(std::move(input));
+  REQUIRE(presentation.visible);
+  REQUIRE(presentation.state == ir::IrResultState::NotSubmitted);
+  REQUIRE(presentation.statusText == "Not eligible");
+  REQUIRE(presentation.showSubmit);
+  REQUIRE(!presentation.canSubmit);
+  REQUIRE(presentation.detailText ==
+          "Beatoraja ruleset scores cannot be submitted.");
 }
 
 void testEveryOutboxStateMapsWithoutBlockingLocalActions() {
@@ -83,6 +101,7 @@ void testEveryOutboxStateMapsWithoutBlockingLocalActions() {
     REQUIRE(presentation.state == expectation.result);
     REQUIRE(presentation.statusText == expectation.label);
     REQUIRE(!presentation.canSubmit);
+    REQUIRE(!presentation.showSubmit);
     REQUIRE(presentation.canRetry == expectation.retry);
     REQUIRE(presentation.rowId == 42);
     REQUIRE(presentation.snapshotRevision == 8);
@@ -99,7 +118,27 @@ void testUnsupportedProviderHasNoSubmissionAction() {
   REQUIRE(presentation.state == ir::IrResultState::Unsupported);
   REQUIRE(presentation.statusText == "Submission unsupported");
   REQUIRE(!presentation.canSubmit);
+  REQUIRE(!presentation.showSubmit);
   REQUIRE(!presentation.canRetry);
+}
+
+void testLegacyQueuedProofShowsBlockingReason() {
+  auto input = baseInput();
+  input.snapshot = {
+      .found = true,
+      .rowId = 42,
+      .state = ir::IrOutboxState::BlockedConfiguration,
+      .errorCode = "unverified_ruleset_proof",
+      .diagnostic =
+          "This queued score predates ruleset verification and cannot be "
+          "submitted.",
+  };
+  const auto presentation = ir::makeIrResultPresentation(std::move(input));
+  REQUIRE(presentation.statusText == "Submission blocked");
+  REQUIRE(presentation.detailText ==
+          "This queued score predates ruleset verification and cannot be "
+          "submitted.");
+  REQUIRE(presentation.canRetry);
 }
 
 void testLocalPersistenceMustBeSavedBeforeAnyIrControlAppears() {
@@ -138,8 +177,10 @@ void testLocalPersistenceMustBeSavedBeforeAnyIrControlAppears() {
 
 int main() {
   testNoRowIsNotSubmittedAndAllowsManualSubmit();
+  testIneligibleResultKeepsDisabledSubmitAndDiagnostic();
   testEveryOutboxStateMapsWithoutBlockingLocalActions();
   testUnsupportedProviderHasNoSubmissionAction();
+  testLegacyQueuedProofShowsBlockingReason();
   testLocalPersistenceMustBeSavedBeforeAnyIrControlAppears();
   return 0;
 }

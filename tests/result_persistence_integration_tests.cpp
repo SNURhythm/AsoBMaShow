@@ -6,6 +6,8 @@
 #include "../src/ir/IrProfileSettings.h"
 #include "../src/ir/tachi/TachiDriver.h"
 #include "../src/repositories/SqliteRAII.h"
+#include "../src/scene/play/GameplayGaugeRules.h"
+#include "../src/scene/play/GameplayJudgeRules.h"
 #include "../src/Utils.h"
 
 #include <algorithm>
@@ -96,22 +98,18 @@ std::string quoteSql(std::string_view value) {
   return quoted;
 }
 
-ScoreProvenance sampleProvenance(const std::string &hash) {
+ScoreProvenance sampleProvenance(const bms_parser::ChartMeta &meta) {
   ScoreProvenanceBuildInput input;
-  input.chartMeta.MD5 = "md5-" + hash;
-  input.chartMeta.SHA256 = "sha-" + hash;
-  input.chartMeta.Rank = 2;
-  input.chartMeta.TotalNotes = 100;
+  input.chartMeta = meta;
   input.longNoteMode = 2;
   input.judgeRankSource = JudgeRankSource::Chart;
-  input.sourceJudgeRank = 2;
-  input.effectiveJudgeWindows = {
-      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
-      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
-      {Kpoor, {-1'000'000, 0}},
-  };
-  input.totalNotes = 100;
-  input.effectiveGaugeTotal = 176.0;
+  input.sourceJudgeRank = meta.Rank;
+  input.effectiveJudgeContexts =
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, meta.Rank)
+          .contexts;
+  input.totalNotes = meta.TotalNotes;
+  input.effectiveGaugeTotal =
+      resolveEffectiveGaugeTotal(GameplayRuleset::LR2, meta);
   input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
   input.ruleset = RulesetDescriptor::Current();
   ScoreProvenance value = makeScoreProvenance(input);
@@ -127,6 +125,8 @@ ReplayData sampleReplay(const std::filesystem::path &root,
   ReplayData replay;
   replay.chartMeta.BmsPath = root / "BMS" / (hash + ".bms");
   replay.chartMeta.SHA256 = file_checksum::sha256(hash);
+  replay.chartMeta.KeyMode = 7;
+  replay.chartMeta.Rank = 2;
   replay.chartMeta.Title = "Title " + hash;
   replay.chartMeta.Artist = "Artist";
   replay.chartMeta.TotalNotes = 50;
@@ -151,7 +151,7 @@ ReplayData sampleReplay(const std::filesystem::path &root,
                            .gaugeType = GaugeType::Hard,
                            .combo = 1,
                            .score = 2});
-  replay.provenance = sampleProvenance(hash);
+  replay.provenance = sampleProvenance(replay.chartMeta);
   return replay;
 }
 

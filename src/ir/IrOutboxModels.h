@@ -14,6 +14,14 @@ inline constexpr std::size_t kMaximumIrPayloadBytes = 64 * 1024;
 inline constexpr std::size_t kMaximumIrRemoteValueBytes = 2 * 1024;
 inline constexpr std::size_t kMaximumIrErrorCodeBytes = 128;
 
+struct IrRulesetProof {
+  std::string rulesetId;
+  int rulesetRevision = 0;
+  std::string validationFingerprint;
+
+  bool operator==(const IrRulesetProof &) const = default;
+};
+
 enum class IrOutboxState : int {
   Pending = 0,
   Uploading = 1,
@@ -29,6 +37,7 @@ struct IrOutboxDraft {
   std::string chartMd5;
   std::string chartSha256;
   std::string payloadJson;
+  IrRulesetProof rulesetProof;
   std::int64_t createdAtUnixMillis = 0;
 
   bool operator==(const IrOutboxDraft &) const = default;
@@ -41,6 +50,7 @@ struct IrOutboxEntry {
   std::string chartMd5;
   std::string chartSha256;
   std::string payloadJson;
+  IrRulesetProof rulesetProof;
   IrOutboxState state = IrOutboxState::Pending;
   bool localResultReady = false;
   int requestAttemptCount = 0;

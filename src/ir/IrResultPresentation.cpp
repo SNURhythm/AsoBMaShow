@@ -26,10 +26,18 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
 
   if (!input.snapshot.found) {
     result.state = IrResultState::NotSubmitted;
-    result.canSubmit = true;
-    result.statusText = "Not submitted";
+    result.showSubmit = true;
+    const bool eligible = !input.draftOutcome.has_value() ||
+                          input.draftOutcome->status == BuildDraftStatus::Built;
+    result.canSubmit = eligible;
+    result.statusText = eligible ? "Not submitted" : "Not eligible";
     result.detailText =
-        "Submit this saved result to " + result.providerDisplayName + ".";
+        eligible
+            ? "Submit this saved result to " + result.providerDisplayName +
+                  "."
+            : (input.draftOutcome->diagnostic.empty()
+                   ? "This saved result is not eligible for submission."
+                   : input.draftOutcome->diagnostic);
     return result;
   }
 
@@ -56,9 +64,17 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
   case IrOutboxState::BlockedConfiguration:
     result.state = IrResultState::AuthenticationRequired;
     result.canRetry = true;
-    result.statusText = "Authentication required";
-    result.detailText =
-        "Add or replace the API key in Settings > IR, then retry.";
+    if (input.snapshot.errorCode == "unverified_ruleset_proof" ||
+        input.snapshot.errorCode == "invalid_ruleset_proof") {
+      result.statusText = "Submission blocked";
+      result.detailText = input.snapshot.diagnostic.empty()
+                              ? "The queued score has no valid ruleset proof."
+                              : input.snapshot.diagnostic;
+    } else {
+      result.statusText = "Authentication required";
+      result.detailText =
+          "Add or replace the API key in Settings > IR, then retry.";
+    }
     break;
   case IrOutboxState::FailedPermanent:
     result.state = IrResultState::Failed;

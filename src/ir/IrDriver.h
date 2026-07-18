@@ -28,6 +28,18 @@ struct IrDriverCapabilities {
 };
 
 enum class BuildDraftStatus { Built, Unsupported, Invalid };
+enum class SubmissionEligibilityReason {
+  Eligible,
+  UnsupportedKeyMode,
+  CourseResult,
+  RulesetMismatch,
+  UnsupportedRulesetRevision,
+  UnverifiedProvenance,
+  ModifiedJudgePolicy,
+  ModifiedGaugeTotal,
+  ModifiedAttempt,
+  InvalidSubmission,
+};
 enum class DeliveryStatus {
   Succeeded,
   Deferred,
@@ -51,6 +63,8 @@ enum class ChartRankingStatus {
 
 struct BuildDraftOutcome {
   BuildDraftStatus status = BuildDraftStatus::Invalid;
+  SubmissionEligibilityReason reason =
+      SubmissionEligibilityReason::InvalidSubmission;
   std::optional<IrOutboxDraft> draft;
   std::string diagnostic;
 };

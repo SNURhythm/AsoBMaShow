@@ -683,6 +683,11 @@ ir::IrResultPresentation ResultScene::makeIrResultPresentation() const {
     snapshot = context.irSubmissionService->status(
         ir::kTachiProviderId, persistenceOptions.irSubmission->attemptId);
   }
+  std::optional<ir::BuildDraftOutcome> draftOutcome;
+  if (persistenceOptions.irSubmission) {
+    draftOutcome = context.irDrivers.buildDraft(
+        ir::kTachiProviderId, *persistenceOptions.irSubmission);
+  }
   return ir::makeIrResultPresentation(
       {.providerId = std::string(ir::kTachiProviderId),
        .providerDisplayName = "Bokutachi",
@@ -690,6 +695,7 @@ ir::IrResultPresentation ResultScene::makeIrResultPresentation() const {
        .settings = std::move(settings),
        .saveOutcome = persistenceOptions.outcome,
        .submission = persistenceOptions.irSubmission,
+       .draftOutcome = std::move(draftOutcome),
        .snapshot = std::move(snapshot)});
 }
 
@@ -812,9 +818,10 @@ void ResultScene::updateIrResultPresentation(bool force) {
                                     : irActionDiagnostic);
   }
   if (irResultSubmitButton != nullptr) {
-    irResultSubmitButton->setVisible(presentation.canSubmit);
-    irResultSubmitButton->setDisplay(presentation.canSubmit ? YGDisplayFlex
-                                                            : YGDisplayNone);
+    irResultSubmitButton->setVisible(presentation.showSubmit);
+    irResultSubmitButton->setDisplay(presentation.showSubmit ? YGDisplayFlex
+                                                             : YGDisplayNone);
+    irResultSubmitButton->setEnabled(presentation.canSubmit);
   }
   if (irResultRetryButton != nullptr) {
     irResultRetryButton->setVisible(presentation.canRetry);
