@@ -851,17 +851,24 @@ std::string courseOutcome(sqlite3 *db) {
 }
 
 ScoreProvenance sampleProvenance(const std::string &hash) {
-  ScoreProvenance value;
-  value.ruleset = RulesetDescriptor::Current();
-  value.stages = {{
-      .chartMd5 = "md5-" + hash,
-      .chartSha256 = "sha-" + hash,
-      .longNoteMode = 2,
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = 2,
-      .effectiveJudgeWindows = {{PGreat, -10000, 10000},
-                                {Great, -30000, 30000}},
-  }};
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = "md5-" + hash;
+  input.chartMeta.SHA256 = "sha-" + hash;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = 100;
+  input.longNoteMode = 2;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = 2;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = 100;
+  input.effectiveGaugeTotal = 176.0;
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.ruleset = RulesetDescriptor::Current();
+  ScoreProvenance value = makeScoreProvenance(input);
   value.gaugeType = GaugeType::Hard;
   value.player1 = {.option = "RANDOM", .seed = 1234};
   value.inputDevices = {InputDeviceCategory::Keyboard};
@@ -2275,7 +2282,8 @@ void testChartAndCourseRoundTripAndPathIsolation(
   db.reset();
   const auto summaries = first.ListReplays(replay.chartMeta, 0);
   assert(summaries.size() == 1);
-  assert(summaries.front().rulesetVersion == 2);
+  assert(summaries.front().rulesetVersion ==
+         RulesetDescriptor::kCurrentVersion);
   assert(summaries.front().eligibility == ScoreEligibility::Modified);
   assert(summaries.front().playback == replay.provenance.playback);
   assert(replay_clear_mark::effectiveClearRank(summaries.front()) ==
@@ -2307,7 +2315,8 @@ void testChartAndCourseRoundTripAndPathIsolation(
   const auto courseSummaries = first.ListCourseReplays(
       {.courseKey = course.courseKey, .legacyCourseId = course.courseId}, 0);
   assert(courseSummaries.size() == 1);
-  assert(courseSummaries.front().rulesetVersion == 2);
+  assert(courseSummaries.front().rulesetVersion ==
+         RulesetDescriptor::kCurrentVersion);
   assert(courseSummaries.front().eligibility == ScoreEligibility::Modified);
   assert(courseSummaries.front().playback == course.provenance.playback);
   assert(replay_clear_mark::effectiveClearRank(courseSummaries.front()) ==
@@ -2399,13 +2408,22 @@ void testInvalidProvenanceRejectsReplayWrites(
   futureSchema.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
   assertRejectedWithoutRows(futureSchema, "future-schema");
 
-  auto futureRuleset = sampleProvenance("future-ruleset");
-  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
-  assertRejectedWithoutRows(futureRuleset, "future-ruleset");
-
   auto invalidEnum = sampleProvenance("invalid-enum");
   invalidEnum.eligibility = static_cast<ScoreEligibility>(999);
   assertRejectedWithoutRows(invalidEnum, "invalid-enum");
+
+  ReplayData retainedReplay = sampleReplay(root, "future-ruleset");
+  retainedReplay.provenance.ruleset.id = "future-ruleset";
+  retainedReplay.provenance.ruleset.version =
+      RulesetDescriptor::kCurrentVersion + 1;
+  retainedReplay.provenance.eligibility = ScoreEligibility::Modified;
+  const auto retainedId = helper.SaveReplay(retainedReplay);
+  assert(retainedId.has_value());
+  const auto retained =
+      helper.LoadReplay(*retainedId, retainedReplay.chartMeta);
+  assert(retained.has_value());
+  assert(retained->provenance.ruleset == retainedReplay.provenance.ruleset);
+  assert(!isSupportedRulesetDescriptor(retained->provenance.ruleset));
 }
 
 void testInvalidReplayWritesDoNotCreateDatabase(

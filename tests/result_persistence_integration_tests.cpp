@@ -97,17 +97,24 @@ std::string quoteSql(std::string_view value) {
 }
 
 ScoreProvenance sampleProvenance(const std::string &hash) {
-  ScoreProvenance value;
-  value.ruleset = RulesetDescriptor::Current();
-  value.stages = {{
-      .chartMd5 = "md5-" + hash,
-      .chartSha256 = "sha-" + hash,
-      .longNoteMode = 2,
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = 2,
-      .effectiveJudgeWindows = {{PGreat, -10000, 10000},
-                                {Great, -30000, 30000}},
-  }};
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = "md5-" + hash;
+  input.chartMeta.SHA256 = "sha-" + hash;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = 100;
+  input.longNoteMode = 2;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = 2;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = 100;
+  input.effectiveGaugeTotal = 176.0;
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.ruleset = RulesetDescriptor::Current();
+  ScoreProvenance value = makeScoreProvenance(input);
   value.gaugeType = GaugeType::Hard;
   value.player1 = {.option = "RANDOM", .seed = 1234};
   value.inputDevices = {InputDeviceCategory::Keyboard};

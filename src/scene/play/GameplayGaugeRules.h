@@ -21,6 +21,8 @@ struct CompiledGaugeDefinition {
   bool scaleNegativeByLr2Damage = false;
   bool hardGutsBelow32 = false;
   bool survival = false;
+
+  bool operator==(const CompiledGaugeDefinition &) const = default;
 };
 
 struct GameplayGaugeRules {
@@ -30,6 +32,8 @@ struct GameplayGaugeRules {
   double effectiveTotal = 100.0;
   std::array<CompiledGaugeDefinition, kGaugeTypeCount> gauges{};
   bool compiled = false;
+
+  bool operator==(const GameplayGaugeRules &) const = default;
 
   [[nodiscard]] float delta(GaugeType type, Judgement judgement,
                             float currentGauge,

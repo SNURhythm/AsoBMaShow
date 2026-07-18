@@ -54,6 +54,8 @@ struct GameplayJudgeRules {
   bool repeatedKpoor = false;
   bool multiBad = false;
   bool rejectsLateBadForLongNoteHead = false;
+
+  bool operator==(const GameplayJudgeRules &) const = default;
 };
 
 [[nodiscard]] JudgeWindowContext

@@ -679,17 +679,24 @@ std::string courseOutcome(sqlite3 *db) {
 }
 
 ScoreProvenance sampleProvenance(const std::string &hash) {
-  ScoreProvenance value;
-  value.ruleset = RulesetDescriptor::Current();
-  value.stages = {{
-      .chartMd5 = "md5-" + hash,
-      .chartSha256 = "sha-" + hash,
-      .longNoteMode = 2,
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = 2,
-      .effectiveJudgeWindows = {{PGreat, -10000, 10000},
-                                {Great, -30000, 30000}},
-  }};
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = "md5-" + hash;
+  input.chartMeta.SHA256 = "sha-" + hash;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = 100;
+  input.longNoteMode = 2;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = 2;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = 100;
+  input.effectiveGaugeTotal = 176.0;
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.ruleset = RulesetDescriptor::Current();
+  ScoreProvenance value = makeScoreProvenance(input);
   value.gaugeType = GaugeType::Hard;
   value.player1 = {.option = "RANDOM", .seed = 1234};
   value.inputDevices = {InputDeviceCategory::Keyboard};
@@ -2003,9 +2010,12 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
   const auto state = sampleState(20, 5);
 
   ScoreProvenance chartProvenance = sampleProvenance("migration-v8-chart");
+  chartProvenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  chartProvenance.stages.front().candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
   chartProvenance.gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove;
   chartProvenance.gaugeAutoShiftLowerBound = GaugeType::Hard;
-  chartProvenance.judgeWindowScalePercent = 80;
   chartProvenance.eligibility = ScoreEligibility::Modified;
   assert(initial.SaveScore(meta, state, chartProvenance));
 
@@ -2018,6 +2028,10 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
   session.courseKey = course_identity::makeCourseKey(session);
 
   ScoreProvenance courseProvenance = sampleProvenance("migration-v8-course");
+  courseProvenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  courseProvenance.stages.front().candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
   courseProvenance.gaugeProfile = GaugeProfile::CourseDefault;
   courseProvenance.gaugeAutoShift = GaugeAutoShiftMode::Continue;
   courseProvenance.stages.front().judgeRankSource =
@@ -2154,13 +2168,19 @@ void testInvalidProvenanceRejectsScoreWrites(
   futureSchema.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
   assertRejectedWithoutRows(futureSchema);
 
-  auto futureRuleset = sampleProvenance("future-ruleset");
-  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
-  assertRejectedWithoutRows(futureRuleset);
-
   auto invalidEnum = sampleProvenance("invalid-enum");
   invalidEnum.gaugeType = static_cast<GaugeType>(999);
   assertRejectedWithoutRows(invalidEnum);
+
+  auto futureRuleset = sampleProvenance("future-ruleset");
+  futureRuleset.ruleset.id = "future-ruleset";
+  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
+  futureRuleset.eligibility = ScoreEligibility::Modified;
+  assert(helper.SaveScore(meta, state, futureRuleset));
+  auto db = openDatabase(path);
+  const auto retained = readStoredProvenance(db.get(), "scores", 1);
+  assert(retained.ruleset == futureRuleset.ruleset);
+  assert(!isSupportedRulesetDescriptor(retained.ruleset));
 }
 
 void testInvalidProvenanceDoesNotCreateScoreDatabase(

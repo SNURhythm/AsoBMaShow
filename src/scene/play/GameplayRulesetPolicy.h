@@ -18,6 +18,7 @@ struct GameplayRulesetPolicy {
       RulesetDescriptor::For(kDefaultGameplayRuleset);
   CompiledGameplayJudge judge;
   GameplayGaugeRules gauge;
+  bool canonical = true;
 };
 
 enum class GameplayPolicyBuildStatus {

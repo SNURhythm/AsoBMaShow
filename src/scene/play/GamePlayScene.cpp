@@ -1509,7 +1509,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                        : judge.timingWindows[Bad].second;
   if (rulesetPolicyBuild.policy.has_value()) {
     attemptProvenance = captureScoreProvenanceAtPlayStart(
-        this->options, this->chart->Meta, judge.timingWindows);
+        this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
   }
 }
 
@@ -1533,7 +1533,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                        : judge.timingWindows[Bad].second;
   if (rulesetPolicyBuild.policy.has_value()) {
     attemptProvenance = captureScoreProvenanceAtPlayStart(
-        this->options, this->chart->Meta, judge.timingWindows);
+        this->options, this->chart->Meta, *rulesetPolicyBuild.policy);
   }
 }
 

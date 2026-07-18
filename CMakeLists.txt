@@ -1274,6 +1274,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1526,6 +1528,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_playback_startup_tests.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(gameplay_playback_startup_tests PRIVATE

@@ -34,11 +34,25 @@ ScoreStageProvenance completeReplaySnapshot(
   result.chartMd5 = meta.MD5;
   result.chartSha256 = meta.SHA256;
   result.sourceJudgeRank = meta.Rank;
-  result.effectiveJudgeWindows = {
-      {PGreat, -12'000, 12'000}, {Great, -30'000, 30'000},
-      {Good, -60'000, 60'000},   {Bad, -200'000, 200'000},
-      {Kpoor, -1'000'000, 0},
+  result.totalNotes = meta.TotalNotes;
+  result.authoredGaugeTotal = meta.Total;
+  result.effectiveGaugeTotal = 199.0;
+  result.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  constexpr std::array contexts{
+      gameplay::JudgeWindowContext::Normal,
+      gameplay::JudgeWindowContext::Scratch,
+      gameplay::JudgeWindowContext::LongNoteTail,
+      gameplay::JudgeWindowContext::LongScratchTail,
   };
+  for (const auto context : contexts) {
+    result.effectiveJudgeWindows.insert(
+        result.effectiveJudgeWindows.end(),
+        {{context, PGreat, -12'000, 12'000},
+         {context, Great, -30'000, 30'000},
+         {context, Good, -60'000, 60'000},
+         {context, Bad, -200'000, 200'000},
+         {context, Kpoor, -1'000'000, 0}});
+  }
   return result;
 }
 
@@ -61,7 +75,8 @@ void testLr2PolicyIsCoherent() {
               policy.judge.rules().candidateSelection ==
                   gameplay::CandidateSelectionMode::LR2 &&
               policy.gauge.ruleset == GameplayRuleset::LR2 &&
-              policy.gauge.compiled && policy.gauge.effectiveTotal == 200.0,
+              policy.gauge.compiled && policy.gauge.effectiveTotal == 200.0 &&
+              policy.canonical,
           "LR2 policy descriptor, judge, candidate, gauge, and TOTAL match");
 }
 
@@ -85,7 +100,8 @@ void testBeatorajaPolicyIsCoherent() {
                   gameplay::CandidateSelectionMode::Duration &&
               policy.gauge.ruleset == GameplayRuleset::Beatoraja &&
               policy.gauge.compiled &&
-              std::abs(policy.gauge.effectiveTotal - 200.5) < 0.0001,
+              std::abs(policy.gauge.effectiveTotal - 200.5) < 0.0001 &&
+              policy.canonical,
           "Beatoraja policy cannot contain LR2 judge or gauge semantics");
 }
 
@@ -148,8 +164,18 @@ void testValidatedReplayAndCourseConsistency() {
   require(recordedPGreat.has_value() &&
               recordedPGreat->earlyMicros == -12'000 &&
               recordedPGreat->lateMicros == 12'000 &&
-              replay.policy->gauge.resolvedProfile == GaugeProfile::CourseLR2,
+              replay.policy->gauge.resolvedProfile == GaugeProfile::CourseLR2 &&
+              replay.policy->gauge.totalNotes == 1000 &&
+              replay.policy->gauge.effectiveTotal == 199.0 &&
+              !replay.policy->canonical,
           "replay windows and LR2 course gauge live in one policy");
+
+  StartOptions replayOptions;
+  replayOptions.ruleset = GameplayRuleset::LR2;
+  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
+      replayOptions, meta, *replay.policy);
+  require(captured.eligibility == ScoreEligibility::Modified,
+          "a safe noncanonical replay policy remains reproducible but modified");
 
   CoursePlaySession session;
   session.ruleset = GameplayRuleset::LR2;
@@ -165,6 +191,35 @@ void testValidatedReplayAndCourseConsistency() {
   require(other.policy.has_value() &&
               !gameplay::courseSessionAcceptsPolicy(session, *other.policy),
           "a course rejects a stage with a different descriptor");
+}
+
+void testCanonicalReplaySnapshotStaysCanonical() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  const auto live = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::LR2,
+             .gaugeProfile = GaugeProfile::Standard,
+             .sourceRank = meta.Rank});
+  require(live.built() && live.policy->canonical,
+          "the live LR2 policy is canonical");
+
+  StartOptions options;
+  options.ruleset = GameplayRuleset::LR2;
+  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
+      options, meta, *live.policy);
+  const auto replay = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::LR2,
+             .gaugeProfile = GaugeProfile::Standard,
+             .sourceRank = meta.Rank,
+             .requiredDescriptor = captured.ruleset,
+             .replaySnapshot = captured.stages.front()});
+  require(replay.built() && replay.policy->canonical &&
+              replay.policy->judge.rules() == live.policy->judge.rules() &&
+              replay.policy->gauge == live.policy->gauge,
+          "a canonical snapshot reconstructs the exact live policy");
+  const ScoreProvenance replayCapture = captureScoreProvenanceAtPlayStart(
+      options, meta, *replay.policy);
+  require(replayCapture.eligibility == ScoreEligibility::Verified,
+          "an exact canonical replay snapshot remains verified");
 }
 
 void testReplayStartRequiresValidatedSnapshot() {
@@ -189,6 +244,7 @@ int main() {
   testBeatorajaPolicyIsCoherent();
   testInvalidInputsDoNotFallBack();
   testValidatedReplayAndCourseConsistency();
+  testCanonicalReplaySnapshotStaysCanonical();
   testReplayStartRequiresValidatedSnapshot();
   return 0;
 }

@@ -138,6 +138,7 @@ void appendChartMeta(CanonicalEncoder &encoder,
 void appendProvenance(CanonicalEncoder &encoder,
                       const ScoreProvenance &provenance) {
   encoder.integer(static_cast<std::int32_t>(provenance.schemaVersion));
+  encoder.string(provenance.ruleset.id);
   encoder.integer(static_cast<std::int32_t>(provenance.ruleset.version));
   encoder.string(provenance.ruleset.scoringModel);
   encoder.string(provenance.ruleset.judgementModel);
@@ -157,8 +158,14 @@ void appendProvenance(CanonicalEncoder &encoder,
     encoder.optional(stage.sourceJudgeRank, [&](int value) {
       encoder.integer(static_cast<std::int32_t>(value));
     });
+    encoder.integer(static_cast<std::int32_t>(stage.totalNotes));
+    encoder.optional(stage.authoredGaugeTotal,
+                     [&](double value) { encoder.float64(value); });
+    encoder.float64(stage.effectiveGaugeTotal);
+    encoder.enumeration(stage.candidateSelection);
     encoder.vector(
         stage.effectiveJudgeWindows, [&](const JudgeWindowProvenance &window) {
+          encoder.enumeration(window.context);
           encoder.enumeration(window.judgement);
           encoder.integer(static_cast<std::int64_t>(window.earlyMicros));
           encoder.integer(static_cast<std::int64_t>(window.lateMicros));

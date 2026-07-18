@@ -4,10 +4,12 @@
 #include "audio/PlaybackRate.h"
 #include "bms_parser.hpp"
 #include "scene/play/Judge.h"
+#include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/GameplayRuleset.h"
 #include "scene/play/RhythmState.h"
 
 #include <cstdint>
+#include <array>
 #include <map>
 #include <optional>
 #include <span>
@@ -40,6 +42,8 @@ enum class InputDeviceCategory : int {
 };
 
 struct JudgeWindowProvenance {
+  gameplay::JudgeWindowContext context =
+      gameplay::JudgeWindowContext::Normal;
   Judgement judgement = None;
   std::int64_t earlyMicros = 0;
   std::int64_t lateMicros = 0;
@@ -63,13 +67,18 @@ struct ScoreStageProvenance {
   std::vector<int> chartRandomValues;
   JudgeRankSource judgeRankSource = JudgeRankSource::Unknown;
   std::optional<int> sourceJudgeRank;
+  int totalNotes = 0;
+  std::optional<double> authoredGaugeTotal;
+  double effectiveGaugeTotal = 0.0;
+  gameplay::CandidateSelectionMode candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
   std::vector<JudgeWindowProvenance> effectiveJudgeWindows;
 
   bool operator==(const ScoreStageProvenance &) const = default;
 };
 
 struct ScoreProvenance {
-  static constexpr int kSchemaVersion = 3;
+  static constexpr int kSchemaVersion = 4;
 
   int schemaVersion = kSchemaVersion;
   RulesetDescriptor ruleset;
@@ -112,6 +121,13 @@ struct ScoreProvenanceBuildInput {
   JudgeRankSource judgeRankSource = JudgeRankSource::Chart;
   std::optional<int> sourceJudgeRank;
   std::map<Judgement, std::pair<long long, long long>> effectiveJudgeWindows;
+  std::array<gameplay::JudgeWindowSet, 4> effectiveJudgeContexts{};
+  int totalNotes = 0;
+  std::optional<double> authoredGaugeTotal;
+  double effectiveGaugeTotal = 0.0;
+  gameplay::CandidateSelectionMode candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
+  bool policyCanonical = true;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;

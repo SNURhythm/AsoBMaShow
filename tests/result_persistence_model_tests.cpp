@@ -29,24 +29,29 @@ std::string repeated(char value, std::size_t count) {
 }
 
 ScoreProvenance populatedProvenance(const bms_parser::ChartMeta &meta) {
-  ScoreProvenance provenance;
-  provenance.schemaVersion = ScoreProvenance::kSchemaVersion;
-  provenance.ruleset = RulesetDescriptor::Current();
-  provenance.stages = {{
-      .chartMd5 = asobmshow::bms_metadata::normalizedHash(meta.MD5),
-      .chartSha256 = asobmshow::bms_metadata::normalizedHash(meta.SHA256),
-      .longNoteMode = 2,
-      .chartRandomSeed = 17,
-      .chartRandomPrng = "mt19937",
-      .chartRandomValues = {4, 8, 15, 16, 23, 42},
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = 2,
-      .effectiveJudgeWindows =
-          {
-              {.judgement = PGreat, .earlyMicros = -10000, .lateMicros = 10000},
-              {.judgement = Great, .earlyMicros = -30000, .lateMicros = 30000},
-          },
-  }};
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = meta;
+  input.chartMeta.MD5 =
+      asobmshow::bms_metadata::normalizedHash(meta.MD5);
+  input.chartMeta.SHA256 =
+      asobmshow::bms_metadata::normalizedHash(meta.SHA256);
+  input.chartMeta.RandomSeed = 17;
+  input.chartMeta.RandomPrng = "mt19937";
+  input.chartMeta.RandomValues = {4, 8, 15, 16, 23, 42};
+  input.longNoteMode = 2;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = 2;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = meta.TotalNotes;
+  input.authoredGaugeTotal = meta.Total;
+  input.effectiveGaugeTotal = std::floor(meta.Total);
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.ruleset = RulesetDescriptor::Current();
+  ScoreProvenance provenance = makeScoreProvenance(input);
   provenance.gaugeType = GaugeType::Normal;
   provenance.gaugeProfile = GaugeProfile::Standard;
   provenance.gaugeAutoShift = GaugeAutoShiftMode::None;
@@ -384,7 +389,7 @@ void testVersionOneFingerprintGolden() {
   const std::string actual =
       result_persistence::payloadFingerprint(replay, score);
   expect(actual ==
-             "17bc9e5a4b9907cf1e25f36bf24bc4a9c57b1a23ed6525609f7583667e989148",
+             "c8744f5007aa619288309622462545732f2ae4a40a772ce5ff012d2542c7dac4",
          "v1 fingerprint remains stable");
 }
 
@@ -635,6 +640,9 @@ void testProvenanceFingerprintCoverage() {
       fixture, [](auto &v) { ++v.provenance.schemaVersion; },
       "provenance.schemaVersion");
   expectReplayFingerprintChange(
+      fixture, [](auto &v) { v.provenance.ruleset.id += "!"; },
+      "provenance.ruleset.id");
+  expectReplayFingerprintChange(
       fixture, [](auto &v) { ++v.provenance.ruleset.version; },
       "provenance.ruleset.version");
   expectReplayFingerprintChange(
@@ -683,6 +691,26 @@ void testProvenanceFingerprintCoverage() {
       [](auto &v) { v.provenance.stages.front().sourceJudgeRank.reset(); },
       "provenance.stage.sourceJudgeRank optional");
   expectReplayFingerprintChange(
+      fixture, [](auto &v) { ++v.provenance.stages.front().totalNotes; },
+      "provenance.stage.totalNotes");
+  expectReplayFingerprintChange(
+      fixture,
+      [](auto &v) {
+        v.provenance.stages.front().authoredGaugeTotal.reset();
+      },
+      "provenance.stage.authoredGaugeTotal optional");
+  expectReplayFingerprintChange(
+      fixture,
+      [](auto &v) { ++v.provenance.stages.front().effectiveGaugeTotal; },
+      "provenance.stage.effectiveGaugeTotal");
+  expectReplayFingerprintChange(
+      fixture,
+      [](auto &v) {
+        v.provenance.stages.front().candidateSelection =
+            gameplay::CandidateSelectionMode::Lowest;
+      },
+      "provenance.stage.candidateSelection");
+  expectReplayFingerprintChange(
       fixture,
       [](auto &v) {
         v.provenance.stages.front().effectiveJudgeWindows.emplace_back();
@@ -695,6 +723,13 @@ void testProvenanceFingerprintCoverage() {
             Good;
       },
       "provenance.window.judgement");
+  expectReplayFingerprintChange(
+      fixture,
+      [](auto &v) {
+        v.provenance.stages.front().effectiveJudgeWindows.front().context =
+            gameplay::JudgeWindowContext::Scratch;
+      },
+      "provenance.window.context");
   expectReplayFingerprintChange(
       fixture,
       [](auto &v) {
