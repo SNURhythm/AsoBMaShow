@@ -45,6 +45,9 @@ ir::IrSubmission validSubmission() {
   submission.kPoor = 7;
   submission.fast = 30;
   submission.slow = 40;
+  submission.pGreatFast = 5;
+  submission.pGreatSlow = 7;
+  submission.gaugeHistory = {20.0F, 31.25F, 48.5F, 82.0F};
   submission.finalGauge = 82.0F;
   submission.clearType = kClearTypeHardClearRank;
   submission.playedAtUnixMillis = 1700000000000LL;
@@ -163,6 +166,13 @@ void testBuildsOneScoreBatchManual() {
          "payload includes max combo");
   expect(score.at("optional").at("gauge") == 82.0,
          "payload includes final gauge");
+  expect(score.at("optional").at("fast") == 25,
+         "submitted fast excludes early PGREAT");
+  expect(score.at("optional").at("slow") == 33,
+         "submitted slow excludes late PGREAT");
+  expect(score.at("optional").at("gaugeHistory") ==
+             nlohmann::json::array({20.0, 31.25, 48.5, 82.0}),
+         "payload includes complete fitting gauge history");
   expect(!document.contains("rulesetProof") &&
              outcome.draft->payloadJson.find("validationFingerprint") ==
                  std::string::npos,
@@ -339,14 +349,60 @@ void testMapsEveryLamp() {
 void testClampsGauge() {
   auto submission = validSubmission();
   submission.finalGauge = -4.0F;
+  submission.gaugeHistory = {-4.0F, 120.0F};
   auto document = builtDocument(submission);
   expect(document.at("scores").at(0).at("optional").at("gauge") == 0.0,
          "negative gauge clamps to zero");
+  expect(document.at("scores")
+                 .at(0)
+                 .at("optional")
+                 .at("gaugeHistory") == nlohmann::json::array({0.0, 100.0}),
+         "gauge history clamps to the BMS percentage range");
 
   submission.finalGauge = 120.0F;
   document = builtDocument(submission);
   expect(document.at("scores").at(0).at("optional").at("gauge") == 100.0,
          "high gauge clamps to one hundred");
+}
+
+void testGaugeHistoryDownsamplesWithinPayloadLimit() {
+  auto submission = validSubmission();
+  submission.gaugeHistory.clear();
+  for (int index = 0; index < 30'000; ++index) {
+    submission.gaugeHistory.push_back(
+        static_cast<float>((index * 37) % 10'001) / 100.0F);
+  }
+  const auto outcome = ir::tachi::buildBatchManualDraft(submission);
+  expect(outcome.draft.has_value(), "oversized history still builds");
+  if (!outcome.draft) {
+    return;
+  }
+  expect(outcome.draft->payloadJson.size() <=
+             ir::tachi::kMaximumPayloadBytes,
+         "downsampled payload respects provider limit");
+  const auto document = nlohmann::json::parse(outcome.draft->payloadJson);
+  const auto &history =
+      document.at("scores").at(0).at("optional").at("gaugeHistory");
+  expect(history.size() < submission.gaugeHistory.size() &&
+             history.size() >= 2,
+         "oversized history is reduced but retained");
+  expect(history.front() == submission.gaugeHistory.front() &&
+             history.back() == submission.gaugeHistory.back(),
+         "downsampling preserves endpoints");
+
+  const auto repeated = ir::tachi::buildBatchManualDraft(submission);
+  expect(repeated.draft &&
+             repeated.draft->payloadJson == outcome.draft->payloadJson,
+         "downsampling is deterministic");
+}
+
+void testEmptyGaugeHistoryIsOmitted() {
+  auto submission = validSubmission();
+  submission.gaugeHistory.clear();
+  const auto document = builtDocument(submission);
+  expect(!document.at("scores").at(0).at("optional").contains(
+             "gaugeHistory"),
+         "empty gauge history remains optional");
 }
 
 void testRejectsMalformedSubmission() {
@@ -383,6 +439,23 @@ void testRejectsMalformedSubmission() {
   expectInvalid(submission, "non-finite gauge is invalid");
 
   submission = validSubmission();
+  submission.pGreatFast = submission.fast + 1;
+  expectInvalid(submission, "PGREAT fast cannot exceed aggregate fast");
+
+  submission = validSubmission();
+  submission.pGreatSlow = submission.slow + 1;
+  expectInvalid(submission, "PGREAT slow cannot exceed aggregate slow");
+
+  submission = validSubmission();
+  submission.pGreatFast = -1;
+  expectInvalid(submission, "PGREAT timing counts cannot be negative");
+
+  submission = validSubmission();
+  submission.gaugeHistory[1] =
+      std::numeric_limits<float>::quiet_NaN();
+  expectInvalid(submission, "non-finite gauge history is invalid");
+
+  submission = validSubmission();
   submission.clearType = 12345;
   expectInvalid(submission, "unknown clear rank is invalid");
 
@@ -417,6 +490,8 @@ int main() {
   testMapsPlaytypesAndHashFallback();
   testMapsEveryLamp();
   testClampsGauge();
+  testGaugeHistoryDownsamplesWithinPayloadLimit();
+  testEmptyGaugeHistoryIsOmitted();
   testRejectsMalformedSubmission();
   testPayloadNeverContainsCredentialMaterial();
   if (failures != 0) {

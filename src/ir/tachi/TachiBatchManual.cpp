@@ -12,7 +12,11 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <optional>
+#include <queue>
+#include <span>
+#include <vector>
 
 namespace ir::tachi {
 namespace {
@@ -75,6 +79,55 @@ SubmissionEligibilityOutcome rejected(SubmissionEligibilityReason reason,
 
 bool chartHashMatches(std::string_view submitted, std::string_view recorded) {
   return submitted.empty() ? recorded.empty() : submitted == recorded;
+}
+
+std::vector<std::size_t> balancedSampleOrder(std::size_t sourceSize) {
+  if (sourceSize == 0) {
+    return {};
+  }
+
+  std::vector<std::size_t> order;
+  order.reserve(sourceSize);
+  order.push_back(0);
+  if (sourceSize == 1) {
+    return order;
+  }
+  order.push_back(sourceSize - 1);
+
+  struct Interval {
+    std::size_t left = 0;
+    std::size_t right = 0;
+  };
+  const auto lowerPriority = [](const Interval &left, const Interval &right) {
+    const std::size_t leftWidth = left.right - left.left;
+    const std::size_t rightWidth = right.right - right.left;
+    if (leftWidth != rightWidth) {
+      return leftWidth < rightWidth;
+    }
+    return left.left > right.left;
+  };
+  std::priority_queue<Interval, std::vector<Interval>,
+                      decltype(lowerPriority)>
+      intervals(lowerPriority);
+  intervals.push({.left = 0, .right = sourceSize - 1});
+
+  while (!intervals.empty()) {
+    const Interval interval = intervals.top();
+    intervals.pop();
+    if (interval.right - interval.left <= 1) {
+      continue;
+    }
+    const std::size_t middle =
+        interval.left + (interval.right - interval.left) / 2;
+    order.push_back(middle);
+    if (middle - interval.left > 1) {
+      intervals.push({.left = interval.left, .right = middle});
+    }
+    if (interval.right - middle > 1) {
+      intervals.push({.left = middle, .right = interval.right});
+    }
+  }
+  return order;
 }
 
 bool canonicalJudgeWindows(const ScoreStageProvenance &stage, int rank) {
@@ -253,6 +306,15 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     if (std::ranges::any_of(counts, [](int value) { return value < 0; })) {
       return invalid("submission counters must not be negative");
     }
+    if (submission.pGreatFast < 0 || submission.pGreatSlow < 0 ||
+        submission.pGreatFast > submission.fast ||
+        submission.pGreatSlow > submission.slow) {
+      return invalid("submission PGREAT timing breakdown is invalid");
+    }
+    if (std::ranges::any_of(submission.gaugeHistory,
+                            [](float value) { return !std::isfinite(value); })) {
+      return invalid("submission gauge history is not finite");
+    }
     if (submission.maxScore <= 0 || submission.score < 0 ||
         submission.score > submission.maxScore ||
         submission.maxScore % 2 != 0 ||
@@ -284,34 +346,86 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
 
     const std::string &identifier =
         hasSha256 ? submission.chartSha256 : submission.chartMd5;
-    nlohmann::json score = {
-        {"score", submission.score},
-        {"lamp", *lamp},
-        {"matchType", "bmsChartHash"},
-        {"identifier", identifier},
-        {"timeAchieved", submission.playedAtUnixMillis},
-        {"judgements",
-         {{"pgreat", submission.pGreat},
-          {"great", submission.great},
-          {"good", submission.good},
-          {"bad", submission.bad},
-          {"poor", submission.poor}}},
-        {"optional",
-         {{"fast", submission.fast},
-          {"slow", submission.slow},
+    const int fast = submission.fast - submission.pGreatFast;
+    const int slow = submission.slow - submission.pGreatSlow;
+    const auto sampledHistory = [&](std::span<const std::size_t> indices) {
+      nlohmann::json history = nlohmann::json::array();
+      for (const std::size_t index : indices) {
+        history.push_back(
+            std::clamp(submission.gaugeHistory[index], 0.0F, 100.0F));
+      }
+      return history;
+    };
+    const auto makeDocument = [&](std::span<const std::size_t> indices) {
+      nlohmann::json optional = {
+          {"fast", fast},
+          {"slow", slow},
           {"maxCombo", submission.maxCombo},
           {"bp", static_cast<int>(badPoints)},
-          {"gauge", std::clamp(submission.finalGauge, 0.0F, 100.0F)}}},
+          {"gauge", std::clamp(submission.finalGauge, 0.0F, 100.0F)},
+      };
+      if (!submission.gaugeHistory.empty()) {
+        optional["gaugeHistory"] = sampledHistory(indices);
+      }
+      nlohmann::json score = {
+          {"score", submission.score},
+          {"lamp", *lamp},
+          {"matchType", "bmsChartHash"},
+          {"identifier", identifier},
+          {"timeAchieved", submission.playedAtUnixMillis},
+          {"judgements",
+           {{"pgreat", submission.pGreat},
+            {"great", submission.great},
+            {"good", submission.good},
+            {"bad", submission.bad},
+            {"poor", submission.poor}}},
+          {"optional", std::move(optional)},
+      };
+      return nlohmann::json{
+          {"meta",
+           {{"game", "bms"},
+            {"playtype", submission.keyMode == 7 ? "7K" : "14K"},
+            {"service", "AsoBMaShow"}}},
+          {"scores", nlohmann::json::array({std::move(score)})},
+      };
     };
-    nlohmann::json document = {
-        {"meta",
-         {{"game", "bms"},
-          {"playtype", submission.keyMode == 7 ? "7K" : "14K"},
-          {"service", "AsoBMaShow"}}},
-        {"scores", nlohmann::json::array({std::move(score)})},
-    };
-    std::string payload = document.dump();
-    if (payload.size() > kMaximumPayloadBytes) {
+
+    std::vector<std::size_t> allIndices(submission.gaugeHistory.size());
+    std::iota(allIndices.begin(), allIndices.end(), 0);
+    std::vector<std::size_t> selected = allIndices;
+    std::string payload = makeDocument(allIndices).dump();
+    if (payload.size() > kMaximumPayloadBytes &&
+        !submission.gaugeHistory.empty()) {
+      const std::string emptyPayload =
+          makeDocument(std::span<const std::size_t>{}).dump();
+      if (emptyPayload.size() > kMaximumPayloadBytes) {
+        return invalid("submission payload exceeds the provider size limit");
+      }
+
+      selected.clear();
+      std::size_t selectedPayloadSize = emptyPayload.size();
+      for (const std::size_t index :
+           balancedSampleOrder(submission.gaugeHistory.size())) {
+        const float value =
+            std::clamp(submission.gaugeHistory[index], 0.0F, 100.0F);
+        const std::size_t separatorSize = selected.empty() ? 0 : 1;
+        const std::size_t tokenSize = nlohmann::json(value).dump().size();
+        const std::size_t available =
+            kMaximumPayloadBytes - selectedPayloadSize;
+        if (separatorSize + tokenSize > available) {
+          break;
+        }
+        selectedPayloadSize += separatorSize + tokenSize;
+        selected.push_back(index);
+      }
+      std::ranges::sort(selected);
+      payload = makeDocument(selected).dump();
+    }
+
+    const std::size_t minimumSamples =
+        std::min<std::size_t>(2, submission.gaugeHistory.size());
+    if (selected.size() < minimumSamples ||
+        payload.size() > kMaximumPayloadBytes) {
       return invalid("submission payload exceeds the provider size limit");
     }
 

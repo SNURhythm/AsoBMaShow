@@ -461,8 +461,9 @@ if (payload.size() > kMaximumPayloadBytes) {
   std::ranges::sort(selected);
   payload = makeDocument(selected).dump();
 }
-if ((!submission.gaugeHistory.empty() &&
-     submission.gaugeHistory.size() > 1 && selected.size() < 2) ||
+const std::size_t minimumSamples =
+    std::min<std::size_t>(2, submission.gaugeHistory.size());
+if (selected.size() < minimumSamples ||
     payload.size() > kMaximumPayloadBytes) {
   return invalid("submission payload exceeds the provider size limit");
 }
