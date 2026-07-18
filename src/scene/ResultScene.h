@@ -1,6 +1,7 @@
 #pragma once
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
+#include "../ir/IrSubmission.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
@@ -57,6 +58,7 @@ struct ResultCourseOptions {
 
 struct ResultPersistenceOptions {
   std::shared_ptr<const result_persistence::ChartResultAttempt> attempt;
+  std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
 };
 

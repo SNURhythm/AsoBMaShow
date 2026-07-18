@@ -49,6 +49,11 @@ struct ProfileSessionDependencies {
       bindReplay;
   std::function<result_persistence::RecoverySummary()> recoverPendingResults;
   std::function<void()> beforeInputReplacement;
+  std::function<bool(std::string &)> pauseProfileServices;
+  std::function<bool(std::string_view, const AppSettings &, std::string &)>
+      activateProfileServices;
+  std::function<bool(std::string_view, const AppSettings &, std::string &)>
+      restoreProfileServices;
 };
 
 class ProfileSessionCoordinator {
@@ -59,9 +64,10 @@ public:
   using RestoreInput = std::function<void(const std::filesystem::path &)>;
   using RefreshCaches = std::function<void()>;
 
-  ProfileSessionCoordinator(PlayerProfileManager &manager, ScoreRepository &score,
-                            ReplayRepository &replay, Blocker blocker,
-                            ApplyInput applyInput, RestoreInput restoreInput,
+  ProfileSessionCoordinator(PlayerProfileManager &manager,
+                            ScoreRepository &score, ReplayRepository &replay,
+                            Blocker blocker, ApplyInput applyInput,
+                            RestoreInput restoreInput,
                             RefreshCaches refreshCaches,
                             ProfileSessionDependencies dependencies = {});
 

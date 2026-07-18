@@ -2,6 +2,9 @@
 
 #include "../src/FileChecksum.h"
 #include "../src/ProfileDatabaseActivity.h"
+#include "../src/ir/IrSubmission.h"
+#include "../src/ir/IrProfileSettings.h"
+#include "../src/ir/tachi/TachiDriver.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 
@@ -71,8 +74,8 @@ int queryInt(sqlite3 *database, const std::string &sql) {
 
 void execOrAbort(sqlite3 *database, const std::string &sql) {
   char *message = nullptr;
-  const int result = sqlite3_exec(database, sql.c_str(), nullptr, nullptr,
-                                  &message);
+  const int result =
+      sqlite3_exec(database, sql.c_str(), nullptr, nullptr, &message);
   if (result != SQLITE_OK) {
     std::cerr << "SQL failed: " << (message ? message : "unknown error")
               << " | " << sql << '\n';
@@ -349,8 +352,8 @@ void testActivationFailureRetainsPendingAndRecoveryActivatesIr() {
   assert(failed.state == SaveState::PendingAcknowledgement);
   assertDatabaseCounts(replayPath, scorePath, 1, 1, 1);
   database = openDatabase(replayPath);
-  assert(queryInt(database.get(),
-                  "SELECT local_result_ready FROM ir_outbox") == 0);
+  assert(queryInt(database.get(), "SELECT local_result_ready FROM ir_outbox") ==
+         0);
   execOrAbort(database.get(), "DROP TRIGGER fail_ir_activation");
   database.reset();
   assert(replay.ListDueIrOutbox(100'000).entries.empty());
@@ -361,11 +364,64 @@ void testActivationFailureRetainsPendingAndRecoveryActivatesIr() {
   assert(recovered.pending == 0);
   assert(recovered.conflicts == 0);
   assertDatabaseCounts(replayPath, scorePath, 1, 1, 0);
-  const auto due = replay.ListDueIrOutbox(
-      std::numeric_limits<std::int64_t>::max());
+  const auto due =
+      replay.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max());
   assert(due.status == ir::IrOutboxBatchStatus::Loaded);
   assert(due.entries.size() == 1);
   assert(due.entries.front().localResultReady);
+}
+
+void testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode() {
+  TemporaryDirectory temporary("automatic-ir-capture");
+  const auto replayPath = temporary.path() / "replay.db";
+  const auto scorePath = temporary.path() / "score.db";
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
+  Coordinator coordinator(score, replay);
+
+  ir::IrDriverRegistry drivers;
+  std::string registrationError;
+  assert(drivers.registerDriver(std::make_shared<ir::tachi::TachiDriver>(),
+                                registrationError));
+
+  ChartResultAttempt automatic =
+      sampleAttempt(temporary.path(), "automatic-ir", 6);
+  automatic.replay.chartMeta.KeyMode = 7;
+  automatic.payloadFingerprint =
+      payloadFingerprint(automatic.replay, automatic.score);
+  const auto submission = ir::makeIrSubmission(automatic, 1'700'000'000'123LL);
+  assert(submission.value.has_value());
+
+  std::map<std::string, ir::IrProviderSettings> providers;
+  providers["tachi"] = {.enabled = true,
+                        .autoSubmit = true,
+                        .serverOrigin = "https://boku.tachi.ac"};
+  const auto automaticDrafts =
+      drivers.buildAutomaticDrafts(providers, *submission.value);
+  assert(automaticDrafts.size() == 1);
+  assert(automaticDrafts.front().createdAtUnixMillis ==
+         submission.value->playedAtUnixMillis);
+
+  const SaveOutcome saved = coordinator.persist(automatic, automaticDrafts);
+  assert(saved.saved());
+  const auto queued = replay.LoadIrOutbox("tachi", automatic.attemptId);
+  assert(queued.status == ir::IrOutboxReadStatus::Found && queued.entry);
+  assert(queued.entry->state == ir::IrOutboxState::Pending);
+  assert(queued.entry->localResultReady);
+
+  ChartResultAttempt manual = sampleAttempt(temporary.path(), "manual-ir", 7);
+  manual.replay.chartMeta.KeyMode = 7;
+  manual.payloadFingerprint = payloadFingerprint(manual.replay, manual.score);
+  const auto manualSubmission =
+      ir::makeIrSubmission(manual, 1'700'000'000'456LL);
+  assert(manualSubmission.value.has_value());
+  providers["tachi"].autoSubmit = false;
+  const auto manualDrafts =
+      drivers.buildAutomaticDrafts(providers, *manualSubmission.value);
+  assert(manualDrafts.empty());
+  assert(coordinator.persist(manual, manualDrafts).saved());
+  assert(replay.LoadIrOutbox("tachi", manual.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
 }
 
 void testProfileSwitchCannotAcquireGateMidPersist() {
@@ -409,7 +465,8 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
           },
       .acknowledgeAndActivate =
           [&](std::string_view id, int replayId) {
-            return replay.AcknowledgePendingChartScoreAndActivateIr(id, replayId);
+            return replay.AcknowledgePendingChartScoreAndActivateIr(id,
+                                                                    replayId);
           },
       .recordRecoveryAttempt =
           [&](std::string_view id, RecoveryAttemptKind kind) {
@@ -465,9 +522,8 @@ void testSuccessfulBoundedRecoveryReportsRemainingBacklog() {
   assert(score.EnsureSchema());
 
   for (int suffix = 0; suffix < 3; ++suffix) {
-    const ChartResultAttempt attempt =
-        sampleAttempt(temporary.path(),
-                      "bounded-backlog-" + std::to_string(suffix), suffix);
+    const ChartResultAttempt attempt = sampleAttempt(
+        temporary.path(), "bounded-backlog-" + std::to_string(suffix), suffix);
     assert(replay.StageChartResult(attempt, {}).status == StageStatus::Staged);
   }
   assertDatabaseCounts(replayPath, scorePath, 3, 0, 3);
@@ -558,6 +614,7 @@ int main() {
   testCrashAfterStageRecoversExactlyOneScore();
   testCommittedScoreBeforeAckRecoversWithoutDuplicate();
   testActivationFailureRetainsPendingAndRecoveryActivatesIr();
+  testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode();
   testProfileSwitchCannotAcquireGateMidPersist();
   testSuccessfulBoundedRecoveryReportsRemainingBacklog();
   testRecoveryRetainsConflictAndProcessesLaterValidRow();

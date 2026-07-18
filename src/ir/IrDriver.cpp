@@ -49,17 +49,17 @@ DeliveryOutcome IrDriver::poll(const IrOutboxEntry &,
   return unsupportedDelivery("driver does not support deferred submission");
 }
 
-ChartRankingOutcome IrDriver::fetchChartRanking(
-    const IrChartQuery &, const IrProviderRuntimeConfig &, IrHttpClient &,
-    std::stop_token) const {
+ChartRankingOutcome IrDriver::fetchChartRanking(const IrChartQuery &,
+                                                const IrProviderRuntimeConfig &,
+                                                IrHttpClient &,
+                                                std::stop_token) const {
   return unsupportedRanking("driver does not support chart rankings");
 }
 
 bool validateCapabilities(IrDriverCapabilities capabilities) noexcept {
   return (capabilities.chartRankings || capabilities.scoreSubmission) &&
-         (!capabilities.readOnly ||
-          (!capabilities.scoreSubmission &&
-           !capabilities.deferredSubmission)) &&
+         (!capabilities.readOnly || (!capabilities.scoreSubmission &&
+                                     !capabilities.deferredSubmission)) &&
          (!capabilities.deferredSubmission || capabilities.scoreSubmission);
 }
 
@@ -112,10 +112,11 @@ IrDriverRegistry::buildDraft(std::string_view providerId,
   }
 }
 
-DeliveryOutcome IrDriverRegistry::submit(
-    std::string_view providerId, const IrOutboxEntry &entry,
-    const IrProviderRuntimeConfig &config, IrHttpClient &http,
-    std::stop_token stopToken) const {
+DeliveryOutcome IrDriverRegistry::submit(std::string_view providerId,
+                                         const IrOutboxEntry &entry,
+                                         const IrProviderRuntimeConfig &config,
+                                         IrHttpClient &http,
+                                         std::stop_token stopToken) const {
   const auto driver = find(providerId);
   if (!driver || driver->capabilities().readOnly ||
       !driver->capabilities().scoreSubmission) {
@@ -130,10 +131,11 @@ DeliveryOutcome IrDriverRegistry::submit(
   }
 }
 
-DeliveryOutcome IrDriverRegistry::poll(
-    std::string_view providerId, const IrOutboxEntry &entry,
-    const IrProviderRuntimeConfig &config, IrHttpClient &http,
-    std::stop_token stopToken) const {
+DeliveryOutcome IrDriverRegistry::poll(std::string_view providerId,
+                                       const IrOutboxEntry &entry,
+                                       const IrProviderRuntimeConfig &config,
+                                       IrHttpClient &http,
+                                       std::stop_token stopToken) const {
   const auto driver = find(providerId);
   if (!driver || driver->capabilities().readOnly ||
       !driver->capabilities().scoreSubmission ||
@@ -163,6 +165,41 @@ ChartRankingOutcome IrDriverRegistry::fetchChartRanking(
     return {.status = ChartRankingStatus::TransientFailure,
             .diagnostic = "IR ranking driver failed"};
   }
+}
+
+std::vector<IrOutboxDraft> IrDriverRegistry::buildAutomaticDrafts(
+    const std::map<std::string, IrProviderSettings> &settings,
+    const IrSubmission &submission) const {
+  std::vector<IrOutboxDraft> drafts;
+  drafts.reserve(settings.size());
+  for (const auto &[providerId, providerSettings] : settings) {
+    if (!providerSettings.enabled || !providerSettings.autoSubmit) {
+      continue;
+    }
+    const auto driver = find(providerId);
+    if (!driver) {
+      continue;
+    }
+    const auto capabilities = driver->capabilities();
+    if (capabilities.readOnly || !capabilities.scoreSubmission) {
+      continue;
+    }
+    BuildDraftOutcome built = buildDraft(providerId, submission);
+    if (built.status != BuildDraftStatus::Built || !built.draft) {
+      continue;
+    }
+    std::string diagnostic;
+    if (!validateIrOutboxDraft(*built.draft, diagnostic) ||
+        built.draft->providerId != providerId ||
+        built.draft->attemptId != submission.attemptId ||
+        built.draft->chartMd5 != submission.chartMd5 ||
+        built.draft->chartSha256 != submission.chartSha256 ||
+        built.draft->createdAtUnixMillis != submission.playedAtUnixMillis) {
+      continue;
+    }
+    drafts.push_back(std::move(*built.draft));
+  }
+  return drafts;
 }
 
 } // namespace ir

@@ -200,6 +200,12 @@ void testReadOnlyDriverCannotBuildSubmissionDraft() {
   const auto outcome = registry.buildDraft("archive", *submission.value);
   expect(outcome.status == ir::BuildDraftStatus::Unsupported,
          "read-only build is unsupported");
+  std::map<std::string, ir::IrProviderSettings> settings;
+  settings["archive"] = {.enabled = true,
+                         .autoSubmit = true,
+                         .serverOrigin = "https://archive.example"};
+  expect(registry.buildAutomaticDrafts(settings, *submission.value).empty(),
+         "automatic capture excludes a malicious read-only driver");
   expect(driver->buildCalls == 0,
          "registry does not invoke read-only build implementation");
 }

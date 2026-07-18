@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IrOutboxModels.h"
+#include "IrProfileSettings.h"
 #include "IrRankingModels.h"
 #include "IrSubmission.h"
 
@@ -11,6 +12,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ir {
 
@@ -82,15 +84,14 @@ public:
   virtual BuildDraftOutcome buildDraft(const IrSubmission &) const;
   virtual DeliveryOutcome submit(const IrOutboxEntry &,
                                  const IrProviderRuntimeConfig &,
-                                 IrHttpClient &,
-                                 std::stop_token) const;
+                                 IrHttpClient &, std::stop_token) const;
   virtual DeliveryOutcome poll(const IrOutboxEntry &,
-                               const IrProviderRuntimeConfig &,
-                               IrHttpClient &,
+                               const IrProviderRuntimeConfig &, IrHttpClient &,
                                std::stop_token) const;
-  virtual ChartRankingOutcome fetchChartRanking(
-      const IrChartQuery &, const IrProviderRuntimeConfig &, IrHttpClient &,
-      std::stop_token) const;
+  virtual ChartRankingOutcome fetchChartRanking(const IrChartQuery &,
+                                                const IrProviderRuntimeConfig &,
+                                                IrHttpClient &,
+                                                std::stop_token) const;
 };
 
 [[nodiscard]] bool
@@ -104,18 +105,23 @@ public:
   find(std::string_view providerId) const;
   [[nodiscard]] BuildDraftOutcome
   buildDraft(std::string_view providerId, const IrSubmission &submission) const;
-  [[nodiscard]] DeliveryOutcome
-  submit(std::string_view providerId, const IrOutboxEntry &entry,
-         const IrProviderRuntimeConfig &config, IrHttpClient &http,
-         std::stop_token stopToken) const;
-  [[nodiscard]] DeliveryOutcome
-  poll(std::string_view providerId, const IrOutboxEntry &entry,
-       const IrProviderRuntimeConfig &config, IrHttpClient &http,
-       std::stop_token stopToken) const;
-  [[nodiscard]] ChartRankingOutcome fetchChartRanking(
-      std::string_view providerId, const IrChartQuery &query,
-      const IrProviderRuntimeConfig &config, IrHttpClient &http,
-      std::stop_token stopToken) const;
+  [[nodiscard]] DeliveryOutcome submit(std::string_view providerId,
+                                       const IrOutboxEntry &entry,
+                                       const IrProviderRuntimeConfig &config,
+                                       IrHttpClient &http,
+                                       std::stop_token stopToken) const;
+  [[nodiscard]] DeliveryOutcome poll(std::string_view providerId,
+                                     const IrOutboxEntry &entry,
+                                     const IrProviderRuntimeConfig &config,
+                                     IrHttpClient &http,
+                                     std::stop_token stopToken) const;
+  [[nodiscard]] ChartRankingOutcome
+  fetchChartRanking(std::string_view providerId, const IrChartQuery &query,
+                    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+                    std::stop_token stopToken) const;
+  [[nodiscard]] std::vector<IrOutboxDraft> buildAutomaticDrafts(
+      const std::map<std::string, IrProviderSettings> &settings,
+      const IrSubmission &submission) const;
 
 private:
   std::map<std::string, std::shared_ptr<const IrDriver>, std::less<>> drivers_;

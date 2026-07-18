@@ -36,9 +36,10 @@ void appendRollbackError(std::string &message, std::string_view operation,
 } // namespace
 
 ProfileSessionCoordinator::ProfileSessionCoordinator(
-    PlayerProfileManager &manager, ScoreRepository &score, ReplayRepository &replay,
-    Blocker blocker, ApplyInput applyInput, RestoreInput restoreInput,
-    RefreshCaches refreshCaches, ProfileSessionDependencies dependencies)
+    PlayerProfileManager &manager, ScoreRepository &score,
+    ReplayRepository &replay, Blocker blocker, ApplyInput applyInput,
+    RestoreInput restoreInput, RefreshCaches refreshCaches,
+    ProfileSessionDependencies dependencies)
     : manager_(manager), score_(score), replay_(replay),
       blocker_(std::move(blocker)), applyInput_(std::move(applyInput)),
       restoreInput_(std::move(restoreInput)),
@@ -69,6 +70,19 @@ ProfileSessionCoordinator::ProfileSessionCoordinator(
       return result_persistence::RecoverySummary{};
     };
   }
+  if (!dependencies_.pauseProfileServices) {
+    dependencies_.pauseProfileServices = [](std::string &) { return true; };
+  }
+  if (!dependencies_.activateProfileServices) {
+    dependencies_.activateProfileServices = [](std::string_view,
+                                               const AppSettings &,
+                                               std::string &) { return true; };
+  }
+  if (!dependencies_.restoreProfileServices) {
+    dependencies_.restoreProfileServices = [](std::string_view,
+                                              const AppSettings &,
+                                              std::string &) { return true; };
+  }
 }
 
 ProfileSwitchResult
@@ -86,13 +100,8 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
     }
   }
 
-  profile_database_activity::SwitchGuard databaseGuard;
-  if (!databaseGuard.ownsLock()) {
-    return switchFailure(ProfileError::SwitchBlocked,
-                         "A score or replay database operation is active.");
-  }
-
-  if (manager_.activeProfile().id == profileId) {
+  const std::string oldProfileId = manager_.activeProfile().id;
+  if (oldProfileId == profileId) {
     return switchSuccess();
   }
 
@@ -128,12 +137,66 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
   }
 
   const PlayerProfilePaths oldPaths = manager_.activePaths();
-  const std::filesystem::path oldScorePath = score_.GetDatabasePath();
-  const std::filesystem::path oldReplayPath = replay_.GetDatabasePath();
+  const std::filesystem::path oldScorePath = oldPaths.scoresDb;
+  const std::filesystem::path oldReplayPath = oldPaths.replaysDb;
   const AppSettings oldSettings = currentSettings;
   bool inputApplyAttempted = false;
 
+  const auto restoreProfileServices = [&](std::string &message) {
+    try {
+      std::string restoreError;
+      if (!dependencies_.restoreProfileServices(oldProfileId, oldSettings,
+                                                restoreError)) {
+        appendRollbackError(message, "unable to restore profile services",
+                            restoreError);
+      }
+    } catch (const std::exception &error) {
+      appendRollbackError(message, "unable to restore profile services", error);
+    } catch (...) {
+      appendRollbackError(message, "unable to restore profile services",
+                          "unknown failure");
+    }
+  };
+
+  std::string serviceError;
+  try {
+    if (!dependencies_.pauseProfileServices(serviceError)) {
+      std::string message = "Unable to pause profile services: " + serviceError;
+      restoreProfileServices(message);
+      return switchFailure(ProfileError::SwitchBlocked, std::move(message));
+    }
+  } catch (const std::exception &error) {
+    std::string message =
+        "Unable to pause profile services: " + std::string(error.what());
+    restoreProfileServices(message);
+    return switchFailure(ProfileError::SwitchBlocked, std::move(message));
+  } catch (...) {
+    std::string message = "Unable to pause profile services: unknown failure";
+    restoreProfileServices(message);
+    return switchFailure(ProfileError::SwitchBlocked, std::move(message));
+  }
+
+  profile_database_activity::SwitchGuard databaseGuard;
+  if (!databaseGuard.ownsLock()) {
+    std::string message = "A score or replay database operation is active.";
+    restoreProfileServices(message);
+    return switchFailure(ProfileError::SwitchBlocked, std::move(message));
+  }
+
   auto rollback = [&](ProfileError error, std::string message) {
+    if (manager_.activeProfile().id != oldProfileId) {
+      try {
+        const ProfileResult restoredProfile =
+            manager_.commitActiveProfile(oldProfileId);
+        if (!restoredProfile.ok()) {
+          appendRollbackError(message, "unable to restore active profile",
+                              restoredProfile.message);
+        }
+      } catch (const std::exception &restoreError) {
+        appendRollbackError(message, "unable to restore active profile",
+                            restoreError);
+      }
+    }
     std::string databaseError;
     if (!score_.BindDatabasePath(oldScorePath, databaseError)) {
       appendRollbackError(message, "unable to restore score database",
@@ -166,6 +229,7 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
                             refreshError);
       }
     }
+    restoreProfileServices(message);
     return switchFailure(error, std::move(message));
   };
 
@@ -272,6 +336,24 @@ ProfileSessionCoordinator::switchTo(std::string_view profileId,
   if (!committed.ok()) {
     return rollback(committed.error,
                     "Unable to commit active profile: " + committed.message);
+  }
+
+  try {
+    errorMessage.clear();
+    if (!dependencies_.activateProfileServices(profileId, currentSettings,
+                                               errorMessage)) {
+      return rollback(ProfileError::IoFailure,
+                      "Unable to activate target profile services: " +
+                          errorMessage);
+    }
+  } catch (const std::exception &error) {
+    return rollback(ProfileError::IoFailure,
+                    "Unable to activate target profile services: " +
+                        std::string(error.what()));
+  } catch (...) {
+    return rollback(ProfileError::IoFailure,
+                    "Unable to activate target profile services: unknown "
+                    "failure");
   }
   return switchSuccess(std::move(recoveryWarning));
 }

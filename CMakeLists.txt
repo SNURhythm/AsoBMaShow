@@ -958,11 +958,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/result_persistence_integration_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ir/tachi/TachiDriver.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/ir/tachi/TachiResponseParser.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
-        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/repositories/ScoreRepository.cpp
