@@ -502,8 +502,9 @@ void testRankingRequestAndStatusClassification() {
         "ranking fetch normalizes origin and lowercases SHA-256 path");
     expect(request.headers ==
                std::vector<std::pair<std::string, std::string>>{
-                   {"Authorization", "Bearer fresh-api-key"}},
-           "ranking fetch sends only the current bearer header");
+                   {"Authorization", "Bearer fresh-api-key"},
+                   {"X-TachiIR-Version", "v2.0.0"}},
+           "ranking fetch identifies the compatible Beatoraja IR protocol");
     expect(request.maximumResponseBytes == 8 * 1024 * 1024,
            "ranking response is capped at eight MiB");
     expect(!request.followRedirects,

@@ -316,7 +316,8 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   const IrHttpRequest request{
       .method = IrHttpMethod::Get,
       .url = *origin + "/ir/beatoraja/charts/" + *sha256 + "/scores",
-      .headers = {{"Authorization", "Bearer " + config.apiKey}},
+      .headers = {{"Authorization", "Bearer " + config.apiKey},
+                  {"X-TachiIR-Version", "v2.0.0"}},
       .maximumResponseBytes = kMaximumRankingResponseBytes,
       .followRedirects = false,
   };
