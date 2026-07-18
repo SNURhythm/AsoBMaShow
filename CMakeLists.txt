@@ -656,6 +656,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(tachi_batch_manual_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(tachi_batch_manual_tests PRIVATE cxx_std_23)
 
+    if (NOT IOS)
+        add_executable(ir_http_client_tests
+            tests/ir_http_client_tests.cpp
+            src/ir/IrHttpClient.cpp
+        )
+        target_include_directories(ir_http_client_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(ir_http_client_tests PRIVATE cxx_std_23)
+        target_link_libraries(ir_http_client_tests PRIVATE CURL::libcurl)
+    endif()
+
     add_executable(replay_repository_tests
         tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
@@ -1898,6 +1910,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    if (TARGET ir_http_client_tests)
+        asobmashow_register_test(ir_http_client_tests)
+    endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10
     )
