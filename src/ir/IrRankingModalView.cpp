@@ -5,6 +5,7 @@
 #include "../targets.h"
 #include "../view/Button.h"
 #include "../view/ClearLampColors.h"
+#include "../view/IconText.h"
 #include "../view/OverlayPortal.h"
 #include "../view/RecyclerView.h"
 #include "../view/TextView.h"
@@ -26,6 +27,7 @@ namespace ir {
 namespace {
 
 constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr uint32_t kIconXmark = 0xf00d;
 constexpr int kPanelMaximumWidth = 1180;
 constexpr int kPanelMaximumHeight = 840;
 constexpr int kPanelMargin = 24;
@@ -80,6 +82,27 @@ Button *makeActionButton(const std::string &label, int width,
   return button;
 }
 
+Button *makeIconActionButton(uint32_t codepoint,
+                             std::function<void()> action) {
+  auto *button = new Button();
+  auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, 22);
+  icon->setText(ui_icons::textForCodepoint(codepoint));
+  icon->setAlign(TextView::CENTER);
+  icon->setVAlign(TextView::MIDDLE);
+  icon->setThemedColor(ui_theme::textPrimary);
+  button->setContentView(icon);
+  button->setWidth(48)->setHeight(48)->setFlexShrink(0);
+  button->setCornerRadius(ui_theme::controlRadius());
+  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
+                                    ui_theme::controlPressed);
+  button->setThemedBorderColors(ui_theme::hairlineStrong,
+                                ui_theme::accentBorderStrong,
+                                ui_theme::accentBorderStrong);
+  button->setStyledBorderWidth(1);
+  button->setOnClickListener(std::move(action));
+  return button;
+}
+
 View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
   auto *card = new View();
   card->setFlex(1.0F)->setMinWidth(0);
@@ -97,28 +120,10 @@ View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
   return card;
 }
 
-bool eventPoint(const SDL_Event &event, float &x, float &y) {
-  if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) {
-    int screenX = static_cast<int>(event.button.x * rendering::widthScale);
-    int screenY = static_cast<int>(event.button.y * rendering::heightScale);
-    int uiX = 0;
-    int uiY = 0;
-    rendering::screenToUi(screenX, screenY, uiX, uiY);
-    x = static_cast<float>(uiX);
-    y = static_cast<float>(uiY);
-    return true;
-  }
-  if (event.type == SDL_FINGERDOWN || event.type == SDL_FINGERUP) {
-    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
-    return true;
-  }
-  return false;
-}
-
 class ModalScrim final : public View {
 public:
-  ModalScrim(View *panel, std::function<void()> requestClose)
-      : panel_(panel), requestClose_(std::move(requestClose)) {}
+  explicit ModalScrim(std::function<void()> requestClose)
+      : requestClose_(std::move(requestClose)) {}
 
 private:
   bool handleEventsImpl(SDL_Event &event) override {
@@ -126,25 +131,10 @@ private:
         (event.key.keysym.sym == SDLK_ESCAPE ||
          event.key.keysym.sym == SDLK_AC_BACK)) {
       requestClose_();
-      return false;
-    }
-    if (event.type == SDL_MOUSEBUTTONDOWN &&
-        event.button.button != SDL_BUTTON_LEFT) {
-      return false;
-    }
-    if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_FINGERDOWN) {
-      float x = 0.0f;
-      float y = 0.0f;
-      if (eventPoint(event, x, y) &&
-          (x < panel_->getX() || x > panel_->getX() + panel_->getWidth() ||
-           y < panel_->getY() || y > panel_->getY() + panel_->getHeight())) {
-        requestClose_();
-      }
     }
     return false;
   }
 
-  View *panel_;
   std::function<void()> requestClose_;
 };
 
@@ -316,7 +306,7 @@ struct IrRankingModal::Impl {
 
   void build() {
     panel = new View();
-    root = new ModalScrim(panel, [this]() { requestClose(); });
+    root = new ModalScrim([this]() { requestClose(); });
     root->setPositionType(YGPositionTypeAbsolute);
     root->setPosition(Edge::Left, 0);
     root->setPosition(Edge::Top, 0);
@@ -348,7 +338,8 @@ struct IrRankingModal::Impl {
     fetchedAt->setThemedColor(ui_theme::textMuted);
     fetchedAt->setWidth(220);
     refreshButton = makeActionButton("Refresh", 112, [this]() { refresh(); });
-    closeButton = makeActionButton("Close", 96, [this]() { requestClose(); });
+    closeButton =
+        makeIconActionButton(kIconXmark, [this]() { requestClose(); });
     header->addView(headerTitle);
     header->addView(fetchedAt);
     header->addView(refreshButton);
@@ -429,7 +420,7 @@ struct IrRankingModal::Impl {
   void buildScoreDetail() {
     scoreDetailPanel = new View();
     scoreDetailRoot =
-        new ModalScrim(scoreDetailPanel, [this]() { hideScoreDetails(); });
+        new ModalScrim([this]() { hideScoreDetails(); });
     scoreDetailRoot->setPositionType(YGPositionTypeAbsolute);
     scoreDetailRoot->setPosition(Edge::Left, 0);
     scoreDetailRoot->setPosition(Edge::Top, 0);
@@ -456,7 +447,7 @@ struct IrRankingModal::Impl {
     scoreDetailTitle->setFlex(1);
     detailHeader->addView(scoreDetailTitle);
     detailHeader->addView(
-        makeActionButton("Close", 96, [this]() { hideScoreDetails(); }));
+        makeIconActionButton(kIconXmark, [this]() { hideScoreDetails(); }));
 
     const auto makeMetricRow = [] {
       auto *row = new View();

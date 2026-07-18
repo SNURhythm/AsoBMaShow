@@ -36,6 +36,23 @@ require(
     source.count("hideScoreDetails();") >= 3,
     "refresh and parent close paths must dismiss score details",
 )
+require(
+    "bool eventPoint(" not in source
+    and "panel_->getX()" not in source
+    and "panel_->getY()" not in source,
+    "ranking modals must not dismiss from outside pointer hit testing",
+)
+require(
+    source.count("new ModalScrim([this]()") == 2,
+    "both ranking scrims must use explicit-only dismissal callbacks",
+)
+require(
+    '#include "../view/IconText.h"' in source
+    and "constexpr uint32_t kIconXmark = 0xf00d;" in source
+    and source.count("makeIconActionButton(kIconXmark,") == 2
+    and 'makeActionButton("Close"' not in source,
+    "both ranking modal headers must use Font Awesome xmark buttons",
+)
 
 if failures:
     for failure in failures:
