@@ -3,6 +3,7 @@
 #include "../CourseIdentity.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
+#include "../ir/IrOutboxModels.h"
 #include "ScoreRepositoryModels.h"
 #include "../bms_parser.hpp"
 
@@ -132,7 +133,7 @@ struct CourseReplayLookup {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 5;
+  static constexpr int kCurrentSchemaVersion = 6;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -163,6 +164,29 @@ public:
   RecordPendingChartScoreRecoveryAttempt(
       std::string_view attemptId,
       result_persistence::RecoveryAttemptKind kind);
+  ir::IrOutboxInsertOutcome
+  EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
+  ir::IrOutboxReadOutcome LoadIrOutbox(std::string_view providerId,
+                                       std::string_view attemptId);
+  ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,
+                                           std::size_t limit = 64);
+  ir::IrOutboxClaimOutcome ClaimIrOutbox(std::int64_t rowId,
+                                         ir::IrOutboxState expectedState,
+                                         std::int64_t nowMs);
+  ir::IrOutboxMutationOutcome
+  ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
+  ir::IrOutboxMutationOutcome RetryIrOutbox(std::int64_t rowId,
+                                            std::int64_t nowMs);
+  ir::IrOutboxMutationOutcome RetryAllIrOutbox(std::string_view providerId,
+                                               std::int64_t nowMs);
+  ir::IrOutboxMutationOutcome UnblockIrOutbox(std::string_view providerId,
+                                              std::int64_t nowMs);
+  ir::IrOutboxMutationOutcome DiscardIrOutbox(std::int64_t rowId);
+  ir::IrOutboxCounts CountIrOutbox(std::string_view providerId);
+  ir::IrOutboxMutationOutcome RecoverStaleIrOutbox(std::int64_t nowMs);
+  ir::IrOutboxMutationOutcome PurgeSucceededIrOutbox(
+      std::int64_t olderThanMs);
+  bool ClearIrOutbox(std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);

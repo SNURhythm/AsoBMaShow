@@ -1020,7 +1020,8 @@ void testVersion4MigrationAddsResultOutbox(
   assert(helper.EnsureSchema());
 
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(columnExists(db.get(), "replays", "attempt_id"));
   assert(columnExists(db.get(), "replays", "attempt_fingerprint"));
   assert(indexExists(db.get(), "idx_replays_attempt_id"));
@@ -1082,7 +1083,8 @@ void testVersion4MarkerAcceptsExactVersion5ResultOutbox(
   ReplayRepository reopened(path);
   assert(reopened.EnsureSchema());
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(db.get()) == schemaBefore);
   assert(queryText(db.get(),
                    "SELECT attempt_id || '|' || attempt_fingerprint || '|' "
@@ -1129,7 +1131,8 @@ void testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(
   ReplayRepository helper(path);
   assert(helper.EnsureSchema());
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(db.get()) == schemaBefore);
 }
 
@@ -1159,7 +1162,8 @@ void testVersion4MarkerAcceptsExactMixedCaseIdentifiers(
   ReplayRepository reopened(path);
   assert(reopened.EnsureSchema());
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(db.get()) == schemaBefore);
   assert(queryText(db.get(),
                    "SELECT attempt_id || '|' || attempt_fingerprint || '|' "
@@ -1198,7 +1202,8 @@ void testCurrentVersionAcceptsExactMixedCaseIdentifiersOnCachedPaths(
   assert(helper.BindDatabasePath(path, bindError));
   assert(bindError.empty());
   auto trusted = openDatabase(path);
-  assert(queryInt(trusted.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(trusted.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(trusted.get(),
                    "SELECT attempt_id || '|' || replay_id || '|' || score "
                    "|| '|' || recovery_attempts FROM "
@@ -2165,7 +2170,8 @@ void testVersion2MigrationPreservesOutcomesAndRows(
   assert(helper.EnsureSchema());
 
   auto migrated = openDatabase(path);
-  assert(queryInt(migrated.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(migrated.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM replays") == 2);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_replays") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM replay_events") == 1);
@@ -2735,7 +2741,7 @@ void testFutureVersionRejectsWithoutSchemaMutation(
   assert(!tableExists(after.get(), "course_replays"));
 }
 
-void testFutureVersionFivePlusOneIsRejected(
+void testFutureVersionCurrentPlusOneIsRejected(
     const std::filesystem::path &root) {
   ReplayData stage = sampleReplay(root, "future-v6-stage");
   CourseReplayData course;
@@ -2749,7 +2755,8 @@ void testFutureVersionFivePlusOneIsRejected(
   const auto assertUnchanged = [&](const std::string &label,
                                    const auto &operation) {
     const auto path = root / "future-v6" / label / "replay.db";
-    createFutureSentinelDatabase(path, 6);
+    createFutureSentinelDatabase(
+        path, ReplayRepository::kCurrentSchemaVersion + 1);
     const auto before = persistentDatabaseSnapshot(path);
     ReplayRepository helper(path);
     operation(helper, path);
@@ -3636,7 +3643,8 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
           {.sha256 = file_checksum::sha256("v3-complete")}},
       "{}");
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
   assert(columnExists(db.get(), "course_replays", "course_key"));
   assert(indexExists(db.get(), "idx_course_replays_key_id"));
   assert(queryText(db.get(),
@@ -4214,6 +4222,302 @@ void testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(
                                  std::to_string(secondId)) == secondKey);
 }
 
+ir::IrOutboxDraft sampleIrDraft(std::string attemptId, std::int64_t createdAt,
+                                std::string payload = R"({"score":123})") {
+  return {
+      .providerId = "tachi",
+      .attemptId = std::move(attemptId),
+      .chartMd5 = std::string(32, 'b'),
+      .chartSha256 = std::string(64, 'a'),
+      .payloadJson = std::move(payload),
+      .createdAtUnixMillis = createdAt,
+  };
+}
+
+void testVersion5MigrationAddsIrOutbox(const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-migration" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE IF EXISTS ir_outbox");
+  execOrAbort(db.get(), "PRAGMA user_version=5");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
+  assert(tableExists(db.get(), "ir_outbox"));
+  assert(indexExists(db.get(), "idx_ir_outbox_due"));
+  assert(indexExists(db.get(), "idx_ir_outbox_attempt"));
+  for (const std::string_view column : {
+           "id", "provider_id", "attempt_id", "chart_md5", "chart_sha256",
+           "payload_json", "state", "local_result_ready",
+           "request_attempt_count", "consecutive_failure_count",
+           "next_attempt_at_ms", "next_request_user_intent", "remote_job_id",
+           "remote_origin", "last_error_code", "last_error_message",
+           "created_at_ms", "updated_at_ms", "completed_at_ms"}) {
+    assert(columnExists(db.get(), "ir_outbox", std::string(column)));
+  }
+  SqliteStatementHandle foreignKeys;
+  assert(prepareSqliteStatement(db.get(), "PRAGMA foreign_key_list(ir_outbox)",
+                                foreignKeys) == SQLITE_OK);
+  assert(sqlite3_step(foreignKeys.get()) == SQLITE_DONE);
+  assert(!columnExists(db.get(), "ir_outbox", "api_key") &&
+         !columnExists(db.get(), "ir_outbox", "authorization"));
+
+  const auto malformedPath = root / "ir-outbox-malformed" / "replay.db";
+  ReplayRepository malformed(malformedPath);
+  assert(malformed.EnsureSchema());
+  malformed.Shutdown();
+  auto malformedDb = openDatabase(malformedPath);
+  execOrAbort(malformedDb.get(), "DROP INDEX idx_ir_outbox_due");
+  const std::string malformedSchema = schemaSnapshot(malformedDb.get());
+  malformedDb.reset();
+  assert(!malformed.EnsureSchema());
+  malformedDb = openDatabase(malformedPath);
+  assert(queryInt(malformedDb.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
+  assert(schemaSnapshot(malformedDb.get()) == malformedSchema);
+}
+
+void testIrOutboxInsertClaimAndDeliveryTransitions(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-transitions" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto draft = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174001", 1'000);
+  const auto inserted = helper.EnqueueReadyIrOutboxDraft(draft, true);
+  assert(inserted.status == ir::IrOutboxInsertStatus::Inserted);
+  assert(inserted.entry && inserted.entry->payloadJson == draft.payloadJson &&
+         inserted.entry->chartMd5 == draft.chartMd5 &&
+         inserted.entry->chartSha256 == draft.chartSha256 &&
+         inserted.entry->state == ir::IrOutboxState::Pending &&
+         inserted.entry->localResultReady &&
+         inserted.entry->nextRequestUserIntent);
+  const std::int64_t rowId = inserted.entry->id;
+
+  const auto duplicate = helper.EnqueueReadyIrOutboxDraft(draft, true);
+  assert(duplicate.status == ir::IrOutboxInsertStatus::AlreadyExists);
+  auto conflictingDraft = draft;
+  conflictingDraft.payloadJson = R"({"score":999})";
+  assert(helper.EnqueueReadyIrOutboxDraft(conflictingDraft, true).status ==
+         ir::IrOutboxInsertStatus::IntegrityConflict);
+
+  const auto read = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(read.status == ir::IrOutboxReadStatus::Found && read.entry &&
+         *read.entry == *inserted.entry);
+  const auto secondReady = helper.EnqueueReadyIrOutboxDraft(
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174002", 1'001), false);
+  assert(secondReady.entry);
+  const auto due = helper.ListDueIrOutbox(1'100);
+  assert(due.status == ir::IrOutboxBatchStatus::Loaded &&
+         due.entries.size() == 2 && due.entries.front().id == rowId &&
+         due.entries.back().id == secondReady.entry->id);
+  assert(helper.DiscardIrOutbox(secondReady.entry->id).affectedRows == 1);
+
+  const auto claim = helper.ClaimIrOutbox(
+      rowId, ir::IrOutboxState::Pending, 1'200);
+  assert(claim.status == ir::IrOutboxClaimStatus::Claimed && claim.entry &&
+         claim.consumedUserIntent &&
+         claim.entry->state == ir::IrOutboxState::Uploading &&
+         claim.entry->requestAttemptCount == 1 &&
+         !claim.entry->nextRequestUserIntent);
+  assert(helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 1'201)
+             .status == ir::IrOutboxClaimStatus::StateMismatch);
+
+  const auto transient = helper.ApplyIrOutboxDelivery({
+      .rowId = rowId,
+      .nextState = ir::IrOutboxState::Pending,
+      .consecutiveFailureCount = 1,
+      .nextAttemptAtUnixMillis = 2'000,
+      .lastErrorCode = "transport",
+      .lastErrorMessage = std::string(700, 'x'),
+      .updatedAtUnixMillis = 1'300,
+  });
+  assert(transient.status == ir::IrOutboxMutationStatus::Updated);
+  auto loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry && loaded.entry->state == ir::IrOutboxState::Pending &&
+         loaded.entry->consecutiveFailureCount == 1 &&
+         loaded.entry->nextAttemptAtUnixMillis == 2'000 &&
+         loaded.entry->lastErrorMessage.size() ==
+             ir::kMaximumDiagnosticBytes);
+  assert(helper.ListDueIrOutbox(1'999).entries.empty());
+
+  assert(helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 2'000)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = rowId,
+             .nextState = ir::IrOutboxState::BlockedConfiguration,
+             .consecutiveFailureCount = 0,
+             .lastErrorCode = "authentication_required",
+             .lastErrorMessage = "API key required",
+             .updatedAtUnixMillis = 2'001,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+  loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry &&
+         loaded.entry->state == ir::IrOutboxState::BlockedConfiguration);
+
+  assert(helper.RetryIrOutbox(rowId, 2'100).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry && loaded.entry->state == ir::IrOutboxState::Pending &&
+         loaded.entry->nextAttemptAtUnixMillis == 2'100 &&
+         loaded.entry->nextRequestUserIntent &&
+         loaded.entry->lastErrorCode.empty());
+
+  assert(helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 2'100)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = rowId,
+             .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+             .consecutiveFailureCount = 0,
+             .nextAttemptAtUnixMillis = 3'000,
+             .remoteJobId = "job-123",
+             .remoteOrigin = "https://boku.tachi.ac",
+             .updatedAtUnixMillis = 2'200,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+  loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry &&
+         loaded.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
+         loaded.entry->remoteJobId == "job-123" &&
+         loaded.entry->remoteOrigin == "https://boku.tachi.ac");
+
+  const auto pollClaim = helper.ClaimIrOutbox(
+      rowId, ir::IrOutboxState::AwaitingRemoteResult, 3'000);
+  assert(pollClaim.status == ir::IrOutboxClaimStatus::Claimed &&
+         !pollClaim.consumedUserIntent && pollClaim.entry &&
+         pollClaim.entry->requestAttemptCount == 4);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = rowId,
+             .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+             .consecutiveFailureCount = 0,
+             .nextAttemptAtUnixMillis = 4'000,
+             .remoteJobId = "job-123",
+             .remoteOrigin = "https://boku.tachi.ac",
+             .updatedAtUnixMillis = 3'001,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+
+  assert(helper.ClaimIrOutbox(
+             rowId, ir::IrOutboxState::AwaitingRemoteResult, 4'000)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = rowId,
+             .nextState = ir::IrOutboxState::Succeeded,
+             .consecutiveFailureCount = 0,
+             .updatedAtUnixMillis = 4'001,
+             .completedAtUnixMillis = 4'001,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+  loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry && loaded.entry->state == ir::IrOutboxState::Succeeded &&
+         loaded.entry->completedAtUnixMillis == 4'001 &&
+         loaded.entry->remoteJobId.empty());
+  assert(helper.PurgeSucceededIrOutbox(4'002).affectedRows == 1);
+  assert(helper.LoadIrOutbox(draft.providerId, draft.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+}
+
+void testIrOutboxRecoveryCountsRetryAndValidation(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-recovery" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto first = helper.EnqueueReadyIrOutboxDraft(
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174010", 1'000), false);
+  const auto second = helper.EnqueueReadyIrOutboxDraft(
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174011", 1'001), false);
+  const auto third = helper.EnqueueReadyIrOutboxDraft(
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174012", 1'002), false);
+  assert(first.entry && second.entry && third.entry);
+
+  assert(helper.ClaimIrOutbox(first.entry->id, ir::IrOutboxState::Pending,
+                              1'100)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ClaimIrOutbox(second.entry->id, ir::IrOutboxState::Pending,
+                              1'100)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = second.entry->id,
+             .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+             .nextAttemptAtUnixMillis = 1'200,
+             .remoteJobId = "job-recover",
+             .remoteOrigin = "https://boku.tachi.ac",
+             .updatedAtUnixMillis = 1'101,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(helper.ClaimIrOutbox(second.entry->id,
+                              ir::IrOutboxState::AwaitingRemoteResult, 1'200)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ClaimIrOutbox(third.entry->id, ir::IrOutboxState::Pending,
+                              1'100)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = third.entry->id,
+             .nextState = ir::IrOutboxState::FailedPermanent,
+             .lastErrorCode = "invalid_payload",
+             .lastErrorMessage = "provider rejected payload",
+             .updatedAtUnixMillis = 1'101,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+
+  assert(helper.RecoverStaleIrOutbox(1'300).affectedRows == 2);
+  auto loadedFirst = helper.LoadIrOutbox(
+      "tachi", "123e4567-e89b-42d3-a456-426614174010");
+  auto loadedSecond = helper.LoadIrOutbox(
+      "tachi", "123e4567-e89b-42d3-a456-426614174011");
+  assert(loadedFirst.entry &&
+         loadedFirst.entry->state == ir::IrOutboxState::Pending);
+  assert(loadedSecond.entry &&
+         loadedSecond.entry->state ==
+             ir::IrOutboxState::AwaitingRemoteResult &&
+         loadedSecond.entry->remoteJobId == "job-recover");
+
+  assert(helper.RetryAllIrOutbox("tachi", 1'400).affectedRows == 1);
+  auto loadedThird = helper.LoadIrOutbox(
+      "tachi", "123e4567-e89b-42d3-a456-426614174012");
+  assert(loadedThird.entry &&
+         loadedThird.entry->state == ir::IrOutboxState::Pending &&
+         loadedThird.entry->nextRequestUserIntent);
+
+  assert(helper.ClaimIrOutbox(third.entry->id, ir::IrOutboxState::Pending,
+                              1'400)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper.ApplyIrOutboxDelivery({
+             .rowId = third.entry->id,
+             .nextState = ir::IrOutboxState::BlockedConfiguration,
+             .updatedAtUnixMillis = 1'401,
+         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(helper.UnblockIrOutbox("tachi", 1'500).affectedRows == 1);
+  loadedThird = helper.LoadIrOutbox(
+      "tachi", "123e4567-e89b-42d3-a456-426614174012");
+  assert(loadedThird.entry && !loadedThird.entry->nextRequestUserIntent &&
+         loadedThird.entry->state == ir::IrOutboxState::Pending);
+
+  const auto counts = helper.CountIrOutbox("tachi");
+  assert(counts.storageAvailable && counts.pending == 2 &&
+         counts.awaitingRemoteResult == 1 && counts.total == 3);
+  assert(helper.DiscardIrOutbox(first.entry->id).affectedRows == 1);
+  assert(helper.CountIrOutbox("tachi").total == 2);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET state=99 WHERE id=" +
+                  std::to_string(third.entry->id));
+  db.reset();
+  assert(helper.LoadIrOutbox(
+                    "tachi", "123e4567-e89b-42d3-a456-426614174012")
+             .status == ir::IrOutboxReadStatus::IntegrityConflict);
+  std::string clearError;
+  assert(helper.ClearIrOutbox(clearError));
+  assert(clearError.empty());
+  assert(helper.CountIrOutbox("tachi").total == 0);
+}
+
 void testExistingListLimits(const std::filesystem::path &root) {
   const auto path = root / "limits" / "replay.db";
   ReplayRepository helper(path);
@@ -4263,7 +4567,7 @@ int main() {
   testCourseSummariesOmitInvalidProvenanceAndCountValidLimit(root);
   testCourseSummariesOmitInvalidLinkedStages(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);
-  testFutureVersionFivePlusOneIsRejected(root);
+  testFutureVersionCurrentPlusOneIsRejected(root);
   testFutureReplayWritesPreservePersistentDatabaseState(root);
   testFutureReplayPreflightPreservesRawDatabaseFamily(root);
   testReplayPreflightRejectsMalformedStatesAndAllowsCreation(root);
@@ -4284,6 +4588,9 @@ int main() {
   testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(root);
   testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(root);
   testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(root);
+  testVersion5MigrationAddsIrOutbox(root);
+  testIrOutboxInsertClaimAndDeliveryTransitions(root);
+  testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);
   testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);
   testVersion4MarkerAcceptsStructurallyExactFormattedArtifacts(root);

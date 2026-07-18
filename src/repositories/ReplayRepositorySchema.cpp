@@ -384,7 +384,44 @@ constexpr const char *kPendingChartScoreRecoveryIndexSql =
     "pending_chart_score_writes("
     "recovery_attempts, last_recovery_at, created_at, attempt_id)";
 
+constexpr const char *kIrOutboxTableSql =
+    "CREATE TABLE ir_outbox ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "payload_json TEXT NOT NULL,"
+    "state INTEGER NOT NULL,"
+    "local_result_ready INTEGER NOT NULL DEFAULT 0,"
+    "request_attempt_count INTEGER NOT NULL DEFAULT 0,"
+    "consecutive_failure_count INTEGER NOT NULL DEFAULT 0,"
+    "next_attempt_at_ms INTEGER,"
+    "next_request_user_intent INTEGER NOT NULL DEFAULT 0,"
+    "remote_job_id TEXT,"
+    "remote_origin TEXT,"
+    "last_error_code TEXT,"
+    "last_error_message TEXT,"
+    "created_at_ms INTEGER NOT NULL,"
+    "updated_at_ms INTEGER NOT NULL,"
+    "completed_at_ms INTEGER,"
+    "UNIQUE(provider_id, attempt_id),"
+    "CHECK (local_result_ready IN (0, 1)),"
+    "CHECK (next_request_user_intent IN (0, 1)),"
+    "CHECK ((remote_job_id IS NULL AND remote_origin IS NULL) OR "
+    "(remote_job_id IS NOT NULL AND remote_origin IS NOT NULL))"
+    ")";
+
+constexpr const char *kIrOutboxDueIndexSql =
+    "CREATE INDEX idx_ir_outbox_due ON "
+    "ir_outbox(local_result_ready, state, next_attempt_at_ms, id)";
+
+constexpr const char *kIrOutboxAttemptIndexSql =
+    "CREATE INDEX idx_ir_outbox_attempt ON "
+    "ir_outbox(provider_id, attempt_id)";
+
 enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
+enum class IrOutboxSchemaState { Absent, Exact, Malformed };
 
 struct NamedSchemaObjectInspection {
   bool present = false;
@@ -785,6 +822,44 @@ bool inspectReplayResultOutboxSchema(sqlite3 *db,
   return true;
 }
 
+bool inspectIrOutboxSchema(sqlite3 *db, IrOutboxSchemaState &state) {
+  NamedSchemaObjectInspection table;
+  NamedSchemaObjectInspection dueIndex;
+  NamedSchemaObjectInspection attemptIndex;
+  bool dueShapeExact = false;
+  bool attemptShapeExact = false;
+  if (!inspectNamedSchemaObject(db, "ir_outbox", "table", "ir_outbox",
+                                kIrOutboxTableSql, table,
+                                "reading IR outbox table schema") ||
+      !inspectNamedSchemaObject(db, "idx_ir_outbox_due", "index",
+                                "ir_outbox", kIrOutboxDueIndexSql, dueIndex,
+                                "reading IR outbox due index") ||
+      !inspectNamedSchemaObject(db, "idx_ir_outbox_attempt", "index",
+                                "ir_outbox", kIrOutboxAttemptIndexSql,
+                                attemptIndex,
+                                "reading IR outbox attempt index") ||
+      !inspectNamedIndexShape(
+          db, "ir_outbox", "idx_ir_outbox_due", false, false,
+          {"local_result_ready", "state", "next_attempt_at_ms", "id"},
+          dueShapeExact, "reading IR outbox due index shape") ||
+      !inspectNamedIndexShape(
+          db, "ir_outbox", "idx_ir_outbox_attempt", false, false,
+          {"provider_id", "attempt_id"}, attemptShapeExact,
+          "reading IR outbox attempt index shape")) {
+    return false;
+  }
+  if (!table.present && !dueIndex.present && !attemptIndex.present) {
+    state = IrOutboxSchemaState::Absent;
+  } else if (table.present && table.exact && dueIndex.present &&
+             dueIndex.exact && dueShapeExact && attemptIndex.present &&
+             attemptIndex.exact && attemptShapeExact) {
+    state = IrOutboxSchemaState::Exact;
+  } else {
+    state = IrOutboxSchemaState::Malformed;
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -797,12 +872,15 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   }
   if (*version >= kReplayDatabaseSchemaVersion) {
     ReplayResultOutboxSchemaState resultOutboxState{};
-    if (!inspectReplayResultOutboxSchema(db, resultOutboxState)) {
+    IrOutboxSchemaState irOutboxState{};
+    if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
+        !inspectIrOutboxSchema(db, irOutboxState)) {
       return false;
     }
-    if (resultOutboxState != ReplayResultOutboxSchemaState::Exact) {
+    if (resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
+        irOutboxState != IrOutboxSchemaState::Exact) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
-              "result outbox schema");
+              "outbox schema");
       return false;
     }
     return true;
@@ -873,6 +951,24 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
                   "creating pending chart score outbox") ||
          !execSql(db, kPendingChartScoreRecoveryIndexSql,
                   "creating pending chart score recovery index"))) {
+      return false;
+    }
+  }
+  if (*version < 6) {
+    IrOutboxSchemaState irOutboxState{};
+    if (!inspectIrOutboxSchema(db, irOutboxState)) {
+      return false;
+    }
+    if (irOutboxState == IrOutboxSchemaState::Malformed) {
+      SDL_Log("Refusing IR outbox migration from a partial or unexpected "
+              "schema");
+      return false;
+    }
+    if (irOutboxState == IrOutboxSchemaState::Absent &&
+        (!execSql(db, kIrOutboxTableSql, "creating IR outbox") ||
+         !execSql(db, kIrOutboxDueIndexSql, "creating IR outbox due index") ||
+         !execSql(db, kIrOutboxAttemptIndexSql,
+                  "creating IR outbox attempt index"))) {
       return false;
     }
   }

@@ -661,8 +661,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -873,8 +875,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/repositories/ScoreRepository.cpp
@@ -1572,8 +1576,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1629,8 +1635,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
@@ -1681,8 +1689,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
