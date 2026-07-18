@@ -111,6 +111,32 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   }
 }
 
+class ResultGaugeGraphView final : public View {
+public:
+  explicit ResultGaugeGraphView(const RhythmState &state) : state(state) {
+    batch.setSubmitView(rendering::ui_view);
+  }
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (state.gaugeHistory.empty() || getWidth() <= 0 || getHeight() <= 0) {
+      return;
+    }
+    rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                            context.scissor.width, context.scissor.height);
+    batch.begin(context.getTransformMatrix());
+    drawResultGaugeLineGraph(batch, state, static_cast<float>(getX()),
+                             static_cast<float>(getY()),
+                             static_cast<float>(getWidth()),
+                             static_cast<float>(getHeight()));
+    batch.end();
+  }
+
+private:
+  const RhythmState &state;
+  rendering::SimpleBatchRenderer batch;
+};
+
 play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
     const bms_parser::ChartMeta &meta,
     const std::optional<ReplayData> &presentationReplay,
@@ -2014,6 +2040,11 @@ void ResultScene::init() {
   updateIrResultPresentation(true);
 
   graphPlaceHolder = rootLayout->findViewByName("graph");
+  if (graphPlaceHolder != nullptr) {
+    auto *graphView = new ResultGaugeGraphView(resultState);
+    graphView->setWidthPercent(100.0F)->setFlex(1.0F);
+    graphPlaceHolder->addView(graphView);
+  }
 
   rootLayout->applyYogaLayout();
 
@@ -2053,19 +2084,6 @@ void ResultScene::renderScene() {
   if (rankingOverlayPortal != nullptr) {
     rankingOverlayPortal->setSize(rendering::window_width,
                                   rendering::window_height);
-  }
-  if (graphPlaceHolder && !resultState.gaugeHistory.empty()) {
-    float x = graphPlaceHolder->getX();
-    float y = graphPlaceHolder->getY();
-    float w = graphPlaceHolder->getWidth();
-    float h = graphPlaceHolder->getHeight();
-
-    rendering::SimpleBatchRenderer graphBatch;
-    graphBatch.setSubmitView(rendering::ui_view);
-    graphBatch.setSubmitDepth(0);
-    graphBatch.begin();
-    drawResultGaugeLineGraph(graphBatch, resultState, x, y, w, h);
-    graphBatch.end();
   }
 }
 

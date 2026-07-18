@@ -27,6 +27,7 @@ def require(condition: bool, message: str) -> None:
 
 
 exporter = read("src/ResultImageExporter.cpp")
+result_scene = read("src/scene/ResultScene.cpp")
 
 require(
     '#include "scene/ResultLayoutGeometry.h"' in exporter,
@@ -53,6 +54,24 @@ for name in (
 require(
     "kPhotoAnalyticsExtraHeight" not in exporter,
     "result photo exporter must not retain stacked analytics extra height",
+)
+
+require(
+    "class ResultGaugeGraphView final : public View" in result_scene,
+    "the live result gauge graph must render through the View tree",
+)
+require(
+    "graphPlaceHolder->addView(graphView);" in result_scene,
+    "the live result gauge view must be attached to the skin graph placeholder",
+)
+
+render_scene_start = result_scene.find("void ResultScene::renderScene()")
+cleanup_start = result_scene.find("void ResultScene::cleanupScene()", render_scene_start)
+render_scene = result_scene[render_scene_start:cleanup_start]
+require(
+    "drawResultGaugeLineGraph" not in render_scene
+    and "SimpleBatchRenderer graphBatch" not in render_scene,
+    "ResultScene::renderScene must not submit the graph after modal overlays",
 )
 
 if failures:
