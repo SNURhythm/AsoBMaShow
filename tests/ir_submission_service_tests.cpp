@@ -209,6 +209,12 @@ ir::IrOutboxDraft draft(int suffix, std::int64_t createdAt) {
       .chartSha256 =
           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       .payloadJson = R"({"score":123})",
+      .rulesetProof =
+          {
+              .rulesetId = "test-rules",
+              .rulesetRevision = 1,
+              .validationFingerprint = std::string(64, 'd'),
+          },
       .createdAtUnixMillis = createdAt};
 }
 
@@ -468,6 +474,19 @@ void testMissingKeyPreservesManualIntentAndReplacementWakes() {
          "credential replacement publishes invalidation callback");
 }
 
+void testManualEnqueueRequiresFreshRulesetProof() {
+  Harness harness;
+  harness.service->start(profile(true));
+  auto missingProof = draft(19, harness.now.load());
+  missingProof.rulesetProof = {};
+  const auto rejected = harness.service->enqueueManual(missingProof);
+  expect(rejected.status == ir::IrOutboxInsertStatus::Invalid,
+         "manual enqueue rejects a missing ruleset proof");
+  expect(harness.repository.LoadIrOutbox("fake", missingProof.attemptId)
+             .status == ir::IrOutboxReadStatus::NotFound,
+         "invalid manual proof creates no durable row");
+}
+
 void testAutomaticAndManualRequestsUseCurrentOrigin() {
   Harness harness;
   harness.setCredential("current-key");
@@ -718,6 +737,7 @@ int main() {
   testStartupRecovery();
   testDisabledAndReadOnlyProvidersStayPaused();
   testMissingKeyPreservesManualIntentAndReplacementWakes();
+  testManualEnqueueRequiresFreshRulesetProof();
   testAutomaticAndManualRequestsUseCurrentOrigin();
   testDeferredPollingPinsOriginAndNeverReposts();
   testPersistedBackoffAndRetryAfter();

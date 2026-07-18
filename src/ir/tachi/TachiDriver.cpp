@@ -1,5 +1,6 @@
 #include "TachiDriver.h"
 
+#include "../../FileChecksum.h"
 #include "TachiBatchManual.h"
 #include "TachiRankingParser.h"
 #include "TachiResponseParser.h"
@@ -33,6 +34,33 @@ DeliveryOutcome permanent(std::string code, std::string diagnostic) {
   return {.status = DeliveryStatus::PermanentFailure,
           .code = std::move(code),
           .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
+std::string proofFingerprintInput(const IrOutboxEntry &entry) {
+  const auto &proof = entry.rulesetProof;
+  std::string input = "tachi-lr2-proof-v1\n";
+  input += std::to_string(proof.rulesetId.size()) + ":" + proof.rulesetId +
+           "\n";
+  input += std::to_string(proof.rulesetRevision) + "\n";
+  input += std::to_string(entry.attemptId.size()) + ":" + entry.attemptId +
+           "\n";
+  input += std::to_string(entry.chartSha256.size()) + ":" +
+           entry.chartSha256 + "\n";
+  input += std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
+  return input;
+}
+
+std::optional<DeliveryOutcome>
+invalidStoredRulesetProof(const IrOutboxEntry &entry) {
+  const auto &proof = entry.rulesetProof;
+  if (entry.providerId != kProviderId || proof.rulesetId != "lr2" ||
+      proof.rulesetRevision != RulesetDescriptor::kCurrentVersion ||
+      proof.validationFingerprint !=
+          file_checksum::sha256(proofFingerprintInput(entry))) {
+    return permanent("ruleset_proof_mismatch",
+                     "The queued score ruleset proof is invalid.");
+  }
+  return std::nullopt;
 }
 
 std::optional<std::chrono::milliseconds>
@@ -188,11 +216,14 @@ DeliveryOutcome TachiDriver::submit(const IrOutboxEntry &entry,
                                     const IrProviderRuntimeConfig &config,
                                     IrHttpClient &http,
                                     std::stop_token stopToken) const {
-  if (entry.state == IrOutboxState::AwaitingRemoteResult) {
-    return poll(entry, config, http, stopToken);
-  }
   if (stopToken.stop_requested()) {
     return cancelled();
+  }
+  if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
+    return *invalidProof;
+  }
+  if (entry.state == IrOutboxState::AwaitingRemoteResult) {
+    return poll(entry, config, http, stopToken);
   }
   if (!validCredential(config.apiKey)) {
     return blocked("missing_api_key", "Tachi API key is missing or invalid");
@@ -227,6 +258,9 @@ DeliveryOutcome TachiDriver::poll(const IrOutboxEntry &entry,
                                   std::stop_token stopToken) const {
   if (stopToken.stop_requested()) {
     return cancelled();
+  }
+  if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
+    return *invalidProof;
   }
   if (!validCredential(config.apiKey)) {
     return blocked("missing_api_key", "Tachi API key is missing or invalid");

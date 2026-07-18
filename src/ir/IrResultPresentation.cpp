@@ -63,14 +63,14 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
     break;
   case IrOutboxState::BlockedConfiguration:
     result.state = IrResultState::AuthenticationRequired;
-    result.canRetry = true;
-    if (input.snapshot.errorCode == "unverified_ruleset_proof" ||
-        input.snapshot.errorCode == "invalid_ruleset_proof") {
+    if (input.snapshot.errorCode == "legacy_ruleset_proof_missing") {
+      result.canRetry = false;
       result.statusText = "Submission blocked";
       result.detailText = input.snapshot.diagnostic.empty()
                               ? "The queued score has no valid ruleset proof."
                               : input.snapshot.diagnostic;
     } else {
+      result.canRetry = true;
       result.statusText = "Authentication required";
       result.detailText =
           "Add or replace the API key in Settings > IR, then retry.";

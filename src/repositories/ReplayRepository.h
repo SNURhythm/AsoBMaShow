@@ -133,7 +133,7 @@ struct CourseReplayLookup {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 6;
+  static constexpr int kCurrentSchemaVersion = 7;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);

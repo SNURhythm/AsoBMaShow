@@ -128,17 +128,17 @@ void testLegacyQueuedProofShowsBlockingReason() {
       .found = true,
       .rowId = 42,
       .state = ir::IrOutboxState::BlockedConfiguration,
-      .errorCode = "unverified_ruleset_proof",
+      .errorCode = "legacy_ruleset_proof_missing",
       .diagnostic =
-          "This queued score predates ruleset verification and cannot be "
-          "submitted.",
+          "Submission blocked because this queued score predates ruleset "
+          "proof.",
   };
   const auto presentation = ir::makeIrResultPresentation(std::move(input));
   REQUIRE(presentation.statusText == "Submission blocked");
   REQUIRE(presentation.detailText ==
-          "This queued score predates ruleset verification and cannot be "
-          "submitted.");
-  REQUIRE(presentation.canRetry);
+          "Submission blocked because this queued score predates ruleset "
+          "proof.");
+  REQUIRE(!presentation.canRetry);
 }
 
 void testLocalPersistenceMustBeSavedBeforeAnyIrControlAppears() {

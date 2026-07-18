@@ -13,7 +13,8 @@
 namespace {
 
 constexpr const char *kIrOutboxColumns =
-    "id,provider_id,attempt_id,chart_md5,chart_sha256,payload_json,state,"
+    "id,provider_id,attempt_id,chart_md5,chart_sha256,payload_json,"
+    "ruleset_id,ruleset_revision,validation_fingerprint,state,"
     "local_result_ready,request_attempt_count,consecutive_failure_count,"
     "next_attempt_at_ms,next_request_user_intent,remote_job_id,remote_origin,"
     "last_error_code,last_error_message,created_at_ms,updated_at_ms,"
@@ -63,20 +64,23 @@ bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
   if (!columnIs(stmt, 0, SQLITE_INTEGER) || !columnIs(stmt, 1, SQLITE_TEXT) ||
       !columnIs(stmt, 2, SQLITE_TEXT) || !nullableText(stmt, 3) ||
       !columnIs(stmt, 4, SQLITE_TEXT) || !columnIs(stmt, 5, SQLITE_TEXT) ||
-      !columnIs(stmt, 6, SQLITE_INTEGER) ||
+      !columnIs(stmt, 6, SQLITE_TEXT) ||
       !columnIs(stmt, 7, SQLITE_INTEGER) ||
-      !columnIs(stmt, 8, SQLITE_INTEGER) ||
-      !columnIs(stmt, 9, SQLITE_INTEGER) || !nullableInteger(stmt, 10) ||
-      !columnIs(stmt, 11, SQLITE_INTEGER) || !nullableText(stmt, 12) ||
-      !nullableText(stmt, 13) || !nullableText(stmt, 14) ||
-      !nullableText(stmt, 15) || !columnIs(stmt, 16, SQLITE_INTEGER) ||
-      !columnIs(stmt, 17, SQLITE_INTEGER) || !nullableInteger(stmt, 18)) {
+      !columnIs(stmt, 8, SQLITE_TEXT) ||
+      !columnIs(stmt, 9, SQLITE_INTEGER) ||
+      !columnIs(stmt, 10, SQLITE_INTEGER) ||
+      !columnIs(stmt, 11, SQLITE_INTEGER) ||
+      !columnIs(stmt, 12, SQLITE_INTEGER) || !nullableInteger(stmt, 13) ||
+      !columnIs(stmt, 14, SQLITE_INTEGER) || !nullableText(stmt, 15) ||
+      !nullableText(stmt, 16) || !nullableText(stmt, 17) ||
+      !nullableText(stmt, 18) || !columnIs(stmt, 19, SQLITE_INTEGER) ||
+      !columnIs(stmt, 20, SQLITE_INTEGER) || !nullableInteger(stmt, 21)) {
     diagnostic = "IR outbox row has unexpected SQLite value types";
     return false;
   }
-  const int state = sqlite3_column_int(stmt, 6);
-  const int localReady = sqlite3_column_int(stmt, 7);
-  const int userIntent = sqlite3_column_int(stmt, 11);
+  const int state = sqlite3_column_int(stmt, 9);
+  const int localReady = sqlite3_column_int(stmt, 10);
+  const int userIntent = sqlite3_column_int(stmt, 14);
   if (!ir::isKnownIrOutboxState(state) ||
       (localReady != 0 && localReady != 1) ||
       (userIntent != 0 && userIntent != 1)) {
@@ -90,19 +94,25 @@ bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
       .chartMd5 = optionalText(stmt, 3),
       .chartSha256 = sqliteColumnString(stmt, 4),
       .payloadJson = sqliteColumnString(stmt, 5),
+      .rulesetProof =
+          {
+              .rulesetId = sqliteColumnString(stmt, 6),
+              .rulesetRevision = sqlite3_column_int(stmt, 7),
+              .validationFingerprint = sqliteColumnString(stmt, 8),
+          },
       .state = static_cast<ir::IrOutboxState>(state),
       .localResultReady = localReady != 0,
-      .requestAttemptCount = sqlite3_column_int(stmt, 8),
-      .consecutiveFailureCount = sqlite3_column_int(stmt, 9),
-      .nextAttemptAtUnixMillis = optionalInteger(stmt, 10),
+      .requestAttemptCount = sqlite3_column_int(stmt, 11),
+      .consecutiveFailureCount = sqlite3_column_int(stmt, 12),
+      .nextAttemptAtUnixMillis = optionalInteger(stmt, 13),
       .nextRequestUserIntent = userIntent != 0,
-      .remoteJobId = optionalText(stmt, 12),
-      .remoteOrigin = optionalText(stmt, 13),
-      .lastErrorCode = optionalText(stmt, 14),
-      .lastErrorMessage = optionalText(stmt, 15),
-      .createdAtUnixMillis = sqlite3_column_int64(stmt, 16),
-      .updatedAtUnixMillis = sqlite3_column_int64(stmt, 17),
-      .completedAtUnixMillis = optionalInteger(stmt, 18),
+      .remoteJobId = optionalText(stmt, 15),
+      .remoteOrigin = optionalText(stmt, 16),
+      .lastErrorCode = optionalText(stmt, 17),
+      .lastErrorMessage = optionalText(stmt, 18),
+      .createdAtUnixMillis = sqlite3_column_int64(stmt, 19),
+      .updatedAtUnixMillis = sqlite3_column_int64(stmt, 20),
+      .completedAtUnixMillis = optionalInteger(stmt, 21),
   };
   return ir::validateIrOutboxEntry(entry, diagnostic);
 }
@@ -236,9 +246,10 @@ replay_repository_detail::InsertInactiveIrDraftsOnConnection(
   SqliteStatementHandle insert;
   constexpr const char *query =
       "INSERT INTO ir_outbox("
-      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,state,"
+      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,ruleset_id,"
+      "ruleset_revision,validation_fingerprint,state,"
       "local_result_ready,next_request_user_intent,created_at_ms,updated_at_ms)"
-      " VALUES(?,?,?,?,?,0,0,0,?,?)";
+      " VALUES(?,?,?,?,?,?,?,?,0,0,0,?,?)";
   if (prepareSqliteStatement(database, query, insert) != SQLITE_OK) {
     return {.status = IrDraftStageStatus::StorageFailure,
             .diagnostic = "could not prepare automatic IR draft staging"};
@@ -253,9 +264,14 @@ replay_repository_detail::InsertInactiveIrDraftsOnConnection(
              : !bindSqliteText(insert.get(), 3, draft.chartMd5)) ||
         !bindSqliteText(insert.get(), 4, draft.chartSha256) ||
         !bindSqliteText(insert.get(), 5, draft.payloadJson) ||
-        sqlite3_bind_int64(insert.get(), 6, draft.createdAtUnixMillis) !=
+        !bindSqliteText(insert.get(), 6, draft.rulesetProof.rulesetId) ||
+        sqlite3_bind_int(insert.get(), 7,
+                         draft.rulesetProof.rulesetRevision) != SQLITE_OK ||
+        !bindSqliteText(insert.get(), 8,
+                        draft.rulesetProof.validationFingerprint) ||
+        sqlite3_bind_int64(insert.get(), 9, draft.createdAtUnixMillis) !=
             SQLITE_OK ||
-        sqlite3_bind_int64(insert.get(), 7, draft.createdAtUnixMillis) !=
+        sqlite3_bind_int64(insert.get(), 10, draft.createdAtUnixMillis) !=
             SQLITE_OK ||
         sqlite3_step(insert.get()) != SQLITE_DONE ||
         sqlite3_changes(database) != 1) {
@@ -317,6 +333,7 @@ replay_repository_detail::VerifyIrDraftsOnConnection(
         entry.chartMd5 != draft.chartMd5 ||
         entry.chartSha256 != draft.chartSha256 ||
         entry.payloadJson != draft.payloadJson ||
+        entry.rulesetProof != draft.rulesetProof ||
         entry.createdAtUnixMillis != draft.createdAtUnixMillis) {
       return {.status = IrDraftStageStatus::IntegrityConflict,
               .diagnostic =
@@ -350,9 +367,10 @@ ReplayRepository::EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft,
   SqliteStatementHandle insert;
   const char *query =
       "INSERT OR IGNORE INTO ir_outbox("
-      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,state,"
+      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,ruleset_id,"
+      "ruleset_revision,validation_fingerprint,state,"
       "local_result_ready,next_request_user_intent,created_at_ms,updated_at_ms)"
-      " VALUES(?,?,?,?,?,0,1,?,?,?)";
+      " VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?)";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, insert) !=
           SQLITE_OK ||
       !bindSqliteText(insert.get(), 1, draft.providerId) ||
@@ -362,10 +380,15 @@ ReplayRepository::EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft,
            : !bindSqliteText(insert.get(), 3, draft.chartMd5)) ||
       !bindSqliteText(insert.get(), 4, draft.chartSha256) ||
       !bindSqliteText(insert.get(), 5, draft.payloadJson) ||
-      sqlite3_bind_int(insert.get(), 6, userIntent ? 1 : 0) != SQLITE_OK ||
-      sqlite3_bind_int64(insert.get(), 7, draft.createdAtUnixMillis) !=
+      !bindSqliteText(insert.get(), 6, draft.rulesetProof.rulesetId) ||
+      sqlite3_bind_int(insert.get(), 7,
+                       draft.rulesetProof.rulesetRevision) != SQLITE_OK ||
+      !bindSqliteText(insert.get(), 8,
+                      draft.rulesetProof.validationFingerprint) ||
+      sqlite3_bind_int(insert.get(), 9, userIntent ? 1 : 0) != SQLITE_OK ||
+      sqlite3_bind_int64(insert.get(), 10, draft.createdAtUnixMillis) !=
           SQLITE_OK ||
-      sqlite3_bind_int64(insert.get(), 8, draft.createdAtUnixMillis) !=
+      sqlite3_bind_int64(insert.get(), 11, draft.createdAtUnixMillis) !=
           SQLITE_OK ||
       sqlite3_step(insert.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxInsertStatus::StorageFailure,
@@ -384,6 +407,7 @@ ReplayRepository::EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft,
       (loaded.entry->chartMd5 != draft.chartMd5 ||
        loaded.entry->chartSha256 != draft.chartSha256 ||
        loaded.entry->payloadJson != draft.payloadJson ||
+       loaded.entry->rulesetProof != draft.rulesetProof ||
        loaded.entry->createdAtUnixMillis != draft.createdAtUnixMillis)) {
     return {.status = ir::IrOutboxInsertStatus::IntegrityConflict,
             .diagnostic = "IR attempt ID already names another payload"};
@@ -755,7 +779,8 @@ ReplayRepository::RetryIrOutbox(std::int64_t rowId, std::int64_t nowMs) {
       "remote_origin=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
       "NULL) THEN remote_origin ELSE NULL END,last_error_code=NULL,"
       "last_error_message=NULL,updated_at_ms=?,completed_at_ms=NULL "
-      "WHERE id=? AND state IN (0,2,3,4)";
+      "WHERE id=? AND state IN (0,2,3,4) AND "
+      "ruleset_id<>'legacy-unknown' AND validation_fingerprint<>''";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, nowMs) != SQLITE_OK ||
@@ -764,7 +789,20 @@ ReplayRepository::RetryIrOutbox(std::int64_t rowId, std::int64_t nowMs) {
       sqlite3_step(stmt.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure};
   }
-  return mutationFromChanges(impl_->sessionDatabase);
+  const auto outcome = mutationFromChanges(impl_->sessionDatabase);
+  if (outcome.status == ir::IrOutboxMutationStatus::Updated) {
+    return outcome;
+  }
+  RowLookup current = loadById(impl_->sessionDatabase, rowId);
+  if (current.status == RowLookupStatus::Found && current.entry &&
+      (current.entry->rulesetProof.rulesetId == "legacy-unknown" ||
+       current.entry->rulesetProof.validationFingerprint.empty())) {
+    return {.status = ir::IrOutboxMutationStatus::Invalid,
+            .diagnostic = "legacy IR outbox rows cannot be retried"};
+  }
+  return {.status = current.status == RowLookupStatus::NotFound
+                        ? ir::IrOutboxMutationStatus::NotFound
+                        : ir::IrOutboxMutationStatus::StateMismatch};
 }
 
 ir::IrOutboxMutationOutcome
@@ -790,7 +828,8 @@ ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
       "remote_origin=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
       "NULL) THEN remote_origin ELSE NULL END,last_error_code=NULL,"
       "last_error_message=NULL,updated_at_ms=?,completed_at_ms=NULL WHERE "
-      "provider_id=? AND state IN (2,3,4)";
+      "provider_id=? AND state IN (2,3,4) AND "
+      "ruleset_id<>'legacy-unknown' AND validation_fingerprint<>''";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, nowMs) != SQLITE_OK ||
@@ -820,7 +859,8 @@ ReplayRepository::UnblockIrOutbox(std::string_view providerId,
       "UPDATE ir_outbox SET state=CASE WHEN remote_job_id IS NULL THEN 0 ELSE "
       "2 END,consecutive_failure_count=0,"
       "next_attempt_at_ms=?,last_error_code=NULL,last_error_message=NULL,"
-      "updated_at_ms=? WHERE provider_id=? AND state=3";
+      "updated_at_ms=? WHERE provider_id=? AND state=3 AND "
+      "ruleset_id<>'legacy-unknown' AND validation_fingerprint<>''";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, nowMs) != SQLITE_OK ||

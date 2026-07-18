@@ -263,19 +263,23 @@ void seedIrOperationalState(const std::filesystem::path &path,
   expect(execute(
              database.get(),
              "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
-             "chart_sha256,payload_json,state,local_result_ready,"
+             "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
+             "validation_fingerprint,state,local_result_ready,"
              "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
              "updated_at_ms,completed_at_ms) VALUES"
              "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
              "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'{\"score\":1}',0,1,NULL,NULL,NULL,1000,1000,NULL),"
+             "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
+             "0,1,NULL,NULL,NULL,1000,1000,NULL),"
              "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
              "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
-             "'{\"score\":2}',2,1,3000,'job-2','https://example.invalid',"
+             "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
+             "2,1,3000,'job-2','https://example.invalid',"
              "2000,2000,NULL),"
              "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
              "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
-             "'{\"score\":3}',5,1,NULL,NULL,NULL,3000,3000,3000)"),
+             "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
+             "5,1,NULL,NULL,NULL,3000,3000,3000)"),
          std::string(label) + " pending, deferred, and succeeded IR rows seed");
 }
 

@@ -4245,6 +4245,12 @@ ir::IrOutboxDraft sampleIrDraft(std::string attemptId, std::int64_t createdAt,
       .chartMd5 = std::string(32, 'b'),
       .chartSha256 = std::string(64, 'a'),
       .payloadJson = std::move(payload),
+      .rulesetProof =
+          {
+              .rulesetId = "lr2",
+              .rulesetRevision = 3,
+              .validationFingerprint = std::string(64, 'c'),
+          },
       .createdAtUnixMillis = createdAt,
   };
 }
@@ -4258,6 +4264,12 @@ automaticIrDraft(const result_persistence::ChartResultAttempt &attempt,
       .chartMd5 = attempt.score.chartMd5,
       .chartSha256 = attempt.score.chartSha256,
       .payloadJson = R"({"score":123})",
+      .rulesetProof =
+          {
+              .rulesetId = "test-rules",
+              .rulesetRevision = 1,
+              .validationFingerprint = std::string(64, 'd'),
+          },
       .createdAtUnixMillis = createdAt,
   };
 }
@@ -4424,7 +4436,8 @@ void testVersion5MigrationAddsIrOutbox(const std::filesystem::path &root) {
         "consecutive_failure_count", "next_attempt_at_ms",
         "next_request_user_intent", "remote_job_id", "remote_origin",
         "last_error_code", "last_error_message", "created_at_ms",
-        "updated_at_ms", "completed_at_ms"}) {
+        "updated_at_ms", "completed_at_ms", "ruleset_id",
+        "ruleset_revision", "validation_fingerprint"}) {
     assert(columnExists(db.get(), "ir_outbox", std::string(column)));
   }
   SqliteStatementHandle foreignKeys;
@@ -4449,6 +4462,109 @@ void testVersion5MigrationAddsIrOutbox(const std::filesystem::path &root) {
   assert(schemaSnapshot(malformedDb.get()) == malformedSchema);
 }
 
+void testVersion6MigrationBlocksRowsWithoutRulesetProof(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-proof-migration" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_outbox");
+  execOrAbort(
+      db.get(),
+      "CREATE TABLE ir_outbox ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id TEXT NOT NULL,"
+      "attempt_id TEXT NOT NULL,chart_md5 TEXT,chart_sha256 TEXT NOT NULL,"
+      "payload_json TEXT NOT NULL,state INTEGER NOT NULL,"
+      "local_result_ready INTEGER NOT NULL DEFAULT 0,"
+      "request_attempt_count INTEGER NOT NULL DEFAULT 0,"
+      "consecutive_failure_count INTEGER NOT NULL DEFAULT 0,"
+      "next_attempt_at_ms INTEGER,"
+      "next_request_user_intent INTEGER NOT NULL DEFAULT 0,"
+      "remote_job_id TEXT,remote_origin TEXT,last_error_code TEXT,"
+      "last_error_message TEXT,created_at_ms INTEGER NOT NULL,"
+      "updated_at_ms INTEGER NOT NULL,completed_at_ms INTEGER,"
+      "UNIQUE(provider_id, attempt_id),CHECK (local_result_ready IN (0, 1)),"
+      "CHECK (next_request_user_intent IN (0, 1)),"
+      "CHECK ((remote_job_id IS NULL AND remote_origin IS NULL) OR "
+      "(remote_job_id IS NOT NULL AND remote_origin IS NOT NULL)))");
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_ir_outbox_due ON ir_outbox("
+              "local_result_ready, state, next_attempt_at_ms, id)");
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_ir_outbox_attempt ON "
+              "ir_outbox(provider_id, attempt_id)");
+  execOrAbort(
+      db.get(),
+      "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,chart_sha256,"
+      "payload_json,state,local_result_ready,created_at_ms,updated_at_ms) "
+      "VALUES('tachi','123e4567-e89b-42d3-a456-426614174099','" +
+          std::string(32, 'b') + "','" + std::string(64, 'a') +
+          "','{\"score\":123}',0,1,1000,1000)");
+  execOrAbort(db.get(), "PRAGMA user_version=6");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  const auto loaded = helper.LoadIrOutbox(
+      "tachi", "123e4567-e89b-42d3-a456-426614174099");
+  assert(loaded.status == ir::IrOutboxReadStatus::Found && loaded.entry);
+  assert(loaded.entry->rulesetProof ==
+         ir::IrRulesetProof{.rulesetId = "legacy-unknown"});
+  assert(loaded.entry->state == ir::IrOutboxState::BlockedConfiguration);
+  assert(loaded.entry->lastErrorCode == "legacy_ruleset_proof_missing");
+  assert(loaded.entry->lastErrorMessage ==
+         "Submission blocked because this queued score predates ruleset "
+         "proof.");
+  assert(loaded.entry->payloadJson == R"({"score":123})");
+  assert(helper.ListDueIrOutbox(10'000).entries.empty());
+  assert(helper.RetryIrOutbox(loaded.entry->id, 10'000).status ==
+         ir::IrOutboxMutationStatus::Invalid);
+  assert(helper.RetryAllIrOutbox("tachi", 10'000).affectedRows == 0);
+  assert(helper.UnblockIrOutbox("tachi", 10'000).affectedRows == 0);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
+  assert(columnExists(db.get(), "ir_outbox", "ruleset_id"));
+  assert(columnExists(db.get(), "ir_outbox", "ruleset_revision"));
+  assert(columnExists(db.get(), "ir_outbox", "validation_fingerprint"));
+}
+
+void testCurrentVersionRejectsMalformedRulesetProofSchema(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-proof-malformed" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  std::string tableSql = queryText(
+      db.get(),
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='ir_outbox'");
+  const std::string exact = "validation_fingerprint TEXT NOT NULL";
+  const auto proofColumn = tableSql.find(exact);
+  assert(proofColumn != std::string::npos);
+  tableSql.replace(proofColumn, exact.size(),
+                   "validation_fingerprint TEXT");
+  execOrAbort(db.get(), "DROP TABLE ir_outbox");
+  execOrAbort(db.get(), tableSql);
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_ir_outbox_due ON ir_outbox("
+              "local_result_ready, state, next_attempt_at_ms, id)");
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_ir_outbox_attempt ON "
+              "ir_outbox(provider_id, attempt_id)");
+  const std::string before = schemaSnapshot(db.get());
+  db.reset();
+
+  assert(!helper.EnsureSchema());
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
+  assert(schemaSnapshot(db.get()) == before);
+}
+
 void testIrOutboxInsertClaimAndDeliveryTransitions(
     const std::filesystem::path &root) {
   const auto path = root / "ir-outbox-transitions" / "replay.db";
@@ -4457,11 +4573,20 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
 
   const auto draft =
       sampleIrDraft("123e4567-e89b-42d3-a456-426614174001", 1'000);
+  auto missingProof = draft;
+  missingProof.rulesetProof = {};
+  assert(helper.EnqueueReadyIrOutboxDraft(missingProof, true).status ==
+         ir::IrOutboxInsertStatus::Invalid);
+  auto partialProof = draft;
+  partialProof.rulesetProof.validationFingerprint.clear();
+  assert(helper.EnqueueReadyIrOutboxDraft(partialProof, true).status ==
+         ir::IrOutboxInsertStatus::Invalid);
   const auto inserted = helper.EnqueueReadyIrOutboxDraft(draft, true);
   assert(inserted.status == ir::IrOutboxInsertStatus::Inserted);
   assert(inserted.entry && inserted.entry->payloadJson == draft.payloadJson &&
          inserted.entry->chartMd5 == draft.chartMd5 &&
          inserted.entry->chartSha256 == draft.chartSha256 &&
+         inserted.entry->rulesetProof == draft.rulesetProof &&
          inserted.entry->state == ir::IrOutboxState::Pending &&
          inserted.entry->localResultReady &&
          inserted.entry->nextRequestUserIntent);
@@ -4471,6 +4596,10 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   assert(duplicate.status == ir::IrOutboxInsertStatus::AlreadyExists);
   auto conflictingDraft = draft;
   conflictingDraft.payloadJson = R"({"score":999})";
+  assert(helper.EnqueueReadyIrOutboxDraft(conflictingDraft, true).status ==
+         ir::IrOutboxInsertStatus::IntegrityConflict);
+  conflictingDraft = draft;
+  conflictingDraft.rulesetProof.validationFingerprint = std::string(64, 'e');
   assert(helper.EnqueueReadyIrOutboxDraft(conflictingDraft, true).status ==
          ir::IrOutboxInsertStatus::IntegrityConflict);
 
@@ -4822,6 +4951,8 @@ int main() {
   testStageChartResultAtomicallyStagesIrDrafts(root);
   testAcknowledgementActivatesIrAtomically(root);
   testVersion5MigrationAddsIrOutbox(root);
+  testVersion6MigrationBlocksRowsWithoutRulesetProof(root);
+  testCurrentVersionRejectsMalformedRulesetProofSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);

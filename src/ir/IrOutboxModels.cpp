@@ -44,6 +44,40 @@ bool validPayload(std::string_view payload) {
          nlohmann::json::accept(payload);
 }
 
+bool validRulesetProof(const IrRulesetProof &proof) {
+  return validProviderId(proof.rulesetId) && proof.rulesetRevision > 0 &&
+         lowerHex(proof.validationFingerprint, 64);
+}
+
+bool legacyRulesetProof(const IrRulesetProof &proof) {
+  return proof.rulesetId == "legacy-unknown" && proof.rulesetRevision == 0 &&
+         proof.validationFingerprint.empty();
+}
+
+bool validateDraft(const IrOutboxDraft &draft, bool allowLegacyProof,
+                   std::string &diagnostic) {
+  if (!validProviderId(draft.providerId)) {
+    diagnostic = "IR provider ID is invalid";
+  } else if (!uuid::isCanonicalLowerV4(draft.attemptId)) {
+    diagnostic = "IR attempt ID is invalid";
+  } else if (!draft.chartMd5.empty() && !lowerHex(draft.chartMd5, 32)) {
+    diagnostic = "IR chart MD5 is invalid";
+  } else if (!lowerHex(draft.chartSha256, 64)) {
+    diagnostic = "IR chart SHA-256 is invalid";
+  } else if (!validPayload(draft.payloadJson)) {
+    diagnostic = "IR payload is malformed or oversized";
+  } else if (!validRulesetProof(draft.rulesetProof) &&
+             !(allowLegacyProof && legacyRulesetProof(draft.rulesetProof))) {
+    diagnostic = "IR ruleset proof is invalid";
+  } else if (draft.createdAtUnixMillis < 0) {
+    diagnostic = "IR creation time is invalid";
+  } else {
+    diagnostic.clear();
+    return true;
+  }
+  return false;
+}
+
 bool validRemotePair(const IrOutboxEntry &entry) {
   const bool hasJob = !entry.remoteJobId.empty();
   const bool hasOrigin = !entry.remoteOrigin.empty();
@@ -90,23 +124,7 @@ bool isKnownIrOutboxState(int value) noexcept {
 bool validateIrOutboxDraft(const IrOutboxDraft &draft,
                            std::string &diagnostic) noexcept {
   try {
-    if (!validProviderId(draft.providerId)) {
-      diagnostic = "IR provider ID is invalid";
-    } else if (!uuid::isCanonicalLowerV4(draft.attemptId)) {
-      diagnostic = "IR attempt ID is invalid";
-    } else if (!draft.chartMd5.empty() && !lowerHex(draft.chartMd5, 32)) {
-      diagnostic = "IR chart MD5 is invalid";
-    } else if (!lowerHex(draft.chartSha256, 64)) {
-      diagnostic = "IR chart SHA-256 is invalid";
-    } else if (!validPayload(draft.payloadJson)) {
-      diagnostic = "IR payload is malformed or oversized";
-    } else if (draft.createdAtUnixMillis < 0) {
-      diagnostic = "IR creation time is invalid";
-    } else {
-      diagnostic.clear();
-      return true;
-    }
-    return false;
+    return validateDraft(draft, false, diagnostic);
   } catch (...) {
     diagnostic = "IR draft validation failed";
     return false;
@@ -122,10 +140,13 @@ bool validateIrOutboxEntry(const IrOutboxEntry &entry,
         .chartMd5 = entry.chartMd5,
         .chartSha256 = entry.chartSha256,
         .payloadJson = entry.payloadJson,
+        .rulesetProof = entry.rulesetProof,
         .createdAtUnixMillis = entry.createdAtUnixMillis,
     };
+    const bool legacyProof = legacyRulesetProof(entry.rulesetProof);
     std::string draftDiagnostic;
-    if (entry.id <= 0 || !validateIrOutboxDraft(draft, draftDiagnostic)) {
+    if (entry.id <= 0 ||
+        !validateDraft(draft, legacyProof, draftDiagnostic)) {
       diagnostic = entry.id <= 0 ? "IR outbox row ID is invalid"
                                  : std::move(draftDiagnostic);
       return false;
@@ -141,10 +162,19 @@ bool validateIrOutboxEntry(const IrOutboxEntry &entry,
       diagnostic = "IR outbox remote job state is invalid";
       return false;
     }
+    if (legacyProof &&
+        (entry.state != IrOutboxState::BlockedConfiguration ||
+         entry.lastErrorCode != "legacy_ruleset_proof_missing" ||
+         entry.nextAttemptAtUnixMillis.has_value() ||
+         entry.nextRequestUserIntent)) {
+      diagnostic = "legacy IR ruleset proof state is invalid";
+      return false;
+    }
     const bool blockedPendingIntent =
         entry.state == IrOutboxState::BlockedConfiguration &&
         entry.remoteJobId.empty();
-    if ((!entry.localResultReady && entry.state != IrOutboxState::Pending) ||
+    if ((!legacyProof && !entry.localResultReady &&
+         entry.state != IrOutboxState::Pending) ||
         (entry.nextRequestUserIntent && entry.state != IrOutboxState::Pending &&
          !blockedPendingIntent)) {
       diagnostic = "IR outbox readiness or user-intent state is invalid";
@@ -155,8 +185,9 @@ bool validateIrOutboxEntry(const IrOutboxEntry &entry,
       diagnostic = "IR outbox error fields are oversized";
       return false;
     }
-    if ((entry.state == IrOutboxState::Succeeded) !=
-        entry.completedAtUnixMillis.has_value()) {
+    if (!legacyProof &&
+        ((entry.state == IrOutboxState::Succeeded) !=
+         entry.completedAtUnixMillis.has_value())) {
       diagnostic = "IR outbox completion state is invalid";
       return false;
     }

@@ -392,6 +392,37 @@ constexpr const char *kIrOutboxTableSql =
     "chart_md5 TEXT,"
     "chart_sha256 TEXT NOT NULL,"
     "payload_json TEXT NOT NULL,"
+    "ruleset_id TEXT NOT NULL,"
+    "ruleset_revision INTEGER NOT NULL,"
+    "validation_fingerprint TEXT NOT NULL,"
+    "state INTEGER NOT NULL,"
+    "local_result_ready INTEGER NOT NULL DEFAULT 0,"
+    "request_attempt_count INTEGER NOT NULL DEFAULT 0,"
+    "consecutive_failure_count INTEGER NOT NULL DEFAULT 0,"
+    "next_attempt_at_ms INTEGER,"
+    "next_request_user_intent INTEGER NOT NULL DEFAULT 0,"
+    "remote_job_id TEXT,"
+    "remote_origin TEXT,"
+    "last_error_code TEXT,"
+    "last_error_message TEXT,"
+    "created_at_ms INTEGER NOT NULL,"
+    "updated_at_ms INTEGER NOT NULL,"
+    "completed_at_ms INTEGER,"
+    "UNIQUE(provider_id, attempt_id),"
+    "CHECK (local_result_ready IN (0, 1)),"
+    "CHECK (next_request_user_intent IN (0, 1)),"
+    "CHECK ((remote_job_id IS NULL AND remote_origin IS NULL) OR "
+    "(remote_job_id IS NOT NULL AND remote_origin IS NOT NULL))"
+    ")";
+
+constexpr const char *kLegacyIrOutboxTableSqlV6 =
+    "CREATE TABLE ir_outbox ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "payload_json TEXT NOT NULL,"
     "state INTEGER NOT NULL,"
     "local_result_ready INTEGER NOT NULL DEFAULT 0,"
     "request_attempt_count INTEGER NOT NULL DEFAULT 0,"
@@ -822,14 +853,16 @@ bool inspectReplayResultOutboxSchema(sqlite3 *db,
   return true;
 }
 
-bool inspectIrOutboxSchema(sqlite3 *db, IrOutboxSchemaState &state) {
+bool inspectIrOutboxSchema(
+    sqlite3 *db, IrOutboxSchemaState &state,
+    const char *expectedTableSql = kIrOutboxTableSql) {
   NamedSchemaObjectInspection table;
   NamedSchemaObjectInspection dueIndex;
   NamedSchemaObjectInspection attemptIndex;
   bool dueShapeExact = false;
   bool attemptShapeExact = false;
   if (!inspectNamedSchemaObject(db, "ir_outbox", "table", "ir_outbox",
-                                kIrOutboxTableSql, table,
+                                expectedTableSql, table,
                                 "reading IR outbox table schema") ||
       !inspectNamedSchemaObject(db, "idx_ir_outbox_due", "index",
                                 "ir_outbox", kIrOutboxDueIndexSql, dueIndex,
@@ -969,6 +1002,59 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
          !execSql(db, kIrOutboxDueIndexSql, "creating IR outbox due index") ||
          !execSql(db, kIrOutboxAttemptIndexSql,
                   "creating IR outbox attempt index"))) {
+      return false;
+    }
+  }
+  if (*version < 7) {
+    if (*version == 6) {
+      IrOutboxSchemaState legacyState{};
+      if (!inspectIrOutboxSchema(db, legacyState,
+                                 kLegacyIrOutboxTableSqlV6) ||
+          legacyState != IrOutboxSchemaState::Exact) {
+        SDL_Log("Refusing IR outbox proof migration from a partial or "
+                "unexpected version 6 schema");
+        return false;
+      }
+      if (!execSql(db, "ALTER TABLE ir_outbox RENAME TO ir_outbox_v6",
+                   "renaming legacy IR outbox") ||
+          !execSql(db, "DROP INDEX idx_ir_outbox_due",
+                   "dropping legacy IR outbox due index") ||
+          !execSql(db, "DROP INDEX idx_ir_outbox_attempt",
+                   "dropping legacy IR outbox attempt index") ||
+          !execSql(db, kIrOutboxTableSql,
+                   "creating ruleset-proof IR outbox") ||
+          !execSql(
+              db,
+              "INSERT INTO ir_outbox("
+              "id,provider_id,attempt_id,chart_md5,chart_sha256,payload_json,"
+              "ruleset_id,ruleset_revision,validation_fingerprint,state,"
+              "local_result_ready,request_attempt_count,"
+              "consecutive_failure_count,next_attempt_at_ms,"
+              "next_request_user_intent,remote_job_id,remote_origin,"
+              "last_error_code,last_error_message,created_at_ms,updated_at_ms,"
+              "completed_at_ms) SELECT id,provider_id,attempt_id,chart_md5,"
+              "chart_sha256,payload_json,'legacy-unknown',0,'',3,"
+              "local_result_ready,request_attempt_count,"
+              "consecutive_failure_count,NULL,0,remote_job_id,remote_origin,"
+              "'legacy_ruleset_proof_missing',"
+              "'Submission blocked because this queued score predates "
+              "ruleset proof.',created_at_ms,updated_at_ms,completed_at_ms "
+              "FROM ir_outbox_v6",
+              "migrating legacy IR outbox rows") ||
+          !execSql(db, "DROP TABLE ir_outbox_v6",
+                   "dropping legacy IR outbox") ||
+          !execSql(db, kIrOutboxDueIndexSql,
+                   "creating IR outbox due index") ||
+          !execSql(db, kIrOutboxAttemptIndexSql,
+                   "creating IR outbox attempt index")) {
+        return false;
+      }
+    }
+    IrOutboxSchemaState irOutboxState{};
+    if (!inspectIrOutboxSchema(db, irOutboxState) ||
+        irOutboxState != IrOutboxSchemaState::Exact) {
+      SDL_Log("Refusing migrated IR outbox with a partial or unexpected "
+              "ruleset proof schema");
       return false;
     }
   }

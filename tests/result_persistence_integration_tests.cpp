@@ -74,6 +74,13 @@ int queryInt(sqlite3 *database, const std::string &sql) {
   return sqlite3_column_int(statement.get(), 0);
 }
 
+std::string queryText(sqlite3 *database, const std::string &sql) {
+  SqliteStatementHandle statement;
+  assert(prepareSqliteStatement(database, sql, statement) == SQLITE_OK);
+  assert(sqlite3_step(statement.get()) == SQLITE_ROW);
+  return sqliteColumnString(statement.get(), 0);
+}
+
 void execOrAbort(sqlite3 *database, const std::string &sql) {
   char *message = nullptr;
   const int result =
@@ -220,6 +227,12 @@ ir::IrOutboxDraft automaticIrDraft(const ChartResultAttempt &attempt,
       .chartMd5 = attempt.score.chartMd5,
       .chartSha256 = attempt.score.chartSha256,
       .payloadJson = R"({"score":123})",
+      .rulesetProof =
+          {
+              .rulesetId = "test-rules",
+              .rulesetRevision = 1,
+              .validationFingerprint = std::string(64, 'd'),
+          },
       .createdAtUnixMillis = createdAtUnixMillis,
   };
 }
@@ -415,6 +428,18 @@ void testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode() {
   assert(queued.status == ir::IrOutboxReadStatus::Found && queued.entry);
   assert(queued.entry->state == ir::IrOutboxState::Pending);
   assert(queued.entry->localResultReady);
+  assert(queued.entry->rulesetProof ==
+         automaticDrafts.front().rulesetProof);
+  assert(queued.entry->rulesetProof.rulesetId == "lr2");
+  assert(queued.entry->rulesetProof.rulesetRevision == 3);
+  assert(queued.entry->rulesetProof.validationFingerprint.size() == 64);
+  replay.Shutdown();
+  auto database = openDatabase(replayPath);
+  assert(queryText(database.get(),
+                   "SELECT validation_fingerprint FROM ir_outbox WHERE "
+                   "provider_id='tachi'") ==
+         automaticDrafts.front().rulesetProof.validationFingerprint);
+  database.reset();
 
   ChartResultAttempt manual = sampleAttempt(temporary.path(), "manual-ir", 7);
   manual.replay.chartMeta.KeyMode = 7;

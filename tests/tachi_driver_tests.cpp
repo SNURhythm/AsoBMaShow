@@ -1,5 +1,6 @@
 #include "ir/tachi/TachiDriver.h"
 
+#include "FileChecksum.h"
 #include "ir/IrHttpClient.h"
 
 #include <chrono>
@@ -41,7 +42,7 @@ public:
 };
 
 ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
-  return {
+  ir::IrOutboxEntry entry{
       .id = 1,
       .providerId = "tachi",
       .attemptId = "123e4567-e89b-42d3-a456-426614174000",
@@ -56,6 +57,18 @@ ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
       .createdAtUnixMillis = 1700000000000LL,
       .updatedAtUnixMillis = 1700000000000LL,
   };
+  const std::string proofInput =
+      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
+      std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
+      "\n" + std::to_string(entry.payloadJson.size()) + ":" +
+      entry.payloadJson;
+  entry.rulesetProof = {
+      .rulesetId = "lr2",
+      .rulesetRevision = 3,
+      .validationFingerprint = file_checksum::sha256(proofInput),
+  };
+  return entry;
 }
 
 ir::IrOutboxEntry awaitingEntry() {
@@ -175,6 +188,45 @@ void testAutomaticSubmissionOmitsUserIntent() {
   expect(http.requests.size() == 1 &&
              !hasHeaderNamed(http.requests.front(), "X-User-Intent"),
          "automatic submission omits X-User-Intent");
+}
+
+void testBlocksLegacyAndMismatchedRulesetProofsBeforeHttp() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+
+  auto entry = pendingEntry();
+  entry.rulesetProof = {.rulesetId = "legacy-unknown"};
+  auto result = driver.submit(entry, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::PermanentFailure,
+         "legacy queued row is rejected");
+  expect(result.code == "ruleset_proof_mismatch",
+         "legacy queued row has a stable proof code");
+  expect(http.requests.empty(), "legacy proof performs no HTTP request");
+
+  entry = pendingEntry();
+  entry.payloadJson.push_back(' ');
+  result = driver.submit(entry, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::PermanentFailure,
+         "payload changed after validation is blocked");
+  expect(result.code == "ruleset_proof_mismatch",
+         "proof mismatch has a stable integrity code");
+  expect(http.requests.empty(), "proof mismatch performs no HTTP request");
+
+  entry = pendingEntry();
+  entry.providerId = "other";
+  result = driver.submit(entry, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::PermanentFailure &&
+             result.code == "ruleset_proof_mismatch",
+         "provider mismatch is rejected as a proof mismatch");
+  expect(http.requests.empty(), "provider mismatch performs no HTTP request");
+
+  entry = awaitingEntry();
+  entry.payloadJson.push_back(' ');
+  result = driver.poll(entry, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::PermanentFailure &&
+             result.code == "ruleset_proof_mismatch",
+         "polling also validates the frozen proof");
+  expect(http.requests.empty(), "poll proof mismatch performs no HTTP request");
 }
 
 void testImmediateWarningsAndRejection() {
@@ -542,6 +594,7 @@ int main() {
   testCapabilitiesAndDraftDelegation();
   testImmediateSubmissionRequestAndAcceptedResponse();
   testAutomaticSubmissionOmitsUserIntent();
+  testBlocksLegacyAndMismatchedRulesetProofsBeforeHttp();
   testImmediateWarningsAndRejection();
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();
