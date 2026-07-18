@@ -1,10 +1,12 @@
 #pragma once
 
 #include "audio/PlaybackRate.h"
+#include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
 
 #include <filesystem>
 #include <iosfwd>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -167,6 +169,9 @@ public:
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;
+  std::map<std::string, ir::IrProviderSettings> irProviders = {
+      {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},
+  };
 
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;

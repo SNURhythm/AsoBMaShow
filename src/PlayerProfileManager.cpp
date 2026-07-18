@@ -366,6 +366,7 @@ PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   paths.profileJson = paths.root / "profile.json";
   paths.settingsJson = paths.root / "settings.json";
   paths.inputJson = paths.root / "input.json";
+  paths.irCredentialsJson = paths.root / "ir-credentials.json";
   paths.scoresDb = paths.root / "scores.db";
   paths.replaysDb = paths.root / "replays.db";
   paths.practiceDirectory = paths.root / "practice";

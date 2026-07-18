@@ -410,6 +410,12 @@ float sanitizePlayAreaWidth(float width) {
 } // namespace
 
 void AppSettings::sanitize() {
+  irProviders.try_emplace(std::string(ir::kTachiProviderId),
+                          ir::IrProviderSettings{});
+  for (auto &[providerId, settings] : irProviders) {
+    (void)providerId;
+    ir::sanitizeProviderSettings(settings);
+  }
   audioVideo.sanitize();
   audioOffsetMs =
       std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);

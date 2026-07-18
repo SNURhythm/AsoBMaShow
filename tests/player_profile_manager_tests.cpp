@@ -383,9 +383,12 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
   expect(paths.profileJson == paths.root / "profile.json" &&
              paths.settingsJson == paths.root / "settings.json" &&
              paths.inputJson == paths.root / "input.json" &&
+             paths.irCredentialsJson == paths.root / "ir-credentials.json" &&
              paths.scoresDb == paths.root / "scores.db" &&
              paths.replaysDb == paths.root / "replays.db",
          "all profile paths follow fixed layout");
+  expect(!std::filesystem::exists(paths.irCredentialsJson),
+         "migration starts without device-local IR credentials");
 
   const auto settings = AppSettingsStore::Load(paths.settingsJson);
   expect(settings.status == AppSettingsLoadStatus::Loaded,
@@ -2212,6 +2215,12 @@ void testProfileCrudConstraintsAndDataIsolation() {
              std::filesystem::exists(manager.pathsFor(secondId).scoresDb) &&
              std::filesystem::exists(manager.pathsFor(secondId).replaysDb),
          "created profile owns all isolated data files");
+  expect(!std::filesystem::exists(
+             manager.pathsFor(secondId).irCredentialsJson),
+         "created profile does not create a credential file");
+
+  writeFile(manager.pathsFor(firstId).irCredentialsJson,
+            R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
 
   const auto duplicate = manager.duplicateProfile(firstId, "First Copy");
   expect(duplicate.ok() && duplicate.profile.has_value(),
@@ -2223,6 +2232,9 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(rowCount(manager.pathsFor(copyId).scoresDb, "scores") ==
              rowCount(manager.pathsFor(firstId).scoresDb, "scores"),
          "duplicate snapshots score data");
+  expect(!std::filesystem::exists(
+             manager.pathsFor(copyId).irCredentialsJson),
+         "duplicate does not copy device-local IR credentials");
 
   const auto renamed = manager.renameProfile(copyId, "Renamed Copy");
   expect(renamed.ok() && renamed.profile &&
