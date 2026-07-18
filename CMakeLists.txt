@@ -1506,6 +1506,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/RhythmLaneInputController.cpp
     )
     target_include_directories(gameplay_practice_input_boundary_tests PRIVATE
@@ -1525,6 +1529,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_simulation_tests.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
@@ -1545,6 +1552,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_automatic_authority_tests.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
@@ -1563,6 +1573,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/realtime_gameplay_worker_tests.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp

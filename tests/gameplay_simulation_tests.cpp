@@ -1,6 +1,9 @@
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/CompiledGameplayJudge.h"
 #include "scene/play/GameplayDefinition.h"
+#include "scene/play/GameplayCandidateRules.h"
+#include "scene/play/GameplayJudgeRules.h"
+#include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
 #include "scene/play/ManualKeysoundSelection.h"
@@ -1568,6 +1571,255 @@ void testCurrentReleaseParityMatrix() {
             "new release transaction matches current controller outcome");
   }
 }
+
+gameplay::CompiledGameplayJudge lr2Judge(int rank = 2) {
+  return gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, rank));
+}
+
+void testSharedNoteRoleClassification() {
+  using gameplay::NoteJudgeRole;
+  using gameplay::NoteKind;
+  const std::array immutableCases{
+      std::pair{gameplay::NoteDefinition{.kind = NoteKind::Normal},
+                NoteJudgeRole::Normal},
+      std::pair{gameplay::NoteDefinition{.kind = NoteKind::Normal,
+                                         .scratchLane = true},
+                NoteJudgeRole::Scratch},
+      std::pair{gameplay::NoteDefinition{.kind = NoteKind::LongHead},
+                NoteJudgeRole::LongNoteHead},
+      std::pair{gameplay::NoteDefinition{.kind = NoteKind::LongHead,
+                                         .scratchLane = true},
+                NoteJudgeRole::LongScratchHead},
+      std::pair{gameplay::NoteDefinition{.kind = NoteKind::LongTail},
+                NoteJudgeRole::LongNoteTail},
+      std::pair{gameplay::NoteDefinition{.kind = NoteKind::LongTail,
+                                         .scratchLane = true},
+                NoteJudgeRole::LongScratchTail},
+  };
+  for (const auto &[note, expected] : immutableCases) {
+    require(gameplay::judgeRoleFor(note) == expected,
+            "immutable notes use the shared judge-role classifier");
+  }
+
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure();
+  auto *normalTimeline = addTimeline(*measure, 100);
+  auto *normal = new bms_parser::Note(1);
+  normalTimeline->SetNote(1, normal);
+  auto *scratchTimeline = addTimeline(*measure, 200);
+  auto *scratch = new bms_parser::Note(2);
+  scratchTimeline->SetNote(7, scratch);
+  auto *normalLong = addLongNote(*measure, 300, 400, 1,
+                                 bms_parser::LongNoteType::LongNote);
+  auto *scratchLong = addLongNote(*measure, 500, 600, 7,
+                                  bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+  require(gameplay::judgeRoleFor(normal, chart.Meta, 0) ==
+                  NoteJudgeRole::Normal &&
+              gameplay::judgeRoleFor(scratch, chart.Meta, 0) ==
+                  NoteJudgeRole::Scratch &&
+              gameplay::judgeRoleFor(normalLong, chart.Meta, 0) ==
+                  NoteJudgeRole::LongNoteHead &&
+              gameplay::judgeRoleFor(normalLong->Tail, chart.Meta, 0) ==
+                  NoteJudgeRole::LongNoteTail &&
+              gameplay::judgeRoleFor(scratchLong, chart.Meta, 0) ==
+                  NoteJudgeRole::LongScratchHead &&
+              gameplay::judgeRoleFor(scratchLong->Tail, chart.Meta, 0) ==
+                  NoteJudgeRole::LongScratchTail,
+          "parser notes use the same six judge roles");
+}
+
+void testLr2CandidateFilterGoldenClusters() {
+  using gameplay::JudgeCandidateDescriptor;
+  std::array<std::size_t, 8> multiBad{};
+
+  const std::array selectedGood{
+      JudgeCandidateDescriptor{.sourceIndex = 10,
+                               .timingMicros = 800,
+                               .judge = JudgeResult(Bad, 200)},
+      JudgeCandidateDescriptor{.sourceIndex = 11,
+                               .timingMicros = 950,
+                               .judge = JudgeResult(Good, 50)},
+      JudgeCandidateDescriptor{.sourceIndex = 12,
+                               .timingMicros = 1150,
+                               .judge = JudgeResult(Bad, -150)},
+  };
+  auto resolution = gameplay::resolveLr2Candidates(selectedGood, multiBad);
+  require(resolution.selectedSourceIndex == 11 &&
+              resolution.multiBadCount == 1 && multiBad[0] == 10,
+          "LR2 Combo selection keeps preceding late BAD before selected GOOD");
+
+  const std::array selectedBad{
+      JudgeCandidateDescriptor{.sourceIndex = 20,
+                               .timingMicros = 820,
+                               .judge = JudgeResult(Bad, 180)},
+      JudgeCandidateDescriptor{.sourceIndex = 21,
+                               .timingMicros = 850,
+                               .judge = JudgeResult(Bad, 150)},
+      JudgeCandidateDescriptor{.sourceIndex = 22,
+                               .timingMicros = 1150,
+                               .judge = JudgeResult(Bad, -150)},
+  };
+  resolution = gameplay::resolveLr2Candidates(selectedBad, multiBad);
+  require(resolution.selectedSourceIndex == 21 &&
+              resolution.multiBadCount == 2 && multiBad[0] == 20 &&
+              multiBad[1] == 22,
+          "a selected LR2 BAD keeps both sorted surrounding multi-BAD notes");
+
+  const std::array precedingLongNote{
+      JudgeCandidateDescriptor{.sourceIndex = 30,
+                               .timingMicros = 800,
+                               .longNoteHead = true,
+                               .judge = JudgeResult(Bad, 200)},
+      JudgeCandidateDescriptor{.sourceIndex = 31,
+                               .timingMicros = 950,
+                               .judge = JudgeResult(Good, 50)},
+  };
+  resolution = gameplay::resolveLr2Candidates(precedingLongNote, multiBad);
+  require(resolution.selectedSourceIndex == 31 &&
+              resolution.multiBadCount == 0,
+          "leading LR2 long-note heads are removed from multi-BAD");
+}
+
+void testLr2RepeatedKpoorAndStrictAutomaticPoor() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+
+  const auto first =
+      simulation.pressLane(1, {.songTimeMicros = 100'000});
+  require(first.transactions.size() == 1 && first.hasJudge &&
+              first.judge.judgement == Kpoor &&
+              !simulation.noteState(0).played &&
+              !simulation.noteState(0).dead && simulation.snapshot().combo == 0 &&
+              simulation.snapshot().comboBreak == 0,
+          "early LR2 press emits KPoor without consuming the note or combo");
+  simulation.releaseLane(1, {.songTimeMicros = 100'001});
+  const auto second =
+      simulation.pressLane(1, {.songTimeMicros = 500'000});
+  require(second.transactions.size() == 1 && second.hasJudge &&
+              second.judge.judgement == Kpoor &&
+              simulation.snapshot().judgeCounts[Kpoor] == 2 &&
+              !simulation.noteState(0).played,
+          "the same future note can emit repeated LR2 KPoor");
+  simulation.releaseLane(1, {.songTimeMicros = 500'001});
+
+  const auto atBoundary = simulation.advanceTo(1'200'000, 1'200'000);
+  require(atBoundary.transactions.empty() && !simulation.noteState(0).played,
+          "LR2 note remains playable at the inclusive +200 ms boundary");
+  const auto afterBoundary = simulation.advanceTo(1'200'001, 1'200'001);
+  require(afterBoundary.transactions.size() == 1 &&
+              afterBoundary.transactions.front().judge.judgement == Poor &&
+              simulation.noteState(0).played &&
+              simulation.snapshot().judgeCounts[Poor] == 1,
+          "LR2 automatic POOR occurs exactly at +200001 microseconds");
+}
+
+void testLr2MultiBadBatchAndFixedSelection() {
+  const auto run = [](AppSettings::NotePriorityMode mode) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 5;
+    chart.Meta.TotalNotes = 3;
+    auto *measure = new bms_parser::Measure();
+    addTimeline(*measure, 800'000)->SetNote(1, new bms_parser::Note(1));
+    addTimeline(*measure, 950'000)->SetNote(2, new bms_parser::Note(2));
+    addTimeline(*measure, 1'150'000)->SetNote(1, new bms_parser::Note(3));
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(
+        definition, {.judge = lr2Judge(), .notePriorityMode = mode});
+    const auto batch = simulation.pressLane(
+        1, 2, {.songTimeMicros = 1'000'000,
+               .laneBeamTimeMicros = 7});
+    require(batch.transactions.size() == 2,
+            "LR2 press emits multi-BAD followed by selected transaction");
+    const auto &multiBad = batch.transactions[0];
+    const auto &selected = batch.transactions[1];
+    require(multiBad.noteId == 0 && multiBad.hasJudge &&
+                multiBad.judge.judgement == Bad &&
+                multiBad.soundNoteId == gameplay::kInvalidNoteId &&
+                !multiBad.hasLaneVisual && selected.noteId == 1 &&
+                selected.judge.judgement == Good &&
+                selected.soundNoteId == 1 && selected.hasLaneVisual &&
+                batch.noteId == selected.noteId &&
+                simulation.noteState(0).played &&
+                simulation.noteState(1).played &&
+                !simulation.noteState(2).played,
+            "LR2 batch ordering and selected-only sound/visual are stable");
+    return std::array{batch.transactions[0].noteId,
+                      batch.transactions[1].noteId};
+  };
+
+  const auto expected = run(AppSettings::NotePriorityMode::Lowest);
+  for (const auto mode : {AppSettings::NotePriorityMode::Combo,
+                          AppSettings::NotePriorityMode::Duration,
+                          AppSettings::NotePriorityMode::Score}) {
+    require(run(mode) == expected,
+            "application note-priority setting cannot alter LR2 selection");
+  }
+}
+
+void testBeatorajaStillEmitsOnePrioritySelectedTransaction() {
+  const auto run = [](AppSettings::NotePriorityMode mode) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 5;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addTimeline(*measure, 800'000)->SetNote(1, new bms_parser::Note(1));
+    addTimeline(*measure, 950'000)->SetNote(1, new bms_parser::Note(2));
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(
+        definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(2)),
+         .notePriorityMode = mode});
+    return simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+  };
+
+  const auto lowest = run(AppSettings::NotePriorityMode::Lowest);
+  require(lowest.transactions.size() == 1 && lowest.noteId == 0,
+          "Beatoraja Lowest keeps the earliest candidate and one transaction");
+  const auto combo = run(AppSettings::NotePriorityMode::Combo);
+  require(combo.transactions.size() == 1 && combo.noteId == 1,
+          "Beatoraja Combo keeps its existing priority and one transaction");
+}
+
+void testLegacyControllerUsesSharedLr2BatchResolution() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 3;
+  auto *measure = new bms_parser::Measure();
+  auto *multiBad = new bms_parser::Note(1);
+  auto *selected = new bms_parser::Note(2);
+  auto *future = new bms_parser::Note(3);
+  addTimeline(*measure, 800'000)->SetNote(1, multiBad);
+  addTimeline(*measure, 950'000)->SetNote(2, selected);
+  addTimeline(*measure, 1'150'000)->SetNote(1, future);
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, lr2Judge());
+  const auto batch = controller.pressLane(
+      1, 2, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 1'000'000,
+             .notePriorityMode = AppSettings::NotePriorityMode::Score});
+  require(batch.transactions.size() == 2 &&
+              batch.transactions[0].note == multiBad &&
+              batch.transactions[0].judge.judgement == Bad &&
+              batch.transactions[0].keySoundNote == nullptr &&
+              batch.transactions[1].note == selected &&
+              batch.transactions[1].judge.judgement == Good &&
+              batch.transactions[1].keySoundNote == selected &&
+              batch.note == selected && multiBad->IsPlayed &&
+              selected->IsPlayed && !future->IsPlayed,
+          "legacy controller consumes the same shared LR2 multi-BAD batch");
+}
 } // namespace
 
 int main() {
@@ -1602,5 +1854,11 @@ int main() {
   testLegacyPreparationControllerCommitsSoundAndHeldStateOnly();
   testCurrentPressParityMatrix();
   testCurrentReleaseParityMatrix();
+  testSharedNoteRoleClassification();
+  testLr2CandidateFilterGoldenClusters();
+  testLr2RepeatedKpoorAndStrictAutomaticPoor();
+  testLr2MultiBadBatchAndFixedSelection();
+  testBeatorajaStillEmitsOnePrioritySelectedTransaction();
+  testLegacyControllerUsesSharedLr2BatchResolution();
   return 0;
 }

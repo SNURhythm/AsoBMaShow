@@ -296,11 +296,16 @@ void RealtimeGameplayWorker::processInput(
   }
 
   if (input.type == RealtimeGameplayInputType::Release) {
-    recordTransaction(preparationInput
-                          ? simulation_.releaseLaneForPreparation(input.lane,
-                                                                  context)
-                          : simulation_.releaseLane(input.lane, context,
-                                                    input.backSpin));
+    if (preparationInput) {
+      recordTransaction(
+          simulation_.releaseLaneForPreparation(input.lane, context));
+    } else {
+      const auto batch =
+          simulation_.releaseLane(input.lane, context, input.backSpin);
+      for (const auto &transaction : batch.transactions) {
+        recordTransaction(transaction);
+      }
+    }
     return;
   }
 
@@ -324,15 +329,31 @@ void RealtimeGameplayWorker::processInput(
     return;
   }
 
-  recordTransaction(preparationInput
-                        ? simulation_.pressLaneForPreparation(
-                              input.lane, compensateLane, context)
-                        : simulation_.pressLane(input.lane, compensateLane,
-                                                context));
+  std::size_t previewMatchCount = 0;
+  bool unexpectedSound = false;
+  if (preparationInput) {
+    const auto transaction = simulation_.pressLaneForPreparation(
+        input.lane, compensateLane, context);
+    previewMatchCount = transaction.soundNoteId == preview ? 1 : 0;
+    unexpectedSound = transaction.soundNoteId != kInvalidNoteId &&
+                      transaction.soundNoteId != preview;
+    recordTransaction(transaction);
+  } else {
+    const auto batch =
+        simulation_.pressLane(input.lane, compensateLane, context);
+    for (const auto &transaction : batch.transactions) {
+      if (transaction.soundNoteId == preview) {
+        ++previewMatchCount;
+      } else if (transaction.soundNoteId != kInvalidNoteId) {
+        unexpectedSound = true;
+      }
+      recordTransaction(transaction);
+    }
+  }
   if (!requiresSound) {
     return;
   }
-  if (latestTransaction_.soundNoteId != preview) {
+  if (unexpectedSound || previewMatchCount != 1) {
     if (reservation.requiresCommit && config_.audio.cancel != nullptr) {
       config_.audio.cancel(config_.audio.context, reservation, preview);
     }

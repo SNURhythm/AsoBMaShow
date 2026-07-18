@@ -3457,25 +3457,36 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
       options.practiceSession != nullptr);
-  auto result = preparationInput ? laneInputController->pressLaneForPreparation(
-                                       mainLane, compensateLane, inputContext)
-                                 : laneInputController->pressLane(
-                                       mainLane, compensateLane, inputContext);
+  if (preparationInput) {
+    const auto result = laneInputController->pressLaneForPreparation(
+        mainLane, compensateLane, inputContext);
+    updateLaneStateText();
+    if (result.keySoundNote != nullptr &&
+        result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
+        !options.autoKeySound && !isReplayPlayback()) {
+      context.jukebox.playKeySound(result.keySoundNote->Wav);
+    }
+    if (result.hasReplayEvent) {
+      const auto &event = result.replayEvent;
+      recordPreparationLaneEvent(event.action, event.lane,
+                                 event.songTimeMicros);
+    }
+    return result.note;
+  }
+  const auto result = laneInputController->pressLane(
+      mainLane, compensateLane, inputContext);
   updateLaneStateText();
   if (result.keySoundNote != nullptr &&
       result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
       !options.autoKeySound && !isReplayPlayback()) {
     context.jukebox.playKeySound(result.keySoundNote->Wav);
   }
-  if (result.hasJudge) {
-    onJudge(result.judge, !options.autoPlay || isReplayPlayback());
-  }
-  if (result.hasReplayEvent) {
-    const auto &event = result.replayEvent;
-    if (preparationInput) {
-      recordPreparationLaneEvent(event.action, event.lane,
-                                 event.songTimeMicros);
-    } else {
+  for (const auto &transaction : result.transactions) {
+    if (transaction.hasJudge) {
+      onJudge(transaction.judge, !options.autoPlay || isReplayPlayback());
+    }
+    if (transaction.hasReplayEvent) {
+      const auto &event = transaction.replayEvent;
       appendReplayEvent(event.action, event.lane, event.note,
                         event.songTimeMicros, event.judgeTimeMicros,
                         event.judge);
@@ -3513,20 +3524,26 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
       options.practiceSession != nullptr);
-  auto result =
-      preparationInput
-          ? laneInputController->releaseLaneForPreparation(lane, inputContext)
-          : laneInputController->releaseLane(lane, inputContext, isBackSpin);
-  updateLaneStateText();
-  if (result.hasJudge) {
-    onJudge(result.judge, !options.autoPlay || isReplayPlayback());
-  }
-  if (result.hasReplayEvent) {
-    const auto &event = result.replayEvent;
-    if (preparationInput) {
+  if (preparationInput) {
+    const auto result =
+        laneInputController->releaseLaneForPreparation(lane, inputContext);
+    updateLaneStateText();
+    if (result.hasReplayEvent) {
+      const auto &event = result.replayEvent;
       recordPreparationLaneEvent(event.action, event.lane,
                                  event.songTimeMicros);
-    } else {
+    }
+    return result.note;
+  }
+  const auto result =
+      laneInputController->releaseLane(lane, inputContext, isBackSpin);
+  updateLaneStateText();
+  for (const auto &transaction : result.transactions) {
+    if (transaction.hasJudge) {
+      onJudge(transaction.judge, !options.autoPlay || isReplayPlayback());
+    }
+    if (transaction.hasReplayEvent) {
+      const auto &event = transaction.replayEvent;
       appendReplayEvent(event.action, event.lane, event.note,
                         event.songTimeMicros, event.judgeTimeMicros,
                         event.judge);
