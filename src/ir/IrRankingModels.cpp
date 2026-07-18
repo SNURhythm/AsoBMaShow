@@ -1,10 +1,13 @@
 #include "IrRankingModels.h"
 
+#include "IrDriver.h"
 #include "IrOutboxModels.h"
+#include "IrProfileSettings.h"
 
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <sstream>
 #include <string_view>
 
 namespace ir {
@@ -61,6 +64,71 @@ makeIrChartQuery(const bms_parser::ChartMeta &meta) noexcept {
   } catch (...) {
     return invalid("chart ranking query construction failed");
   }
+}
+
+IrRankingCacheKeyBuildOutcome
+makeIrRankingCacheKey(const IrRankingRequest &request) noexcept {
+  try {
+    const auto origin = normalizeServerOrigin(request.serverOrigin);
+    const std::string sha256 = normalizedHash(request.chart.chartSha256);
+    if (request.profileId.empty() || request.profileId.size() > 256 ||
+        request.providerId.empty() || request.providerId.size() > 64 ||
+        !origin || request.chart.keyMode <= 0 ||
+        request.chart.totalNotes <= 0 ||
+        request.chart.totalNotes > std::numeric_limits<int>::max() / 2 ||
+        !isHexDigest(sha256, 64)) {
+      return {.diagnostic = "ranking cache identity is invalid"};
+    }
+    return {.value = IrRankingCacheKey{.profileId = request.profileId,
+                                       .providerId = request.providerId,
+                                       .serverOrigin = *origin,
+                                       .keyMode = request.chart.keyMode,
+                                       .chartSha256 = sha256,
+                                       .totalNotes = request.chart.totalNotes}};
+  } catch (...) {
+    return {.diagnostic = "ranking cache identity construction failed"};
+  }
+}
+
+IrRankingSnapshotState snapshotStateFor(ChartRankingStatus status) noexcept {
+  switch (status) {
+  case ChartRankingStatus::Succeeded:
+    return IrRankingSnapshotState::Succeeded;
+  case ChartRankingStatus::ChartNotFound:
+    return IrRankingSnapshotState::ChartNotFound;
+  case ChartRankingStatus::AuthenticationRequired:
+    return IrRankingSnapshotState::AuthenticationRequired;
+  case ChartRankingStatus::TransientFailure:
+    return IrRankingSnapshotState::TransientFailure;
+  case ChartRankingStatus::Unsupported:
+    return IrRankingSnapshotState::Unsupported;
+  case ChartRankingStatus::MalformedResponse:
+    return IrRankingSnapshotState::MalformedResponse;
+  case ChartRankingStatus::OversizedResponse:
+    return IrRankingSnapshotState::OversizedResponse;
+  case ChartRankingStatus::Cancelled:
+    return IrRankingSnapshotState::Cancelled;
+  }
+  return IrRankingSnapshotState::MalformedResponse;
+}
+
+std::string describeIrRankingCacheKey(const IrRankingCacheKey &key) {
+  std::ostringstream output;
+  output << "profile=" << key.profileId << ";provider=" << key.providerId
+         << ";origin=" << key.serverOrigin << ";key_mode=" << key.keyMode
+         << ";sha256=" << key.chartSha256 << ";notes=" << key.totalNotes;
+  return output.str();
+}
+
+std::string describeIrChartRanking(const IrChartRanking &ranking) {
+  std::ostringstream output;
+  output << "provider=" << ranking.providerId
+         << ";key_mode=" << ranking.chart.keyMode
+         << ";sha256=" << ranking.chart.chartSha256
+         << ";notes=" << ranking.chart.totalNotes
+         << ";entries=" << ranking.entries.size()
+         << ";fetched_at_ms=" << ranking.fetchedAtUnixMillis;
+  return output.str();
 }
 
 } // namespace ir

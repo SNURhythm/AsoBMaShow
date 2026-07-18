@@ -4,11 +4,16 @@
 #include "../scene/play/GameplayScoreState.h"
 
 #include <cstdint>
+#include <compare>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ir {
+
+enum class ChartRankingStatus;
 
 struct IrChartQuery {
   int keyMode = 0;
@@ -47,7 +52,87 @@ struct IrChartRanking {
   bool operator==(const IrChartRanking &) const = default;
 };
 
+struct IrLocalComparison {
+  std::string label;
+  int score = 0;
+  int maxScore = 0;
+  int clearType = kClearTypeFailedRank;
+  std::optional<int> badPoints;
+  std::optional<int> maxCombo;
+
+  bool operator==(const IrLocalComparison &) const = default;
+};
+
+struct IrRankingRequest {
+  std::uint64_t generation = 0;
+  std::string profileId;
+  std::string providerId;
+  std::string serverOrigin;
+  IrChartQuery chart;
+  std::optional<IrLocalComparison> localComparison;
+
+  bool operator==(const IrRankingRequest &) const = default;
+};
+
+struct IrRankingCacheKey {
+  std::string profileId;
+  std::string providerId;
+  std::string serverOrigin;
+  int keyMode = 0;
+  std::string chartSha256;
+  int totalNotes = 0;
+
+  auto operator<=>(const IrRankingCacheKey &) const = default;
+};
+
+struct IrRankingCacheKeyBuildOutcome {
+  std::optional<IrRankingCacheKey> value;
+  std::string diagnostic;
+};
+
+enum class IrRankingSnapshotState {
+  Closed,
+  Loading,
+  Succeeded,
+  ChartNotFound,
+  AuthenticationRequired,
+  TransientFailure,
+  Unsupported,
+  MalformedResponse,
+  OversizedResponse,
+  Cancelled,
+};
+
+struct IrRankingSnapshot {
+  std::uint64_t revision = 0;
+  std::uint64_t generation = 0;
+  IrRankingSnapshotState state = IrRankingSnapshotState::Closed;
+  std::optional<IrRankingRequest> request;
+  std::shared_ptr<const IrChartRanking> ranking;
+  std::string diagnostic;
+  bool fromCache = false;
+};
+
+struct IrRankingInvalidation {
+  std::optional<std::string> profileId;
+  std::optional<std::string> providerId;
+  std::optional<std::string> serverOrigin;
+  std::optional<std::string> chartSha256;
+  bool clearVisible = true;
+};
+
 [[nodiscard]] IrChartQueryBuildOutcome
 makeIrChartQuery(const bms_parser::ChartMeta &meta) noexcept;
+
+[[nodiscard]] IrRankingCacheKeyBuildOutcome
+makeIrRankingCacheKey(const IrRankingRequest &request) noexcept;
+
+[[nodiscard]] IrRankingSnapshotState
+snapshotStateFor(ChartRankingStatus status) noexcept;
+
+[[nodiscard]] std::string
+describeIrRankingCacheKey(const IrRankingCacheKey &key);
+
+[[nodiscard]] std::string describeIrChartRanking(const IrChartRanking &ranking);
 
 } // namespace ir
