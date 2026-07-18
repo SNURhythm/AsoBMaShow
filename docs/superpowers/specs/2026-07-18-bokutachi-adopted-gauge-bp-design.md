@@ -1,27 +1,56 @@
-# Bokutachi Adopted Gauge and BP Design
+# GAS Gauge History and Bokutachi BP Design
 
 ## Goal
 
-Correct Bokutachi Direct Manual payloads so gauge history represents only the
-gauge adopted at the end of Gauge Auto Shift (GAS), and BP includes KPOOR.
+Capture complete histories for every gauge tracked by Gauge Auto Shift (GAS),
+make the result graph selectable by gauge, submit only the final adopted gauge
+history to Bokutachi, and include KPOOR in BP.
+
+## Canonical gauge histories
+
+`GameplayScoreState` retains the existing active-gauge `gaugeHistory` for
+compatibility and adds one history per gauge type. On every gauge mutation it
+records the post-mutation value for every gauge being tracked by the active GAS
+mode. Without GAS, only the active gauge series is recorded.
+
+Bounded realtime gameplay reserves each series before play. All series share
+the existing logical sample capacity, so reaching the limit still produces the
+same gauge-history integrity failure without allocating on the realtime
+thread. The realtime worker transfers the full set of histories when gameplay
+stops. Replay result reconstruction recomputes the same parallel histories and
+then applies the recorded active-gauge snapshot for bit-exact compatibility.
+
+## Result graph
+
+The result graph initially displays the complete history for the final active
+gauge, which is the gauge adopted by GAS at the end of the play. When more than
+one relevant GAS series is available, each tap advances to the next series and
+wraps back to the first. A label inside the graph shows the selected gauge type
+using the corresponding clear-lamp color. Non-GAS results remain a one-series
+graph.
+
+Relevant series follow the configured mode:
+
+- Best Clear and Select-to-Under expose their admitted gauge range.
+- Survival-to-Groove exposes the selected survival gauge and Normal gauge.
+- Other modes expose only the final active gauge.
 
 ## Gauge history
 
-`makeIrSubmission` remains the boundary that derives provider-neutral evidence
-from the persisted replay. A gauge-mutating replay event is a judged press,
-release, or miss, a mine event, or an explicit gauge event.
+`makeChartResultAttempt` snapshots the final gauge's complete series from the
+score state into the transient attempt. `makeIrSubmission` uses that series as
+`IrSubmission::gaugeHistory`. This removes values from other gauges used during
+GAS transitions without truncating the adopted gauge's history to the point at
+which it became active.
 
-The adopted gauge is the `gaugeType` on the final gauge-mutating replay event.
-Every gauge-mutating event is still validated for a finite gauge value and is
-still considered when deriving PGREAT early/late counts. Only events whose
-`gaugeType` equals the adopted gauge contribute samples to
-`IrSubmission::gaugeHistory`. This removes values from gauges used during GAS
-transitions. A replay with no gauge-mutating events continues to produce no
-gauge history, and a non-GAS replay retains all of its samples because every
-event uses the same gauge type.
+For legacy or synthetic attempts that do not contain the state-derived series,
+IR construction falls back to gauge-mutating replay events whose `gaugeType`
+matches the final gauge-mutating event. Every gauge-mutating replay value is
+still validated, and PGREAT early/late derivation still considers all judged
+events.
 
-This correction does not change replay storage, result-screen graph behavior,
-or the outbox schema.
+The correction does not change replay serialization, stored score columns,
+the outbox schema, or credential handling.
 
 ## Bad points
 
@@ -37,8 +66,8 @@ KPOOR because Bokutachi's BMS judgement shape has no separate KPOOR field.
 
 ## Verification
 
-Regression tests cover a replay that changes gauge type and confirm that only
-samples from the final adopted gauge survive. Payload tests confirm that BP
-includes KPOOR and that integer overflow is rejected. Existing no-GAS gauge
-history, PGREAT timing, payload-size, and credential-hygiene tests remain
-green.
+Regression tests cover per-gauge recording, bounded capacity, realtime worker
+transfer, result-series order and cycling, state-derived IR history, legacy
+replay fallback, and unchanged non-GAS behavior. Payload tests confirm that BP
+includes KPOOR and that integer overflow is rejected. Existing replay,
+PGREAT-timing, payload-size, and credential-hygiene tests remain green.
