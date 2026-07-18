@@ -19,6 +19,7 @@ private:
   bool mousePressedInside = false;
   bool isHovered = false;
   bool enabled = true;
+  bool selected = false;
   SDL_FingerID activeTouchId = -1;
   Color normalBackgroundColor = Color(0, 0, 0, 0);
   Color hoverBackgroundColor = Color(0, 0, 0, 0);
@@ -49,7 +50,11 @@ public:
   void setOnClickListener(std::function<void()> listener);
   void setEnabled(bool enabled);
   [[nodiscard]] bool isEnabled() const { return enabled; }
+  void setSelected(bool selected) { this->selected = selected; }
+  [[nodiscard]] bool isSelected() const { return selected; }
   void setContentView(View *view);
+  [[nodiscard]] View *getContentView() { return contentView.get(); }
+  [[nodiscard]] const View *getContentView() const { return contentView.get(); }
   Button *setBackgroundColors(const Color &normal, const Color &hover,
                               const Color &pressed);
   Button *setThemedBackgroundColors(ThemeColorProvider normal,

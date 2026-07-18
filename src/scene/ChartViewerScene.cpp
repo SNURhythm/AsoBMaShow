@@ -2344,6 +2344,9 @@ ChartViewerScene::ChartViewerScene(
         pendingPracticeLaunchRequest->requiredRulesetDescriptor;
     practiceReplayRulesetSnapshot =
         pendingPracticeLaunchRequest->replayRulesetSnapshot;
+  } else {
+    practiceRuleset = gameplayRulesetSelectionOrDefault(
+        context.settings.selectedGameplayRuleset);
   }
   if (pendingPracticeLaunchRequest.has_value() &&
       pendingPracticeLaunchRequest->replayPlayOptions.has_value()) {

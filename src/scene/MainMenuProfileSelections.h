@@ -4,6 +4,7 @@
 #include "../AssistOptionUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
+#include "play/GameplayRuleset.h"
 #include "play/Pacemaker.h"
 
 #include <string>
@@ -65,6 +66,7 @@ inline GaugeAutoShiftMode gaugeAutoShiftFromSettingId(const std::string &id) {
 }
 
 struct Selections {
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
@@ -80,6 +82,8 @@ struct Selections {
   }
 
   void reload(const AppSettings &settings) {
+    ruleset =
+        gameplayRulesetSelectionOrDefault(settings.selectedGameplayRuleset);
     gaugeAutoShift =
         gaugeAutoShiftFromSettingId(settings.selectedGaugeAutoShiftMode);
     const bool legacyAutoShift = settings.selectedGaugeType.rfind("gas", 0) == 0;
@@ -113,6 +117,7 @@ struct Selections {
   }
 
   void applyTo(AppSettings &settings) const {
+    settings.selectedGameplayRuleset = gameplayRulesetId(ruleset);
     settings.selectedGaugeType = gaugeSettingId(gaugeType);
     settings.selectedGaugeAutoShiftMode =
         gaugeAutoShiftSettingId(gaugeAutoShift);

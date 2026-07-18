@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../scene/play/GameplayRuleset.h"
 #include "../scene/play/RhythmState.h"
 #include "View.h"
 
@@ -15,6 +16,7 @@ class SnappedSlider;
 class TextView;
 
 struct PlayOptionsPanelState {
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
@@ -32,6 +34,7 @@ struct PlayOptionsPanelState {
 };
 
 struct PlayOptionsPanelCallbacks {
+  std::function<void(GameplayRuleset)> onRulesetSelected;
   std::function<void(GaugeType, GaugeAutoShiftMode)> onGaugeSelected;
   std::function<void(GaugeType)> onGaugeLowerBoundSelected;
   std::function<void(const std::string &)> onPlayOptionSelected;
@@ -68,6 +71,7 @@ private:
     Button *button = nullptr;
     TextView *text = nullptr;
     std::string id;
+    GameplayRuleset ruleset = kDefaultGameplayRuleset;
     GaugeType gaugeType = GaugeType::Normal;
     GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   };
@@ -75,6 +79,7 @@ private:
   PlayOptionsPanelCallbacks callbacks;
   PlayOptionsPanelState state;
   PlayOptionSectionView *playOptionSection = nullptr;
+  std::vector<SelectionButton> rulesetButtons;
   std::vector<SelectionButton> gaugeButtons;
   std::vector<SelectionButton> gaugeAutoShiftButtons;
   std::vector<SelectionButton> gaugeLowerBoundButtons;

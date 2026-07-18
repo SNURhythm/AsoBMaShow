@@ -166,6 +166,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
   expected.gameplayClubModeEnabled = true;
   expected.musicPlayerClubModeEnabled = true;
+  expected.selectedGameplayRuleset = "beatoraja";
   expected.irProviders["tachi"] = {
       .enabled = true,
       .autoSubmit = true,
@@ -178,8 +179,11 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
-  expect(readFile(path).find("\"schemaVersion\": 2") != std::string::npos,
-         "saved JSON declares schema version 2");
+  expect(readFile(path).find("\"schemaVersion\": 3") != std::string::npos,
+         "saved JSON declares schema version 3");
+  expect(readFile(path).find("\"selectedGameplayRuleset\": \"beatoraja\"") !=
+             std::string::npos,
+         "saved JSON includes the per-profile gameplay ruleset");
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
@@ -207,6 +211,70 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON includes non-secret IR provider settings");
   expect(readFile(path).find("sentinel-api-key") == std::string::npos,
          "serialized settings contain no API key material");
+}
+
+void testGameplayRulesetDefaultsMigrationAndValidation() {
+  expect(AppSettings{}.selectedGameplayRuleset == "lr2",
+         "new settings default gameplay to LR2");
+
+  TempDirectory temp;
+  const auto schema2Path = temp.path() / "schema-2.json";
+  writeFile(schema2Path,
+            R"({"schemaVersion":2,"selectedPlayOption":"MIRROR"})");
+  const auto migrated = AppSettingsStore::Load(schema2Path);
+  expect(migrated.status == AppSettingsLoadStatus::Loaded,
+         "schema-2 settings migrate to schema 3");
+  expect(migrated.settings.selectedGameplayRuleset == "lr2",
+         "schema-2 migration inserts the LR2 default");
+  expect(migrated.settings.selectedPlayOption == "MIRROR",
+         "ruleset migration preserves unrelated settings");
+
+  const auto missingPath = temp.path() / "missing-ruleset.json";
+  writeFile(missingPath, R"({"schemaVersion":3})");
+  const auto missing = AppSettingsStore::Load(missingPath);
+  expect(missing.status == AppSettingsLoadStatus::Loaded &&
+             missing.settings.selectedGameplayRuleset == "lr2",
+         "a current document missing the field still defaults to LR2");
+
+  const auto validPath = temp.path() / "beatoraja.json";
+  writeFile(validPath,
+            R"({"schemaVersion":3,"selectedGameplayRuleset":"beatoraja"})");
+  const auto valid = AppSettingsStore::Load(validPath);
+  expect(valid.status == AppSettingsLoadStatus::Loaded &&
+             valid.settings.selectedGameplayRuleset == "beatoraja",
+         "a valid Beatoraja selection survives loading");
+
+  const auto invalidPath = temp.path() / "invalid-ruleset.json";
+  writeFile(
+      invalidPath,
+      R"({"schemaVersion":3,"selectedGameplayRuleset":"future-ruleset"})");
+  const auto invalid = AppSettingsStore::Load(invalidPath);
+  expect(invalid.status == AppSettingsLoadStatus::Loaded &&
+             invalid.settings.selectedGameplayRuleset == "lr2",
+         "an invalid ruleset selection falls back to LR2");
+  expect(hasDiagnostic(invalid.diagnostics, "selectedGameplayRuleset",
+                       "lr2 or beatoraja"),
+         "invalid ruleset emits a field-specific diagnostic");
+  expect(std::ranges::none_of(
+             invalid.diagnostics,
+             [](const std::string &diagnostic) {
+               return diagnostic.find("api") != std::string::npos ||
+                      diagnostic.find("secret") != std::string::npos ||
+                      diagnostic.find("selectedGaugeType") != std::string::npos;
+             }),
+         "ruleset diagnostics mention neither secrets nor unrelated fields");
+
+  std::istringstream legacyValid("selected_gameplay_ruleset=beatoraja\n");
+  const auto parsedValid =
+      AppSettingsStore::LoadLegacyCfgStreamForTesting(legacyValid);
+  expect(parsedValid.status == AppSettingsLoadStatus::Loaded &&
+             parsedValid.settings.selectedGameplayRuleset == "beatoraja",
+         "manual legacy CFG can select Beatoraja");
+  std::istringstream legacyMissing("selected_play_option=RANDOM\n");
+  const auto parsedMissing =
+      AppSettingsStore::LoadLegacyCfgStreamForTesting(legacyMissing);
+  expect(parsedMissing.settings.selectedGameplayRuleset == "lr2",
+         "legacy CFG without a ruleset remains LR2");
 }
 
 void testIrDefaultsMigrationAndOriginSanitization() {
@@ -635,6 +703,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testGameplayRulesetDefaultsMigrationAndValidation();
   testIrDefaultsMigrationAndOriginSanitization();
   testPlaybackSelectionSanitizationAndLegacyDefaults();
   testVersionFixturesAndNoRewrite();

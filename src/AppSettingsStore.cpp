@@ -1,6 +1,7 @@
 #include "AppSettingsStore.h"
 
 #include "VersionedJson.h"
+#include "scene/play/GameplayRuleset.h"
 
 #include <array>
 #include <cmath>
@@ -165,6 +166,7 @@ json settingsToJson(const AppSettings &settings) {
        static_cast<int>(settings.musicPlayerPlaybackMode)},
       {"gameplayClubModeEnabled", settings.gameplayClubModeEnabled},
       {"musicPlayerClubModeEnabled", settings.musicPlayerClubModeEnabled},
+      {"selectedGameplayRuleset", settings.selectedGameplayRuleset},
       {"selectedGaugeType", settings.selectedGaugeType},
       {"selectedGaugeAutoShiftMode", settings.selectedGaugeAutoShiftMode},
       {"selectedGaugeAutoShiftLowerBound",
@@ -290,6 +292,16 @@ AppSettings settingsFromJson(const json &document,
             settings.gameplayClubModeEnabled, diagnostics);
   readValue(document, "musicPlayerClubModeEnabled",
             settings.musicPlayerClubModeEnabled, diagnostics);
+  std::string selectedGameplayRuleset = settings.selectedGameplayRuleset;
+  if (readValue(document, "selectedGameplayRuleset", selectedGameplayRuleset,
+                diagnostics)) {
+    if (gameplayRulesetFromId(selectedGameplayRuleset).has_value()) {
+      settings.selectedGameplayRuleset = std::move(selectedGameplayRuleset);
+    } else {
+      invalidValue("selectedGameplayRuleset", "expected lr2 or beatoraja",
+                   diagnostics);
+    }
+  }
   readValue(document, "selectedGaugeType", settings.selectedGaugeType,
             diagnostics);
   readValue(document, "selectedGaugeAutoShiftMode",
@@ -406,7 +418,7 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 2> migrations = {
+  const std::array<versioned_json::Migration, 3> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
         return true;
@@ -427,6 +439,12 @@ AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
               {"autoSubmit", false},
               {"serverOrigin", ir::kDefaultTachiServerOrigin},
           };
+        }
+        return true;
+      },
+      [](json &document, std::string &) {
+        if (!document.contains("selectedGameplayRuleset")) {
+          document["selectedGameplayRuleset"] = "lr2";
         }
         return true;
       }};

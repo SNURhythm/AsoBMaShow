@@ -496,6 +496,7 @@ struct SwitchFixture {
 
     AppSettings firstSettings;
     firstSettings.audioOffsetMs = -17;
+    firstSettings.selectedGameplayRuleset = "lr2";
     firstSettings.selectedGaugeType = "gas";
     firstSettings.selectedPlayOption = "MIRROR";
     firstSettings.selectedLnMode = "LN";
@@ -504,6 +505,7 @@ struct SwitchFixture {
     firstSettings.sanitize();
     AppSettings secondSettings;
     secondSettings.audioOffsetMs = 42;
+    secondSettings.selectedGameplayRuleset = "beatoraja";
     secondSettings.selectedGaugeType = "hard";
     secondSettings.selectedPlayOption = "R-RANDOM";
     secondSettings.selectedLnMode = "HCN";
@@ -759,6 +761,7 @@ void expectFirstProfileState(SwitchFixture &fixture,
   expect(fixture.replay.GetDatabasePath() == fixture.firstPaths.replaysDb,
          std::string(label) + " restores replay database path");
   expect(fixture.currentSettings.audioOffsetMs == -17 &&
+             fixture.currentSettings.selectedGameplayRuleset == "lr2" &&
              fixture.currentSettings.selectedPlayOption == "MIRROR",
          std::string(label) + " restores current settings");
   expect(fixture.appliedInputPath == fixture.firstPaths.inputJson &&
@@ -803,6 +806,7 @@ void testSuccessfulSwitchIsIsolatedAndPersistsOldState() {
              fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
          "successful switch rebinds score and replay helpers");
   expect(fixture.currentSettings.audioOffsetMs == 42 &&
+             fixture.currentSettings.selectedGameplayRuleset == "beatoraja" &&
              fixture.currentSettings.selectedPlayOption == "R-RANDOM",
          "successful switch installs target settings");
   expect(firstBindingId(fixture.currentInput) == "second-profile-binding" &&
@@ -1460,7 +1464,8 @@ void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
   const ProfileSwitchResult switched =
       fixture.coordinator.switchTo(fixture.secondId, fixture.currentSettings);
   expect(switched.ok(), "retained MainMenu selection test switches to B");
-  expect(retained.gaugeType == GaugeType::Hard &&
+  expect(retained.ruleset == GameplayRuleset::Beatoraja &&
+             retained.gaugeType == GaugeType::Hard &&
              retained.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
              retained.playOption == "R-RANDOM" &&
              retained.longNoteMode == "HCN" && retained.assistOption == "OFF" &&
@@ -1469,7 +1474,8 @@ void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
 
   AppSettings laterSave;
   retained.applyTo(laterSave);
-  expect(laterSave.selectedGaugeType == "hard" &&
+  expect(laterSave.selectedGameplayRuleset == "beatoraja" &&
+             laterSave.selectedGaugeType == "hard" &&
              laterSave.selectedGaugeAutoShiftMode == "best_clear" &&
              laterSave.selectedPlayOption == "R-RANDOM" &&
              laterSave.selectedLnMode == "HCN" &&
@@ -1491,7 +1497,8 @@ void testRetainedMainMenuSelectionsReloadWithoutProfileLeakage() {
   const ProfileSwitchResult rolledBack = rollbackFixture.coordinator.switchTo(
       rollbackFixture.secondId, rollbackFixture.currentSettings);
   expect(!rolledBack.ok(), "retained MainMenu rollback test fails bootstrap");
-  expect(rollbackSelections.gaugeType == GaugeType::ExHard &&
+  expect(rollbackSelections.ruleset == GameplayRuleset::LR2 &&
+             rollbackSelections.gaugeType == GaugeType::ExHard &&
              rollbackSelections.gaugeAutoShift ==
                  GaugeAutoShiftMode::BestClear &&
              rollbackSelections.playOption == "MIRROR" &&

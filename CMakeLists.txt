@@ -1271,6 +1271,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
     target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(play_options_panel_view_tests
+        tests/play_options_panel_view_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/DropdownView.cpp
+        src/view/PlayOptionSectionView.cpp
+        src/view/PlayOptionsPanelView.cpp
+        src/view/ScrollView.cpp
+        src/view/SnappedSlider.cpp
+        src/view/TextInputBox.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(play_options_panel_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(play_options_panel_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(play_options_panel_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
@@ -2132,6 +2156,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
     )
     asobmashow_register_test(gameplay_ruleset_tests)
+    asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
     asobmashow_register_test(gameplay_gauge_rules_tests)
     asobmashow_register_test(gameplay_ruleset_policy_tests)

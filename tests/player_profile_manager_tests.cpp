@@ -2263,6 +2263,14 @@ void testProfileCrudConstraintsAndDataIsolation() {
              manager.pathsFor(secondId).irCredentialsJson),
          "created profile does not create a credential file");
 
+  auto sourceSettings =
+      AppSettingsStore::Load(manager.pathsFor(firstId).settingsJson).settings;
+  sourceSettings.selectedGameplayRuleset = "beatoraja";
+  std::string settingsError;
+  expect(AppSettingsStore::Save(manager.pathsFor(firstId).settingsJson,
+                                sourceSettings, settingsError),
+         "duplicate source ruleset saves: " + settingsError);
+
   writeFile(manager.pathsFor(firstId).irCredentialsJson,
             R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
   seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
@@ -2277,6 +2285,9 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(readFile(manager.pathsFor(copyId).settingsJson) ==
              readFile(manager.pathsFor(firstId).settingsJson),
          "duplicate preserves settings bytes");
+  expect(AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson)
+                 .settings.selectedGameplayRuleset == "beatoraja",
+         "duplicate preserves the per-profile ruleset selection");
   expect(rowCount(manager.pathsFor(copyId).scoresDb, "scores") ==
              rowCount(manager.pathsFor(firstId).scoresDb, "scores"),
          "duplicate snapshots score data");

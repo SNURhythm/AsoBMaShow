@@ -498,6 +498,7 @@ struct Fixture {
     AppSettings settings;
     settings.audioOffsetMs = -37;
     settings.visibleTimeGreenNumber = 765;
+    settings.selectedGameplayRuleset = "beatoraja";
     settings.selectedPlayOption = "R-RANDOM";
     settings.sanitize();
     std::string error;
@@ -1037,6 +1038,9 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
   expect(readFile(importedPaths.settingsJson) == sourceSettings &&
              readFile(importedPaths.inputJson) == sourceInput,
          "settings and input bytes round-trip exactly");
+  expect(AppSettingsStore::Load(importedPaths.settingsJson)
+                 .settings.selectedGameplayRuleset == "beatoraja",
+         "ruleset selection round-trips through profile archives");
   expect(readFile(importedPaths.practiceDirectory /
                   (std::string(kPracticeHash) + ".json")) ==
              readFile(sourcePaths.practiceDirectory /

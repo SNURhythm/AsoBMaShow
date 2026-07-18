@@ -627,6 +627,7 @@ private:
   void applyPendingUiUpdates();
   void selectFolder(LibraryFolderItem item);
   bool toggleChartFavorite(const ChartMetaRecord &record, bool favorite);
+  void setGameplayRulesetSelection(GameplayRuleset ruleset);
   void setGaugeSelection(GaugeType gaugeType, GaugeAutoShiftMode autoShift);
   void setGaugeAutoShiftLowerBound(GaugeType gaugeType);
   void refreshGaugeSelectionButtons();

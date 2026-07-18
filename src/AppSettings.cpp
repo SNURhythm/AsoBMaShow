@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 #include "LongNoteModeUtils.h"
+#include "scene/play/GameplayRuleset.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -530,6 +531,8 @@ void AppSettings::sanitize() {
     uiThemeMode = UiThemeMode::Dark;
     break;
   }
+  selectedGameplayRuleset = std::string(gameplayRulesetId(
+      gameplayRulesetSelectionOrDefault(selectedGameplayRuleset)));
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
       selectedGaugeAutoShiftMode, "none");
@@ -785,6 +788,8 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.systemPlaybackShowArtist = parsed;
         }
+      } else if (key == "selected_gameplay_ruleset") {
+        settings.selectedGameplayRuleset = value;
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

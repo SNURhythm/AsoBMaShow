@@ -159,6 +159,7 @@ public:
       audio::PlaybackMode::PitchShift;
   bool gameplayClubModeEnabled = false;
   bool musicPlayerClubModeEnabled = false;
+  std::string selectedGameplayRuleset = "lr2";
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedGaugeAutoShiftMode = "best_clear";
   std::string selectedGaugeAutoShiftLowerBound = "assisted_easy";

@@ -33,6 +33,7 @@
 #include "ChartViewerScene.h"
 #include "MusicPlayerScene.h"
 #include "play/GamePlayScene.h"
+#include "play/GameplayGaugeRules.h"
 #include "play/Pacemaker.h"
 #include "../view/ClearLampColors.h"
 #include "../view/DropdownView.h"
@@ -116,11 +117,9 @@ constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://stellabms.xyz/st/table.html",
 };
 
-std::string formatGaugeTotal(const bms_parser::ChartMeta &meta) {
-  const double total =
-      meta.HasTotal && meta.Total > 0.0
-          ? meta.Total
-          : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
+std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
+                             GameplayRuleset ruleset) {
+  const double total = resolveEffectiveGaugeTotal(ruleset, meta);
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(2) << total;
   std::string value = stream.str();
@@ -4718,6 +4717,23 @@ bool MainMenuScene::currentAssistOptionSelectionAllowed(
   return assist_options::normalize(option) == selection.assistOption;
 }
 
+void MainMenuScene::setGameplayRulesetSelection(GameplayRuleset ruleset) {
+  const main_menu_profile::Selections previousSelections = profileSelections;
+  const AppSettings previousSettings = context.settings;
+  profileSelections.ruleset = ruleset;
+  profileSelections.applyTo(context.settings);
+  context.settings.sanitize();
+  std::string errorMessage;
+  if (!context.saveSettings(&errorMessage)) {
+    profileSelections = previousSelections;
+    context.settings = previousSettings;
+    SDL_Log("Failed to save gameplay ruleset selection: %s",
+            errorMessage.empty() ? "unknown error" : errorMessage.c_str());
+  }
+  refreshPlayOptionsPanel();
+  refreshReadySettingsSummary();
+}
+
 void MainMenuScene::setGaugeSelection(GaugeType gaugeType,
                                       GaugeAutoShiftMode autoShift) {
   profileSelections.gaugeType = gaugeType;
@@ -4868,7 +4884,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
       playbackLocked ? course_rules::kRequiredPlaybackRate.percent
                      : context.settings.selectedPlaybackRatePercent;
   playOptionsPanel->refresh(
-      {.gaugeType = profileSelections.gaugeType,
+      {.ruleset = profileSelections.ruleset,
+       .gaugeType = profileSelections.gaugeType,
        .gaugeAutoShift = profileSelections.gaugeAutoShift,
        .gaugeAutoShiftLowerBound =
            profileSelections.gaugeAutoShiftLowerBound,
@@ -4905,8 +4922,9 @@ void MainMenuScene::refreshReadySettingsSummary() {
         profileSelections.gaugeType, profileSelections.gaugeAutoShift));
   }
   if (readyPlayOptionText != nullptr) {
-    readyPlayOptionText->setText(effective.playOption + " · " +
-                                 effective.longNoteMode);
+    readyPlayOptionText->setText(
+        std::string(gameplayRulesetLabel(profileSelections.ruleset)) + " · " +
+        effective.playOption + " · " + effective.longNoteMode);
   }
   if (readyTotalText != nullptr) {
     if (showTotal) {
@@ -4916,7 +4934,9 @@ void MainMenuScene::refreshReadySettingsSummary() {
         readyTotalIconText->setText(ui_icons::textForCodepoint(
             chartAuthored ? kIconFileLines : kIconCalculator));
       }
-      readyTotalText->setText("TOTAL: " + formatGaugeTotal(record->meta));
+      readyTotalText->setText(
+          "TOTAL: " +
+          formatGaugeTotal(record->meta, profileSelections.ruleset));
       readyTotalRow->setDisplay(YGDisplayFlex);
       readyTotalRow->setVisible(true);
     } else {
@@ -5099,6 +5119,8 @@ void MainMenuScene::startSelectedCourse() {
         constraintSettings.rules.longNoteMode);
   }
   session->currentIndex = 0;
+  session->ruleset = profileSelections.ruleset;
+  session->rulesetDescriptor = RulesetDescriptor::For(session->ruleset);
   session->gaugeType = profileSelections.gaugeType;
   session->gaugeProfile = constraintSettings.gaugeProfile;
   session->gaugeAutoShift = profileSelections.gaugeAutoShift;
@@ -5259,6 +5281,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
   const GaugeType gaugeAutoShiftLowerBound =
       profileSelections.gaugeAutoShiftLowerBound;
+  const GameplayRuleset ruleset = profileSelections.ruleset;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = profileSelections.playOption;
   int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
@@ -5282,7 +5305,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
   defer(
       [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
-       autoKeySound, playOption, selectedLongNoteMode, assistOption,
+       ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
        pacemakerTarget, playback,
        canReusePreviewForStart, chartRandomInfo]() {
         auto finishStart = [this]() {
@@ -5321,6 +5344,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
                                     .playback = playback,
+                                    .ruleset = ruleset,
                                 });
           return finishStart();
         }
@@ -5375,6 +5399,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                       .assistOption = assistOption,
                                       .pacemakerTarget = pacemakerTarget,
                                       .playback = playback,
+                                      .ruleset = ruleset,
                                   });
             return finishStart();
           }
@@ -5399,6 +5424,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                          .assistOption = assistOption,
                                          .pacemakerTarget = pacemakerTarget,
                                          .playback = playback,
+                                         .ruleset = ruleset,
                                      });
         return finishStart();
       },
@@ -7527,7 +7553,10 @@ void MainMenuScene::buildPlayOptionsModal() {
 
   const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
   playOptionsPanel = new PlayOptionsPanelView(
-      {.onGaugeSelected = [this](GaugeType type,
+      {.onRulesetSelected = [this](GameplayRuleset ruleset) {
+         setGameplayRulesetSelection(ruleset);
+       },
+       .onGaugeSelected = [this](GaugeType type,
                                  GaugeAutoShiftMode autoShift) {
          setGaugeSelection(type, autoShift);
        },
@@ -8831,8 +8860,10 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
   };
+  const GameplayRuleset autoPlayRuleset = profileSelections.ruleset;
   defer(
-      [this, record, replayId, pacemakerTarget, autoPlayPlayback]() {
+      [this, record, replayId, pacemakerTarget, autoPlayPlayback,
+       autoPlayRuleset]() {
         auto failReplayLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -8883,6 +8914,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                          .playback = autoPlayPlayback,
                          .touchVisualizationEnabled = false,
                          .replayGhostRenderingEnabled = false,
+                         .ruleset = autoPlayRuleset,
                      });
           willStart.store(false);
           return true;
@@ -8955,6 +8987,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
   const GaugeType gaugeAutoShiftLowerBound =
       profileSelections.gaugeAutoShiftLowerBound;
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const GameplayRuleset ruleset = profileSelections.ruleset;
   const audio::PlaybackRate playback{
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
@@ -8962,7 +8995,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
 
   defer(
       [this, record, replayId, gaugeType, gaugeAutoShift,
-       gaugeAutoShiftLowerBound, autoKeySound, playback]() {
+       gaugeAutoShiftLowerBound, autoKeySound, ruleset, playback]() {
         auto failGBattleLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -9021,6 +9054,7 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
                        .pacemakerTarget = pacemaker::kTargetOff,
                        .playback = playback,
                        .replayGhostRenderingEnabled = false,
+                       .ruleset = ruleset,
                    });
         willStart.store(false);
         return true;
