@@ -907,7 +907,7 @@ ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
       "remote_origin=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
       "NULL) THEN remote_origin ELSE NULL END,last_error_code=NULL,"
       "last_error_message=NULL,updated_at_ms=?,completed_at_ms=NULL WHERE "
-      "provider_id=? AND state IN (0,2,3,4) AND "
+      "provider_id=? AND local_result_ready=1 AND state IN (0,2,3,4) AND "
       "ruleset_id<>'legacy-unknown' AND validation_fingerprint<>''";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||

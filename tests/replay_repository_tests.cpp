@@ -4303,6 +4303,22 @@ void testStageChartResultAtomicallyStagesIrDrafts(
   assert(helper.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max())
              .entries.empty());
 
+  const auto visible = helper.EnqueueReadyIrOutboxDraft(
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174081", 10'002), false);
+  assert(visible.entry);
+  assert(helper.RetryAllIrOutbox("tachi", 10'100).affectedRows == 1);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(),
+                  "SELECT next_request_user_intent FROM ir_outbox WHERE "
+                  "provider_id='tachi' AND attempt_id='" +
+                      attempt.attemptId + "'") == 0);
+  assert(queryInt(db.get(),
+                  "SELECT next_request_user_intent FROM ir_outbox WHERE "
+                  "provider_id='tachi' AND "
+                  "attempt_id='123e4567-e89b-42d3-a456-426614174081'") == 1);
+  db.reset();
+
   const auto repeated = helper.StageChartResult(attempt, drafts);
   assert(repeated.status == result_persistence::StageStatus::AlreadyStaged);
   auto changed = drafts;
