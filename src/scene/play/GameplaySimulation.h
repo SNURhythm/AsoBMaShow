@@ -21,6 +21,7 @@ struct NoteRuntimeState {
   bool holding = false;
   std::int64_t playedTimeMicros = 0;
   std::int64_t releaseTimeMicros = 0;
+  JudgeResult acceptedHeadJudge = JudgeResult(None, 0);
 };
 
 struct GameplayTimeRange {

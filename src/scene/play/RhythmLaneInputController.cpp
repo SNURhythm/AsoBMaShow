@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <limits>
 #include <span>
 #include <utility>
@@ -49,14 +50,53 @@ JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
   return judgeResult;
 }
 
+int longNoteJudgeSeverity(Judgement judgement) noexcept {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Kpoor:
+  case Poor:
+    return 4;
+  case None:
+  case JudgementCount:
+    return 5;
+  }
+  return 5;
+}
+
+JudgeResult worseLongNoteJudge(const JudgeResult &head,
+                               const JudgeResult &tail) noexcept {
+  const int headSeverity = longNoteJudgeSeverity(head.judgement);
+  const int tailSeverity = longNoteJudgeSeverity(tail.judgement);
+  if (tailSeverity != headSeverity) {
+    return tailSeverity > headSeverity ? tail : head;
+  }
+  return std::llabs(tail.Diff) > std::llabs(head.Diff) ? tail : head;
+}
+
 JudgeResult judgeClassicLongNoteRelease(
-                                        const gameplay::CompiledGameplayJudge &judge,
-                                        const bms_parser::ChartMeta &chartMeta,
-                                        int longNoteModeOverride,
-                                        bms_parser::LongNote *tail,
-                                        long long releasedTime) {
+    const gameplay::CompiledGameplayJudge &judge,
+    const bms_parser::ChartMeta &chartMeta, int longNoteModeOverride,
+    bms_parser::LongNote *tail, long long releasedTime,
+    const JudgeResult &acceptedHeadJudge) {
   if (tail == nullptr || !tail->IsTail() || tail->Head == nullptr) {
     return JudgeResult(None, 0);
+  }
+
+  if (judge.rules().ruleset == GameplayRuleset::LR2) {
+    const JudgeResult head =
+        normalizeLongNoteReleaseJudge(acceptedHeadJudge);
+    const long long tailDiff = releasedTime - noteTimingMicros(tail);
+    if (std::llabs(tailDiff) <= 120'000) {
+      return head;
+    }
+    return worseLongNoteJudge(head, JudgeResult(Bad, tailDiff));
   }
 
   const JudgeResult headJudge = judge.judgeAt(
@@ -157,6 +197,7 @@ RhythmLaneInputController::RhythmLaneInputController(
   judgeCandidateNotes.reserve(capacity);
   judgeCandidates.reserve(capacity);
   multiBadSourceIndices.reserve(capacity);
+  acceptedLongHeadJudges.reserve(capacity);
   indexKeysoundNotes();
   resetLaneStates();
 }
@@ -499,6 +540,8 @@ RhythmLaneInputController::releaseLane(int lane,
   }
 
   const long long inputTime = inputTimeMicros(context);
+  const bool lr2Release =
+      judge.rules().ruleset == GameplayRuleset::LR2;
   for (const auto *measure : chart->Measures) {
     if (measure == nullptr) {
       continue;
@@ -507,13 +550,21 @@ RhythmLaneInputController::releaseLane(int lane,
       if (timeline == nullptr) {
         continue;
       }
-      if (timeline->Timing < inputTime - latePoorTiming) {
-        continue;
-      }
       if (lane < 0 || static_cast<size_t>(lane) >= timeline->Notes.size()) {
         continue;
       }
       auto *note = timeline->Notes[lane];
+      const auto *longNote =
+          dynamic_cast<const bms_parser::LongNote *>(note);
+      if (lr2Release &&
+          (longNote == nullptr || !longNote->IsTail() ||
+           !longNote->IsHolding)) {
+        continue;
+      }
+      if (!lr2Release &&
+          timeline->Timing < inputTime - latePoorTiming) {
+        continue;
+      }
       if (note == nullptr || note->IsPlayed || !noteAllowed(note)) {
         continue;
       }
@@ -536,6 +587,7 @@ RhythmLaneInputController::releaseLane(int lane,
 
 void RhythmLaneInputController::resetLaneStates() {
   lanePressed.clear();
+  acceptedLongHeadJudges.clear();
   if (chart == nullptr) {
     return;
   }
@@ -570,6 +622,32 @@ RhythmLaneInputController::resultBatch(const Result &selected) const {
   return result;
 }
 
+void RhythmLaneInputController::rememberAcceptedLongHeadJudge(
+    bms_parser::LongNote *head, const JudgeResult &judgeResult) {
+  const auto found = std::ranges::find(acceptedLongHeadJudges, head,
+                                       &AcceptedLongHeadJudge::head);
+  if (found != acceptedLongHeadJudges.end()) {
+    found->judge = judgeResult;
+    return;
+  }
+  acceptedLongHeadJudges.push_back({head, judgeResult});
+}
+
+JudgeResult RhythmLaneInputController::acceptedLongHeadJudge(
+    const bms_parser::LongNote *tail) const {
+  if (tail == nullptr || tail->Head == nullptr) {
+    return JudgeResult(None, 0);
+  }
+  const auto found = std::ranges::find(acceptedLongHeadJudges, tail->Head,
+                                       &AcceptedLongHeadJudge::head);
+  if (found != acceptedLongHeadJudges.end()) {
+    return found->judge;
+  }
+  return judge.judgeAt(
+      gameplay::judgeRoleFor(tail->Head, chart->Meta, longNoteModeOverride),
+      noteTimingMicros(tail->Head), tail->Head->PlayedTime);
+}
+
 RhythmLaneInputController::Result
 RhythmLaneInputController::pressNote(bms_parser::Note *note,
                                      long long pressedTime,
@@ -593,6 +671,7 @@ RhythmLaneInputController::pressNote(bms_parser::Note *note,
       auto *longNote = static_cast<bms_parser::LongNote *>(note);
       if (!longNote->IsTail()) {
         longNote->Press(pressedTime);
+        rememberAcceptedLongHeadJudge(longNote, judgeResult);
         result.hasJudge =
             effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
         setReplayEvent(result, ReplayEventAction::Press, note->Lane, note,
@@ -647,7 +726,8 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
           ? normalizeLongNoteReleaseJudge(judgeResult)
           : judgeClassicLongNoteRelease(judge, chart->Meta,
                                         longNoteModeOverride, longNote,
-                                        releasedTime);
+                                        releasedTime,
+                                        acceptedLongHeadJudge(longNote));
   result.judge = appliedJudge;
   result.hasJudge = true;
   setReplayEvent(result, ReplayEventAction::Release, note->Lane, note,

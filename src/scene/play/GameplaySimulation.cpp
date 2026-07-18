@@ -23,6 +23,47 @@ JudgeResult normalizeReleaseJudge(const JudgeResult &judge) {
 std::int64_t absoluteDistance(std::int64_t value) {
   return value < 0 ? -value : value;
 }
+
+int longNoteJudgeSeverity(Judgement judgement) noexcept {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Kpoor:
+  case Poor:
+    return 4;
+  case None:
+  case JudgementCount:
+    return 5;
+  }
+  return 5;
+}
+
+JudgeResult worseLongNoteJudge(const JudgeResult &head,
+                               const JudgeResult &tail) noexcept {
+  const int headSeverity = longNoteJudgeSeverity(head.judgement);
+  const int tailSeverity = longNoteJudgeSeverity(tail.judgement);
+  if (tailSeverity != headSeverity) {
+    return tailSeverity > headSeverity ? tail : head;
+  }
+  return absoluteDistance(tail.Diff) > absoluteDistance(head.Diff) ? tail
+                                                                   : head;
+}
+
+JudgeResult lr2ClassicReleaseJudge(const JudgeResult &acceptedHead,
+                                   std::int64_t tailDiffMicros,
+                                   bool heldThroughTail) noexcept {
+  const JudgeResult head = normalizeReleaseJudge(acceptedHead);
+  if (heldThroughTail || absoluteDistance(tailDiffMicros) <= 120'000) {
+    return head;
+  }
+  return worseLongNoteJudge(head, JudgeResult(Bad, tailDiffMicros));
+}
 } // namespace
 
 GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
@@ -370,17 +411,23 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   tailState.releaseTimeMicros = songTimeMicros;
   clearPairHolding(tailId);
 
-  const JudgeResult tailJudge =
-      config_.judge.judgeAt(tail.timingMicros, songTimeMicros);
+  const JudgeResult tailJudge = config_.judge.judgeAt(
+      judgeRoleFor(tail), tail.timingMicros, songTimeMicros);
   JudgeResult applied = normalizeReleaseJudge(tailJudge);
   if (tail.longNoteRule == LongNoteRule::Classic) {
-    const auto &head = definition_.note(tail.pairId);
-    const JudgeResult headJudge =
-        config_.judge.judgeAt(head.timingMicros, headState.playedTimeMicros);
-    applied = normalizeReleaseJudge(absoluteDistance(tailJudge.Diff) >
-                                            absoluteDistance(headJudge.Diff)
-                                        ? tailJudge
-                                        : headJudge);
+    if (config_.judge.rules().ruleset == GameplayRuleset::LR2) {
+      applied = lr2ClassicReleaseJudge(headState.acceptedHeadJudge,
+                                       songTimeMicros - tail.timingMicros,
+                                       true);
+    } else {
+      const auto &head = definition_.note(tail.pairId);
+      const JudgeResult headJudge = config_.judge.judgeAt(
+          judgeRoleFor(head), head.timingMicros, headState.playedTimeMicros);
+      applied = normalizeReleaseJudge(
+          absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
+              ? tailJudge
+              : headJudge);
+    }
   }
 
   GameplayInputResult result;
@@ -494,6 +541,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   state.played = true;
   state.playedTimeMicros = songTimeMicros;
   if (note.kind == NoteKind::LongHead) {
+    state.acceptedHeadJudge = JudgeResult(PGreat, 0);
     state.holding = true;
     if (note.pairId != kInvalidNoteId) {
       noteStates_[note.pairId].holding = true;
@@ -1114,6 +1162,18 @@ GameplaySimulation::selectReleaseCandidate(int lane,
     return kInvalidNoteId;
   }
   const auto ids = definition_.laneNotes(lane);
+  if (config_.judge.rules().ruleset == GameplayRuleset::LR2) {
+    for (const NoteId id : ids) {
+      const auto &note = definition_.note(id);
+      const auto &state = noteStates_[id];
+      ++lastSearchStats_.notesExamined;
+      if (note.kind == NoteKind::LongTail && state.holding && !state.played &&
+          !state.dead && noteAllowed(id)) {
+        return id;
+      }
+    }
+    return kInvalidNoteId;
+  }
   const std::int64_t poorCutoff =
       inputTimeMicros - config_.judge.automaticPoorLateMicros();
   for (std::size_t index = runtime->cursor; index < ids.size(); ++index) {
@@ -1126,12 +1186,16 @@ GameplaySimulation::selectReleaseCandidate(int lane,
       runtime->cursor = ids.size();
       return kInvalidNoteId;
     }
-    if (state.played || state.dead || note.timingMicros < poorCutoff) {
+    if (state.played || state.dead) {
       runtime->cursor = index + 1;
       continue;
     }
     if (config_.allowedNoteRange.has_value() &&
         !config_.allowedNoteRange->contains(note.timingMicros)) {
+      continue;
+    }
+    if (note.timingMicros < poorCutoff) {
+      runtime->cursor = index + 1;
       continue;
     }
     return id;
@@ -1355,6 +1419,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
       state.played = true;
       state.playedTimeMicros = judgedTime;
       if (note.kind == NoteKind::LongHead) {
+        state.acceptedHeadJudge = judge;
         state.holding = true;
         if (note.pairId != kInvalidNoteId) {
           noteStates_[note.pairId].holding = true;
@@ -1455,13 +1520,18 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
       judgeRoleFor(tail), tail.timingMicros, judgedTime);
   JudgeResult applied = tailJudge;
   if (tail.longNoteRule == LongNoteRule::Classic) {
-    const auto &head = definition_.note(tail.pairId);
-    const JudgeResult headJudge =
-        config_.judge.judgeAt(head.timingMicros, headState.playedTimeMicros);
-    applied = normalizeReleaseJudge(
-        absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
-            ? tailJudge
-            : headJudge);
+    if (config_.judge.rules().ruleset == GameplayRuleset::LR2) {
+      applied = lr2ClassicReleaseJudge(headState.acceptedHeadJudge,
+                                       judgedTime - tail.timingMicros, false);
+    } else {
+      const auto &head = definition_.note(tail.pairId);
+      const JudgeResult headJudge = config_.judge.judgeAt(
+          judgeRoleFor(head), head.timingMicros, headState.playedTimeMicros);
+      applied = normalizeReleaseJudge(
+          absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
+              ? tailJudge
+              : headJudge);
+    }
   } else if (tail.scratchLane && !isBackSpin) {
     applied = JudgeResult(Poor, judgedTime - tail.timingMicros);
   } else {

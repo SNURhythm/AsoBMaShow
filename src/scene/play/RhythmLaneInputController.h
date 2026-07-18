@@ -69,6 +69,11 @@ public:
   void resetLaneStates();
 
 private:
+  struct AcceptedLongHeadJudge {
+    bms_parser::LongNote *head = nullptr;
+    JudgeResult judge = JudgeResult(None, 0);
+  };
+
   bms_parser::Chart *chart = nullptr;
   BMSRenderer *renderer = nullptr;
   std::unordered_map<int, bool> &lanePressed;
@@ -82,6 +87,7 @@ private:
   std::vector<bms_parser::Note *> judgeCandidateNotes;
   std::vector<gameplay::JudgeCandidateDescriptor> judgeCandidates;
   std::vector<std::size_t> multiBadSourceIndices;
+  std::vector<AcceptedLongHeadJudge> acceptedLongHeadJudges;
 
   void indexKeysoundNotes();
   [[nodiscard]] bms_parser::Note *
@@ -90,6 +96,10 @@ private:
   long long inputTimeMicros(const InputContext &context) const;
   [[nodiscard]] bool noteAllowed(const bms_parser::Note *note) const;
   [[nodiscard]] ResultBatch resultBatch(const Result &selected) const;
+  void rememberAcceptedLongHeadJudge(bms_parser::LongNote *head,
+                                     const JudgeResult &judgeResult);
+  [[nodiscard]] JudgeResult acceptedLongHeadJudge(
+      const bms_parser::LongNote *tail) const;
   Result pressNote(bms_parser::Note *note, long long pressedTime,
                    long long songTimeMicros);
   Result releaseNote(bms_parser::Note *note, long long releasedTime,

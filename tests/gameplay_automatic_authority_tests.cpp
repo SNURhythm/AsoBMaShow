@@ -1,4 +1,5 @@
 #include "scene/play/GameplayDefinition.h"
+#include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
@@ -122,7 +123,11 @@ void requireSameCompleteOutcome(
                 leftState.dead == rightState.dead &&
                 leftState.holding == rightState.holding &&
                 leftState.playedTimeMicros == rightState.playedTimeMicros &&
-                leftState.releaseTimeMicros == rightState.releaseTimeMicros,
+                leftState.releaseTimeMicros == rightState.releaseTimeMicros &&
+                leftState.acceptedHeadJudge.judgement ==
+                    rightState.acceptedHeadJudge.judgement &&
+                leftState.acceptedHeadJudge.Diff ==
+                    rightState.acceptedHeadJudge.Diff,
             "one-shot and chunked note states are identical");
   }
   for (const auto &lane : definition.lanes()) {
@@ -2038,6 +2043,54 @@ void testCompleteOutcomeMatchesForLargeAndChunkedScheduling() {
           "large and chunked schedules both reach chart completion");
   requireSameCompleteOutcome(definition, oneShot, chunked);
 }
+
+void testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails() {
+  const auto lr2Judge = gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+  {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1,
+                bms_parser::LongNoteType::LongNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition,
+                                            {.judge = lr2Judge});
+    const auto press =
+        simulation.pressLane(1, {.songTimeMicros = 1'050'000});
+    const auto tail = simulation.advanceTo(2'000'000, 2'000'000);
+    require(press.judge.judgement == Good && !press.hasJudge &&
+                tail.transactions.size() == 1 &&
+                tail.transactions.front().judge.judgement == Good &&
+                simulation.snapshot().judgeCounts[Good] == 1,
+            "LR2 automatic classic tail commits the stored head judgement");
+  }
+
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1, type);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation oneShot(
+        definition, {.judge = lr2Judge, .attempt = {.autoPlay = true}});
+    gameplay::GameplaySimulation chunked(
+        definition, {.judge = lr2Judge, .attempt = {.autoPlay = true}});
+    oneShot.advanceTo(2'000'000, 2'000'000);
+    for (const auto time :
+         std::array<std::int64_t, 4>{1'000'000, 1'400'000, 1'800'000,
+                                    2'000'000}) {
+      chunked.advanceTo(time, time);
+    }
+    require(oneShot.snapshot().judgeCounts[PGreat] == 2 &&
+                chunked.snapshot().judgeCounts[PGreat] == 2,
+            "LR2 autoplay CN/HCN commits head and tail separately");
+    requireSameHellChargeOutcome(oneShot, chunked);
+  }
+}
 } // namespace
 
 int main() {
@@ -2068,5 +2121,6 @@ int main() {
   testOpenEndedStartRangeStillCompletesChart();
   testSurvivalFailureFinishesTransactionThenFreezesEveryEntryPoint();
   testCompleteOutcomeMatchesForLargeAndChunkedScheduling();
+  testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails();
   return 0;
 }

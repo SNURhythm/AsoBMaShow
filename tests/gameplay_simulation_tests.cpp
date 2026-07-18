@@ -1820,6 +1820,236 @@ void testLegacyControllerUsesSharedLr2BatchResolution() {
               selected->IsPlayed && !future->IsPlayed,
           "legacy controller consumes the same shared LR2 multi-BAD batch");
 }
+
+struct Lr2LongReleaseSummary {
+  bool hasJudge = false;
+  Judgement judgement = None;
+  long long diffMicros = 0;
+  JudgeResult acceptedHead = JudgeResult(None, 0);
+};
+
+Lr2LongReleaseSummary runLr2SimulationRelease(
+    bms_parser::LongNoteType type, int lane, long long headDiffMicros,
+    long long tailDiffMicros, bool isBackSpin) {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, lane, type);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+  const auto press = simulation.pressLane(
+      lane, {.songTimeMicros = 1'000'000 + headDiffMicros});
+  require(press.noteId != gameplay::kInvalidNoteId,
+          "LR2 long-note boundary setup accepts its head");
+  const auto release = simulation.releaseLane(
+      lane, {.songTimeMicros = 2'000'000 + tailDiffMicros}, isBackSpin);
+  return {
+      .hasJudge = release.hasJudge,
+      .judgement = release.judge.judgement,
+      .diffMicros = release.judge.Diff,
+      .acceptedHead = simulation.noteState(press.noteId).acceptedHeadJudge,
+  };
+}
+
+Lr2LongReleaseSummary runLr2ControllerRelease(
+    bms_parser::LongNoteType type, int lane, long long headDiffMicros,
+    long long tailDiffMicros, bool isBackSpin) {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, lane, type);
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, lr2Judge());
+  const auto press = controller.pressLane(
+      lane, {.songTimeMicros = 1'000'000 + headDiffMicros});
+  require(press.note != nullptr,
+          "legacy LR2 long-note boundary setup accepts its head");
+  const auto release = controller.releaseLane(
+      lane, {.songTimeMicros = 2'000'000 + tailDiffMicros}, isBackSpin);
+  return {
+      .hasJudge = release.hasJudge,
+      .judgement = release.judge.judgement,
+      .diffMicros = release.judge.Diff,
+      .acceptedHead = press.judge,
+  };
+}
+
+void testLr2LongTailBoundaryTableAcrossAuthorities() {
+  struct TailCase {
+    long long diffMicros;
+    Judgement expected;
+  };
+  const std::array cases{
+      TailCase{-200'001, Bad}, TailCase{-200'000, Bad},
+      TailCase{-120'001, Bad}, TailCase{-120'000, PGreat},
+      TailCase{0, PGreat},       TailCase{120'000, PGreat},
+      TailCase{120'001, Bad},   TailCase{200'000, Bad},
+      TailCase{200'001, Bad},
+  };
+  for (const int lane : {1, 7}) {
+    for (const auto &entry : cases) {
+      const bool isBackSpin = lane == 7;
+      const auto simulation = runLr2SimulationRelease(
+          bms_parser::LongNoteType::ChargeNote, lane, 0,
+          entry.diffMicros, isBackSpin);
+      const auto controller = runLr2ControllerRelease(
+          bms_parser::LongNoteType::ChargeNote, lane, 0,
+          entry.diffMicros, isBackSpin);
+      require(simulation.hasJudge && controller.hasJudge &&
+                  simulation.judgement == entry.expected &&
+                  controller.judgement == entry.expected &&
+                  simulation.diffMicros == entry.diffMicros &&
+                  controller.diffMicros == entry.diffMicros,
+              "LR2 key and scratch tails share inclusive 120/200 ms edges");
+    }
+  }
+
+  const auto nonBackSpin = runLr2SimulationRelease(
+      bms_parser::LongNoteType::ChargeNote, 7, 0, 0, false);
+  const auto controllerNonBackSpin = runLr2ControllerRelease(
+      bms_parser::LongNoteType::ChargeNote, 7, 0, 0, false);
+  require(nonBackSpin.hasJudge && nonBackSpin.judgement == Poor &&
+              controllerNonBackSpin.hasJudge &&
+              controllerNonBackSpin.judgement == Poor,
+          "LR2 scratch CN release without backspin remains Poor");
+
+  const auto classicScratch = runLr2SimulationRelease(
+      bms_parser::LongNoteType::LongNote, 7, 50'000, 120'000, false);
+  const auto controllerClassicScratch = runLr2ControllerRelease(
+      bms_parser::LongNoteType::LongNote, 7, 50'000, 120'000, false);
+  require(classicScratch.judgement == Good &&
+              controllerClassicScratch.judgement == Good,
+          "LR2 classic scratch LN preserves its stored head inside tolerance");
+}
+
+void testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge() {
+  const auto heldGood = [&] {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1,
+                bms_parser::LongNoteType::LongNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition,
+                                            {.judge = lr2Judge()});
+    const auto press =
+        simulation.pressLane(1, {.songTimeMicros = 1'050'000});
+    const auto accepted =
+        simulation.noteState(press.noteId).acceptedHeadJudge;
+    require(!press.hasJudge && press.judge.judgement == Good &&
+                accepted.judgement == press.judge.judgement &&
+                accepted.Diff == press.judge.Diff,
+            "classic LR2 head stores its accepted judgement without scoring");
+    const auto advance = simulation.advanceTo(2'000'000, 2'000'000);
+    require(advance.transactions.size() == 1 &&
+                advance.transactions.front().hasJudge &&
+                advance.transactions.front().judge.judgement == Good,
+            "holding a classic LR2 LN through its tail preserves head quality");
+  };
+  heldGood();
+
+  for (const auto &[tailDiff, expected] :
+       std::array<std::pair<long long, Judgement>, 5>{
+           std::pair{-120'001LL, Bad}, std::pair{-120'000LL, Good},
+           std::pair{120'000LL, Good}, std::pair{120'001LL, Bad},
+           std::pair{200'001LL, Bad}}) {
+    const auto simulation = runLr2SimulationRelease(
+        bms_parser::LongNoteType::LongNote, 1, 50'000, tailDiff, false);
+    const auto controller = runLr2ControllerRelease(
+        bms_parser::LongNoteType::LongNote, 1, 50'000, tailDiff, false);
+    require(simulation.judgement == expected &&
+                controller.judgement == expected &&
+                simulation.acceptedHead.judgement == Good &&
+                controller.acceptedHead.judgement == Good,
+            "classic LR2 release uses stored head quality inside tolerance and BAD outside");
+  }
+
+  const auto earlyBad = runLr2SimulationRelease(
+      bms_parser::LongNoteType::LongNote, 1, -150'000, 0, false);
+  require(earlyBad.acceptedHead.judgement == Bad &&
+              earlyBad.judgement == Bad,
+          "early BAD is accepted on an LR2 classic head and remains final");
+
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+  const auto rejected =
+      simulation.pressLane(1, {.songTimeMicros = 1'100'001});
+  require(rejected.noteId == gameplay::kInvalidNoteId &&
+              !simulation.noteState(0).played,
+          "late BAD after LR2 GOOD is rejected for long-note heads");
+}
+
+void testLr2ChargeAndHellChargeCommitHeadAndTailSeparately() {
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1, type);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition,
+                                            {.judge = lr2Judge()});
+    const auto press =
+        simulation.applyPressAt(1, 1, {.songTimeMicros = 1'050'000});
+    const auto release =
+        simulation.applyReleaseAt(1, {.songTimeMicros = 2'000'000});
+    const auto snapshot = simulation.snapshot();
+    require(press.hasJudge && press.judge.judgement == Good &&
+                release.hasJudge && release.judge.judgement == PGreat &&
+                snapshot.judgeCounts[Good] == 1 &&
+                snapshot.judgeCounts[PGreat] == 1,
+            "LR2 CN and HCN score their head and tail as separate notes");
+    if (type == bms_parser::LongNoteType::HellChargeNote) {
+      require(std::ranges::any_of(
+                  simulation.replayEvents(), [](const auto &event) {
+                    return event.action ==
+                           gameplay::GameplayReplayAction::Gauge;
+                  }),
+              "held LR2 HCN emits authoritative gauge ticks");
+    }
+  }
+}
+
+void testLr2AutoplayAndReplayStyleLongNoteSequences() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation autoplay(
+      definition, {.judge = lr2Judge(), .attempt = {.autoPlay = true}});
+  const auto automatic = autoplay.advanceTo(2'000'000, 2'000'000);
+  require(automatic.transactions.size() == 2 &&
+              autoplay.snapshot().judgeCounts[PGreat] == 1,
+          "LR2 autoplay presses and resolves a classic LN once");
+
+  gameplay::GameplaySimulation direct(definition, {.judge = lr2Judge()});
+  gameplay::GameplaySimulation replayed(definition, {.judge = lr2Judge()});
+  direct.pressLane(1, {.songTimeMicros = 1'050'000});
+  direct.releaseLane(1, {.songTimeMicros = 1'900'000});
+  replayed.applyPressAt(1, 1, {.songTimeMicros = 1'050'000});
+  replayed.applyReleaseAt(1, {.songTimeMicros = 1'900'000});
+  require(sameAttemptSnapshot(direct.snapshot(), replayed.snapshot()) &&
+              std::ranges::equal(direct.replayEvents(),
+                                 replayed.replayEvents()),
+          "LR2 replay-applied press/release sequence matches direct input");
+}
 } // namespace
 
 int main() {
@@ -1860,5 +2090,9 @@ int main() {
   testLr2MultiBadBatchAndFixedSelection();
   testBeatorajaStillEmitsOnePrioritySelectedTransaction();
   testLegacyControllerUsesSharedLr2BatchResolution();
+  testLr2LongTailBoundaryTableAcrossAuthorities();
+  testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge();
+  testLr2ChargeAndHellChargeCommitHeadAndTailSeparately();
+  testLr2AutoplayAndReplayStyleLongNoteSequences();
   return 0;
 }
