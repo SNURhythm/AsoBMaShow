@@ -34,6 +34,10 @@ struct IrChartRankingEntry {
   std::string playerName;
   int score = 0;
   int maxScore = 0;
+  int earlyPGreat = 0;
+  int latePGreat = 0;
+  int earlyGreat = 0;
+  int lateGreat = 0;
   int clearType = kClearTypeFailedRank;
   std::optional<int> badPoints;
   std::optional<int> maxCombo;

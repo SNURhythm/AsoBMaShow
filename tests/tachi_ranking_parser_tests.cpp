@@ -76,6 +76,10 @@ void testEmptyAndAuthenticatedRanking() {
          "ranking retains provider and canonical chart query");
 
   auto current = row("", 110, 5, 0);
+  current["epg"] = 31;
+  current["lpg"] = 19;
+  current["egr"] = 6;
+  current["lgr"] = 4;
   current["maxcombo"] = nullptr;
   outcome = parse(Json::array({current}));
   expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
@@ -90,6 +94,9 @@ void testEmptyAndAuthenticatedRanking() {
          "empty player denotes the authenticated user");
   expect(entry.score == 110 && entry.maxScore == 200,
          "EX score and maximum are normalized");
+  expect(entry.earlyPGreat == 31 && entry.latePGreat == 19 &&
+             entry.earlyGreat == 6 && entry.lateGreat == 4,
+         "early and late PGREAT/GREAT counts are retained");
   expect(entry.clearType == kClearTypeNormalClearRank,
          "clear index maps to canonical rank");
   expect(entry.badPoints == 0, "zero BP is retained as a real value");
