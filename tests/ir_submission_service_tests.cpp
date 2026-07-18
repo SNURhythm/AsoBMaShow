@@ -395,6 +395,40 @@ std::int64_t makeAwaiting(Harness &harness, int suffix,
   return inserted.entry->id;
 }
 
+void testActiveRequestSnapshotsDistinguishSubmitAndPoll() {
+  Harness submit;
+  submit.setCredential("key");
+  submit.repository.EnqueueReadyIrOutboxDraft(draft(20, submit.now.load()),
+                                              false);
+  submit.driver->blockRequestsUntilCancelled();
+  submit.service->start(profile(true));
+  expect(submit.driver->waitForCalls(1), "blocked submit starts");
+  expect(submit.waitForSnapshot(
+             attemptId(20), [](const auto &snapshot) {
+               return snapshot.state == ir::IrOutboxState::Uploading &&
+                      snapshot.activeRequest ==
+                          ir::IrActiveRequestKind::Submit;
+             }),
+         "fresh claim publishes submit activity");
+  submit.service->pauseAndCancel();
+
+  Harness poll;
+  poll.setCredential("key");
+  makeAwaiting(poll, 21);
+  poll.now += 10'000;
+  poll.driver->blockRequestsUntilCancelled();
+  poll.service->start(profile(true));
+  expect(poll.driver->waitForCalls(1), "blocked poll starts");
+  expect(poll.waitForSnapshot(
+             attemptId(21), [](const auto &snapshot) {
+               return snapshot.state == ir::IrOutboxState::Uploading &&
+                      snapshot.activeRequest ==
+                          ir::IrActiveRequestKind::Poll;
+             }),
+         "deferred claim publishes poll activity");
+  poll.service->pauseAndCancel();
+}
+
 void testStartupRecovery() {
   Harness harness;
   const auto pending = harness.repository.EnqueueReadyIrOutboxDraft(
@@ -734,6 +768,7 @@ void testPauseCancelsInflightAndRecoversClaim() {
 
 int main() {
   static_assert(ir::kMaximumAttemptStatusSnapshots > 0);
+  testActiveRequestSnapshotsDistinguishSubmitAndPoll();
   testStartupRecovery();
   testDisabledAndReadOnlyProvidersStayPaused();
   testMissingKeyPreservesManualIntentAndReplacementWakes();

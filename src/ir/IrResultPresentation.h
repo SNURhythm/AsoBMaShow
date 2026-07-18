@@ -18,6 +18,7 @@ enum class IrResultState {
   NotSubmitted,
   Queued,
   Submitting,
+  Polling,
   Waiting,
   Submitted,
   AuthenticationRequired,

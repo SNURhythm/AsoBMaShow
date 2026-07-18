@@ -24,11 +24,14 @@ struct IrActiveProfileConfig {
   std::map<std::string, IrProviderSettings, std::less<>> providers;
 };
 
+enum class IrActiveRequestKind { None, Submit, Poll };
+
 struct IrAttemptStatusSnapshot {
   std::uint64_t revision = 0;
   bool found = false;
   std::int64_t rowId = 0;
   IrOutboxState state = IrOutboxState::Pending;
+  IrActiveRequestKind activeRequest = IrActiveRequestKind::None;
   int requestAttemptCount = 0;
   int consecutiveFailureCount = 0;
   std::optional<std::int64_t> nextAttemptAtUnixMillis;

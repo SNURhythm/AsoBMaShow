@@ -50,10 +50,17 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
     result.detailText = "Waiting for the next submission attempt.";
     break;
   case IrOutboxState::Uploading:
-    result.state = IrResultState::Submitting;
-    result.statusText = "Submitting";
-    result.detailText =
-        "Sending this score to " + result.providerDisplayName + ".";
+    if (input.snapshot.activeRequest == IrActiveRequestKind::Poll) {
+      result.state = IrResultState::Polling;
+      result.statusText = "Polling " + result.providerDisplayName;
+      result.detailText = "Checking the queued import result with " +
+                          result.providerDisplayName + ".";
+    } else {
+      result.state = IrResultState::Submitting;
+      result.statusText = "Submitting";
+      result.detailText =
+          "Sending this score to " + result.providerDisplayName + ".";
+    }
     break;
   case IrOutboxState::AwaitingRemoteResult:
     result.state = IrResultState::Waiting;

@@ -111,10 +111,17 @@ std::string redactCredential(std::string value, std::string_view credential) {
 
 IrAttemptStatusSnapshot snapshotFrom(const IrOutboxEntry &entry,
                                      std::uint64_t revision) {
+  const IrActiveRequestKind activeRequest =
+      entry.state != IrOutboxState::Uploading
+          ? IrActiveRequestKind::None
+          : (!entry.remoteJobId.empty() && !entry.remoteOrigin.empty()
+                 ? IrActiveRequestKind::Poll
+                 : IrActiveRequestKind::Submit);
   return {.revision = revision,
           .found = true,
           .rowId = entry.id,
           .state = entry.state,
+          .activeRequest = activeRequest,
           .requestAttemptCount = entry.requestAttemptCount,
           .consecutiveFailureCount = entry.consecutiveFailureCount,
           .nextAttemptAtUnixMillis = entry.nextAttemptAtUnixMillis,

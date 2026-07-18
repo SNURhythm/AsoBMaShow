@@ -110,6 +110,22 @@ void testEveryOutboxStateMapsWithoutBlockingLocalActions() {
   }
 }
 
+void testActivePollHasDistinctPresentation() {
+  auto input = baseInput();
+  input.snapshot = {
+      .revision = 9,
+      .found = true,
+      .rowId = 43,
+      .state = ir::IrOutboxState::Uploading,
+      .activeRequest = ir::IrActiveRequestKind::Poll,
+  };
+  const auto presentation = ir::makeIrResultPresentation(std::move(input));
+  REQUIRE(presentation.state == ir::IrResultState::Polling);
+  REQUIRE(presentation.statusText == "Polling Bokutachi");
+  REQUIRE(presentation.detailText ==
+          "Checking the queued import result with Bokutachi.");
+}
+
 void testUnsupportedProviderHasNoSubmissionAction() {
   auto input = baseInput();
   input.capabilities = {.readOnly = true, .chartRankings = true};
@@ -179,6 +195,7 @@ int main() {
   testNoRowIsNotSubmittedAndAllowsManualSubmit();
   testIneligibleResultKeepsDisabledSubmitAndDiagnostic();
   testEveryOutboxStateMapsWithoutBlockingLocalActions();
+  testActivePollHasDistinctPresentation();
   testUnsupportedProviderHasNoSubmissionAction();
   testLegacyQueuedProofShowsBlockingReason();
   testLocalPersistenceMustBeSavedBeforeAnyIrControlAppears();
