@@ -85,7 +85,7 @@ normalizeServerOrigin(std::string_view value) noexcept {
         suffixStart == std::string_view::npos
             ? std::string_view{}
             : remainder.substr(suffixStart);
-    if (authority.empty() || authority.contains('@') ||
+    if (authority.empty() || authority.find('@') != std::string_view::npos ||
         (!suffix.empty() && suffix != "/")) {
       return std::nullopt;
     }

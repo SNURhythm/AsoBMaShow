@@ -12,7 +12,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -296,9 +295,9 @@ struct IrSubmissionService::Impl {
       return stopToken.stop_requested() || stopped || wakeRevision != observed;
     };
     if (deadline) {
-      condition.wait_until(lock, stopToken, *deadline, predicate);
+      condition.wait_until(lock, *deadline, predicate);
     } else {
-      condition.wait(lock, stopToken, predicate);
+      condition.wait(lock, predicate);
     }
   }
 

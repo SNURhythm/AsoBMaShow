@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../ThreadCompat.h"
 #include "IrOutboxModels.h"
 #include "IrProfileSettings.h"
 #include "IrRankingModels.h"
@@ -9,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
