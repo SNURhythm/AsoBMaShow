@@ -835,7 +835,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
 
   View *graphPlaceHolder = nullptr;
   if (data == nullptr || data->showResultGraph) {
-    graphPlaceHolder = new View();
+    graphPlaceHolder = new Button();
     graphPlaceHolder->setBackgroundColor(ui_theme::resultPanelSubtle());
     graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
     graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);

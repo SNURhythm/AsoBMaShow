@@ -11,6 +11,7 @@
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../view/Button.h"
+#include "../view/ClearLampColors.h"
 #include "../view/OverlayPortal.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -19,6 +20,7 @@
 #include "ChartViewerScene.h"
 #include "PracticeAnalyticsPresentation.h"
 #include "PracticeAnalyticsView.h"
+#include "ResultGaugeHistory.h"
 
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -55,8 +57,9 @@ Color resultGaugeLineColor(float value) {
 }
 
 void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
-                              const RhythmState &resultState, float x, float y,
-                              float w, float h) {
+                              const std::vector<float> &gaugeHistory,
+                              GaugeType gaugeType, GaugeProfile gaugeProfile,
+                              float x, float y, float w, float h) {
   batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
 
   const float padding = 8.0f;
@@ -65,7 +68,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   const float graphW = std::max(1.0f, w - padding * 2.0f);
   const float graphH = std::max(1.0f, h - padding * 2.0f);
   const float gaugeMaximum =
-      gaugeMaximumValue(resultState.gaugeType, resultState.gaugeProfile);
+      gaugeMaximumValue(gaugeType, gaugeProfile);
   auto clampedValue = [gaugeMaximum](float value) {
     return std::clamp(value, 0.0f, gaugeMaximum);
   };
@@ -79,17 +82,17 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
                 guideColor);
 
-  const size_t count = resultState.gaugeHistory.size();
+  const size_t count = gaugeHistory.size();
   if (count == 1) {
-    const float value = clampedValue(resultState.gaugeHistory.front());
+    const float value = clampedValue(gaugeHistory.front());
     batch.addCircle(graphX, valueY(value), 3.5f,
                     resultGaugeLineColor(value).toABGR());
     return;
   }
 
   for (size_t i = 1; i < count; ++i) {
-    const float prevValue = clampedValue(resultState.gaugeHistory[i - 1]);
-    const float value = clampedValue(resultState.gaugeHistory[i]);
+    const float prevValue = clampedValue(gaugeHistory[i - 1]);
+    const float value = clampedValue(gaugeHistory[i]);
     const float x0 =
         graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
                      graphW;
@@ -102,7 +105,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
   const size_t markerStep = std::max<size_t>(1, count / 40);
   for (size_t i = 0; i < count; i += markerStep) {
-    const float value = clampedValue(resultState.gaugeHistory[i]);
+    const float value = clampedValue(gaugeHistory[i]);
     const float pointX =
         graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
                      graphW;
@@ -113,19 +116,27 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
 
 class ResultGaugeGraphView final : public View {
 public:
-  explicit ResultGaugeGraphView(const RhythmState &state) : state(state) {
+  explicit ResultGaugeGraphView(const RhythmState &state)
+      : state(state), selectedType(result_gauge_history::initialType(state)) {
     batch.setSubmitView(rendering::ui_view);
   }
 
+  void select(GaugeType type) { selectedType = type; }
+
+  [[nodiscard]] GaugeType selection() const { return selectedType; }
+
 protected:
   void renderImpl(RenderContext &context) override {
-    if (state.gaugeHistory.empty() || getWidth() <= 0 || getHeight() <= 0) {
+    const auto &history =
+        result_gauge_history::historyFor(state, selectedType);
+    if (history.empty() || getWidth() <= 0 || getHeight() <= 0) {
       return;
     }
     rendering::setScissorUI(context.scissor.x, context.scissor.y,
                             context.scissor.width, context.scissor.height);
     batch.begin(context.getTransformMatrix());
-    drawResultGaugeLineGraph(batch, state, static_cast<float>(getX()),
+    drawResultGaugeLineGraph(batch, history, selectedType, state.gaugeProfile,
+                             static_cast<float>(getX()),
                              static_cast<float>(getY()),
                              static_cast<float>(getWidth()),
                              static_cast<float>(getHeight()));
@@ -134,6 +145,7 @@ protected:
 
 private:
   const RhythmState &state;
+  GaugeType selectedType;
   rendering::SimpleBatchRenderer batch;
 };
 
@@ -2044,6 +2056,40 @@ void ResultScene::init() {
     auto *graphView = new ResultGaugeGraphView(resultState);
     graphView->setWidthPercent(100.0F)->setFlex(1.0F);
     graphPlaceHolder->addView(graphView);
+
+    auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    gaugeLabel->setAlign(TextView::CENTER);
+    gaugeLabel->setVAlign(TextView::MIDDLE);
+    gaugeLabel->setPositionType(YGPositionTypeAbsolute);
+    gaugeLabel->setPosition(Edge::Left, 12);
+    gaugeLabel->setPosition(Edge::Top, 12);
+    gaugeLabel->setWidth(142);
+    gaugeLabel->setHeight(30);
+    gaugeLabel->setCornerRadius(6);
+    gaugeLabel->setZIndex(2);
+    graphPlaceHolder->addView(gaugeLabel);
+
+    const auto updateGaugeLabel = [this, graphView, gaugeLabel]() {
+      const GaugeType type = graphView->selection();
+      const Color color =
+          clearLampColorForRank(gaugeTypeToClearRank(type));
+      gaugeLabel->setText(
+          gaugeDisplayShortLabel(type, resultState.gaugeProfile));
+      gaugeLabel->setBackgroundColor(color);
+      gaugeLabel->setColor(ui_theme::sdl(ui_theme::textOn(color)));
+    };
+    updateGaugeLabel();
+
+    if (result_gauge_history::availableTypes(resultState).size() > 1) {
+      if (auto *graphButton = dynamic_cast<Button *>(graphPlaceHolder)) {
+        graphButton->setOnClickListener(
+            [this, graphView, updateGaugeLabel]() {
+              graphView->select(result_gauge_history::nextType(
+                  resultState, graphView->selection()));
+              updateGaugeLabel();
+            });
+      }
+    }
   }
 
   rootLayout->applyYogaLayout();

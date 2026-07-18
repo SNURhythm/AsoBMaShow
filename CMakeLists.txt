@@ -1784,6 +1784,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(result_layout_geometry_tests PRIVATE cxx_std_23)
 
+    add_executable(result_gauge_history_tests
+        tests/result_gauge_history_tests.cpp
+        src/scene/ResultGaugeHistory.cpp
+    )
+    target_include_directories(result_gauge_history_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_gauge_history_tests PRIVATE cxx_std_23)
+
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
@@ -2217,6 +2226,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_launch_tests)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
+    asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)
