@@ -201,7 +201,7 @@ void testComparisonStaysSeparateAndYouEntryIsHighlighted() {
   REQUIRE(you.maxComboText == "\xE2\x80\x94");
 }
 
-void testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails() {
+void testResponsiveRowsKeepFixedHeightCoreFields() {
   ir::IrRankingModalModel model;
   model.open(request(), "Test Chart");
   REQUIRE(model.apply(snapshot(ir::IrRankingSnapshotState::Succeeded)));
@@ -214,7 +214,6 @@ void testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails() {
 
   auto compact = model.row(0, 560);
   REQUIRE(compact.compact);
-  REQUIRE(!compact.expanded);
   REQUIRE(!compact.showBadPoints);
   REQUIRE(!compact.showMaxCombo);
   REQUIRE(!compact.showAchievementTime);
@@ -222,16 +221,6 @@ void testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails() {
   REQUIRE(!compact.playerText.empty());
   REQUIRE(!compact.rateText.empty());
   REQUIRE(!compact.lampText.empty());
-
-  model.toggleExpanded(0);
-  compact = model.row(0, 560);
-  REQUIRE(compact.expanded);
-  REQUIRE(compact.showBadPoints);
-  REQUIRE(compact.showMaxCombo);
-  REQUIRE(compact.showAchievementTime);
-  REQUIRE(compact.detailText.find("BP 0") != std::string::npos);
-  model.toggleExpanded(0);
-  REQUIRE(!model.row(0, 560).expanded);
 }
 
 void testScoreDetailFormatsCompleteAndMissingData() {
@@ -342,7 +331,7 @@ int main() {
   testModalStateMappingAndActions();
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
-  testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails();
+  testResponsiveRowsKeepFixedHeightCoreFields();
   testScoreDetailFormatsCompleteAndMissingData();
   testTwentyThousandEntriesCreateOnlyVisibleRows();
   testRecyclerBindingSeesAppliedRowWidth();

@@ -159,7 +159,6 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept {
 void IrRankingModalModel::open(IrRankingRequest request,
                                std::string chartTitle) {
   expectedRequest_ = std::move(request);
-  expandedIndex_.reset();
   presentation_ = {
       .state = IrRankingModalState::Loading,
       .chartTitle = std::move(chartTitle),
@@ -174,7 +173,6 @@ void IrRankingModalModel::refresh(std::uint64_t generation) {
     return;
   }
   expectedRequest_->generation = generation;
-  expandedIndex_.reset();
   presentation_.state = IrRankingModalState::Loading;
   presentation_.statusText = "Loading rankings...";
   presentation_.detailText.clear();
@@ -279,15 +277,6 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
   return true;
 }
 
-void IrRankingModalModel::toggleExpanded(int index) {
-  if (!presentation_.ranking || index < 0 ||
-      index >= static_cast<int>(presentation_.ranking->entries.size())) {
-    return;
-  }
-  expandedIndex_ =
-      expandedIndex_ == index ? std::nullopt : std::optional<int>(index);
-}
-
 IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
   if (!presentation_.ranking || index < 0 ||
       index >= static_cast<int>(presentation_.ranking->entries.size())) {
@@ -295,8 +284,7 @@ IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
   }
   const auto &entry = presentation_.ranking->entries[index];
   const bool compact = width <= kCompactRowMaximumWidth;
-  const bool expanded = compact && expandedIndex_ == index;
-  const bool showDetails = !compact || expanded;
+  const bool showDetails = !compact;
   IrRankingRowPresentation value{
       .rankText = rankText(entry.rank),
       .playerText = playerText(entry),
@@ -310,16 +298,10 @@ IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
       .clearType = entry.clearType,
       .highlighted = entry.currentUser,
       .compact = compact,
-      .expanded = expanded,
       .showBadPoints = showDetails,
       .showMaxCombo = showDetails,
       .showAchievementTime = showDetails,
   };
-  if (expanded) {
-    value.detailText = "EX " + value.scoreText + "   BP " +
-                       value.badPointsText + "   Combo " + value.maxComboText +
-                       "   " + value.achievementTimeText;
-  }
   return value;
 }
 

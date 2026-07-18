@@ -36,11 +36,9 @@ struct IrRankingRowPresentation {
   std::string badPointsText;
   std::string maxComboText;
   std::string achievementTimeText;
-  std::string detailText;
   int clearType = kClearTypeFailedRank;
   bool highlighted = false;
   bool compact = false;
-  bool expanded = false;
   bool showBadPoints = false;
   bool showMaxCombo = false;
   bool showAchievementTime = false;
@@ -104,7 +102,6 @@ public:
   void open(IrRankingRequest request, std::string chartTitle);
   void refresh(std::uint64_t generation);
   [[nodiscard]] bool apply(const IrRankingSnapshot &snapshot);
-  void toggleExpanded(int index);
 
   [[nodiscard]] const IrRankingModalPresentation &presentation() const {
     return presentation_;
@@ -119,7 +116,6 @@ public:
 private:
   std::optional<IrRankingRequest> expectedRequest_;
   IrRankingModalPresentation presentation_;
-  std::optional<int> expandedIndex_;
 };
 
 class IrRankingModal {

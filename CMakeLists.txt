@@ -523,6 +523,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(main_menu_ranking_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME ir_ranking_detail_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_ir_ranking_detail_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(ir_ranking_detail_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 
     add_executable(repository_boundary_tests
         tests/repository_boundary_tests.cpp

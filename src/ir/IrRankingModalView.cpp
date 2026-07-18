@@ -80,6 +80,23 @@ Button *makeActionButton(const std::string &label, int width,
   return button;
 }
 
+View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
+  auto *card = new View();
+  card->setFlex(1.0F)->setMinWidth(0);
+  card->setFlexDirection(FlexDirection::Column);
+  card->setPadding(Edge::All, 10);
+  card->setGap(4);
+  card->setThemedBackgroundColor(ui_theme::panelSubtle);
+  card->setCornerRadius(ui_theme::controlRadius());
+  auto *caption = makeText(14);
+  caption->setText(std::move(label));
+  caption->setThemedColor(ui_theme::textMuted);
+  value = makeText(valueSize);
+  card->addView(caption);
+  card->addView(value);
+  return card;
+}
+
 bool eventPoint(const SDL_Event &event, float &x, float &y) {
   if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) {
     int screenX = static_cast<int>(event.button.x * rendering::widthScale);
@@ -167,10 +184,6 @@ public:
     combo_->setWidth(88);
     time_ = makeText(15, TextView::RIGHT);
     time_->setWidth(172);
-    detail_ = makeText(15);
-    detail_->setThemedColor(ui_theme::textSecondary);
-    detail_->setHeight(26);
-
     primary_->addView(rank_);
     primary_->addView(player_);
     primary_->addView(score_);
@@ -180,7 +193,6 @@ public:
     primary_->addView(combo_);
     primary_->addView(time_);
     addView(primary_);
-    addView(detail_);
   }
 
   void bind(const IrRankingRowPresentation &row) {
@@ -192,8 +204,6 @@ public:
     badPoints_->setText(row.badPointsText);
     combo_->setText(row.maxComboText);
     time_->setText(row.achievementTimeText);
-    detail_->setText(row.detailText);
-
     const Color lampColor = clearLampColorForRank(row.clearType);
     lamp_->setBackgroundColor(lampColor);
     lamp_->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
@@ -212,9 +222,6 @@ public:
                                                         : YGDisplayNone);
     time_->setDisplay(row.showAchievementTime && !row.compact ? YGDisplayFlex
                                                               : YGDisplayNone);
-    detail_->setDisplay(row.compact && row.expanded ? YGDisplayFlex
-                                                    : YGDisplayNone);
-    detail_->setVisible(row.compact && row.expanded);
     lamp_->setWidth(row.compact ? 144.0f : 174.0f);
     applyYogaLayout();
   }
@@ -229,7 +236,6 @@ private:
   TextView *badPoints_ = nullptr;
   TextView *combo_ = nullptr;
   TextView *time_ = nullptr;
-  TextView *detail_ = nullptr;
 };
 
 std::string comparisonText(const IrLocalComparison &comparison) {
@@ -266,9 +272,23 @@ struct IrRankingModal::Impl {
   TextView *detail = nullptr;
   Button *retryButton = nullptr;
   RecyclerView<IrChartRankingEntry> *list = nullptr;
+  ModalScrim *scoreDetailRoot = nullptr;
+  View *scoreDetailPanel = nullptr;
+  TextView *scoreDetailTitle = nullptr;
+  TextView *scoreDetailScore = nullptr;
+  TextView *scoreDetailRate = nullptr;
+  TextView *scoreDetailLamp = nullptr;
+  TextView *scoreDetailEarlyPGreat = nullptr;
+  TextView *scoreDetailLatePGreat = nullptr;
+  TextView *scoreDetailEarlyGreat = nullptr;
+  TextView *scoreDetailLateGreat = nullptr;
+  TextView *scoreDetailBadPoints = nullptr;
+  TextView *scoreDetailMaxCombo = nullptr;
+  TextView *scoreDetailAchievementTime = nullptr;
   std::shared_ptr<const IrChartRanking> visibleRanking;
   bool open = false;
   bool closeRequested = false;
+  bool scoreDetailOpen = false;
   int layoutWidth = 0;
   int layoutHeight = 0;
   SafeInsets layoutSafe;
@@ -281,6 +301,7 @@ struct IrRankingModal::Impl {
   ~Impl() {
     closeNow();
     delete root;
+    delete scoreDetailRoot;
   }
 
   void requestClose() {
@@ -387,12 +408,143 @@ struct IrRankingModal::Impl {
       }
     };
     list->onSelected = [this](const auto &, int index) {
-      model.toggleExpanded(index);
-      list->rebindVisibleItems();
+      showScoreDetails(index);
     };
     panel->addView(list);
     root->addView(panel);
     root->setVisible(false);
+    buildScoreDetail();
+  }
+
+  void buildScoreDetail() {
+    scoreDetailPanel = new View();
+    scoreDetailRoot = new ModalScrim(scoreDetailPanel,
+                                     [this]() { hideScoreDetails(); });
+    scoreDetailRoot->setPositionType(YGPositionTypeAbsolute);
+    scoreDetailRoot->setPosition(Edge::Left, 0);
+    scoreDetailRoot->setPosition(Edge::Top, 0);
+    scoreDetailRoot->setFlexDirection(FlexDirection::Column);
+    scoreDetailRoot->setAlignItems(YGAlignCenter);
+    scoreDetailRoot->setJustifyContent(YGJustifyCenter);
+    scoreDetailRoot->setBackgroundColor(Color(2, 5, 9, 214));
+
+    scoreDetailPanel->setFlexDirection(FlexDirection::Column);
+    scoreDetailPanel->setAlignItems(YGAlignStretch);
+    scoreDetailPanel->setPadding(Edge::All, 18);
+    scoreDetailPanel->setGap(12);
+    scoreDetailPanel->setThemedBackgroundColor(ui_theme::panelStrong);
+    scoreDetailPanel->setCornerRadius(ui_theme::panelRadius());
+    scoreDetailPanel->setThemedBorderColor(ui_theme::hairlineStrong);
+    scoreDetailPanel->setBorderWidth(1);
+    scoreDetailPanel->setThemedShadow(ui_theme::shadow,
+                                     ui_theme::kModalShadow);
+
+    auto *detailHeader = new View();
+    detailHeader->setFlexDirection(FlexDirection::Row);
+    detailHeader->setAlignItems(YGAlignCenter);
+    detailHeader->setGap(10)->setHeight(52)->setFlexShrink(0);
+    scoreDetailTitle = makeText(25);
+    scoreDetailTitle->setFlex(1);
+    detailHeader->addView(scoreDetailTitle);
+    detailHeader->addView(makeActionButton(
+        "Close", 96, [this]() { hideScoreDetails(); }));
+
+    const auto makeMetricRow = [] {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Row);
+      row->setAlignItems(YGAlignStretch);
+      row->setGap(10)->setFlexShrink(0);
+      return row;
+    };
+    auto *summary = makeMetricRow();
+    summary->setHeight(82);
+    summary->addView(makeMetricCard("EX Score", scoreDetailScore));
+    summary->addView(makeMetricCard("Rate", scoreDetailRate));
+    summary->addView(makeMetricCard("Lamp", scoreDetailLamp, 17));
+
+    auto *judgements = makeMetricRow();
+    judgements->setHeight(88);
+    judgements->addView(
+        makeMetricCard("PGREAT Early", scoreDetailEarlyPGreat));
+    judgements->addView(
+        makeMetricCard("PGREAT Late", scoreDetailLatePGreat));
+    judgements->addView(
+        makeMetricCard("GREAT Early", scoreDetailEarlyGreat));
+    judgements->addView(
+        makeMetricCard("GREAT Late", scoreDetailLateGreat));
+
+    auto *metadata = makeMetricRow();
+    metadata->setHeight(82);
+    metadata->addView(makeMetricCard("BP", scoreDetailBadPoints));
+    metadata->addView(makeMetricCard("Max Combo", scoreDetailMaxCombo));
+    metadata->addView(
+        makeMetricCard("Achieved", scoreDetailAchievementTime, 16));
+
+    scoreDetailPanel->addView(detailHeader);
+    scoreDetailPanel->addView(summary);
+    scoreDetailPanel->addView(judgements);
+    scoreDetailPanel->addView(metadata);
+    scoreDetailRoot->addView(scoreDetailPanel);
+    scoreDetailRoot->setVisible(false);
+  }
+
+  void updateScoreDetailLayout(const SafeInsets &safe) {
+    const auto geometry =
+        layoutIrRankingPanel({.viewportWidth = rendering::window_width,
+                              .viewportHeight = rendering::window_height,
+                              .safeTop = safe.top,
+                              .safeLeft = safe.left,
+                              .safeBottom = safe.bottom,
+                              .safeRight = safe.right,
+                              .margin = 36,
+                              .maximumWidth = 760,
+                              .maximumHeight = 480});
+    scoreDetailRoot->setSize(rendering::window_width,
+                             rendering::window_height);
+    scoreDetailRoot->setPadding(Edge::Top, safe.top + 36);
+    scoreDetailRoot->setPadding(Edge::Bottom, safe.bottom + 36);
+    scoreDetailRoot->setPadding(Edge::Left, safe.left + 36);
+    scoreDetailRoot->setPadding(Edge::Right, safe.right + 36);
+    scoreDetailPanel->setWidth(static_cast<float>(geometry.width));
+    scoreDetailPanel->setHeight(static_cast<float>(geometry.height));
+    scoreDetailRoot->applyYogaLayout();
+  }
+
+  void hideScoreDetails() {
+    portal.dismiss(scoreDetailRoot);
+    scoreDetailRoot->setVisible(false);
+    scoreDetailOpen = false;
+  }
+
+  void showScoreDetails(int index) {
+    const auto detailValue = model.scoreDetail(index);
+    if (!detailValue) {
+      return;
+    }
+    hideScoreDetails();
+    const auto &detail = *detailValue;
+    scoreDetailTitle->setText(detail.rankText + "   " + detail.playerText);
+    scoreDetailScore->setText(detail.scoreText);
+    scoreDetailRate->setText(detail.rateText);
+    scoreDetailLamp->setText(detail.lampText);
+    scoreDetailEarlyPGreat->setText(detail.earlyPGreatText);
+    scoreDetailLatePGreat->setText(detail.latePGreatText);
+    scoreDetailEarlyGreat->setText(detail.earlyGreatText);
+    scoreDetailLateGreat->setText(detail.lateGreatText);
+    scoreDetailBadPoints->setText(detail.badPointsText);
+    scoreDetailMaxCombo->setText(detail.maxComboText);
+    scoreDetailAchievementTime->setText(detail.achievementTimeText);
+    const Color lampColor = clearLampColorForRank(detail.clearType);
+    scoreDetailLamp->setBackgroundColor(lampColor);
+    scoreDetailLamp->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
+    scoreDetailLamp->setCornerRadius(6);
+    scoreDetailTitle->setThemedColor(detail.highlighted
+                                         ? ui_theme::cyan
+                                         : ui_theme::textPrimary);
+    scoreDetailOpen = true;
+    scoreDetailRoot->setVisible(true);
+    updateScoreDetailLayout(safeInsets());
+    portal.present(scoreDetailRoot);
   }
 
   void updateLayout() {
@@ -427,6 +579,9 @@ struct IrRankingModal::Impl {
     fetchedAt->setDisplay(geometry.compact ? YGDisplayNone : YGDisplayFlex);
     root->applyYogaLayout();
     list->rebindVisibleItems();
+    if (scoreDetailOpen) {
+      updateScoreDetailLayout(safe);
+    }
   }
 
   void refreshPresentation() {
@@ -497,6 +652,7 @@ struct IrRankingModal::Impl {
     if (!open || !model.expectedRequest()) {
       return;
     }
+    hideScoreDetails();
     IrRankingRequest request = *model.expectedRequest();
     const std::uint64_t generation = service.refresh(request);
     model.refresh(generation);
@@ -518,6 +674,7 @@ struct IrRankingModal::Impl {
   }
 
   void closeNow() {
+    hideScoreDetails();
     if (!open) {
       closeRequested = false;
       return;
