@@ -2330,6 +2330,39 @@ void testProfileCrudConstraintsAndDataIsolation() {
          "the last profile cannot be deleted");
 }
 
+void testOptionalOperationalFilesRejectLinksWithoutTouchingTargets() {
+  TempDirectory temp("profile-operational-file-safety");
+  TempDirectory external("profile-operational-file-external");
+  PlayerProfileManager manager(temp.path(), dependenciesFor());
+  expect(manager.Initialize().ok(),
+         "operational-file safety fixture initializes");
+  const std::string profileId = manager.activeProfile().id;
+  const PlayerProfilePaths paths = manager.activePaths();
+
+  const std::array<std::pair<std::filesystem::path, std::string_view>, 2>
+      operationalFiles = {{{paths.irCredentialsJson, "IR credentials"},
+                           {paths.bokutachiCacheJson, "Bokutachi cache"}}};
+  for (const auto &[profilePath, label] : operationalFiles) {
+    const auto externalTarget = external.path() / profilePath.filename();
+    const std::string sentinel = std::string(label) + " external data";
+    writeFile(externalTarget, sentinel);
+
+    std::error_code linkError;
+    std::filesystem::create_symlink(externalTarget, profilePath, linkError);
+    expect(!linkError, std::string(label) + " symlink fixture creates");
+    if (!linkError) {
+      expect(manager.validateProfile(profileId).error ==
+                 ProfileError::IntegrityFailure,
+             std::string(label) + " validation rejects a linked file");
+      expect(readFile(externalTarget) == sentinel,
+             std::string(label) +
+                 " rejection leaves its external target untouched");
+      std::filesystem::remove(profilePath, linkError);
+      expect(!linkError, std::string(label) + " symlink fixture removes");
+    }
+  }
+}
+
 void testPracticeDirectoryLifecycleAndValidation() {
   constexpr std::string_view hash = "0123456789abcdef0123456789abcdef"
                                     "0123456789abcdef0123456789abcdef";
@@ -2525,6 +2558,7 @@ int main() {
   testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testProfileCrudConstraintsAndDataIsolation();
+  testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();
   testFutureVersionsFailClosed();
 

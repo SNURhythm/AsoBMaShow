@@ -360,6 +360,37 @@ bool ensureContainedPath(const std::filesystem::path &applicationRoot,
   return true;
 }
 
+bool validateOptionalOperationalFile(
+    const std::filesystem::path &applicationRoot,
+    const std::filesystem::path &path, std::string &errorMessage) {
+  if (!ensureContainedPath(applicationRoot, path, errorMessage)) {
+    return false;
+  }
+
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error) {
+    if (error == std::make_error_code(std::errc::no_such_file_or_directory)) {
+      return true;
+    }
+    errorMessage = "unable to inspect optional profile component '" +
+                   path.string() + "': " + error.message();
+    return false;
+  }
+  if (status.type() == std::filesystem::file_type::not_found) {
+    return true;
+  }
+  if (hasUnsafeLink(path, status, errorMessage) ||
+      !std::filesystem::is_regular_file(status)) {
+    if (errorMessage.empty()) {
+      errorMessage = "optional profile component is not a safe regular file: " +
+                     path.filename().string();
+    }
+    return false;
+  }
+  return true;
+}
+
 PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   PlayerProfilePaths paths;
   paths.root = root;
@@ -699,6 +730,12 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
       return failure(ProfileError::IntegrityFailure,
                      "profile component is not a safe regular file: " +
                          file.filename().string());
+    }
+  }
+  for (const auto &file :
+       {paths.irCredentialsJson, paths.bokutachiCacheJson}) {
+    if (!validateOptionalOperationalFile(applicationRoot, file, safetyError)) {
+      return failure(ProfileError::IntegrityFailure, safetyError);
     }
   }
   if (!validatePracticeDirectory(applicationRoot, paths, nullptr,
@@ -1953,6 +1990,13 @@ PlayerProfileManager::validateProfile(std::string_view id,
       return failure(ProfileError::IntegrityFailure,
                      "profile component is missing: " +
                          file.filename().string());
+    }
+  }
+  for (const auto &file :
+       {paths.irCredentialsJson, paths.bokutachiCacheJson}) {
+    if (!validateOptionalOperationalFile(applicationDataRoot_, file,
+                                         safetyError)) {
+      return failure(ProfileError::IntegrityFailure, safetyError);
     }
   }
 
