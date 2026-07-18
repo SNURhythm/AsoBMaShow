@@ -8,6 +8,7 @@
 #include "../bms_parser.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -126,6 +127,13 @@ struct ReplaySummary {
   audio::PlaybackRate playback;
 };
 
+struct ReplayResultRecord {
+  ReplayData replay;
+  std::optional<std::string> attemptId;
+  std::optional<std::string> attemptFingerprint;
+  std::int64_t playedAtUnixMillis = 0;
+};
+
 struct CourseReplayLookup {
   std::string courseKey;
   int legacyCourseId = 0;
@@ -208,6 +216,8 @@ public:
                                                int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
                                        const bms_parser::ChartMeta &chartMeta);
+  std::optional<ReplayResultRecord>
+  LoadReplayResult(int replayId, const bms_parser::ChartMeta &chartMeta);
   std::optional<CourseReplayData> LoadCourseReplay(int replayId);
   bool
   RecoverCourseRecords(std::span<const course_identity::Definition> definitions,

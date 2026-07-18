@@ -2767,7 +2767,7 @@ bool replay_repository_detail::RecoverCourseRecordsOnConnection(
   return true;
 }
 
-static std::optional<ReplayData>
+static std::optional<ReplayResultRecord>
 loadReplayFromConnection(sqlite3 *db, int replayId,
                          const bms_parser::ChartMeta &chartMeta) {
   const auto match = replayChartMatchFor(chartMeta);
@@ -2777,7 +2777,11 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
       "clear_type, created_at, random_seed, random_prng, random_values,"
       "play_option,"
       "play_option_seed, play_option2, play_option2_seed, assist_option, "
-      "ln_mode, max_combo, ruleset_version, eligibility, provenance_json "
+      "ln_mode, max_combo, ruleset_version, eligibility, provenance_json,"
+      "attempt_id, attempt_fingerprint,"
+      "CASE WHEN typeof(created_at)='text' "
+      "THEN COALESCE(CAST(strftime('%s', created_at) AS INTEGER)*1000, 0) "
+      "ELSE 0 END "
       "FROM replays WHERE id = ? AND ";
   query += replayChartMatchPredicate("");
 
@@ -2789,7 +2793,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
 
   sqlite3_bind_int(stmt.get(), 1, replayId);
   bindReplayChartMatch(stmt.get(), 2, match);
-  std::optional<ReplayData> replay;
+  std::optional<ReplayResultRecord> result;
   if (sqlite3_step(stmt.get()) == SQLITE_ROW) {
     ReplayData loaded;
     loaded.id = sqlite3_column_int(stmt.get(), 0);
@@ -2851,13 +2855,25 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
     loaded.provenance = std::move(*provenance);
     loaded.gaugeAutoShiftLowerBound =
         loaded.provenance.gaugeAutoShiftLowerBound;
-    replay = std::move(loaded);
+    ReplayResultRecord record;
+    record.replay = std::move(loaded);
+    if (sqlite3_column_type(stmt.get(), 25) == SQLITE_TEXT) {
+      record.attemptId = readText(stmt.get(), 25);
+    }
+    if (sqlite3_column_type(stmt.get(), 26) == SQLITE_TEXT) {
+      record.attemptFingerprint = readText(stmt.get(), 26);
+    }
+    if (sqlite3_column_type(stmt.get(), 27) == SQLITE_INTEGER) {
+      record.playedAtUnixMillis = sqlite3_column_int64(stmt.get(), 27);
+    }
+    result = std::move(record);
   }
   stmt.reset();
 
-  if (!replay.has_value()) {
+  if (!result.has_value()) {
     return std::nullopt;
   }
+  ReplayData &replay = result->replay;
 
   const char *eventQuery =
       "SELECT action, lane, note_time_micros, song_time_micros,"
@@ -2869,7 +2885,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
                                     logSqlErrorText)) {
     return std::nullopt;
   }
-  sqlite3_bind_int(eventStmt.get(), 1, replay->id);
+  sqlite3_bind_int(eventStmt.get(), 1, replay.id);
 
   int eventRc = SQLITE_OK;
   while ((eventRc = sqlite3_step(eventStmt.get())) == SQLITE_ROW) {
@@ -2885,7 +2901,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
     event.gaugeType = gaugeTypeFromInt(sqlite3_column_int(eventStmt.get(), 8));
     event.combo = sqlite3_column_int(eventStmt.get(), 9);
     event.score = sqlite3_column_int(eventStmt.get(), 10);
-    replay->events.push_back(event);
+    replay.events.push_back(event);
   }
   if (eventRc != SQLITE_DONE) {
     logSqlError("loading replay events", db);
@@ -2902,7 +2918,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
                                     logSqlErrorText)) {
     return std::nullopt;
   }
-  sqlite3_bind_int(touchSampleStmt.get(), 1, replay->id);
+  sqlite3_bind_int(touchSampleStmt.get(), 1, replay.id);
 
   int touchSampleRc = SQLITE_OK;
   while ((touchSampleRc = sqlite3_step(touchSampleStmt.get())) == SQLITE_ROW) {
@@ -2915,7 +2931,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
         static_cast<float>(sqlite3_column_double(touchSampleStmt.get(), 3));
     sample.y =
         static_cast<float>(sqlite3_column_double(touchSampleStmt.get(), 4));
-    replay->touchSamples.push_back(sample);
+    replay.touchSamples.push_back(sample);
   }
   if (touchSampleRc != SQLITE_DONE) {
     logSqlError("loading replay touch samples", db);
@@ -2934,7 +2950,7 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
                                     logSqlErrorText)) {
     return std::nullopt;
   }
-  sqlite3_bind_int(laneCoverEventStmt.get(), 1, replay->id);
+  sqlite3_bind_int(laneCoverEventStmt.get(), 1, replay.id);
 
   int laneCoverEventRc = SQLITE_OK;
   while ((laneCoverEventRc = sqlite3_step(laneCoverEventStmt.get())) ==
@@ -2945,14 +2961,14 @@ loadReplayFromConnection(sqlite3 *db, int replayId,
         sqlite3_column_int(laneCoverEventStmt.get(), 1);
     event.resetVisibleTimeReference =
         sqlite3_column_int(laneCoverEventStmt.get(), 2) != 0;
-    replay->laneCoverEvents.push_back(event);
+    replay.laneCoverEvents.push_back(event);
   }
   if (laneCoverEventRc != SQLITE_DONE) {
     logSqlError("loading replay lane cover events", db);
     return std::nullopt;
   }
 
-  return replay;
+  return result;
 }
 
 std::optional<ReplayData>
@@ -2983,7 +2999,35 @@ std::optional<ReplayData> replay_repository_detail::LoadReplayOnConnection(
     logSqlErrorText("committing replay load snapshot", snapshotError);
     return std::nullopt;
   }
-  return replay;
+  return std::move(replay->replay);
+}
+
+std::optional<ReplayResultRecord>
+ReplayRepository::LoadReplayResult(int replayId,
+                                   const bms_parser::ChartMeta &chartMeta) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+
+  std::string snapshotError;
+  SqliteTransactionHandle readSnapshot(impl_->sessionDatabase,
+                                       "BEGIN TRANSACTION", snapshotError);
+  if (!readSnapshot.active()) {
+    logSqlErrorText("starting replay result load snapshot", snapshotError);
+    return std::nullopt;
+  }
+  auto result =
+      loadReplayFromConnection(impl_->sessionDatabase, replayId, chartMeta);
+  if (!result.has_value()) {
+    return std::nullopt;
+  }
+  if (!readSnapshot.commit(snapshotError)) {
+    logSqlErrorText("committing replay result load snapshot", snapshotError);
+    return std::nullopt;
+  }
+  return result;
 }
 
 std::optional<CourseReplayData> ReplayRepository::LoadCourseReplay(int replayId) {
@@ -3087,7 +3131,7 @@ replay_repository_detail::LoadCourseReplayOnConnection(sqlite3 *db,
       return std::nullopt;
     }
     courseReplay.stages.push_back(CourseReplayStageData{
-        .replay = std::move(*stageReplay),
+        .replay = std::move(stageReplay->replay),
         .restMicrosAfterStage = std::max(0LL, pendingStage.restMicros)});
   }
 

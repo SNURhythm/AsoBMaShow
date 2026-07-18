@@ -2336,6 +2336,50 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(retargetable.GetDatabasePath() == firstPath);
 }
 
+void testReplayResultRecordMetadata(const std::filesystem::path &root) {
+  const auto path = root / "result-recall" / "replay.db";
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+
+  ReplayData replay = sampleReplay(root, "result-recall-chart");
+  const auto replayId = repository.SaveReplay(replay);
+  assert(replayId.has_value());
+
+  auto db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "UPDATE replays SET "
+      "attempt_id='123e4567-e89b-42d3-a456-426614174000',"
+      "attempt_fingerprint='0123456789abcdef0123456789abcdef"
+      "0123456789abcdef0123456789abcdef',"
+      "created_at='2026-07-19 03:04:05' WHERE id=" +
+          std::to_string(*replayId));
+  db.reset();
+
+  const auto recalled =
+      repository.LoadReplayResult(*replayId, replay.chartMeta);
+  assert(recalled.has_value());
+  assert(recalled->replay.id == *replayId);
+  assert(recalled->attemptId ==
+         "123e4567-e89b-42d3-a456-426614174000");
+  assert(recalled->attemptFingerprint ==
+         "0123456789abcdef0123456789abcdef"
+         "0123456789abcdef0123456789abcdef");
+  assert(recalled->playedAtUnixMillis == 1784430245000LL);
+
+  db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE replays SET attempt_id=NULL,"
+              "attempt_fingerprint=NULL WHERE id=" +
+                  std::to_string(*replayId));
+  db.reset();
+  const auto legacy =
+      repository.LoadReplayResult(*replayId, replay.chartMeta);
+  assert(legacy.has_value());
+  assert(!legacy->attemptId.has_value());
+  assert(!legacy->attemptFingerprint.has_value());
+}
+
 void testInvalidNewProvenanceFailsLoad(const std::filesystem::path &root) {
   const auto path = root / "invalid" / "replay.db";
   ReplayRepository helper(path);
@@ -4938,6 +4982,7 @@ int main() {
 
   testVersion2MigrationPreservesOutcomesAndRows(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
+  testReplayResultRecordMetadata(root);
   testInvalidNewProvenanceFailsLoad(root);
   testInvalidProvenanceRejectsReplayWrites(root);
   testInvalidReplayWritesDoNotCreateDatabase(root);
