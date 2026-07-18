@@ -97,7 +97,12 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
                                    const ReplayData &replay,
                                    GaugeProfile gaugeProfile,
                                    const GaugeStateSnapshot *carriedGauge) {
-  RhythmState state(&chart, false);
+  GameplayRuleset ruleset = GameplayRuleset::Beatoraja;
+  if (isSupportedRulesetDescriptor(replay.provenance.ruleset)) {
+    ruleset = gameplayRulesetFromId(replay.provenance.ruleset.id)
+                  .value_or(GameplayRuleset::Beatoraja);
+  }
+  RhythmState state(&chart, false, ruleset, gaugeProfile);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
                        gaugeProfile, replay.gaugeAutoShiftLowerBound);
   if (replay.provenance.startingGaugePercent.has_value()) {

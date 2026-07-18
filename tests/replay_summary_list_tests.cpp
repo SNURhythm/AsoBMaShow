@@ -105,6 +105,45 @@ int main() {
     return 1;
   }
 
+  ReplayData lr2RulesetReplay;
+  lr2RulesetReplay.initialGaugeType = GaugeType::Normal;
+  lr2RulesetReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  lr2RulesetReplay.provenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::LR2);
+  lr2RulesetReplay.events.push_back({.action = ReplayEventAction::Release,
+                                     .judgement = Bad,
+                                     .gauge = 40.0f,
+                                     .gaugeType = GaugeType::Hard});
+  const RhythmState lr2RulesetResult =
+      replay_result::BuildResultState(chart, lr2RulesetReplay);
+  RhythmState directlySimulatedLr2(&chart, false, GameplayRuleset::LR2);
+  directlySimulatedLr2.configureGauge(GaugeType::Normal,
+                                      GaugeAutoShiftMode::BestClear);
+  directlySimulatedLr2.applyGaugeJudgement(Bad);
+  if (lr2RulesetResult.gaugeHistoryFor(GaugeType::Easy) !=
+      directlySimulatedLr2.gaugeHistoryFor(GaugeType::Easy)) {
+    std::cerr << "replay result must rebuild non-active gauge histories with "
+                 "the recorded LR2 ruleset"
+              << std::endl;
+    return 1;
+  }
+  if (lr2RulesetResult.gaugeRules().ruleset != GameplayRuleset::LR2) {
+    std::cerr << "replay result must retain the recorded LR2 gauge ruleset"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData legacyRulesetReplay = lr2RulesetReplay;
+  legacyRulesetReplay.provenance = ScoreProvenance::Legacy();
+  const RhythmState legacyRulesetResult =
+      replay_result::BuildResultState(chart, legacyRulesetReplay);
+  if (legacyRulesetResult.gaugeRules().ruleset !=
+      GameplayRuleset::Beatoraja) {
+    std::cerr << "legacy replay result gauge reconstruction remains Beatoraja"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData firstCourseStage;
   firstCourseStage.initialGaugeType = GaugeType::Hard;
   firstCourseStage.events.push_back({.action = ReplayEventAction::Gauge,
