@@ -515,6 +515,9 @@ struct GameplayScoreConfig {
   int keyMode = 7;
 };
 
+using GaugeHistoryCollection =
+    std::array<std::vector<float>, kGaugeTypeCount>;
+
 class GameplayScoreState {
 public:
   bool isPlaying = false;
@@ -549,6 +552,9 @@ public:
 
   void configureBoundedGaugeHistory(std::size_t capacity) {
     gaugeHistory.reserve(capacity);
+    for (auto &history : gaugeHistories) {
+      history.reserve(capacity);
+    }
     gaugeHistoryCapacity_ = capacity;
     boundedGaugeHistory_ = true;
   }
@@ -576,6 +582,7 @@ public:
   }
 
   std::vector<float> gaugeHistory;
+  GaugeHistoryCollection gaugeHistories;
   float currentGauge = 100.0f;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeType selectedGaugeType = GaugeType::Normal;
@@ -587,6 +594,15 @@ public:
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
   int fastCount = 0;
   int slowCount = 0;
+
+  [[nodiscard]] std::vector<float> &gaugeHistoryFor(GaugeType type) {
+    return gaugeHistories[gaugeTypeIndex(type)];
+  }
+
+  [[nodiscard]] const std::vector<float> &
+  gaugeHistoryFor(GaugeType type) const {
+    return gaugeHistories[gaugeTypeIndex(type)];
+  }
 
   void resetJudgeCounts() {
     judgeCount.clear();
@@ -645,6 +661,7 @@ public:
     }
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
     gaugeHistory.clear();
+    clearGaugeHistories();
   }
 
   void setStartingGaugePercent(int percent) {
@@ -689,6 +706,7 @@ public:
       gaugeValues[index] = currentGauge;
     }
     gaugeHistory.clear();
+    clearGaugeHistories();
   }
 
   [[nodiscard]] GaugeStateSnapshot gaugeSnapshot() const {
@@ -842,9 +860,23 @@ private:
     if (!boundedGaugeHistory_ ||
         gaugeHistory.size() < gaugeHistoryCapacity_) {
       gaugeHistory.push_back(value);
+      if (tracksAllGaugeTypes()) {
+        for (int index = 0; index < static_cast<int>(kGaugeTypeCount);
+             ++index) {
+          gaugeHistories[index].push_back(gaugeValues[index]);
+        }
+      } else {
+        gaugeHistories[gaugeTypeIndex(gaugeType)].push_back(value);
+      }
       return;
     }
     gaugeHistoryOverflowed_ = true;
+  }
+
+  void clearGaugeHistories() {
+    for (auto &history : gaugeHistories) {
+      history.clear();
+    }
   }
 
   [[nodiscard]] ClearType getGaugeClearType() const {
