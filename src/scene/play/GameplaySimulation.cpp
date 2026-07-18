@@ -1,6 +1,7 @@
 #include "GameplaySimulation.h"
 #include "GameplayNoteJudgeRole.h"
 #include "ManualKeysoundSelection.h"
+#include "../../bms_parser.hpp"
 
 #include <algorithm>
 #include <array>
@@ -64,14 +65,30 @@ JudgeResult lr2ClassicReleaseJudge(const JudgeResult &acceptedHead,
   }
   return worseLongNoteJudge(head, JudgeResult(Bad, tailDiffMicros));
 }
+
+GameplaySimulationConfig withCompiledGaugeRules(
+    const GameplayDefinition &definition, GameplaySimulationConfig config) {
+  if (config.gaugeRules.compiled) {
+    return config;
+  }
+  const auto metadata = definition.metadata();
+  bms_parser::ChartMeta meta;
+  meta.TotalNotes = metadata.totalNotes;
+  meta.KeyMode = metadata.keyMode;
+  meta.HasTotal = metadata.hasGaugeTotal;
+  meta.Total = metadata.gaugeTotal;
+  config.gaugeRules = compileGameplayGaugeRules(
+      config.judge.rules().ruleset, meta, config.attempt.gaugeProfile);
+  return config;
+}
 } // namespace
 
 GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                                        GameplaySimulationConfig config)
-    : definition_(definition), config_(std::move(config)),
-      scoreState_({.totalNotes = definition.metadata().totalNotes,
-                   .keyMode = definition.metadata().keyMode,
-                   .gaugeTotal = definition.metadata().gaugeTotal}),
+    : definition_(definition),
+      config_(withCompiledGaugeRules(definition, std::move(config))),
+      scoreState_({.gaugeRules = config_.gaugeRules,
+                   .keyMode = definition.metadata().keyMode}),
       noteStates_(definition.noteCount()),
       hellChargeBalanceMicros_(definition.noteCount()) {
   replayEvents_.reserve(config_.attempt.replayCapacity);

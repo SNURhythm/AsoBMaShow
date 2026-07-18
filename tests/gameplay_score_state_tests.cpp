@@ -14,6 +14,18 @@ void require(bool value, const char *message) {
   }
 }
 
+GameplayScoreConfig beatorajaScoreConfig(int totalNotes, int keyMode,
+                                         double total) {
+  bms_parser::ChartMeta meta;
+  meta.TotalNotes = totalNotes;
+  meta.KeyMode = keyMode;
+  meta.HasTotal = true;
+  meta.Total = total;
+  return {.gaugeRules = compileGameplayGaugeRules(
+              GameplayRuleset::Beatoraja, meta, GaugeProfile::Standard),
+          .keyMode = keyMode};
+}
+
 void requireSame(const GameplayScoreState &left,
                  const GameplayScoreState &right) {
   require(left.judgeCount == right.judgeCount, "judge counts match");
@@ -31,8 +43,7 @@ void requireSame(const GameplayScoreState &left,
 }
 
 void testConfiguredGaugeHistoryUsesLogicalLimit() {
-  GameplayScoreState state(
-      {.totalNotes = 10, .keyMode = 7, .gaugeTotal = 100.0});
+  GameplayScoreState state(beatorajaScoreConfig(10, 7, 100.0));
   state.gaugeHistory.reserve(8);
   state.configureBoundedGaugeHistory(2);
   const auto *const storage = state.gaugeHistory.data();
@@ -78,9 +89,7 @@ int main() {
   chart.Meta.Total = 280.0;
 
   RhythmState legacy(&chart, false);
-  GameplayScoreState runtime({.totalNotes = 432,
-                              .keyMode = 7,
-                              .gaugeTotal = 280.0});
+  GameplayScoreState runtime(beatorajaScoreConfig(432, 7, 280.0));
   legacy.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
   runtime.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
   legacy.configureBoundedGaugeHistory(64);

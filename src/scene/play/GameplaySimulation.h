@@ -82,6 +82,7 @@ struct GameplayFinalSummary {
 
 struct GameplaySimulationConfig {
   CompiledGameplayJudge judge;
+  GameplayGaugeRules gaugeRules;
   AppSettings::NotePriorityMode notePriorityMode =
       AppSettings::NotePriorityMode::Lowest;
   std::optional<GameplayTimeRange> allowedNoteRange;

@@ -199,6 +199,7 @@ void testDefinitionCompilesAutomaticMetadata() {
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   const auto metadata = definition.metadata();
   require(metadata.totalNotes == 2 && metadata.keyMode == 7 &&
+              metadata.hasGaugeTotal &&
               metadata.gaugeTotal == 260.0,
           "chart gauge metadata is copied");
 
@@ -237,10 +238,9 @@ void testDefinitionUsesDefaultGaugeTotalWhenChartOmitsTotal() {
   chart.Meta.HasTotal = false;
 
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
-  require(definition.metadata().gaugeTotal ==
-              beatorajaDefaultGaugeTotal(chart.Meta.KeyMode,
-                                         chart.Meta.TotalNotes),
-          "missing chart total uses the shared beatoraja gauge rule");
+  require(!definition.metadata().hasGaugeTotal &&
+              definition.metadata().gaugeTotal == chart.Meta.Total,
+          "definition preserves raw missing-TOTAL metadata for policy compile");
 }
 
 void testDefinitionCompilesChronologicalHellChargeHeads() {
@@ -301,9 +301,8 @@ void testAttemptInitializesConfiguredAndCarriedState() {
                   kClearTypeAssistedEasyClearRank,
           "attempt restores carried combo and assist-clear state");
 
-  GameplayScoreState carried({.totalNotes = 10,
-                              .keyMode = 7,
-                              .gaugeTotal = 260.0});
+  GameplayScoreState carried(
+      {.gaugeRules = configured.scoreState().gaugeRules(), .keyMode = 7});
   carried.configureGauge(GaugeType::Easy, GaugeAutoShiftMode::BestClear,
                          GaugeProfile::Standard, GaugeType::Easy);
   carried.setStartingGaugePercent(64);

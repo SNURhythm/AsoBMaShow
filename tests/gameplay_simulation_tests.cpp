@@ -607,9 +607,9 @@ void testBadAndPoorTransactionsMatchStandaloneScoreState() {
       definition,
       {.judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
   const auto metadata = definition.metadata();
-  GameplayScoreState standalone({.totalNotes = metadata.totalNotes,
-                                 .keyMode = metadata.keyMode,
-                                 .gaugeTotal = metadata.gaugeTotal});
+  GameplayScoreState standalone(
+      {.gaugeRules = simulation.scoreState().gaugeRules(),
+       .keyMode = metadata.keyMode});
   standalone.configureBoundedGaugeHistory(4096);
 
   const auto commitBoth = [&](const gameplay::GameplayInputResult &result) {

@@ -605,6 +605,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gbattle_tests.cpp
         src/bms_parser.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(gbattle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(gbattle_tests PRIVATE cxx_std_23)
@@ -614,6 +615,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ReplayResultStateBuilder.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_summary_list_tests PRIVATE cxx_std_23)
@@ -964,6 +966,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(result_persistence_model_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1050,6 +1053,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
@@ -1064,6 +1068,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(chart_record_filters_tests
         tests/chart_record_filters_tests.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(chart_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_record_filters_tests PRIVATE cxx_std_23)
@@ -1293,6 +1298,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_judge_rules_tests PRIVATE cxx_std_23)
 
+    add_executable(gameplay_gauge_rules_tests
+        tests/gameplay_gauge_rules_tests.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(gameplay_gauge_rules_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_gauge_rules_tests PRIVATE cxx_std_23)
+
     add_executable(input_profile_tests
         tests/input_profile_tests.cpp
         src/input/GyroscopeTurntable.cpp
@@ -1445,6 +1460,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(practice_configuration_tests
         tests/practice_configuration_tests.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_configuration_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1456,6 +1472,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_rule_override_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1465,6 +1482,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_score_state_tests
         tests/gameplay_score_state_tests.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(gameplay_score_state_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1508,6 +1526,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/Judge.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/RhythmLaneInputController.cpp
@@ -1530,6 +1549,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
@@ -1553,6 +1573,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
@@ -1574,6 +1595,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
@@ -1643,6 +1665,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeResultModel.cpp
     )
     target_include_directories(practice_result_model_tests PRIVATE
@@ -1656,6 +1679,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeResultFlow.cpp
         src/practice/PracticeResultModel.cpp
     )
@@ -1668,6 +1692,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/practice_launch_tests.cpp
         src/ScoreProvenance.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeLaunchRequest.cpp
     )
     target_include_directories(practice_launch_tests PRIVATE
@@ -1695,6 +1720,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(chart_practice_range_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1706,6 +1732,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
     )
     target_include_directories(practice_preset_store_tests PRIVATE
@@ -1727,6 +1754,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
@@ -1777,6 +1805,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
@@ -1840,6 +1869,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
@@ -1916,6 +1946,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDefaults.cpp
         src/input/InputNormalizer.cpp
         src/input/RealtimePhysicalInputRouter.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(logical_gameplay_input_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -2084,6 +2115,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     asobmashow_register_test(gameplay_ruleset_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
+    asobmashow_register_test(gameplay_gauge_rules_tests)
     asobmashow_register_test(input_profile_tests foundation_input_profile)
     if (NOT IOS AND NOT PLATFORM_ANDROID)
         asobmashow_register_test(platform_document_handoff_tests foundation_platform_document_handoff)
