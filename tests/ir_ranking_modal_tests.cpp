@@ -68,6 +68,10 @@ std::shared_ptr<const ir::IrChartRanking> ranking(bool includeEntries = true) {
          .playerName = "AAA",
          .score = 1900,
          .maxScore = 2000,
+         .earlyPGreat = 430,
+         .latePGreat = 470,
+         .earlyGreat = 48,
+         .lateGreat = 52,
          .clearType = kClearTypeFullComboRank,
          .badPoints = 0,
          .maxCombo = 1000,
@@ -230,6 +234,39 @@ void testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails() {
   REQUIRE(!model.row(0, 560).expanded);
 }
 
+void testScoreDetailFormatsCompleteAndMissingData() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  REQUIRE(model.apply(snapshot(ir::IrRankingSnapshotState::Succeeded)));
+
+  const auto detail = model.scoreDetail(0);
+  REQUIRE(detail.has_value());
+  REQUIRE(detail->rankText == "#1");
+  REQUIRE(detail->playerText == "AAA");
+  REQUIRE(detail->scoreText == "1900 / 2000");
+  REQUIRE(detail->rateText == "95.00%");
+  REQUIRE(detail->lampText == "FULL COMBO");
+  REQUIRE(detail->earlyPGreatText == "430");
+  REQUIRE(detail->latePGreatText == "470");
+  REQUIRE(detail->earlyGreatText == "48");
+  REQUIRE(detail->lateGreatText == "52");
+  REQUIRE(detail->badPointsText == "0");
+  REQUIRE(detail->maxComboText == "1000");
+  REQUIRE(detail->achievementTimeText != "\xE2\x80\x94");
+  REQUIRE(detail->clearType == kClearTypeFullComboRank);
+  REQUIRE(!detail->highlighted);
+
+  const auto missing = model.scoreDetail(1);
+  REQUIRE(missing.has_value());
+  REQUIRE(missing->badPointsText == "\xE2\x80\x94");
+  REQUIRE(missing->maxComboText == "\xE2\x80\x94");
+  REQUIRE(missing->achievementTimeText == "\xE2\x80\x94");
+  REQUIRE(missing->highlighted);
+
+  REQUIRE(!model.scoreDetail(-1).has_value());
+  REQUIRE(!model.scoreDetail(2).has_value());
+}
+
 void testTwentyThousandEntriesCreateOnlyVisibleRows() {
   std::vector<ir::IrChartRankingEntry> entries(20'000);
   for (int index = 0; index < static_cast<int>(entries.size()); ++index) {
@@ -306,6 +343,7 @@ int main() {
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
   testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails();
+  testScoreDetailFormatsCompleteAndMissingData();
   testTwentyThousandEntriesCreateOnlyVisibleRows();
   testRecyclerBindingSeesAppliedRowWidth();
   testBokutachiEligibilityRequiresSupportedModeNotesAndSha256();

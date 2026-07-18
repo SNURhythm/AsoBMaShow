@@ -46,6 +46,23 @@ struct IrRankingRowPresentation {
   bool showAchievementTime = false;
 };
 
+struct IrRankingScoreDetailPresentation {
+  std::string rankText;
+  std::string playerText;
+  std::string scoreText;
+  std::string rateText;
+  std::string lampText;
+  std::string earlyPGreatText;
+  std::string latePGreatText;
+  std::string earlyGreatText;
+  std::string lateGreatText;
+  std::string badPointsText;
+  std::string maxComboText;
+  std::string achievementTimeText;
+  int clearType = kClearTypeFailedRank;
+  bool highlighted = false;
+};
+
 struct IrRankingModalPresentation {
   IrRankingModalState state = IrRankingModalState::Loading;
   std::string chartTitle;
@@ -96,6 +113,8 @@ public:
     return expectedRequest_;
   }
   [[nodiscard]] IrRankingRowPresentation row(int index, int width) const;
+  [[nodiscard]] std::optional<IrRankingScoreDetailPresentation>
+  scoreDetail(int index) const;
 
 private:
   std::optional<IrRankingRequest> expectedRequest_;

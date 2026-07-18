@@ -323,4 +323,30 @@ IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
   return value;
 }
 
+std::optional<IrRankingScoreDetailPresentation>
+IrRankingModalModel::scoreDetail(int index) const {
+  if (!presentation_.ranking || index < 0 ||
+      index >= static_cast<int>(presentation_.ranking->entries.size())) {
+    return std::nullopt;
+  }
+  const auto &entry = presentation_.ranking->entries[index];
+  return IrRankingScoreDetailPresentation{
+      .rankText = rankText(entry.rank),
+      .playerText = playerText(entry),
+      .scoreText = scoreText(entry.score, entry.maxScore),
+      .rateText = formatIrRankingRate(entry.score, entry.maxScore),
+      .lampText = clearTypeRankToLabel(entry.clearType),
+      .earlyPGreatText = std::to_string(entry.earlyPGreat),
+      .latePGreatText = std::to_string(entry.latePGreat),
+      .earlyGreatText = std::to_string(entry.earlyGreat),
+      .lateGreatText = std::to_string(entry.lateGreat),
+      .badPointsText = integerOrMissing(entry.badPoints),
+      .maxComboText = integerOrMissing(entry.maxCombo),
+      .achievementTimeText =
+          formatIrRankingTimestamp(entry.achievedAtUnixMillis),
+      .clearType = entry.clearType,
+      .highlighted = entry.currentUser,
+  };
+}
+
 } // namespace ir
