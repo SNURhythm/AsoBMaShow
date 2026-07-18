@@ -3,6 +3,7 @@
 #include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrSubmission.h"
 #include "../ir/IrResultPresentation.h"
+#include "../ir/IrRankingModal.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
@@ -66,6 +67,7 @@ struct ResultPersistenceOptions {
 class TextView;
 class Button;
 class PracticeAnalyticsView;
+class OverlayPortal;
 
 class ResultScene : public Scene {
 public:
@@ -102,6 +104,9 @@ private:
   void updateIrResultPresentation(bool force = false);
   void submitIrResult();
   void retryIrResult();
+  void openRankings();
+  void refreshRankingsButton();
+  [[nodiscard]] bool rankingsAvailable() const;
   [[nodiscard]] ir::IrResultPresentation makeIrResultPresentation() const;
   void refreshResultSummary();
   void addTimingAnalytics(std::optional<practice::ResultModel> analyticsModel);
@@ -165,6 +170,9 @@ private:
   TextView *irResultDetailText = nullptr;
   Button *irResultSubmitButton = nullptr;
   Button *irResultRetryButton = nullptr;
+  OverlayPortal *rankingOverlayPortal = nullptr;
+  Button *rankingsButton = nullptr;
+  std::unique_ptr<ir::IrRankingModal> rankingsModal;
   PracticeAnalyticsView *timingAnalyticsView = nullptr;
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;

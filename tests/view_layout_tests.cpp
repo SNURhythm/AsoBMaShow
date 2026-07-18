@@ -2,6 +2,7 @@
 #include "../src/view/OverlayPortal.h"
 #include "../src/view/View.h"
 #include "scene/ResultLayoutGeometry.h"
+#include "ir/IrRankingModal.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
@@ -141,6 +142,37 @@ void testOverlayPortalDispatchesPresentedViewsAboveContent() {
   assert(root.handleEvents(event));
   assert(overlay.eventCount == 1);
   assert(background->eventCount == 1);
+}
+
+void testRankingModalPanelStaysCenteredInsideSafeArea() {
+  const auto geometry = ir::layoutIrRankingPanel(
+      {.viewportWidth = 1000,
+       .viewportHeight = 700,
+       .safeTop = 20,
+       .safeLeft = 40,
+       .safeBottom = 30,
+       .safeRight = 10,
+       .margin = 24,
+       .maximumWidth = 1180,
+       .maximumHeight = 840});
+  assert(geometry.x == 64);
+  assert(geometry.y == 44);
+  assert(geometry.width == 902);
+  assert(geometry.height == 602);
+  assert(geometry.compact == false);
+
+  const auto compact = ir::layoutIrRankingPanel(
+      {.viewportWidth = 640,
+       .viewportHeight = 480,
+       .safeTop = 0,
+       .safeLeft = 0,
+       .safeBottom = 0,
+       .safeRight = 0});
+  assert(compact.x >= 0);
+  assert(compact.y >= 0);
+  assert(compact.x + compact.width <= 640);
+  assert(compact.y + compact.height <= 480);
+  assert(compact.compact);
 }
 
 void testBlockingOverlayStopsAllInteractiveEvents() {
@@ -703,6 +735,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 int main() {
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
+  testRankingModalPanelStaysCenteredInsideSafeArea();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testGyroscopeSettingsLayoutAndPresentation();

@@ -4,6 +4,8 @@ target_sources(main PRIVATE
     IrCredentialStore.cpp
     IrOutboxModels.cpp
     IrProfileSettings.cpp
+    IrRankingModal.cpp
+    IrRankingModalView.cpp
     IrRankingModels.cpp
     IrRankingService.cpp
     IrResultPresentation.cpp

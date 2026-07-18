@@ -11,6 +11,7 @@
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../view/Button.h"
+#include "../view/OverlayPortal.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
@@ -1029,6 +1030,28 @@ void ResultScene::addRetryButtons() {
     }
   }
 
+  rankingsButton = new Button();
+  auto *rankingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  rankingsText->setText("Rankings");
+  rankingsText->setAlign(TextView::CENTER);
+  rankingsText->setVAlign(TextView::MIDDLE);
+  rankingsText->setColor(
+      ui_theme::sdl(ui_theme::textOn(ui_theme::infoAction())));
+  rankingsButton->setContentView(rankingsText);
+  rankingsButton->setOnClickListener([this]() { openRankings(); });
+  rankingsButton->setSize(232, 64);
+  rankingsButton->setCornerRadius(ui_theme::controlRadius());
+  rankingsButton->setBackgroundColors(ui_theme::infoAction(),
+                                       ui_theme::infoActionHover(),
+                                       ui_theme::infoActionPressed());
+  rankingsButton->setBorderColors(
+      ui_theme::withAlpha(ui_theme::cyan(), 150),
+      ui_theme::withAlpha(ui_theme::cyan(), 190),
+      ui_theme::withAlpha(ui_theme::cyan(), 220));
+  rankingsButton->setStyledBorderWidth(1);
+  retryRow->addView(rankingsButton);
+  refreshRankingsButton();
+
   exportPhotoButton = new Button();
   exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   exportPhotoButtonText->setText("Export Photo");
@@ -1084,6 +1107,59 @@ void ResultScene::addRetryButtons() {
   retryRow->addView(practiceSectionButton);
   updatePracticeSectionAction();
   actionHost->addView(retryRow);
+}
+
+bool ResultScene::rankingsAvailable() const {
+  if (context.irRankingService == nullptr || isCourseStageResult() ||
+      isCourseFinalResult()) {
+    return false;
+  }
+  const auto driver = context.irDrivers.find(ir::kTachiProviderId);
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  return driver != nullptr && driver->capabilities().chartRankings &&
+         settings != context.settings.irProviders.end() &&
+         settings->second.enabled &&
+         ir::makeBokutachiRankingQuery(meta).value.has_value();
+}
+
+void ResultScene::refreshRankingsButton() {
+  if (rankingsButton != nullptr) {
+    rankingsButton->setEnabled(rankingsAvailable());
+  }
+}
+
+void ResultScene::openRankings() {
+  if (!rankingsAvailable() || rankingOverlayPortal == nullptr ||
+      context.irRankingService == nullptr) {
+    refreshRankingsButton();
+    return;
+  }
+  const auto query = ir::makeBokutachiRankingQuery(meta);
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (!query.value || settings == context.settings.irProviders.end()) {
+    refreshRankingsButton();
+    return;
+  }
+  if (!rankingsModal) {
+    rankingsModal = std::make_unique<ir::IrRankingModal>(
+        *rankingOverlayPortal, *context.irRankingService);
+  }
+  rankingsModal->open(
+      {.profileId = context.profileManager.activeProfile().id,
+       .providerId = std::string(ir::kTachiProviderId),
+       .serverOrigin = settings->second.serverOrigin,
+       .chart = *query.value,
+       .localComparison = ir::IrLocalComparison{
+           .label = "This Play",
+           .score = resultState.getScore(),
+           .maxScore = std::max(0, meta.TotalNotes) * 2,
+           .clearType = resultState.getClearTypeRank(),
+           .badPoints = resultState.comboBreak,
+           .maxCombo = resultState.maxCombo,
+       }},
+      meta.Title.empty() ? "Completed chart" : meta.Title);
 }
 
 void ResultScene::addCourseButtons() {
@@ -1896,6 +1972,14 @@ void ResultScene::init() {
     }
   }
 
+  rankingOverlayPortal = new OverlayPortal(
+      0, 0, rendering::window_width, rendering::window_height);
+  rankingOverlayPortal->setPositionType(YGPositionTypeAbsolute);
+  rankingOverlayPortal->setPosition(Edge::Left, 0);
+  rankingOverlayPortal->setPosition(Edge::Top, 0);
+  rankingOverlayPortal->setZIndex(2000);
+  rootLayout->addView(rankingOverlayPortal);
+
   updateResultPersistencePresentation();
   updateIrResultPresentation(true);
 
@@ -1930,9 +2014,16 @@ void ResultScene::update(float dt) {
       updateIrResultPresentation();
     }
   }
+  if (rankingsModal) {
+    rankingsModal->update();
+  }
 }
 
 void ResultScene::renderScene() {
+  if (rankingOverlayPortal != nullptr) {
+    rankingOverlayPortal->setSize(rendering::window_width,
+                                  rendering::window_height);
+  }
   if (graphPlaceHolder && !resultState.gaugeHistory.empty()) {
     float x = graphPlaceHolder->getX();
     float y = graphPlaceHolder->getY();
@@ -1949,6 +2040,7 @@ void ResultScene::renderScene() {
 }
 
 void ResultScene::cleanupScene() {
+  rankingsModal.reset();
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
   normalResultActions = nullptr;
@@ -1960,6 +2052,8 @@ void ResultScene::cleanupScene() {
   irResultDetailText = nullptr;
   irResultSubmitButton = nullptr;
   irResultRetryButton = nullptr;
+  rankingOverlayPortal = nullptr;
+  rankingsButton = nullptr;
   irObservedSnapshotInitialized = false;
   irObservedSnapshotRevision = 0;
   irActionDiagnostic.clear();

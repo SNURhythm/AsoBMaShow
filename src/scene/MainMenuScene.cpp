@@ -1273,6 +1273,9 @@ void MainMenuScene::init() {
 }
 
 void MainMenuScene::onPause() {
+  if (rankingsModal) {
+    rankingsModal->close();
+  }
   chartListCache.clear();
 }
 
@@ -3089,17 +3092,27 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto right = new View();
   right->setFlexDirection(FlexDirection::Column);
   right->setAlignItems(YGAlignCenter);
-  right->setPadding(Edge::Top, 16);
-  right->setPadding(Edge::Bottom, 16);
-  right->setPadding(Edge::Left, 10);
-  right->setPadding(Edge::Right, 10);
-  right->setGap(12);
   right->setWidth(300);
   right->setThemedBackgroundColor(ui_theme::mainMenuPanel);
   right->setCornerRadius(ui_theme::panelRadius());
   right->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   right->setThemedBorderColor(ui_theme::hairline);
   right->setBorderWidth(1);
+
+  auto *rightScroll = new ScrollView();
+  rightScroll->setWidth(280);
+  rightScroll->setFlex(1);
+  rightScroll->setFlexShrink(1);
+  rightScroll->clearBackgroundColor();
+  auto *rightContent = new View();
+  rightContent->setWidth(278);
+  rightContent->setFlexDirection(FlexDirection::Column);
+  rightContent->setAlignItems(YGAlignCenter);
+  rightContent->setPadding(Edge::Top, 16);
+  rightContent->setPadding(Edge::Bottom, 16);
+  rightContent->setPadding(Edge::Left, 9);
+  rightContent->setPadding(Edge::Right, 9);
+  rightContent->setGap(12);
 
   auto *readySettings = new View();
   readySettings->setFlexDirection(FlexDirection::Column);
@@ -3176,8 +3189,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton->setContentView(readySettings);
   readyPlayOptionsButton->setOnClickListener(
       [this]() { showPlayOptionsModal(); });
-  right->addView(readyTotalRow);
-  right->addView(readyPlayOptionsButton);
+  rightContent->addView(readyTotalRow);
+  rightContent->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
   startButton = new Button(0, 0, 220, 86);
@@ -3300,8 +3313,23 @@ void MainMenuScene::initView(ApplicationContext &context) {
       ui_theme::childRadiusForInset(ui_theme::panelRadius(), 1.0f, 0.0f));
   jacketCard->addView(jacketView);
   startButton->setHeight(86);
-  right->addView(jacketCard);
-  right->addView(startButton);
+  rightContent->addView(jacketCard);
+  rightContent->addView(startButton);
+
+  rankingsButton = new Button(0, 0, 220, 58);
+  rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
+  rankingsButtonText->setText("Rankings");
+  rankingsButtonText->setAlign(TextView::CENTER);
+  rankingsButtonText->setVAlign(TextView::MIDDLE);
+  rankingsButton->setContentView(rankingsButtonText);
+  styleThemedActionButton(rankingsButton, rankingsButtonText, true,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed,
+                          ui_theme::accentBorder);
+  rankingsButton->setOnClickListener(
+      [this]() { openRankingsForSelection(); });
+  rankingsButton->setEnabled(false);
+  rightContent->addView(rankingsButton);
 
   chartActionsRow = new View();
   chartActionsRow->setFlexDirection(FlexDirection::Row);
@@ -3336,17 +3364,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealButton->setOnClickListener(
       [this]() { revealSelectedChartInFileManager(); });
   chartActionsRow->addView(revealButton);
-  right->addView(chartActionsRow);
+  rightContent->addView(chartActionsRow);
 
-  right->addView(replayButtonSlot);
-  right->addView(unzipButtonSlot);
-  right->addView(findBmsButtonSlot);
-  right->addView(replayStatusText);
+  rightContent->addView(replayButtonSlot);
+  rightContent->addView(unzipButtonSlot);
+  rightContent->addView(findBmsButtonSlot);
+  rightContent->addView(replayStatusText);
 
   auto *settingsSpacer = new View();
   settingsSpacer->setWidth(220);
-  settingsSpacer->setFlex(1);
-  right->addView(settingsSpacer);
+  settingsSpacer->setHeight(12);
+  rightContent->addView(settingsSpacer);
 
   auto *settingsButton = new Button(0, 0, 220, 64);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
@@ -3365,8 +3393,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
     cancelPreviewLoading(true);
     context.sceneManager->changeScene("Settings", true);
   });
-  right->addView(settingsButton);
+  rightContent->addView(settingsButton);
 
+  rightScroll->setContentView(rightContent);
+  right->addView(rightScroll);
   rootLayout->addView(right);
   buildPlayOptionsModal();
   buildReplayModal();
@@ -4506,6 +4536,7 @@ std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const {
 }
 
 void MainMenuScene::refreshSelectedChartActionState() {
+  refreshRankingsButton();
   const auto record = selectedRecordSnapshot();
   if (!record.has_value()) {
     refreshReplayAvailability(nullptr);
@@ -4537,6 +4568,71 @@ void MainMenuScene::refreshSelectedChartActionState() {
       (!record->meta.SHA256.empty() || !record->meta.MD5.empty() ||
        !record->meta.Title.empty()));
   refreshStartButtonForActiveFolder();
+}
+
+void MainMenuScene::refreshRankingsButton() {
+  if (rankingsButton == nullptr) {
+    return;
+  }
+  const auto record = selectedRecordSnapshot();
+  const auto driver = context.irDrivers.find(ir::kTachiProviderId);
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  const bool enabled =
+      context.irRankingService != nullptr && record.has_value() &&
+      !record->courseStart && driver != nullptr &&
+      driver->capabilities().chartRankings &&
+      settings != context.settings.irProviders.end() &&
+      settings->second.enabled &&
+      ir::makeBokutachiRankingQuery(record->meta).value.has_value();
+  rankingsButton->setEnabled(enabled);
+}
+
+void MainMenuScene::openRankingsForSelection() {
+  if (rankingsButton == nullptr || !rankingsButton->isEnabled() ||
+      context.irRankingService == nullptr || overlayPortal == nullptr) {
+    return;
+  }
+  const auto record = selectedRecordSnapshot();
+  if (!record || record->courseStart) {
+    return;
+  }
+  const auto query = ir::makeBokutachiRankingQuery(record->meta);
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (!query.value || settings == context.settings.irProviders.end() ||
+      !settings->second.enabled) {
+    refreshRankingsButton();
+    return;
+  }
+
+  std::optional<ir::IrLocalComparison> comparison;
+  const auto best = scoreBestScores.bestFor(
+      record->meta,
+      long_note_mode::valueFromId(profileSelections.longNoteMode));
+  if (best) {
+    comparison = ir::IrLocalComparison{
+        .label = "Local PB",
+        .score = best->score,
+        .maxScore = best->maxScore > 0
+                        ? best->maxScore
+                        : std::max(0, record->meta.TotalNotes) * 2,
+        .clearType = best->clearType,
+        .badPoints = best->comboBreak,
+        .maxCombo = best->maxCombo,
+    };
+  }
+  if (!rankingsModal) {
+    rankingsModal = std::make_unique<ir::IrRankingModal>(
+        *overlayPortal, *context.irRankingService);
+  }
+  rankingsModal->open(
+      {.profileId = context.profileManager.activeProfile().id,
+       .providerId = std::string(ir::kTachiProviderId),
+       .serverOrigin = settings->second.serverOrigin,
+       .chart = *query.value,
+       .localComparison = std::move(comparison)},
+      record->meta.Title.empty() ? "Selected chart" : record->meta.Title);
 }
 
 MainMenuScene::EffectivePlayOptionSelection
@@ -9709,6 +9805,9 @@ void MainMenuScene::update(float dt) {
   if (tasksModalRoot != nullptr && tasksModalRoot->getVisible()) {
     refreshTasksModal();
   }
+  if (rankingsModal) {
+    rankingsModal->update();
+  }
 }
 
 void MainMenuScene::renderScene() {
@@ -9768,6 +9867,7 @@ void MainMenuScene::renderScene() {
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
+  rankingsModal.reset();
   cancelActivePreviewLoading();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
@@ -9827,6 +9927,8 @@ void MainMenuScene::cleanupScene() {
   jacketView = nullptr;
   searchBox = nullptr;
   startButton = nullptr;
+  rankingsButton = nullptr;
+  rankingsButtonText = nullptr;
   chartActionsRow = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;

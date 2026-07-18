@@ -750,6 +750,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(ir_result_presentation_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_ranking_modal_tests
+        tests/ir_ranking_modal_tests.cpp
+        src/ir/IrRankingModal.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(ir_ranking_modal_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_ranking_modal_tests PRIVATE cxx_std_23)
+    target_link_libraries(ir_ranking_modal_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     if (NOT IOS)
         add_executable(ir_http_client_tests
             tests/ir_http_client_tests.cpp
@@ -1229,6 +1245,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(view_layout_tests
         tests/view_layout_tests.cpp
+        src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
         src/view/View.cpp
         src/rendering/UniformCache.cpp
@@ -1996,6 +2013,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_service_tests
         ir_settings_presentation_tests
         ir_result_presentation_tests
+        ir_ranking_modal_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests

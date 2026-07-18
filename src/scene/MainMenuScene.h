@@ -9,6 +9,7 @@
 #include "../ReplayRecordFilters.h"
 #include "../ReplayVideoExporter.h"
 #include "../repositories/ScoreRepository.h"
+#include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
 #include "../utils/Debouncer.h"
@@ -246,6 +247,9 @@ private:
   Button *chartSortButton = nullptr;
   TextView *chartSortButtonText = nullptr;
   Button *startButton = nullptr;
+  Button *rankingsButton = nullptr;
+  TextView *rankingsButtonText = nullptr;
+  std::unique_ptr<ir::IrRankingModal> rankingsModal;
   View *chartActionsRow = nullptr;
   View *replayButtonSlot = nullptr;
   Button *replayButton = nullptr;
@@ -643,6 +647,8 @@ private:
   bool currentAssistOptionSelectionAllowed(const std::string &option) const;
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   void refreshSelectedChartActionState();
+  void refreshRankingsButton();
+  void openRankingsForSelection();
   EffectivePlayOptionSelection currentEffectivePlayOptionSelection() const;
   bool currentPlayOptionSelectionAllowed(const std::string &option) const;
   bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;
