@@ -633,44 +633,55 @@ private:
 
     // Temporary container for newly visible items
     std::deque<std::pair<View *, T>> newVisibleItems;
+    std::vector<std::pair<View *, int>> pendingBindings;
     idxToView.clear();
-    LayoutBatchScope layoutBatch;
-    // Iterate over the range of visible items
-    for (int i = startIndex; i <= endIndex; ++i) {
-      const T &item = itemAt(i);
-      View *view = nullptr;
-      bool shouldBind = false;
+    {
+      LayoutBatchScope sizingBatch;
+      // Iterate over the range of visible items
+      for (int i = startIndex; i <= endIndex; ++i) {
+        const T &item = itemAt(i);
+        View *view = nullptr;
+        bool shouldBind = false;
 
-      // Check if the item already has a corresponding view
-      auto it = std::find_if(viewEntries.begin(), viewEntries.end(),
-                             [&item, this](const std::pair<View *, T> &entry) {
-                               return itemComparator(entry.second, item);
-                             });
+        // Check if the item already has a corresponding view
+        auto it =
+            std::find_if(viewEntries.begin(), viewEntries.end(),
+                         [&item, this](const std::pair<View *, T> &entry) {
+                           return itemComparator(entry.second, item);
+                         });
 
-      if (it != viewEntries.end()) {
-        // If the view is already visible, use it
-        view = it->first;
-        idxToView[i] = view;
-        viewEntries.erase(it); // Remove from current visible items
-        shouldBind = visibleItemsNeedRebind;
-      } else {
-        // Otherwise, get a recycled view or create a new one
-        view = getViewForItem(item);
-        idxToView[i] = view;
-        shouldBind = true;
+        if (it != viewEntries.end()) {
+          // If the view is already visible, use it
+          view = it->first;
+          idxToView[i] = view;
+          viewEntries.erase(it); // Remove from current visible items
+          shouldBind = visibleItemsNeedRebind;
+        } else {
+          // Otherwise, get a recycled view or create a new one
+          view = getViewForItem(item);
+          idxToView[i] = view;
+          shouldBind = true;
+        }
+
+        view->setPositionNoLayout(layoutX,
+                                  layoutY + (i * itemHeight) - scrollOffset,
+                                  YGPositionType::YGPositionTypeAbsolute);
+        view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
+        if (shouldBind && onBind) {
+          pendingBindings.emplace_back(view, i);
+        }
+
+        newVisibleItems.emplace_back(view, item);
       }
+    }
 
-      // Size before binding so row content is laid out against the recycler
-      // width rather than the stale width of a created or recycled view.
-      view->setPositionNoLayout(layoutX,
-                                layoutY + (i * itemHeight) - scrollOffset,
-                                YGPositionType::YGPositionTypeAbsolute);
-      view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
-      if (shouldBind && onBind) {
-        onBind(view, item, i, selectedIndex == i);
+    // Bind only after the sizing batch has flushed so responsive row content
+    // observes the current recycler width instead of stale recycled geometry.
+    {
+      LayoutBatchScope bindingBatch;
+      for (const auto &[view, index] : pendingBindings) {
+        onBind(view, itemAt(index), index, selectedIndex == index);
       }
-
-      newVisibleItems.emplace_back(view, item);
     }
 
     // Recycle any views that are no longer visible

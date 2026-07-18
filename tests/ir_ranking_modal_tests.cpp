@@ -261,6 +261,23 @@ void testTwentyThousandEntriesCreateOnlyVisibleRows() {
   REQUIRE(recycler.getViewByIndex(15'000) == nullptr);
 }
 
+void testRecyclerBindingSeesAppliedRowWidth() {
+  RecyclerView<int> recycler(
+      [](const int left, const int right) { return left == right; });
+  recycler.setWidth(800)->setHeight(200)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  int boundWidth = -1;
+  recycler.onCreateView = [](const int &) { return new View(); };
+  recycler.onBind = [&](View *view, const int &, int, bool) {
+    boundWidth = view->getWidth();
+  };
+  recycler.setItems(std::vector<int>{1});
+
+  REQUIRE(boundWidth == 800);
+  REQUIRE(recycler.getViewByIndex(0) != nullptr);
+  REQUIRE(recycler.getViewByIndex(0)->getWidth() == 800);
+}
+
 void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
   bms_parser::ChartMeta meta;
   meta.KeyMode = 7;
@@ -290,6 +307,7 @@ int main() {
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
   testResponsiveRowsKeepCoreFieldsAndExpandCompactDetails();
   testTwentyThousandEntriesCreateOnlyVisibleRows();
+  testRecyclerBindingSeesAppliedRowWidth();
   testBokutachiEligibilityRequiresSupportedModeNotesAndSha256();
   return 0;
 }
