@@ -8,5 +8,6 @@ target_sources(main PRIVATE
     IrSubmission.cpp
     tachi/TachiBatchManual.cpp
     tachi/TachiDriver.cpp
+    tachi/TachiRankingParser.cpp
     tachi/TachiResponseParser.cpp
 )

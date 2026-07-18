@@ -418,6 +418,124 @@ void testInvalidRuntimeConfigurationNeverSends() {
   expect(http.requests.empty(), "invalid origin never reaches HTTP");
 }
 
+ir::IrChartQuery rankingQuery() {
+  return {
+      .keyMode = 7,
+      .chartMd5 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      .chartSha256 =
+          "ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD",
+      .totalNotes = 100,
+  };
+}
+
+void testRankingRequestAndStatusClassification() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200, .body = R"({"success":true,"body":[]})"});
+  auto result =
+      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->entries.empty(),
+         "empty remote chart ranking succeeds");
+  expect(http.requests.size() == 1, "ranking fetch performs one request");
+  if (!http.requests.empty()) {
+    const auto &request = http.requests.front();
+    expect(request.method == ir::IrHttpMethod::Get, "ranking fetch uses GET");
+    expect(
+        request.url ==
+            "https://boku.tachi.ac/ir/beatoraja/charts/"
+            "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd/"
+            "scores",
+        "ranking fetch normalizes origin and lowercases SHA-256 path");
+    expect(request.headers ==
+               std::vector<std::pair<std::string, std::string>>{
+                   {"Authorization", "Bearer fresh-api-key"}},
+           "ranking fetch sends only the current bearer header");
+    expect(request.maximumResponseBytes == 8 * 1024 * 1024,
+           "ranking response is capped at eight MiB");
+    expect(!request.followRedirects,
+           "authenticated ranking fetch does not follow redirects");
+  }
+
+  http.responses.push_back({.statusCode = 404});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::ChartNotFound,
+         "ranking 404 maps to chart not found");
+
+  for (long status : {401L, 403L}) {
+    http.responses.push_back({.statusCode = status});
+    result =
+        driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+    expect(result.status == ir::ChartRankingStatus::AuthenticationRequired,
+           "ranking authentication failure requests credentials");
+  }
+
+  for (long status : {408L, 429L, 500L, 503L}) {
+    http.responses.push_back({.statusCode = status});
+    result =
+        driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+    expect(result.status == ir::ChartRankingStatus::TransientFailure,
+           "retryable ranking HTTP status is transient");
+  }
+
+  for (long status : {302L, 400L}) {
+    http.responses.push_back({.statusCode = status});
+    result =
+        driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+    expect(result.status == ir::ChartRankingStatus::MalformedResponse,
+           "other ranking HTTP status is malformed and not cacheable");
+  }
+
+  http.responses.push_back(
+      {.transportError = ir::IrTransportError::ResponseTooLarge});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::OversizedResponse,
+         "oversized ranking transport maps separately");
+
+  http.responses.push_back({.transportError = ir::IrTransportError::Offline,
+                            .diagnostic = "offline"});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::TransientFailure,
+         "ranking transport failure is transient");
+
+  http.responses.push_back({.transportError = ir::IrTransportError::Other,
+                            .diagnostic = "transport echoed fresh-api-key"});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.diagnostic.find("fresh-api-key") == std::string::npos,
+         "ranking diagnostics cannot retain the current API key");
+
+  http.responses.push_back({.transportError = ir::IrTransportError::Cancelled});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Cancelled,
+         "cancelled ranking fetch maps separately");
+}
+
+void testRankingPreflightNeverLeaksCredentials() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  auto config = runtimeConfig();
+  config.apiKey.clear();
+  auto result = driver.fetchChartRanking(rankingQuery(), config, http, {});
+  expect(result.status == ir::ChartRankingStatus::AuthenticationRequired,
+         "missing ranking credential requests authentication");
+  expect(http.requests.empty(), "missing ranking credential never sends");
+
+  config = runtimeConfig();
+  config.serverOrigin = "https://example.test/path";
+  result = driver.fetchChartRanking(rankingQuery(), config, http, {});
+  expect(result.status == ir::ChartRankingStatus::MalformedResponse,
+         "invalid ranking origin fails preflight");
+  expect(http.requests.empty(), "invalid ranking origin never sends");
+
+  auto unsupported = rankingQuery();
+  unsupported.keyMode = 5;
+  result = driver.fetchChartRanking(unsupported, runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Unsupported,
+         "Tachi ranking reads reject unsupported BMS key modes");
+  expect(http.requests.empty(), "unsupported key mode never sends");
+}
+
 } // namespace
 
 int main() {
@@ -432,6 +550,8 @@ int main() {
   testAwaitingSubmitNeverPostsAgain();
   testHttpAndTransportClassification();
   testInvalidRuntimeConfigurationNeverSends();
+  testRankingRequestAndStatusClassification();
+  testRankingPreflightNeverLeaksCredentials();
 
   if (failures != 0) {
     std::cerr << failures << " Tachi driver test(s) failed\n";

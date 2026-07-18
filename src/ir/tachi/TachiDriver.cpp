@@ -1,6 +1,7 @@
 #include "TachiDriver.h"
 
 #include "TachiBatchManual.h"
+#include "TachiRankingParser.h"
 #include "TachiResponseParser.h"
 #include "../IrHttpClient.h"
 #include "../IrProfileSettings.h"
@@ -139,6 +140,32 @@ IrHttpRequest submitRequest(std::string_view origin, const IrOutboxEntry &entry,
   return request;
 }
 
+ChartRankingOutcome rankingFailure(ChartRankingStatus status,
+                                   std::string diagnostic,
+                                   std::string_view apiKey = {}) {
+  return {.status = status,
+          .diagnostic = redact(std::move(diagnostic), apiKey)};
+}
+
+std::optional<std::string> normalizedSha256(std::string_view value) {
+  if (value.size() != 64) {
+    return std::nullopt;
+  }
+  std::string normalized;
+  normalized.reserve(value.size());
+  for (const unsigned char character : value) {
+    if ((character >= '0' && character <= '9') ||
+        (character >= 'a' && character <= 'f')) {
+      normalized.push_back(static_cast<char>(character));
+    } else if (character >= 'A' && character <= 'F') {
+      normalized.push_back(static_cast<char>(character - 'A' + 'a'));
+    } else {
+      return std::nullopt;
+    }
+  }
+  return normalized;
+}
+
 } // namespace
 
 std::string_view TachiDriver::providerId() const noexcept {
@@ -223,6 +250,83 @@ DeliveryOutcome TachiDriver::poll(const IrOutboxEntry &entry,
     return classifyFailure(response, config.apiKey);
   }
   return redactOutcome(parsePollStatusResponse(response.body), config.apiKey);
+}
+
+ChartRankingOutcome TachiDriver::fetchChartRanking(
+    const IrChartQuery &query, const IrProviderRuntimeConfig &config,
+    IrHttpClient &http, std::stop_token stopToken) const {
+  if (stopToken.stop_requested()) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
+  }
+  if (query.keyMode != 7 && query.keyMode != 14) {
+    return rankingFailure(ChartRankingStatus::Unsupported,
+                          "Bokutachi supports BMS 7K and 14K rankings only");
+  }
+  if (!validCredential(config.apiKey)) {
+    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
+                          "Tachi API key is missing or invalid");
+  }
+  const auto origin = normalizeServerOrigin(config.serverOrigin);
+  if (!origin) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi server origin is missing or invalid");
+  }
+  const auto sha256 = normalizedSha256(query.chartSha256);
+  if (!sha256 || query.totalNotes <= 0 ||
+      query.totalNotes > std::numeric_limits<int>::max() / 2) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking chart query is invalid");
+  }
+
+  const IrHttpRequest request{
+      .method = IrHttpMethod::Get,
+      .url = *origin + "/ir/beatoraja/charts/" + *sha256 + "/scores",
+      .headers = {{"Authorization", "Bearer " + config.apiKey}},
+      .maximumResponseBytes = kMaximumRankingResponseBytes,
+      .followRedirects = false,
+  };
+  const IrHttpResponse response = http.perform(request, stopToken);
+  if (response.transportError == IrTransportError::Cancelled) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
+  }
+  if (response.transportError == IrTransportError::ResponseTooLarge) {
+    return rankingFailure(ChartRankingStatus::OversizedResponse,
+                          "Tachi ranking response exceeded the size limit");
+  }
+  if (response.transportError != IrTransportError::None) {
+    return rankingFailure(ChartRankingStatus::TransientFailure,
+                          response.diagnostic.empty()
+                              ? "Tachi ranking transport request failed"
+                              : response.diagnostic,
+                          config.apiKey);
+  }
+  if (response.statusCode == 404) {
+    return {.status = ChartRankingStatus::ChartNotFound};
+  }
+  if (response.statusCode == 401 || response.statusCode == 403) {
+    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
+                          "Tachi ranking authentication failed");
+  }
+  if (response.statusCode == 408 || response.statusCode == 429 ||
+      (response.statusCode >= 500 && response.statusCode < 600)) {
+    return rankingFailure(ChartRankingStatus::TransientFailure,
+                          "Tachi ranking request failed with HTTP " +
+                              std::to_string(response.statusCode));
+  }
+  if (!isHttpSuccess(response.statusCode)) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking request failed with HTTP " +
+                              std::to_string(response.statusCode));
+  }
+
+  IrChartQuery normalizedQuery = query;
+  normalizedQuery.chartSha256 = *sha256;
+  ChartRankingOutcome outcome =
+      parseRankingResponse(response.body, normalizedQuery);
+  outcome.diagnostic = redact(std::move(outcome.diagnostic), config.apiKey);
+  return outcome;
 }
 
 } // namespace ir::tachi

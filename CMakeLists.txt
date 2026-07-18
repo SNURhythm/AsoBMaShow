@@ -665,12 +665,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/ir/tachi/TachiDriver.cpp
+        src/ir/tachi/TachiRankingParser.cpp
         src/ir/tachi/TachiResponseParser.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
     )
     target_include_directories(tachi_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(tachi_driver_tests PRIVATE cxx_std_23)
+
+    add_executable(tachi_ranking_parser_tests
+        tests/tachi_ranking_parser_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(tachi_ranking_parser_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(tachi_ranking_parser_tests PRIVATE cxx_std_23)
 
     if (NOT IOS)
         add_executable(ir_http_client_tests
@@ -1905,6 +1915,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_driver_tests
         tachi_batch_manual_tests
         tachi_driver_tests
+        tachi_ranking_parser_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests

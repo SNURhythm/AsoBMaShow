@@ -17,6 +17,10 @@ public:
                                      const IrProviderRuntimeConfig &config,
                                      IrHttpClient &http,
                                      std::stop_token stopToken) const override;
+  [[nodiscard]] ChartRankingOutcome
+  fetchChartRanking(const IrChartQuery &query,
+                    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+                    std::stop_token stopToken) const override;
 };
 
 } // namespace ir::tachi
