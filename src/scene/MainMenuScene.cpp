@@ -3098,6 +3098,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
   right->setThemedBorderColor(ui_theme::hairline);
   right->setBorderWidth(1);
+  right->setGap(12);
+  right->setPadding(Edge::Bottom, 16);
 
   auto *rightScroll = new ScrollView();
   rightScroll->setWidth(280);
@@ -3371,11 +3373,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightContent->addView(findBmsButtonSlot);
   rightContent->addView(replayStatusText);
 
-  auto *settingsSpacer = new View();
-  settingsSpacer->setWidth(220);
-  settingsSpacer->setHeight(12);
-  rightContent->addView(settingsSpacer);
-
   auto *settingsButton = new Button(0, 0, 220, 64);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
   settingsText->setText("Settings");
@@ -3393,10 +3390,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
     cancelPreviewLoading(true);
     context.sceneManager->changeScene("Settings", true);
   });
-  rightContent->addView(settingsButton);
-
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
+  right->addView(settingsButton);
   rootLayout->addView(right);
   buildPlayOptionsModal();
   buildReplayModal();
