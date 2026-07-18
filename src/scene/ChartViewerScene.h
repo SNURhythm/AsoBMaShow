@@ -126,6 +126,9 @@ private:
   std::optional<std::string> selectedPracticePresetId;
   long long practiceChartEndMicros = 0;
   std::optional<practice::LaunchRequest> pendingPracticeLaunchRequest;
+  GameplayRuleset practiceRuleset = kDefaultGameplayRuleset;
+  std::optional<RulesetDescriptor> practiceRequiredRulesetDescriptor;
+  std::optional<ScoreStageProvenance> practiceReplayRulesetSnapshot;
 
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;

@@ -5208,6 +5208,8 @@ void MainMenuScene::startCourseDirect(
         options.clubMode = context.settings.gameplayClubModeEnabled;
         options.courseSession = session;
         options.courseConstraints = session->constraints;
+        options.ruleset = session->ruleset;
+        options.requiredRulesetDescriptor = session->rulesetDescriptor;
         options.ownsChart = true;
 
         context.sceneManager->changeScene(
@@ -9067,6 +9069,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         for (const auto &stage : replayData->stages) {
           session->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
         }
+        session->snapshotRulesetFromReplay(replayData->stages.front().replay);
         const CourseConstraintSettings constraintSettings =
             courseConstraintSettingsFromJson(replayData->constraintJson);
         session->currentIndex = 0;

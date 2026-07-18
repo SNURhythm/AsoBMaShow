@@ -17,6 +17,7 @@
 #include "../../view/TextView.h"
 #include "../../view/IconText.h"
 #include "BMSRenderer.h"
+#include "GameplayNoteJudgeRole.h"
 #include "RealtimeGameplayAuthorityPolicy.h"
 #include "RhythmLaneInputController.h"
 #include "RealtimeGameplayWorker.h"
@@ -40,6 +41,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -233,16 +235,35 @@ JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
   return judgeResult;
 }
 
-JudgeResult judgeClassicLongNoteRelease(Judge &judge,
-                                        bms_parser::LongNote *tail,
-                                        long long releasedTime) {
+JudgeResult judgeClassicLongNoteRelease(
+    const gameplay::CompiledGameplayJudge &judge,
+    const bms_parser::ChartMeta &chartMeta, int longNoteModeOverride,
+    bms_parser::LongNote *tail, long long releasedTime) {
   if (tail == nullptr || !tail->IsTail() || tail->Head == nullptr) {
     return JudgeResult(None, 0);
   }
 
-  const JudgeResult headJudge =
-      judge.judgeNow(tail->Head, tail->Head->PlayedTime);
-  const JudgeResult tailJudge = judge.judgeNow(tail, releasedTime);
+  const auto noteTiming = [](const bms_parser::Note *note) {
+    return note != nullptr && note->Timeline != nullptr
+               ? note->Timeline->Timing
+               : 0LL;
+  };
+  const JudgeResult headJudge = judge.judgeAt(
+      gameplay::judgeRoleFor(tail->Head, chartMeta, longNoteModeOverride),
+      noteTiming(tail->Head), tail->Head->PlayedTime);
+  const long long tailDiff = releasedTime - noteTiming(tail);
+  if (judge.rules().ruleset == GameplayRuleset::LR2) {
+    const JudgeResult head = normalizeLongNoteReleaseJudge(headJudge);
+    if (std::llabs(tailDiff) <= 120'000) {
+      return head;
+    }
+    return head.judgement == Bad && std::llabs(head.Diff) > std::llabs(tailDiff)
+               ? head
+               : JudgeResult(Bad, tailDiff);
+  }
+  const JudgeResult tailJudge = judge.judgeAt(
+      gameplay::judgeRoleFor(tail, chartMeta, longNoteModeOverride),
+      noteTiming(tail), releasedTime);
   const auto absDiff = [](long long value) {
     return value < 0 ? -value : value;
   };
@@ -327,6 +348,24 @@ std::string gameplayPlayOptionLabel(const StartOptions &options) {
   const std::string label =
       play_options::formatPlayOptionLabel(option, seed, option2, seed2);
   return label.empty() ? "" : "Option: " + label;
+}
+
+Judge presentationJudgeForPolicy(
+    const gameplay::GameplayPolicyBuildOutcome &outcome, int sourceRank) {
+  Judge result(sourceRank);
+  if (!outcome.policy.has_value()) {
+    return result;
+  }
+  result.timingWindows.clear();
+  for (const Judgement judgement : {PGreat, Great, Good, Bad, Kpoor}) {
+    const auto window = outcome.policy->judge.window(
+        gameplay::JudgeWindowContext::Normal, judgement);
+    if (window.has_value()) {
+      result.timingWindows[judgement] =
+          {window->earlyMicros, window->lateMicros};
+    }
+  }
+  return result;
 }
 
 bool gameplayHasSamePatternRandomization(const bms_parser::Chart &chart,
@@ -963,7 +1002,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   const std::size_t replayCapacity = gameplay::realtimeGameplayReplayCapacity(
       definition.noteCount(), definition.metadata().finalTimelineTimeMicros);
   gameplay::GameplaySimulationConfig simulationConfig{
-      .judge = gameplay::CompiledGameplayJudge::from(judge),
+      .judge = rulesetPolicyBuild.policy->judge,
+      .gaugeRules = rulesetPolicyBuild.policy->gauge,
       .notePriorityMode = context.settings.notePriorityMode,
       .attempt =
           {
@@ -1457,11 +1497,20 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       chart(options.ownsChart ? ownedChart.get() : chart),
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, chart->Meta.KeyMode))),
-      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
-      attemptProvenance(captureScoreProvenanceAtPlayStart(
-          this->options, this->chart->Meta, judge.timingWindows)) {
+      rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
+          this->options, this->chart->Meta,
+          context.settings.notePriorityMode)),
+      judge(presentationJudgeForPolicy(rulesetPolicyBuild,
+                                       this->chart->Meta.Rank)) {
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
-  latePoorTiming = judge.timingWindows[Bad].second;
+  latePoorTiming = rulesetPolicyBuild.policy.has_value()
+                       ? rulesetPolicyBuild.policy->judge
+                             .automaticPoorLateMicros()
+                       : judge.timingWindows[Bad].second;
+  if (rulesetPolicyBuild.policy.has_value()) {
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        this->options, this->chart->Meta, judge.timingWindows);
+  }
 }
 
 GamePlayScene::GamePlayScene(ApplicationContext &context,
@@ -1471,12 +1520,21 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       options(enforceCoursePlaybackRules(
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
                                        this->chart->Meta.KeyMode))),
-      judge(makeEffectiveJudgeAtPlayStart(this->options, this->chart->Meta)),
-      attemptProvenance(captureScoreProvenanceAtPlayStart(
-          this->options, this->chart->Meta, judge.timingWindows)) {
+      rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
+          this->options, this->chart->Meta,
+          context.settings.notePriorityMode)),
+      judge(presentationJudgeForPolicy(rulesetPolicyBuild,
+                                       this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
-  latePoorTiming = judge.timingWindows[Bad].second;
+  latePoorTiming = rulesetPolicyBuild.policy.has_value()
+                       ? rulesetPolicyBuild.policy->judge
+                             .automaticPoorLateMicros()
+                       : judge.timingWindows[Bad].second;
+  if (rulesetPolicyBuild.policy.has_value()) {
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        this->options, this->chart->Meta, judge.timingWindows);
+  }
 }
 
 GamePlayScene::~GamePlayScene() {
@@ -1489,6 +1547,13 @@ GamePlayScene::~GamePlayScene() {
 void GamePlayScene::init() {
   context.profileGameplayActive.store(true, std::memory_order_release);
   profileGameplayBlockerActive = true;
+  if (!rulesetPolicyBuild.built()) {
+    showPlaybackInitializationFailure(
+        rulesetPolicyBuild.diagnostic.empty()
+            ? "The selected gameplay ruleset could not be started."
+            : rulesetPolicyBuild.diagnostic);
+    return;
+  }
   if (chart != nullptr) {
     const int replayLongNoteMode =
         options.replayData != nullptr
@@ -1578,7 +1643,8 @@ void GamePlayScene::init() {
   }
 
   ownedLaneInputController = std::make_unique<RhythmLaneInputController>(
-      chart, renderer, lanePressed, judge, options.longNoteMode,
+      chart, renderer, lanePressed, rulesetPolicyBuild.policy->judge,
+      options.longNoteMode,
       practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
 
@@ -1862,7 +1928,8 @@ bool GamePlayScene::reset() {
   if (renderer != nullptr) {
     renderer->setCurrentBpm(currentGameplayBpm);
   }
-  ownedState = std::make_unique<RhythmState>(chart, false);
+  ownedState = std::make_unique<RhythmState>(
+      chart, false, rulesetPolicyBuild.policy->gauge);
   state = ownedState.get();
   const bool courseReplayPlayback = isReplayPlayback() && isCoursePlayback() &&
                                     options.courseSession != nullptr &&
@@ -2514,6 +2581,8 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   nextOptions.clubMode = options.clubMode;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;
+  nextOptions.ruleset = session->ruleset;
+  nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
   nextOptions.ownsChart = true;
 
   context.sceneManager->changeScene(
@@ -3677,10 +3746,16 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               }
               longNote->Release(judgedTime);
               const auto judgeResult =
-                  chargeLongNote ? normalizeLongNoteReleaseJudge(
-                                       judge.judgeNow(longNote, judgedTime))
-                                 : judgeClassicLongNoteRelease(judge, longNote,
-                                                               judgedTime);
+                  chargeLongNote
+                      ? normalizeLongNoteReleaseJudge(
+                            rulesetPolicyBuild.policy->judge.judgeAt(
+                                gameplay::judgeRoleFor(
+                                    longNote, chart->Meta,
+                                    options.longNoteMode),
+                                longNote->Timeline->Timing, judgedTime))
+                      : judgeClassicLongNoteRelease(
+                            rulesetPolicyBuild.policy->judge, chart->Meta,
+                            options.longNoteMode, longNote, judgedTime);
               onJudge(judgeResult, false);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
                                 time, judgedTime, judgeResult);
@@ -4296,7 +4371,12 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
   }
   const JudgeResult judgeResult = precomputedJudge != nullptr
                                       ? *precomputedJudge
-                                      : judge.judgeNow(note, pressedTime);
+                                      : rulesetPolicyBuild.policy->judge.judgeAt(
+                                            gameplay::judgeRoleFor(
+                                                note, chart->Meta,
+                                                options.longNoteMode),
+                                            note->Timeline->Timing,
+                                            pressedTime);
   if (judgeResult.judgement != None) {
     if (judgeResult.isNotePlayed()) {
       // TODO: play keybomb
@@ -4348,16 +4428,24 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
   LongNote->Release(ReleasedTime);
   const auto judgeResult = precomputedJudge != nullptr
                                ? *precomputedJudge
-                               : judge.judgeNow(LongNote, ReleasedTime);
+                               : rulesetPolicyBuild.policy->judge.judgeAt(
+                                     gameplay::judgeRoleFor(
+                                         LongNote, chart->Meta,
+                                         options.longNoteMode),
+                                     LongNote->Timeline->Timing,
+                                     ReleasedTime);
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
       effectiveLongNoteIsCharge(LongNote, chart, options.longNoteMode);
   if (precomputedJudge != nullptr) {
     appliedJudge = *precomputedJudge;
   } else {
-    appliedJudge = chargeLongNote ? normalizeLongNoteReleaseJudge(judgeResult)
-                                  : judgeClassicLongNoteRelease(judge, LongNote,
-                                                                ReleasedTime);
+    appliedJudge =
+        chargeLongNote
+            ? normalizeLongNoteReleaseJudge(judgeResult)
+            : judgeClassicLongNoteRelease(
+                  rulesetPolicyBuild.policy->judge, chart->Meta,
+                  options.longNoteMode, LongNote, ReleasedTime);
   }
   onJudge(appliedJudge, !options.autoPlay || isReplayPlayback());
   if (recordEvent) {

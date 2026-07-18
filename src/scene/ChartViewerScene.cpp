@@ -2338,6 +2338,13 @@ ChartViewerScene::ChartViewerScene(
   }
   viewerAssistOption =
       assist_options::normalize(context.settings.selectedAssistOption);
+  if (pendingPracticeLaunchRequest.has_value()) {
+    practiceRuleset = pendingPracticeLaunchRequest->ruleset;
+    practiceRequiredRulesetDescriptor =
+        pendingPracticeLaunchRequest->requiredRulesetDescriptor;
+    practiceReplayRulesetSnapshot =
+        pendingPracticeLaunchRequest->replayRulesetSnapshot;
+  }
   if (pendingPracticeLaunchRequest.has_value() &&
       pendingPracticeLaunchRequest->replayPlayOptions.has_value()) {
     const auto &replayOptions =
@@ -4126,6 +4133,10 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     return;
   }
 
+  practiceRuleset = request.ruleset;
+  practiceRequiredRulesetDescriptor = request.requiredRulesetDescriptor;
+  practiceReplayRulesetSnapshot = request.replayRulesetSnapshot;
+
   practiceConfiguration =
       sanitizePracticeConfiguration(std::move(application.configuration),
                                     practiceChartEndMicros, chart.get())
@@ -4535,6 +4546,10 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                         [this](const ReplayData &replayData) {
                           setPracticeGhostReplay(replayData);
                         },
+                    .ruleset = practiceRuleset,
+                    .requiredRulesetDescriptor =
+                        practiceRequiredRulesetDescriptor,
+                    .replayRulesetOverride = practiceReplayRulesetSnapshot,
                 }),
             true);
         return true;

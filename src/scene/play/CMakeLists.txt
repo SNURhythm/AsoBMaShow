@@ -3,6 +3,7 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             JudgementIndicatorRenderer.cpp Judge.cpp
                             GameplayJudgeRules.cpp
                             GameplayGaugeRules.cpp
+                            GameplayRulesetPolicy.cpp
                             GameplayNoteJudgeRole.cpp
                             GameplayCandidateRules.cpp
                             CompiledGameplayJudge.cpp GameplayDefinition.cpp

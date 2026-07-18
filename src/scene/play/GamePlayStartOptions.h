@@ -2,9 +2,11 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
+#include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
 #include "Pacemaker.h"
+#include "GameplayRulesetPolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -93,8 +95,9 @@ struct StartOptions {
   std::optional<bool> replayGhostRenderingEnabled;
   std::function<void(const ReplayData &)> practiceGhostCallback;
   std::vector<InputDeviceCategory> inputDeviceCategories;
-  std::optional<RulesetDescriptor> rulesetDescriptor;
-  std::optional<ScoreStageProvenance> replayJudgeOverride;
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
+  std::optional<RulesetDescriptor> requiredRulesetDescriptor;
+  std::optional<ScoreStageProvenance> replayRulesetOverride;
 };
 
 namespace play_start_detail {
@@ -166,11 +169,11 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
 makeEffectiveJudgeAtPlayStart(const StartOptions &options,
                               const bms_parser::ChartMeta &chartMeta) {
   Judge judge = makeEffectiveJudgeAtPlayStart(options, chartMeta.Rank);
-  if (options.replayJudgeOverride.has_value() &&
-      score_provenance::stageMatchesChart(*options.replayJudgeOverride,
+  if (options.replayRulesetOverride.has_value() &&
+      score_provenance::stageMatchesChart(*options.replayRulesetOverride,
                                           chartMeta)) {
     if (const auto windows = play_start_detail::validatedJudgeWindows(
-            *options.replayJudgeOverride)) {
+            *options.replayRulesetOverride)) {
       judge.timingWindows = *windows;
     }
   }
@@ -183,9 +186,81 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.clubMode = replay.provenance.clubMode;
   options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
   options.startingGaugePercent = replay.provenance.startingGaugePercent;
+  options.gaugeType = replay.provenance.gaugeType;
+  options.gaugeProfile = replay.provenance.gaugeProfile;
+  options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
   options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
-  options.replayJudgeOverride = play_start_detail::replayJudgeOverrideForChart(
-      replay.provenance, replay.chartMeta);
+  options.requiredRulesetDescriptor = replay.provenance.ruleset;
+  if (const auto recordedRuleset =
+          gameplayRulesetFromId(replay.provenance.ruleset.id)) {
+    options.ruleset = *recordedRuleset;
+  }
+  options.replayRulesetOverride =
+      play_start_detail::replayJudgeOverrideForChart(replay.provenance,
+                                                     replay.chartMeta);
+}
+
+[[nodiscard]] inline gameplay::CandidateSelectionMode
+candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
+  switch (mode) {
+  case AppSettings::NotePriorityMode::Combo:
+    return gameplay::CandidateSelectionMode::Combo;
+  case AppSettings::NotePriorityMode::Duration:
+    return gameplay::CandidateSelectionMode::Duration;
+  case AppSettings::NotePriorityMode::Score:
+    return gameplay::CandidateSelectionMode::Score;
+  case AppSettings::NotePriorityMode::Lowest:
+  default:
+    return gameplay::CandidateSelectionMode::Lowest;
+  }
+}
+
+[[nodiscard]] inline gameplay::GameplayPolicyBuildOutcome
+buildGameplayRulesetPolicyAtPlayStart(
+    const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
+    AppSettings::NotePriorityMode notePriorityMode) {
+  const GameplayRuleset selectedRuleset =
+      options.courseSession != nullptr ? options.courseSession->ruleset
+                                       : options.ruleset;
+  std::optional<RulesetDescriptor> requiredDescriptor =
+      options.requiredRulesetDescriptor;
+  if (!requiredDescriptor.has_value() && options.courseSession != nullptr) {
+    requiredDescriptor = options.courseSession->rulesetDescriptor;
+  }
+  const int sourceRank =
+      options.replayRulesetOverride.has_value() &&
+              options.replayRulesetOverride->sourceJudgeRank.has_value()
+          ? *options.replayRulesetOverride->sourceJudgeRank
+          : chartMeta.Rank;
+  auto outcome = gameplay::buildGameplayRulesetPolicy(
+      chartMeta,
+      {.ruleset = selectedRuleset,
+       .gaugeProfile = options.gaugeProfile,
+       .sourceRank = sourceRank,
+       .playbackRatePercent = options.playback.percent,
+       .judgeScalePercent = options.judgeWindowScalePercent,
+       .courseJudgement = options.courseConstraints.judgement,
+       .beatorajaCandidateSelection =
+           candidateSelectionForNotePriority(notePriorityMode),
+       .requiredDescriptor = std::move(requiredDescriptor),
+       .replaySnapshot = options.replayRulesetOverride});
+  if (outcome.built() && options.replayData != nullptr &&
+      !options.replayRulesetOverride.has_value()) {
+    outcome.status =
+        gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot;
+    outcome.policy.reset();
+    outcome.diagnostic =
+        "The replay does not contain a complete gameplay policy snapshot.";
+  }
+  if (outcome.policy.has_value() && options.courseSession != nullptr &&
+      !gameplay::courseSessionAcceptsPolicy(*options.courseSession,
+                                            *outcome.policy)) {
+    outcome.status = gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset;
+    outcome.policy.reset();
+    outcome.diagnostic =
+        "This course stage uses a different gameplay ruleset.";
+  }
+  return outcome;
 }
 
 [[nodiscard]] inline StartOptions
@@ -233,10 +308,9 @@ enforceCoursePlaybackRules(StartOptions options) {
   input.playback = options.playback;
   input.judgeWindowScalePercent = options.judgeWindowScalePercent;
   input.startingGaugePercent = options.startingGaugePercent;
-  input.ruleset =
-      options.courseSession != nullptr
-          ? options.courseSession->rulesetDescriptor
-          : options.rulesetDescriptor.value_or(RulesetDescriptor::Current());
+  input.ruleset = options.courseSession != nullptr
+                      ? options.courseSession->rulesetDescriptor
+                      : RulesetDescriptor::For(options.ruleset);
   return makeScoreProvenance(input);
 }
 
@@ -255,6 +329,8 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
     options.courseSession = session;
     options.courseConstraints = session->constraints;
+    options.ruleset = session->ruleset;
+    options.requiredRulesetDescriptor = session->rulesetDescriptor;
     options.touchVisualizationEnabled =
         session->replayTouchVisualizationEnabled;
     options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;

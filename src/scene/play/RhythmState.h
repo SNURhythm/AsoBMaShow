@@ -13,16 +13,27 @@ public:
     (void)addReadyMeasure;
   }
 
+  explicit RhythmState(const bms_parser::Chart *chart, bool addReadyMeasure,
+                       GameplayGaugeRules gaugeRules)
+      : GameplayScoreState(
+            {.gaugeRules = gaugeRules,
+             .keyMode = chart == nullptr ? 7 : chart->Meta.KeyMode}),
+        chart_(chart), ruleset_(gaugeRules.ruleset),
+        fixedGaugeRules_(std::move(gaugeRules)) {
+    (void)addReadyMeasure;
+  }
+
   void configureGauge(GaugeType newSelectedGaugeType,
                       GaugeAutoShiftMode autoShift,
                       GaugeProfile selectedGaugeProfile =
                           GaugeProfile::Standard,
                       GaugeType autoShiftLowerBound =
                           GaugeType::AssistedEasy) {
-    setGaugeRules(
-        compileGameplayGaugeRules(ruleset_, chartMeta(),
-                                  selectedGaugeProfile),
-        chart_ == nullptr ? 7 : chart_->Meta.KeyMode);
+    setGaugeRules(fixedGaugeRules_.has_value()
+                      ? *fixedGaugeRules_
+                      : compileGameplayGaugeRules(
+                            ruleset_, chartMeta(), selectedGaugeProfile),
+                  chart_ == nullptr ? 7 : chart_->Meta.KeyMode);
     GameplayScoreState::configureGauge(newSelectedGaugeType, autoShift,
                                        selectedGaugeProfile,
                                        autoShiftLowerBound);
@@ -46,4 +57,5 @@ private:
 
   const bms_parser::Chart *chart_ = nullptr;
   GameplayRuleset ruleset_ = GameplayRuleset::Beatoraja;
+  std::optional<GameplayGaugeRules> fixedGaugeRules_;
 };

@@ -153,8 +153,9 @@ private:
   float coursePauseHoldProgress = 0.0f;
   float coursePauseHoldRewindStartProgress = 0.0f;
   StartOptions options;
+  gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   Judge judge;
-  const ScoreProvenance attemptProvenance;
+  ScoreProvenance attemptProvenance;
   void checkPassedTimeline(long long time);
   void detonateLandmine(bms_parser::LandmineNote *note, long long songTimeMicros,
                         long long judgeTimeMicros);

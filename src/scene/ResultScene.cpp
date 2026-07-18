@@ -1482,6 +1482,8 @@ void ResultScene::continueCourse() {
   nextOptions.assistOption = session->assistOption;
   nextOptions.courseSession = session;
   nextOptions.courseConstraints = session->constraints;
+  nextOptions.ruleset = session->ruleset;
+  nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
   nextOptions.ownsChart = true;
 
   context.sceneManager->changeScene(
@@ -1606,6 +1608,11 @@ void ResultScene::startRetry(bool samePattern) {
                       context.settings.selectedPacemakerTarget);
         options.playback = retryPlayback;
         options.ownsChart = true;
+        options.requiredRulesetDescriptor = attemptProvenance.ruleset;
+        if (const auto completedRuleset =
+                gameplayRulesetFromId(attemptProvenance.ruleset.id)) {
+          options.ruleset = *completedRuleset;
+        }
         if (practiceOptions.enabled) {
           options.practiceSession = retryPracticeSession;
           options.practiceMode = retryPracticeSession == nullptr;
@@ -1769,6 +1776,21 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
       .endMicros = endMicros,
       .source = source,
   };
+  const ScoreProvenance &rulesetSource =
+      source == practice::LaunchSource::ReplayResult && retryData.has_value()
+          ? retryData->provenance
+          : attemptProvenance;
+  request.requiredRulesetDescriptor = rulesetSource.ruleset;
+  if (const auto selectedRuleset =
+          gameplayRulesetFromId(rulesetSource.ruleset.id)) {
+    request.ruleset = *selectedRuleset;
+  }
+  if (source == practice::LaunchSource::ReplayResult) {
+    if (const auto *stage =
+            score_provenance::uniqueStageForChart(rulesetSource, chartMeta)) {
+      request.replayRulesetSnapshot = *stage;
+    }
+  }
   if (source == practice::LaunchSource::ReplayResult &&
       retryData.has_value()) {
     request.replayId = retryData->id;
@@ -1878,6 +1900,7 @@ void ResultScene::startCourseReplay() {
   for (const auto &stage : replayData->stages) {
     replaySession->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
   }
+  replaySession->snapshotRulesetFromReplay(replayData->stages.front().replay);
   const CourseConstraintSettings constraintSettings =
       courseConstraintSettingsFromJson(replayData->constraintJson);
   replaySession->currentIndex = 0;

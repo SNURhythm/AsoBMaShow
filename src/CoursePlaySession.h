@@ -284,6 +284,7 @@ struct CoursePlaySession {
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<CourseReplayStageData> replayStages;
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
   std::vector<std::optional<ScoreProvenance>> stageProvenance;
   std::size_t currentIndex = 0;
@@ -313,6 +314,13 @@ struct CoursePlaySession {
 
   [[nodiscard]] bool validCurrentIndex() const {
     return currentIndex < entries.size();
+  }
+
+  void snapshotRulesetFromReplay(const ReplayData &replay) {
+    rulesetDescriptor = replay.provenance.ruleset;
+    if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
+      ruleset = *recorded;
+    }
   }
 
   [[nodiscard]] bool hasNextChart() const {

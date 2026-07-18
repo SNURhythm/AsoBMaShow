@@ -402,8 +402,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
   options.startingGaugePercent = 37;
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard,
                                    InputDeviceCategory::Midi};
-  options.rulesetDescriptor =
-      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  options.ruleset = GameplayRuleset::Beatoraja;
 
   Judge effectiveJudge(meta.Rank);
   const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
@@ -414,7 +413,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
   options.playOption = "NORMAL";
   options.playOptionSeed.reset();
   options.inputDeviceCategories = {InputDeviceCategory::Touch};
-  options.rulesetDescriptor = RulesetDescriptor::Legacy();
+  options.ruleset = GameplayRuleset::LR2;
   meta.MD5 = "mutated-md5";
   meta.SHA256 = "mutated-sha256";
   meta.RandomValues = {99};
@@ -516,7 +515,7 @@ void testReplayUsesPersistedJudgeWindowsAsAuthority() {
 
   StartOptions options;
   applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.replayJudgeOverride.has_value());
+  assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta currentMeta = replay.chartMeta;
   currentMeta.Rank = 3;
@@ -537,7 +536,7 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
 
   StartOptions options;
   applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.replayJudgeOverride.has_value());
+  assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta differentChart = replay.chartMeta;
   differentChart.SHA256 = std::string(64, 'e');
@@ -549,7 +548,7 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   replay.provenance.stages.front().effectiveJudgeWindows.pop_back();
   StartOptions incompleteOptions;
   applyReplayProvenanceToStartOptions(incompleteOptions, replay);
-  assert(!incompleteOptions.replayJudgeOverride.has_value());
+  assert(!incompleteOptions.replayRulesetOverride.has_value());
   const Judge incompleteFallback =
       makeEffectiveJudgeAtPlayStart(incompleteOptions, replay.chartMeta);
   assert(incompleteFallback.timingWindows ==
@@ -558,7 +557,7 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   replay.provenance = ScoreProvenance::Legacy();
   StartOptions legacyOptions;
   applyReplayProvenanceToStartOptions(legacyOptions, replay);
-  assert(!legacyOptions.replayJudgeOverride.has_value());
+  assert(!legacyOptions.replayRulesetOverride.has_value());
 }
 
 void testCourseReplaySelectsMatchingStageJudgeWindows() {
@@ -586,7 +585,7 @@ void testCourseReplaySelectsMatchingStageJudgeWindows() {
   session->constraints.judgement = CourseJudgementConstraint::NoGood;
   const StartOptions options =
       makeCourseReplayStageStartOptions(session, stageReplay);
-  assert(options.replayJudgeOverride.has_value());
+  assert(options.replayRulesetOverride.has_value());
   const Judge restored =
       makeEffectiveJudgeAtPlayStart(options, stageReplay->chartMeta);
   assert(restored.timingWindows == secondWindows);
@@ -669,6 +668,7 @@ void testConstrainedPlayCapturesEffectiveWindowsAsVerified() {
 
 void testCourseSessionAggregatesRecordedStagesByIndex() {
   CoursePlaySession session;
+  session.ruleset = GameplayRuleset::Beatoraja;
   session.rulesetDescriptor =
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
 
@@ -697,6 +697,7 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
 
   StartOptions options;
   options.courseSession = std::make_shared<CoursePlaySession>();
+  options.courseSession->ruleset = GameplayRuleset::Beatoraja;
   options.courseSession->rulesetDescriptor =
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   options.courseSession->rulesetDescriptor.scoringModel = "course-override";
