@@ -68,10 +68,21 @@ std::shared_ptr<const ir::IrChartRanking> ranking(bool includeEntries = true) {
          .playerName = "AAA",
          .score = 1900,
          .maxScore = 2000,
+         .pGreat = 930,
+         .great = 40,
+         .good = 20,
+         .bad = 6,
+         .poor = 4,
          .earlyPGreat = 430,
-         .latePGreat = 470,
-         .earlyGreat = 48,
-         .lateGreat = 52,
+         .latePGreat = 500,
+         .earlyGreat = 18,
+         .lateGreat = 22,
+         .earlyGood = 12,
+         .lateGood = 8,
+         .earlyBad = 4,
+         .lateBad = 2,
+         .earlyPoor = 1,
+         .latePoor = 3,
          .clearType = kClearTypeFullComboRank,
          .badPoints = 0,
          .maxCombo = 1000,
@@ -235,10 +246,21 @@ void testScoreDetailFormatsCompleteAndMissingData() {
   REQUIRE(detail->scoreText == "1900 / 2000");
   REQUIRE(detail->rateText == "95.00%");
   REQUIRE(detail->lampText == "FULL COMBO");
+  REQUIRE(detail->totalPGreatText == "930");
+  REQUIRE(detail->totalGreatText == "40");
+  REQUIRE(detail->totalGoodText == "20");
+  REQUIRE(detail->totalBadText == "6");
+  REQUIRE(detail->totalPoorText == "4");
   REQUIRE(detail->earlyPGreatText == "430");
-  REQUIRE(detail->latePGreatText == "470");
-  REQUIRE(detail->earlyGreatText == "48");
-  REQUIRE(detail->lateGreatText == "52");
+  REQUIRE(detail->latePGreatText == "500");
+  REQUIRE(detail->earlyGreatText == "18");
+  REQUIRE(detail->lateGreatText == "22");
+  REQUIRE(detail->earlyGoodText == "12");
+  REQUIRE(detail->lateGoodText == "8");
+  REQUIRE(detail->earlyBadText == "4");
+  REQUIRE(detail->lateBadText == "2");
+  REQUIRE(detail->earlyPoorText == "1");
+  REQUIRE(detail->latePoorText == "3");
   REQUIRE(detail->judgementBreakdownAvailable);
   REQUIRE(detail->badPointsText == "0");
   REQUIRE(detail->maxComboText == "1000");
@@ -248,10 +270,21 @@ void testScoreDetailFormatsCompleteAndMissingData() {
 
   const auto missing = model.scoreDetail(1);
   REQUIRE(missing.has_value());
+  REQUIRE(missing->totalPGreatText == "\xE2\x80\x94");
+  REQUIRE(missing->totalGreatText == "\xE2\x80\x94");
+  REQUIRE(missing->totalGoodText == "\xE2\x80\x94");
+  REQUIRE(missing->totalBadText == "\xE2\x80\x94");
+  REQUIRE(missing->totalPoorText == "\xE2\x80\x94");
   REQUIRE(missing->earlyPGreatText == "\xE2\x80\x94");
   REQUIRE(missing->latePGreatText == "\xE2\x80\x94");
   REQUIRE(missing->earlyGreatText == "\xE2\x80\x94");
   REQUIRE(missing->lateGreatText == "\xE2\x80\x94");
+  REQUIRE(missing->earlyGoodText == "\xE2\x80\x94");
+  REQUIRE(missing->lateGoodText == "\xE2\x80\x94");
+  REQUIRE(missing->earlyBadText == "\xE2\x80\x94");
+  REQUIRE(missing->lateBadText == "\xE2\x80\x94");
+  REQUIRE(missing->earlyPoorText == "\xE2\x80\x94");
+  REQUIRE(missing->latePoorText == "\xE2\x80\x94");
   REQUIRE(!missing->judgementBreakdownAvailable);
   REQUIRE(missing->badPointsText == "\xE2\x80\x94");
   REQUIRE(missing->maxComboText == "\xE2\x80\x94");
@@ -260,6 +293,25 @@ void testScoreDetailFormatsCompleteAndMissingData() {
 
   REQUIRE(!model.scoreDetail(-1).has_value());
   REQUIRE(!model.scoreDetail(2).has_value());
+
+  auto totalsOnlySnapshot = snapshot(ir::IrRankingSnapshotState::Succeeded);
+  auto totalsOnlyRanking =
+      std::make_shared<ir::IrChartRanking>(*totalsOnlySnapshot.ranking);
+  totalsOnlyRanking->entries.front().earlyPGreat.reset();
+  totalsOnlyRanking->entries.front().latePGreat.reset();
+  totalsOnlyRanking->entries.front().earlyGreat.reset();
+  totalsOnlyRanking->entries.front().lateGreat.reset();
+  totalsOnlyRanking->entries.front().earlyGood.reset();
+  totalsOnlyRanking->entries.front().lateGood.reset();
+  totalsOnlyRanking->entries.front().earlyBad.reset();
+  totalsOnlyRanking->entries.front().lateBad.reset();
+  totalsOnlyRanking->entries.front().earlyPoor.reset();
+  totalsOnlyRanking->entries.front().latePoor.reset();
+  totalsOnlySnapshot.ranking = totalsOnlyRanking;
+  ir::IrRankingModalModel totalsOnly;
+  totalsOnly.open(request(), "Test Chart");
+  REQUIRE(totalsOnly.apply(totalsOnlySnapshot));
+  REQUIRE(totalsOnly.scoreDetail(0)->judgementBreakdownAvailable);
 }
 
 void testPaginationPresentationKeepsSuccessfulListVisible() {

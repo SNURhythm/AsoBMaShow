@@ -55,12 +55,24 @@ Json pb(std::int64_t userId = 42, int rank = 110, int outOf = 512,
        {{"score", score},
         {"lamp", std::move(lamp)},
         {"enumIndexes", {{"lamp", 4}}},
+        {"judgements",
+         {{"pgreat", 511},
+          {"great", 262},
+          {"good", 31},
+          {"bad", 14},
+          {"poor", 8}}},
         {"optional",
          {{"enumIndexes", Json::object()},
           {"epg", 336},
           {"lpg", 175},
           {"egr", 201},
           {"lgr", 61},
+          {"egd", 13},
+          {"lgd", 18},
+          {"ebd", 11},
+          {"lbd", 3},
+          {"epr", 0},
+          {"lpr", 8},
           {"bp", 62},
           {"maxCombo", 109}}}}},
   };
@@ -131,10 +143,21 @@ void testNativePbRetainsAuthenticJudgements() {
   REQUIRE(entry.currentUser);
   REQUIRE(entry.score == 1284);
   REQUIRE(entry.maxScore == 1652);
+  REQUIRE(entry.pGreat == 511);
+  REQUIRE(entry.great == 262);
+  REQUIRE(entry.good == 31);
+  REQUIRE(entry.bad == 14);
+  REQUIRE(entry.poor == 8);
   REQUIRE(entry.earlyPGreat == 336);
   REQUIRE(entry.latePGreat == 175);
   REQUIRE(entry.earlyGreat == 201);
   REQUIRE(entry.lateGreat == 61);
+  REQUIRE(entry.earlyGood == 13);
+  REQUIRE(entry.lateGood == 18);
+  REQUIRE(entry.earlyBad == 11);
+  REQUIRE(entry.lateBad == 3);
+  REQUIRE(entry.earlyPoor == 0);
+  REQUIRE(entry.latePoor == 8);
   REQUIRE(entry.clearType == kClearTypeNormalClearRank);
   REQUIRE(entry.badPoints == 62);
   REQUIRE(entry.maxCombo == 109);
@@ -152,10 +175,21 @@ void testMissingOptionalMetricsStayUnavailable() {
   REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
   const auto &entry = result.page->entries.front();
   REQUIRE(!entry.currentUser);
+  REQUIRE(entry.pGreat == 511);
+  REQUIRE(entry.great == 262);
+  REQUIRE(entry.good == 31);
+  REQUIRE(entry.bad == 14);
+  REQUIRE(entry.poor == 8);
   REQUIRE(!entry.earlyPGreat.has_value());
   REQUIRE(!entry.latePGreat.has_value());
   REQUIRE(!entry.earlyGreat.has_value());
   REQUIRE(!entry.lateGreat.has_value());
+  REQUIRE(!entry.earlyGood.has_value());
+  REQUIRE(!entry.lateGood.has_value());
+  REQUIRE(!entry.earlyBad.has_value());
+  REQUIRE(!entry.lateBad.has_value());
+  REQUIRE(!entry.earlyPoor.has_value());
+  REQUIRE(!entry.latePoor.has_value());
   REQUIRE(!entry.badPoints.has_value());
   REQUIRE(!entry.maxCombo.has_value());
   REQUIRE(!entry.achievedAtUnixMillis.has_value());
@@ -163,6 +197,7 @@ void testMissingOptionalMetricsStayUnavailable() {
 
 void testInconsistentOrPartialTimingStaysUnavailable() {
   auto inconsistent = pb(7, 164, 332, 1235, "CLEAR");
+  inconsistent["scoreData"].erase("judgements");
   inconsistent["scoreData"]["optional"]["epg"] = 300;
   inconsistent["scoreData"]["optional"]["lpg"] = 100;
   inconsistent["scoreData"]["optional"]["egr"] = 200;
@@ -180,6 +215,7 @@ void testInconsistentOrPartialTimingStaysUnavailable() {
   REQUIRE(!inconsistentEntry.lateGreat.has_value());
 
   auto partial = pb(8, 165, 332, 1234, "CLEAR");
+  partial["scoreData"].erase("judgements");
   partial["scoreData"]["optional"]["lgr"] = nullptr;
   result = ir::tachi::parseRankingPageResponse(
       page(Json::array({partial}), Json::array({user(8, "PartialScore")})),
@@ -189,6 +225,49 @@ void testInconsistentOrPartialTimingStaysUnavailable() {
   REQUIRE(!result.page->entries.front().latePGreat.has_value());
   REQUIRE(!result.page->entries.front().earlyGreat.has_value());
   REQUIRE(!result.page->entries.front().lateGreat.has_value());
+}
+
+void testEachTimingPairDegradesIndependently() {
+  auto partial = pb();
+  partial["scoreData"]["optional"]["lgd"] = nullptr;
+  auto result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({partial}), Json::array({user(42, "PartialGood")})),
+      query(), "chart-id", 42);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  const auto &entry = result.page->entries.front();
+  REQUIRE(entry.pGreat == 511);
+  REQUIRE(entry.good == 31);
+  REQUIRE(entry.earlyPGreat == 336);
+  REQUIRE(entry.latePGreat == 175);
+  REQUIRE(!entry.earlyGood.has_value());
+  REQUIRE(!entry.lateGood.has_value());
+  REQUIRE(entry.earlyBad == 11);
+  REQUIRE(entry.lateBad == 3);
+
+  auto inconsistent = pb();
+  inconsistent["scoreData"]["optional"]["egd"] = 12;
+  result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({inconsistent}),
+           Json::array({user(42, "InconsistentGood")})),
+      query(), "chart-id", 42);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(!result.page->entries.front().earlyGood.has_value());
+  REQUIRE(!result.page->entries.front().lateGood.has_value());
+  REQUIRE(result.page->entries.front().earlyBad == 11);
+
+  auto negative = pb();
+  negative["scoreData"]["optional"]["ebd"] = -1;
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({negative}), Json::array({user(42, "Bad")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
+
+  auto nonInteger = pb();
+  nonInteger["scoreData"]["optional"]["epr"] = 0.5;
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({nonInteger}), Json::array({user(42, "Bad")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 }
 
 void testLampMappingsAndFourteenKeyGame() {
@@ -309,6 +388,7 @@ int main() {
   testNativePbRetainsAuthenticJudgements();
   testMissingOptionalMetricsStayUnavailable();
   testInconsistentOrPartialTimingStaysUnavailable();
+  testEachTimingPairDegradesIndependently();
   testLampMappingsAndFourteenKeyGame();
   testPageValidation();
   testNamesAndPageOrdering();

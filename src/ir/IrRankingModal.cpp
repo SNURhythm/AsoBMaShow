@@ -349,18 +349,32 @@ IrRankingModalModel::scoreDetail(int index) const {
   }
   const auto &entry = presentation_.ranking->entries[index];
   const bool judgementBreakdownAvailable =
-      entry.earlyPGreat.has_value() && entry.latePGreat.has_value() &&
-      entry.earlyGreat.has_value() && entry.lateGreat.has_value();
+      entry.pGreat.has_value() || entry.great.has_value() ||
+      entry.good.has_value() || entry.bad.has_value() ||
+      entry.poor.has_value() || entry.earlyPGreat.has_value() ||
+      entry.earlyGreat.has_value() || entry.earlyGood.has_value() ||
+      entry.earlyBad.has_value() || entry.earlyPoor.has_value();
   return IrRankingScoreDetailPresentation{
       .rankText = rankText(entry.rank),
       .playerText = playerText(entry),
       .scoreText = scoreText(entry.score, entry.maxScore),
       .rateText = formatIrRankingRate(entry.score, entry.maxScore),
       .lampText = clearTypeRankToLabel(entry.clearType),
+      .totalPGreatText = integerOrMissing(entry.pGreat),
+      .totalGreatText = integerOrMissing(entry.great),
+      .totalGoodText = integerOrMissing(entry.good),
+      .totalBadText = integerOrMissing(entry.bad),
+      .totalPoorText = integerOrMissing(entry.poor),
       .earlyPGreatText = integerOrMissing(entry.earlyPGreat),
       .latePGreatText = integerOrMissing(entry.latePGreat),
       .earlyGreatText = integerOrMissing(entry.earlyGreat),
       .lateGreatText = integerOrMissing(entry.lateGreat),
+      .earlyGoodText = integerOrMissing(entry.earlyGood),
+      .lateGoodText = integerOrMissing(entry.lateGood),
+      .earlyBadText = integerOrMissing(entry.earlyBad),
+      .lateBadText = integerOrMissing(entry.lateBad),
+      .earlyPoorText = integerOrMissing(entry.earlyPoor),
+      .latePoorText = integerOrMissing(entry.latePoor),
       .badPointsText = integerOrMissing(entry.badPoints),
       .maxComboText = integerOrMissing(entry.maxCombo),
       .achievementTimeText =

@@ -247,40 +247,98 @@ parsePb(const Json &pb, const IrChartQuery &query,
   if (optional == scoreData->end() || !optional->is_object()) {
     return std::nullopt;
   }
+  std::optional<int> pGreat;
+  std::optional<int> great;
+  std::optional<int> good;
+  std::optional<int> bad;
+  std::optional<int> poor;
+  const auto judgements = scoreData->find("judgements");
+  if (judgements != scoreData->end() && !judgements->is_null()) {
+    if (!judgements->is_object() ||
+        !readOptionalNonnegativeInt(*judgements, "pgreat", pGreat) ||
+        !readOptionalNonnegativeInt(*judgements, "great", great) ||
+        !readOptionalNonnegativeInt(*judgements, "good", good) ||
+        !readOptionalNonnegativeInt(*judgements, "bad", bad) ||
+        !readOptionalNonnegativeInt(*judgements, "poor", poor)) {
+      return std::nullopt;
+    }
+  }
   std::optional<int> epg;
   std::optional<int> lpg;
   std::optional<int> egr;
   std::optional<int> lgr;
+  std::optional<int> egd;
+  std::optional<int> lgd;
+  std::optional<int> ebd;
+  std::optional<int> lbd;
+  std::optional<int> epr;
+  std::optional<int> lpr;
   std::optional<int> badPoints;
   std::optional<int> maxCombo;
   if (!readOptionalNonnegativeInt(*optional, "epg", epg) ||
       !readOptionalNonnegativeInt(*optional, "lpg", lpg) ||
       !readOptionalNonnegativeInt(*optional, "egr", egr) ||
       !readOptionalNonnegativeInt(*optional, "lgr", lgr) ||
+      !readOptionalNonnegativeInt(*optional, "egd", egd) ||
+      !readOptionalNonnegativeInt(*optional, "lgd", lgd) ||
+      !readOptionalNonnegativeInt(*optional, "ebd", ebd) ||
+      !readOptionalNonnegativeInt(*optional, "lbd", lbd) ||
+      !readOptionalNonnegativeInt(*optional, "epr", epr) ||
+      !readOptionalNonnegativeInt(*optional, "lpr", lpr) ||
       !readOptionalNonnegativeInt(*optional, "bp", badPoints) ||
       !readOptionalNonnegativeInt(*optional, "maxCombo", maxCombo)) {
     return std::nullopt;
   }
-  const std::array timingPresent{epg.has_value(), lpg.has_value(),
-                                 egr.has_value(), lgr.has_value()};
-  const bool hasAnyTiming =
-      std::ranges::any_of(timingPresent, [](bool value) { return value; });
-  const bool hasAllTiming =
-      std::ranges::all_of(timingPresent, [](bool value) { return value; });
-  if (hasAllTiming) {
-    const std::int64_t pGreat = static_cast<std::int64_t>(*epg) + *lpg;
-    const std::int64_t great = static_cast<std::int64_t>(*egr) + *lgr;
-    if (pGreat + great > query.totalNotes || pGreat * 2 + great != *score) {
+
+  const auto validatePair =
+      [totalNotes = query.totalNotes](std::optional<int> &early,
+                                     std::optional<int> &late,
+                                     const std::optional<int> &total) {
+        if (early.has_value() != late.has_value()) {
+          early.reset();
+          late.reset();
+          return;
+        }
+        if (!early) {
+          return;
+        }
+        const std::int64_t sum = static_cast<std::int64_t>(*early) + *late;
+        if (sum > totalNotes || (total && sum != *total)) {
+          early.reset();
+          late.reset();
+        }
+      };
+  validatePair(epg, lpg, pGreat);
+  validatePair(egr, lgr, great);
+  validatePair(egd, lgd, good);
+  validatePair(ebd, lbd, bad);
+  validatePair(epr, lpr, poor);
+
+  if (!pGreat && !great) {
+    const std::array timingPresent{epg.has_value(), lpg.has_value(),
+                                   egr.has_value(), lgr.has_value()};
+    const bool hasAnyTiming =
+        std::ranges::any_of(timingPresent, [](bool value) { return value; });
+    const bool hasAllTiming =
+        std::ranges::all_of(timingPresent, [](bool value) { return value; });
+    if (hasAllTiming) {
+      const std::int64_t timingPGreat =
+          static_cast<std::int64_t>(*epg) + *lpg;
+      const std::int64_t timingGreat =
+          static_cast<std::int64_t>(*egr) + *lgr;
+      if (timingPGreat + timingGreat > query.totalNotes ||
+          timingPGreat * 2 + timingGreat != *score) {
+        epg.reset();
+        lpg.reset();
+        egr.reset();
+        lgr.reset();
+      }
+    } else if (hasAnyTiming) {
       epg.reset();
       lpg.reset();
       egr.reset();
       lgr.reset();
     }
-  } else if (hasAnyTiming) {
-    epg.reset();
-    lpg.reset();
-    egr.reset();
-    lgr.reset();
   }
 
   std::optional<std::int64_t> achievedAt;
@@ -304,10 +362,21 @@ parsePb(const Json &pb, const IrChartQuery &query,
       .playerName = user->second,
       .score = static_cast<int>(*score),
       .maxScore = static_cast<int>(maximumScore),
+      .pGreat = pGreat,
+      .great = great,
+      .good = good,
+      .bad = bad,
+      .poor = poor,
       .earlyPGreat = epg,
       .latePGreat = lpg,
       .earlyGreat = egr,
       .lateGreat = lgr,
+      .earlyGood = egd,
+      .lateGood = lgd,
+      .earlyBad = ebd,
+      .lateBad = lbd,
+      .earlyPoor = epr,
+      .latePoor = lpr,
       .clearType = *clearType,
       .badPoints = badPoints,
       .maxCombo = maxCombo,
