@@ -442,4 +442,57 @@ bool writeWithBackup(const std::filesystem::path &path,
   }
   return true;
 }
+
+bool writeWithoutBackup(const std::filesystem::path &path,
+                        std::span<const std::byte> contents,
+                        std::string &errorMessage,
+                        const Operations *operations) {
+  errorMessage.clear();
+  const Operations defaults = defaultOperations();
+  const Operations &ops = operations == nullptr ? defaults : *operations;
+  if (!ops.writeAndSync || !ops.replace || !ops.remove) {
+    errorMessage = "atomic file operations are incomplete";
+    return false;
+  }
+
+  std::error_code ec;
+  std::filesystem::path metadataSyncRoot = path.parent_path().empty()
+                                               ? std::filesystem::path(".")
+                                               : path.parent_path();
+  while (!std::filesystem::exists(metadataSyncRoot, ec)) {
+    if (ec) {
+      errorMessage =
+          "file ancestor existence check failed: " + ec.message();
+      return false;
+    }
+    const auto parent = metadataSyncRoot.parent_path();
+    metadataSyncRoot = parent.empty() ? std::filesystem::path(".") : parent;
+  }
+  if (ec) {
+    errorMessage = "file ancestor existence check failed: " + ec.message();
+    return false;
+  }
+  if (!path.parent_path().empty()) {
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) {
+      errorMessage = "create file directory failed: " + ec.message();
+      return false;
+    }
+  }
+
+  const std::filesystem::path temporary = path.string() + ".tmp";
+  ops.remove(temporary);
+  ops.remove(path.string() + ".bak");
+  ops.remove(path.string() + ".bak.pending");
+  ops.remove(path.string() + ".bak.previous");
+  if (!ops.writeAndSync(temporary, contents, errorMessage)) {
+    ops.remove(temporary);
+    return false;
+  }
+  if (!ops.replace(temporary, path, errorMessage)) {
+    ops.remove(temporary);
+    return false;
+  }
+  return syncDirectoryMetadata(path, metadataSyncRoot, errorMessage);
+}
 } // namespace atomic_file

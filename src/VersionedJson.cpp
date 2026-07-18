@@ -116,4 +116,17 @@ bool saveAtomic(const std::filesystem::path &path,
   return atomic_file::writeWithBackup(path, std::as_bytes(std::span(encoded)),
                                       errorMessage, operations);
 }
+
+bool saveAtomicWithoutBackup(const std::filesystem::path &path,
+                             const nlohmann::json &document,
+                             std::string &errorMessage,
+                             const atomic_file::Operations *operations) {
+  if (!document.is_object()) {
+    errorMessage = "versioned JSON root must be an object";
+    return false;
+  }
+  const std::string encoded = document.dump(2) + "\n";
+  return atomic_file::writeWithoutBackup(
+      path, std::as_bytes(std::span(encoded)), errorMessage, operations);
+}
 } // namespace versioned_json

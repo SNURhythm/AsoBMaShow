@@ -30,7 +30,7 @@ bool validApiKey(std::string_view value) {
   return !value.empty() &&
          value.size() <= IrCredentialStore::kMaximumApiKeyBytes &&
          std::ranges::none_of(value, [](unsigned char character) {
-           return character == 0;
+           return character <= 0x20 || character == 0x7f;
          });
 }
 
@@ -173,7 +173,8 @@ IrCredentialWriteResult IrCredentialStore::save(
   if (document.dump(2).size() + 1 > kMaximumFileBytes) {
     return invalidWrite("credential file exceeds size limit");
   }
-  if (!versioned_json::saveAtomic(path, document, diagnostic, operations)) {
+  if (!versioned_json::saveAtomicWithoutBackup(path, document, diagnostic,
+                                                operations)) {
     return invalidWrite(redactKeys(std::move(diagnostic), credentials));
   }
   return {.succeeded = true};

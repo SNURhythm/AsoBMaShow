@@ -2,6 +2,7 @@
 
 #include "AtomicFile.h"
 
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -47,6 +48,16 @@ void writeFile(const std::filesystem::path &path, std::string_view contents) {
   output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
 }
 
+void expectNoBackupArtifacts(const std::filesystem::path &path,
+                             std::string_view operation) {
+  for (const std::string_view suffix :
+       {".bak", ".bak.pending", ".bak.previous"}) {
+    expect(!std::filesystem::exists(path.string() + std::string(suffix)),
+           std::string(operation) + " removes credential artifact " +
+               std::string(suffix));
+  }
+}
+
 void testMissingSaveLoadReplaceAndRemove() {
   TempDirectory temp;
   const auto path = temp.path() / "ir-credentials.json";
@@ -66,6 +77,10 @@ void testMissingSaveLoadReplaceAndRemove() {
              "first-device-local-key",
          "saved API key round trips");
 
+  for (const std::string_view suffix :
+       {".bak", ".bak.pending", ".bak.previous"}) {
+    writeFile(path.string() + std::string(suffix), "legacy-secret-artifact");
+  }
   expect(ir::IrCredentialStore::replaceApiKey(
              path, "tachi", "replacement-device-local-key")
              .succeeded,
@@ -74,13 +89,19 @@ void testMissingSaveLoadReplaceAndRemove() {
   expect(loaded.credentials.apiKeys.at("tachi") ==
              "replacement-device-local-key",
          "replacement key becomes current");
+  expectNoBackupArtifacts(path, "key replacement");
 
+  for (const std::string_view suffix :
+       {".bak", ".bak.pending", ".bak.previous"}) {
+    writeFile(path.string() + std::string(suffix), "legacy-secret-artifact");
+  }
   expect(ir::IrCredentialStore::removeApiKey(path, "tachi").succeeded,
          "key removal succeeds");
   loaded = ir::IrCredentialStore::load(path);
   expect(loaded.status == ir::IrCredentialLoadStatus::Loaded &&
              loaded.credentials.apiKeys.empty(),
          "key removal persists an empty provider map");
+  expectNoBackupArtifacts(path, "key removal");
 }
 
 void testMalformedFutureAndOversizedFilesFailClosed() {
@@ -138,6 +159,48 @@ void testKeyAndProviderValidationDoesNotLeakSecrets() {
          "a key at the four KiB limit is accepted");
 }
 
+void testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad() {
+  TempDirectory temp;
+  const std::array invalidKeys = {
+      std::pair{std::string_view("leading-space"), std::string(" leading")},
+      std::pair{std::string_view("trailing-space"), std::string("trailing ")},
+      std::pair{std::string_view("newline"), std::string("line\nbreak")},
+      std::pair{std::string_view("control"),
+                std::string("key") + static_cast<char>(0x01) + "value"},
+      std::pair{std::string_view("del"),
+                std::string("key") + static_cast<char>(0x7f) + "value"},
+  };
+  for (const auto &[name, apiKey] : invalidKeys) {
+    const auto path = temp.path() / ("save-" + std::string(name) + ".json");
+    const auto result =
+        ir::IrCredentialStore::replaceApiKey(path, "tachi", apiKey);
+    expect(!result.succeeded,
+           "credential save rejects " + std::string(name));
+    expect(!std::filesystem::exists(path),
+           "rejected credential save creates no file");
+  }
+
+  const std::array invalidJsonKeys = {
+      std::pair{std::string_view("leading-space"), std::string(" leading")},
+      std::pair{std::string_view("trailing-space"), std::string("trailing ")},
+      std::pair{std::string_view("newline"), std::string("line\\nbreak")},
+      std::pair{std::string_view("control"), std::string("key\\u0001value")},
+      std::pair{std::string_view("del"),
+                std::string("key") + static_cast<char>(0x7f) + "value"},
+  };
+  for (const auto &[name, encodedApiKey] : invalidJsonKeys) {
+    const auto path = temp.path() / ("load-" + std::string(name) + ".json");
+    writeFile(path,
+              "{\"schemaVersion\":1,\"providers\":{\"tachi\":{\"apiKey\":\"" +
+                  encodedApiKey + "\"}}}");
+    const auto loaded = ir::IrCredentialStore::load(path);
+    expect(loaded.status == ir::IrCredentialLoadStatus::Invalid,
+           "credential load rejects " + std::string(name));
+    expect(loaded.credentials.apiKeys.empty(),
+           "invalid loaded credential exposes no keys");
+  }
+}
+
 void testAtomicFailureRollsBackPriorCredentials() {
   TempDirectory temp;
   const auto path = temp.path() / "ir-credentials.json";
@@ -175,6 +238,7 @@ int main() {
   testMissingSaveLoadReplaceAndRemove();
   testMalformedFutureAndOversizedFilesFailClosed();
   testKeyAndProviderValidationDoesNotLeakSecrets();
+  testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad();
   testAtomicFailureRollsBackPriorCredentials();
   if (failures != 0) {
     std::cerr << failures << " IR credential store test(s) failed\n";
