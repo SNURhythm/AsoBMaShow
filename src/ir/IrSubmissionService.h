@@ -12,6 +12,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class ReplayRepository;
 
@@ -80,6 +81,8 @@ public:
   [[nodiscard]] IrOutboxMutationOutcome retryAll(std::string_view providerId);
   [[nodiscard]] IrOutboxMutationOutcome discard(std::int64_t rowId);
   [[nodiscard]] IrOutboxCounts counts(std::string_view providerId) const;
+  [[nodiscard]] std::vector<IrAttemptStatusSnapshot>
+  statuses(std::string_view providerId) const;
   [[nodiscard]] IrAttemptStatusSnapshot
   status(std::string_view providerId, std::string_view attemptId) const;
 

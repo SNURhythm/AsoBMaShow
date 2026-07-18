@@ -17,6 +17,7 @@ target_sources(main PRIVATE
     SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
     SettingsSceneInput.cpp
+    SettingsSceneIr.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
     SettingsSceneProfiles.cpp

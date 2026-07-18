@@ -278,6 +278,9 @@ void SettingsScene::update(float dt) {
   applyPendingProfileDocumentHandoff();
   refreshTablesIfLibraryChanged();
   updateInputSettingsState();
+  if (activeTab == SettingsTab::Ir) {
+    refreshIrSettingsPresentation();
+  }
   ensureLayoutUpToDate();
 }
 
@@ -470,6 +473,7 @@ void SettingsScene::cleanupScene() {
   displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
+  irTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
@@ -479,6 +483,19 @@ void SettingsScene::cleanupScene() {
   displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
+  irTabText = nullptr;
+  irPendingCountText = nullptr;
+  irAwaitingCountText = nullptr;
+  irBlockedCountText = nullptr;
+  irFailedCountText = nullptr;
+  irStatusText = nullptr;
+  irServerOriginInput = nullptr;
+  irApiKeyInput = nullptr;
+  irSettingsModel.reset();
+  irPendingDiscardRowId.reset();
+  irKeyEditorActive = false;
+  irStatusIsError = false;
+  irStatusMessage.clear();
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;

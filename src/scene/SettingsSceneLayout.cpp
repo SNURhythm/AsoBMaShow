@@ -135,6 +135,7 @@ void SettingsScene::resetViewState() {
   displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
+  irTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
@@ -144,6 +145,14 @@ void SettingsScene::resetViewState() {
   displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
+  irTabText = nullptr;
+  irPendingCountText = nullptr;
+  irAwaitingCountText = nullptr;
+  irBlockedCountText = nullptr;
+  irFailedCountText = nullptr;
+  irStatusText = nullptr;
+  irServerOriginInput = nullptr;
+  irApiKeyInput = nullptr;
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;
@@ -2582,6 +2591,7 @@ void SettingsScene::initView() {
                     &difficultyTablesTabText);
   bmsLibraryTabButton =
       makeTabButton(SettingsTab::BmsLibrary, "BMS Library", &bmsLibraryTabText);
+  irTabButton = makeTabButton(SettingsTab::Ir, "IR", &irTabText);
   tabControls->addView(profileTabButton);
   tabControls->addView(timingTabButton);
   tabControls->addView(visualTabButton);
@@ -2592,6 +2602,7 @@ void SettingsScene::initView() {
   tabControls->addView(displayTabButton);
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(bmsLibraryTabButton);
+  tabControls->addView(irTabButton);
   auto *tabRail = new ScrollView();
   tabRail->setWidth(static_cast<float>(tabColumnWidth));
   tabRail->setFlexShrink(0.0f);
@@ -2645,6 +2656,9 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::BmsLibrary:
     cardsColumn = buildBmsLibraryTab(metrics);
+    break;
+  case SettingsTab::Ir:
+    cardsColumn = buildIrTab(metrics);
     break;
   }
   if (cardsColumn != nullptr) {

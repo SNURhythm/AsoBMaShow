@@ -808,6 +808,21 @@ IrOutboxCounts IrSubmissionService::counts(std::string_view providerId) const {
                                               : found->second;
 }
 
+std::vector<IrAttemptStatusSnapshot>
+IrSubmissionService::statuses(std::string_view providerId) const {
+  std::vector<IrAttemptStatusSnapshot> result;
+  std::lock_guard lock(impl_->mutex);
+  for (const auto &[key, snapshot] : impl_->statusSnapshots) {
+    if (key.first == providerId) {
+      result.push_back(snapshot);
+    }
+  }
+  std::ranges::sort(result, [](const auto &left, const auto &right) {
+    return left.rowId > right.rowId;
+  });
+  return result;
+}
+
 IrAttemptStatusSnapshot
 IrSubmissionService::status(std::string_view providerId,
                             std::string_view attemptId) const {

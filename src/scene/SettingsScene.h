@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../repositories/ChartRepository.h"
+#include "../ir/IrSettingsPresentation.h"
 #include "../PlatformDocumentHandoff.h"
 #include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
@@ -86,6 +87,7 @@ private:
     Display,
     DifficultyTables,
     BmsLibrary,
+    Ir,
   };
 
   View *rootLayout = nullptr;
@@ -174,6 +176,7 @@ private:
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
+  Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
   TextView *laneTabText = nullptr;
@@ -183,6 +186,14 @@ private:
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
+  TextView *irTabText = nullptr;
+  TextView *irPendingCountText = nullptr;
+  TextView *irAwaitingCountText = nullptr;
+  TextView *irBlockedCountText = nullptr;
+  TextView *irFailedCountText = nullptr;
+  TextView *irStatusText = nullptr;
+  TextInputBox *irServerOriginInput = nullptr;
+  TextInputBox *irApiKeyInput = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;
@@ -337,6 +348,11 @@ private:
   bool displayResolutionDropdownOpen = false;
   bool displayVsyncDropdownOpen = false;
   bool displayFrameCapDropdownOpen = false;
+  std::unique_ptr<ir::IrSettingsActionModel> irSettingsModel;
+  std::optional<std::int64_t> irPendingDiscardRowId;
+  bool irKeyEditorActive = false;
+  bool irStatusIsError = false;
+  std::string irStatusMessage;
 
   void initView();
   void resetViewState();
@@ -357,6 +373,7 @@ private:
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildIrTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
   void buildDisplayPreviewOverlay(const settings_scene::LayoutMetrics &metrics);
@@ -407,6 +424,7 @@ private:
   void measureTemporaryArchiveCache();
   void cleanupTemporaryArchiveCache();
   void refreshSettingsText();
+  void refreshIrSettingsPresentation();
   void ensureProfileController();
   void applyPendingProfileArchiveCompletion();
   void applyPendingProfileDocumentHandoff();

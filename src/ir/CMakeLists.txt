@@ -6,6 +6,7 @@ target_sources(main PRIVATE
     IrProfileSettings.cpp
     IrRankingModels.cpp
     IrRankingService.cpp
+    IrSettingsPresentation.cpp
     IrSubmission.cpp
     IrSubmissionService.cpp
     tachi/TachiBatchManual.cpp

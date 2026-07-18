@@ -503,6 +503,7 @@ void SettingsScene::refreshSettingsText() {
                 SettingsTab::DifficultyTables);
   applyTabStyle(bmsLibraryTabButton, bmsLibraryTabText,
                 SettingsTab::BmsLibrary);
+  applyTabStyle(irTabButton, irTabText, SettingsTab::Ir);
 
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();

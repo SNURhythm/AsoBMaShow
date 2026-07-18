@@ -728,6 +728,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(ir_ranking_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_ranking_service_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_settings_presentation_tests
+        tests/ir_settings_presentation_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_settings_presentation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_settings_presentation_tests PRIVATE cxx_std_23)
+
     if (NOT IOS)
         add_executable(ir_http_client_tests
             tests/ir_http_client_tests.cpp
@@ -1972,6 +1984,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tachi_ranking_parser_tests
         ir_submission_service_tests
         ir_ranking_service_tests
+        ir_settings_presentation_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests
