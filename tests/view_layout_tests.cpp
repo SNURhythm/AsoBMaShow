@@ -1,9 +1,11 @@
 #include "../src/view/BlockingOverlayView.h"
 #include "../src/view/OverlayPortal.h"
 #include "../src/view/View.h"
+#include "scene/ResultLayoutGeometry.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
+#include "skin/SkinTypes.h"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +34,11 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+static_assert(requires(ResultSkinData data) {
+  data.showTimingAnalytics;
+  data.showResultGraph;
+});
 
 class EventRecordingView final : public View {
 public:
@@ -433,6 +440,58 @@ void testSiblingInsertionPreservesLayoutAndZOrders() {
          YGNodeGetChildCount(root.getNode()) == 0);
 }
 
+void testCompactResultVisualRowFitsActions() {
+  const auto metrics = result_layout::metricsFor(885.0f, true);
+  View root(0, 0, 1920, 885);
+  root.setFlexDirection(FlexDirection::Column);
+  root.setAlignItems(YGAlignStretch);
+  root.setJustifyContent(YGJustifyCenter);
+  root.setPadding(Edge::All, metrics.rootPadding);
+  root.setGap(metrics.rootGap);
+
+  const auto addFixedSection = [&](float height) {
+    auto *section = new View();
+    section->setHeight(height);
+    section->setFlexShrink(0.0f);
+    root.addView(section);
+  };
+  addFixedSection(result_layout::kHeaderHeight);
+  addFixedSection(metrics.summaryHeight);
+  addFixedSection(metrics.infoHeight);
+  addFixedSection(metrics.detailsHeight);
+
+  auto *visuals = new View();
+  visuals->setHeight(metrics.visualHeight);
+  visuals->setMinHeight(metrics.visualMinimumHeight);
+  visuals->setFlexShrink(1.0f);
+  visuals->setFlexDirection(FlexDirection::Row);
+  visuals->setGap(metrics.visualGap);
+  auto *graph = new View();
+  graph->setFlexGrow(metrics.graphFlex);
+  graph->setFlexBasis(0.0f);
+  graph->setMinWidth(0.0f);
+  auto *analytics = new View();
+  analytics->setFlexGrow(metrics.analyticsFlex);
+  analytics->setFlexBasis(0.0f);
+  analytics->setMinWidth(0.0f);
+  visuals->addView(graph);
+  visuals->addView(analytics);
+  root.addView(visuals);
+
+  auto *actions = new View();
+  actions->setHeight(result_layout::kActionHeight);
+  actions->setFlexShrink(0.0f);
+  root.addView(actions);
+  root.applyYogaLayout();
+
+  assert(graph->getWidth() < analytics->getWidth());
+  assert(std::abs(static_cast<float>(graph->getWidth()) /
+                      static_cast<float>(analytics->getWidth()) -
+                  metrics.graphFlex / metrics.analyticsFlex) <
+         0.02f);
+  assert(actions->getY() + actions->getHeight() <= root.getHeight());
+}
+
 void testInputSettingsLayoutPolicy() {
   const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
   assert(!wide.stackSelectors);
@@ -622,6 +681,7 @@ int main() {
 
   testWrappedGridRowsKeepColumnMeasurements();
   testSiblingInsertionPreservesLayoutAndZOrders();
+  testCompactResultVisualRowFitsActions();
 
   return 0;
 }

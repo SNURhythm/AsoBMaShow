@@ -32,6 +32,8 @@ struct ResultSkinData {
   ApplicationContext *context;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
+  bool showTimingAnalytics = false;
+  bool showResultGraph = true;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;

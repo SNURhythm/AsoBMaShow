@@ -1,6 +1,8 @@
 #include "DefaultSkin.h"
 #include "../ScoreRankUtils.h"
 #include "../scene/PracticeAnalyticsPresentation.h"
+#include "../scene/ResultLayoutGeometry.h"
+#include "../targets.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -133,13 +135,17 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   const auto &meta = *data->meta;
   const auto &resultState = *data->state;
   auto &context = *data->context;
+  const bool mobileTarget =
+      TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
+  const auto layoutMetrics = result_layout::metricsFor(
+      static_cast<float>(rendering::window_height), mobileTarget);
 
   if (!summaryOnly) {
     rootLayout->setFlexDirection(FlexDirection::Column);
     rootLayout->setAlignItems(YGAlignStretch);
     rootLayout->setJustifyContent(YGJustifyCenter);
-    rootLayout->setPadding(Edge::All, 32);
-    rootLayout->setGap(12);
+    rootLayout->setPadding(Edge::All, layoutMetrics.rootPadding);
+    rootLayout->setGap(layoutMetrics.rootGap);
     rootLayout->setBackgroundColor(ui_theme::resultBackdrop());
   }
 
@@ -377,7 +383,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   summaryRow->setFlexDirection(FlexDirection::Row);
   summaryRow->setAlignItems(YGAlignStretch);
   summaryRow->setGap(12);
-  summaryRow->setHeight(198);
+  summaryRow->setHeight(layoutMetrics.summaryHeight);
   summaryRow->setName("resultSummary");
 
   auto *gradePanel = makePanel(
@@ -387,7 +393,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   gradePanel->setFlexDirection(FlexDirection::Column);
   gradePanel->setAlignItems(YGAlignCenter);
   gradePanel->setJustifyContent(YGJustifyCenter);
-  gradePanel->setPadding(Edge::All, 12);
+  gradePanel->setPadding(Edge::All, layoutMetrics.gradePanelPadding);
   gradePanel->setGap(2);
   auto *gradeLabel = makeLabel("GRADE", 17, ui_theme::textSecondary());
   gradeLabel->setHeight(23);
@@ -413,7 +419,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   scorePanel->setFlexBasis(0);
   scorePanel->setMinWidth(0);
   scorePanel->setFlexDirection(FlexDirection::Column);
-  scorePanel->setPadding(Edge::All, 14);
+  scorePanel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
   scorePanel->setGap(6);
   addPanelTitle(scorePanel, hasPacemaker ? "PACEMAKER" : "SCORE COMPARISON");
   auto *scoreCompareRow = new View();
@@ -465,7 +471,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   lampPanel->setFlexBasis(0);
   lampPanel->setMinWidth(0);
   lampPanel->setFlexDirection(FlexDirection::Column);
-  lampPanel->setPadding(Edge::All, 14);
+  lampPanel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
   lampPanel->setGap(6);
   addPanelTitle(lampPanel, "CLEAR LAMP COMPARISON");
   auto *lampCompareRow = new View();
@@ -491,7 +497,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   comboPanel->setFlexBasis(0);
   comboPanel->setMinWidth(0);
   comboPanel->setFlexDirection(FlexDirection::Column);
-  comboPanel->setPadding(Edge::All, 14);
+  comboPanel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
   comboPanel->setGap(6);
   addPanelTitle(comboPanel, "COMBO / BREAK COMPARISON");
   auto *comboCompareRow = new View();
@@ -537,7 +543,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   infoGrid->setFlexWrap(YGWrapNoWrap);
   infoGrid->setJustifyContent(YGJustifyCenter);
   infoGrid->setAlignItems(YGAlignStretch);
-  infoGrid->setHeight(100);
+  infoGrid->setHeight(layoutMetrics.infoHeight);
   infoGrid->setName("resultInfoGrid");
 
   auto addInfoTile = [&](const std::string &label, const std::string &value,
@@ -551,7 +557,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 7);
+    tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
@@ -587,7 +593,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 7);
+    tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
@@ -657,7 +663,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 7);
+    tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
@@ -724,7 +730,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   detailsGrid->setFlexWrap(YGWrapNoWrap);
   detailsGrid->setJustifyContent(YGJustifyCenter);
   detailsGrid->setAlignItems(YGAlignStretch);
-  detailsGrid->setHeight(108);
+  detailsGrid->setHeight(layoutMetrics.detailsHeight);
   detailsGrid->setName("detailsGrid");
 
   auto addMetric = [&](const std::string &label, int count, Color accent,
@@ -737,7 +743,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 8);
+    tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
     auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
@@ -764,7 +770,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     tile->setFlexBasis(0);
     tile->setFlexShrink(1);
     tile->setMinWidth(0);
-    tile->setPadding(Edge::All, 8);
+    tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
     tile->setFlexDirection(FlexDirection::Column);
     tile->setJustifyContent(YGJustifyCenter);
 
@@ -827,36 +833,56 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
 
   rootLayout->addView(detailsGrid);
 
-  auto graphPlaceHolder = new View();
-  graphPlaceHolder->setHeight(136);
-  graphPlaceHolder->setWidthPercent(100);
-  graphPlaceHolder->setBackgroundColor(ui_theme::resultPanelSubtle());
-  graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
-  graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
-  graphPlaceHolder->setBorderColor(ui_theme::hairlineSubtle());
-  graphPlaceHolder->setBorderWidth(1);
-  graphPlaceHolder->setName("graph");
-  rootLayout->addView(graphPlaceHolder);
+  View *graphPlaceHolder = nullptr;
+  if (data == nullptr || data->showResultGraph) {
+    graphPlaceHolder = new View();
+    graphPlaceHolder->setBackgroundColor(ui_theme::resultPanelSubtle());
+    graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
+    graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+    graphPlaceHolder->setBorderColor(ui_theme::hairlineSubtle());
+    graphPlaceHolder->setBorderWidth(1);
+    graphPlaceHolder->setName("graph");
+  }
 
   if (data != nullptr && data->outGraphPlaceholder != nullptr) {
     *data->outGraphPlaceholder = graphPlaceHolder;
   }
 
+  if (graphPlaceHolder != nullptr && data != nullptr &&
+      data->showControls && data->showTimingAnalytics) {
+    auto *visualsRow = new View();
+    visualsRow->setName("resultVisuals");
+    visualsRow->setWidthPercent(100.0f);
+    visualsRow->setHeight(layoutMetrics.visualHeight);
+    visualsRow->setMinHeight(layoutMetrics.visualMinimumHeight);
+    visualsRow->setFlexShrink(1.0f);
+    visualsRow->setFlexDirection(FlexDirection::Row);
+    visualsRow->setAlignItems(YGAlignStretch);
+    visualsRow->setGap(layoutMetrics.visualGap);
+
+    graphPlaceHolder->setFlexGrow(layoutMetrics.graphFlex);
+    graphPlaceHolder->setFlexBasis(0.0f);
+    graphPlaceHolder->setMinWidth(0.0f);
+    visualsRow->addView(graphPlaceHolder);
+
+    auto *timingAnalyticsHost = new View();
+    timingAnalyticsHost->setName("timingAnalytics");
+    timingAnalyticsHost->setFlexGrow(layoutMetrics.analyticsFlex);
+    timingAnalyticsHost->setFlexBasis(0.0f);
+    timingAnalyticsHost->setMinWidth(0.0f);
+    timingAnalyticsHost->setFlexDirection(FlexDirection::Column);
+    timingAnalyticsHost->setAlignItems(YGAlignStretch);
+    visualsRow->addView(timingAnalyticsHost);
+    rootLayout->addView(visualsRow);
+  } else if (graphPlaceHolder != nullptr) {
+    graphPlaceHolder->setHeight(result_layout::kLegacyGraphHeight);
+    graphPlaceHolder->setWidthPercent(100.0f);
+    rootLayout->addView(graphPlaceHolder);
+  }
+
   if (data != nullptr && !data->showControls) {
     return;
   }
-
-  auto *timingAnalyticsHost = new View();
-  timingAnalyticsHost->setName("timingAnalytics");
-  timingAnalyticsHost->setWidthPercent(100.0f);
-  timingAnalyticsHost->setHeight(
-      practice_analytics_presentation::kPreferredAnalyticsHeight);
-  timingAnalyticsHost->setMinHeight(
-      practice_analytics_presentation::kMinimumAnalyticsHeight);
-  timingAnalyticsHost->setFlexShrink(1.0f);
-  timingAnalyticsHost->setFlexDirection(FlexDirection::Column);
-  timingAnalyticsHost->setAlignItems(YGAlignStretch);
-  rootLayout->addView(timingAnalyticsHost);
 
   auto *actionsRow = new View();
   actionsRow->setFlexDirection(FlexDirection::Row);
@@ -864,6 +890,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   actionsRow->setJustifyContent(YGJustifyCenter);
   actionsRow->setFlexWrap(YGWrapWrap);
   actionsRow->setGap(14);
+  actionsRow->setMinHeight(result_layout::kActionHeight);
+  actionsRow->setFlexShrink(0.0f);
   actionsRow->setName("resultActions");
 
   auto btn = new Button(0, 0, 232, 64);

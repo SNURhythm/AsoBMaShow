@@ -537,12 +537,12 @@ ResultScene::makeTimingAnalyticsModel() const {
                                abandonedAttempts);
 }
 
-void ResultScene::addTimingAnalytics() {
+void ResultScene::addTimingAnalytics(
+    std::optional<practice::ResultModel> analyticsModel) {
   View *host =
       rootLayout == nullptr
           ? nullptr
           : rootLayout->findViewByName("timingAnalytics");
-  auto analyticsModel = makeTimingAnalyticsModel();
   if (rootLayout == nullptr || !analyticsModel.has_value()) {
     if (host != nullptr) {
       host->setDisplay(YGDisplayNone);
@@ -1651,9 +1651,11 @@ void ResultScene::init() {
       new View(0, 0, rendering::window_width, rendering::window_height);
   addView(rootLayout);
 
+  auto analyticsModel = makeTimingAnalyticsModel();
   ResultSkinData data = makeResultSkinData();
+  data.showTimingAnalytics = analyticsModel.has_value();
   skin->buildLayout("Result", rootLayout, &data);
-  addTimingAnalytics();
+  addTimingAnalytics(std::move(analyticsModel));
   addResultPersistenceStatus();
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();

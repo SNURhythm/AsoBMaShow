@@ -96,7 +96,7 @@ private:
   void applyResultPersistenceReceipt();
   void updateResultPersistencePresentation();
   void refreshResultSummary();
-  void addTimingAnalytics();
+  void addTimingAnalytics(std::optional<practice::ResultModel> analyticsModel);
   void addRetryButtons();
   void addCourseButtons();
   void buildCourseExitConfirmation();
