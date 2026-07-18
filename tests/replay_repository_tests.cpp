@@ -94,8 +94,7 @@ bool columnExists(sqlite3 *db, const std::string &table,
 bool indexExists(sqlite3 *db, const std::string &index) {
   SqliteStatementHandle stmt;
   assert(prepareSqliteStatement(
-             db,
-             "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+             db, "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
              stmt) == SQLITE_OK);
   bindSqliteText(stmt.get(), 1, index);
   return sqlite3_step(stmt.get()) == SQLITE_ROW;
@@ -250,8 +249,7 @@ rawDatabaseFamilySnapshot(const std::filesystem::path &path) {
 bool sameDatabaseFamilyIgnoringWalSharedMemoryBytes(
     const RawDatabaseFamilySnapshot &left,
     const RawDatabaseFamilySnapshot &right) {
-  return left.files[0] == right.files[0] &&
-         left.files[1] == right.files[1] &&
+  return left.files[0] == right.files[0] && left.files[1] == right.files[1] &&
          left.files[2] == right.files[2] &&
          left.files[3].has_value() == right.files[3].has_value();
 }
@@ -707,8 +705,7 @@ void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
       "clear_type,completed_charts,total_charts) VALUES "
       "(19,'Path only','Group','{}',0,0,0,0,'NORMAL','OFF',100,1,100.0,300,"
       "1,1)");
-  const int pathOnlyId =
-      static_cast<int>(sqlite3_last_insert_rowid(db.get()));
+  const int pathOnlyId = static_cast<int>(sqlite3_last_insert_rowid(db.get()));
   execOrAbort(db.get(),
               "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
               "replay_id,rest_micros_after_stage) VALUES (" +
@@ -738,14 +735,14 @@ void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
         "constraint_json,gauge_type,gauge_profile,gauge_auto_shift,ln_mode,"
         "requested_play_option,assist_option,final_score,max_combo,"
         "final_gauge,clear_type,completed_charts,total_charts) VALUES (" +
-            std::to_string(courseId) + ",'Corrupt','Group','{}',0,0,0,0,"
+            std::to_string(courseId) +
+            ",'Corrupt','Group','{}',0,0,0,0,"
             "'NORMAL','OFF',100,1,100.0,300," +
             std::to_string(completedCharts) + "," +
             std::to_string(totalCharts) + ")");
     return static_cast<int>(sqlite3_last_insert_rowid(db.get()));
   };
-  const auto linkStage = [&](int courseReplayId, int stageIndex,
-                             int replayId) {
+  const auto linkStage = [&](int courseReplayId, int stageIndex, int replayId) {
     execOrAbort(db.get(),
                 "INSERT INTO course_replay_stages (course_replay_id,"
                 "stage_index,replay_id,rest_micros_after_stage) VALUES (" +
@@ -770,9 +767,9 @@ void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
   linkStage(gapId, 2, 1);
   linkStage(insertCourse(23, 1, 1), 0, 999999);
 
-  const int excessiveId = insertCourse(
-      24, replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
-      replay_summary_scan::kMaxCourseStagesPerCandidate + 1);
+  const int excessiveId =
+      insertCourse(24, replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
+                   replay_summary_scan::kMaxCourseStagesPerCandidate + 1);
   execOrAbort(
       db.get(),
       "WITH RECURSIVE stage(value) AS (VALUES(0) UNION ALL SELECT value+1 "
@@ -799,8 +796,7 @@ void createVersion3CourseKeyFixture(const std::filesystem::path &path) {
       static_cast<int>(sqlite3_last_insert_rowid(db.get()));
   execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
                             std::to_string(invalidStageProvenanceReplayId));
-  linkStage(insertCourse(26, 1, 1), 0,
-            invalidStageProvenanceReplayId);
+  linkStage(insertCourse(26, 1, 1), 0, invalidStageProvenanceReplayId);
 
   const int missingStageId = insertCourse(27, 2, 2);
   linkStage(missingStageId, 0, 1);
@@ -834,9 +830,8 @@ void createVersion4ReplayFixture(const std::filesystem::path &path) {
   execOrAbort(db.get(),
               "ALTER TABLE course_replays ADD COLUMN course_key TEXT NOT NULL "
               "DEFAULT ''");
-  execOrAbort(db.get(),
-              "CREATE INDEX idx_course_replays_key_id ON "
-              "course_replays(course_key, id)");
+  execOrAbort(db.get(), "CREATE INDEX idx_course_replays_key_id ON "
+                        "course_replays(course_key, id)");
   execOrAbort(db.get(), "PRAGMA user_version = 4");
 }
 
@@ -1011,8 +1006,7 @@ void rewriteReplayResultOutboxWithMixedCaseIdentifiers(sqlite3 *db) {
                   "Last_Recovery_At, Created_At, Attempt_Id)");
 }
 
-void testVersion4MigrationAddsResultOutbox(
-    const std::filesystem::path &root) {
+void testVersion4MigrationAddsResultOutbox(const std::filesystem::path &root) {
   const auto path = root / "result-outbox-v5-migration" / "replay.db";
   createVersion4ReplayFixture(path);
 
@@ -1025,26 +1019,44 @@ void testVersion4MigrationAddsResultOutbox(
   assert(columnExists(db.get(), "replays", "attempt_id"));
   assert(columnExists(db.get(), "replays", "attempt_fingerprint"));
   assert(indexExists(db.get(), "idx_replays_attempt_id"));
-  assert(indexIsUniqueAndPartial(db.get(), "replays",
-                                 "idx_replays_attempt_id"));
+  assert(
+      indexIsUniqueAndPartial(db.get(), "replays", "idx_replays_attempt_id"));
   const std::string replayAttemptIndexSql = queryText(
       db.get(), "SELECT sql FROM sqlite_master WHERE type='index' AND "
                 "name='idx_replays_attempt_id'");
   assert(replayAttemptIndexSql.find("WHERE attempt_id IS NOT NULL") !=
          std::string::npos);
   assert(tableExists(db.get(), "pending_chart_score_writes"));
-  assert(columnIsTextPrimaryKeyNotNull(
-      db.get(), "pending_chart_score_writes", "attempt_id"));
+  assert(columnIsTextPrimaryKeyNotNull(db.get(), "pending_chart_score_writes",
+                                       "attempt_id"));
   for (const std::string column : {
-           "attempt_id",       "replay_id",         "chart_path",
-           "chart_md5",       "chart_sha256",      "chart_title",
-           "chart_artist",    "ln_mode",           "score",
-           "max_score",       "max_combo",         "combo_break",
-           "pgreat",          "great",             "good",
-           "bad",             "poor",              "kpoor",
-           "fast",            "slow",              "final_gauge",
-           "clear_type",      "ruleset_version",   "eligibility",
-           "provenance_json", "created_at",        "recovery_attempts",
+           "attempt_id",
+           "replay_id",
+           "chart_path",
+           "chart_md5",
+           "chart_sha256",
+           "chart_title",
+           "chart_artist",
+           "ln_mode",
+           "score",
+           "max_score",
+           "max_combo",
+           "combo_break",
+           "pgreat",
+           "great",
+           "good",
+           "bad",
+           "poor",
+           "kpoor",
+           "fast",
+           "slow",
+           "final_gauge",
+           "clear_type",
+           "ruleset_version",
+           "eligibility",
+           "provenance_json",
+           "created_at",
+           "recovery_attempts",
            "last_recovery_at",
        }) {
     assert(columnExists(db.get(), "pending_chart_score_writes", column));
@@ -1413,9 +1425,8 @@ void testVersion4OutboxCreationFailureRollsBackBaseRepairs(
   auto db = openDatabase(path);
   execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
   execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('ddl-rollback')");
-  execOrAbort(db.get(),
-              "CREATE VIEW pending_chart_score_writes AS "
-              "SELECT 'blocked' AS attempt_id");
+  execOrAbort(db.get(), "CREATE VIEW pending_chart_score_writes AS "
+                        "SELECT 'blocked' AS attempt_id");
   const ReplayMigrationSnapshot before{
       .userVersion = queryInt(db.get(), "PRAGMA user_version"),
       .schema = schemaSnapshot(db.get()),
@@ -1468,10 +1479,9 @@ void testStageChartResultIsAtomicAndReturnsTimestamp(
   auto db = openDatabase(path);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 1);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM replay_events") == 1);
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replay_touch_samples") ==
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replay_touch_samples") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replay_lane_cover_events") ==
          1);
-  assert(queryInt(db.get(),
-                  "SELECT COUNT(*) FROM replay_lane_cover_events") == 1);
   assert(queryInt(db.get(),
                   "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
   assert(queryText(db.get(), "SELECT attempt_id FROM replays") ==
@@ -1576,8 +1586,8 @@ void testChangedPayloadForSameAttemptConflicts(
 
   auto changed = original;
   ++changed.replay.events.front().diffMicros;
-  changed.payloadFingerprint = result_persistence::payloadFingerprint(
-      changed.replay, changed.score);
+  changed.payloadFingerprint =
+      result_persistence::payloadFingerprint(changed.replay, changed.score);
   const auto conflict = helper.StageChartResult(changed, {});
   assert(conflict.status == result_persistence::StageStatus::IntegrityConflict);
   assert(!conflict.receipt.has_value());
@@ -1668,8 +1678,7 @@ void testStageAcceptsStandard9KeysGaugeMaximum(
   assert(pending.value->score.finalGauge == 120.0f);
 }
 
-void testStageAcceptsNonLongNoteChartMode(
-    const std::filesystem::path &root) {
+void testStageAcceptsNonLongNoteChartMode(const std::filesystem::path &root) {
   const auto path = root / "stage-non-long-note-chart" / "replay.db";
   ReplayRepository helper(path);
   auto attempt = sampleChartAttempt(root, "stage-non-long-note-chart", 16);
@@ -1685,8 +1694,7 @@ void testStageAcceptsNonLongNoteChartMode(
   const auto pending = helper.LoadPendingChartScore(attempt.attemptId);
   assert(pending.status == result_persistence::PendingReadStatus::Found);
   assert(pending.value.has_value());
-  assert(pending.value->score.longNoteMode ==
-         long_note_mode::kUnknownValue);
+  assert(pending.value->score.longNoteMode == long_note_mode::kUnknownValue);
 }
 
 void testStageAcceptsUnforcedLongNoteChartMode(
@@ -1769,8 +1777,8 @@ void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
 
   auto changed = attempt;
   ++changed.score.fast;
-  changed.payloadFingerprint = result_persistence::payloadFingerprint(
-      changed.replay, changed.score);
+  changed.payloadFingerprint =
+      result_persistence::payloadFingerprint(changed.replay, changed.score);
   assert(helper.StageChartResult(changed, {}).status ==
          result_persistence::StageStatus::IntegrityConflict);
 
@@ -1799,9 +1807,9 @@ void testOutboxInsertFailureRollsBackReplayAndChildren(
   assert(!failed.receipt.has_value());
 
   db = openDatabase(path);
-  for (const std::string table : {
-           "replays", "replay_events", "replay_touch_samples",
-           "replay_lane_cover_events", "pending_chart_score_writes"}) {
+  for (const std::string table :
+       {"replays", "replay_events", "replay_touch_samples",
+        "replay_lane_cover_events", "pending_chart_score_writes"}) {
     assert(queryInt(db.get(), "SELECT COUNT(*) FROM " + table) == 0);
   }
 }
@@ -1817,11 +1825,10 @@ void testPendingReadsDistinguishMissingFailureAndConflict(
          result_persistence::StageStatus::Staged);
 
   auto db = openDatabase(path);
-  execOrAbort(db.get(),
-              "UPDATE pending_chart_score_writes SET "
-              "attempt_id='00000000-0000-4000-8000-00000000000A' "
-              "WHERE attempt_id='" +
-                  attempt.attemptId + "'");
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET "
+                        "attempt_id='00000000-0000-4000-8000-00000000000A' "
+                        "WHERE attempt_id='" +
+                            attempt.attemptId + "'");
   db.reset();
   const auto malformedIdentity =
       helper.LoadPendingChartScore(attempt.attemptId);
@@ -1830,9 +1837,8 @@ void testPendingReadsDistinguishMissingFailureAndConflict(
   assert(!malformedIdentity.value.has_value());
 
   db = openDatabase(path);
-  execOrAbort(db.get(),
-              "UPDATE pending_chart_score_writes SET attempt_id='" +
-                  attempt.attemptId + "'");
+  execOrAbort(db.get(), "UPDATE pending_chart_score_writes SET attempt_id='" +
+                            attempt.attemptId + "'");
   execOrAbort(db.get(),
               "UPDATE pending_chart_score_writes SET provenance_json='{' "
               "WHERE attempt_id='" +
@@ -1909,8 +1915,7 @@ void testRecoverySnapshotPrioritizesNeverAttemptedRows(
   assert(helper.StageChartResult(third, {}).receipt.has_value());
 
   const auto marked = helper.RecordPendingChartScoreRecoveryAttempt(
-      first.attemptId,
-      result_persistence::RecoveryAttemptKind::StorageFailure);
+      first.attemptId, result_persistence::RecoveryAttemptKind::StorageFailure);
   assert(marked.status == result_persistence::RecoveryMarkStatus::Recorded);
   const auto missing = helper.RecordPendingChartScoreRecoveryAttempt(
       chartAttemptId(9),
@@ -1928,10 +1933,9 @@ void testRecoverySnapshotPrioritizesNeverAttemptedRows(
                   "SELECT recovery_attempts FROM pending_chart_score_writes "
                   "WHERE attempt_id='" +
                       first.attemptId + "'") == 1);
-  assert(queryInt(db.get(),
-                  "SELECT last_recovery_at IS NOT NULL FROM "
-                  "pending_chart_score_writes WHERE attempt_id='" +
-                      first.attemptId + "'") == 1);
+  assert(queryInt(db.get(), "SELECT last_recovery_at IS NOT NULL FROM "
+                            "pending_chart_score_writes WHERE attempt_id='" +
+                                first.attemptId + "'") == 1);
 }
 
 void testPendingSemanticConflictsAreRetainedByAcknowledgement(
@@ -2311,10 +2315,9 @@ void testChartAndCourseRoundTripAndPathIsolation(
 
   assert(second.ListReplays(replay.chartMeta, 0).empty());
   assert(second
-             .ListCourseReplays(
-                 {.courseKey = course.courseKey,
-                  .legacyCourseId = course.courseId},
-                 0)
+             .ListCourseReplays({.courseKey = course.courseKey,
+                                 .legacyCourseId = course.courseId},
+                                0)
              .empty());
   assert(first.GetDatabasePath() == firstPath);
   assert(second.GetDatabasePath() == secondPath);
@@ -2468,8 +2471,7 @@ void testInvalidReplayWritesDoNotCreateDatabase(
 
   CourseReplayData oversizedCourse;
   oversizedCourse.courseId = 84;
-  oversizedCourse.provenance =
-      sampleProvenance("oversized-course-no-database");
+  oversizedCourse.provenance = sampleProvenance("oversized-course-no-database");
   oversizedCourse.stages.resize(
       replay_summary_scan::kMaxCourseStagesPerCandidate + 1,
       CourseReplayStageData{
@@ -2755,8 +2757,8 @@ void testFutureVersionCurrentPlusOneIsRejected(
   const auto assertUnchanged = [&](const std::string &label,
                                    const auto &operation) {
     const auto path = root / "future-v6" / label / "replay.db";
-    createFutureSentinelDatabase(
-        path, ReplayRepository::kCurrentSchemaVersion + 1);
+    createFutureSentinelDatabase(path,
+                                 ReplayRepository::kCurrentSchemaVersion + 1);
     const auto before = persistentDatabaseSnapshot(path);
     ReplayRepository helper(path);
     operation(helper, path);
@@ -2813,13 +2815,15 @@ void testFutureVersionCurrentPlusOneIsRejected(
     assert(!batch.storageAvailable);
   });
   assertUnchanged("acknowledge", [&](ReplayRepository &helper, const auto &) {
-    assert(helper.AcknowledgePendingChartScoreAndActivateIr(attempt.attemptId, 1).status ==
-           result_persistence::AcknowledgeStatus::StorageFailure);
+    assert(
+        helper.AcknowledgePendingChartScoreAndActivateIr(attempt.attemptId, 1)
+            .status == result_persistence::AcknowledgeStatus::StorageFailure);
   });
   assertUnchanged("mark-recovery", [&](ReplayRepository &helper, const auto &) {
-    assert(helper.RecordPendingChartScoreRecoveryAttempt(
-                     attempt.attemptId,
-                     result_persistence::RecoveryAttemptKind::StorageFailure)
+    assert(helper
+               .RecordPendingChartScoreRecoveryAttempt(
+                   attempt.attemptId,
+                   result_persistence::RecoveryAttemptKind::StorageFailure)
                .status ==
            result_persistence::RecoveryMarkStatus::StorageFailure);
   });
@@ -2893,11 +2897,11 @@ void testFutureReplayPreflightPreservesRawDatabaseFamily(
                                  FutureDatabaseState::HotJournal,
                                  FutureDatabaseState::Delete};
   for (const FutureDatabaseState databaseState : states) {
-    assertRejectedWithoutFamilyMutation(
-        databaseState, "connect", [&](const auto &path) {
-          ReplayRepository helper(path);
-          return !helper.EnsureSchema();
-        });
+    assertRejectedWithoutFamilyMutation(databaseState, "connect",
+                                        [&](const auto &path) {
+                                          ReplayRepository helper(path);
+                                          return !helper.EnsureSchema();
+                                        });
     assertRejectedWithoutFamilyMutation(
         databaseState, "save-chart", [&](const auto &path) {
           ReplayRepository helper(path);
@@ -3254,10 +3258,9 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
     assert(helper
-               .ListCourseReplays(
-                   {.courseKey = course.courseKey,
-                    .legacyCourseId = course.courseId},
-                   1)
+               .ListCourseReplays({.courseKey = course.courseKey,
+                                   .legacyCourseId = course.courseId},
+                                  1)
                .empty());
     helper.Shutdown();
   }
@@ -3265,10 +3268,9 @@ void testCourseStageStepErrorsFailListsAndFullLoad(
     ScopedInterruptStatementAutoExtension interrupt(
         "FROM course_replay_stages s");
     assert(helper
-               .ListCourseReplays(
-                   {.courseKey = course.courseKey,
-                    .legacyCourseId = course.courseId},
-                   0)
+               .ListCourseReplays({.courseKey = course.courseKey,
+                                   .legacyCourseId = course.courseId},
+                                  0)
                .empty());
     helper.Shutdown();
   }
@@ -3494,10 +3496,9 @@ void testCourseSummaryValidationAndDetailsShareWalSnapshot(
       "diff_micros,gauge,gauge_type,combo,score) VALUES (" +
       std::to_string(stageReplayId) + ",0,0,0,0,0,0,0,0,0.0,0,0,0)";
 
-  const auto summaries = withMutationDuringLongWalRead(
-      path, mutation, [&] {
-        return helper.ListCourseReplays({.legacyCourseId = kCourseId}, 0);
-      });
+  const auto summaries = withMutationDuringLongWalRead(path, mutation, [&] {
+    return helper.ListCourseReplays({.legacyCourseId = kCourseId}, 0);
+  });
   const auto target =
       std::find_if(summaries.begin(), summaries.end(),
                    [&](const auto &value) { return value.id == targetId; });
@@ -3618,10 +3619,9 @@ void testLimitedSummaryScansHaveFiniteCorruptBudget(
     db.reset();
 
     ScopedLogCapture logs;
-    const auto summaries =
-        helper.ListCourseReplays({.courseKey = valid.courseKey,
-                                  .legacyCourseId = valid.courseId},
-                                 kRequestedLimit);
+    const auto summaries = helper.ListCourseReplays(
+        {.courseKey = valid.courseKey, .legacyCourseId = valid.courseId},
+        kRequestedLimit);
     assert(summaries.empty());
     assert(logs.countContaining("Course replay summary provenance scan") == 1);
     assert(logs.anyContains(inspectedText));
@@ -3647,9 +3647,10 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
          ReplayRepository::kCurrentSchemaVersion);
   assert(columnExists(db.get(), "course_replays", "course_key"));
   assert(indexExists(db.get(), "idx_course_replays_key_id"));
-  assert(queryText(db.get(),
-                   "SELECT course_key FROM course_replays WHERE course_id=18") ==
-         expectedKey);
+  assert(
+      queryText(db.get(),
+                "SELECT course_key FROM course_replays WHERE course_id=18") ==
+      expectedKey);
   assert(queryText(db.get(),
                    "SELECT course_key FROM course_replays WHERE course_id=17")
              .empty());
@@ -3688,7 +3689,6 @@ void testVersion3To4BackfillsOnlyCompleteDurableCourseReplays(
   assert(helper.EnsureSchema());
   db = openDatabase(path);
   assert(schemaSnapshot(db.get()) == firstSchema);
-
 }
 
 void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
@@ -3699,8 +3699,7 @@ void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
       {.sha256 = file_checksum::sha256("partial-stage-a")},
       {.sha256 = file_checksum::sha256("partial-stage-b")},
   };
-  const std::string fullKey =
-      course_identity::makeCourseKey(fullCharts, "[]");
+  const std::string fullKey = course_identity::makeCourseKey(fullCharts, "[]");
   const std::string prefixKey = course_identity::makeCourseKey(
       std::span<const course_identity::ChartIdentity>(fullCharts).first(1),
       "[]");
@@ -3767,11 +3766,12 @@ void testPartialCourseReplayStoresFullKeyAndRejectsInvalidShape(
 
 void testCourseStagePreparationValidatesBeforeMetadataFallback(
     const std::filesystem::path &root) {
-  bms_parser::ChartMeta expected = sampleReplay(root, "expected-stage").chartMeta;
+  bms_parser::ChartMeta expected =
+      sampleReplay(root, "expected-stage").chartMeta;
   expected.MD5 = "11111111111111111111111111111111";
 
-  CourseReplayStageData recorded{
-      .replay = sampleReplay(root, "recorded-stage")};
+  CourseReplayStageData recorded{.replay =
+                                     sampleReplay(root, "recorded-stage")};
   recorded.replay.chartMeta.BmsPath.clear();
   recorded.replay.chartMeta.SHA256.clear();
   recorded.replay.chartMeta.MD5.clear();
@@ -3794,8 +3794,8 @@ void testCourseStagePreparationValidatesBeforeMetadataFallback(
   };
   std::vector<CourseReplayStageData> sparseStages(2);
   sparseStages[1].replay = sampleReplay(root, "prefix-stage-1");
-  assert(!course_replay::prepareCompletedPrefixForSave(
-              sparseStages, expectedPrefix, 2)
+  assert(!course_replay::prepareCompletedPrefixForSave(sparseStages,
+                                                       expectedPrefix, 2)
               .has_value());
 
   sparseStages[0].replay = sampleReplay(root, "prefix-stage-0");
@@ -3803,10 +3803,8 @@ void testCourseStagePreparationValidatesBeforeMetadataFallback(
       sparseStages, expectedPrefix, 2);
   assert(validPrefix.has_value());
   assert(validPrefix->size() == 2);
-  assert((*validPrefix)[0].replay.chartMeta.SHA256 ==
-         expectedPrefix[0].SHA256);
-  assert((*validPrefix)[1].replay.chartMeta.SHA256 ==
-         expectedPrefix[1].SHA256);
+  assert((*validPrefix)[0].replay.chartMeta.SHA256 == expectedPrefix[0].SHA256);
+  assert((*validPrefix)[1].replay.chartMeta.SHA256 == expectedPrefix[1].SHA256);
 }
 
 void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
@@ -3843,11 +3841,13 @@ void testCourseReplayLookupMergesKeyAndBlankLegacyRows(
   const int blankOtherId = save(88, keyA, 5);
   const int corruptNewest = save(999, keyA, 6);
   auto db = openDatabase(path);
-  execOrAbort(db.get(), "UPDATE course_replays SET course_key='' WHERE id IN (" +
-                            std::to_string(blankCompatible) + "," +
-                            std::to_string(blankOtherId) + ")");
-  execOrAbort(db.get(), "UPDATE course_replays SET provenance_json='{' WHERE id=" +
-                            std::to_string(corruptNewest));
+  execOrAbort(db.get(),
+              "UPDATE course_replays SET course_key='' WHERE id IN (" +
+                  std::to_string(blankCompatible) + "," +
+                  std::to_string(blankOtherId) + ")");
+  execOrAbort(db.get(),
+              "UPDATE course_replays SET provenance_json='{' WHERE id=" +
+                  std::to_string(corruptNewest));
   db.reset();
 
   const CourseReplayLookup lookup{.courseKey = keyA, .legacyCourseId = 77};
@@ -3921,8 +3921,7 @@ void testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(
   assert(validId.has_value() && *validId == 1);
   helper.Shutdown();
 
-  constexpr sqlite3_int64 outOfRangeId =
-      static_cast<sqlite3_int64>(1) << 32;
+  constexpr sqlite3_int64 outOfRangeId = static_cast<sqlite3_int64>(1) << 32;
   constexpr sqlite3_int64 aliasedId = outOfRangeId + 1;
   auto db = openDatabase(path);
   execOrAbort(
@@ -3940,17 +3939,15 @@ void testCourseReplayLookupRejectsOutOfRangeIdsBeforeHydration(
           "clear_type,completed_charts,total_charts,created_at,ruleset_version,"
           "eligibility,provenance_json FROM course_replays WHERE id=" +
           std::to_string(*validId));
-  execOrAbort(
-      db.get(),
-      "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
-      "replay_id,rest_micros_after_stage) SELECT " +
-          std::to_string(aliasedId) +
-          ",stage_index,replay_id,rest_micros_after_stage FROM "
-          "course_replay_stages WHERE course_replay_id=" +
-          std::to_string(*validId));
-  assert(queryInt(db.get(),
-                  "SELECT COUNT(*) FROM course_replays WHERE id=" +
-                      std::to_string(aliasedId)) == 1);
+  execOrAbort(db.get(),
+              "INSERT INTO course_replay_stages (course_replay_id,stage_index,"
+              "replay_id,rest_micros_after_stage) SELECT " +
+                  std::to_string(aliasedId) +
+                  ",stage_index,replay_id,rest_micros_after_stage FROM "
+                  "course_replay_stages WHERE course_replay_id=" +
+                  std::to_string(*validId));
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_replays WHERE id=" +
+                                std::to_string(aliasedId)) == 1);
   db.reset();
 
   ScopedLogCapture logs;
@@ -4038,11 +4035,11 @@ void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
   const int ambiguousId = savePartial(92, "Ambiguous", common, keyA);
   const int mismatchId = savePartial(93, "Mismatch", common, keyA);
   auto db = openDatabase(path);
-  execOrAbort(db.get(), "UPDATE course_replays SET course_key='' WHERE id IN (" +
-                            std::to_string(uniqueId) + "," +
-                            std::to_string(evidenceId) + "," +
-                            std::to_string(ambiguousId) + "," +
-                            std::to_string(mismatchId) + ")");
+  execOrAbort(db.get(),
+              "UPDATE course_replays SET course_key='' WHERE id IN (" +
+                  std::to_string(uniqueId) + "," + std::to_string(evidenceId) +
+                  "," + std::to_string(ambiguousId) + "," +
+                  std::to_string(mismatchId) + ")");
   const std::string historicalTuple = queryText(
       db.get(),
       "SELECT course_id || '|' || course_name || '|' || course_group_name || "
@@ -4114,9 +4111,10 @@ void testCourseReplayRecoveryUsesPrefixThenExactScoreEvidence(
     assert(helper.RecoverCourseRecords(definitions, {&mismatch, 1}, error));
     assert(error.empty());
     db = openDatabase(path);
-    assert(queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
-                                   std::to_string(mismatchId))
-               .empty());
+    assert(
+        queryText(db.get(), "SELECT course_key FROM course_replays WHERE id=" +
+                                std::to_string(mismatchId))
+            .empty());
     db.reset();
   }
 
@@ -4190,12 +4188,11 @@ void testCourseReplayRecoveryRollsBackAndNestsInCallerTransaction(
 
   auto db = openDatabase(path);
   execOrAbort(db.get(), "UPDATE course_replays SET course_key=''");
-  execOrAbort(
-      db.get(),
-      "CREATE TRIGGER fail_second_course_recovery "
-      "BEFORE UPDATE OF course_key ON course_replays WHEN OLD.id=" +
-          std::to_string(secondId) +
-          " BEGIN SELECT RAISE(ABORT, 'forced recovery failure'); END");
+  execOrAbort(db.get(),
+              "CREATE TRIGGER fail_second_course_recovery "
+              "BEFORE UPDATE OF course_key ON course_replays WHEN OLD.id=" +
+                  std::to_string(secondId) +
+                  " BEGIN SELECT RAISE(ABORT, 'forced recovery failure'); END");
   db.reset();
 
   std::string error;
@@ -4234,9 +4231,9 @@ ir::IrOutboxDraft sampleIrDraft(std::string attemptId, std::int64_t createdAt,
   };
 }
 
-ir::IrOutboxDraft automaticIrDraft(
-    const result_persistence::ChartResultAttempt &attempt,
-    std::string providerId, std::int64_t createdAt) {
+ir::IrOutboxDraft
+automaticIrDraft(const result_persistence::ChartResultAttempt &attempt,
+                 std::string providerId, std::int64_t createdAt) {
   return {
       .providerId = std::move(providerId),
       .attemptId = attempt.attemptId,
@@ -4279,23 +4276,22 @@ void testStageChartResultAtomicallyStagesIrDrafts(
   changed[0].payloadJson = R"({"score":999})";
   assert(helper.StageChartResult(attempt, changed).status ==
          result_persistence::StageStatus::IntegrityConflict);
-  assert(helper.StageChartResult(
-                   attempt, std::span<const ir::IrOutboxDraft>(drafts).first(1))
+  assert(helper
+             .StageChartResult(
+                 attempt, std::span<const ir::IrOutboxDraft>(drafts).first(1))
              .status == result_persistence::StageStatus::IntegrityConflict);
 
   const auto invalidPath = root / "ir-stage-invalid" / "replay.db";
   ReplayRepository invalid(invalidPath);
   assert(invalid.EnsureSchema());
-  const auto invalidAttempt =
-      sampleChartAttempt(root, "ir-stage-invalid", 82);
+  const auto invalidAttempt = sampleChartAttempt(root, "ir-stage-invalid", 82);
   auto duplicateProviders = std::array{
       automaticIrDraft(invalidAttempt, "tachi", 20'000),
       automaticIrDraft(invalidAttempt, "tachi", 20'001),
   };
   assert(invalid.StageChartResult(invalidAttempt, duplicateProviders).status ==
          result_persistence::StageStatus::IntegrityConflict);
-  auto mismatched =
-      automaticIrDraft(invalidAttempt, "tachi", 20'002);
+  auto mismatched = automaticIrDraft(invalidAttempt, "tachi", 20'002);
   mismatched.attemptId = "123e4567-e89b-42d3-a456-426614174099";
   assert(invalid.StageChartResult(invalidAttempt, {&mismatched, 1}).status ==
          result_persistence::StageStatus::IntegrityConflict);
@@ -4315,13 +4311,13 @@ void testStageChartResultAtomicallyStagesIrDrafts(
   assert(failing.EnsureSchema());
   failing.Shutdown();
   db = openDatabase(failurePath);
-  execOrAbort(db.get(),
-              "CREATE TRIGGER fail_second_ir_draft BEFORE INSERT ON ir_outbox "
-              "WHEN NEW.provider_id='archive_readonly' BEGIN SELECT RAISE(ABORT, "
-              "'forced IR draft failure'); END");
+  execOrAbort(
+      db.get(),
+      "CREATE TRIGGER fail_second_ir_draft BEFORE INSERT ON ir_outbox "
+      "WHEN NEW.provider_id='archive_readonly' BEGIN SELECT RAISE(ABORT, "
+      "'forced IR draft failure'); END");
   db.reset();
-  const auto failedAttempt =
-      sampleChartAttempt(root, "ir-stage-rollback", 83);
+  const auto failedAttempt = sampleChartAttempt(root, "ir-stage-rollback", 83);
   const std::array failedDrafts{
       automaticIrDraft(failedAttempt, "tachi", 30'000),
       automaticIrDraft(failedAttempt, "archive_readonly", 30'001),
@@ -4356,30 +4352,31 @@ void testAcknowledgementActivatesIrAtomically(
 
   const auto failed = helper.AcknowledgePendingChartScoreAndActivateIr(
       attempt.attemptId, staged.receipt->replayId);
-  assert(failed.status == result_persistence::AcknowledgeStatus::StorageFailure);
+  assert(failed.status ==
+         result_persistence::AcknowledgeStatus::StorageFailure);
   helper.Shutdown();
   db = openDatabase(path);
   assert(queryInt(db.get(),
                   "SELECT COUNT(*) FROM pending_chart_score_writes") == 1);
-  assert(queryInt(db.get(),
-                  "SELECT local_result_ready FROM ir_outbox") == 0);
+  assert(queryInt(db.get(), "SELECT local_result_ready FROM ir_outbox") == 0);
   execOrAbort(db.get(), "DROP TRIGGER fail_ir_activation");
   db.reset();
 
   const auto activated = helper.AcknowledgePendingChartScoreAndActivateIr(
       attempt.attemptId, staged.receipt->replayId);
-  assert(activated.status == result_persistence::AcknowledgeStatus::Acknowledged);
+  assert(activated.status ==
+         result_persistence::AcknowledgeStatus::Acknowledged);
   helper.Shutdown();
   db = openDatabase(path);
   assert(queryInt(db.get(),
                   "SELECT COUNT(*) FROM pending_chart_score_writes") == 0);
-  assert(queryInt(db.get(),
-                  "SELECT local_result_ready FROM ir_outbox") == 1);
+  assert(queryInt(db.get(), "SELECT local_result_ready FROM ir_outbox") == 1);
   db.reset();
   assert(helper.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max())
              .entries.size() == 1);
-  assert(helper.AcknowledgePendingChartScoreAndActivateIr(
-                    attempt.attemptId, staged.receipt->replayId)
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 attempt.attemptId, staged.receipt->replayId)
              .status ==
          result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
 }
@@ -4403,13 +4400,13 @@ void testVersion5MigrationAddsIrOutbox(const std::filesystem::path &root) {
   assert(tableExists(db.get(), "ir_outbox"));
   assert(indexExists(db.get(), "idx_ir_outbox_due"));
   assert(indexExists(db.get(), "idx_ir_outbox_attempt"));
-  for (const std::string_view column : {
-           "id", "provider_id", "attempt_id", "chart_md5", "chart_sha256",
-           "payload_json", "state", "local_result_ready",
-           "request_attempt_count", "consecutive_failure_count",
-           "next_attempt_at_ms", "next_request_user_intent", "remote_job_id",
-           "remote_origin", "last_error_code", "last_error_message",
-           "created_at_ms", "updated_at_ms", "completed_at_ms"}) {
+  for (const std::string_view column :
+       {"id", "provider_id", "attempt_id", "chart_md5", "chart_sha256",
+        "payload_json", "state", "local_result_ready", "request_attempt_count",
+        "consecutive_failure_count", "next_attempt_at_ms",
+        "next_request_user_intent", "remote_job_id", "remote_origin",
+        "last_error_code", "last_error_message", "created_at_ms",
+        "updated_at_ms", "completed_at_ms"}) {
     assert(columnExists(db.get(), "ir_outbox", std::string(column)));
   }
   SqliteStatementHandle foreignKeys;
@@ -4440,8 +4437,8 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
-  const auto draft = sampleIrDraft(
-      "123e4567-e89b-42d3-a456-426614174001", 1'000);
+  const auto draft =
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174001", 1'000);
   const auto inserted = helper.EnqueueReadyIrOutboxDraft(draft, true);
   assert(inserted.status == ir::IrOutboxInsertStatus::Inserted);
   assert(inserted.entry && inserted.entry->payloadJson == draft.payloadJson &&
@@ -4465,21 +4462,47 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   const auto secondReady = helper.EnqueueReadyIrOutboxDraft(
       sampleIrDraft("123e4567-e89b-42d3-a456-426614174002", 1'001), false);
   assert(secondReady.entry);
+  const auto blockedBeforeClaim = helper.EnqueueReadyIrOutboxDraft(
+      sampleIrDraft("123e4567-e89b-42d3-a456-426614174003", 1'002), true);
+  assert(blockedBeforeClaim.entry);
+  assert(helper
+             .BlockIrOutboxConfiguration(
+                 blockedBeforeClaim.entry->id, ir::IrOutboxState::Pending,
+                 "missing_api_key", "API key required", 1'050)
+             .status == ir::IrOutboxMutationStatus::Updated);
+  auto blockedBeforeClaimLoaded =
+      helper.LoadIrOutbox(blockedBeforeClaim.entry->providerId,
+                          blockedBeforeClaim.entry->attemptId);
+  assert(blockedBeforeClaimLoaded.entry &&
+         blockedBeforeClaimLoaded.entry->state ==
+             ir::IrOutboxState::BlockedConfiguration &&
+         blockedBeforeClaimLoaded.entry->nextRequestUserIntent &&
+         blockedBeforeClaimLoaded.entry->requestAttemptCount == 0);
+  assert(helper.UnblockIrOutbox("tachi", 1'060).affectedRows == 1);
+  blockedBeforeClaimLoaded =
+      helper.LoadIrOutbox(blockedBeforeClaim.entry->providerId,
+                          blockedBeforeClaim.entry->attemptId);
+  assert(blockedBeforeClaimLoaded.entry &&
+         blockedBeforeClaimLoaded.entry->state == ir::IrOutboxState::Pending &&
+         blockedBeforeClaimLoaded.entry->nextRequestUserIntent);
+  assert(helper.DiscardIrOutbox(blockedBeforeClaim.entry->id).affectedRows ==
+         1);
   const auto due = helper.ListDueIrOutbox(1'100);
   assert(due.status == ir::IrOutboxBatchStatus::Loaded &&
          due.entries.size() == 2 && due.entries.front().id == rowId &&
          due.entries.back().id == secondReady.entry->id);
   assert(helper.DiscardIrOutbox(secondReady.entry->id).affectedRows == 1);
 
-  const auto claim = helper.ClaimIrOutbox(
-      rowId, ir::IrOutboxState::Pending, 1'200);
+  const auto claim =
+      helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 1'200);
   assert(claim.status == ir::IrOutboxClaimStatus::Claimed && claim.entry &&
          claim.consumedUserIntent &&
          claim.entry->state == ir::IrOutboxState::Uploading &&
          claim.entry->requestAttemptCount == 1 &&
          !claim.entry->nextRequestUserIntent);
-  assert(helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 1'201)
-             .status == ir::IrOutboxClaimStatus::StateMismatch);
+  assert(
+      helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 1'201).status ==
+      ir::IrOutboxClaimStatus::StateMismatch);
 
   const auto transient = helper.ApplyIrOutboxDelivery({
       .rowId = rowId,
@@ -4495,20 +4518,22 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   assert(loaded.entry && loaded.entry->state == ir::IrOutboxState::Pending &&
          loaded.entry->consecutiveFailureCount == 1 &&
          loaded.entry->nextAttemptAtUnixMillis == 2'000 &&
-         loaded.entry->lastErrorMessage.size() ==
-             ir::kMaximumDiagnosticBytes);
+         loaded.entry->lastErrorMessage.size() == ir::kMaximumDiagnosticBytes);
   assert(helper.ListDueIrOutbox(1'999).entries.empty());
 
-  assert(helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 2'000)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = rowId,
-             .nextState = ir::IrOutboxState::BlockedConfiguration,
-             .consecutiveFailureCount = 0,
-             .lastErrorCode = "authentication_required",
-             .lastErrorMessage = "API key required",
-             .updatedAtUnixMillis = 2'001,
-         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(
+      helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 2'000).status ==
+      ir::IrOutboxClaimStatus::Claimed);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = rowId,
+                 .nextState = ir::IrOutboxState::BlockedConfiguration,
+                 .consecutiveFailureCount = 0,
+                 .lastErrorCode = "authentication_required",
+                 .lastErrorMessage = "API key required",
+                 .updatedAtUnixMillis = 2'001,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry &&
          loaded.entry->state == ir::IrOutboxState::BlockedConfiguration);
@@ -4521,48 +4546,76 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
          loaded.entry->nextRequestUserIntent &&
          loaded.entry->lastErrorCode.empty());
 
-  assert(helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 2'100)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = rowId,
-             .nextState = ir::IrOutboxState::AwaitingRemoteResult,
-             .consecutiveFailureCount = 0,
-             .nextAttemptAtUnixMillis = 3'000,
-             .remoteJobId = "job-123",
-             .remoteOrigin = "https://boku.tachi.ac",
-             .updatedAtUnixMillis = 2'200,
-         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(
+      helper.ClaimIrOutbox(rowId, ir::IrOutboxState::Pending, 2'100).status ==
+      ir::IrOutboxClaimStatus::Claimed);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = rowId,
+                 .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+                 .consecutiveFailureCount = 0,
+                 .nextAttemptAtUnixMillis = 3'000,
+                 .remoteJobId = "job-123",
+                 .remoteOrigin = "https://boku.tachi.ac",
+                 .updatedAtUnixMillis = 2'200,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry &&
          loaded.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
          loaded.entry->remoteJobId == "job-123" &&
          loaded.entry->remoteOrigin == "https://boku.tachi.ac");
 
+  assert(helper
+             .BlockIrOutboxConfiguration(
+                 rowId, ir::IrOutboxState::AwaitingRemoteResult,
+                 "authentication_failed", "API key rejected", 2'300)
+             .status == ir::IrOutboxMutationStatus::Updated);
+  loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry &&
+         loaded.entry->state == ir::IrOutboxState::BlockedConfiguration &&
+         loaded.entry->remoteJobId == "job-123" &&
+         loaded.entry->remoteOrigin == "https://boku.tachi.ac" &&
+         !loaded.entry->nextRequestUserIntent);
+  assert(helper.RetryIrOutbox(rowId, 2'301).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
+  assert(loaded.entry &&
+         loaded.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
+         loaded.entry->remoteJobId == "job-123" &&
+         loaded.entry->remoteOrigin == "https://boku.tachi.ac" &&
+         !loaded.entry->nextRequestUserIntent);
+
   const auto pollClaim = helper.ClaimIrOutbox(
       rowId, ir::IrOutboxState::AwaitingRemoteResult, 3'000);
   assert(pollClaim.status == ir::IrOutboxClaimStatus::Claimed &&
          !pollClaim.consumedUserIntent && pollClaim.entry &&
          pollClaim.entry->requestAttemptCount == 4);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = rowId,
-             .nextState = ir::IrOutboxState::AwaitingRemoteResult,
-             .consecutiveFailureCount = 0,
-             .nextAttemptAtUnixMillis = 4'000,
-             .remoteJobId = "job-123",
-             .remoteOrigin = "https://boku.tachi.ac",
-             .updatedAtUnixMillis = 3'001,
-         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = rowId,
+                 .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+                 .consecutiveFailureCount = 0,
+                 .nextAttemptAtUnixMillis = 4'000,
+                 .remoteJobId = "job-123",
+                 .remoteOrigin = "https://boku.tachi.ac",
+                 .updatedAtUnixMillis = 3'001,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
 
-  assert(helper.ClaimIrOutbox(
-             rowId, ir::IrOutboxState::AwaitingRemoteResult, 4'000)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = rowId,
-             .nextState = ir::IrOutboxState::Succeeded,
-             .consecutiveFailureCount = 0,
-             .updatedAtUnixMillis = 4'001,
-             .completedAtUnixMillis = 4'001,
-         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(
+      helper
+          .ClaimIrOutbox(rowId, ir::IrOutboxState::AwaitingRemoteResult, 4'000)
+          .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = rowId,
+                 .nextState = ir::IrOutboxState::Succeeded,
+                 .consecutiveFailureCount = 0,
+                 .updatedAtUnixMillis = 4'001,
+                 .completedAtUnixMillis = 4'001,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry && loaded.entry->state == ir::IrOutboxState::Succeeded &&
          loaded.entry->completedAtUnixMillis == 4'001 &&
@@ -4586,64 +4639,77 @@ void testIrOutboxRecoveryCountsRetryAndValidation(
       sampleIrDraft("123e4567-e89b-42d3-a456-426614174012", 1'002), false);
   assert(first.entry && second.entry && third.entry);
 
-  assert(helper.ClaimIrOutbox(first.entry->id, ir::IrOutboxState::Pending,
-                              1'100)
+  assert(
+      helper.ClaimIrOutbox(first.entry->id, ir::IrOutboxState::Pending, 1'100)
+          .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(
+      helper.ClaimIrOutbox(second.entry->id, ir::IrOutboxState::Pending, 1'100)
+          .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = second.entry->id,
+                 .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+                 .nextAttemptAtUnixMillis = 1'200,
+                 .remoteJobId = "job-recover",
+                 .remoteOrigin = "https://boku.tachi.ac",
+                 .updatedAtUnixMillis = 1'101,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
+  assert(helper
+             .ClaimIrOutbox(second.entry->id,
+                            ir::IrOutboxState::AwaitingRemoteResult, 1'200)
              .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ClaimIrOutbox(second.entry->id, ir::IrOutboxState::Pending,
-                              1'100)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = second.entry->id,
-             .nextState = ir::IrOutboxState::AwaitingRemoteResult,
-             .nextAttemptAtUnixMillis = 1'200,
-             .remoteJobId = "job-recover",
-             .remoteOrigin = "https://boku.tachi.ac",
-             .updatedAtUnixMillis = 1'101,
-         }).status == ir::IrOutboxMutationStatus::Updated);
-  assert(helper.ClaimIrOutbox(second.entry->id,
-                              ir::IrOutboxState::AwaitingRemoteResult, 1'200)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ClaimIrOutbox(third.entry->id, ir::IrOutboxState::Pending,
-                              1'100)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = third.entry->id,
-             .nextState = ir::IrOutboxState::FailedPermanent,
-             .lastErrorCode = "invalid_payload",
-             .lastErrorMessage = "provider rejected payload",
-             .updatedAtUnixMillis = 1'101,
-         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(
+      helper.ClaimIrOutbox(third.entry->id, ir::IrOutboxState::Pending, 1'100)
+          .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = third.entry->id,
+                 .nextState = ir::IrOutboxState::FailedPermanent,
+                 .lastErrorCode = "invalid_payload",
+                 .lastErrorMessage = "provider rejected payload",
+                 .updatedAtUnixMillis = 1'101,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
 
   assert(helper.RecoverStaleIrOutbox(1'300).affectedRows == 2);
-  auto loadedFirst = helper.LoadIrOutbox(
-      "tachi", "123e4567-e89b-42d3-a456-426614174010");
-  auto loadedSecond = helper.LoadIrOutbox(
-      "tachi", "123e4567-e89b-42d3-a456-426614174011");
+  auto loadedFirst =
+      helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174010");
+  auto loadedSecond =
+      helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174011");
   assert(loadedFirst.entry &&
          loadedFirst.entry->state == ir::IrOutboxState::Pending);
   assert(loadedSecond.entry &&
-         loadedSecond.entry->state ==
-             ir::IrOutboxState::AwaitingRemoteResult &&
+         loadedSecond.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
          loadedSecond.entry->remoteJobId == "job-recover");
 
-  assert(helper.RetryAllIrOutbox("tachi", 1'400).affectedRows == 1);
-  auto loadedThird = helper.LoadIrOutbox(
-      "tachi", "123e4567-e89b-42d3-a456-426614174012");
+  assert(helper.RetryAllIrOutbox("tachi", 1'400).affectedRows == 2);
+  auto loadedThird =
+      helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174012");
+  loadedSecond =
+      helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174011");
   assert(loadedThird.entry &&
          loadedThird.entry->state == ir::IrOutboxState::Pending &&
          loadedThird.entry->nextRequestUserIntent);
+  assert(loadedSecond.entry &&
+         loadedSecond.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
+         loadedSecond.entry->remoteJobId == "job-recover" &&
+         loadedSecond.entry->remoteOrigin == "https://boku.tachi.ac" &&
+         !loadedSecond.entry->nextRequestUserIntent);
 
-  assert(helper.ClaimIrOutbox(third.entry->id, ir::IrOutboxState::Pending,
-                              1'400)
-             .status == ir::IrOutboxClaimStatus::Claimed);
-  assert(helper.ApplyIrOutboxDelivery({
-             .rowId = third.entry->id,
-             .nextState = ir::IrOutboxState::BlockedConfiguration,
-             .updatedAtUnixMillis = 1'401,
-         }).status == ir::IrOutboxMutationStatus::Updated);
+  assert(
+      helper.ClaimIrOutbox(third.entry->id, ir::IrOutboxState::Pending, 1'400)
+          .status == ir::IrOutboxClaimStatus::Claimed);
+  assert(helper
+             .ApplyIrOutboxDelivery({
+                 .rowId = third.entry->id,
+                 .nextState = ir::IrOutboxState::BlockedConfiguration,
+                 .updatedAtUnixMillis = 1'401,
+             })
+             .status == ir::IrOutboxMutationStatus::Updated);
   assert(helper.UnblockIrOutbox("tachi", 1'500).affectedRows == 1);
-  loadedThird = helper.LoadIrOutbox(
-      "tachi", "123e4567-e89b-42d3-a456-426614174012");
+  loadedThird =
+      helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174012");
   assert(loadedThird.entry && !loadedThird.entry->nextRequestUserIntent &&
          loadedThird.entry->state == ir::IrOutboxState::Pending);
 
@@ -4655,12 +4721,10 @@ void testIrOutboxRecoveryCountsRetryAndValidation(
 
   helper.Shutdown();
   auto db = openDatabase(path);
-  execOrAbort(db.get(),
-              "UPDATE ir_outbox SET state=99 WHERE id=" +
-                  std::to_string(third.entry->id));
+  execOrAbort(db.get(), "UPDATE ir_outbox SET state=99 WHERE id=" +
+                            std::to_string(third.entry->id));
   db.reset();
-  assert(helper.LoadIrOutbox(
-                    "tachi", "123e4567-e89b-42d3-a456-426614174012")
+  assert(helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174012")
              .status == ir::IrOutboxReadStatus::IntegrityConflict);
   std::string clearError;
   assert(helper.ClearIrOutbox(clearError));
@@ -4688,8 +4752,7 @@ void testExistingListLimits(const std::filesystem::path &root) {
   assert(allChart.front().id == 105);
   assert(allChart.back().id == 1);
   assert(helper.ListCourseReplays({.legacyCourseId = 7}).size() == 100);
-  const auto allCourse =
-      helper.ListCourseReplays({.legacyCourseId = 7}, 0);
+  const auto allCourse = helper.ListCourseReplays({.legacyCourseId = 7}, 0);
   assert(allCourse.size() == 105);
   assert(allCourse.front().id == 105);
   assert(allCourse.back().id == 1);

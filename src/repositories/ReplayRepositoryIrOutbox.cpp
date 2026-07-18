@@ -60,10 +60,10 @@ std::string optionalText(sqlite3_stmt *stmt, int column) {
 
 bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
                        std::string &diagnostic) {
-  if (!columnIs(stmt, 0, SQLITE_INTEGER) ||
-      !columnIs(stmt, 1, SQLITE_TEXT) || !columnIs(stmt, 2, SQLITE_TEXT) ||
-      !nullableText(stmt, 3) || !columnIs(stmt, 4, SQLITE_TEXT) ||
-      !columnIs(stmt, 5, SQLITE_TEXT) || !columnIs(stmt, 6, SQLITE_INTEGER) ||
+  if (!columnIs(stmt, 0, SQLITE_INTEGER) || !columnIs(stmt, 1, SQLITE_TEXT) ||
+      !columnIs(stmt, 2, SQLITE_TEXT) || !nullableText(stmt, 3) ||
+      !columnIs(stmt, 4, SQLITE_TEXT) || !columnIs(stmt, 5, SQLITE_TEXT) ||
+      !columnIs(stmt, 6, SQLITE_INTEGER) ||
       !columnIs(stmt, 7, SQLITE_INTEGER) ||
       !columnIs(stmt, 8, SQLITE_INTEGER) ||
       !columnIs(stmt, 9, SQLITE_INTEGER) || !nullableInteger(stmt, 10) ||
@@ -115,8 +115,7 @@ struct RowLookup {
   std::string diagnostic;
 };
 
-RowLookup loadByQuery(sqlite3 *db, const std::string &query,
-                      const auto &bind) {
+RowLookup loadByQuery(sqlite3 *db, const std::string &query, const auto &bind) {
   SqliteStatementHandle stmt;
   if (prepareSqliteStatement(db, query, stmt) != SQLITE_OK ||
       !bind(stmt.get())) {
@@ -145,19 +144,20 @@ RowLookup loadByQuery(sqlite3 *db, const std::string &query,
 }
 
 RowLookup loadById(sqlite3 *db, std::int64_t rowId) {
-  return loadByQuery(
-      db, std::string("SELECT ") + kIrOutboxColumns +
-              " FROM ir_outbox WHERE id=?",
-      [&](sqlite3_stmt *stmt) {
-        return sqlite3_bind_int64(stmt, 1, rowId) == SQLITE_OK;
-      });
+  return loadByQuery(db,
+                     std::string("SELECT ") + kIrOutboxColumns +
+                         " FROM ir_outbox WHERE id=?",
+                     [&](sqlite3_stmt *stmt) {
+                       return sqlite3_bind_int64(stmt, 1, rowId) == SQLITE_OK;
+                     });
 }
 
 RowLookup loadByIdentity(sqlite3 *db, std::string_view providerId,
                          std::string_view attemptId) {
   return loadByQuery(
-      db, std::string("SELECT ") + kIrOutboxColumns +
-              " FROM ir_outbox WHERE provider_id=? AND attempt_id=?",
+      db,
+      std::string("SELECT ") + kIrOutboxColumns +
+          " FROM ir_outbox WHERE provider_id=? AND attempt_id=?",
       [&](sqlite3_stmt *stmt) {
         return sqlite3_bind_text(stmt, 1, providerId.data(),
                                  static_cast<int>(providerId.size()),
@@ -326,8 +326,9 @@ replay_repository_detail::VerifyIrDraftsOnConnection(
   return {.status = IrDraftStageStatus::Succeeded};
 }
 
-ir::IrOutboxInsertOutcome ReplayRepository::EnqueueReadyIrOutboxDraft(
-    const ir::IrOutboxDraft &draft, bool userIntent) {
+ir::IrOutboxInsertOutcome
+ReplayRepository::EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft,
+                                            bool userIntent) {
   std::string validation;
   if (!ir::validateIrOutboxDraft(draft, validation)) {
     return {.status = ir::IrOutboxInsertStatus::Invalid,
@@ -340,9 +341,8 @@ ir::IrOutboxInsertOutcome ReplayRepository::EnqueueReadyIrOutboxDraft(
             .diagnostic = "replay storage is unavailable"};
   }
   std::string transactionError;
-  SqliteTransactionHandle transaction(impl_->sessionDatabase,
-                                      "BEGIN IMMEDIATE TRANSACTION",
-                                      transactionError);
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
   if (!transaction.active()) {
     return {.status = ir::IrOutboxInsertStatus::StorageFailure,
             .diagnostic = "could not start IR outbox insertion"};
@@ -428,8 +428,8 @@ ReplayRepository::LoadIrOutbox(std::string_view providerId,
   return {};
 }
 
-ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
-    std::int64_t nowMs, std::size_t limit) {
+ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(std::int64_t nowMs,
+                                                           std::size_t limit) {
   if (nowMs < 0 || limit > 256) {
     return {.status = ir::IrOutboxBatchStatus::Invalid,
             .diagnostic = "IR outbox due query is invalid"};
@@ -457,8 +457,7 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
     return {.status = ir::IrOutboxBatchStatus::StorageFailure,
             .diagnostic = "could not prepare IR outbox due query"};
   }
-  ir::IrOutboxBatchOutcome result{
-      .status = ir::IrOutboxBatchStatus::Loaded};
+  ir::IrOutboxBatchOutcome result{.status = ir::IrOutboxBatchStatus::Loaded};
   int rc = SQLITE_OK;
   while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
     ir::IrOutboxEntry entry;
@@ -476,10 +475,52 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
   return result;
 }
 
-ir::IrOutboxClaimOutcome
-ReplayRepository::ClaimIrOutbox(std::int64_t rowId,
-                                ir::IrOutboxState expectedState,
-                                std::int64_t nowMs) {
+ir::IrOutboxBatchOutcome ReplayRepository::ListIrOutbox(std::size_t limit) {
+  if (limit > 4096) {
+    return {.status = ir::IrOutboxBatchStatus::Invalid,
+            .diagnostic = "IR outbox list query is invalid"};
+  }
+  if (limit == 0) {
+    return {.status = ir::IrOutboxBatchStatus::Loaded};
+  }
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrOutboxBatchStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  const std::string query =
+      std::string("SELECT ") + kIrOutboxColumns +
+      " FROM ir_outbox WHERE local_result_ready=1 ORDER BY updated_at_ms "
+      "DESC,id DESC LIMIT ?";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 1,
+                         static_cast<sqlite3_int64>(limit)) != SQLITE_OK) {
+    return {.status = ir::IrOutboxBatchStatus::StorageFailure,
+            .diagnostic = "could not prepare IR outbox list query"};
+  }
+  ir::IrOutboxBatchOutcome result{.status = ir::IrOutboxBatchStatus::Loaded};
+  int status = SQLITE_OK;
+  while ((status = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    ir::IrOutboxEntry entry;
+    if (!decodeIrOutboxRow(statement.get(), entry, result.diagnostic)) {
+      result.status = ir::IrOutboxBatchStatus::IntegrityConflict;
+      result.entries.clear();
+      return result;
+    }
+    result.entries.push_back(std::move(entry));
+  }
+  if (status != SQLITE_DONE) {
+    return {.status = ir::IrOutboxBatchStatus::StorageFailure,
+            .diagnostic = "IR outbox list query did not complete"};
+  }
+  return result;
+}
+
+ir::IrOutboxClaimOutcome ReplayRepository::ClaimIrOutbox(
+    std::int64_t rowId, ir::IrOutboxState expectedState, std::int64_t nowMs) {
   if (rowId <= 0 || nowMs < 0 ||
       (expectedState != ir::IrOutboxState::Pending &&
        expectedState != ir::IrOutboxState::AwaitingRemoteResult)) {
@@ -493,9 +534,8 @@ ReplayRepository::ClaimIrOutbox(std::int64_t rowId,
             .diagnostic = "replay storage is unavailable"};
   }
   std::string transactionError;
-  SqliteTransactionHandle transaction(impl_->sessionDatabase,
-                                      "BEGIN IMMEDIATE TRANSACTION",
-                                      transactionError);
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
   if (!transaction.active()) {
     return {.status = ir::IrOutboxClaimStatus::StorageFailure,
             .diagnostic = "could not start IR outbox claim"};
@@ -554,15 +594,69 @@ ReplayRepository::ClaimIrOutbox(std::int64_t rowId,
           .consumedUserIntent = consumed};
 }
 
+ir::IrOutboxMutationOutcome ReplayRepository::BlockIrOutboxConfiguration(
+    std::int64_t rowId, ir::IrOutboxState expectedState,
+    std::string_view errorCode, std::string_view errorMessage,
+    std::int64_t nowMs) {
+  if (rowId <= 0 || nowMs < 0 ||
+      (expectedState != ir::IrOutboxState::Pending &&
+       expectedState != ir::IrOutboxState::AwaitingRemoteResult)) {
+    return {.status = ir::IrOutboxMutationStatus::Invalid,
+            .diagnostic = "IR configuration block is invalid"};
+  }
+  std::string storedCode = ir::sanitizeDiagnostic(errorCode);
+  if (storedCode.size() > ir::kMaximumIrErrorCodeBytes) {
+    storedCode.resize(ir::kMaximumIrErrorCodeBytes);
+  }
+  const std::string storedMessage = ir::sanitizeDiagnostic(errorMessage);
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  SqliteStatementHandle statement;
+  const char *query =
+      "UPDATE ir_outbox SET state=3,consecutive_failure_count=0,"
+      "next_attempt_at_ms=NULL,last_error_code=?,last_error_message=?,"
+      "updated_at_ms=? WHERE id=? AND state=? AND local_result_ready=1";
+  const std::optional<std::string> code =
+      storedCode.empty() ? std::nullopt
+                         : std::optional<std::string>(storedCode);
+  const std::optional<std::string> message =
+      storedMessage.empty() ? std::nullopt
+                            : std::optional<std::string>(storedMessage);
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      !bindOptionalText(statement.get(), 1, code) ||
+      !bindOptionalText(statement.get(), 2, message) ||
+      sqlite3_bind_int64(statement.get(), 3, nowMs) != SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 4, rowId) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 5, static_cast<int>(expectedState)) !=
+          SQLITE_OK ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not block IR outbox configuration"};
+  }
+  const auto outcome = mutationFromChanges(impl_->sessionDatabase);
+  if (outcome.status == ir::IrOutboxMutationStatus::Updated) {
+    return outcome;
+  }
+  RowLookup current = loadById(impl_->sessionDatabase, rowId);
+  return {.status = current.status == RowLookupStatus::NotFound
+                        ? ir::IrOutboxMutationStatus::NotFound
+                        : ir::IrOutboxMutationStatus::StateMismatch};
+}
+
 ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
     const ir::IrOutboxDeliveryUpdate &update) {
   const bool hasJob = update.remoteJobId && !update.remoteJobId->empty();
   const bool hasOrigin = update.remoteOrigin && !update.remoteOrigin->empty();
   const bool remotePairValid =
       hasJob == hasOrigin &&
-      (!hasJob || (update.remoteJobId->size() <= ir::kMaximumIrRemoteValueBytes &&
-                   update.remoteOrigin->size() <=
-                       ir::kMaximumIrRemoteValueBytes));
+      (!hasJob ||
+       (update.remoteJobId->size() <= ir::kMaximumIrRemoteValueBytes &&
+        update.remoteOrigin->size() <= ir::kMaximumIrRemoteValueBytes));
   const bool targetValid =
       update.nextState == ir::IrOutboxState::Pending ||
       update.nextState == ir::IrOutboxState::AwaitingRemoteResult ||
@@ -571,13 +665,13 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
       update.nextState == ir::IrOutboxState::Succeeded;
   if (update.rowId <= 0 || update.updatedAtUnixMillis < 0 ||
       update.consecutiveFailureCount < 0 ||
-      (update.nextAttemptAtUnixMillis &&
-       *update.nextAttemptAtUnixMillis < 0) ||
-      (update.completedAtUnixMillis &&
-       *update.completedAtUnixMillis < 0) ||
+      (update.nextAttemptAtUnixMillis && *update.nextAttemptAtUnixMillis < 0) ||
+      (update.completedAtUnixMillis && *update.completedAtUnixMillis < 0) ||
       !targetValid || !remotePairValid ||
-      ((update.nextState == ir::IrOutboxState::AwaitingRemoteResult) !=
-       hasJob) ||
+      (update.nextState == ir::IrOutboxState::AwaitingRemoteResult &&
+       !hasJob) ||
+      (update.nextState != ir::IrOutboxState::AwaitingRemoteResult &&
+       update.nextState != ir::IrOutboxState::BlockedConfiguration && hasJob) ||
       ((update.nextState == ir::IrOutboxState::Succeeded) !=
        update.completedAtUnixMillis.has_value())) {
     return {.status = ir::IrOutboxMutationStatus::Invalid,
@@ -606,8 +700,7 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
   const std::optional<std::string> remoteOrigin =
       hasOrigin ? update.remoteOrigin : std::nullopt;
   const std::optional<std::string> storedErrorCode =
-      errorCode.empty() ? std::nullopt
-                        : std::optional<std::string>(errorCode);
+      errorCode.empty() ? std::nullopt : std::optional<std::string>(errorCode);
   const std::optional<std::string> storedErrorMessage =
       errorMessage.empty() ? std::nullopt
                            : std::optional<std::string>(errorMessage);
@@ -640,8 +733,8 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
                         : ir::IrOutboxMutationStatus::StateMismatch};
 }
 
-ir::IrOutboxMutationOutcome ReplayRepository::RetryIrOutbox(
-    std::int64_t rowId, std::int64_t nowMs) {
+ir::IrOutboxMutationOutcome
+ReplayRepository::RetryIrOutbox(std::int64_t rowId, std::int64_t nowMs) {
   if (rowId <= 0 || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
@@ -652,10 +745,17 @@ ir::IrOutboxMutationOutcome ReplayRepository::RetryIrOutbox(
   }
   SqliteStatementHandle stmt;
   const char *query =
-      "UPDATE ir_outbox SET state=0,consecutive_failure_count=0,"
-      "next_attempt_at_ms=?,next_request_user_intent=1,remote_job_id=NULL,"
-      "remote_origin=NULL,last_error_code=NULL,last_error_message=NULL,"
-      "updated_at_ms=?,completed_at_ms=NULL WHERE id=? AND state IN (0,3,4)";
+      "UPDATE ir_outbox SET "
+      "state=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT NULL) "
+      "THEN 2 ELSE 0 END,consecutive_failure_count=0,next_attempt_at_ms=?,"
+      "next_request_user_intent=CASE WHEN state=2 OR (state=3 AND "
+      "remote_job_id IS NOT NULL) THEN 0 ELSE 1 END,"
+      "remote_job_id=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
+      "NULL) THEN remote_job_id ELSE NULL END,"
+      "remote_origin=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
+      "NULL) THEN remote_origin ELSE NULL END,last_error_code=NULL,"
+      "last_error_message=NULL,updated_at_ms=?,completed_at_ms=NULL "
+      "WHERE id=? AND state IN (0,2,3,4)";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, nowMs) != SQLITE_OK ||
@@ -667,8 +767,9 @@ ir::IrOutboxMutationOutcome ReplayRepository::RetryIrOutbox(
   return mutationFromChanges(impl_->sessionDatabase);
 }
 
-ir::IrOutboxMutationOutcome ReplayRepository::RetryAllIrOutbox(
-    std::string_view providerId, std::int64_t nowMs) {
+ir::IrOutboxMutationOutcome
+ReplayRepository::RetryAllIrOutbox(std::string_view providerId,
+                                   std::int64_t nowMs) {
   if (!validProviderId(providerId) || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
@@ -679,11 +780,17 @@ ir::IrOutboxMutationOutcome ReplayRepository::RetryAllIrOutbox(
   }
   SqliteStatementHandle stmt;
   const char *query =
-      "UPDATE ir_outbox SET state=0,consecutive_failure_count=0,"
-      "next_attempt_at_ms=?,next_request_user_intent=1,remote_job_id=NULL,"
-      "remote_origin=NULL,last_error_code=NULL,last_error_message=NULL,"
-      "updated_at_ms=?,completed_at_ms=NULL WHERE provider_id=? AND state IN "
-      "(3,4)";
+      "UPDATE ir_outbox SET "
+      "state=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT NULL) "
+      "THEN 2 ELSE 0 END,consecutive_failure_count=0,next_attempt_at_ms=?,"
+      "next_request_user_intent=CASE WHEN state=2 OR (state=3 AND "
+      "remote_job_id IS NOT NULL) THEN 0 ELSE 1 END,"
+      "remote_job_id=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
+      "NULL) THEN remote_job_id ELSE NULL END,"
+      "remote_origin=CASE WHEN state=2 OR (state=3 AND remote_job_id IS NOT "
+      "NULL) THEN remote_origin ELSE NULL END,last_error_code=NULL,"
+      "last_error_message=NULL,updated_at_ms=?,completed_at_ms=NULL WHERE "
+      "provider_id=? AND state IN (2,3,4)";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, nowMs) != SQLITE_OK ||
@@ -697,8 +804,9 @@ ir::IrOutboxMutationOutcome ReplayRepository::RetryAllIrOutbox(
   return mutationFromChanges(impl_->sessionDatabase);
 }
 
-ir::IrOutboxMutationOutcome ReplayRepository::UnblockIrOutbox(
-    std::string_view providerId, std::int64_t nowMs) {
+ir::IrOutboxMutationOutcome
+ReplayRepository::UnblockIrOutbox(std::string_view providerId,
+                                  std::int64_t nowMs) {
   if (!validProviderId(providerId) || nowMs < 0) {
     return {.status = ir::IrOutboxMutationStatus::Invalid};
   }
@@ -709,7 +817,8 @@ ir::IrOutboxMutationOutcome ReplayRepository::UnblockIrOutbox(
   }
   SqliteStatementHandle stmt;
   const char *query =
-      "UPDATE ir_outbox SET state=0,consecutive_failure_count=0,"
+      "UPDATE ir_outbox SET state=CASE WHEN remote_job_id IS NULL THEN 0 ELSE "
+      "2 END,consecutive_failure_count=0,"
       "next_attempt_at_ms=?,last_error_code=NULL,last_error_message=NULL,"
       "updated_at_ms=? WHERE provider_id=? AND state=3";
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
@@ -737,8 +846,8 @@ ReplayRepository::DiscardIrOutbox(std::int64_t rowId) {
   }
   SqliteStatementHandle stmt;
   if (prepareSqliteStatement(impl_->sessionDatabase,
-                             "DELETE FROM ir_outbox WHERE id=?", stmt) !=
-          SQLITE_OK ||
+                             "DELETE FROM ir_outbox WHERE id=?",
+                             stmt) != SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, rowId) != SQLITE_OK ||
       sqlite3_step(stmt.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure};
@@ -817,9 +926,8 @@ ReplayRepository::RecoverStaleIrOutbox(std::int64_t nowMs) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure};
   }
   std::string transactionError;
-  SqliteTransactionHandle transaction(impl_->sessionDatabase,
-                                      "BEGIN IMMEDIATE TRANSACTION",
-                                      transactionError);
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
   if (!transaction.active()) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure};
   }
@@ -868,8 +976,8 @@ ReplayRepository::PurgeSucceededIrOutbox(std::int64_t olderThanMs) {
   SqliteStatementHandle stmt;
   if (prepareSqliteStatement(
           impl_->sessionDatabase,
-          "DELETE FROM ir_outbox WHERE state=5 AND completed_at_ms<?", stmt) !=
-          SQLITE_OK ||
+          "DELETE FROM ir_outbox WHERE state=5 AND completed_at_ms<?",
+          stmt) != SQLITE_OK ||
       sqlite3_bind_int64(stmt.get(), 1, olderThanMs) != SQLITE_OK ||
       sqlite3_step(stmt.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure};
@@ -937,8 +1045,8 @@ bool ReplayRepository::ClearIrOutboxSnapshot(
   }
   SqliteStatementHandle verify;
   if (prepareSqliteStatement(snapshot.impl_->sessionDatabase,
-                             "SELECT COUNT(*) FROM ir_outbox", verify) !=
-          SQLITE_OK ||
+                             "SELECT COUNT(*) FROM ir_outbox",
+                             verify) != SQLITE_OK ||
       sqlite3_step(verify.get()) != SQLITE_ROW ||
       sqlite3_column_type(verify.get(), 0) != SQLITE_INTEGER ||
       sqlite3_column_int64(verify.get(), 0) != 0 ||

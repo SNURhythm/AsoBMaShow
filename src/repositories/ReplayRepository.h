@@ -152,9 +152,9 @@ public:
   bool EnsureSchema();
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
-  result_persistence::StageOutcome StageChartResult(
-      const result_persistence::ChartResultAttempt &attempt,
-      std::span<const ir::IrOutboxDraft> irDrafts);
+  result_persistence::StageOutcome
+  StageChartResult(const result_persistence::ChartResultAttempt &attempt,
+                   std::span<const ir::IrOutboxDraft> irDrafts);
   result_persistence::PendingReadOutcome
   LoadPendingChartScore(std::string_view attemptId);
   result_persistence::PendingBatchOutcome
@@ -164,17 +164,22 @@ public:
                                             int replayId);
   result_persistence::RecoveryMarkOutcome
   RecordPendingChartScoreRecoveryAttempt(
-      std::string_view attemptId,
-      result_persistence::RecoveryAttemptKind kind);
+      std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   ir::IrOutboxInsertOutcome
   EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
   ir::IrOutboxReadOutcome LoadIrOutbox(std::string_view providerId,
                                        std::string_view attemptId);
   ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,
                                            std::size_t limit = 64);
+  ir::IrOutboxBatchOutcome ListIrOutbox(std::size_t limit = 1024);
   ir::IrOutboxClaimOutcome ClaimIrOutbox(std::int64_t rowId,
                                          ir::IrOutboxState expectedState,
                                          std::int64_t nowMs);
+  ir::IrOutboxMutationOutcome
+  BlockIrOutboxConfiguration(std::int64_t rowId,
+                             ir::IrOutboxState expectedState,
+                             std::string_view errorCode,
+                             std::string_view errorMessage, std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
   ir::IrOutboxMutationOutcome RetryIrOutbox(std::int64_t rowId,
@@ -186,24 +191,23 @@ public:
   ir::IrOutboxMutationOutcome DiscardIrOutbox(std::int64_t rowId);
   ir::IrOutboxCounts CountIrOutbox(std::string_view providerId);
   ir::IrOutboxMutationOutcome RecoverStaleIrOutbox(std::int64_t nowMs);
-  ir::IrOutboxMutationOutcome PurgeSucceededIrOutbox(
-      std::int64_t olderThanMs);
+  ir::IrOutboxMutationOutcome PurgeSucceededIrOutbox(std::int64_t olderThanMs);
   bool ClearIrOutbox(std::string &errorMessage);
-  static bool ClearIrOutboxSnapshot(
-      const std::filesystem::path &snapshotDatabasePath,
-      std::string &errorMessage);
+  static bool
+  ClearIrOutboxSnapshot(const std::filesystem::path &snapshotDatabasePath,
+                        std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100);
-  std::vector<ReplaySummary>
-  ListCourseReplays(const CourseReplayLookup &lookup, int limit = 100);
+  std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
+                                               int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
                                        const bms_parser::ChartMeta &chartMeta);
   std::optional<CourseReplayData> LoadCourseReplay(int replayId);
-  bool RecoverCourseRecords(
-      std::span<const course_identity::Definition> definitions,
-      std::span<const CourseScoreEvidence> scoreEvidence,
-      std::string &errorMessage);
+  bool
+  RecoverCourseRecords(std::span<const course_identity::Definition> definitions,
+                       std::span<const CourseScoreEvidence> scoreEvidence,
+                       std::string &errorMessage);
   std::optional<ReplayData>
   LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
 

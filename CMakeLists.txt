@@ -682,6 +682,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(tachi_ranking_parser_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(tachi_ranking_parser_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_submission_service_tests
+        tests/ir_submission_service_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionService.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(ir_submission_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ir_submission_service_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL2)
+    endif()
+
     if (NOT IOS)
         add_executable(ir_http_client_tests
             tests/ir_http_client_tests.cpp
@@ -1916,6 +1947,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tachi_batch_manual_tests
         tachi_driver_tests
         tachi_ranking_parser_tests
+        ir_submission_service_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests

@@ -57,8 +57,9 @@ bool validRemotePair(const IrOutboxEntry &entry) {
     return hasJob;
   case IrOutboxState::Uploading:
     return true;
-  case IrOutboxState::Pending:
   case IrOutboxState::BlockedConfiguration:
+    return true;
+  case IrOutboxState::Pending:
   case IrOutboxState::FailedPermanent:
   case IrOutboxState::Succeeded:
     return !hasJob;
@@ -131,8 +132,7 @@ bool validateIrOutboxEntry(const IrOutboxEntry &entry,
     }
     if (entry.requestAttemptCount < 0 || entry.consecutiveFailureCount < 0 ||
         entry.updatedAtUnixMillis < 0 ||
-        (entry.nextAttemptAtUnixMillis &&
-         *entry.nextAttemptAtUnixMillis < 0) ||
+        (entry.nextAttemptAtUnixMillis && *entry.nextAttemptAtUnixMillis < 0) ||
         (entry.completedAtUnixMillis && *entry.completedAtUnixMillis < 0)) {
       diagnostic = "IR outbox counters or times are invalid";
       return false;
@@ -141,10 +141,12 @@ bool validateIrOutboxEntry(const IrOutboxEntry &entry,
       diagnostic = "IR outbox remote job state is invalid";
       return false;
     }
-    if ((!entry.localResultReady &&
-         entry.state != IrOutboxState::Pending) ||
-        (entry.nextRequestUserIntent &&
-         entry.state != IrOutboxState::Pending)) {
+    const bool blockedPendingIntent =
+        entry.state == IrOutboxState::BlockedConfiguration &&
+        entry.remoteJobId.empty();
+    if ((!entry.localResultReady && entry.state != IrOutboxState::Pending) ||
+        (entry.nextRequestUserIntent && entry.state != IrOutboxState::Pending &&
+         !blockedPendingIntent)) {
       diagnostic = "IR outbox readiness or user-intent state is invalid";
       return false;
     }
