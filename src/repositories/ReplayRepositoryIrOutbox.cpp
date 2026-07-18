@@ -499,6 +499,34 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(std::int64_t nowMs,
   return result;
 }
 
+std::optional<std::int64_t> ReplayRepository::NextIrOutboxAttemptAfter(
+    std::string_view providerId, std::int64_t nowMs) {
+  if (!validProviderId(providerId) || nowMs < 0) {
+    return std::nullopt;
+  }
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "SELECT MIN(next_attempt_at_ms) FROM ir_outbox WHERE "
+          "local_result_ready=1 AND state IN (0,2) AND provider_id=? AND "
+          "next_attempt_at_ms>?",
+          stmt) != SQLITE_OK ||
+      sqlite3_bind_text(stmt.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_int64(stmt.get(), 2, nowMs) != SQLITE_OK ||
+      sqlite3_step(stmt.get()) != SQLITE_ROW ||
+      !nullableInteger(stmt.get(), 0)) {
+    return std::nullopt;
+  }
+  return optionalInteger(stmt.get(), 0);
+}
+
 ir::IrOutboxBatchOutcome ReplayRepository::ListIrOutbox(std::size_t limit) {
   if (limit > 4096) {
     return {.status = ir::IrOutboxBatchStatus::Invalid,

@@ -167,10 +167,11 @@ private:
 class ManualWaiter {
 public:
   void wait(std::stop_token token,
-            std::optional<std::chrono::steady_clock::time_point>) {
+            std::optional<std::chrono::steady_clock::time_point> deadline) {
     std::stop_callback stopped(token, [&] { condition_.notify_all(); });
     std::unique_lock lock(mutex_);
     ++entered_;
+    deadline_ = deadline;
     condition_.notify_all();
     condition_.wait(lock, [&] { return token.stop_requested() || pending_; });
     pending_ = false;
@@ -187,11 +188,17 @@ public:
     return condition_.wait_for(lock, 3s, [&] { return entered_ >= count; });
   }
 
+  std::optional<std::chrono::steady_clock::time_point> deadline() {
+    std::lock_guard lock(mutex_);
+    return deadline_;
+  }
+
 private:
   std::mutex mutex_;
   std::condition_variable condition_;
   bool pending_ = false;
   std::size_t entered_ = 0;
+  std::optional<std::chrono::steady_clock::time_point> deadline_;
 };
 
 std::string attemptId(int suffix) {
@@ -485,6 +492,29 @@ void testDisabledAndReadOnlyProvidersStayPaused() {
   expect(readOnly.driver->calls().empty() &&
              load(readOnly, 4).state == ir::IrOutboxState::Pending,
          "read-only provider is excluded from submission work");
+}
+
+void testFutureWakeIgnoresBoundedSkippedProviderRows() {
+  Harness harness;
+  bool skippedRowsInserted = true;
+  for (int suffix = 100; suffix < 164; ++suffix) {
+    auto skipped = draft(suffix, harness.now.load());
+    skipped.providerId = "skipped";
+    skippedRowsInserted =
+        harness.repository.EnqueueReadyIrOutboxDraft(skipped, false).entry
+            .has_value() &&
+        skippedRowsInserted;
+  }
+  expect(skippedRowsInserted, "skipped-provider starvation fixtures insert");
+  makeAwaiting(harness, 164);
+
+  const auto expectedDeadline = std::chrono::steady_clock::time_point(
+      std::chrono::milliseconds(harness.now.load() + 10'000));
+  harness.service->start(profile(true));
+  expect(harness.waiter.waitForEntries(2),
+         "worker settles after scanning skipped-provider rows");
+  expect(harness.waiter.deadline() == expectedDeadline,
+         "worker waits for the later enabled-provider attempt");
 }
 
 void testMissingKeyPreservesManualIntentAndReplacementWakes() {
@@ -786,6 +816,7 @@ int main() {
   testActiveRequestSnapshotsDistinguishSubmitAndPoll();
   testStartupRecovery();
   testDisabledAndReadOnlyProvidersStayPaused();
+  testFutureWakeIgnoresBoundedSkippedProviderRows();
   testMissingKeyPreservesManualIntentAndReplacementWakes();
   testManualEnqueueRequiresFreshRulesetProof();
   testAutomaticAndManualRequestsUseCurrentOrigin();

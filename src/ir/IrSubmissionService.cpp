@@ -362,22 +362,14 @@ struct IrSubmissionService::Impl {
   nextEligibleFutureTime(std::uint64_t expectedGeneration,
                          const IrActiveProfileConfig &config,
                          std::int64_t now) {
-    const auto future = repository.ListDueIrOutbox(
-        std::numeric_limits<std::int64_t>::max(), kWorkerBatchSize);
-    if (future.status != IrOutboxBatchStatus::Loaded) {
-      return std::nullopt;
-    }
     std::optional<std::int64_t> result;
-    for (const auto &entry : future.entries) {
-      const auto provider = config.providers.find(entry.providerId);
-      if (provider == config.providers.end() || !provider->second.enabled ||
-          !providerCanSubmit(drivers, entry.providerId) ||
-          !entry.nextAttemptAtUnixMillis ||
-          *entry.nextAttemptAtUnixMillis <= now) {
+    for (const auto &[providerId, settings] : config.providers) {
+      if (!settings.enabled || !providerCanSubmit(drivers, providerId)) {
         continue;
       }
-      if (!result || *entry.nextAttemptAtUnixMillis < *result) {
-        result = entry.nextAttemptAtUnixMillis;
+      const auto next = repository.NextIrOutboxAttemptAfter(providerId, now);
+      if (next && (!result || *next < *result)) {
+        result = next;
       }
     }
     {
