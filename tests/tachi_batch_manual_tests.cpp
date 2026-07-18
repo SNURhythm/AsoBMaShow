@@ -160,8 +160,8 @@ void testBuildsOneScoreBatchManual() {
          "payload emits only Tachi BMS judgements");
   expect(!score.at("judgements").contains("kpoor"),
          "payload omits KPoor");
-  expect(score.at("optional").at("bp") == 3,
-         "BP is bad plus poor only");
+  expect(score.at("optional").at("bp") == 10,
+         "BP includes bad, poor, and KPoor");
   expect(score.at("optional").at("maxCombo") == 550,
          "payload includes max combo");
   expect(score.at("optional").at("gauge") == 82.0,
@@ -461,8 +461,9 @@ void testRejectsMalformedSubmission() {
 
   submission = validSubmission();
   submission.bad = std::numeric_limits<int>::max();
-  submission.poor = 1;
-  expectInvalid(submission, "BP integer overflow is invalid");
+  submission.poor = 0;
+  submission.kPoor = 1;
+  expectInvalid(submission, "KPOOR participates in BP overflow validation");
 }
 
 void testPayloadNeverContainsCredentialMaterial() {

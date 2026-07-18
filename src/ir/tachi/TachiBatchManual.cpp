@@ -328,7 +328,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
       return invalid("submission EX score disagrees with judgements");
     }
     const long long badPoints =
-        static_cast<long long>(submission.bad) + submission.poor;
+        static_cast<long long>(submission.bad) + submission.poor +
+        submission.kPoor;
     if (badPoints > std::numeric_limits<int>::max()) {
       return invalid("submission BP exceeds the supported range");
     }
