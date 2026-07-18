@@ -294,6 +294,11 @@ public:
     }
   }
 
+  [[nodiscard]] std::size_t credentialChangeCount() const {
+    std::lock_guard lock(successMutex);
+    return credentialChanges.size();
+  }
+
   bool waitForState(std::string_view attempt,
                     ir::IrOutboxState expected) const {
     return waitForSnapshot(attempt, [&](const auto &snapshot) {
@@ -494,6 +499,8 @@ void testMissingKeyPreservesManualIntentAndReplacementWakes() {
   auto blocked = load(harness, 5);
   expect(blocked.nextRequestUserIntent && blocked.requestAttemptCount == 0,
          "missing key blocks without claiming or consuming manual intent");
+  expect(harness.credentialChangeCount() == 0,
+         "initial credential observation is not reported as a replacement");
 
   harness.setCredential("replacement-key");
   harness.service->notifyConfigurationChanged();
@@ -504,7 +511,7 @@ void testMissingKeyPreservesManualIntentAndReplacementWakes() {
          "unblocked POST consumes manual intent with the current key");
   expect(harness.waitForState(attemptId(5), ir::IrOutboxState::Succeeded),
          "unblocked row succeeds");
-  expect(!harness.credentialChanges.empty(),
+  expect(harness.credentialChangeCount() == 1,
          "credential replacement publishes invalidation callback");
 }
 

@@ -20,7 +20,9 @@ in-memory store when IR services activate a profile. Cache hits do not write to
 disk. Successful identity or chart resolution writes only when the stored
 value changes, using the existing atomic-file infrastructure. Chart mappings
 retain insertion order and are bounded to 2,048 entries; server origins are
-bounded to 16 and the JSON input is capped at 1 MiB.
+bounded to 16 and both JSON input and the exact persisted representation are
+capped at 1 MiB. Additional oldest chart mappings are evicted before a write
+when JSON escaping would otherwise exceed that limit.
 
 `TachiDriver::fetchChartRanking` consults the store before making prerequisite
 requests. Missing chart IDs still use the native chart-resolve route, and a
@@ -31,8 +33,10 @@ retries the PB request once. Other failures retain their existing behavior.
 
 The cache is profile-local so a user ID is never shared across profiles. A
 successful Bokutachi API-key replacement or removal clears cached user IDs but
-keeps chart mappings, which are not credential-specific. Profile archives do
-not include the cache.
+keeps chart mappings, which are not credential-specific. The identity clear is
+persisted before changing the credential. If that atomic write fails, the
+disposable cache is durably discarded; the credential change is rejected if
+neither operation succeeds. Profile archives do not include the cache.
 
 ## Data Shape
 

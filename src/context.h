@@ -37,6 +37,7 @@
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingService.h"
 #include "ir/IrSubmissionService.h"
+#include "ir/tachi/BokutachiCacheStore.h"
 #include "ir/tachi/TachiDriver.h"
 #include "video/DisplaySettingsManager.h"
 #include "video/FramePacer.h"
@@ -110,6 +111,7 @@ public:
   ReplayRepository replayRepository;
   MusicPlaylistRepository musicPlaylistRepository;
   result_persistence::Coordinator resultPersistence;
+  std::shared_ptr<ir::tachi::BokutachiCacheStore> bokutachiCacheStore;
   ir::IrDriverRegistry irDrivers;
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
   std::unique_ptr<ir::IrRankingService> irRankingService;
@@ -164,13 +166,15 @@ public:
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
         resultPersistence(scoreRepository, replayRepository),
+        bokutachiCacheStore(std::make_shared<ir::tachi::BokutachiCacheStore>()),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio),
         musicPlayer(musicPlaylistRepository, chartRepository) {
     std::string irDriverDiagnostic;
-    if (!irDrivers.registerDriver(std::make_shared<ir::tachi::TachiDriver>(),
-                                  irDriverDiagnostic)) {
+    if (!irDrivers.registerDriver(
+            std::make_shared<ir::tachi::TachiDriver>(bokutachiCacheStore),
+            irDriverDiagnostic)) {
       SDL_Log("Bokutachi IR driver registration was unavailable");
     }
     if (!profileInitializationResult.ok()) {
@@ -372,6 +376,13 @@ public:
         SDL_Log("IR HTTP transport was unavailable");
         return false;
       }
+      std::string cacheDiagnostic;
+      if (!bokutachiCacheStore->activate(
+              profileManager.activePaths().bokutachiCacheJson,
+              cacheDiagnostic)) {
+        SDL_Log(
+            "Bokutachi lookup cache was unavailable; using network lookups");
+      }
       if (!irRankingService) {
         ir::IrRankingServiceOptions options;
         options.credentialLookup = [this](std::string_view profileId,
@@ -403,6 +414,12 @@ public:
             };
         options.credentialChanged = [this](std::string_view profileId,
                                            std::string_view providerId) {
+          if (providerId == "tachi") {
+            std::string cacheDiagnostic;
+            if (!bokutachiCacheStore->clearUserIds(cacheDiagnostic)) {
+              SDL_Log("Bokutachi cached identity could not be invalidated");
+            }
+          }
           if (irRankingService) {
             irRankingService->invalidate({
                 .profileId = std::string(profileId),
@@ -444,6 +461,13 @@ public:
                                  const AppSettings &profileSettings,
                                  std::string &error) noexcept {
     try {
+      std::string cacheDiagnostic;
+      if (!bokutachiCacheStore->activate(
+              profileManager.activePaths().bokutachiCacheJson,
+              cacheDiagnostic)) {
+        SDL_Log(
+            "Bokutachi lookup cache was unavailable; using network lookups");
+      }
       if (irRankingService) {
         irRankingService->activateProfile(profileId);
       }

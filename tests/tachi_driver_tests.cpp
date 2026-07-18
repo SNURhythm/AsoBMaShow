@@ -1,5 +1,7 @@
 #include "ir/tachi/TachiDriver.h"
 
+#include "ir/tachi/BokutachiCacheStore.h"
+
 #include "FileChecksum.h"
 #include "ir/IrHttpClient.h"
 
@@ -7,6 +9,8 @@
 
 #include <chrono>
 #include <deque>
+#include <filesystem>
+#include <functional>
 #include <iostream>
 #include <stop_token>
 #include <string>
@@ -36,11 +40,38 @@ public:
     }
     auto response = std::move(responses.front());
     responses.pop_front();
+    if (afterResponse) {
+      afterResponse(requests.size());
+    }
     return response;
   }
 
   std::deque<ir::IrHttpResponse> responses;
   std::vector<ir::IrHttpRequest> requests;
+  std::function<void(std::size_t)> afterResponse;
+};
+
+class CacheTempDirectory {
+public:
+  CacheTempDirectory() {
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    path_ = std::filesystem::temp_directory_path() /
+            ("asobmashow-tachi-driver-cache-" + std::to_string(nonce));
+    std::filesystem::create_directories(path_);
+  }
+
+  ~CacheTempDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  [[nodiscard]] std::filesystem::path cachePath() const {
+    return path_ / "bokutachi-cache.json";
+  }
+
+private:
+  std::filesystem::path path_;
 };
 
 ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
@@ -720,6 +751,150 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
          "a changed remote outOf cannot be appended to the loaded prefix");
 }
 
+void testRankingPrerequisitesPersistAcrossFetches() {
+  CacheTempDirectory temp;
+  auto cache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  std::string diagnostic;
+  expect(cache->activate(temp.cachePath(), diagnostic),
+         "ranking cache fixture activates");
+  const ir::tachi::TachiDriver driver(cache);
+  FakeHttpClient http;
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody()});
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+  auto result =
+      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded,
+         "cold cached ranking fetch succeeds");
+  expect(cache->userId("https://boku.tachi.ac") == 42,
+         "successful identity lookup populates cache");
+  expect(
+      cache->chartId(
+          "https://boku.tachi.ac", "bms-7k",
+          "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd") ==
+          "chart-id",
+      "successful chart resolution populates cache");
+
+  http.requests.clear();
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded &&
+             http.requests.size() == 1 &&
+             http.requests.front().url.ends_with("/pbs?startRanking=1"),
+         "full persistent cache hit performs only the PB request");
+
+  expect(cache->clearUserIds(diagnostic), "partial hit fixture clears user");
+  http.requests.clear();
+  http.responses.push_back(
+      {.statusCode = 200, .body = rankingIdentityBody(43)});
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded &&
+             http.requests.size() == 2 &&
+             http.requests[0].url.ends_with("/api/v1/status") &&
+             http.requests[1].url.ends_with("/pbs?startRanking=1"),
+         "chart-only cache hit requests only identity and PB data");
+
+  expect(cache->eraseChartId(
+             "https://boku.tachi.ac", "bms-7k",
+             "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+             diagnostic),
+         "partial hit fixture clears chart");
+  http.requests.clear();
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded &&
+             http.requests.size() == 2 &&
+             http.requests[0].url.ends_with("/charts/resolve") &&
+             http.requests[1].url.ends_with("/pbs?startRanking=1"),
+         "user-only cache hit requests only chart resolution and PB data");
+}
+
+void testStaleCachedChartIsResolvedOnce() {
+  CacheTempDirectory temp;
+  auto cache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  std::string diagnostic;
+  expect(cache->activate(temp.cachePath(), diagnostic) &&
+             cache->rememberUserId("https://boku.tachi.ac", 42, diagnostic) &&
+             cache->rememberChartId("https://boku.tachi.ac", "bms-7k",
+                                    "abcdefabcdefabcdefabcdefabcdefabcdefabcdef"
+                                    "abcdefabcdefabcdefabcd",
+                                    "stale-chart-id", diagnostic),
+         "stale chart fixture populates cache");
+  const ir::tachi::TachiDriver driver(cache);
+  FakeHttpClient http;
+  http.responses.push_back({.statusCode = 404});
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+  auto result =
+      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded &&
+             http.requests.size() == 3,
+         "cached chart 404 resolves and retries exactly once");
+  if (http.requests.size() == 3) {
+    expect(http.requests[0].url.find("/stale-chart-id/pbs") !=
+                   std::string::npos &&
+               http.requests[1].url.ends_with("/charts/resolve") &&
+               http.requests[2].url.find("/chart-id/pbs") != std::string::npos,
+           "stale chart retry uses old PB, resolver, then replacement PB");
+  }
+  expect(
+      cache->chartId(
+          "https://boku.tachi.ac", "bms-7k",
+          "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd") ==
+          "chart-id",
+      "successful stale recovery persists replacement chart identity");
+
+  expect(cache->rememberChartId(
+             "https://boku.tachi.ac", "bms-7k",
+             "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+             "stale-again", diagnostic),
+         "second stale fixture updates mapping");
+  http.requests.clear();
+  http.responses.push_back({.statusCode = 404});
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 404});
+  result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::ChartNotFound &&
+             http.requests.size() == 3,
+         "replacement chart 404 is returned without an unbounded retry");
+}
+
+void testCancelledIdentityResponseIsNotCached() {
+  CacheTempDirectory temp;
+  auto cache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  std::string diagnostic;
+  expect(cache->activate(temp.cachePath(), diagnostic),
+         "cancelled identity cache fixture activates");
+  const ir::tachi::TachiDriver driver(cache);
+  FakeHttpClient http;
+  std::stop_source cancellation;
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody()});
+  http.afterResponse = [&](std::size_t requestCount) {
+    if (requestCount == 2) {
+      cancellation.request_stop();
+    }
+  };
+  const auto result = driver.fetchChartRanking(
+      rankingQuery(), runtimeConfig(), http, cancellation.get_token());
+  expect(result.status == ir::ChartRankingStatus::Cancelled,
+         "identity response cancelled by credential invalidation is discarded");
+  expect(!cache->userId("https://boku.tachi.ac"),
+         "cancelled identity response cannot repopulate cached user ID");
+}
+
 void testRankingPreflightNeverLeaksCredentials() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -762,6 +937,9 @@ int main() {
   testInvalidRuntimeConfigurationNeverSends();
   testRankingRequestAndStatusClassification();
   testNativeRankingPagesWithoutRepeatingPreflight();
+  testRankingPrerequisitesPersistAcrossFetches();
+  testStaleCachedChartIsResolvedOnce();
+  testCancelledIdentityResponseIsNotCached();
   testRankingPreflightNeverLeaksCredentials();
 
   if (failures != 0) {

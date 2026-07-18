@@ -692,6 +692,9 @@ void testIrOperationalStateIsNotProfilePortable() {
       fixture.manager.pathsFor(fixture.sourceId);
   writeFile(source.irCredentialsJson,
             R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-portable-api-key"}}})");
+  constexpr std::string_view cacheMarker = "sentinel-bokutachi-cache-chart";
+  writeFile(source.bokutachiCacheJson,
+            R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
   seedIrOperationalState(source.replaysDb, "archive source");
 
   const auto exported =
@@ -709,10 +712,18 @@ void testIrOperationalStateIsNotProfilePortable() {
            return member.name == "ir-credentials.json";
          }),
          "credential file is absent from archive members and accounting");
+  expect(std::ranges::none_of(members, [](const ArchiveMember &member) {
+           return member.name == "bokutachi-cache.json";
+         }),
+         "Bokutachi cache is absent from archive members and accounting");
   expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
            return member.contents.find(credential) != std::string::npos;
          }),
          "archive contains no credential bytes");
+  expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
+           return member.contents.find(cacheMarker) != std::string::npos;
+         }),
+         "archive contains no Bokutachi cache identifiers");
 
   ArchiveMember *replays = findMember(members, "replays.db");
   expect(replays != nullptr, "IR-safe export includes replay database");
@@ -743,6 +754,8 @@ void testIrOperationalStateIsNotProfilePortable() {
          "import strips deliberately crafted IR operational rows");
   expect(!std::filesystem::exists(installed.irCredentialsJson),
          "imported profile has no credential file");
+  expect(!std::filesystem::exists(installed.bokutachiCacheJson),
+         "imported profile has no Bokutachi cache file");
   for (const auto &entry :
        std::filesystem::recursive_directory_iterator(installed.root)) {
     if (entry.is_regular_file()) {

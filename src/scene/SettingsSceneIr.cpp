@@ -139,6 +139,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
+            if (!context.bokutachiCacheStore->clearUserIds(diagnostic)) {
+              if (diagnostic.empty()) {
+                diagnostic =
+                    "The cached Bokutachi identity could not be invalidated.";
+              }
+              return false;
+            }
             auto result = ir::IrCredentialStore::replaceApiKey(
                 context.profileManager.activePaths().irCredentialsJson,
                 std::string(kProviderId), std::string(apiKey));
@@ -149,6 +156,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           [this](std::string &diagnostic) {
             if (!context.profileReady()) {
               diagnostic = "The active profile is unavailable.";
+              return false;
+            }
+            if (!context.bokutachiCacheStore->clearUserIds(diagnostic)) {
+              if (diagnostic.empty()) {
+                diagnostic =
+                    "The cached Bokutachi identity could not be invalidated.";
+              }
               return false;
             }
             auto result = ir::IrCredentialStore::removeApiKey(

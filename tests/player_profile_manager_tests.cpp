@@ -432,11 +432,15 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
              paths.settingsJson == paths.root / "settings.json" &&
              paths.inputJson == paths.root / "input.json" &&
              paths.irCredentialsJson == paths.root / "ir-credentials.json" &&
+             paths.bokutachiCacheJson ==
+                 paths.root / "bokutachi-cache.json" &&
              paths.scoresDb == paths.root / "scores.db" &&
              paths.replaysDb == paths.root / "replays.db",
          "all profile paths follow fixed layout");
   expect(!std::filesystem::exists(paths.irCredentialsJson),
          "migration starts without device-local IR credentials");
+  expect(!std::filesystem::exists(paths.bokutachiCacheJson),
+         "migration starts without a Bokutachi lookup cache");
 
   const auto settings = AppSettingsStore::Load(paths.settingsJson);
   expect(settings.status == AppSettingsLoadStatus::Loaded,

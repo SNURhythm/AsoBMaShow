@@ -1,6 +1,7 @@
 #include "TachiDriver.h"
 
 #include "../../FileChecksum.h"
+#include "BokutachiCacheStore.h"
 #include "TachiBatchManual.h"
 #include "TachiRankingParser.h"
 #include "TachiResponseParser.h"
@@ -441,6 +442,9 @@ ChartRankingOutcome fetchNativeRankingPage(
 
 } // namespace
 
+TachiDriver::TachiDriver(std::shared_ptr<BokutachiCacheStore> cacheStore) noexcept
+    : cacheStore_(std::move(cacheStore)) {}
+
 std::string_view TachiDriver::providerId() const noexcept {
   return kProviderId;
 }
@@ -564,55 +568,108 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
   const std::vector<std::pair<std::string, std::string>> bearerHeader{
       {"Authorization", "Bearer " + config.apiKey}};
 
-  const IrHttpRequest resolveRequest{
-      .method = IrHttpMethod::Post,
-      .url = *origin + "/api/v1/games/" + game + "/charts/resolve",
-      .headers = {{"Authorization", "Bearer " + config.apiKey},
-                  {"Content-Type", "application/json"}},
-      .body =
-          "{\"identifier\":\"" + *sha256 + "\",\"matchType\":\"bmsChartHash\"}",
-      .maximumResponseBytes = kMaximumTachiResponseBytes,
-      .followRedirects = false,
+  std::optional<std::string> chartId =
+      cacheStore_ ? cacheStore_->chartId(*origin, game, *sha256) : std::nullopt;
+  const bool usedCachedChartId = chartId.has_value();
+  auto resolveChart = [&]() -> std::optional<ChartRankingOutcome> {
+    if (stopToken.stop_requested()) {
+      return rankingFailure(ChartRankingStatus::Cancelled,
+                            "Tachi ranking request was cancelled");
+    }
+    const IrHttpRequest resolveRequest{
+        .method = IrHttpMethod::Post,
+        .url = *origin + "/api/v1/games/" + game + "/charts/resolve",
+        .headers = {{"Authorization", "Bearer " + config.apiKey},
+                    {"Content-Type", "application/json"}},
+        .body = "{\"identifier\":\"" + *sha256 +
+                "\",\"matchType\":\"bmsChartHash\"}",
+        .maximumResponseBytes = kMaximumTachiResponseBytes,
+        .followRedirects = false,
+    };
+    const IrHttpResponse response = http.perform(resolveRequest, stopToken);
+    if (const auto failure =
+            rankingHttpFailure(response, config.apiKey, true)) {
+      return *failure;
+    }
+    const auto parsed =
+        parseChartResolveResponse(response.body, normalizedQuery);
+    if (parsed.status != ChartRankingStatus::Succeeded || !parsed.chartId) {
+      return rankingParseFailure(parsed.status, parsed.diagnostic,
+                                 config.apiKey);
+    }
+    if (stopToken.stop_requested()) {
+      return rankingFailure(ChartRankingStatus::Cancelled,
+                            "Tachi ranking request was cancelled");
+    }
+    chartId = *parsed.chartId;
+    if (cacheStore_) {
+      std::string ignoredDiagnostic;
+      (void)cacheStore_->rememberChartId(*origin, game, *sha256, *chartId,
+                                         ignoredDiagnostic);
+    }
+    return std::nullopt;
   };
-  const IrHttpResponse resolveResponse =
-      http.perform(resolveRequest, stopToken);
-  if (const auto failure =
-          rankingHttpFailure(resolveResponse, config.apiKey, true)) {
-    return *failure;
-  }
-  const auto resolved =
-      parseChartResolveResponse(resolveResponse.body, normalizedQuery);
-  if (resolved.status != ChartRankingStatus::Succeeded || !resolved.chartId) {
-    return rankingParseFailure(resolved.status, resolved.diagnostic,
-                               config.apiKey);
+
+  if (!chartId) {
+    if (const auto failure = resolveChart()) {
+      return *failure;
+    }
   }
 
-  if (stopToken.stop_requested()) {
-    return rankingFailure(ChartRankingStatus::Cancelled,
-                          "Tachi ranking request was cancelled");
-  }
-  const IrHttpRequest identityRequest{
-      .method = IrHttpMethod::Get,
-      .url = *origin + "/api/v1/status",
-      .headers = bearerHeader,
-      .maximumResponseBytes = kMaximumTachiResponseBytes,
-      .followRedirects = false,
-  };
-  const IrHttpResponse identityResponse =
-      http.perform(identityRequest, stopToken);
-  if (const auto failure =
-          rankingHttpFailure(identityResponse, config.apiKey, false)) {
-    return *failure;
-  }
-  const auto identity = parseRankingIdentityResponse(identityResponse.body);
-  if (identity.status != ChartRankingStatus::Succeeded || !identity.userId) {
-    return rankingParseFailure(identity.status, identity.diagnostic,
-                               config.apiKey);
+  std::optional<std::int64_t> userId =
+      cacheStore_ ? cacheStore_->userId(*origin) : std::nullopt;
+  if (!userId) {
+    if (stopToken.stop_requested()) {
+      return rankingFailure(ChartRankingStatus::Cancelled,
+                            "Tachi ranking request was cancelled");
+    }
+    const IrHttpRequest identityRequest{
+        .method = IrHttpMethod::Get,
+        .url = *origin + "/api/v1/status",
+        .headers = bearerHeader,
+        .maximumResponseBytes = kMaximumTachiResponseBytes,
+        .followRedirects = false,
+    };
+    const IrHttpResponse identityResponse =
+        http.perform(identityRequest, stopToken);
+    if (const auto failure =
+            rankingHttpFailure(identityResponse, config.apiKey, false)) {
+      return *failure;
+    }
+    const auto identity = parseRankingIdentityResponse(identityResponse.body);
+    if (identity.status != ChartRankingStatus::Succeeded || !identity.userId) {
+      return rankingParseFailure(identity.status, identity.diagnostic,
+                                 config.apiKey);
+    }
+    if (stopToken.stop_requested()) {
+      return rankingFailure(ChartRankingStatus::Cancelled,
+                            "Tachi ranking request was cancelled");
+    }
+    userId = *identity.userId;
+    if (cacheStore_) {
+      std::string ignoredDiagnostic;
+      (void)cacheStore_->rememberUserId(*origin, *userId, ignoredDiagnostic);
+    }
   }
 
-  return fetchNativeRankingPage(normalizedQuery, *origin, game,
-                                *resolved.chartId, *identity.userId, 1, 0,
-                                std::nullopt, config, http, stopToken);
+  auto page =
+      fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId, *userId,
+                             1, 0, std::nullopt, config, http, stopToken);
+  if (page.status != ChartRankingStatus::ChartNotFound || !usedCachedChartId) {
+    return page;
+  }
+
+  if (cacheStore_) {
+    std::string ignoredDiagnostic;
+    (void)cacheStore_->eraseChartId(*origin, game, *sha256, ignoredDiagnostic);
+  }
+  chartId.reset();
+  if (const auto failure = resolveChart()) {
+    return *failure;
+  }
+  return fetchNativeRankingPage(normalizedQuery, *origin, game, *chartId,
+                                *userId, 1, 0, std::nullopt, config, http,
+                                stopToken);
 }
 
 ChartRankingOutcome TachiDriver::fetchChartRankingPage(

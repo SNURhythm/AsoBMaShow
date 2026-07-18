@@ -2,10 +2,17 @@
 
 #include "../IrDriver.h"
 
+#include <memory>
+
 namespace ir::tachi {
+
+class BokutachiCacheStore;
 
 class TachiDriver final : public IrDriver {
 public:
+  TachiDriver() = default;
+  explicit TachiDriver(std::shared_ptr<BokutachiCacheStore> cacheStore) noexcept;
+
   [[nodiscard]] std::string_view providerId() const noexcept override;
   [[nodiscard]] IrDriverCapabilities capabilities() const noexcept override;
   [[nodiscard]] BuildDraftOutcome
@@ -25,6 +32,9 @@ public:
       const IrChartQuery &query, std::string_view pageToken,
       const IrProviderRuntimeConfig &config, IrHttpClient &http,
       std::stop_token stopToken) const override;
+
+private:
+  std::shared_ptr<BokutachiCacheStore> cacheStore_;
 };
 
 } // namespace ir::tachi

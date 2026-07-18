@@ -22,6 +22,7 @@ struct PlayerProfilePaths {
   std::filesystem::path settingsJson;
   std::filesystem::path inputJson;
   std::filesystem::path irCredentialsJson;
+  std::filesystem::path bokutachiCacheJson;
   std::filesystem::path scoresDb;
   std::filesystem::path replaysDb;
   std::filesystem::path practiceDirectory;

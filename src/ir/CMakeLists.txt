@@ -12,6 +12,7 @@ target_sources(main PRIVATE
     IrSettingsPresentation.cpp
     IrSubmission.cpp
     IrSubmissionService.cpp
+    tachi/BokutachiCacheStore.cpp
     tachi/TachiBatchManual.cpp
     tachi/TachiDriver.cpp
     tachi/TachiRankingParser.cpp
