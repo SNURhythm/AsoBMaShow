@@ -11,6 +11,7 @@ target_sources(main PRIVATE
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
     SceneManager.cpp
+    ResultGaugeHistory.cpp
     ResultScene.cpp
     SettingsScene.cpp
     SettingsAudioVideoModel.cpp
