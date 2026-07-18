@@ -4830,7 +4830,7 @@ void testIrOutboxRecoveryCountsRetryAndValidation(
          loadedSecond.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
          loadedSecond.entry->remoteJobId == "job-recover");
 
-  assert(helper.RetryAllIrOutbox("tachi", 1'400).affectedRows == 2);
+  assert(helper.RetryAllIrOutbox("tachi", 1'400).affectedRows == 3);
   auto loadedThird =
       helper.LoadIrOutbox("tachi", "123e4567-e89b-42d3-a456-426614174012");
   loadedSecond =

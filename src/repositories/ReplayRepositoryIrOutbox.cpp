@@ -499,6 +499,57 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(std::int64_t nowMs,
   return result;
 }
 
+ir::IrOutboxBatchOutcome ReplayRepository::ListDueIrOutbox(
+    std::string_view providerId, std::int64_t nowMs, std::size_t limit) {
+  if (!validProviderId(providerId) || nowMs < 0 || limit > 256) {
+    return {.status = ir::IrOutboxBatchStatus::Invalid,
+            .diagnostic = "IR provider outbox due query is invalid"};
+  }
+  if (limit == 0) {
+    return {.status = ir::IrOutboxBatchStatus::Loaded};
+  }
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrOutboxBatchStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  const std::string query =
+      std::string("SELECT ") + kIrOutboxColumns +
+      " FROM ir_outbox WHERE local_result_ready=1 AND state IN (0,2) "
+      "AND provider_id=? AND "
+      "(next_attempt_at_ms IS NULL OR next_attempt_at_ms<=?) "
+      "ORDER BY COALESCE(next_attempt_at_ms,0),id LIMIT ?";
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
+          SQLITE_OK ||
+      sqlite3_bind_text(stmt.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_int64(stmt.get(), 2, nowMs) != SQLITE_OK ||
+      sqlite3_bind_int64(stmt.get(), 3, static_cast<sqlite3_int64>(limit)) !=
+          SQLITE_OK) {
+    return {.status = ir::IrOutboxBatchStatus::StorageFailure,
+            .diagnostic = "could not prepare IR provider outbox due query"};
+  }
+  ir::IrOutboxBatchOutcome result{.status = ir::IrOutboxBatchStatus::Loaded};
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+    ir::IrOutboxEntry entry;
+    if (!decodeIrOutboxRow(stmt.get(), entry, result.diagnostic)) {
+      result.status = ir::IrOutboxBatchStatus::IntegrityConflict;
+      result.entries.clear();
+      return result;
+    }
+    result.entries.push_back(std::move(entry));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ir::IrOutboxBatchStatus::StorageFailure,
+            .diagnostic = "IR provider outbox due query did not complete"};
+  }
+  return result;
+}
+
 std::optional<std::int64_t> ReplayRepository::NextIrOutboxAttemptAfter(
     std::string_view providerId, std::int64_t nowMs) {
   if (!validProviderId(providerId) || nowMs < 0) {

@@ -452,9 +452,27 @@ struct IrSubmissionService::Impl {
                                      const IrActiveProfileConfig &config) {
     processCredentialChanges(expectedGeneration, config);
     const std::int64_t now = safeNow(options);
-    const auto due = repository.ListDueIrOutbox(now, kWorkerBatchSize);
-    if (due.status != IrOutboxBatchStatus::Loaded) {
-      return safeAdd(now, 1'000);
+    IrOutboxBatchOutcome due{.status = IrOutboxBatchStatus::Loaded};
+    for (const auto &[providerId, settings] : config.providers) {
+      if (!settings.enabled || !providerCanSubmit(drivers, providerId)) {
+        continue;
+      }
+      const auto providerDue =
+          repository.ListDueIrOutbox(providerId, now, kWorkerBatchSize);
+      if (providerDue.status != IrOutboxBatchStatus::Loaded) {
+        return safeAdd(now, 1'000);
+      }
+      due.entries.insert(due.entries.end(), providerDue.entries.begin(),
+                         providerDue.entries.end());
+    }
+    std::ranges::sort(due.entries, [](const IrOutboxEntry &left,
+                                     const IrOutboxEntry &right) {
+      const std::int64_t leftTime = left.nextAttemptAtUnixMillis.value_or(0);
+      const std::int64_t rightTime = right.nextAttemptAtUnixMillis.value_or(0);
+      return leftTime == rightTime ? left.id < right.id : leftTime < rightTime;
+    });
+    if (due.entries.size() > kWorkerBatchSize) {
+      due.entries.resize(kWorkerBatchSize);
     }
 
     for (const IrOutboxEntry &entry : due.entries) {

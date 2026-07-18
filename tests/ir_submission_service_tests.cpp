@@ -496,6 +496,7 @@ void testDisabledAndReadOnlyProvidersStayPaused() {
 
 void testFutureWakeIgnoresBoundedSkippedProviderRows() {
   Harness harness;
+  harness.setCredential("key");
   bool skippedRowsInserted = true;
   for (int suffix = 100; suffix < 164; ++suffix) {
     auto skipped = draft(suffix, harness.now.load());
@@ -515,6 +516,13 @@ void testFutureWakeIgnoresBoundedSkippedProviderRows() {
          "worker settles after scanning skipped-provider rows");
   expect(harness.waiter.deadline() == expectedDeadline,
          "worker waits for the later enabled-provider attempt");
+
+  harness.now += 10'000;
+  harness.service->notifyOutboxChanged();
+  expect(harness.driver->waitForCalls(1),
+         "enabled-provider attempt runs when its deadline becomes due");
+  expect(harness.waitForState(attemptId(164), ir::IrOutboxState::Succeeded),
+         "due enabled-provider attempt succeeds despite skipped rows");
 }
 
 void testMissingKeyPreservesManualIntentAndReplacementWakes() {

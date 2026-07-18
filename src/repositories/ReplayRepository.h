@@ -171,6 +171,9 @@ public:
                                        std::string_view attemptId);
   ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,
                                            std::size_t limit = 64);
+  ir::IrOutboxBatchOutcome ListDueIrOutbox(std::string_view providerId,
+                                           std::int64_t nowMs,
+                                           std::size_t limit = 64);
   std::optional<std::int64_t>
   NextIrOutboxAttemptAfter(std::string_view providerId, std::int64_t nowMs);
   ir::IrOutboxBatchOutcome ListIrOutbox(std::size_t limit = 1024);
