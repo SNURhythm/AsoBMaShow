@@ -124,6 +124,7 @@ struct AttemptFixture {
                          GaugeProfile::Standard);
     state.currentGauge = 84.5f;
     state.gaugeValues[gaugeTypeIndex(state.gaugeType)] = state.currentGauge;
+    state.gaugeHistoryFor(state.gaugeType) = {61.0f, 72.5f, 84.5f};
     state.maxCombo = 6;
     state.comboBreak = 2;
     state.judgeCount[PGreat] = 2;
@@ -297,6 +298,9 @@ void testAttemptValidationAndFingerprint() {
          "attempt retains its identity");
   expect(attempt && attempt->payloadFingerprint.size() == 64,
          "attempt fingerprint is SHA-256 hex");
+  expect(attempt && attempt->adoptedGaugeHistory ==
+                        std::vector<float>({61.0f, 72.5f, 84.5f}),
+         "attempt snapshots the complete final adopted gauge series");
   expect(attempt && attempt->payloadFingerprint.find_first_not_of(
                         "0123456789abcdef") == std::string::npos,
          "attempt fingerprint is canonical lower hex");

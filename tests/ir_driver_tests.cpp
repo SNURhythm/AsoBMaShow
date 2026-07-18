@@ -153,6 +153,44 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
   }
 }
 
+void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
+  auto attempt = validAttempt();
+  attempt.replay.events = {
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = -12'000,
+       .gauge = 72.0F,
+       .gaugeType = GaugeType::Hard},
+      {.action = ReplayEventAction::Release,
+       .judgement = PGreat,
+       .diffMicros = 8'000,
+       .gauge = 24.0F,
+       .gaugeType = GaugeType::Normal},
+      {.action = ReplayEventAction::Press,
+       .judgement = Great,
+       .diffMicros = -6'000,
+       .gauge = 64.0F,
+       .gaugeType = GaugeType::Hard},
+      {.action = ReplayEventAction::Mine,
+       .gauge = 26.0F,
+       .gaugeType = GaugeType::Normal},
+  };
+
+  auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  expect(outcome.value && outcome.value->gaugeHistory ==
+                              std::vector<float>({24.0F, 26.0F}),
+         "legacy replay fallback keeps only the final adopted gauge");
+  expect(outcome.value && outcome.value->pGreatFast == 1 &&
+             outcome.value->pGreatSlow == 1,
+         "adopted-gauge filtering does not filter PGREAT timing evidence");
+
+  attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
+  outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  expect(outcome.value && outcome.value->gaugeHistory ==
+                              attempt.adoptedGaugeHistory,
+         "state-derived adopted history takes priority over replay fallback");
+}
+
 void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   auto attempt = validAttempt();
   attempt.replay.events = {{.action = ReplayEventAction::Press,
@@ -162,6 +200,20 @@ void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
                                 std::numeric_limits<float>::quiet_NaN()}};
   expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
          "non-finite gauge history is rejected");
+
+  attempt = validAttempt();
+  attempt.replay.events = {
+      {.action = ReplayEventAction::Press,
+       .judgement = Great,
+       .gauge = std::numeric_limits<float>::quiet_NaN(),
+       .gaugeType = GaugeType::Hard},
+      {.action = ReplayEventAction::Press,
+       .judgement = Great,
+       .gauge = 20.0F,
+       .gaugeType = GaugeType::Normal},
+  };
+  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+         "discarded GAS transition history is still validated");
 
   attempt = validAttempt();
   attempt.score.fast = 0;
@@ -287,6 +339,7 @@ int main() {
   testCanonicalSubmissionBuildsFromAttempt();
   testCanonicalSubmissionRejectsInvalidInput();
   testCanonicalSubmissionExtractsGaugeAndPGreatTiming();
+  testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory();
   testCanonicalSubmissionRejectsInvalidDetailedEvidence();
   testChartQueryNormalizesIdentity();
   testCapabilityValidation();

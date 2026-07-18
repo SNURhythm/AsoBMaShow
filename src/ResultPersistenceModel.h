@@ -40,6 +40,7 @@ struct ChartResultAttempt {
   std::string attemptId;
   ReplayData replay;
   ChartScoreWrite score;
+  std::vector<float> adoptedGaugeHistory;
   std::string payloadFingerprint;
 };
 

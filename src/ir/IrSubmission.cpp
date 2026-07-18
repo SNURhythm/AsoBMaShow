@@ -123,8 +123,7 @@ IrSubmissionBuildOutcome makeIrSubmission(
       return invalid("score gauge or clear rank is invalid");
     }
 
-    std::vector<float> gaugeHistory;
-    gaugeHistory.reserve(attempt.replay.events.size());
+    std::optional<GaugeType> adoptedGaugeType;
     int pGreatFast = 0;
     int pGreatSlow = 0;
     for (const ReplayEvent &event : attempt.replay.events) {
@@ -134,12 +133,30 @@ IrSubmissionBuildOutcome makeIrSubmission(
       if (!std::isfinite(event.gauge)) {
         return invalid("replay gauge history is not finite");
       }
-      gaugeHistory.push_back(event.gauge);
+      adoptedGaugeType = event.gaugeType;
       if (event.judgement == PGreat) {
         if (event.diffMicros < 0) {
           ++pGreatFast;
         } else if (event.diffMicros > 0) {
           ++pGreatSlow;
+        }
+      }
+    }
+
+    std::vector<float> gaugeHistory;
+    if (!attempt.adoptedGaugeHistory.empty()) {
+      if (std::ranges::any_of(attempt.adoptedGaugeHistory, [](float value) {
+            return !std::isfinite(value);
+          })) {
+        return invalid("adopted gauge history is not finite");
+      }
+      gaugeHistory = attempt.adoptedGaugeHistory;
+    } else if (adoptedGaugeType) {
+      gaugeHistory.reserve(attempt.replay.events.size());
+      for (const ReplayEvent &event : attempt.replay.events) {
+        if (replayEventMutatesGauge(event) &&
+            event.gaugeType == *adoptedGaugeType) {
+          gaugeHistory.push_back(event.gauge);
         }
       }
     }

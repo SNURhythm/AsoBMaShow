@@ -429,9 +429,13 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
   }
 
   const std::string fingerprint = payloadFingerprint(replay, score);
+  std::vector<float> adoptedGaugeHistory =
+      state.gaugeHistoryFor(state.gaugeType);
   return ChartResultAttempt{.attemptId = std::move(attemptId),
                             .replay = std::move(replay),
                             .score = std::move(score),
+                            .adoptedGaugeHistory =
+                                std::move(adoptedGaugeHistory),
                             .payloadFingerprint = fingerprint};
 }
 
