@@ -122,6 +122,10 @@ void testCanonicalSubmissionRejectsInvalidInput() {
 
 void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
   auto attempt = validAttempt();
+  attempt.replay.chartMeta.TotalNotes = 7;
+  attempt.score.maxScore = 14;
+  attempt.score.bad = 1;
+  attempt.score.poor = 1;
   attempt.replay.events = {
       {.action = ReplayEventAction::Press,
        .judgement = PGreat,
@@ -144,6 +148,21 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
        .gauge = 28.0F,
        .score = 7},
       {.action = ReplayEventAction::Press,
+       .judgement = Good,
+       .diffMicros = -4'000,
+       .gauge = 26.0F,
+       .score = 7},
+      {.action = ReplayEventAction::Release,
+       .judgement = Bad,
+       .diffMicros = 7'000,
+       .gauge = 22.0F,
+       .score = 7},
+      {.action = ReplayEventAction::Miss,
+       .judgement = Poor,
+       .diffMicros = 0,
+       .gauge = 18.0F,
+       .score = 7},
+      {.action = ReplayEventAction::Press,
        .judgement = None,
        .diffMicros = -1'000,
        .gauge = 99.0F,
@@ -155,7 +174,8 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
   expect(outcome.value.has_value(), "replay evidence builds");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory ==
-               std::vector<float>{24.0F, 25.5F, 27.0F, 28.0F, 11.0F},
+               std::vector<float>{24.0F, 25.5F, 27.0F, 28.0F, 26.0F, 22.0F,
+                                  18.0F, 11.0F},
            "only gauge-mutating replay events become gauge history");
     expect(outcome.value->pGreatFast == 1 &&
                outcome.value->pGreatSlow == 1,
@@ -164,8 +184,14 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
                outcome.value->earlyPGreat == 2 &&
                outcome.value->latePGreat == 1 &&
                outcome.value->earlyGreat == 1 &&
-               outcome.value->lateGreat == 0,
-           "complete replay exposes authentic LR2 judgement timing");
+               outcome.value->lateGreat == 0 &&
+               outcome.value->earlyGood == 1 &&
+               outcome.value->lateGood == 0 &&
+               outcome.value->earlyBad == 0 &&
+               outcome.value->lateBad == 1 &&
+               outcome.value->earlyPoor == 1 &&
+               outcome.value->latePoor == 0,
+           "complete replay exposes every authentic LR2 judgement timing");
   }
 }
 
@@ -197,13 +223,18 @@ void testCanonicalSubmissionExcludesNonScoringClassicLongNoteHeadTiming() {
        .diffMicros = 6'000,
        .gauge = 28.0F,
        .score = 7},
+      {.action = ReplayEventAction::Press,
+       .judgement = Good,
+       .diffMicros = -8'000,
+       .gauge = 27.0F,
+       .score = 7},
   };
 
   const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
   expect(outcome.value.has_value(), "classic long-note evidence builds");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory ==
-               std::vector<float>{20.0F, 22.0F, 24.0F, 26.0F, 28.0F},
+               std::vector<float>{20.0F, 22.0F, 24.0F, 26.0F, 28.0F, 27.0F},
            "non-scoring long-note heads remain in gauge history");
     expect(outcome.value->pGreatFast == 1 &&
                outcome.value->pGreatSlow == 1,

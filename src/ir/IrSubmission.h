@@ -33,6 +33,12 @@ struct IrSubmission {
   int latePGreat = 0;
   int earlyGreat = 0;
   int lateGreat = 0;
+  int earlyGood = 0;
+  int lateGood = 0;
+  int earlyBad = 0;
+  int lateBad = 0;
+  int earlyPoor = 0;
+  int latePoor = 0;
   std::vector<float> gaugeHistory;
   float finalGauge = 0.0F;
   int clearType = kClearTypeFailedRank;

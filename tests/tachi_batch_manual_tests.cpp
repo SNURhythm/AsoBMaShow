@@ -52,6 +52,12 @@ ir::IrSubmission validSubmission() {
   submission.latePGreat = 220;
   submission.earlyGreat = 60;
   submission.lateGreat = 40;
+  submission.earlyGood = 6;
+  submission.lateGood = 4;
+  submission.earlyBad = 1;
+  submission.lateBad = 1;
+  submission.earlyPoor = 0;
+  submission.latePoor = 1;
   submission.gaugeHistory = {20.0F, 31.25F, 48.5F, 82.0F};
   submission.finalGauge = 82.0F;
   submission.clearType = kClearTypeHardClearRank;
@@ -178,7 +184,13 @@ void testBuildsOneScoreBatchManual() {
   expect(score.at("optional").at("epg") == 280 &&
              score.at("optional").at("lpg") == 220 &&
              score.at("optional").at("egr") == 60 &&
-             score.at("optional").at("lgr") == 40,
+             score.at("optional").at("lgr") == 40 &&
+             score.at("optional").at("egd") == 6 &&
+             score.at("optional").at("lgd") == 4 &&
+             score.at("optional").at("ebd") == 1 &&
+             score.at("optional").at("lbd") == 1 &&
+             score.at("optional").at("epr") == 0 &&
+             score.at("optional").at("lpr") == 1,
          "payload includes authentic LR2 judgement timing breakdown");
   expect(score.at("optional").at("gaugeHistory") ==
              nlohmann::json::array({20.0, 31.25, 48.5, 82.0}),
@@ -464,6 +476,15 @@ void testRejectsMalformedSubmission() {
   --submission.earlyPGreat;
   expectInvalid(submission,
                 "incomplete LR2 judgement timing breakdown is invalid");
+
+  submission = validSubmission();
+  --submission.lateGood;
+  expectInvalid(submission,
+                "incomplete GOOD timing breakdown is invalid");
+
+  submission = validSubmission();
+  submission.earlyPoor = -1;
+  expectInvalid(submission, "negative POOR timing breakdown is invalid");
 
   submission = validSubmission();
   submission.gaugeHistory[1] =

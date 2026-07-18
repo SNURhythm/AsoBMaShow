@@ -130,6 +130,12 @@ IrSubmissionBuildOutcome makeIrSubmission(
     int latePGreat = 0;
     int earlyGreat = 0;
     int lateGreat = 0;
+    int earlyGood = 0;
+    int lateGood = 0;
+    int earlyBad = 0;
+    int lateBad = 0;
+    int earlyPoor = 0;
+    int latePoor = 0;
     std::int64_t observedReplayScore = 0;
     for (const ReplayEvent &event : attempt.replay.events) {
       const std::int64_t eventScore = event.score;
@@ -142,10 +148,11 @@ IrSubmissionBuildOutcome makeIrSubmission(
         return invalid("replay gauge history is not finite");
       }
       adoptedGaugeType = event.gaugeType;
-      const bool canProvideJudgementTiming =
+      const bool authenticJudgementEvent =
           event.action == ReplayEventAction::Press ||
-          event.action == ReplayEventAction::Release;
-      if (canProvideJudgementTiming && event.judgement == PGreat &&
+          event.action == ReplayEventAction::Release ||
+          event.action == ReplayEventAction::Miss;
+      if (authenticJudgementEvent && event.judgement == PGreat &&
           scoreDelta == 2) {
         if (event.diffMicros < 0) {
           ++pGreatFast;
@@ -157,12 +164,30 @@ IrSubmissionBuildOutcome makeIrSubmission(
         } else {
           ++latePGreat;
         }
-      } else if (canProvideJudgementTiming && event.judgement == Great &&
+      } else if (authenticJudgementEvent && event.judgement == Great &&
                  scoreDelta == 1) {
         if (event.diffMicros <= 0) {
           ++earlyGreat;
         } else {
           ++lateGreat;
+        }
+      } else if (authenticJudgementEvent && event.judgement == Good) {
+        if (event.diffMicros <= 0) {
+          ++earlyGood;
+        } else {
+          ++lateGood;
+        }
+      } else if (authenticJudgementEvent && event.judgement == Bad) {
+        if (event.diffMicros <= 0) {
+          ++earlyBad;
+        } else {
+          ++lateBad;
+        }
+      } else if (authenticJudgementEvent && event.judgement == Poor) {
+        if (event.diffMicros <= 0) {
+          ++earlyPoor;
+        } else {
+          ++latePoor;
         }
       }
     }
@@ -189,7 +214,10 @@ IrSubmissionBuildOutcome makeIrSubmission(
     }
     const bool judgementTimingBreakdownAvailable =
         earlyPGreat + latePGreat == score.pGreat &&
-        earlyGreat + lateGreat == score.great;
+        earlyGreat + lateGreat == score.great &&
+        earlyGood + lateGood == score.good &&
+        earlyBad + lateBad == score.bad &&
+        earlyPoor + latePoor == score.poor;
 
     return {.value = IrSubmission{
                 .attemptId = attempt.attemptId,
@@ -216,6 +244,12 @@ IrSubmissionBuildOutcome makeIrSubmission(
                 .latePGreat = latePGreat,
                 .earlyGreat = earlyGreat,
                 .lateGreat = lateGreat,
+                .earlyGood = earlyGood,
+                .lateGood = lateGood,
+                .earlyBad = earlyBad,
+                .lateBad = lateBad,
+                .earlyPoor = earlyPoor,
+                .latePoor = latePoor,
                 .gaugeHistory = std::move(gaugeHistory),
                 .finalGauge = score.finalGauge,
                 .clearType = score.clearType,

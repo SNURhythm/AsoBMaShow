@@ -314,12 +314,21 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     if (submission.judgementTimingBreakdownAvailable &&
         (submission.earlyPGreat < 0 || submission.latePGreat < 0 ||
          submission.earlyGreat < 0 || submission.lateGreat < 0 ||
+         submission.earlyGood < 0 || submission.lateGood < 0 ||
+         submission.earlyBad < 0 || submission.lateBad < 0 ||
+         submission.earlyPoor < 0 || submission.latePoor < 0 ||
          static_cast<long long>(submission.earlyPGreat) +
                  submission.latePGreat !=
              submission.pGreat ||
          static_cast<long long>(submission.earlyGreat) +
                  submission.lateGreat !=
              submission.great ||
+         static_cast<long long>(submission.earlyGood) + submission.lateGood !=
+             submission.good ||
+         static_cast<long long>(submission.earlyBad) + submission.lateBad !=
+             submission.bad ||
+         static_cast<long long>(submission.earlyPoor) + submission.latePoor !=
+             submission.poor ||
          submission.pGreatFast > submission.earlyPGreat ||
          submission.pGreatSlow > submission.latePGreat)) {
       return invalid("submission LR2 judgement timing breakdown is invalid");
@@ -383,6 +392,12 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
         optional["lpg"] = submission.latePGreat;
         optional["egr"] = submission.earlyGreat;
         optional["lgr"] = submission.lateGreat;
+        optional["egd"] = submission.earlyGood;
+        optional["lgd"] = submission.lateGood;
+        optional["ebd"] = submission.earlyBad;
+        optional["lbd"] = submission.lateBad;
+        optional["epr"] = submission.earlyPoor;
+        optional["lpr"] = submission.latePoor;
       }
       if (!submission.gaugeHistory.empty()) {
         optional["gaugeHistory"] = sampledHistory(indices);
