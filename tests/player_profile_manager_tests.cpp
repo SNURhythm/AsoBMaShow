@@ -249,6 +249,50 @@ std::int64_t rowCount(const std::filesystem::path &database,
   return count.value_or(-1);
 }
 
+void seedIrOperationalState(const std::filesystem::path &path,
+                            std::string_view label) {
+  ReplayRepository repository(path);
+  expect(repository.EnsureSchema(),
+         std::string(label) + " IR outbox schema initializes");
+  repository.Shutdown();
+  Database database = openDatabase(path);
+  expect(database != nullptr,
+         std::string(label) + " IR outbox database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(
+             database.get(),
+             "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
+             "chart_sha256,payload_json,state,local_result_ready,"
+             "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
+             "updated_at_ms,completed_at_ms) VALUES"
+             "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'{\"score\":1}',0,1,NULL,NULL,NULL,1000,1000,NULL),"
+             "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
+             "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+             "'{\"score\":2}',2,1,3000,'job-2','https://example.invalid',"
+             "2000,2000,NULL),"
+             "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
+             "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
+             "'{\"score\":3}',5,1,NULL,NULL,NULL,3000,3000,3000)"),
+         std::string(label) + " pending, deferred, and succeeded IR rows seed");
+}
+
+bool directoryContains(const std::filesystem::path &root,
+                       std::string_view needle) {
+  std::error_code error;
+  for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    if (iterator->is_regular_file(error) && !error &&
+        readFile(iterator->path()).find(needle) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void setDatabaseVersion(const std::filesystem::path &path, int version,
                         std::string_view label) {
   Database database = openDatabase(path);
@@ -2221,6 +2265,10 @@ void testProfileCrudConstraintsAndDataIsolation() {
 
   writeFile(manager.pathsFor(firstId).irCredentialsJson,
             R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
+  seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
+                         "duplicate source");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb, "ir_outbox") == 3,
+         "duplicate source starts with three IR operational rows");
 
   const auto duplicate = manager.duplicateProfile(firstId, "First Copy");
   expect(duplicate.ok() && duplicate.profile.has_value(),
@@ -2235,6 +2283,13 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(!std::filesystem::exists(
              manager.pathsFor(copyId).irCredentialsJson),
          "duplicate does not copy device-local IR credentials");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb, "ir_outbox") == 3,
+         "duplication leaves source IR operational rows unchanged");
+  expect(rowCount(manager.pathsFor(copyId).replaysDb, "ir_outbox") == 0,
+         "duplicate starts with no device-local IR operational rows");
+  expect(!directoryContains(manager.pathsFor(copyId).root,
+                            "sentinel-api-key"),
+         "duplicate contains no credential bytes in any profile file");
 
   const auto renamed = manager.renameProfile(copyId, "Renamed Copy");
   expect(renamed.ok() && renamed.profile &&

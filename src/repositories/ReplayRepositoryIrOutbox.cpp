@@ -892,3 +892,76 @@ bool ReplayRepository::ClearIrOutbox(std::string &errorMessage) {
   errorMessage.clear();
   return true;
 }
+
+bool ReplayRepository::ClearIrOutboxSnapshot(
+    const std::filesystem::path &snapshotDatabasePath,
+    std::string &errorMessage) {
+  if (snapshotDatabasePath.empty()) {
+    errorMessage = "IR outbox snapshot path is empty";
+    return false;
+  }
+  std::error_code filesystemError;
+  const auto status =
+      std::filesystem::symlink_status(snapshotDatabasePath, filesystemError);
+  if (filesystemError || !std::filesystem::is_regular_file(status) ||
+      std::filesystem::is_symlink(status)) {
+    errorMessage = "IR outbox snapshot is not a regular database file";
+    return false;
+  }
+  ReplayRepository snapshot(snapshotDatabasePath);
+  if (!snapshot.EnsureSchema()) {
+    errorMessage = "IR outbox snapshot schema is unavailable";
+    return false;
+  }
+
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(snapshot.impl_->sessionMutex);
+  if (!snapshot.EnsureSessionDatabaseLocked()) {
+    errorMessage = "IR outbox snapshot storage is unavailable";
+    return false;
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(snapshot.impl_->sessionDatabase,
+                                      "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    errorMessage = "could not start IR outbox snapshot cleanup";
+    return false;
+  }
+  SqliteStatementHandle clear;
+  if (prepareSqliteStatement(snapshot.impl_->sessionDatabase,
+                             "DELETE FROM ir_outbox", clear) != SQLITE_OK ||
+      sqlite3_step(clear.get()) != SQLITE_DONE) {
+    errorMessage = "could not clear IR outbox snapshot";
+    return false;
+  }
+  SqliteStatementHandle verify;
+  if (prepareSqliteStatement(snapshot.impl_->sessionDatabase,
+                             "SELECT COUNT(*) FROM ir_outbox", verify) !=
+          SQLITE_OK ||
+      sqlite3_step(verify.get()) != SQLITE_ROW ||
+      sqlite3_column_type(verify.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_int64(verify.get(), 0) != 0 ||
+      sqlite3_step(verify.get()) != SQLITE_DONE) {
+    errorMessage = "IR outbox snapshot cleanup could not be verified";
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    errorMessage = "could not commit IR outbox snapshot cleanup";
+    return false;
+  }
+  clear.reset();
+  verify.reset();
+  int walFrames = 0;
+  int checkpointedFrames = 0;
+  const int checkpointResult = sqlite3_wal_checkpoint_v2(
+      snapshot.impl_->sessionDatabase, "main", SQLITE_CHECKPOINT_TRUNCATE,
+      &walFrames, &checkpointedFrames);
+  if (checkpointResult != SQLITE_OK ||
+      (walFrames >= 0 && checkpointedFrames != walFrames)) {
+    errorMessage = "could not checkpoint the cleaned IR outbox snapshot";
+    return false;
+  }
+  errorMessage.clear();
+  return true;
+}

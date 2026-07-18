@@ -1370,6 +1370,12 @@ ProfileResult buildProfile(
        !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
     return fail(ProfileError::IntegrityFailure, errorMessage);
   }
+  if (mode == BuildMode::Duplicate &&
+      !ReplayRepository::ClearIrOutboxSnapshot(staging.replaysDb,
+                                               errorMessage)) {
+    return fail(ProfileError::IntegrityFailure,
+                "unable to clear duplicated IR work: " + errorMessage);
+  }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteMetadata)) {
     return fail(ProfileError::MigrationFailure, errorMessage);

@@ -248,6 +248,37 @@ std::int64_t rowCount(const std::filesystem::path &path,
   return result.value_or(-1);
 }
 
+void seedIrOperationalState(const std::filesystem::path &path,
+                            std::string_view label) {
+  ReplayRepository repository(path);
+  expect(repository.EnsureSchema(),
+         std::string(label) + " IR outbox schema initializes");
+  repository.Shutdown();
+  Database database = openDatabase(path);
+  expect(database != nullptr,
+         std::string(label) + " IR outbox database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(
+             database.get(),
+             "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
+             "chart_sha256,payload_json,state,local_result_ready,"
+             "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
+             "updated_at_ms,completed_at_ms) VALUES"
+             "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'{\"score\":1}',0,1,NULL,NULL,NULL,1000,1000,NULL),"
+             "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
+             "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+             "'{\"score\":2}',2,1,3000,'job-2','https://example.invalid',"
+             "2000,2000,NULL),"
+             "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
+             "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
+             "'{\"score\":3}',5,1,NULL,NULL,NULL,3000,3000,3000)"),
+         std::string(label) + " pending, deferred, and succeeded IR rows seed");
+}
+
 std::string scalarText(const std::filesystem::path &path,
                        std::string_view query) {
   Database database = openDatabase(path);
@@ -646,6 +677,73 @@ void testExportIsDeterministicAndStrict() {
                document.at("replaySchemaVersion") ==
                    ReplayRepository::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
+  }
+}
+
+void testIrOperationalStateIsNotProfilePortable() {
+  Fixture fixture;
+  constexpr std::string_view credential = "sentinel-portable-api-key";
+  const PlayerProfilePaths source =
+      fixture.manager.pathsFor(fixture.sourceId);
+  writeFile(source.irCredentialsJson,
+            R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-portable-api-key"}}})");
+  seedIrOperationalState(source.replaysDb, "archive source");
+
+  const auto exported =
+      exportFixture(fixture, "ir-operational-state.asobprofile");
+  expect(rowCount(source.replaysDb, "ir_outbox") == 3,
+         "export leaves source IR operational rows unchanged");
+  expect(readFile(source.irCredentialsJson).find(credential) !=
+             std::string::npos,
+         "export leaves source credential bytes unchanged");
+
+  std::string error;
+  auto members = readArchive(exported, error);
+  expect(error.empty(), "IR-safe export reads: " + error);
+  expect(std::ranges::none_of(members, [](const ArchiveMember &member) {
+           return member.name == "ir-credentials.json";
+         }),
+         "credential file is absent from archive members and accounting");
+  expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
+           return member.contents.find(credential) != std::string::npos;
+         }),
+         "archive contains no credential bytes");
+
+  ArchiveMember *replays = findMember(members, "replays.db");
+  expect(replays != nullptr, "IR-safe export includes replay database");
+  if (replays == nullptr) {
+    return;
+  }
+  const auto portableDatabase = fixture.exchange.path() / "portable-replays.db";
+  writeFile(portableDatabase, replays->contents);
+  expect(rowCount(portableDatabase, "ir_outbox") == 0,
+         "exported replay snapshot contains no IR operational rows");
+
+  seedIrOperationalState(portableDatabase, "crafted archive");
+  replays->contents = readFile(portableDatabase);
+  refreshChecksums(members);
+  const auto crafted = fixture.exchange.path() / "crafted-ir-state.zip";
+  expect(writeArchive(crafted, members, error),
+         "crafted compatible IR archive writes: " + error);
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(crafted);
+  expect(imported.ok() && imported.profile,
+         "crafted compatible IR archive imports: " + imported.message);
+  if (!imported.profile) {
+    return;
+  }
+  const PlayerProfilePaths installed =
+      fixture.manager.pathsFor(imported.profile->id);
+  expect(rowCount(installed.replaysDb, "ir_outbox") == 0,
+         "import strips deliberately crafted IR operational rows");
+  expect(!std::filesystem::exists(installed.irCredentialsJson),
+         "imported profile has no credential file");
+  for (const auto &entry :
+       std::filesystem::recursive_directory_iterator(installed.root)) {
+    if (entry.is_regular_file()) {
+      expect(readFile(entry.path()).find(credential) == std::string::npos,
+             "imported profile file contains no credential bytes");
+    }
   }
 }
 
@@ -1299,7 +1397,8 @@ void testOverwriteRollbackRestoresOriginalProfile() {
 void expectRejectedWithoutMutation(
     Fixture &fixture, const std::vector<ArchiveMember> &members,
     std::string_view label,
-    ProfileError expected = ProfileError::IntegrityFailure) {
+    ProfileError expected = ProfileError::IntegrityFailure,
+    std::string_view messageNeedle = {}) {
   const auto archive = fixture.temp.path() / (std::string(label) + ".zip");
   std::string error;
   expect(writeArchive(archive, members, error),
@@ -1314,7 +1413,9 @@ void expectRejectedWithoutMutation(
       };
   ProfileArchiveService service(fixture.manager, std::move(dependencies));
   const auto result = service.Import(archive);
-  expect(result.error == expected,
+  expect(result.error == expected &&
+             (messageNeedle.empty() ||
+              result.message.find(messageNeedle) != std::string::npos),
          std::string(label) + " archive is rejected: " + result.message);
   expect(fixture.manager.listProfiles().size() == profilesBefore,
          std::string(label) + " rejection does not create a profile");
@@ -1345,6 +1446,14 @@ void testStrictMemberAllowlistAndTypes() {
   auto extra = valid;
   extra.push_back({.name = "extra.txt", .contents = "unexpected"});
   expectRejectedWithoutMutation(fixture, extra, "extra-member");
+
+  auto credentials = valid;
+  credentials.push_back({.name = "ir-credentials.json",
+                         .contents = "sentinel-api-key"});
+  expectRejectedWithoutMutation(fixture, credentials,
+                                "credential-member-is-unknown",
+                                ProfileError::IntegrityFailure,
+                                "unexpected member name");
 
   auto duplicate = valid;
   duplicate.push_back(valid.front());
@@ -2587,6 +2696,7 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testIrOperationalStateIsNotProfilePortable();
   testExportRejectsSupportedOlderSourceBeforeWritingArchive();
   testPresetStoreSidecarRemainsProfilePortable();
   testMalformedOptionalPracticeRemainsVisibleButCannotExport();
