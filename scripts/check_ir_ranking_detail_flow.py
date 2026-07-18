@@ -12,6 +12,8 @@ root = (
 ).resolve()
 source_path = root / "src/ir/IrRankingModalView.cpp"
 source = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
+model_path = root / "src/ir/IrRankingModal.cpp"
+model_source = model_path.read_text(encoding="utf-8") if model_path.is_file() else ""
 failures: list[str] = []
 
 
@@ -52,6 +54,53 @@ require(
     and source.count("makeIconActionButton(kIconXmark,") == 2
     and 'makeActionButton("Close"' not in source,
     "both ranking modal headers must use Font Awesome xmark buttons",
+)
+require(
+    "class RankingTableHeaderView" in source
+    and 'makeHeaderLabel("Rank"' in source
+    and 'makeHeaderLabel("Player"' in source
+    and 'makeHeaderLabel("EX Score"' in source
+    and 'makeHeaderLabel("EX Rate"' in source
+    and 'makeHeaderLabel("Lamp"' in source
+    and 'makeHeaderLabel("BP"' in source
+    and 'makeHeaderLabel("Max Combo"' in source
+    and 'makeHeaderLabel("Achieved"' in source,
+    "ranking list must have a pinned header for every visible column",
+)
+require(
+    "getVisibleItemWidth()" in source
+    and source.count("useCompactIrRankingColumns")
+    + model_source.count("useCompactIrRankingColumns")
+    >= 2,
+    "ranking header and rows must share recycler width and compact policy",
+)
+require(
+    'makeJudgementRow("PGREAT"' in source
+    and 'makeJudgementRow("GREAT"' in source
+    and 'makeJudgementRow("GOOD"' in source
+    and 'makeJudgementRow("BAD"' in source
+    and 'makeJudgementRow("POOR"' in source
+    and 'setText("Total")' in source
+    and 'setText("Early")' in source
+    and 'setText("Late")' in source,
+    "score details must arrange every supported judgment in semantic rows",
+)
+require(
+    "detail.totalGoodText" in source
+    and "detail.earlyGoodText" in source
+    and "detail.lateGoodText" in source
+    and "detail.totalBadText" in source
+    and "detail.earlyBadText" in source
+    and "detail.lateBadText" in source
+    and "detail.totalPoorText" in source
+    and "detail.earlyPoorText" in source
+    and "detail.latePoorText" in source,
+    "score detail view must bind all Bokutachi judgment cells",
+)
+require(
+    "KPOOR is not exposed separately by Bokutachi; BP remains aggregate."
+    in source,
+    "score details must explain the Bokutachi KPOOR capability boundary",
 )
 
 if failures:

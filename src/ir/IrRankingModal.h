@@ -159,6 +159,7 @@ formatIrRankingTimestamp(std::optional<std::int64_t> unixMillis);
 makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept;
 [[nodiscard]] IrRankingPanelGeometry
 layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept;
+[[nodiscard]] bool useCompactIrRankingColumns(int width) noexcept;
 [[nodiscard]] bool shouldLoadNextIrRankingPage(
     int entryCount, float scrollOffset, float viewportHeight, int itemHeight,
     int preloadRows = 10) noexcept;

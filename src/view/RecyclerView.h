@@ -275,6 +275,10 @@ public:
   // the scrollbar by shrinking content width.
   bool reserveScrollbarGutter = false;
 
+  [[nodiscard]] inline int getVisibleItemWidth() const {
+    return visibleItemWidth();
+  }
+
   inline void setItems(std::vector<T> &&items) {
     itemProvider = nullptr;
     externalItemCount = 0;

@@ -217,11 +217,17 @@ void testResponsiveRowsKeepFixedHeightCoreFields() {
   model.open(request(), "Test Chart");
   REQUIRE(model.apply(snapshot(ir::IrRankingSnapshotState::Succeeded)));
 
-  const auto wide = model.row(0, 900);
+  const auto wide = model.row(0, 1100);
   REQUIRE(!wide.compact);
   REQUIRE(wide.showBadPoints);
   REQUIRE(wide.showMaxCombo);
   REQUIRE(wide.showAchievementTime);
+
+  const auto constrained = model.row(0, 900);
+  REQUIRE(constrained.compact);
+  REQUIRE(!constrained.showBadPoints);
+  REQUIRE(!constrained.showMaxCombo);
+  REQUIRE(!constrained.showAchievementTime);
 
   auto compact = model.row(0, 560);
   REQUIRE(compact.compact);

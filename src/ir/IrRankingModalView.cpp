@@ -17,6 +17,7 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -31,6 +32,16 @@ constexpr uint32_t kIconXmark = 0xf00d;
 constexpr int kPanelMaximumWidth = 1180;
 constexpr int kPanelMaximumHeight = 840;
 constexpr int kPanelMargin = 24;
+constexpr float kRankingRowHorizontalPadding = 12.0F;
+constexpr float kRankingColumnGap = 10.0F;
+constexpr float kRankColumnWidth = 58.0F;
+constexpr float kScoreColumnWidth = 152.0F;
+constexpr float kRateColumnWidth = 86.0F;
+constexpr float kLampColumnWidth = 174.0F;
+constexpr float kCompactLampColumnWidth = 144.0F;
+constexpr float kBadPointsColumnWidth = 62.0F;
+constexpr float kMaxComboColumnWidth = 88.0F;
+constexpr float kAchievedColumnWidth = 172.0F;
 
 struct SafeInsets {
   int top = 0;
@@ -143,8 +154,8 @@ public:
   RankingRowView() {
     setFlexDirection(FlexDirection::Column);
     setAlignItems(YGAlignStretch);
-    setPadding(Edge::Left, 12);
-    setPadding(Edge::Right, 12);
+    setPadding(Edge::Left, kRankingRowHorizontalPadding);
+    setPadding(Edge::Right, kRankingRowHorizontalPadding);
     setPadding(Edge::Top, 5);
     setPadding(Edge::Bottom, 5);
     setGap(2);
@@ -154,26 +165,26 @@ public:
     primary_ = new View();
     primary_->setFlexDirection(FlexDirection::Row);
     primary_->setAlignItems(YGAlignCenter);
-    primary_->setGap(10);
+    primary_->setGap(kRankingColumnGap);
     primary_->setFlex(1);
 
     rank_ = makeText(18, TextView::CENTER);
-    rank_->setWidth(58);
+    rank_->setWidth(kRankColumnWidth);
     player_ = makeText(19);
     player_->setFlex(1);
     score_ = makeText(17, TextView::RIGHT);
-    score_->setWidth(152);
+    score_->setWidth(kScoreColumnWidth);
     rate_ = makeText(17, TextView::RIGHT);
-    rate_->setWidth(86);
+    rate_->setWidth(kRateColumnWidth);
     lamp_ = makeText(15, TextView::CENTER);
-    lamp_->setWidth(174)->setHeight(32);
+    lamp_->setWidth(kLampColumnWidth)->setHeight(32);
     lamp_->setCornerRadius(6);
     badPoints_ = makeText(17, TextView::RIGHT);
-    badPoints_->setWidth(62);
+    badPoints_->setWidth(kBadPointsColumnWidth);
     combo_ = makeText(17, TextView::RIGHT);
-    combo_->setWidth(88);
+    combo_->setWidth(kMaxComboColumnWidth);
     time_ = makeText(15, TextView::RIGHT);
-    time_->setWidth(172);
+    time_->setWidth(kAchievedColumnWidth);
     primary_->addView(rank_);
     primary_->addView(player_);
     primary_->addView(score_);
@@ -212,12 +223,81 @@ public:
                                                         : YGDisplayNone);
     time_->setDisplay(row.showAchievementTime && !row.compact ? YGDisplayFlex
                                                               : YGDisplayNone);
-    lamp_->setWidth(row.compact ? 144.0f : 174.0f);
+    lamp_->setWidth(row.compact ? kCompactLampColumnWidth
+                                : kLampColumnWidth);
     applyYogaLayout();
   }
 
 private:
   View *primary_ = nullptr;
+  TextView *rank_ = nullptr;
+  TextView *player_ = nullptr;
+  TextView *score_ = nullptr;
+  TextView *rate_ = nullptr;
+  TextView *lamp_ = nullptr;
+  TextView *badPoints_ = nullptr;
+  TextView *combo_ = nullptr;
+  TextView *time_ = nullptr;
+};
+
+TextView *makeHeaderLabel(std::string label, TextView::TextAlign align) {
+  auto *text = makeText(14, align);
+  text->setText(std::move(label));
+  text->setThemedColor(ui_theme::textMuted);
+  return text;
+}
+
+class RankingTableHeaderView final : public View {
+public:
+  RankingTableHeaderView() {
+    setFlexDirection(FlexDirection::Row);
+    setAlignItems(YGAlignCenter);
+    setPadding(Edge::Left, kRankingRowHorizontalPadding);
+    setPadding(Edge::Right, kRankingRowHorizontalPadding);
+    setGap(kRankingColumnGap);
+    setHeight(34);
+    setFlexShrink(0);
+    setThemedBackgroundColor(ui_theme::fieldInk);
+    setCornerRadius(ui_theme::controlRadius());
+
+    rank_ = makeHeaderLabel("Rank", TextView::CENTER);
+    rank_->setWidth(kRankColumnWidth);
+    player_ = makeHeaderLabel("Player", TextView::LEFT);
+    player_->setFlex(1);
+    score_ = makeHeaderLabel("EX Score", TextView::RIGHT);
+    score_->setWidth(kScoreColumnWidth);
+    rate_ = makeHeaderLabel("EX Rate", TextView::RIGHT);
+    rate_->setWidth(kRateColumnWidth);
+    lamp_ = makeHeaderLabel("Lamp", TextView::CENTER);
+    lamp_->setWidth(kLampColumnWidth);
+    badPoints_ = makeHeaderLabel("BP", TextView::RIGHT);
+    badPoints_->setWidth(kBadPointsColumnWidth);
+    combo_ = makeHeaderLabel("Max Combo", TextView::RIGHT);
+    combo_->setWidth(kMaxComboColumnWidth);
+    time_ = makeHeaderLabel("Achieved", TextView::RIGHT);
+    time_->setWidth(kAchievedColumnWidth);
+
+    addView(rank_);
+    addView(player_);
+    addView(score_);
+    addView(rate_);
+    addView(lamp_);
+    addView(badPoints_);
+    addView(combo_);
+    addView(time_);
+  }
+
+  void bind(int width) {
+    const bool compact = useCompactIrRankingColumns(width);
+    score_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
+    badPoints_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
+    combo_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
+    time_->setDisplay(compact ? YGDisplayNone : YGDisplayFlex);
+    lamp_->setWidth(compact ? kCompactLampColumnWidth : kLampColumnWidth);
+    applyYogaLayout();
+  }
+
+private:
   TextView *rank_ = nullptr;
   TextView *player_ = nullptr;
   TextView *score_ = nullptr;
@@ -261,6 +341,8 @@ struct IrRankingModal::Impl {
   TextView *status = nullptr;
   TextView *detail = nullptr;
   Button *retryButton = nullptr;
+  View *rankingTable = nullptr;
+  RankingTableHeaderView *tableHeader = nullptr;
   RecyclerView<IrChartRankingEntry> *list = nullptr;
   TextView *paginationStatus = nullptr;
   ModalScrim *scoreDetailRoot = nullptr;
@@ -271,10 +353,10 @@ struct IrRankingModal::Impl {
   TextView *scoreDetailLamp = nullptr;
   View *scoreDetailJudgements = nullptr;
   TextView *scoreDetailJudgementUnavailable = nullptr;
-  TextView *scoreDetailEarlyPGreat = nullptr;
-  TextView *scoreDetailLatePGreat = nullptr;
-  TextView *scoreDetailEarlyGreat = nullptr;
-  TextView *scoreDetailLateGreat = nullptr;
+  TextView *scoreDetailKpoorNote = nullptr;
+  std::array<TextView *, 5> scoreDetailTotals{};
+  std::array<TextView *, 5> scoreDetailEarly{};
+  std::array<TextView *, 5> scoreDetailLate{};
   TextView *scoreDetailBadPoints = nullptr;
   TextView *scoreDetailMaxCombo = nullptr;
   TextView *scoreDetailAchievementTime = nullptr;
@@ -380,6 +462,17 @@ struct IrRankingModal::Impl {
     retryButton->setAlignSelf(YGAlignCenter);
     panel->addView(retryButton);
 
+    rankingTable = new View();
+    rankingTable->setFlexDirection(FlexDirection::Column);
+    rankingTable->setAlignItems(YGAlignStretch);
+    rankingTable->setFlexGrow(1);
+    rankingTable->setFlexShrink(1);
+    rankingTable->setFlexBasis(0);
+    rankingTable->setMinHeight(0);
+    rankingTable->setGap(4);
+    tableHeader = new RankingTableHeaderView();
+    rankingTable->addView(tableHeader);
+
     list = new RecyclerView<IrChartRankingEntry>(
         [](const auto &left, const auto &right) {
           return left.rank == right.rank && left.playerName == right.playerName;
@@ -404,7 +497,8 @@ struct IrRankingModal::Impl {
     list->onSelected = [this](const auto &, int index) {
       showScoreDetails(index);
     };
-    panel->addView(list);
+    rankingTable->addView(list);
+    panel->addView(rankingTable);
     paginationStatus = makeText(15, TextView::CENTER);
     paginationStatus->setThemedColor(ui_theme::textMuted);
     paginationStatus->setWrap(true);
@@ -462,16 +556,80 @@ struct IrRankingModal::Impl {
     summary->addView(makeMetricCard("Rate", scoreDetailRate));
     summary->addView(makeMetricCard("Lamp", scoreDetailLamp, 17));
 
-    scoreDetailJudgements = makeMetricRow();
-    scoreDetailJudgements->setHeight(88);
-    scoreDetailJudgements->addView(
-        makeMetricCard("PGREAT Early", scoreDetailEarlyPGreat));
-    scoreDetailJudgements->addView(
-        makeMetricCard("PGREAT Late", scoreDetailLatePGreat));
-    scoreDetailJudgements->addView(
-        makeMetricCard("GREAT Early", scoreDetailEarlyGreat));
-    scoreDetailJudgements->addView(
-        makeMetricCard("GREAT Late", scoreDetailLateGreat));
+    scoreDetailJudgements = new View();
+    scoreDetailJudgements->setFlexDirection(FlexDirection::Column);
+    scoreDetailJudgements->setAlignItems(YGAlignStretch);
+    scoreDetailJudgements->setHeight(230);
+    scoreDetailJudgements->setFlexShrink(0);
+    scoreDetailJudgements->setGap(2);
+    scoreDetailJudgements->setPadding(Edge::All, 4);
+    scoreDetailJudgements->setThemedBackgroundColor(ui_theme::fieldInk);
+    scoreDetailJudgements->setCornerRadius(ui_theme::controlRadius());
+
+    const auto makeJudgementHeaderCell = [](TextView::TextAlign align) {
+      auto *cell = makeText(14, align);
+      cell->setThemedColor(ui_theme::textMuted);
+      cell->setFlex(1);
+      return cell;
+    };
+    auto *judgementHeader = new View();
+    judgementHeader->setFlexDirection(FlexDirection::Row);
+    judgementHeader->setAlignItems(YGAlignCenter);
+    judgementHeader->setHeight(30)->setFlexShrink(0);
+    judgementHeader->setPadding(Edge::Left, 10);
+    judgementHeader->setPadding(Edge::Right, 10);
+    auto *judgementHeading = makeText(14);
+    judgementHeading->setText("Judgment");
+    judgementHeading->setThemedColor(ui_theme::textMuted);
+    judgementHeading->setWidth(152);
+    auto *totalHeading = makeJudgementHeaderCell(TextView::CENTER);
+    totalHeading->setText("Total");
+    auto *earlyHeading = makeJudgementHeaderCell(TextView::CENTER);
+    earlyHeading->setText("Early");
+    earlyHeading->setThemedColor(ui_theme::fastFeedback);
+    auto *lateHeading = makeJudgementHeaderCell(TextView::CENTER);
+    lateHeading->setText("Late");
+    lateHeading->setThemedColor(ui_theme::slowFeedback);
+    judgementHeader->addView(judgementHeading);
+    judgementHeader->addView(totalHeading);
+    judgementHeader->addView(earlyHeading);
+    judgementHeader->addView(lateHeading);
+    scoreDetailJudgements->addView(judgementHeader);
+
+    const auto makeJudgementRow =
+        [this](std::string label, std::size_t index,
+               View::ThemeColorProvider labelColor) {
+          auto *row = new View();
+          row->setFlexDirection(FlexDirection::Row);
+          row->setAlignItems(YGAlignCenter);
+          row->setHeight(36)->setFlexShrink(0);
+          row->setPadding(Edge::Left, 10);
+          row->setPadding(Edge::Right, 10);
+          row->setThemedBackgroundColor(ui_theme::panelSubtle);
+
+          auto *name = makeText(16);
+          name->setText(std::move(label));
+          name->setThemedColor(std::move(labelColor));
+          name->setWidth(152);
+          scoreDetailTotals[index] = makeText(17, TextView::CENTER);
+          scoreDetailTotals[index]->setFlex(1);
+          scoreDetailEarly[index] = makeText(17, TextView::CENTER);
+          scoreDetailEarly[index]->setThemedColor(ui_theme::fastFeedback);
+          scoreDetailEarly[index]->setFlex(1);
+          scoreDetailLate[index] = makeText(17, TextView::CENTER);
+          scoreDetailLate[index]->setThemedColor(ui_theme::slowFeedback);
+          scoreDetailLate[index]->setFlex(1);
+          row->addView(name);
+          row->addView(scoreDetailTotals[index]);
+          row->addView(scoreDetailEarly[index]);
+          row->addView(scoreDetailLate[index]);
+          scoreDetailJudgements->addView(row);
+        };
+    makeJudgementRow("PGREAT", 0, ui_theme::cyan);
+    makeJudgementRow("GREAT", 1, ui_theme::lime);
+    makeJudgementRow("GOOD", 2, ui_theme::amber);
+    makeJudgementRow("BAD", 3, [] { return Color(255, 132, 96, 255); });
+    makeJudgementRow("POOR", 4, ui_theme::coral);
 
     scoreDetailJudgementUnavailable = makeText(17, TextView::CENTER);
     scoreDetailJudgementUnavailable->setText(
@@ -485,6 +643,14 @@ struct IrRankingModal::Impl {
         ui_theme::panelSubtle);
     scoreDetailJudgementUnavailable->setCornerRadius(ui_theme::controlRadius());
 
+    scoreDetailKpoorNote = makeText(14, TextView::CENTER);
+    scoreDetailKpoorNote->setText(
+        "KPOOR is not exposed separately by Bokutachi; BP remains aggregate.");
+    scoreDetailKpoorNote->setWrap(true);
+    scoreDetailKpoorNote->setHeight(32);
+    scoreDetailKpoorNote->setFlexShrink(0);
+    scoreDetailKpoorNote->setThemedColor(ui_theme::textMuted);
+
     auto *metadata = makeMetricRow();
     metadata->setHeight(82);
     metadata->addView(makeMetricCard("BP", scoreDetailBadPoints));
@@ -496,6 +662,7 @@ struct IrRankingModal::Impl {
     scoreDetailPanel->addView(summary);
     scoreDetailPanel->addView(scoreDetailJudgements);
     scoreDetailPanel->addView(scoreDetailJudgementUnavailable);
+    scoreDetailPanel->addView(scoreDetailKpoorNote);
     scoreDetailPanel->addView(metadata);
     scoreDetailRoot->addView(scoreDetailPanel);
     scoreDetailRoot->setVisible(false);
@@ -511,7 +678,7 @@ struct IrRankingModal::Impl {
                               .safeRight = safe.right,
                               .margin = 36,
                               .maximumWidth = 760,
-                              .maximumHeight = 480});
+                              .maximumHeight = 620});
     scoreDetailRoot->setSize(rendering::window_width, rendering::window_height);
     scoreDetailRoot->setPadding(Edge::Top, safe.top + 36);
     scoreDetailRoot->setPadding(Edge::Bottom, safe.bottom + 36);
@@ -539,10 +706,20 @@ struct IrRankingModal::Impl {
     scoreDetailScore->setText(detail.scoreText);
     scoreDetailRate->setText(detail.rateText);
     scoreDetailLamp->setText(detail.lampText);
-    scoreDetailEarlyPGreat->setText(detail.earlyPGreatText);
-    scoreDetailLatePGreat->setText(detail.latePGreatText);
-    scoreDetailEarlyGreat->setText(detail.earlyGreatText);
-    scoreDetailLateGreat->setText(detail.lateGreatText);
+    const std::array totals{detail.totalPGreatText, detail.totalGreatText,
+                            detail.totalGoodText, detail.totalBadText,
+                            detail.totalPoorText};
+    const std::array early{detail.earlyPGreatText, detail.earlyGreatText,
+                           detail.earlyGoodText, detail.earlyBadText,
+                           detail.earlyPoorText};
+    const std::array late{detail.latePGreatText, detail.lateGreatText,
+                          detail.lateGoodText, detail.lateBadText,
+                          detail.latePoorText};
+    for (std::size_t row = 0; row < totals.size(); ++row) {
+      scoreDetailTotals[row]->setText(totals[row]);
+      scoreDetailEarly[row]->setText(early[row]);
+      scoreDetailLate[row]->setText(late[row]);
+    }
     scoreDetailJudgements->setVisible(detail.judgementBreakdownAvailable);
     scoreDetailJudgements->setDisplay(
         detail.judgementBreakdownAvailable ? YGDisplayFlex : YGDisplayNone);
@@ -563,6 +740,15 @@ struct IrRankingModal::Impl {
     scoreDetailRoot->setVisible(true);
     updateScoreDetailLayout(safeInsets());
     portal.present(scoreDetailRoot);
+  }
+
+  void syncRankingHeader() {
+    const int width = list->getVisibleItemWidth();
+    if (width <= 0) {
+      return;
+    }
+    tableHeader->setWidth(static_cast<float>(width));
+    tableHeader->bind(width);
   }
 
   void updateLayout() {
@@ -596,6 +782,8 @@ struct IrRankingModal::Impl {
     list->itemHeight = geometry.compact ? 92 : 74;
     fetchedAt->setDisplay(geometry.compact ? YGDisplayNone : YGDisplayFlex);
     root->applyYogaLayout();
+    syncRankingHeader();
+    root->applyYogaLayout();
     list->rebindVisibleItems();
     if (scoreDetailOpen) {
       updateScoreDetailLayout(safe);
@@ -628,8 +816,10 @@ struct IrRankingModal::Impl {
     retryButton->setDisplay(presentation.canRetry ? YGDisplayFlex
                                                   : YGDisplayNone);
     retryButton->setEnabled(presentation.canRetry);
+    rankingTable->setVisible(showList);
+    rankingTable->setDisplay(showList ? YGDisplayFlex : YGDisplayNone);
+    tableHeader->setVisible(showList);
     list->setVisible(showList);
-    list->setDisplay(showList ? YGDisplayFlex : YGDisplayNone);
     const bool showPaginationStatus =
         showList && !presentation.paginationStatusText.empty();
     paginationStatus->setText(presentation.paginationStatusText);
@@ -658,6 +848,11 @@ struct IrRankingModal::Impl {
       list->rebindVisibleItems();
     }
     root->applyYogaLayout();
+    if (showList) {
+      syncRankingHeader();
+      root->applyYogaLayout();
+      list->rebindVisibleItems();
+    }
   }
 
   void openRequest(IrRankingRequest request, std::string title) {

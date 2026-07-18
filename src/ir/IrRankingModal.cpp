@@ -12,7 +12,8 @@
 namespace ir {
 namespace {
 
-constexpr int kCompactRowMaximumWidth = 679;
+// Eight wide columns need 886 px before giving Player any usable width.
+constexpr int kCompactRowMaximumWidth = 999;
 constexpr std::string_view kMissing = "\xE2\x80\x94";
 
 std::string integerOrMissing(const std::optional<int> &value) {
@@ -154,6 +155,10 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept {
           .width = width,
           .height = height,
           .compact = width <= kCompactRowMaximumWidth + 44};
+}
+
+bool useCompactIrRankingColumns(int width) noexcept {
+  return width <= kCompactRowMaximumWidth;
 }
 
 bool shouldLoadNextIrRankingPage(int entryCount, float scrollOffset,
@@ -319,7 +324,7 @@ IrRankingRowPresentation IrRankingModalModel::row(int index, int width) const {
     return {};
   }
   const auto &entry = presentation_.ranking->entries[index];
-  const bool compact = width <= kCompactRowMaximumWidth;
+  const bool compact = useCompactIrRankingColumns(width);
   const bool showDetails = !compact;
   IrRankingRowPresentation value{
       .rankText = rankText(entry.rank),

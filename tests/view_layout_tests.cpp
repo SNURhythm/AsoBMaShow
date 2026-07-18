@@ -159,7 +159,20 @@ void testRankingModalPanelStaysCenteredInsideSafeArea() {
   assert(geometry.y == 44);
   assert(geometry.width == 902);
   assert(geometry.height == 602);
-  assert(geometry.compact == false);
+  assert(geometry.compact);
+
+  const auto wide = ir::layoutIrRankingPanel(
+      {.viewportWidth = 1280,
+       .viewportHeight = 800,
+       .safeTop = 0,
+       .safeLeft = 0,
+       .safeBottom = 0,
+       .safeRight = 0,
+       .margin = 24,
+       .maximumWidth = 1180,
+       .maximumHeight = 840});
+  assert(wide.width == 1180);
+  assert(wide.compact == false);
 
   const auto compact = ir::layoutIrRankingPanel(
       {.viewportWidth = 640,
