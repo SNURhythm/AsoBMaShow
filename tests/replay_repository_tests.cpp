@@ -4297,6 +4297,9 @@ void testStageChartResultAtomicallyStagesIrDrafts(
                   "SELECT COUNT(*) FROM ir_outbox WHERE state=0 AND "
                   "local_result_ready=0 AND next_request_user_intent=0") == 2);
   db.reset();
+  const auto inactiveCounts = helper.CountIrOutbox("tachi");
+  assert(inactiveCounts.storageAvailable && inactiveCounts.total == 0 &&
+         inactiveCounts.pending == 0);
   assert(helper.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max())
              .entries.empty());
 

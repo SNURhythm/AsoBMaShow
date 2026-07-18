@@ -177,6 +177,9 @@ void testFutureCacheIsPreserved() {
          "future cache is unavailable to this version");
   expect(!store.rememberUserId(kOrigin, 92, diagnostic),
          "future cache disables writes");
+  expect(store.clearUserIds(diagnostic),
+         "an unavailable cache with no loaded identity does not block a "
+         "credential change");
   expect(readFile(path) == future, "future cache remains byte-for-byte intact");
 }
 

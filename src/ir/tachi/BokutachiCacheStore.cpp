@@ -380,16 +380,16 @@ bool BokutachiCacheStore::clearUserIds(std::string &diagnostic) noexcept {
   try {
     std::scoped_lock lock(mutex_);
     diagnostic.clear();
-    if (!activated_ || !writesEnabled_) {
-      diagnostic = "Bokutachi cache writes are unavailable";
-      return false;
-    }
     const bool changed =
         std::ranges::any_of(origins_, [](const OriginEntry &entry) {
           return entry.userId.has_value();
         });
     if (!changed) {
       return true;
+    }
+    if (!activated_ || !writesEnabled_) {
+      diagnostic = "Bokutachi cache writes are unavailable";
+      return false;
     }
     for (auto &origin : origins_) {
       origin.userId.reset();

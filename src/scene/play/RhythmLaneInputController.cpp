@@ -480,6 +480,13 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
         continue;
       }
       multiBadNote->Play(inputTime);
+      if (multiBadNote->IsLongNote()) {
+        auto *longNote = static_cast<bms_parser::LongNote *>(multiBadNote);
+        if (!longNote->IsTail() && longNote->Tail != nullptr &&
+            !longNote->Tail->IsPlayed) {
+          longNote->Tail->Play(inputTime);
+        }
+      }
       Result multiBad;
       multiBad.note = multiBadNote;
       multiBad.hasJudge = true;

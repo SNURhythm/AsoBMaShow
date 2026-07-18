@@ -987,8 +987,8 @@ ReplayRepository::CountIrOutbox(std::string_view providerId) {
   SqliteStatementHandle stmt;
   if (prepareSqliteStatement(
           impl_->sessionDatabase,
-          "SELECT state,COUNT(*) FROM ir_outbox WHERE provider_id=? GROUP BY "
-          "state",
+          "SELECT state,COUNT(*) FROM ir_outbox WHERE provider_id=? AND "
+          "local_result_ready=1 GROUP BY state",
           stmt) != SQLITE_OK ||
       sqlite3_bind_text(stmt.get(), 1, providerId.data(),
                         static_cast<int>(providerId.size()),

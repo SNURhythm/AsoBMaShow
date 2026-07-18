@@ -1850,6 +1850,31 @@ void testLegacyControllerUsesSharedLr2BatchResolution() {
           "legacy controller consumes the same shared LR2 multi-BAD batch");
 }
 
+void testLegacyControllerLr2MultiBadLongHeadConsumesTail() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  auto *selected = new bms_parser::Note(1);
+  addTimeline(*measure, 850'000)->SetNote(1, selected);
+  auto *multiBadHead = addLongNote(*measure, 1'150'000, 1'800'000, 2,
+                                   bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(&chart, nullptr, lanes, lr2Judge());
+
+  const auto batch = controller.pressLane(
+      1, 2, {.songTimeMicros = 1'000'000,
+             .laneBeamTimeMicros = 1'000'000,
+             .notePriorityMode = AppSettings::NotePriorityMode::Score});
+  require(batch.transactions.size() == 2 &&
+              batch.transactions.front().note == multiBadHead &&
+              batch.transactions.front().judge.judgement == Bad &&
+              multiBadHead->IsPlayed && multiBadHead->Tail != nullptr &&
+              multiBadHead->Tail->IsPlayed && selected->IsPlayed,
+          "legacy LR2 multi-BAD consumes a long-note head and its paired tail");
+}
+
 struct Lr2LongReleaseSummary {
   bool hasJudge = false;
   Judgement judgement = None;
@@ -2120,6 +2145,7 @@ int main() {
   testLr2MultiBadLongHeadConsumesTail();
   testBeatorajaStillEmitsOnePrioritySelectedTransaction();
   testLegacyControllerUsesSharedLr2BatchResolution();
+  testLegacyControllerLr2MultiBadLongHeadConsumesTail();
   testLr2LongTailBoundaryTableAcrossAuthorities();
   testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge();
   testLr2ChargeAndHellChargeCommitHeadAndTailSeparately();
