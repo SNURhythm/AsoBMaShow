@@ -310,6 +310,21 @@ public:
     updateVisibleItems();
   }
 
+  // Replace an externally owned provider after an append without moving the
+  // viewport back to the first row.
+  inline void updateItemProvider(int count,
+                                 std::function<const T &(int)> provider) {
+    items.clear();
+    externalItemCount = std::max(0, count);
+    itemProvider = std::move(provider);
+    if (selectedIndex >= externalItemCount) {
+      selectedIndex = -1;
+    }
+    clampScrollOffset();
+    visibleItemsNeedRebind = true;
+    updateVisibleItems();
+  }
+
   inline void push(T item) {
     itemProvider = nullptr;
     externalItemCount = 0;

@@ -5,7 +5,7 @@
 Add durable Internet Ranking (IR) submission and chart-ranking reads to
 AsoBMaShow without making gameplay, result persistence, chart selection, or
 the result scene depend on Tachi-specific protocol details. The first provider
-is Bokutachi through Tachi's Direct Manual and beatoraja-compatible endpoints,
+is Bokutachi through Tachi's Direct Manual and native BMS ranking endpoints,
 but the internal models, driver boundary, queue, services, and UI must support
 additional read-only or read/write IR providers without restructuring the
 result flow.
@@ -622,7 +622,8 @@ completion triggers a poll, never a second POST.
 
 For a chart with a valid lowercase SHA-256 digest, the Bokutachi driver reads
 the native Tachi BMS personal-best leaderboard. It first resolves the chart,
-then obtains the authenticated numeric user ID, then pages the PB route:
+then obtains the authenticated numeric user ID before fetching the first
+bounded ranking page:
 
 ```text
 POST <server-origin>/api/v1/games/bms-{7k|14k}/charts/resolve
@@ -640,10 +641,13 @@ found` empty state. HTTP 401/403 becomes `authentication required`; transport,
 bounded, sanitized errors and are not cached.
 
 The resolved document must match the requested game, SHA-256, and note count.
-Native PB pages supply authoritative server ranks and `outOf`; the driver
-validates page ordering and continues until every PB is present. A ranking that
-changes or becomes incomplete during pagination is rejected rather than shown
-partially.
+The driver requests the first 100-row native PB page at rank 1. When `outOf`
+shows more rows, the result includes a credential-free opaque continuation
+token bound to the chart hash, chart ID, authenticated user ID, stable count,
+loaded position, and previous rank. Each continuation performs exactly one PB
+request and never repeats chart resolution or identity lookup. The service
+appends pages only as the virtualized list approaches its final ten rows, so
+popular charts do not delay the initial modal.
 
 - PB `userID` maps through the page's user documents; the ID returned by
   `/api/v1/status` marks the current user. Names must be valid UTF-8 with 1
@@ -653,14 +657,19 @@ partially.
 - `scoreData.optional.bp`, `maxCombo`, and `timeAchieved` populate BP, max
   combo, and achievement time when present and valid.
 - Native optional `epg/lpg/egr/lgr` populate judgement detail only when all
-  four exist and reproduce the stored EX score. Missing timing evidence is a
-  valid historical PB and is displayed as unavailable.
+  four exist and reproduce the stored EX score. Missing, partial, or
+  inconsistent timing evidence is displayed as unavailable without rejecting
+  the otherwise valid historical PB.
 - Invalid rows fail the whole response instead of shifting ranks in a
   partially displayed remote list.
 
-Each ranking page accepts at most 8 MiB and 100 entries; the assembled ranking
-accepts at most 20,000 entries. Exceeding a limit produces an oversized-response
-error rather than truncating the leaderboard.
+Each ranking page accepts at most 8 MiB and 100 entries. An `outOf` value above
+20,000 or a response above the byte cap produces an oversized-response error.
+Changed totals, malformed tokens, duplicate stable user IDs, regressing rows,
+or early termination stop pagination while retaining the already loaded list.
+Because Tachi accepts a rank rather than a row offset, one tie group larger
+than the 100-row limit cannot be exhaustively enumerated; the same count check
+keeps the verified prefix visible and reports the remaining page unavailable.
 
 ## Retry Classification
 
@@ -742,6 +751,11 @@ replaces the cache entry, cancels an older generation, and queues the new
 generation. Closing the modal cancels its active or pending request without
 waiting on the UI thread.
 
+A successful ranking with a continuation token remains visible while the
+service fetches one next page. Success appends immutable rows and replaces the
+cached value. Page failure leaves the rows visible, exposes Refresh, and
+blocks automatic retry so a near-end viewport cannot create a request loop.
+
 Successful responses are cached for five minutes using a monotonic clock. A
 cache key contains profile ID, provider ID, server origin, key mode, and chart
 SHA-256 plus total note count. The API key is never part of the key or cached
@@ -815,6 +829,8 @@ The modal contains:
   a remote rank or inserted into the server entries.
 - A virtualized list with rank, player, EX score and rate, lamp, BP, and max
   combo.
+- On-demand page loading near the final ten rows, retaining scroll position
+  when immutable page snapshots are appended.
 - A highlighted authenticated-user row labeled `You`.
 
 On compact widths, each row keeps rank/player, EX rate, and lamp visible.

@@ -7,17 +7,21 @@
 #include "../IrHttpClient.h"
 #include "../IrProfileSettings.h"
 
+#include "nlohmann/json.hpp"
+
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <limits>
-#include <set>
 #include <string>
 
 namespace ir::tachi {
 namespace {
 
 constexpr std::size_t kMaximumTachiResponseBytes = 1024 * 1024;
+constexpr std::size_t kMaximumRankingPageTokenBytes = 2048;
+constexpr std::size_t kMaximumRankingChartIdBytes = 256;
 
 DeliveryOutcome cancelled() {
   return {.status = DeliveryStatus::Cancelled,
@@ -265,6 +269,176 @@ ChartRankingOutcome rankingParseFailure(ChartRankingStatus status,
   return rankingFailure(status, std::move(diagnostic), apiKey);
 }
 
+struct RankingPageCursor {
+  std::string chartSha256;
+  std::string chartId;
+  std::int64_t userId = 0;
+  int startRanking = 0;
+  int loadedEntries = 0;
+  int lastRank = 0;
+  int outOf = 0;
+};
+
+std::optional<std::int64_t> cursorInteger(const nlohmann::json &object,
+                                          std::string_view key) {
+  const auto found = object.find(key);
+  if (found == object.end()) {
+    return std::nullopt;
+  }
+  if (found->is_number_unsigned()) {
+    const auto value = found->get<std::uint64_t>();
+    if (value >
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return std::nullopt;
+    }
+    return static_cast<std::int64_t>(value);
+  }
+  if (!found->is_number_integer()) {
+    return std::nullopt;
+  }
+  return found->get<std::int64_t>();
+}
+
+bool validCursorChartId(std::string_view value) {
+  return !value.empty() && value.size() <= kMaximumRankingChartIdBytes &&
+         std::ranges::none_of(value, [](unsigned char character) {
+           return character <= 0x20U || character == 0x7fU;
+         });
+}
+
+std::optional<RankingPageCursor>
+parseRankingPageCursor(std::string_view token,
+                       const IrChartQuery &normalizedQuery) {
+  try {
+    if (token.empty() || token.size() > kMaximumRankingPageTokenBytes) {
+      return std::nullopt;
+    }
+    const auto document = nlohmann::json::parse(token);
+    if (!document.is_object()) {
+      return std::nullopt;
+    }
+    const auto version = cursorInteger(document, "v");
+    const auto userId = cursorInteger(document, "userID");
+    const auto startRanking = cursorInteger(document, "startRanking");
+    const auto loadedEntries = cursorInteger(document, "loadedEntries");
+    const auto lastRank = cursorInteger(document, "lastRank");
+    const auto outOf = cursorInteger(document, "outOf");
+    const auto chartSha = document.find("chartSHA256");
+    const auto chartId = document.find("chartID");
+    if (!version || *version != 1 || !userId || *userId <= 0 ||
+        !startRanking || *startRanking <= 1 ||
+        *startRanking > std::numeric_limits<int>::max() || !loadedEntries ||
+        *loadedEntries <= 0 ||
+        *loadedEntries > static_cast<std::int64_t>(kMaximumRankingEntries) ||
+        !lastRank || *lastRank <= 0 ||
+        *lastRank > static_cast<std::int64_t>(kMaximumRankingEntries) ||
+        !outOf || *outOf <= *loadedEntries ||
+        *outOf > static_cast<std::int64_t>(kMaximumRankingEntries) ||
+        *startRanking != *lastRank + 1 || *startRanking > *outOf ||
+        *lastRank >= *outOf ||
+        chartSha == document.end() || !chartSha->is_string() ||
+        chartSha->get_ref<const std::string &>() !=
+            normalizedQuery.chartSha256 ||
+        chartId == document.end() || !chartId->is_string() ||
+        !validCursorChartId(chartId->get_ref<const std::string &>())) {
+      return std::nullopt;
+    }
+    return RankingPageCursor{
+        .chartSha256 = chartSha->get<std::string>(),
+        .chartId = chartId->get<std::string>(),
+        .userId = *userId,
+        .startRanking = static_cast<int>(*startRanking),
+        .loadedEntries = static_cast<int>(*loadedEntries),
+        .lastRank = static_cast<int>(*lastRank),
+        .outOf = static_cast<int>(*outOf),
+    };
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::string makeRankingPageCursor(const IrChartQuery &query,
+                                  std::string_view chartId,
+                                  std::int64_t userId, int startRanking,
+                                  int loadedEntries, int lastRank, int outOf) {
+  return nlohmann::json{{"v", 1},
+                        {"chartSHA256", query.chartSha256},
+                        {"chartID", chartId},
+                        {"userID", userId},
+                        {"startRanking", startRanking},
+                        {"loadedEntries", loadedEntries},
+                        {"lastRank", lastRank},
+                        {"outOf", outOf}}
+      .dump();
+}
+
+ChartRankingOutcome fetchNativeRankingPage(
+    const IrChartQuery &query, std::string_view origin, std::string_view game,
+    std::string_view chartId, std::int64_t userId, int startRanking,
+    int loadedEntries, std::optional<int> expectedOutOf,
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) {
+  if (stopToken.stop_requested()) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
+  }
+  const IrHttpRequest pageRequest{
+      .method = IrHttpMethod::Get,
+      .url = std::string(origin) + "/api/v1/games/" + std::string(game) +
+             "/charts/" + encodePathSegment(chartId) +
+             "/pbs?startRanking=" + std::to_string(startRanking),
+      .headers = {{"Authorization", "Bearer " + config.apiKey}},
+      .maximumResponseBytes = kMaximumRankingResponseBytes,
+      .followRedirects = false,
+  };
+  const IrHttpResponse pageResponse = http.perform(pageRequest, stopToken);
+  if (const auto failure =
+          rankingHttpFailure(pageResponse, config.apiKey, true)) {
+    return *failure;
+  }
+  auto page = parseRankingPageResponse(pageResponse.body, query, chartId,
+                                       userId);
+  if (page.status != ChartRankingStatus::Succeeded || !page.page) {
+    return rankingParseFailure(page.status, page.diagnostic, config.apiKey);
+  }
+  if (page.page->entries.empty()) {
+    if (loadedEntries != 0 || expectedOutOf) {
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking continuation ended early");
+    }
+    return {.status = ChartRankingStatus::Succeeded,
+            .ranking = IrChartRanking{.providerId = std::string(kProviderId),
+                                      .chart = query}};
+  }
+  if (page.page->entries.front().rank < startRanking ||
+      (expectedOutOf && page.page->outOf != *expectedOutOf)) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking page cursor does not match response");
+  }
+  const int newLoadedEntries =
+      loadedEntries + static_cast<int>(page.page->entries.size());
+  if (page.page->outOf <= 0 || newLoadedEntries > page.page->outOf) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking page count is invalid");
+  }
+
+  IrChartRanking ranking{.providerId = std::string(kProviderId),
+                         .chart = query,
+                         .entries = std::move(page.page->entries)};
+  if (newLoadedEntries < page.page->outOf) {
+    const int nextStart = ranking.entries.back().rank + 1;
+    if (nextStart <= startRanking || nextStart > page.page->outOf) {
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking page did not advance");
+    }
+    ranking.nextPageToken = makeRankingPageCursor(
+        query, chartId, userId, nextStart, newLoadedEntries,
+        ranking.entries.back().rank, page.page->outOf);
+  }
+  return {.status = ChartRankingStatus::Succeeded,
+          .ranking = std::move(ranking)};
+}
+
 } // namespace
 
 std::string_view TachiDriver::providerId() const noexcept {
@@ -436,82 +610,45 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
                                config.apiKey);
   }
 
-  IrChartRanking ranking{.providerId = std::string(kProviderId),
-                         .chart = normalizedQuery};
-  std::optional<int> expectedEntries;
-  std::set<std::int64_t> seenUsers;
-  int startRanking = 1;
-  while (true) {
-    if (stopToken.stop_requested()) {
-      return rankingFailure(ChartRankingStatus::Cancelled,
-                            "Tachi ranking request was cancelled");
-    }
-    const IrHttpRequest pageRequest{
-        .method = IrHttpMethod::Get,
-        .url = *origin + "/api/v1/games/" + game + "/charts/" +
-               encodePathSegment(*resolved.chartId) +
-               "/pbs?startRanking=" + std::to_string(startRanking),
-        .headers = bearerHeader,
-        .maximumResponseBytes = kMaximumRankingResponseBytes,
-        .followRedirects = false,
-    };
-    const IrHttpResponse pageResponse = http.perform(pageRequest, stopToken);
-    if (const auto failure =
-            rankingHttpFailure(pageResponse, config.apiKey, true)) {
-      return *failure;
-    }
-    auto page = parseRankingPageResponse(pageResponse.body, normalizedQuery,
-                                         *resolved.chartId, *identity.userId);
-    if (page.status != ChartRankingStatus::Succeeded || !page.page) {
-      return rankingParseFailure(page.status, page.diagnostic, config.apiKey);
-    }
+  return fetchNativeRankingPage(normalizedQuery, *origin, game,
+                                *resolved.chartId, *identity.userId, 1, 0,
+                                std::nullopt, config, http, stopToken);
+}
 
-    if (page.page->entries.empty()) {
-      if (ranking.entries.empty() && !expectedEntries) {
-        return {.status = ChartRankingStatus::Succeeded,
-                .ranking = std::move(ranking)};
-      }
-      return rankingFailure(ChartRankingStatus::MalformedResponse,
-                            "Tachi ranking pagination ended early");
-    }
-    if (!expectedEntries) {
-      expectedEntries = page.page->outOf;
-      ranking.entries.reserve(static_cast<std::size_t>(*expectedEntries));
-    } else if (*expectedEntries != page.page->outOf) {
-      return rankingFailure(ChartRankingStatus::MalformedResponse,
-                            "Tachi ranking changed during pagination");
-    }
-    if (page.page->entries.front().rank < startRanking ||
-        (!ranking.entries.empty() &&
-         page.page->entries.front().rank <= ranking.entries.back().rank)) {
-      return rankingFailure(ChartRankingStatus::MalformedResponse,
-                            "Tachi ranking pagination order is invalid");
-    }
-    for (const std::int64_t userId : page.page->userIds) {
-      if (!seenUsers.insert(userId).second) {
-        return rankingFailure(ChartRankingStatus::MalformedResponse,
-                              "Tachi ranking pagination duplicated a user");
-      }
-    }
-
-    const int lastRank = page.page->entries.back().rank;
-    ranking.entries.insert(ranking.entries.end(),
-                           std::make_move_iterator(page.page->entries.begin()),
-                           std::make_move_iterator(page.page->entries.end()));
-    if (ranking.entries.size() > static_cast<std::size_t>(*expectedEntries)) {
-      return rankingFailure(ChartRankingStatus::MalformedResponse,
-                            "Tachi ranking returned too many entries");
-    }
-    if (ranking.entries.size() == static_cast<std::size_t>(*expectedEntries)) {
-      return {.status = ChartRankingStatus::Succeeded,
-              .ranking = std::move(ranking)};
-    }
-    if (lastRank >= *expectedEntries) {
-      return rankingFailure(ChartRankingStatus::MalformedResponse,
-                            "Tachi ranking pagination is incomplete");
-    }
-    startRanking = lastRank + 1;
+ChartRankingOutcome TachiDriver::fetchChartRankingPage(
+    const IrChartQuery &query, std::string_view pageToken,
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  if (stopToken.stop_requested()) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
   }
+  if (query.keyMode != 7 && query.keyMode != 14) {
+    return rankingFailure(ChartRankingStatus::Unsupported,
+                          "Bokutachi supports BMS 7K and 14K rankings only");
+  }
+  if (!validCredential(config.apiKey)) {
+    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
+                          "Tachi API key is missing or invalid");
+  }
+  const auto origin = normalizeServerOrigin(config.serverOrigin);
+  const auto sha256 = normalizedSha256(query.chartSha256);
+  if (!origin || !sha256 || query.totalNotes <= 0 ||
+      query.totalNotes > std::numeric_limits<int>::max() / 2) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking continuation request is invalid");
+  }
+  IrChartQuery normalizedQuery = query;
+  normalizedQuery.chartSha256 = *sha256;
+  const auto cursor = parseRankingPageCursor(pageToken, normalizedQuery);
+  if (!cursor) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking continuation token is invalid");
+  }
+  return fetchNativeRankingPage(
+      normalizedQuery, *origin, nativeBmsGame(query.keyMode), cursor->chartId,
+      cursor->userId, cursor->startRanking, cursor->loadedEntries,
+      cursor->outOf, config, http, stopToken);
 }
 
 } // namespace ir::tachi

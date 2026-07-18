@@ -82,6 +82,7 @@ struct RankingCall {
   std::string profileId;
   std::string serverOrigin;
   std::string credential;
+  std::optional<std::string> pageToken;
 };
 
 class FakeRankingDriver final : public ir::IrDriver {
@@ -120,6 +121,31 @@ public:
     return action.outcome;
   }
 
+  ir::ChartRankingOutcome fetchChartRankingPage(
+      const ir::IrChartQuery &query, std::string_view pageToken,
+      const ir::IrProviderRuntimeConfig &config, ir::IrHttpClient &,
+      std::stop_token stopToken) const override {
+    RankingAction action;
+    {
+      std::lock_guard lock(mutex_);
+      calls_.push_back({.chart = query,
+                        .profileId = config.profileId,
+                        .serverOrigin = config.serverOrigin,
+                        .credential = config.apiKey,
+                        .pageToken = std::string(pageToken)});
+      if (!actions_.empty()) {
+        action = std::move(actions_.front());
+        actions_.pop_front();
+      }
+      callsChanged_.notify_all();
+    }
+    if (action.gate && !action.gate->wait(stopToken)) {
+      return {.status = ir::ChartRankingStatus::Cancelled,
+              .diagnostic = "cancelled"};
+    }
+    return action.outcome;
+  }
+
   void push(RankingAction action) {
     std::lock_guard lock(mutex_);
     actions_.push_back(std::move(action));
@@ -138,15 +164,18 @@ public:
 
   static ir::ChartRankingOutcome success(std::string_view providerId,
                                          const ir::IrChartQuery &query,
-                                         std::string player) {
+                                         std::string player,
+                                         std::optional<std::string> next = {}) {
     ir::IrChartRanking ranking{
         .providerId = std::string(providerId),
         .chart = query,
         .entries = {{.rank = 1,
+                     .providerEntryId = player,
                      .playerName = std::move(player),
                      .score = 1500,
                      .maxScore = query.totalNotes * 2,
                      .clearType = kClearTypeNormalClearRank}},
+        .nextPageToken = std::move(next),
         .fetchedAtUnixMillis = 1234};
     return {.status = ir::ChartRankingStatus::Succeeded,
             .ranking = std::move(ranking)};
@@ -406,6 +435,128 @@ void testLatestRequestCloseAndLateCompletion() {
          "completion after close is rejected");
 }
 
+void testPaginationAppendsWithoutDiscardingVisibleRows() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", request().chart, "first", "page-2")});
+  const auto generation = harness.openAndWait(request());
+
+  auto nextPage = FakeRankingDriver::success("fake", request().chart,
+                                             "second");
+  nextPage.ranking->entries.front().rank = 2;
+  const auto gate = std::make_shared<Gate>();
+  driver->push({.outcome = std::move(nextPage), .gate = gate});
+
+  expect(harness.service->loadNextPage(generation),
+         "a visible continuation page is queued once");
+  expect(driver->waitForCalls(2), "continuation page starts");
+  auto loading = harness.service->snapshot();
+  expect(loading.state == ir::IrRankingSnapshotState::Succeeded &&
+             loading.loadingNextPage && loading.ranking &&
+             loading.ranking->entries.size() == 1 &&
+             loading.ranking->entries.front().playerName == "first",
+         "loading the next page keeps the current virtualized rows visible");
+  expect(!harness.service->loadNextPage(generation),
+         "duplicate near-end notifications do not queue duplicate pages");
+
+  gate->open();
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline &&
+         harness.service->snapshot().loadingNextPage) {
+    std::this_thread::yield();
+  }
+  const auto appended = harness.service->snapshot();
+  expect(appended.state == ir::IrRankingSnapshotState::Succeeded &&
+             !appended.loadingNextPage && !appended.paginationBlocked &&
+             appended.ranking && appended.ranking->entries.size() == 2 &&
+             appended.ranking->entries[0].playerName == "first" &&
+             appended.ranking->entries[1].playerName == "second" &&
+             !appended.ranking->nextPageToken.has_value(),
+         "a continuation page is appended in order and completes pagination");
+  const auto calls = driver->calls();
+  expect(calls.size() == 2 && !calls[0].pageToken &&
+             calls[1].pageToken == "page-2",
+         "the service delegates continuation through the page method only");
+}
+
+void testPaginationFailureKeepsRowsAndStopsAutomaticRetry() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", request().chart, "first", "page-2")});
+  const auto generation = harness.openAndWait(request());
+  driver->push({.outcome = {.status = ir::ChartRankingStatus::TransientFailure,
+                            .diagnostic = "offline"}});
+  expect(harness.service->loadNextPage(generation),
+         "failing continuation page is queued");
+
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline &&
+         !harness.service->snapshot().paginationBlocked) {
+    std::this_thread::yield();
+  }
+  const auto failed = harness.service->snapshot();
+  expect(failed.state == ir::IrRankingSnapshotState::Succeeded &&
+             !failed.loadingNextPage && failed.paginationBlocked &&
+             failed.ranking && failed.ranking->entries.size() == 1 &&
+             failed.diagnostic == "offline",
+         "continuation failure preserves rows and exposes a retryable status");
+  expect(!harness.service->loadNextPage(generation) &&
+             driver->calls().size() == 2,
+         "near-end updates cannot create an automatic retry loop");
+}
+
+void testPaginationRejectsDuplicateProviderRows() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", request().chart, "duplicate", "page-2")});
+  const auto generation = harness.openAndWait(request());
+  auto duplicate =
+      FakeRankingDriver::success("fake", request().chart, "duplicate");
+  duplicate.ranking->entries.front().rank = 2;
+  driver->push({.outcome = std::move(duplicate)});
+  expect(harness.service->loadNextPage(generation),
+         "duplicate continuation fixture is queued");
+
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline &&
+         !harness.service->snapshot().paginationBlocked) {
+    std::this_thread::yield();
+  }
+  const auto failed = harness.service->snapshot();
+  expect(failed.state == ir::IrRankingSnapshotState::Succeeded &&
+             failed.paginationBlocked && failed.ranking &&
+             failed.ranking->entries.size() == 1,
+         "a duplicated provider row cannot corrupt the appended leaderboard");
+}
+
+void testCloseRejectsLatePaginationCompletion() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", request().chart, "first", "page-2")});
+  const auto generation = harness.openAndWait(request());
+  const auto gate = std::make_shared<Gate>(true);
+  auto next = FakeRankingDriver::success("fake", request().chart, "second");
+  next.ranking->entries.front().rank = 2;
+  driver->push({.outcome = std::move(next), .gate = gate});
+  expect(harness.service->loadNextPage(generation),
+         "late pagination fixture is queued");
+  expect(driver->waitForCalls(2), "late pagination fixture starts");
+
+  harness.service->close(generation);
+  expect(harness.service->snapshot().state ==
+             ir::IrRankingSnapshotState::Closed,
+         "closing during pagination immediately closes the visible snapshot");
+  gate->open();
+  std::this_thread::sleep_for(20ms);
+  expect(harness.service->snapshot().state ==
+             ir::IrRankingSnapshotState::Closed,
+         "a late page completion cannot reopen a closed ranking modal");
+}
+
 void testCacheIdentityAndCredentialFreeDebugTypes() {
   static_assert(!HasApiKeyMember<ir::IrRankingCacheKey>);
   static_assert(!HasApiKeyMember<ir::IrChartRanking>);
@@ -441,15 +592,40 @@ void testCacheIdentityAndCredentialFreeDebugTypes() {
          "value");
 
   Harness hostile;
-  hostile.driver("fake")->push(
-      {.outcome = FakeRankingDriver::success("fake", request().chart,
-                                             "sentinel-api-key")});
+  auto hostileOutcome = FakeRankingDriver::success(
+      "fake", request().chart, "sentinel-api-key");
+  hostileOutcome.ranking->entries.front().providerEntryId = "safe-player-id";
+  hostile.driver("fake")->push({.outcome = std::move(hostileOutcome)});
   hostile.openAndWait(request());
   const auto hostileSnapshot = hostile.service->snapshot();
   expect(
       hostileSnapshot.ranking &&
           hostileSnapshot.ranking->entries.front().playerName == "[redacted]",
       "provider data cannot echo the current API key into the ranking cache");
+
+  Harness hostileToken;
+  hostileToken.driver("fake")->push(
+      {.outcome = FakeRankingDriver::success(
+           "fake", request().chart, "player", "sentinel-api-key")});
+  const auto hostileTokenGeneration = hostileToken.service->open(request());
+  expect(hostileToken.waitFor(hostileTokenGeneration,
+                              ir::IrRankingSnapshotState::MalformedResponse) &&
+             !hostileToken.service->snapshot().ranking,
+         "a provider cannot echo the API key into a cached page token");
+
+  Harness hostileIdentity;
+  auto hostileIdentityOutcome =
+      FakeRankingDriver::success("fake", request().chart, "player");
+  hostileIdentityOutcome.ranking->entries.front().providerEntryId =
+      "sentinel-api-key";
+  hostileIdentity.driver("fake")->push(
+      {.outcome = std::move(hostileIdentityOutcome)});
+  const auto hostileIdentityGeneration = hostileIdentity.service->open(request());
+  expect(hostileIdentity.waitFor(
+             hostileIdentityGeneration,
+             ir::IrRankingSnapshotState::MalformedResponse) &&
+             !hostileIdentity.service->snapshot().ranking,
+         "a provider cannot echo the API key into a cached row identity");
 
   Harness harness;
   auto fake = harness.driver("fake");
@@ -541,6 +717,10 @@ int main() {
   testFetchCacheExpiryAndRefresh();
   testFailuresAndMissingCredentialAreNotCached();
   testLatestRequestCloseAndLateCompletion();
+  testPaginationAppendsWithoutDiscardingVisibleRows();
+  testPaginationFailureKeepsRowsAndStopsAutomaticRetry();
+  testPaginationRejectsDuplicateProviderRows();
+  testCloseRejectsLatePaginationCompletion();
   testCacheIdentityAndCredentialFreeDebugTypes();
   testInvalidationAndShutdown();
 

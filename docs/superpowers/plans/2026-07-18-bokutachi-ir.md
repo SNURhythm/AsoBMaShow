@@ -766,10 +766,13 @@ GET  <normalized-origin>/api/v1/games/bms-{7k|14k}/charts/<chartID>/pbs?startRan
 Authorization: Bearer <current-key>
 ```
 
-Validate the resolved game, SHA-256, and note count. Use native server ranks,
-page until `outOf` is satisfied, and reject changed or incomplete pagination.
-Normalize native score, lamp, optional BP/combo/time, and authentic optional
-`epg/lpg/egr/lgr`; do not use the beatoraja compatibility conversion.
+Validate the resolved game, SHA-256, and note count. Request the first 100-row
+native page at rank 1 and return a credential-free opaque continuation token
+when `outOf` has more rows. A page-token request performs exactly one native PB
+GET without repeating resolve/status. Normalize native score, lamp, optional
+BP/combo/time, and authentic optional `epg/lpg/egr/lgr`; inconsistent optional
+timing is unavailable rather than fatal. Do not use the beatoraja compatibility
+conversion.
 
 - [x] Run and pass both tests:
 
@@ -905,7 +908,7 @@ struct IrRankingRequest {
 
 Keep `localComparison` in active request/snapshot state only; cache only the normalized remote `IrChartRanking`.
 
-- [ ] Implement one `std::jthread`, one latest pending request, one per-request stop source, a generation counter, and a mutex-protected cache. Expose nonblocking `open`, `refresh`, `close`, `snapshot`, `invalidate`, `activateProfile`, and `stop` methods.
+- [ ] Implement one `std::jthread`, one latest pending request, one per-request stop source, a generation counter, and a mutex-protected cache. Expose nonblocking `open`, `refresh`, `loadNextPage`, `close`, `snapshot`, `invalidate`, `activateProfile`, and `stop` methods. Page loading keeps the successful snapshot visible, appends immutable rows, and blocks automatic retry after failure.
 
 - [ ] Cache successful rankings for five minutes using the injected monotonic clock. Do not cache not-found, auth, unsupported, transient, malformed, oversized, or cancelled outcomes.
 
@@ -1094,7 +1097,7 @@ git commit -m "feat: show IR submission controls on results"
 
 - [ ] Write modal-model tests for loading, success, empty/not-found, auth, transient/offline, malformed, oversized, cancelled, refresh, and retry states. Require the comparison card to remain separate and the `You` entry highlighted.
 
-- [ ] Add virtualization and responsive layout tests: a 20,000-entry result must create only visible `RecyclerView` rows; wide rows show rank/player/EX rate/lamp/BP/combo; compact rows keep rank/player/rate/lamp and expand details on selection.
+- [ ] Add virtualization and responsive layout tests: a 20,000-entry result must create only visible `RecyclerView` rows; appended providers retain scroll position and request a next page near the final ten rows; wide rows show rank/player/EX rate/lamp/BP/combo; compact rows keep rank/player/rate/lamp and expand details on selection.
 
 - [ ] Implement `IrRankingModal` as a safe-area-aware scrim plus centered panel presented through an `OverlayPortal`. It owns no driver/HTTP state; it opens/refreshes/closes a generation in `IrRankingService` and renders immutable snapshots.
 

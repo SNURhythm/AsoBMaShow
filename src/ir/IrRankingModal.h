@@ -71,6 +71,10 @@ struct IrRankingModalPresentation {
   bool canRefresh = false;
   bool canRetry = false;
   bool comparisonInLeaderboard = false;
+  bool loadingNextPage = false;
+  bool canLoadNextPage = false;
+  bool paginationBlocked = false;
+  std::string paginationStatusText;
   int entryCount = 0;
   std::uint64_t revision = 0;
   std::uint64_t generation = 0;
@@ -144,5 +148,8 @@ formatIrRankingTimestamp(std::optional<std::int64_t> unixMillis);
 makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept;
 [[nodiscard]] IrRankingPanelGeometry
 layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept;
+[[nodiscard]] bool shouldLoadNextIrRankingPage(
+    int entryCount, float scrollOffset, float viewportHeight, int itemHeight,
+    int preloadRows = 10) noexcept;
 
 } // namespace ir

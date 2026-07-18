@@ -31,6 +31,7 @@ struct IrChartQueryBuildOutcome {
 
 struct IrChartRankingEntry {
   int rank = 0;
+  std::string providerEntryId;
   std::string playerName;
   int score = 0;
   int maxScore = 0;
@@ -51,6 +52,7 @@ struct IrChartRanking {
   std::string providerId;
   IrChartQuery chart;
   std::vector<IrChartRankingEntry> entries;
+  std::optional<std::string> nextPageToken;
   std::int64_t fetchedAtUnixMillis = 0;
 
   bool operator==(const IrChartRanking &) const = default;
@@ -115,6 +117,8 @@ struct IrRankingSnapshot {
   std::shared_ptr<const IrChartRanking> ranking;
   std::string diagnostic;
   bool fromCache = false;
+  bool loadingNextPage = false;
+  bool paginationBlocked = false;
 };
 
 struct IrRankingInvalidation {

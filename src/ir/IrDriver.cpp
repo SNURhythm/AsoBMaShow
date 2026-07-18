@@ -57,6 +57,12 @@ ChartRankingOutcome IrDriver::fetchChartRanking(const IrChartQuery &,
   return unsupportedRanking("driver does not support chart rankings");
 }
 
+ChartRankingOutcome IrDriver::fetchChartRankingPage(
+    const IrChartQuery &, std::string_view, const IrProviderRuntimeConfig &,
+    IrHttpClient &, std::stop_token) const {
+  return unsupportedRanking("driver does not support paged chart rankings");
+}
+
 bool validateCapabilities(IrDriverCapabilities capabilities) noexcept {
   return (capabilities.chartRankings || capabilities.scoreSubmission) &&
          (!capabilities.readOnly || (!capabilities.scoreSubmission &&
@@ -166,6 +172,23 @@ ChartRankingOutcome IrDriverRegistry::fetchChartRanking(
   } catch (...) {
     return {.status = ChartRankingStatus::TransientFailure,
             .diagnostic = "IR ranking driver failed"};
+  }
+}
+
+ChartRankingOutcome IrDriverRegistry::fetchChartRankingPage(
+    std::string_view providerId, const IrChartQuery &query,
+    std::string_view pageToken, const IrProviderRuntimeConfig &config,
+    IrHttpClient &http, std::stop_token stopToken) const {
+  const auto driver = find(providerId);
+  if (!driver || !driver->capabilities().chartRankings) {
+    return unsupportedRanking("IR provider cannot read chart rankings");
+  }
+  try {
+    return driver->fetchChartRankingPage(query, pageToken, config, http,
+                                         stopToken);
+  } catch (...) {
+    return {.status = ChartRankingStatus::TransientFailure,
+            .diagnostic = "IR ranking page driver failed"};
   }
 }
 

@@ -9,6 +9,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -19,6 +20,7 @@ namespace {
 using SteadyTimePoint = IrRankingServiceOptions::SteadyTimePoint;
 
 constexpr std::size_t kMaximumRankingCacheEntries = 64;
+constexpr std::size_t kMaximumRankingPageTokenBytes = 16 * 1024;
 
 SteadyTimePoint safeNow(const IrRankingServiceOptions &options) {
   try {
@@ -98,6 +100,9 @@ struct IrRankingService::Impl {
     std::uint64_t generation = 0;
     IrRankingRequest request;
     IrRankingCacheKey key;
+    bool nextPage = false;
+    std::string pageToken;
+    std::shared_ptr<const IrChartRanking> baseRanking;
   };
 
   const IrDriverRegistry &drivers;
@@ -128,7 +133,9 @@ struct IrRankingService::Impl {
   void publishLocked(IrRankingSnapshotState state,
                      std::optional<IrRankingRequest> request,
                      std::shared_ptr<const IrChartRanking> ranking = {},
-                     std::string diagnostic = {}, bool fromCache = false) {
+                     std::string diagnostic = {}, bool fromCache = false,
+                     bool loadingNextPage = false,
+                     bool paginationBlocked = false) {
     ++revision;
     current = {.revision = revision,
                .generation = request ? request->generation : generation,
@@ -136,7 +143,19 @@ struct IrRankingService::Impl {
                .request = std::move(request),
                .ranking = std::move(ranking),
                .diagnostic = sanitizeDiagnostic(diagnostic),
-               .fromCache = fromCache};
+               .fromCache = fromCache,
+               .loadingNextPage = loadingNextPage,
+               .paginationBlocked = paginationBlocked};
+  }
+
+  void storeCacheLocked(const IrRankingCacheKey &key,
+                        std::shared_ptr<const IrChartRanking> ranking) {
+    pruneExpiredLocked(safeNow(options));
+    if (!cache.contains(key) && cache.size() >= kMaximumRankingCacheEntries) {
+      cache.erase(cache.begin());
+    }
+    cache[key] = {.ranking = std::move(ranking),
+                  .expiresAt = safeNow(options) + kIrRankingCacheTtl};
   }
 
   void pruneExpiredLocked(SteadyTimePoint now) {
@@ -188,6 +207,31 @@ struct IrRankingService::Impl {
     return generation;
   }
 
+  bool queueNextPage(std::uint64_t requestedGeneration) {
+    std::lock_guard lock(mutex);
+    if (stopped || current.generation != requestedGeneration ||
+        current.state != IrRankingSnapshotState::Succeeded ||
+        !current.request || !current.ranking || current.loadingNextPage ||
+        current.paginationBlocked || pending || activeGeneration != 0 ||
+        !current.ranking->nextPageToken) {
+      return false;
+    }
+    const auto built = makeIrRankingCacheKey(*current.request);
+    if (!built.value) {
+      return false;
+    }
+    pending = Work{.generation = requestedGeneration,
+                   .request = *current.request,
+                   .key = *built.value,
+                   .nextPage = true,
+                   .pageToken = *current.ranking->nextPageToken,
+                   .baseRanking = current.ranking};
+    publishLocked(IrRankingSnapshotState::Succeeded, current.request,
+                  current.ranking, {}, current.fromCache, true, false);
+    condition.notify_all();
+    return true;
+  }
+
   void workerMain(std::stop_token stopToken) {
     while (!stopToken.stop_requested()) {
       Work work;
@@ -219,9 +263,13 @@ struct IrRankingService::Impl {
             .profileId = work.request.profileId,
             .serverOrigin = work.key.serverOrigin,
             .apiKey = credential};
-        outcome = drivers.fetchChartRanking(work.request.providerId,
-                                            work.request.chart, runtime, http,
-                                            requestToken);
+        outcome = work.nextPage
+                      ? drivers.fetchChartRankingPage(
+                            work.request.providerId, work.request.chart,
+                            work.pageToken, runtime, http, requestToken)
+                      : drivers.fetchChartRanking(work.request.providerId,
+                                                  work.request.chart, runtime,
+                                                  http, requestToken);
       }
       outcome.diagnostic =
           redactCredential(std::move(outcome.diagnostic), credential);
@@ -232,8 +280,13 @@ struct IrRankingService::Impl {
         activeKey.reset();
         condition.notify_all();
       }
-      if (stopped || current.generation != work.generation ||
-          current.state != IrRankingSnapshotState::Loading ||
+      const bool expectedState =
+          work.nextPage
+              ? current.state == IrRankingSnapshotState::Succeeded &&
+                    current.loadingNextPage &&
+                    current.ranking == work.baseRanking
+              : current.state == IrRankingSnapshotState::Loading;
+      if (stopped || current.generation != work.generation || !expectedState ||
           !current.request) {
         continue;
       }
@@ -251,15 +304,91 @@ struct IrRankingService::Impl {
           entry.playerName =
               redactCredential(std::move(entry.playerName), credential);
         }
+        const bool credentialFreeEntryIds =
+            credential.empty() ||
+            std::ranges::none_of(normalized.entries, [&](const auto &entry) {
+              return entry.providerEntryId.find(credential) !=
+                     std::string::npos;
+            });
+        const bool validPageToken =
+            credentialFreeEntryIds &&
+            (!normalized.nextPageToken ||
+             (!normalized.nextPageToken->empty() &&
+              normalized.nextPageToken->size() <=
+                  kMaximumRankingPageTokenBytes &&
+              (credential.empty() ||
+               normalized.nextPageToken->find(credential) ==
+                   std::string::npos)));
+        if (work.nextPage) {
+          bool valid = work.baseRanking && !normalized.entries.empty() &&
+                       validPageToken &&
+                       normalized.nextPageToken !=
+                           work.baseRanking->nextPageToken;
+          std::set<std::string, std::less<>> identities;
+          int previousRank = 0;
+          if (work.baseRanking) {
+            for (const auto &entry : work.baseRanking->entries) {
+              valid = valid && !entry.providerEntryId.empty() &&
+                      identities.insert(entry.providerEntryId).second &&
+                      entry.rank >= previousRank;
+              previousRank = entry.rank;
+            }
+          }
+          for (const auto &entry : normalized.entries) {
+            valid = valid && !entry.providerEntryId.empty() &&
+                    identities.insert(entry.providerEntryId).second &&
+                    entry.rank >= previousRank;
+            previousRank = entry.rank;
+          }
+          if (!valid) {
+            publishLocked(IrRankingSnapshotState::Succeeded, work.request,
+                          work.baseRanking,
+                          "IR ranking continuation page is invalid", false,
+                          false, true);
+            continue;
+          }
+          IrChartRanking merged = *work.baseRanking;
+          merged.entries.insert(merged.entries.end(),
+                                std::make_move_iterator(
+                                    normalized.entries.begin()),
+                                std::make_move_iterator(
+                                    normalized.entries.end()));
+          merged.nextPageToken = std::move(normalized.nextPageToken);
+          auto ranking =
+              std::make_shared<const IrChartRanking>(std::move(merged));
+          storeCacheLocked(work.key, ranking);
+          publishLocked(IrRankingSnapshotState::Succeeded, work.request,
+                        std::move(ranking));
+          continue;
+        }
+
+        if (!validPageToken) {
+          publishLocked(IrRankingSnapshotState::MalformedResponse,
+                        work.request, {},
+                        "IR ranking continuation token is invalid");
+          continue;
+        }
+        if (normalized.nextPageToken) {
+          std::set<std::string, std::less<>> identities;
+          int previousRank = 0;
+          bool valid = !normalized.entries.empty();
+          for (const auto &entry : normalized.entries) {
+            valid = valid && !entry.providerEntryId.empty() &&
+                    identities.insert(entry.providerEntryId).second &&
+                    entry.rank >= previousRank;
+            previousRank = entry.rank;
+          }
+          if (!valid) {
+            publishLocked(IrRankingSnapshotState::MalformedResponse,
+                          work.request, {},
+                          "IR paged ranking response is invalid");
+            continue;
+          }
+        }
+
         auto ranking =
             std::make_shared<const IrChartRanking>(std::move(normalized));
-        pruneExpiredLocked(safeNow(options));
-        if (!cache.contains(work.key) &&
-            cache.size() >= kMaximumRankingCacheEntries) {
-          cache.erase(cache.begin());
-        }
-        cache[work.key] = {.ranking = ranking,
-                           .expiresAt = safeNow(options) + kIrRankingCacheTtl};
+        storeCacheLocked(work.key, ranking);
         publishLocked(IrRankingSnapshotState::Succeeded, work.request,
                       std::move(ranking));
         continue;
@@ -268,8 +397,14 @@ struct IrRankingService::Impl {
           outcome.status == ChartRankingStatus::Succeeded
               ? ChartRankingStatus::MalformedResponse
               : outcome.status;
-      publishLocked(snapshotStateFor(status), work.request, {},
-                    outcome.diagnostic);
+      if (work.nextPage) {
+        publishLocked(IrRankingSnapshotState::Succeeded, work.request,
+                      work.baseRanking, outcome.diagnostic, false, false,
+                      true);
+      } else {
+        publishLocked(snapshotStateFor(status), work.request, {},
+                      outcome.diagnostic);
+      }
     }
   }
 };
@@ -301,6 +436,10 @@ std::uint64_t IrRankingService::refresh(IrRankingRequest request) {
   return impl_->queue(std::move(request), true);
 }
 
+bool IrRankingService::loadNextPage(std::uint64_t generation) {
+  return impl_->queueNextPage(generation);
+}
+
 void IrRankingService::close(std::uint64_t generation) {
   std::lock_guard lock(impl_->mutex);
   if (impl_->current.generation != generation) {
@@ -321,6 +460,11 @@ void IrRankingService::pauseAndCancel() {
     impl_->publishLocked(IrRankingSnapshotState::Cancelled,
                          impl_->current.request, {},
                          "IR ranking request was cancelled");
+  } else if (impl_->current.loadingNextPage) {
+    impl_->publishLocked(IrRankingSnapshotState::Succeeded,
+                         impl_->current.request, impl_->current.ranking,
+                         "IR ranking page request was cancelled", false,
+                         false, true);
   }
   impl_->condition.wait(lock, [&] { return impl_->activeGeneration == 0; });
 }

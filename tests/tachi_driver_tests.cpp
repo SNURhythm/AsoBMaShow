@@ -547,7 +547,8 @@ void testRankingRequestAndStatusClassification() {
              result.ranking->entries.empty(),
          "empty remote chart ranking succeeds");
   expect(http.requests.size() == 3,
-         "native ranking fetch resolves, authenticates, and reads PBs");
+         "native ranking fetch resolves, authenticates, and reads the first "
+         "ranking page");
   if (http.requests.size() == 3) {
     const auto &resolve = http.requests[0];
     expect(resolve.method == ir::IrHttpMethod::Post,
@@ -639,7 +640,7 @@ void testRankingRequestAndStatusClassification() {
          "cancelled ranking fetch maps separately");
 }
 
-void testNativeRankingPagination() {
+void testNativeRankingPagesWithoutRepeatingPreflight() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
   http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
@@ -647,47 +648,76 @@ void testNativeRankingPagination() {
   http.responses.push_back(
       {.statusCode = 200,
        .body = rankingPageBody(
-           nlohmann::json::array({rankingPb(1, 3, 1), rankingPb(2, 3, 2)}),
+           nlohmann::json::array(
+               {rankingPb(1, 3, 1), rankingPb(1, 3, 2)}),
            nlohmann::json::array({{{"id", 1}, {"username", "Alice"}},
                                   {{"id", 2}, {"username", "Bob"}}}))});
+
+  auto result =
+      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->entries.size() == 2 &&
+             result.ranking->nextPageToken.has_value(),
+         "native ranking returns the first page and a continuation cursor");
+  expect(result.ranking && result.ranking->entries[1].currentUser,
+         "native user ID marks the authenticated ranking entry");
+  expect(result.ranking && result.ranking->entries[0].providerEntryId == "1" &&
+             result.ranking->entries[1].providerEntryId == "2",
+         "native rows carry stable credential-free provider identities");
+  expect(http.requests.size() == 3 &&
+             http.requests.back().url.ends_with("?startRanking=1"),
+         "initial native ranking always starts at rank one");
+
+  const std::string cursor = *result.ranking->nextPageToken;
   http.responses.push_back(
       {.statusCode = 200,
        .body = rankingPageBody(
            nlohmann::json::array({rankingPb(3, 3, 3)}),
            nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
-
-  const auto result =
-      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
+                                        runtimeConfig(), http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
-             result.ranking->entries.size() == 3,
-         "native ranking follows pages until outOf is satisfied");
-  expect(result.ranking && result.ranking->entries[1].currentUser,
-         "native user ID marks the authenticated ranking entry");
+             result.ranking->entries.size() == 1 &&
+             !result.ranking->nextPageToken.has_value(),
+         "the final native page clears the continuation cursor");
   expect(http.requests.size() == 4 &&
-             http.requests.back().url.ends_with("?startRanking=3"),
-         "native ranking continues from the next server rank");
-}
+             http.requests.back().url.ends_with("?startRanking=2"),
+         "a continuation performs exactly one ranking-page request");
 
-void testNativeRankingRejectsDuplicateUsersAcrossPages() {
-  const ir::tachi::TachiDriver driver;
-  FakeHttpClient http;
-  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
-  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody(2)});
+  const auto requestsBeforeMalformed = http.requests.size();
+  result = driver.fetchChartRankingPage(rankingQuery(), "not-a-page-token",
+                                        runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::MalformedResponse &&
+             http.requests.size() == requestsBeforeMalformed,
+         "a malformed continuation cursor fails before HTTP");
+
   http.responses.push_back(
       {.statusCode = 200,
        .body = rankingPageBody(
-           nlohmann::json::array({rankingPb(1, 2, 2)}),
-           nlohmann::json::array({{{"id", 2}, {"username", "Bob"}}}))});
-  http.responses.push_back(
-      {.statusCode = 200,
-       .body = rankingPageBody(
-           nlohmann::json::array({rankingPb(2, 2, 2)}),
-           nlohmann::json::array({{{"id", 2}, {"username", "Bob"}}}))});
-
-  const auto result =
-      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+           nlohmann::json::array({rankingPb(1, 3, 3)}),
+           nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
+                                        runtimeConfig(), http, {});
   expect(result.status == ir::ChartRankingStatus::MalformedResponse,
-         "ranking mutation cannot duplicate one user across pages");
+         "a regressing native page is rejected");
+
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
+                                        runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::MalformedResponse,
+         "a rank-only cursor that cannot advance through a tie fails safely");
+
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(3, 4, 3)}),
+           nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
+                                        runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::MalformedResponse,
+         "a changed remote outOf cannot be appended to the loaded prefix");
 }
 
 void testRankingPreflightNeverLeaksCredentials() {
@@ -731,8 +761,7 @@ int main() {
   testHttpAndTransportClassification();
   testInvalidRuntimeConfigurationNeverSends();
   testRankingRequestAndStatusClassification();
-  testNativeRankingPagination();
-  testNativeRankingRejectsDuplicateUsersAcrossPages();
+  testNativeRankingPagesWithoutRepeatingPreflight();
   testRankingPreflightNeverLeaksCredentials();
 
   if (failures != 0) {

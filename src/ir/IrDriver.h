@@ -106,6 +106,9 @@ public:
                                                 const IrProviderRuntimeConfig &,
                                                 IrHttpClient &,
                                                 std::stop_token) const;
+  virtual ChartRankingOutcome fetchChartRankingPage(
+      const IrChartQuery &, std::string_view pageToken,
+      const IrProviderRuntimeConfig &, IrHttpClient &, std::stop_token) const;
 };
 
 [[nodiscard]] bool
@@ -133,6 +136,10 @@ public:
   fetchChartRanking(std::string_view providerId, const IrChartQuery &query,
                     const IrProviderRuntimeConfig &config, IrHttpClient &http,
                     std::stop_token stopToken) const;
+  [[nodiscard]] ChartRankingOutcome fetchChartRankingPage(
+      std::string_view providerId, const IrChartQuery &query,
+      std::string_view pageToken, const IrProviderRuntimeConfig &config,
+      IrHttpClient &http, std::stop_token stopToken) const;
   [[nodiscard]] std::vector<IrOutboxDraft> buildAutomaticDrafts(
       const std::map<std::string, IrProviderSettings> &settings,
       const IrSubmission &submission) const;

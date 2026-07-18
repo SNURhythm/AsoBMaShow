@@ -262,6 +262,39 @@ void testScoreDetailFormatsCompleteAndMissingData() {
   REQUIRE(!model.scoreDetail(2).has_value());
 }
 
+void testPaginationPresentationKeepsSuccessfulListVisible() {
+  ir::IrRankingModalModel model;
+  model.open(request(), "Test Chart");
+  auto loading = snapshot(ir::IrRankingSnapshotState::Succeeded, 1);
+  auto page = std::make_shared<ir::IrChartRanking>(*loading.ranking);
+  page->nextPageToken = "page-2";
+  loading.ranking = page;
+  loading.loadingNextPage = true;
+  REQUIRE(model.apply(loading));
+  REQUIRE(model.presentation().state == ir::IrRankingModalState::Success);
+  REQUIRE(model.presentation().entryCount == 2);
+  REQUIRE(model.presentation().loadingNextPage);
+  REQUIRE(!model.presentation().canLoadNextPage);
+  REQUIRE(model.presentation().paginationStatusText ==
+          "Loading more rankings...");
+
+  auto blocked = loading;
+  blocked.revision = 2;
+  blocked.loadingNextPage = false;
+  blocked.paginationBlocked = true;
+  blocked.diagnostic = "offline";
+  REQUIRE(model.apply(blocked));
+  REQUIRE(model.presentation().state == ir::IrRankingModalState::Success);
+  REQUIRE(model.presentation().entryCount == 2);
+  REQUIRE(model.presentation().paginationBlocked);
+  REQUIRE(!model.presentation().canLoadNextPage);
+  REQUIRE(model.presentation().detailText == "offline");
+  REQUIRE(model.presentation().paginationStatusText.find("offline") !=
+          std::string::npos);
+  REQUIRE(model.presentation().paginationStatusText.find("Refresh") !=
+          std::string::npos);
+}
+
 void testTwentyThousandEntriesCreateOnlyVisibleRows() {
   std::vector<ir::IrChartRankingEntry> entries(20'000);
   for (int index = 0; index < static_cast<int>(entries.size()); ++index) {
@@ -291,6 +324,29 @@ void testTwentyThousandEntriesCreateOnlyVisibleRows() {
   REQUIRE(createdRows <= 13);
   REQUIRE(recycler.getViewByIndex(0) != nullptr);
   REQUIRE(recycler.getViewByIndex(15'000) == nullptr);
+}
+
+void testVirtualizedPaginationThresholdAndScrollRetention() {
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, 0.0f, 600.0f, 60, 10));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(100, 4'900.0f, 600.0f, 60, 10));
+  REQUIRE(ir::shouldLoadNextIrRankingPage(5, 0.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(0, 0.0f, 600.0f, 60, 10));
+  REQUIRE(!ir::shouldLoadNextIrRankingPage(100, -1.0f, 600.0f, 60, 10));
+
+  std::vector<int> entries(100);
+  RecyclerView<int> recycler(
+      [](const int left, const int right) { return left == right; });
+  recycler.setWidth(800)->setHeight(600)->applyYogaLayout();
+  recycler.itemHeight = 60;
+  recycler.onCreateView = [](const int &) { return new View(); };
+  recycler.onBind = [](View *, const int &, int, bool) {};
+  recycler.setItemProvider(50,
+                           [&](int index) -> const int & { return entries[index]; });
+  recycler.scrollOffset = 1'800.0f;
+  recycler.updateItemProvider(
+      100, [&](int index) -> const int & { return entries[index]; });
+  REQUIRE(recycler.scrollOffset == 1'800.0f);
+  REQUIRE(recycler.size() == 100);
 }
 
 void testRecyclerBindingSeesAppliedRowWidth() {
@@ -339,7 +395,9 @@ int main() {
   testComparisonStaysSeparateAndYouEntryIsHighlighted();
   testResponsiveRowsKeepFixedHeightCoreFields();
   testScoreDetailFormatsCompleteAndMissingData();
+  testPaginationPresentationKeepsSuccessfulListVisible();
   testTwentyThousandEntriesCreateOnlyVisibleRows();
+  testVirtualizedPaginationThresholdAndScrollRetention();
   testRecyclerBindingSeesAppliedRowWidth();
   testBokutachiEligibilityRequiresSupportedModeNotesAndSha256();
   return 0;

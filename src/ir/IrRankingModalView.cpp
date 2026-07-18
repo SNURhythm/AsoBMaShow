@@ -272,6 +272,7 @@ struct IrRankingModal::Impl {
   TextView *detail = nullptr;
   Button *retryButton = nullptr;
   RecyclerView<IrChartRankingEntry> *list = nullptr;
+  TextView *paginationStatus = nullptr;
   ModalScrim *scoreDetailRoot = nullptr;
   View *scoreDetailPanel = nullptr;
   TextView *scoreDetailTitle = nullptr;
@@ -413,6 +414,13 @@ struct IrRankingModal::Impl {
       showScoreDetails(index);
     };
     panel->addView(list);
+    paginationStatus = makeText(15, TextView::CENTER);
+    paginationStatus->setThemedColor(ui_theme::textMuted);
+    paginationStatus->setWrap(true);
+    paginationStatus->setHeight(44);
+    paginationStatus->setFlexShrink(0);
+    paginationStatus->setDisplay(YGDisplayNone);
+    panel->addView(paginationStatus);
     root->addView(panel);
     root->setVisible(false);
     buildScoreDetail();
@@ -631,15 +639,27 @@ struct IrRankingModal::Impl {
     retryButton->setEnabled(presentation.canRetry);
     list->setVisible(showList);
     list->setDisplay(showList ? YGDisplayFlex : YGDisplayNone);
+    const bool showPaginationStatus =
+        showList && !presentation.paginationStatusText.empty();
+    paginationStatus->setText(presentation.paginationStatusText);
+    paginationStatus->setVisible(showPaginationStatus);
+    paginationStatus->setDisplay(showPaginationStatus ? YGDisplayFlex
+                                                      : YGDisplayNone);
 
     if (showList && presentation.ranking != visibleRanking) {
+      const bool preserveScroll = visibleRanking != nullptr;
       visibleRanking = presentation.ranking;
       const auto retained = visibleRanking;
-      list->setItemProvider(
-          static_cast<int>(retained->entries.size()),
-          [retained](int index) -> const IrChartRankingEntry & {
-            return retained->entries[static_cast<std::size_t>(index)];
-          });
+      auto provider = [retained](int index) -> const IrChartRankingEntry & {
+        return retained->entries[static_cast<std::size_t>(index)];
+      };
+      if (preserveScroll) {
+        list->updateItemProvider(static_cast<int>(retained->entries.size()),
+                                 std::move(provider));
+      } else {
+        list->setItemProvider(static_cast<int>(retained->entries.size()),
+                              std::move(provider));
+      }
     } else if (!showList) {
       visibleRanking.reset();
       list->clear();
@@ -689,6 +709,13 @@ struct IrRankingModal::Impl {
     updateLayout();
     if (model.apply(service.snapshot())) {
       refreshPresentation();
+    }
+    const auto &presentation = model.presentation();
+    if (presentation.canLoadNextPage && presentation.ranking &&
+        shouldLoadNextIrRankingPage(
+            presentation.entryCount, list->scrollOffset,
+            static_cast<float>(list->getContentHeight()), list->itemHeight)) {
+      (void)service.loadNextPage(presentation.generation);
     }
   }
 

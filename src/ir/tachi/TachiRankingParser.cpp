@@ -267,15 +267,20 @@ parsePb(const Json &pb, const IrChartQuery &query,
       std::ranges::any_of(timingPresent, [](bool value) { return value; });
   const bool hasAllTiming =
       std::ranges::all_of(timingPresent, [](bool value) { return value; });
-  if (hasAnyTiming != hasAllTiming) {
-    return std::nullopt;
-  }
   if (hasAllTiming) {
     const std::int64_t pGreat = static_cast<std::int64_t>(*epg) + *lpg;
     const std::int64_t great = static_cast<std::int64_t>(*egr) + *lgr;
     if (pGreat + great > query.totalNotes || pGreat * 2 + great != *score) {
-      return std::nullopt;
+      epg.reset();
+      lpg.reset();
+      egr.reset();
+      lgr.reset();
     }
+  } else if (hasAnyTiming) {
+    epg.reset();
+    lpg.reset();
+    egr.reset();
+    lgr.reset();
   }
 
   std::optional<std::int64_t> achievedAt;
@@ -295,6 +300,7 @@ parsePb(const Json &pb, const IrChartQuery &query,
 
   return IrChartRankingEntry{
       .rank = static_cast<int>(*rank),
+      .providerEntryId = std::to_string(*userId),
       .playerName = user->second,
       .score = static_cast<int>(*score),
       .maxScore = static_cast<int>(maximumScore),

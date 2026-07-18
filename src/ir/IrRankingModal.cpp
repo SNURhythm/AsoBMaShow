@@ -156,6 +156,19 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept {
           .compact = width <= kCompactRowMaximumWidth + 44};
 }
 
+bool shouldLoadNextIrRankingPage(int entryCount, float scrollOffset,
+                                 float viewportHeight, int itemHeight,
+                                 int preloadRows) noexcept {
+  if (entryCount <= 0 || scrollOffset < 0.0f || viewportHeight <= 0.0f ||
+      itemHeight <= 0 || preloadRows < 0) {
+    return false;
+  }
+  const float visibleBottom = scrollOffset + viewportHeight;
+  const int visibleEnd =
+      static_cast<int>(visibleBottom / static_cast<float>(itemHeight));
+  return visibleEnd >= std::max(0, entryCount - preloadRows);
+}
+
 void IrRankingModalModel::open(IrRankingRequest request,
                                std::string chartTitle) {
   expectedRequest_ = std::move(request);
@@ -183,6 +196,10 @@ void IrRankingModalModel::refresh(std::uint64_t generation) {
   presentation_.revision = 0;
   presentation_.generation = generation;
   presentation_.ranking.reset();
+  presentation_.loadingNextPage = false;
+  presentation_.canLoadNextPage = false;
+  presentation_.paginationBlocked = false;
+  presentation_.paginationStatusText.clear();
 }
 
 bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
@@ -199,6 +216,9 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
   presentation_.detailText = snapshot.diagnostic;
   presentation_.comparison = expectedRequest_->localComparison;
   presentation_.comparisonInLeaderboard = false;
+  presentation_.loadingNextPage = snapshot.loadingNextPage;
+  presentation_.paginationBlocked = snapshot.paginationBlocked;
+  presentation_.paginationStatusText.clear();
 
   switch (snapshot.state) {
   case IrRankingSnapshotState::Loading:
@@ -209,6 +229,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
     presentation_.ranking.reset();
     presentation_.entryCount = 0;
     presentation_.fetchedAtText.clear();
+    presentation_.canLoadNextPage = false;
     break;
   case IrRankingSnapshotState::Succeeded:
     if (!snapshot.ranking || snapshot.ranking->entries.empty()) {
@@ -222,6 +243,7 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
           snapshot.ranking
               ? formatIrRankingTimestamp(snapshot.ranking->fetchedAtUnixMillis)
               : std::string{};
+      presentation_.canLoadNextPage = false;
       break;
     }
     presentation_.state = IrRankingModalState::Success;
@@ -234,6 +256,20 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
         static_cast<int>(snapshot.ranking->entries.size());
     presentation_.fetchedAtText =
         formatIrRankingTimestamp(snapshot.ranking->fetchedAtUnixMillis);
+    presentation_.canLoadNextPage =
+        snapshot.ranking->nextPageToken.has_value() &&
+        !snapshot.loadingNextPage && !snapshot.paginationBlocked;
+    if (snapshot.loadingNextPage) {
+      presentation_.paginationStatusText = "Loading more rankings...";
+    } else if (snapshot.paginationBlocked) {
+      presentation_.paginationStatusText = snapshot.diagnostic.empty()
+                                               ? "More rankings unavailable - "
+                                                 "Refresh to retry"
+                                               : "More rankings unavailable: " +
+                                                     snapshot.diagnostic +
+                                                     " - Refresh to retry";
+      presentation_.detailText = snapshot.diagnostic;
+    }
     break;
   case IrRankingSnapshotState::ChartNotFound:
     setFailure(presentation_, IrRankingModalState::NotFound,

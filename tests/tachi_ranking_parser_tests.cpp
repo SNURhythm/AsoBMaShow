@@ -161,6 +161,36 @@ void testMissingOptionalMetricsStayUnavailable() {
   REQUIRE(!entry.achievedAtUnixMillis.has_value());
 }
 
+void testInconsistentOrPartialTimingStaysUnavailable() {
+  auto inconsistent = pb(7, 164, 332, 1235, "CLEAR");
+  inconsistent["scoreData"]["optional"]["epg"] = 300;
+  inconsistent["scoreData"]["optional"]["lpg"] = 100;
+  inconsistent["scoreData"]["optional"]["egr"] = 200;
+  inconsistent["scoreData"]["optional"]["lgr"] = 34;
+
+  auto result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({inconsistent}), Json::array({user(7, "LegacyScore")})),
+      query(), "chart-id", 42);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(result.page.has_value());
+  const auto &inconsistentEntry = result.page->entries.front();
+  REQUIRE(!inconsistentEntry.earlyPGreat.has_value());
+  REQUIRE(!inconsistentEntry.latePGreat.has_value());
+  REQUIRE(!inconsistentEntry.earlyGreat.has_value());
+  REQUIRE(!inconsistentEntry.lateGreat.has_value());
+
+  auto partial = pb(8, 165, 332, 1234, "CLEAR");
+  partial["scoreData"]["optional"]["lgr"] = nullptr;
+  result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({partial}), Json::array({user(8, "PartialScore")})),
+      query(), "chart-id", 42);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(!result.page->entries.front().earlyPGreat.has_value());
+  REQUIRE(!result.page->entries.front().latePGreat.has_value());
+  REQUIRE(!result.page->entries.front().earlyGreat.has_value());
+  REQUIRE(!result.page->entries.front().lateGreat.has_value());
+}
+
 void testLampMappingsAndFourteenKeyGame() {
   const std::vector<std::pair<std::string, int>> lamps{
       {"NO PLAY", kClearTypeFailedRank},
@@ -196,13 +226,6 @@ void testLampMappingsAndFourteenKeyGame() {
 void testPageValidation() {
   auto invalid = pb();
   invalid["scoreData"]["score"] = 1653;
-  REQUIRE(ir::tachi::parseRankingPageResponse(
-              page(Json::array({invalid}), Json::array({user(42, "Player")})),
-              query(), "chart-id", 42)
-              .status == ir::ChartRankingStatus::MalformedResponse);
-
-  invalid = pb();
-  invalid["scoreData"]["optional"]["epg"] = 335;
   REQUIRE(ir::tachi::parseRankingPageResponse(
               page(Json::array({invalid}), Json::array({user(42, "Player")})),
               query(), "chart-id", 42)
@@ -285,6 +308,7 @@ int main() {
   testIdentityAndChartResolution();
   testNativePbRetainsAuthenticJudgements();
   testMissingOptionalMetricsStayUnavailable();
+  testInconsistentOrPartialTimingStaysUnavailable();
   testLampMappingsAndFourteenKeyGame();
   testPageValidation();
   testNamesAndPageOrdering();

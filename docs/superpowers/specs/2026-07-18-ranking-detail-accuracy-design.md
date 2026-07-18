@@ -30,15 +30,18 @@ export:
    `POST /api/v1/games/bms-{7k|14k}/charts/resolve` and
    `matchType: bmsChartHash`.
 2. Read the authenticated numeric user ID from `GET /api/v1/status`.
-3. Page through
-   `GET /api/v1/games/bms-{7k|14k}/charts/:chartID/pbs?startRanking=N`.
+3. Fetch the first native ranking page at rank 1.
+4. Return a credential-free opaque continuation token when more PBs exist.
+   The virtualized modal requests another page when its viewport approaches
+   the final ten loaded rows. A continuation uses only the native PB route; it
+   does not repeat chart resolution or identity lookup.
 
 The native response supplies server ranks, users, EX score, lamp, PB, max
 combo, timestamp, and optional `epg/lpg/egr/lgr`. The parser validates the
 resolved game, hash, note count, chart ID, user mapping, page order, `outOf`,
-score range, and the EX-score equation when all four timing values exist.
-Historical scores without a complete timing breakdown remain valid and show
-the existing unavailable message.
+and score range. Timing metrics populate details only when all four exist and
+reproduce the EX score. Missing, partial, or inconsistent historical timing is
+treated as unavailable without invalidating the rest of the PB.
 
 Direct Manual submissions include `epg/lpg/egr/lgr` only when the replay
 contains a complete PGREAT/GREAT timing breakdown. LR2oraja assigns an exact
@@ -58,11 +61,19 @@ KPOOR-inclusive sum.
 - Authenticated requests never follow redirects and never persist API keys.
 - Chart resolution is rejected unless game, SHA-256, and note count match the
   local query.
-- Each native PB page is capped at 8 MiB and 100 entries; the complete ranking
-  is capped at 20,000 entries.
-- Pagination must remain ordered and reach the server's stable `outOf` count.
-  A ranking that changes or becomes incomplete during fetch is rejected rather
-  than shown partially.
+- Each native PB response is capped at 8 MiB and 100 entries. Only one page is
+  in flight and pages are requested on demand instead of serially blocking the
+  initial modal.
+- Continuation tokens bind the normalized chart hash, resolved chart ID,
+  authenticated user ID, stable `outOf`, loaded count, and previous rank. They
+  contain no API key and are bounded before parsing.
+- The returned page must be ordered, retain stable user identities, preserve
+  `outOf`, and cannot regress from the previous rank. Duplicate users or a
+  page that does not advance fail pagination while preserving loaded rows.
+- Tachi exposes a rank cursor rather than a row offset. If a single tied-rank
+  group exceeds the 100-row server limit, the API cannot enumerate the rest of
+  that tie deterministically; the loaded-count check stops with the verified
+  prefix visible instead of claiming the list is complete.
 - HTTP 404 maps to chart-not-found, 401/403 to authentication-required, and
   retryable transport/HTTP statuses to transient failure.
 

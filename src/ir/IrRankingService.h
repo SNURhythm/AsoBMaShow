@@ -34,6 +34,7 @@ public:
   [[nodiscard]] std::uint64_t open(IrRankingRequest request);
   [[nodiscard]] std::uint64_t refresh();
   [[nodiscard]] std::uint64_t refresh(IrRankingRequest request);
+  [[nodiscard]] bool loadNextPage(std::uint64_t generation);
   void close(std::uint64_t generation);
   void pauseAndCancel();
   [[nodiscard]] IrRankingSnapshot snapshot() const;
