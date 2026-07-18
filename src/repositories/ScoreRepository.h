@@ -91,7 +91,8 @@ public:
   std::optional<ScoreBestSnapshot> LoadBestScore(
       const bms_parser::ChartMeta &chartMeta,
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
-      const std::optional<std::string> &excludeAttemptId = std::nullopt);
+      const std::optional<std::string> &excludeAttemptId = std::nullopt,
+      int selectedLongNoteMode = 0);
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
   CourseScoreRecoveryResult RecoverCourseRecords(

@@ -47,6 +47,11 @@ ir::IrSubmission validSubmission() {
   submission.slow = 40;
   submission.pGreatFast = 5;
   submission.pGreatSlow = 7;
+  submission.judgementTimingBreakdownAvailable = true;
+  submission.earlyPGreat = 280;
+  submission.latePGreat = 220;
+  submission.earlyGreat = 60;
+  submission.lateGreat = 40;
   submission.gaugeHistory = {20.0F, 31.25F, 48.5F, 82.0F};
   submission.finalGauge = 82.0F;
   submission.clearType = kClearTypeHardClearRank;
@@ -170,6 +175,11 @@ void testBuildsOneScoreBatchManual() {
          "submitted fast excludes early PGREAT");
   expect(score.at("optional").at("slow") == 33,
          "submitted slow excludes late PGREAT");
+  expect(score.at("optional").at("epg") == 280 &&
+             score.at("optional").at("lpg") == 220 &&
+             score.at("optional").at("egr") == 60 &&
+             score.at("optional").at("lgr") == 40,
+         "payload includes authentic LR2 judgement timing breakdown");
   expect(score.at("optional").at("gaugeHistory") ==
              nlohmann::json::array({20.0, 31.25, 48.5, 82.0}),
          "payload includes complete fitting gauge history");
@@ -449,6 +459,11 @@ void testRejectsMalformedSubmission() {
   submission = validSubmission();
   submission.pGreatFast = -1;
   expectInvalid(submission, "PGREAT timing counts cannot be negative");
+
+  submission = validSubmission();
+  --submission.earlyPGreat;
+  expectInvalid(submission,
+                "incomplete LR2 judgement timing breakdown is invalid");
 
   submission = validSubmission();
   submission.gaugeHistory[1] =

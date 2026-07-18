@@ -93,7 +93,8 @@ void testCanonicalSubmissionBuildsFromAttempt() {
   expect(submission.score == 7 && submission.maxScore == 10,
          "submission retains EX score values");
   expect(submission.gaugeHistory.empty() && submission.pGreatFast == 0 &&
-             submission.pGreatSlow == 0,
+             submission.pGreatSlow == 0 &&
+             !submission.judgementTimingBreakdownAvailable,
          "empty replay keeps detailed evidence optional");
   expect(submission.playedAtUnixMillis == 1700000000123LL,
          "submission retains capture time");
@@ -135,6 +136,10 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
        .diffMicros = -6'000,
        .gauge = 27.0F},
       {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = 0,
+       .gauge = 28.0F},
+      {.action = ReplayEventAction::Press,
        .judgement = None,
        .diffMicros = -1'000,
        .gauge = 99.0F},
@@ -145,11 +150,17 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
   expect(outcome.value.has_value(), "replay evidence builds");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory ==
-               std::vector<float>{24.0F, 25.5F, 27.0F, 11.0F},
+               std::vector<float>{24.0F, 25.5F, 27.0F, 28.0F, 11.0F},
            "only gauge-mutating replay events become gauge history");
     expect(outcome.value->pGreatFast == 1 &&
                outcome.value->pGreatSlow == 1,
            "PGREAT early and late evidence is separated");
+    expect(outcome.value->judgementTimingBreakdownAvailable &&
+               outcome.value->earlyPGreat == 2 &&
+               outcome.value->latePGreat == 1 &&
+               outcome.value->earlyGreat == 1 &&
+               outcome.value->lateGreat == 0,
+           "complete replay exposes authentic LR2 judgement timing");
   }
 }
 
@@ -254,6 +265,16 @@ void testChartQueryNormalizesIdentity() {
          "query rejects missing identity");
 }
 
+void testIrBadPointsIncludeKpoor() {
+  expect(ir::calculateIrBadPoints(14, 8, 40) == 62,
+         "IR BP includes BAD, POOR, and KPOOR");
+  expect(!ir::calculateIrBadPoints(-1, 8, 40).has_value(),
+         "IR BP rejects negative counters");
+  expect(!ir::calculateIrBadPoints(std::numeric_limits<int>::max(), 1, 0)
+              .has_value(),
+         "IR BP rejects integer overflow");
+}
+
 void testCapabilityValidation() {
   expect(ir::validateCapabilities({.readOnly = true, .chartRankings = true}),
          "read-only ranking driver is valid");
@@ -342,6 +363,7 @@ int main() {
   testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory();
   testCanonicalSubmissionRejectsInvalidDetailedEvidence();
   testChartQueryNormalizesIdentity();
+  testIrBadPointsIncludeKpoor();
   testCapabilityValidation();
   testRegistryRejectsInvalidAndDuplicateDrivers();
   testReadOnlyDriverCannotBuildSubmissionDraft();

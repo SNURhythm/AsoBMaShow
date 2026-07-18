@@ -311,6 +311,19 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
         submission.pGreatSlow > submission.slow) {
       return invalid("submission PGREAT timing breakdown is invalid");
     }
+    if (submission.judgementTimingBreakdownAvailable &&
+        (submission.earlyPGreat < 0 || submission.latePGreat < 0 ||
+         submission.earlyGreat < 0 || submission.lateGreat < 0 ||
+         static_cast<long long>(submission.earlyPGreat) +
+                 submission.latePGreat !=
+             submission.pGreat ||
+         static_cast<long long>(submission.earlyGreat) +
+                 submission.lateGreat !=
+             submission.great ||
+         submission.pGreatFast > submission.earlyPGreat ||
+         submission.pGreatSlow > submission.latePGreat)) {
+      return invalid("submission LR2 judgement timing breakdown is invalid");
+    }
     if (std::ranges::any_of(submission.gaugeHistory,
                             [](float value) { return !std::isfinite(value); })) {
       return invalid("submission gauge history is not finite");
@@ -365,6 +378,12 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
           {"bp", static_cast<int>(badPoints)},
           {"gauge", std::clamp(submission.finalGauge, 0.0F, 100.0F)},
       };
+      if (submission.judgementTimingBreakdownAvailable) {
+        optional["epg"] = submission.earlyPGreat;
+        optional["lpg"] = submission.latePGreat;
+        optional["egr"] = submission.earlyGreat;
+        optional["lgr"] = submission.lateGreat;
+      }
       if (!submission.gaugeHistory.empty()) {
         optional["gaugeHistory"] = sampledHistory(indices);
       }

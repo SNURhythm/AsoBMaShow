@@ -66,6 +66,17 @@ makeIrChartQuery(const bms_parser::ChartMeta &meta) noexcept {
   }
 }
 
+std::optional<int> calculateIrBadPoints(int bad, int poor, int kPoor) noexcept {
+  if (bad < 0 || poor < 0 || kPoor < 0) {
+    return std::nullopt;
+  }
+  const long long total = static_cast<long long>(bad) + poor + kPoor;
+  if (total > std::numeric_limits<int>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<int>(total);
+}
+
 IrRankingCacheKeyBuildOutcome
 makeIrRankingCacheKey(const IrRankingRequest &request) noexcept {
   try {

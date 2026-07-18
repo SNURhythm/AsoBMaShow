@@ -28,6 +28,11 @@ struct IrSubmission {
   int slow = 0;
   int pGreatFast = 0;
   int pGreatSlow = 0;
+  bool judgementTimingBreakdownAvailable = false;
+  int earlyPGreat = 0;
+  int latePGreat = 0;
+  int earlyGreat = 0;
+  int lateGreat = 0;
   std::vector<float> gaugeHistory;
   float finalGauge = 0.0F;
   int clearType = kClearTypeFailedRank;

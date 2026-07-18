@@ -1,16 +1,14 @@
-# Ranking Detail Accuracy Design
+# Native Bokutachi Ranking Detail Design
 
 ## Goal
 
-Stop the Bokutachi ranking detail modal and local comparison banner from
-presenting derived values as if they were authoritative score data.
+Display authentic Bokutachi BMS PB details and use LR2 BP semantics without
+changing the result screen's BREAK metric.
 
 ## Root Cause
 
-At Tachi commit `233bc992f74cd314c8ef9bc2730d714904838dfc`, the Beatoraja ranking
-converter in
-`typescript/server/src/server/router/ir/beatoraja/charts/_chartSHA256/convert-scores.ts`
-always synthesizes the four timing fields from EX score:
+Tachi's `/ir/beatoraja/charts/:sha256/scores` compatibility converter always
+rewrites the four judgement timing fields as an EX-score encoding:
 
 ```text
 epg = floor(score / 2)
@@ -19,70 +17,62 @@ lpg = 0
 lgr = 0
 ```
 
-The converter calls this a temporary compatibility hack. AsoBMaShow currently
-parses those fields as literal early/late PGREAT and GREAT counts, so a 1284 EX
-score appears as 642 early PGREAT and no other judgements even when the real
-play was 511 PGREAT and 262 GREAT.
-
-The local comparison has an independent semantic error: it labels
-`comboBreak` as BP. For LR2/Bokutachi, BP is `BAD + POOR + KPOOR`, while combo
-break excludes KPOOR.
+Those values satisfy beatoraja's legacy score interface but are not a real
+PGREAT/GREAT breakdown. AsoBMaShow treated them as literal judgements, so a
+1284 score appeared as 642 early PGREATs.
 
 ## Chosen Design
 
-Keep using the Beatoraja-compatible ranking endpoint for the leaderboard, but
-treat its four synthesized judgement fields only as an encoding of EX score.
-The normalized ranking entry stores timing-split judgements as optional
-values. The Tachi parser leaves them absent because this endpoint cannot prove
-them. The detail presentation shows a single centered explanation when the
-breakdown is absent instead of four fabricated metric cards.
+Ranking reads use Tachi's native BMS API rather than its beatoraja compatibility
+export:
 
-Provider-neutral entries retain the ability to carry real optional timing
-counts in the future. When all four values are present, the existing four-card
-layout remains available.
+1. Resolve the lowercase SHA-256 with
+   `POST /api/v1/games/bms-{7k|14k}/charts/resolve` and
+   `matchType: bmsChartHash`.
+2. Read the authenticated numeric user ID from `GET /api/v1/status`.
+3. Page through
+   `GET /api/v1/games/bms-{7k|14k}/charts/:chartID/pbs?startRanking=N`.
 
-Local comparisons use authoritative BP evidence:
+The native response supplies server ranks, users, EX score, lamp, PB, max
+combo, timestamp, and optional `epg/lpg/egr/lgr`. The parser validates the
+resolved game, hash, note count, chart ID, user mapping, page order, `outOf`,
+score range, and the EX-score equation when all four timing values exist.
+Historical scores without a complete timing breakdown remain valid and show
+the existing unavailable message.
 
-- The result screen sums the current state's BAD, POOR, and KPOOR counts.
-- Song select loads the selected local best row on demand and exposes the same
-  sum from its stored judge counts.
-- The existing score summary cache remains unchanged; the on-demand read only
-  occurs when the user opens rankings.
+Direct Manual submissions include `epg/lpg/egr/lgr` only when the replay
+contains a complete PGREAT/GREAT timing breakdown. LR2oraja assigns an exact
+zero timing to the early side; aggregate Bokutachi `fast` and `slow` continue
+to exclude all PGREAT counts as required.
 
-This avoids a score-database schema migration and does not change ranking HTTP
-requests, score submission, the durable outbox, or credentials.
+Local ranking comparisons use BP = `BAD + POOR + KPOOR`. Song select loads the
+selected best score row on demand so it can read the stored judgement counts.
+The result ranking comparison calculates the same sum from the current state.
 
-The result screen's existing `BREAK` metric is deliberately unchanged. It
-continues to mean combo breaks (`BAD + POOR`); the separate sum including
-KPOOR is calculated only for fields explicitly labeled `BP` in the ranking
-UI.
+The result screen's BREAK value is deliberately unchanged: it remains
+`BAD + POOR`, with KPOOR excluded. Only fields explicitly labeled BP use the
+KPOOR-inclusive sum.
 
-## Rejected Alternatives
+## Safety and Failure Handling
 
-Using the synthesized fields with different labels remains misleading because
-they are only an EX-score decomposition. Enriching every row from Tachi's
-native API requires chart-ID resolution, pagination, user mapping, and another
-asynchronous detail flow; it is disproportionate and still cannot guarantee
-early/late data for historical or composite PBs. Overlaying local data only on
-the current-user row would make rival rows inconsistent and can associate one
-local play with a composite Tachi PB incorrectly.
+- Authenticated requests never follow redirects and never persist API keys.
+- Chart resolution is rejected unless game, SHA-256, and note count match the
+  local query.
+- Each native PB page is capped at 8 MiB and 100 entries; the complete ranking
+  is capped at 20,000 entries.
+- Pagination must remain ordered and reach the server's stable `outOf` count.
+  A ranking that changes or becomes incomplete during fetch is rejected rather
+  than shown partially.
+- HTTP 404 maps to chart-not-found, 401/403 to authentication-required, and
+  retryable transport/HTTP statuses to transient failure.
 
-## Error Handling
+## References
 
-Missing timing splits are valid normalized data, not a malformed response.
-The parser continues validating the compatibility integers and using them to
-compute EX score. Invalid counts still reject the complete response. Stored BP
-is exposed only when its sum is nonnegative and fits in `int`; otherwise the
-local comparison uses the existing em dash.
-
-## Testing
-
-- Parser regression: a row containing plausible timing splits produces the
-  correct EX score but no authoritative normalized judgement breakdown.
-- Modal regression: optional real counts format normally; absent counts show
-  the unavailable state rather than zero or synthesized numbers.
-- Repository regression: a stored score with BAD 14, POOR 8, and KPOOR 40
-  loads BP 62.
-- Result and main-menu source/behavior tests verify they feed the corrected BP
-  into `IrLocalComparison`.
-- Build the desktop target and run the complete CTest suite.
+- Tachi native chart resolve and PB routes:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/api/v1/games/router.ts>
+- Tachi PB document shape:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/common/src/types/documents.ts>
+- Tachi compatibility conversion that fabricates timing fields:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/ir/beatoraja/charts/_chartSHA256/convert-scores.ts>
+- LR2oraja early/late assignment (`mfast >= 0` is FAST):
+  <https://github.com/wcko87/lr2oraja/blob/lr2oraja/src/bms/player/beatoraja/play/JudgeManager.java>

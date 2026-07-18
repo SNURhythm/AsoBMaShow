@@ -3,6 +3,7 @@
 #include "nlohmann/json.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -14,310 +15,279 @@ namespace {
 
 using Json = nlohmann::json;
 
-int failures = 0;
+#define REQUIRE(condition) require((condition), #condition, __LINE__)
 
-void expect(bool condition, std::string_view message) {
-  if (!condition) {
-    std::cerr << "FAIL: " << message << '\n';
-    ++failures;
+void require(bool condition, const char *expression, int line) {
+  if (condition) {
+    return;
   }
+  std::cerr << "requirement failed at line " << line << ": " << expression
+            << '\n';
+  std::exit(1);
 }
 
-ir::IrChartQuery query() {
+ir::IrChartQuery query(int keyMode = 7) {
   return {
-      .keyMode = 7,
+      .keyMode = keyMode,
       .chartMd5 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       .chartSha256 =
           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      .totalNotes = 100,
+      .totalNotes = 826,
   };
 }
 
-Json row(std::string player = "Alice", int score = 150, int clear = 5,
-         int minBp = 3, std::int64_t date = 1700000000000LL) {
+Json user(std::int64_t id, std::string username) {
+  return {{"id", id}, {"username", std::move(username)}};
+}
+
+Json pb(std::int64_t userId = 42, int rank = 110, int outOf = 512,
+        int score = 1284, std::string lamp = "CLEAR") {
   return {
-      {"player", std::move(player)},
-      {"notes", 100},
-      {"epg", score / 2},
-      {"lpg", 0},
-      {"egr", score % 2},
-      {"lgr", 0},
-      {"clear", clear},
-      {"minbp", minBp},
-      {"maxcombo", 80},
-      {"date", date},
+      {"composedFrom",
+       Json::array({{{"name", "Best Score"}, {"scoreID", "score-42"}}})},
+      {"rankingData",
+       {{"rank", rank}, {"outOf", outOf}, {"rivalRank", nullptr}}},
+      {"userID", userId},
+      {"chartID", "chart-id"},
+      {"game", "bms-7k"},
+      {"timeAchieved", 1784341271000LL},
+      {"scoreData",
+       {{"score", score},
+        {"lamp", std::move(lamp)},
+        {"enumIndexes", {{"lamp", 4}}},
+        {"optional",
+         {{"enumIndexes", Json::object()},
+          {"epg", 336},
+          {"lpg", 175},
+          {"egr", 201},
+          {"lgr", 61},
+          {"bp", 62},
+          {"maxCombo", 109}}}}},
   };
 }
 
-std::string response(const Json &rows) {
-  return Json{{"success", true}, {"description", "scores"}, {"body", rows}}
+std::string page(const Json &pbs, const Json &users) {
+  return Json{{"success", true},
+              {"description", "Returned scores."},
+              {"body", {{"pbs", pbs}, {"users", users}}}}
       .dump();
 }
 
-ir::ChartRankingOutcome parse(const Json &rows) {
-  return ir::tachi::parseRankingResponse(response(rows), query());
+void testIdentityAndChartResolution() {
+  const auto identity = ir::tachi::parseRankingIdentityResponse(
+      R"({"success":true,"body":{"whoami":42}})");
+  REQUIRE(identity.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(identity.userId == 42);
+
+  const std::string resolveBody = Json{
+      {"success", true},
+      {"body",
+       {{"chart",
+         {{"chartID", "chart-id"},
+          {"game", "bms-7k"},
+          {"data", {{"hashSHA256", query().chartSha256}, {"notecount", 826}}}}},
+        {"song",
+         {{"id", "song-id"}}}}}}.dump();
+  const auto resolved =
+      ir::tachi::parseChartResolveResponse(resolveBody, query());
+  REQUIRE(resolved.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(resolved.chartId == "chart-id");
+
+  auto wrongMode = Json::parse(resolveBody);
+  wrongMode["body"]["chart"]["game"] = "bms-14k";
+  REQUIRE(
+      ir::tachi::parseChartResolveResponse(wrongMode.dump(), query()).status ==
+      ir::ChartRankingStatus::MalformedResponse);
+
+  auto wrongHash = Json::parse(resolveBody);
+  wrongHash["body"]["chart"]["data"]["hashSHA256"] = std::string(64, 'c');
+  REQUIRE(
+      ir::tachi::parseChartResolveResponse(wrongHash.dump(), query()).status ==
+      ir::ChartRankingStatus::MalformedResponse);
+
+  auto wrongNotes = Json::parse(resolveBody);
+  wrongNotes["body"]["chart"]["data"]["notecount"] = 825;
+  REQUIRE(
+      ir::tachi::parseChartResolveResponse(wrongNotes.dump(), query()).status ==
+      ir::ChartRankingStatus::MalformedResponse);
+
+  REQUIRE(ir::tachi::parseRankingIdentityResponse(
+              R"({"success":true,"body":{"whoami":null}})")
+              .status == ir::ChartRankingStatus::MalformedResponse);
 }
 
-void expectMalformed(Json rows, std::string_view message) {
-  const auto outcome = parse(rows);
-  expect(outcome.status == ir::ChartRankingStatus::MalformedResponse, message);
-  expect(!outcome.ranking.has_value(),
-         "malformed ranking never returns partial entries");
+void testNativePbRetainsAuthenticJudgements() {
+  const auto result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({pb()}), Json::array({user(42, "YouName")})), query(),
+      "chart-id", 42);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(result.page.has_value());
+  REQUIRE(result.page->outOf == 512);
+  REQUIRE(result.page->entries.size() == 1);
+
+  const auto &entry = result.page->entries.front();
+  REQUIRE(entry.rank == 110);
+  REQUIRE(entry.playerName == "YouName");
+  REQUIRE(entry.currentUser);
+  REQUIRE(entry.score == 1284);
+  REQUIRE(entry.maxScore == 1652);
+  REQUIRE(entry.earlyPGreat == 336);
+  REQUIRE(entry.latePGreat == 175);
+  REQUIRE(entry.earlyGreat == 201);
+  REQUIRE(entry.lateGreat == 61);
+  REQUIRE(entry.clearType == kClearTypeNormalClearRank);
+  REQUIRE(entry.badPoints == 62);
+  REQUIRE(entry.maxCombo == 109);
+  REQUIRE(entry.achievedAtUnixMillis == 1784341271000LL);
 }
 
-void testEmptyAndAuthenticatedRanking() {
-  auto outcome = parse(Json::array());
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded,
-         "empty ranking succeeds");
-  expect(outcome.ranking && outcome.ranking->entries.empty(),
-         "empty ranking returns an empty normalized list");
-  expect(outcome.ranking && outcome.ranking->providerId == "tachi" &&
-             outcome.ranking->chart == query(),
-         "ranking retains provider and canonical chart query");
+void testMissingOptionalMetricsStayUnavailable() {
+  auto score = pb(7, 1, 1, 1000, "HARD CLEAR");
+  score["scoreData"]["optional"] = {{"enumIndexes", Json::object()}};
+  score["timeAchieved"] = nullptr;
 
-  auto current = row("", 110, 5, 0);
-  current["epg"] = 31;
-  current["lpg"] = 19;
-  current["egr"] = 6;
-  current["lgr"] = 4;
-  current["maxcombo"] = nullptr;
-  outcome = parse(Json::array({current}));
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
-             outcome.ranking && outcome.ranking->entries.size() == 1,
-         "one authenticated score parses");
-  if (!outcome.ranking || outcome.ranking->entries.empty()) {
-    return;
-  }
-  const auto &entry = outcome.ranking->entries.front();
-  expect(entry.rank == 1, "single entry has rank one");
-  expect(entry.playerName == "You" && entry.currentUser,
-         "empty player denotes the authenticated user");
-  expect(entry.score == 110 && entry.maxScore == 200,
-         "EX score and maximum are normalized");
-  expect(entry.earlyPGreat == 31 && entry.latePGreat == 19 &&
-             entry.earlyGreat == 6 && entry.lateGreat == 4,
-         "early and late PGREAT/GREAT counts are retained");
-  expect(entry.clearType == kClearTypeNormalClearRank,
-         "clear index maps to canonical rank");
-  expect(entry.badPoints == 0, "zero BP is retained as a real value");
-  expect(!entry.maxCombo.has_value(), "null max combo remains absent");
-  expect(entry.achievedAtUnixMillis == 1700000000000LL,
-         "positive date is retained as Unix milliseconds");
+  const auto result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({score}), Json::array({user(7, "OldScore")})), query(),
+      "chart-id", 42);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  const auto &entry = result.page->entries.front();
+  REQUIRE(!entry.currentUser);
+  REQUIRE(!entry.earlyPGreat.has_value());
+  REQUIRE(!entry.latePGreat.has_value());
+  REQUIRE(!entry.earlyGreat.has_value());
+  REQUIRE(!entry.lateGreat.has_value());
+  REQUIRE(!entry.badPoints.has_value());
+  REQUIRE(!entry.maxCombo.has_value());
+  REQUIRE(!entry.achievedAtUnixMillis.has_value());
 }
 
-void testEveryClearIndex() {
-  const std::vector<int> expected{
-      kClearTypeFailedRank,
-      kClearTypeFailedRank,
-      kClearTypeAssistedEasyClearRank,
-      kClearTypeAssistedEasyClearRank,
-      kClearTypeEasyClearRank,
-      kClearTypeNormalClearRank,
-      kClearTypeHardClearRank,
-      kClearTypeExHardClearRank,
-      kClearTypeFullComboRank,
-      kClearTypeFullComboRank,
+void testLampMappingsAndFourteenKeyGame() {
+  const std::vector<std::pair<std::string, int>> lamps{
+      {"NO PLAY", kClearTypeFailedRank},
+      {"FAILED", kClearTypeFailedRank},
+      {"ASSIST CLEAR", kClearTypeAssistedEasyClearRank},
+      {"EASY CLEAR", kClearTypeEasyClearRank},
+      {"CLEAR", kClearTypeNormalClearRank},
+      {"HARD CLEAR", kClearTypeHardClearRank},
+      {"EX HARD CLEAR", kClearTypeExHardClearRank},
+      {"FULL COMBO", kClearTypeFullComboRank},
   };
-  for (int clear = 0; clear <= 9; ++clear) {
-    const auto outcome = parse(Json::array({row("Player", 100, clear)}));
-    expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
-               outcome.ranking &&
-               outcome.ranking->entries.front().clearType == expected[clear],
-           std::string("maps beatoraja clear index ") + std::to_string(clear));
+  for (std::size_t index = 0; index < lamps.size(); ++index) {
+    auto row =
+        pb(static_cast<std::int64_t>(index + 1), static_cast<int>(index + 1),
+           static_cast<int>(lamps.size()), 1284, lamps[index].first);
+    const auto result = ir::tachi::parseRankingPageResponse(
+        page(Json::array({row}),
+             Json::array({user(static_cast<std::int64_t>(index + 1),
+                               "Player" + std::to_string(index))})),
+        query(), "chart-id", 99);
+    REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+    REQUIRE(result.page->entries.front().clearType == lamps[index].second);
   }
-  expectMalformed(Json::array({row("Player", 100, 10)}),
-                  "unknown clear index rejects the whole ranking");
+
+  auto row14 = pb();
+  row14["game"] = "bms-14k";
+  const auto result14 = ir::tachi::parseRankingPageResponse(
+      page(Json::array({row14}), Json::array({user(42, "DPPlayer")})),
+      query(14), "chart-id", 42);
+  REQUIRE(result14.status == ir::ChartRankingStatus::Succeeded);
 }
 
-void testPlayerNameValidation() {
-  const std::string sixtyFourCodePoints = std::string(63, 'a') + "é";
-  auto outcome = parse(Json::array({row(sixtyFourCodePoints)}));
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded,
-         "valid 64-code-point UTF-8 player name succeeds");
+void testPageValidation() {
+  auto invalid = pb();
+  invalid["scoreData"]["score"] = 1653;
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({invalid}), Json::array({user(42, "Player")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 
-  expectMalformed(Json::array({row(std::string(64, 'a') + "é")}),
-                  "65-code-point player name is rejected");
+  invalid = pb();
+  invalid["scoreData"]["optional"]["epg"] = 335;
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({invalid}), Json::array({user(42, "Player")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 
-  std::string invalidUtf8 = "bad";
-  invalidUtf8.push_back(static_cast<char>(0xc3));
-  invalidUtf8.push_back('(');
-  std::string invalidBody =
-      R"({"success":true,"body":[{"player":")" + invalidUtf8 +
-      R"(","notes":100,"epg":50,"lpg":0,"egr":0,"lgr":0,"clear":5,"minbp":1,"maxcombo":80,"date":1}]})";
-  outcome = ir::tachi::parseRankingResponse(invalidBody, query());
-  expect(outcome.status == ir::ChartRankingStatus::MalformedResponse,
-         "invalid UTF-8 player name is rejected");
+  invalid = pb();
+  invalid["chartID"] = "other-chart";
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({invalid}), Json::array({user(42, "Player")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 
-  Json controlled = row("safe");
-  controlled["player"] = std::string("unsafe\x01name", 11);
-  expectMalformed(Json::array({controlled}),
-                  "control characters in player names are rejected");
-}
+  invalid = pb();
+  invalid["scoreData"]["optional"]["bp"] = -1;
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({invalid}), Json::array({user(42, "Player")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 
-void testDuplicateCurrentUserAndNoteMismatch() {
-  expectMalformed(Json::array({row(""), row("")}),
-                  "duplicate authenticated user rows are rejected");
+  invalid = pb();
+  invalid["rankingData"]["outOf"] = ir::tachi::kMaximumRankingEntries + 1;
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({invalid}), Json::array({user(42, "Player")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::OversizedResponse);
 
-  auto mismatch = row();
-  mismatch["notes"] = 99;
-  expectMalformed(Json::array({mismatch}),
-                  "note-count mismatch rejects the whole ranking");
-}
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({pb()}), Json::array()), query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 
-void testNumericAndRowBounds() {
-  auto invalid = row();
-  invalid["epg"] = std::numeric_limits<int>::max();
-  invalid["lpg"] = std::numeric_limits<int>::max();
-  expectMalformed(Json::array({invalid}),
-                  "EX score arithmetic overflow is rejected");
-
-  invalid = row();
-  invalid["epg"] = 101;
-  invalid["egr"] = 0;
-  expectMalformed(Json::array({invalid}),
-                  "EX score above chart maximum is rejected");
-
-  auto lateKpoor = row("Late KPOOR", 2, 0, 102);
-  lateKpoor["maxcombo"] = nullptr;
-  auto outcome = parse(Json::array({lateKpoor}));
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
-             outcome.ranking &&
-             outcome.ranking->entries.front().badPoints == 102,
-         "BP above note count is accepted for LR2 KPOOR accounting");
-
-  auto legacyCombo = row("Legacy Combo", 190, 8, 0);
-  legacyCombo["maxcombo"] = 105;
-  outcome = parse(Json::array({legacyCombo}));
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
-             outcome.ranking &&
-             outcome.ranking->entries.front().maxCombo == 105,
-         "legacy max combo above server note count is accepted");
-
-  invalid = row();
-  invalid["minbp"] = -1;
-  expectMalformed(Json::array({invalid}), "negative BP is rejected");
-  invalid = row();
-  invalid["minbp"] =
-      static_cast<std::uint64_t>(std::numeric_limits<int>::max()) + 1;
-  expectMalformed(Json::array({invalid}),
-                  "BP outside integer range is rejected");
-  invalid = row();
-  invalid["maxcombo"] = -1;
-  expectMalformed(Json::array({invalid}), "negative max combo is rejected");
-  invalid = row();
-  invalid["maxcombo"] =
-      static_cast<std::uint64_t>(std::numeric_limits<int>::max()) + 1;
-  expectMalformed(Json::array({invalid}),
-                  "max combo outside integer range is rejected");
-
-  invalid = row();
-  invalid["date"] = -1;
-  expectMalformed(Json::array({invalid}), "negative date is rejected");
-  invalid = row();
-  invalid["date"] = std::numeric_limits<std::uint64_t>::max();
-  expectMalformed(Json::array({invalid}),
-                  "date outside signed Unix-millisecond range is rejected");
-
-  auto unknownTime = row();
-  unknownTime["date"] = 0;
-  outcome = parse(Json::array({unknownTime}));
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
-             outcome.ranking &&
-             !outcome.ranking->entries.front().achievedAtUnixMillis,
-         "zero date is normalized to unknown");
-
-  invalid = row();
-  invalid.erase("minbp");
-  expectMalformed(Json::array({invalid}),
-                  "missing required row field is rejected");
-  invalid = row();
-  invalid["maxcombo"] = "many";
-  expectMalformed(Json::array({invalid}), "wrong row field type is rejected");
-}
-
-void testOrderingAndCompetitionRanks() {
-  const Json shuffled = Json::array({
-      row("Unknown", 150, 5, 3, 0),
-      row("Late", 150, 5, 3, 200),
-      row("High-Z", 160, 4, 0, 500),
-      row("BP", 150, 5, 9, 500),
-      row("Clear", 150, 7, 0, 500),
-      row("Early", 150, 5, 3, 100),
-      row("High-A", 160, 4, 0, 500),
-  });
-  const auto outcome = parse(shuffled);
-  expect(outcome.status == ir::ChartRankingStatus::Succeeded &&
-             outcome.ranking && outcome.ranking->entries.size() == 7,
-         "shuffled ranking parses");
-  if (!outcome.ranking || outcome.ranking->entries.size() != 7) {
-    return;
-  }
-  const std::vector<std::string> expectedNames{
-      "High-A", "High-Z", "Clear", "BP", "Early", "Late", "Unknown"};
-  const std::vector<int> expectedRanks{1, 1, 3, 4, 5, 6, 7};
-  for (std::size_t index = 0; index < expectedNames.size(); ++index) {
-    expect(outcome.ranking->entries[index].playerName == expectedNames[index],
-           "ranking sorts by score, clear, BP, time, then UTF-8 name");
-    expect(outcome.ranking->entries[index].rank == expectedRanks[index],
-           "ranking assigns competition ranks from complete tuples");
-  }
-}
-
-void testEntryAndBodyLimits() {
-  Json maximum = Json::array();
-  maximum.get_ref<Json::array_t &>().reserve(ir::tachi::kMaximumRankingEntries);
-  const Json oneRow = row("Player");
-  for (std::size_t index = 0; index < ir::tachi::kMaximumRankingEntries;
-       ++index) {
-    maximum.push_back(oneRow);
-  }
-  auto outcome = parse(maximum);
-  expect(
-      outcome.status == ir::ChartRankingStatus::Succeeded && outcome.ranking &&
-          outcome.ranking->entries.size() == ir::tachi::kMaximumRankingEntries,
-      "20,000 ranking rows are accepted");
-
-  maximum.push_back(oneRow);
-  outcome = parse(maximum);
-  expect(outcome.status == ir::ChartRankingStatus::OversizedResponse,
-         "20,001 ranking rows are rejected as oversized");
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              R"({"success":true,"body":{"pbs":[],"users":[]}})", query(),
+              "chart-id", 42)
+              .status == ir::ChartRankingStatus::Succeeded);
 
   const std::string oversized(ir::tachi::kMaximumRankingResponseBytes + 1, ' ');
-  outcome = ir::tachi::parseRankingResponse(oversized, query());
-  expect(outcome.status == ir::ChartRankingStatus::OversizedResponse,
-         "body above eight MiB is rejected before parsing");
+  REQUIRE(
+      ir::tachi::parseRankingPageResponse(oversized, query(), "chart-id", 42)
+          .status == ir::ChartRankingStatus::OversizedResponse);
 }
 
-void testEnvelopeValidation() {
-  auto outcome = ir::tachi::parseRankingResponse("not-json", query());
-  expect(outcome.status == ir::ChartRankingStatus::MalformedResponse,
-         "malformed JSON is rejected");
-  outcome = ir::tachi::parseRankingResponse(
-      R"({"success":false,"description":"nope"})", query());
-  expect(outcome.status == ir::ChartRankingStatus::MalformedResponse,
-         "success false is rejected");
-  outcome =
-      ir::tachi::parseRankingResponse(R"({"success":true,"body":{}})", query());
-  expect(outcome.status == ir::ChartRankingStatus::MalformedResponse,
-         "non-array ranking body is rejected");
+void testNamesAndPageOrdering() {
+  auto first = pb(1, 101, 200, 1284);
+  auto second = pb(2, 102, 200, 1200);
+  second["scoreData"]["optional"] = {{"enumIndexes", Json::object()},
+                                     {"epg", 300},
+                                     {"lpg", 200},
+                                     {"egr", 100},
+                                     {"lgr", 100}};
+  const auto result = ir::tachi::parseRankingPageResponse(
+      page(Json::array({first, second}),
+           Json::array({user(1, "Alice"), user(2, "Bob")})),
+      query(), "chart-id", 2);
+  REQUIRE(result.status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(result.page->entries[0].playerName == "Alice");
+  REQUIRE(result.page->entries[1].playerName == "Bob");
+  REQUIRE(result.page->entries[1].currentUser);
+
+  auto reversed = Json::array({second, first});
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(reversed, Json::array({user(1, "Alice"), user(2, "Bob")})),
+              query(), "chart-id", 2)
+              .status == ir::ChartRankingStatus::MalformedResponse);
+
+  const std::string valid64 = std::string(63, 'a') + "é";
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({pb()}), Json::array({user(42, valid64)})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::Succeeded);
+  REQUIRE(ir::tachi::parseRankingPageResponse(
+              page(Json::array({pb()}),
+                   Json::array({user(42, std::string(64, 'a') + "é")})),
+              query(), "chart-id", 42)
+              .status == ir::ChartRankingStatus::MalformedResponse);
 }
 
 } // namespace
 
 int main() {
-  testEmptyAndAuthenticatedRanking();
-  testEveryClearIndex();
-  testPlayerNameValidation();
-  testDuplicateCurrentUserAndNoteMismatch();
-  testNumericAndRowBounds();
-  testOrderingAndCompetitionRanks();
-  testEntryAndBodyLimits();
-  testEnvelopeValidation();
-
-  if (failures != 0) {
-    std::cerr << failures << " Tachi ranking parser test(s) failed\n";
-    return 1;
-  }
-  std::cout << "Tachi ranking parser tests passed\n";
+  testIdentityAndChartResolution();
+  testNativePbRetainsAuthenticJudgements();
+  testMissingOptionalMetricsStayUnavailable();
+  testLampMappingsAndFourteenKeyGame();
+  testPageValidation();
+  testNamesAndPageOrdering();
+  std::cout << "Tachi native ranking parser tests passed\n";
   return 0;
 }

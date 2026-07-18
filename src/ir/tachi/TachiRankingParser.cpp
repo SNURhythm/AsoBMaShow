@@ -1,6 +1,5 @@
 #include "TachiRankingParser.h"
 
-#include "TachiBatchManual.h"
 #include "../IrOutboxModels.h"
 
 #include "nlohmann/json.hpp"
@@ -9,8 +8,11 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -19,19 +21,11 @@ namespace {
 
 using Json = nlohmann::json;
 
-struct ParsedRankingEntry {
-  IrChartRankingEntry entry;
-  RankingTuple tuple;
-};
+constexpr std::size_t kMaximumRankingPageEntries = 100;
+constexpr std::size_t kMaximumChartIdBytes = 256;
 
-ChartRankingOutcome malformed(std::string_view diagnostic) {
-  return {.status = ChartRankingStatus::MalformedResponse,
-          .diagnostic = sanitizeDiagnostic(diagnostic)};
-}
-
-ChartRankingOutcome oversized(std::string_view diagnostic) {
-  return {.status = ChartRankingStatus::OversizedResponse,
-          .diagnostic = sanitizeDiagnostic(diagnostic)};
+std::string malformedDiagnostic(std::string_view message) {
+  return sanitizeDiagnostic(message);
 }
 
 std::optional<std::int64_t> jsonInteger(const Json &value) {
@@ -53,6 +47,38 @@ std::optional<std::int64_t> requiredInteger(const Json &object,
                                             std::string_view key) {
   const auto value = object.find(key);
   return value == object.end() ? std::nullopt : jsonInteger(*value);
+}
+
+const Json *successfulBody(const Json &document) {
+  if (!document.is_object()) {
+    return nullptr;
+  }
+  const auto success = document.find("success");
+  const auto body = document.find("body");
+  if (success == document.end() || !success->is_boolean() ||
+      !success->get<bool>() || body == document.end() || !body->is_object()) {
+    return nullptr;
+  }
+  return &*body;
+}
+
+std::optional<std::string_view> gameFor(const IrChartQuery &query) {
+  if (query.keyMode == 7) {
+    return "bms-7k";
+  }
+  if (query.keyMode == 14) {
+    return "bms-14k";
+  }
+  return std::nullopt;
+}
+
+bool validChartId(std::string_view value) {
+  if (value.empty() || value.size() > kMaximumChartIdBytes) {
+    return false;
+  }
+  return std::ranges::none_of(value, [](unsigned char character) {
+    return character <= 0x20U || character == 0x7fU;
+  });
 }
 
 bool validUtf8Name(std::string_view value) {
@@ -89,10 +115,8 @@ bool validUtf8Name(std::string_view value) {
     }
     if ((width == 3 && codePoint < 0x800U) ||
         (width == 3 && codePoint >= 0xd800U && codePoint <= 0xdfffU) ||
-        (width == 4 && codePoint < 0x10000U) || codePoint > 0x10ffffU) {
-      return false;
-    }
-    if (codePoint <= 0x1fU || (codePoint >= 0x7fU && codePoint <= 0x9fU)) {
+        (width == 4 && codePoint < 0x10000U) || codePoint > 0x10ffffU ||
+        codePoint <= 0x1fU || (codePoint >= 0x7fU && codePoint <= 0x9fU)) {
       return false;
     }
     ++codePoints;
@@ -104,200 +128,336 @@ bool validUtf8Name(std::string_view value) {
   return codePoints > 0;
 }
 
-std::optional<int> mapClearIndex(std::int64_t clearIndex) {
-  switch (clearIndex) {
-  case 0:
-  case 1:
+std::optional<int> mapLamp(std::string_view lamp) {
+  if (lamp == "NO PLAY" || lamp == "FAILED") {
     return kClearTypeFailedRank;
-  case 2:
-  case 3:
-    return kClearTypeAssistedEasyClearRank;
-  case 4:
-    return kClearTypeEasyClearRank;
-  case 5:
-    return kClearTypeNormalClearRank;
-  case 6:
-    return kClearTypeHardClearRank;
-  case 7:
-    return kClearTypeExHardClearRank;
-  case 8:
-  case 9:
-    return kClearTypeFullComboRank;
-  default:
-    return std::nullopt;
   }
+  if (lamp == "ASSIST CLEAR") {
+    return kClearTypeAssistedEasyClearRank;
+  }
+  if (lamp == "EASY CLEAR") {
+    return kClearTypeEasyClearRank;
+  }
+  if (lamp == "CLEAR") {
+    return kClearTypeNormalClearRank;
+  }
+  if (lamp == "HARD CLEAR") {
+    return kClearTypeHardClearRank;
+  }
+  if (lamp == "EX HARD CLEAR") {
+    return kClearTypeExHardClearRank;
+  }
+  if (lamp == "FULL COMBO") {
+    return kClearTypeFullComboRank;
+  }
+  return std::nullopt;
 }
 
-std::optional<ParsedRankingEntry>
-parseRow(const Json &row, const IrChartQuery &query, bool &currentUserSeen) {
-  if (!row.is_object()) {
+bool readOptionalNonnegativeInt(const Json &object, std::string_view key,
+                                std::optional<int> &result) {
+  const auto value = object.find(key);
+  if (value == object.end() || value->is_null()) {
+    result.reset();
+    return true;
+  }
+  const auto parsed = jsonInteger(*value);
+  if (!parsed || *parsed < 0 || *parsed > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  result = static_cast<int>(*parsed);
+  return true;
+}
+
+std::optional<std::map<std::int64_t, std::string>>
+parseUsers(const Json &users) {
+  if (!users.is_array() || users.size() > kMaximumRankingPageEntries) {
     return std::nullopt;
   }
-  const auto player = row.find("player");
-  if (player == row.end() || !player->is_string()) {
+  std::map<std::int64_t, std::string> parsed;
+  for (const auto &user : users) {
+    if (!user.is_object()) {
+      return std::nullopt;
+    }
+    const auto id = requiredInteger(user, "id");
+    const auto username = user.find("username");
+    if (!id || *id <= 0 || username == user.end() || !username->is_string()) {
+      return std::nullopt;
+    }
+    const auto &name = username->get_ref<const std::string &>();
+    if (!validUtf8Name(name) || !parsed.emplace(*id, name).second) {
+      return std::nullopt;
+    }
+  }
+  return parsed;
+}
+
+std::optional<IrChartRankingEntry>
+parsePb(const Json &pb, const IrChartQuery &query,
+        std::string_view expectedChartId, std::int64_t authenticatedUserId,
+        const std::map<std::int64_t, std::string> &users, int &outOf) {
+  if (!pb.is_object()) {
     return std::nullopt;
   }
-  const auto &rawPlayer = player->get_ref<const std::string &>();
-  const bool currentUser = rawPlayer.empty();
-  if ((!currentUser && !validUtf8Name(rawPlayer)) ||
-      (currentUser && currentUserSeen)) {
+  const auto expectedGame = gameFor(query);
+  const auto game = pb.find("game");
+  const auto chartId = pb.find("chartID");
+  const auto userId = requiredInteger(pb, "userID");
+  const auto rankingData = pb.find("rankingData");
+  const auto scoreData = pb.find("scoreData");
+  if (!expectedGame || game == pb.end() || !game->is_string() ||
+      game->get_ref<const std::string &>() != *expectedGame ||
+      chartId == pb.end() || !chartId->is_string() ||
+      chartId->get_ref<const std::string &>() != expectedChartId || !userId ||
+      *userId <= 0 || rankingData == pb.end() || !rankingData->is_object() ||
+      scoreData == pb.end() || !scoreData->is_object()) {
+    return std::nullopt;
+  }
+  const auto user = users.find(*userId);
+  if (user == users.end()) {
     return std::nullopt;
   }
 
-  const auto notes = requiredInteger(row, "notes");
-  const auto epg = requiredInteger(row, "epg");
-  const auto lpg = requiredInteger(row, "lpg");
-  const auto egr = requiredInteger(row, "egr");
-  const auto lgr = requiredInteger(row, "lgr");
-  const auto clear = requiredInteger(row, "clear");
-  const auto minBp = requiredInteger(row, "minbp");
-  const auto date = requiredInteger(row, "date");
-  if (!notes || !epg || !lpg || !egr || !lgr || !clear || !minBp || !date ||
-      *notes != query.totalNotes) {
+  const auto rank = requiredInteger(*rankingData, "rank");
+  const auto rowOutOf = requiredInteger(*rankingData, "outOf");
+  if (!rank || !rowOutOf || *rank <= 0 || *rowOutOf <= 0 || *rank > *rowOutOf ||
+      *rank > std::numeric_limits<int>::max() ||
+      *rowOutOf > static_cast<std::int64_t>(kMaximumRankingEntries)) {
     return std::nullopt;
   }
-  const std::array judgementCounts{*epg, *lpg, *egr, *lgr};
-  if (std::ranges::any_of(judgementCounts, [&](std::int64_t count) {
-        return count < 0 || count > query.totalNotes;
-      })) {
+  if (outOf == 0) {
+    outOf = static_cast<int>(*rowOutOf);
+  } else if (outOf != *rowOutOf) {
     return std::nullopt;
   }
-  const std::int64_t perfectGreat = *epg + *lpg;
-  const std::int64_t great = *egr + *lgr;
-  const std::int64_t score = perfectGreat * 2 + great;
-  const std::int64_t maximumScore =
-      static_cast<std::int64_t>(query.totalNotes) * 2;
-  if (perfectGreat + great > query.totalNotes || score < 0 ||
-      score > maximumScore || score > std::numeric_limits<int>::max() ||
-      *minBp < 0 || *minBp > std::numeric_limits<int>::max() || *date < 0) {
+
+  const auto score = requiredInteger(*scoreData, "score");
+  const auto lamp = scoreData->find("lamp");
+  const auto maximumScore = static_cast<std::int64_t>(query.totalNotes) * 2;
+  if (!score || *score < 0 || *score > maximumScore ||
+      *score > std::numeric_limits<int>::max() || lamp == scoreData->end() ||
+      !lamp->is_string()) {
     return std::nullopt;
   }
-  const auto clearType = mapClearIndex(*clear);
+  const auto clearType = mapLamp(lamp->get_ref<const std::string &>());
   if (!clearType) {
     return std::nullopt;
   }
 
-  const auto maxComboValue = row.find("maxcombo");
-  if (maxComboValue == row.end()) {
+  const auto optional = scoreData->find("optional");
+  if (optional == scoreData->end() || !optional->is_object()) {
     return std::nullopt;
   }
+  std::optional<int> epg;
+  std::optional<int> lpg;
+  std::optional<int> egr;
+  std::optional<int> lgr;
+  std::optional<int> badPoints;
   std::optional<int> maxCombo;
-  if (!maxComboValue->is_null()) {
-    const auto parsed = jsonInteger(*maxComboValue);
-    if (!parsed || *parsed < 0 || *parsed > std::numeric_limits<int>::max()) {
+  if (!readOptionalNonnegativeInt(*optional, "epg", epg) ||
+      !readOptionalNonnegativeInt(*optional, "lpg", lpg) ||
+      !readOptionalNonnegativeInt(*optional, "egr", egr) ||
+      !readOptionalNonnegativeInt(*optional, "lgr", lgr) ||
+      !readOptionalNonnegativeInt(*optional, "bp", badPoints) ||
+      !readOptionalNonnegativeInt(*optional, "maxCombo", maxCombo)) {
+    return std::nullopt;
+  }
+  const std::array timingPresent{epg.has_value(), lpg.has_value(),
+                                 egr.has_value(), lgr.has_value()};
+  const bool hasAnyTiming =
+      std::ranges::any_of(timingPresent, [](bool value) { return value; });
+  const bool hasAllTiming =
+      std::ranges::all_of(timingPresent, [](bool value) { return value; });
+  if (hasAnyTiming != hasAllTiming) {
+    return std::nullopt;
+  }
+  if (hasAllTiming) {
+    const std::int64_t pGreat = static_cast<std::int64_t>(*epg) + *lpg;
+    const std::int64_t great = static_cast<std::int64_t>(*egr) + *lgr;
+    if (pGreat + great > query.totalNotes || pGreat * 2 + great != *score) {
       return std::nullopt;
     }
-    maxCombo = static_cast<int>(*parsed);
   }
 
-  currentUserSeen = currentUserSeen || currentUser;
-  const auto achievedAt =
-      *date == 0 ? std::nullopt : std::optional<std::int64_t>(*date);
-  return ParsedRankingEntry{
-      .entry = {.playerName = currentUser ? "You" : rawPlayer,
-                .score = static_cast<int>(score),
-                .maxScore = static_cast<int>(maximumScore),
-                .earlyPGreat = static_cast<int>(*epg),
-                .latePGreat = static_cast<int>(*lpg),
-                .earlyGreat = static_cast<int>(*egr),
-                .lateGreat = static_cast<int>(*lgr),
-                .clearType = *clearType,
-                .badPoints = static_cast<int>(*minBp),
-                .maxCombo = maxCombo,
-                .achievedAtUnixMillis = achievedAt,
-                .currentUser = currentUser},
-      .tuple = {.score = static_cast<int>(score),
-                .clearIndex = static_cast<int>(*clear),
-                .badPoints = static_cast<int>(*minBp),
-                .achievedAt = achievedAt}};
-}
-
-bool utf8ByteOrder(std::string_view left, std::string_view right) {
-  return std::lexicographical_compare(
-      left.begin(), left.end(), right.begin(), right.end(),
-      [](char leftByte, char rightByte) {
-        return static_cast<unsigned char>(leftByte) <
-               static_cast<unsigned char>(rightByte);
-      });
-}
-
-bool rankingLess(const ParsedRankingEntry &left,
-                 const ParsedRankingEntry &right) {
-  if (left.tuple.score != right.tuple.score) {
-    return left.tuple.score > right.tuple.score;
+  std::optional<std::int64_t> achievedAt;
+  const auto time = pb.find("timeAchieved");
+  if (time == pb.end()) {
+    return std::nullopt;
   }
-  if (left.tuple.clearIndex != right.tuple.clearIndex) {
-    return left.tuple.clearIndex > right.tuple.clearIndex;
-  }
-  if (left.tuple.badPoints != right.tuple.badPoints) {
-    return left.tuple.badPoints > right.tuple.badPoints;
-  }
-  if (left.tuple.achievedAt != right.tuple.achievedAt) {
-    if (!left.tuple.achievedAt) {
-      return false;
+  if (!time->is_null()) {
+    const auto parsed = jsonInteger(*time);
+    if (!parsed || *parsed < 0) {
+      return std::nullopt;
     }
-    if (!right.tuple.achievedAt) {
-      return true;
+    if (*parsed > 0) {
+      achievedAt = *parsed;
     }
-    return *left.tuple.achievedAt < *right.tuple.achievedAt;
   }
-  return utf8ByteOrder(left.entry.playerName, right.entry.playerName);
+
+  return IrChartRankingEntry{
+      .rank = static_cast<int>(*rank),
+      .playerName = user->second,
+      .score = static_cast<int>(*score),
+      .maxScore = static_cast<int>(maximumScore),
+      .earlyPGreat = epg,
+      .latePGreat = lpg,
+      .earlyGreat = egr,
+      .lateGreat = lgr,
+      .clearType = *clearType,
+      .badPoints = badPoints,
+      .maxCombo = maxCombo,
+      .achievedAtUnixMillis = achievedAt,
+      .currentUser = *userId == authenticatedUserId,
+  };
 }
 
 } // namespace
 
-ChartRankingOutcome parseRankingResponse(std::string_view body,
-                                         const IrChartQuery &query) noexcept {
+TachiRankingIdentityOutcome
+parseRankingIdentityResponse(std::string_view body) noexcept {
   try {
     if (body.size() > kMaximumRankingResponseBytes) {
-      return oversized("Tachi ranking response exceeded the size limit");
+      return {.status = ChartRankingStatus::OversizedResponse,
+              .diagnostic = malformedDiagnostic(
+                  "Tachi identity response exceeded the size limit")};
     }
     const Json document = Json::parse(body);
-    if (!document.is_object()) {
-      return malformed("Tachi ranking response is not an object");
+    const Json *responseBody = successfulBody(document);
+    if (!responseBody) {
+      return {.diagnostic = malformedDiagnostic(
+                  "Tachi identity response envelope is invalid")};
     }
-    const auto success = document.find("success");
-    const auto responseBody = document.find("body");
-    if (success == document.end() || !success->is_boolean() ||
-        !success->get<bool>() || responseBody == document.end() ||
-        !responseBody->is_array()) {
-      return malformed("Tachi ranking response envelope is invalid");
+    const auto userId = requiredInteger(*responseBody, "whoami");
+    if (!userId || *userId <= 0) {
+      return {.diagnostic = malformedDiagnostic(
+                  "Tachi identity response has no authenticated user")};
     }
-    if (responseBody->size() > kMaximumRankingEntries) {
-      return oversized("Tachi ranking response has too many entries");
-    }
-    if (query.totalNotes <= 0 ||
-        query.totalNotes > std::numeric_limits<int>::max() / 2) {
-      return malformed("Tachi ranking chart note count is invalid");
-    }
+    return {.status = ChartRankingStatus::Succeeded, .userId = *userId};
+  } catch (...) {
+    return {.diagnostic =
+                malformedDiagnostic("Tachi identity response parsing failed")};
+  }
+}
 
-    std::vector<ParsedRankingEntry> parsed;
-    parsed.reserve(responseBody->size());
-    bool currentUserSeen = false;
-    for (const auto &row : *responseBody) {
-      auto entry = parseRow(row, query, currentUserSeen);
-      if (!entry) {
-        return malformed("Tachi ranking row is invalid");
-      }
-      parsed.push_back(std::move(*entry));
+TachiChartResolveOutcome
+parseChartResolveResponse(std::string_view body,
+                          const IrChartQuery &query) noexcept {
+  try {
+    if (body.size() > kMaximumRankingResponseBytes) {
+      return {.status = ChartRankingStatus::OversizedResponse,
+              .diagnostic = malformedDiagnostic(
+                  "Tachi chart response exceeded the size limit")};
     }
-    std::sort(parsed.begin(), parsed.end(), rankingLess);
-
-    IrChartRanking ranking{.providerId = std::string(kProviderId),
-                           .chart = query};
-    ranking.entries.reserve(parsed.size());
-    int rank = 1;
-    for (std::size_t index = 0; index < parsed.size(); ++index) {
-      if (index != 0 && parsed[index].tuple != parsed[index - 1].tuple) {
-        rank = static_cast<int>(index + 1);
-      }
-      parsed[index].entry.rank = rank;
-      ranking.entries.push_back(std::move(parsed[index].entry));
+    const Json document = Json::parse(body);
+    const Json *responseBody = successfulBody(document);
+    const auto expectedGame = gameFor(query);
+    if (!responseBody || !expectedGame) {
+      return {.diagnostic = malformedDiagnostic(
+                  "Tachi chart response envelope is invalid")};
+    }
+    const auto chart = responseBody->find("chart");
+    if (chart == responseBody->end() || !chart->is_object()) {
+      return {.diagnostic =
+                  malformedDiagnostic("Tachi chart response is invalid")};
+    }
+    const auto chartId = chart->find("chartID");
+    const auto game = chart->find("game");
+    const auto data = chart->find("data");
+    if (chartId == chart->end() || !chartId->is_string() ||
+        !validChartId(chartId->get_ref<const std::string &>()) ||
+        game == chart->end() || !game->is_string() ||
+        game->get_ref<const std::string &>() != *expectedGame ||
+        data == chart->end() || !data->is_object()) {
+      return {.diagnostic =
+                  malformedDiagnostic("Tachi resolved chart is invalid")};
+    }
+    const auto hash = data->find("hashSHA256");
+    const auto noteCount = requiredInteger(*data, "notecount");
+    if (hash == data->end() || !hash->is_string() ||
+        hash->get_ref<const std::string &>() != query.chartSha256 ||
+        !noteCount || *noteCount != query.totalNotes) {
+      return {.diagnostic = malformedDiagnostic(
+                  "Tachi resolved chart does not match the request")};
     }
     return {.status = ChartRankingStatus::Succeeded,
-            .ranking = std::move(ranking)};
+            .chartId = chartId->get<std::string>()};
   } catch (...) {
-    return malformed("Tachi ranking response parsing failed");
+    return {.diagnostic =
+                malformedDiagnostic("Tachi chart response parsing failed")};
+  }
+}
+
+TachiRankingPageOutcome
+parseRankingPageResponse(std::string_view body, const IrChartQuery &query,
+                         std::string_view expectedChartId,
+                         std::int64_t authenticatedUserId) noexcept {
+  try {
+    if (body.size() > kMaximumRankingResponseBytes) {
+      return {.status = ChartRankingStatus::OversizedResponse,
+              .diagnostic = malformedDiagnostic(
+                  "Tachi ranking response exceeded the size limit")};
+    }
+    if (query.totalNotes <= 0 ||
+        query.totalNotes > std::numeric_limits<int>::max() / 2 ||
+        !gameFor(query) || !validChartId(expectedChartId) ||
+        authenticatedUserId <= 0) {
+      return {.diagnostic =
+                  malformedDiagnostic("Tachi ranking request is invalid")};
+    }
+    const Json document = Json::parse(body);
+    const Json *responseBody = successfulBody(document);
+    if (!responseBody) {
+      return {.diagnostic = malformedDiagnostic(
+                  "Tachi ranking response envelope is invalid")};
+    }
+    const auto pbs = responseBody->find("pbs");
+    const auto usersJson = responseBody->find("users");
+    if (pbs == responseBody->end() || !pbs->is_array() ||
+        usersJson == responseBody->end() ||
+        pbs->size() > kMaximumRankingPageEntries) {
+      return {.diagnostic =
+                  malformedDiagnostic("Tachi ranking page is invalid")};
+    }
+    const auto users = parseUsers(*usersJson);
+    if (!users) {
+      return {.diagnostic =
+                  malformedDiagnostic("Tachi ranking user data is invalid")};
+    }
+
+    TachiRankingPage page;
+    page.entries.reserve(pbs->size());
+    page.userIds.reserve(pbs->size());
+    std::set<std::int64_t> seenUsers;
+    int previousRank = 0;
+    for (const auto &pb : *pbs) {
+      const auto userId = requiredInteger(pb, "userID");
+      if (!userId || !seenUsers.insert(*userId).second) {
+        return {.diagnostic = malformedDiagnostic(
+                    "Tachi ranking page has duplicate users")};
+      }
+      const auto rankingData = pb.find("rankingData");
+      if (rankingData != pb.end() && rankingData->is_object()) {
+        const auto outOf = requiredInteger(*rankingData, "outOf");
+        if (outOf &&
+            *outOf > static_cast<std::int64_t>(kMaximumRankingEntries)) {
+          return {.status = ChartRankingStatus::OversizedResponse,
+                  .diagnostic = malformedDiagnostic(
+                      "Tachi ranking has too many entries")};
+        }
+      }
+      auto entry = parsePb(pb, query, expectedChartId, authenticatedUserId,
+                           *users, page.outOf);
+      if (!entry || entry->rank < previousRank) {
+        return {.diagnostic =
+                    malformedDiagnostic("Tachi ranking row is invalid")};
+      }
+      previousRank = entry->rank;
+      page.userIds.push_back(*userId);
+      page.entries.push_back(std::move(*entry));
+    }
+    return {.status = ChartRankingStatus::Succeeded, .page = std::move(page)};
+  } catch (...) {
+    return {.diagnostic =
+                malformedDiagnostic("Tachi ranking response parsing failed")};
   }
 }
 

@@ -46,6 +46,14 @@ long long nowMicros() {
       .count();
 }
 
+std::optional<int> rankingBadPoints(const RhythmState &state) {
+  const auto count = [&](Judgement judgement) {
+    const auto it = state.judgeCount.find(judgement);
+    return it == state.judgeCount.end() ? 0 : it->second;
+  };
+  return ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+}
+
 Color resultGaugeLineColor(float value) {
   if (value > 80.0f) {
     return ui_theme::withAlpha(ui_theme::cyan(), 210);
@@ -1201,7 +1209,7 @@ void ResultScene::openRankings() {
            .score = resultState.getScore(),
            .maxScore = std::max(0, meta.TotalNotes) * 2,
            .clearType = resultState.getClearTypeRank(),
-           .badPoints = resultState.comboBreak,
+           .badPoints = rankingBadPoints(resultState),
            .maxCombo = resultState.maxCombo,
        }},
       meta.Title.empty() ? "Completed chart" : meta.Title);

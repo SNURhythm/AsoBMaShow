@@ -239,6 +239,7 @@ void testScoreDetailFormatsCompleteAndMissingData() {
   REQUIRE(detail->latePGreatText == "470");
   REQUIRE(detail->earlyGreatText == "48");
   REQUIRE(detail->lateGreatText == "52");
+  REQUIRE(detail->judgementBreakdownAvailable);
   REQUIRE(detail->badPointsText == "0");
   REQUIRE(detail->maxComboText == "1000");
   REQUIRE(detail->achievementTimeText != "\xE2\x80\x94");
@@ -247,6 +248,11 @@ void testScoreDetailFormatsCompleteAndMissingData() {
 
   const auto missing = model.scoreDetail(1);
   REQUIRE(missing.has_value());
+  REQUIRE(missing->earlyPGreatText == "\xE2\x80\x94");
+  REQUIRE(missing->latePGreatText == "\xE2\x80\x94");
+  REQUIRE(missing->earlyGreatText == "\xE2\x80\x94");
+  REQUIRE(missing->lateGreatText == "\xE2\x80\x94");
+  REQUIRE(!missing->judgementBreakdownAvailable);
   REQUIRE(missing->badPointsText == "\xE2\x80\x94");
   REQUIRE(missing->maxComboText == "\xE2\x80\x94");
   REQUIRE(missing->achievementTimeText == "\xE2\x80\x94");

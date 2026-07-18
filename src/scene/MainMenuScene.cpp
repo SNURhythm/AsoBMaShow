@@ -4607,9 +4607,10 @@ void MainMenuScene::openRankingsForSelection() {
   }
 
   std::optional<ir::IrLocalComparison> comparison;
-  const auto best = scoreBestScores.bestFor(
-      record->meta,
-      long_note_mode::valueFromId(profileSelections.longNoteMode));
+  const int selectedLongNoteMode =
+      long_note_mode::valueFromId(profileSelections.longNoteMode);
+  const auto best = context.scoreRepository.LoadBestScore(
+      record->meta, std::nullopt, std::nullopt, selectedLongNoteMode);
   if (best) {
     comparison = ir::IrLocalComparison{
         .label = "Local PB",
@@ -4618,7 +4619,7 @@ void MainMenuScene::openRankingsForSelection() {
                         ? best->maxScore
                         : std::max(0, record->meta.TotalNotes) * 2,
         .clearType = best->clearType,
-        .badPoints = best->comboBreak,
+        .badPoints = best->badPoints,
         .maxCombo = best->maxCombo,
     };
   }

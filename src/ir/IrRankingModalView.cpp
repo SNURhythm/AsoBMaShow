@@ -278,6 +278,8 @@ struct IrRankingModal::Impl {
   TextView *scoreDetailScore = nullptr;
   TextView *scoreDetailRate = nullptr;
   TextView *scoreDetailLamp = nullptr;
+  View *scoreDetailJudgements = nullptr;
+  TextView *scoreDetailJudgementUnavailable = nullptr;
   TextView *scoreDetailEarlyPGreat = nullptr;
   TextView *scoreDetailLatePGreat = nullptr;
   TextView *scoreDetailEarlyGreat = nullptr;
@@ -418,8 +420,8 @@ struct IrRankingModal::Impl {
 
   void buildScoreDetail() {
     scoreDetailPanel = new View();
-    scoreDetailRoot = new ModalScrim(scoreDetailPanel,
-                                     [this]() { hideScoreDetails(); });
+    scoreDetailRoot =
+        new ModalScrim(scoreDetailPanel, [this]() { hideScoreDetails(); });
     scoreDetailRoot->setPositionType(YGPositionTypeAbsolute);
     scoreDetailRoot->setPosition(Edge::Left, 0);
     scoreDetailRoot->setPosition(Edge::Top, 0);
@@ -436,8 +438,7 @@ struct IrRankingModal::Impl {
     scoreDetailPanel->setCornerRadius(ui_theme::panelRadius());
     scoreDetailPanel->setThemedBorderColor(ui_theme::hairlineStrong);
     scoreDetailPanel->setBorderWidth(1);
-    scoreDetailPanel->setThemedShadow(ui_theme::shadow,
-                                     ui_theme::kModalShadow);
+    scoreDetailPanel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
 
     auto *detailHeader = new View();
     detailHeader->setFlexDirection(FlexDirection::Row);
@@ -446,8 +447,8 @@ struct IrRankingModal::Impl {
     scoreDetailTitle = makeText(25);
     scoreDetailTitle->setFlex(1);
     detailHeader->addView(scoreDetailTitle);
-    detailHeader->addView(makeActionButton(
-        "Close", 96, [this]() { hideScoreDetails(); }));
+    detailHeader->addView(
+        makeActionButton("Close", 96, [this]() { hideScoreDetails(); }));
 
     const auto makeMetricRow = [] {
       auto *row = new View();
@@ -462,16 +463,28 @@ struct IrRankingModal::Impl {
     summary->addView(makeMetricCard("Rate", scoreDetailRate));
     summary->addView(makeMetricCard("Lamp", scoreDetailLamp, 17));
 
-    auto *judgements = makeMetricRow();
-    judgements->setHeight(88);
-    judgements->addView(
+    scoreDetailJudgements = makeMetricRow();
+    scoreDetailJudgements->setHeight(88);
+    scoreDetailJudgements->addView(
         makeMetricCard("PGREAT Early", scoreDetailEarlyPGreat));
-    judgements->addView(
+    scoreDetailJudgements->addView(
         makeMetricCard("PGREAT Late", scoreDetailLatePGreat));
-    judgements->addView(
+    scoreDetailJudgements->addView(
         makeMetricCard("GREAT Early", scoreDetailEarlyGreat));
-    judgements->addView(
+    scoreDetailJudgements->addView(
         makeMetricCard("GREAT Late", scoreDetailLateGreat));
+
+    scoreDetailJudgementUnavailable = makeText(17, TextView::CENTER);
+    scoreDetailJudgementUnavailable->setText(
+        "Judgement breakdown unavailable from Bokutachi rankings.");
+    scoreDetailJudgementUnavailable->setWrap(true);
+    scoreDetailJudgementUnavailable->setHeight(88);
+    scoreDetailJudgementUnavailable->setFlexShrink(0);
+    scoreDetailJudgementUnavailable->setPadding(Edge::All, 12);
+    scoreDetailJudgementUnavailable->setThemedColor(ui_theme::textSecondary);
+    scoreDetailJudgementUnavailable->setThemedBackgroundColor(
+        ui_theme::panelSubtle);
+    scoreDetailJudgementUnavailable->setCornerRadius(ui_theme::controlRadius());
 
     auto *metadata = makeMetricRow();
     metadata->setHeight(82);
@@ -482,7 +495,8 @@ struct IrRankingModal::Impl {
 
     scoreDetailPanel->addView(detailHeader);
     scoreDetailPanel->addView(summary);
-    scoreDetailPanel->addView(judgements);
+    scoreDetailPanel->addView(scoreDetailJudgements);
+    scoreDetailPanel->addView(scoreDetailJudgementUnavailable);
     scoreDetailPanel->addView(metadata);
     scoreDetailRoot->addView(scoreDetailPanel);
     scoreDetailRoot->setVisible(false);
@@ -499,8 +513,7 @@ struct IrRankingModal::Impl {
                               .margin = 36,
                               .maximumWidth = 760,
                               .maximumHeight = 480});
-    scoreDetailRoot->setSize(rendering::window_width,
-                             rendering::window_height);
+    scoreDetailRoot->setSize(rendering::window_width, rendering::window_height);
     scoreDetailRoot->setPadding(Edge::Top, safe.top + 36);
     scoreDetailRoot->setPadding(Edge::Bottom, safe.bottom + 36);
     scoreDetailRoot->setPadding(Edge::Left, safe.left + 36);
@@ -531,6 +544,13 @@ struct IrRankingModal::Impl {
     scoreDetailLatePGreat->setText(detail.latePGreatText);
     scoreDetailEarlyGreat->setText(detail.earlyGreatText);
     scoreDetailLateGreat->setText(detail.lateGreatText);
+    scoreDetailJudgements->setVisible(detail.judgementBreakdownAvailable);
+    scoreDetailJudgements->setDisplay(
+        detail.judgementBreakdownAvailable ? YGDisplayFlex : YGDisplayNone);
+    scoreDetailJudgementUnavailable->setVisible(
+        !detail.judgementBreakdownAvailable);
+    scoreDetailJudgementUnavailable->setDisplay(
+        detail.judgementBreakdownAvailable ? YGDisplayNone : YGDisplayFlex);
     scoreDetailBadPoints->setText(detail.badPointsText);
     scoreDetailMaxCombo->setText(detail.maxComboText);
     scoreDetailAchievementTime->setText(detail.achievementTimeText);
@@ -538,9 +558,8 @@ struct IrRankingModal::Impl {
     scoreDetailLamp->setBackgroundColor(lampColor);
     scoreDetailLamp->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
     scoreDetailLamp->setCornerRadius(6);
-    scoreDetailTitle->setThemedColor(detail.highlighted
-                                         ? ui_theme::cyan
-                                         : ui_theme::textPrimary);
+    scoreDetailTitle->setThemedColor(
+        detail.highlighted ? ui_theme::cyan : ui_theme::textPrimary);
     scoreDetailOpen = true;
     scoreDetailRoot->setVisible(true);
     updateScoreDetailLayout(safeInsets());

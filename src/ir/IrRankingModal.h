@@ -57,6 +57,7 @@ struct IrRankingScoreDetailPresentation {
   std::string badPointsText;
   std::string maxComboText;
   std::string achievementTimeText;
+  bool judgementBreakdownAvailable = false;
   int clearType = kClearTypeFailedRank;
   bool highlighted = false;
 };

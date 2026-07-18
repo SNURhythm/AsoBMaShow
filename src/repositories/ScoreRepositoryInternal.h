@@ -48,7 +48,8 @@ bool InsertCourseScoreOnConnection(
 std::optional<ScoreBestSnapshot> LoadBestScoreOnConnection(
     sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
-    const std::optional<std::string> &excludeAttemptId);
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode = 0);
 std::optional<ScoreBestSnapshot>
 LoadBestCourseScoreOnConnection(sqlite3 *database,
                                 const CoursePlaySession &session);

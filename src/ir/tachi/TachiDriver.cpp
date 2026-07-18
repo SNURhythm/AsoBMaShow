@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <set>
 #include <string>
 
 namespace ir::tachi {
@@ -39,13 +40,13 @@ DeliveryOutcome permanent(std::string code, std::string diagnostic) {
 std::string proofFingerprintInput(const IrOutboxEntry &entry) {
   const auto &proof = entry.rulesetProof;
   std::string input = "tachi-lr2-proof-v1\n";
-  input += std::to_string(proof.rulesetId.size()) + ":" + proof.rulesetId +
-           "\n";
+  input +=
+      std::to_string(proof.rulesetId.size()) + ":" + proof.rulesetId + "\n";
   input += std::to_string(proof.rulesetRevision) + "\n";
-  input += std::to_string(entry.attemptId.size()) + ":" + entry.attemptId +
-           "\n";
-  input += std::to_string(entry.chartSha256.size()) + ":" +
-           entry.chartSha256 + "\n";
+  input +=
+      std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n";
+  input +=
+      std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 + "\n";
   input += std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
   return input;
 }
@@ -194,6 +195,76 @@ std::optional<std::string> normalizedSha256(std::string_view value) {
   return normalized;
 }
 
+std::string_view nativeBmsGame(int keyMode) {
+  return keyMode == 14 ? "bms-14k" : "bms-7k";
+}
+
+std::string encodePathSegment(std::string_view value) {
+  constexpr char digits[] = "0123456789ABCDEF";
+  std::string encoded;
+  encoded.reserve(value.size());
+  for (const unsigned char character : value) {
+    const bool unreserved = (character >= 'a' && character <= 'z') ||
+                            (character >= 'A' && character <= 'Z') ||
+                            (character >= '0' && character <= '9') ||
+                            character == '-' || character == '_' ||
+                            character == '.' || character == '~';
+    if (unreserved) {
+      encoded.push_back(static_cast<char>(character));
+    } else {
+      encoded.push_back('%');
+      encoded.push_back(digits[character >> 4U]);
+      encoded.push_back(digits[character & 0x0fU]);
+    }
+  }
+  return encoded;
+}
+
+std::optional<ChartRankingOutcome>
+rankingHttpFailure(const IrHttpResponse &response, std::string_view apiKey,
+                   bool chartNotFoundOn404) {
+  if (response.transportError == IrTransportError::Cancelled) {
+    return rankingFailure(ChartRankingStatus::Cancelled,
+                          "Tachi ranking request was cancelled");
+  }
+  if (response.transportError == IrTransportError::ResponseTooLarge) {
+    return rankingFailure(ChartRankingStatus::OversizedResponse,
+                          "Tachi ranking response exceeded the size limit");
+  }
+  if (response.transportError != IrTransportError::None) {
+    return rankingFailure(ChartRankingStatus::TransientFailure,
+                          response.diagnostic.empty()
+                              ? "Tachi ranking transport request failed"
+                              : response.diagnostic,
+                          apiKey);
+  }
+  if (response.statusCode == 404 && chartNotFoundOn404) {
+    return ChartRankingOutcome{.status = ChartRankingStatus::ChartNotFound};
+  }
+  if (response.statusCode == 401 || response.statusCode == 403) {
+    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
+                          "Tachi ranking authentication failed");
+  }
+  if (response.statusCode == 408 || response.statusCode == 429 ||
+      (response.statusCode >= 500 && response.statusCode < 600)) {
+    return rankingFailure(ChartRankingStatus::TransientFailure,
+                          "Tachi ranking request failed with HTTP " +
+                              std::to_string(response.statusCode));
+  }
+  if (!isHttpSuccess(response.statusCode)) {
+    return rankingFailure(ChartRankingStatus::MalformedResponse,
+                          "Tachi ranking request failed with HTTP " +
+                              std::to_string(response.statusCode));
+  }
+  return std::nullopt;
+}
+
+ChartRankingOutcome rankingParseFailure(ChartRankingStatus status,
+                                        std::string diagnostic,
+                                        std::string_view apiKey) {
+  return rankingFailure(status, std::move(diagnostic), apiKey);
+}
+
 } // namespace
 
 std::string_view TachiDriver::providerId() const noexcept {
@@ -313,55 +384,134 @@ ChartRankingOutcome TachiDriver::fetchChartRanking(
                           "Tachi ranking chart query is invalid");
   }
 
-  const IrHttpRequest request{
-      .method = IrHttpMethod::Get,
-      .url = *origin + "/ir/beatoraja/charts/" + *sha256 + "/scores",
+  IrChartQuery normalizedQuery = query;
+  normalizedQuery.chartSha256 = *sha256;
+  const std::string game(nativeBmsGame(query.keyMode));
+  const std::vector<std::pair<std::string, std::string>> bearerHeader{
+      {"Authorization", "Bearer " + config.apiKey}};
+
+  const IrHttpRequest resolveRequest{
+      .method = IrHttpMethod::Post,
+      .url = *origin + "/api/v1/games/" + game + "/charts/resolve",
       .headers = {{"Authorization", "Bearer " + config.apiKey},
-                  {"X-TachiIR-Version", "v2.0.0"}},
-      .maximumResponseBytes = kMaximumRankingResponseBytes,
+                  {"Content-Type", "application/json"}},
+      .body =
+          "{\"identifier\":\"" + *sha256 + "\",\"matchType\":\"bmsChartHash\"}",
+      .maximumResponseBytes = kMaximumTachiResponseBytes,
       .followRedirects = false,
   };
-  const IrHttpResponse response = http.perform(request, stopToken);
-  if (response.transportError == IrTransportError::Cancelled) {
+  const IrHttpResponse resolveResponse =
+      http.perform(resolveRequest, stopToken);
+  if (const auto failure =
+          rankingHttpFailure(resolveResponse, config.apiKey, true)) {
+    return *failure;
+  }
+  const auto resolved =
+      parseChartResolveResponse(resolveResponse.body, normalizedQuery);
+  if (resolved.status != ChartRankingStatus::Succeeded || !resolved.chartId) {
+    return rankingParseFailure(resolved.status, resolved.diagnostic,
+                               config.apiKey);
+  }
+
+  if (stopToken.stop_requested()) {
     return rankingFailure(ChartRankingStatus::Cancelled,
                           "Tachi ranking request was cancelled");
   }
-  if (response.transportError == IrTransportError::ResponseTooLarge) {
-    return rankingFailure(ChartRankingStatus::OversizedResponse,
-                          "Tachi ranking response exceeded the size limit");
+  const IrHttpRequest identityRequest{
+      .method = IrHttpMethod::Get,
+      .url = *origin + "/api/v1/status",
+      .headers = bearerHeader,
+      .maximumResponseBytes = kMaximumTachiResponseBytes,
+      .followRedirects = false,
+  };
+  const IrHttpResponse identityResponse =
+      http.perform(identityRequest, stopToken);
+  if (const auto failure =
+          rankingHttpFailure(identityResponse, config.apiKey, false)) {
+    return *failure;
   }
-  if (response.transportError != IrTransportError::None) {
-    return rankingFailure(ChartRankingStatus::TransientFailure,
-                          response.diagnostic.empty()
-                              ? "Tachi ranking transport request failed"
-                              : response.diagnostic,
-                          config.apiKey);
-  }
-  if (response.statusCode == 404) {
-    return {.status = ChartRankingStatus::ChartNotFound};
-  }
-  if (response.statusCode == 401 || response.statusCode == 403) {
-    return rankingFailure(ChartRankingStatus::AuthenticationRequired,
-                          "Tachi ranking authentication failed");
-  }
-  if (response.statusCode == 408 || response.statusCode == 429 ||
-      (response.statusCode >= 500 && response.statusCode < 600)) {
-    return rankingFailure(ChartRankingStatus::TransientFailure,
-                          "Tachi ranking request failed with HTTP " +
-                              std::to_string(response.statusCode));
-  }
-  if (!isHttpSuccess(response.statusCode)) {
-    return rankingFailure(ChartRankingStatus::MalformedResponse,
-                          "Tachi ranking request failed with HTTP " +
-                              std::to_string(response.statusCode));
+  const auto identity = parseRankingIdentityResponse(identityResponse.body);
+  if (identity.status != ChartRankingStatus::Succeeded || !identity.userId) {
+    return rankingParseFailure(identity.status, identity.diagnostic,
+                               config.apiKey);
   }
 
-  IrChartQuery normalizedQuery = query;
-  normalizedQuery.chartSha256 = *sha256;
-  ChartRankingOutcome outcome =
-      parseRankingResponse(response.body, normalizedQuery);
-  outcome.diagnostic = redact(std::move(outcome.diagnostic), config.apiKey);
-  return outcome;
+  IrChartRanking ranking{.providerId = std::string(kProviderId),
+                         .chart = normalizedQuery};
+  std::optional<int> expectedEntries;
+  std::set<std::int64_t> seenUsers;
+  int startRanking = 1;
+  while (true) {
+    if (stopToken.stop_requested()) {
+      return rankingFailure(ChartRankingStatus::Cancelled,
+                            "Tachi ranking request was cancelled");
+    }
+    const IrHttpRequest pageRequest{
+        .method = IrHttpMethod::Get,
+        .url = *origin + "/api/v1/games/" + game + "/charts/" +
+               encodePathSegment(*resolved.chartId) +
+               "/pbs?startRanking=" + std::to_string(startRanking),
+        .headers = bearerHeader,
+        .maximumResponseBytes = kMaximumRankingResponseBytes,
+        .followRedirects = false,
+    };
+    const IrHttpResponse pageResponse = http.perform(pageRequest, stopToken);
+    if (const auto failure =
+            rankingHttpFailure(pageResponse, config.apiKey, true)) {
+      return *failure;
+    }
+    auto page = parseRankingPageResponse(pageResponse.body, normalizedQuery,
+                                         *resolved.chartId, *identity.userId);
+    if (page.status != ChartRankingStatus::Succeeded || !page.page) {
+      return rankingParseFailure(page.status, page.diagnostic, config.apiKey);
+    }
+
+    if (page.page->entries.empty()) {
+      if (ranking.entries.empty() && !expectedEntries) {
+        return {.status = ChartRankingStatus::Succeeded,
+                .ranking = std::move(ranking)};
+      }
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking pagination ended early");
+    }
+    if (!expectedEntries) {
+      expectedEntries = page.page->outOf;
+      ranking.entries.reserve(static_cast<std::size_t>(*expectedEntries));
+    } else if (*expectedEntries != page.page->outOf) {
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking changed during pagination");
+    }
+    if (page.page->entries.front().rank < startRanking ||
+        (!ranking.entries.empty() &&
+         page.page->entries.front().rank <= ranking.entries.back().rank)) {
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking pagination order is invalid");
+    }
+    for (const std::int64_t userId : page.page->userIds) {
+      if (!seenUsers.insert(userId).second) {
+        return rankingFailure(ChartRankingStatus::MalformedResponse,
+                              "Tachi ranking pagination duplicated a user");
+      }
+    }
+
+    const int lastRank = page.page->entries.back().rank;
+    ranking.entries.insert(ranking.entries.end(),
+                           std::make_move_iterator(page.page->entries.begin()),
+                           std::make_move_iterator(page.page->entries.end()));
+    if (ranking.entries.size() > static_cast<std::size_t>(*expectedEntries)) {
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking returned too many entries");
+    }
+    if (ranking.entries.size() == static_cast<std::size_t>(*expectedEntries)) {
+      return {.status = ChartRankingStatus::Succeeded,
+              .ranking = std::move(ranking)};
+    }
+    if (lastRank >= *expectedEntries) {
+      return rankingFailure(ChartRankingStatus::MalformedResponse,
+                            "Tachi ranking pagination is incomplete");
+    }
+    startRanking = lastRank + 1;
+  }
 }
 
 } // namespace ir::tachi

@@ -912,24 +912,28 @@ bool ScoreRepository::SaveCourseScore(const CoursePlaySession &session,
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
-    const std::optional<std::string> &excludeAttemptId) {
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
   return score_repository_detail::LoadBestScoreOnConnection(
-      impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId);
+      impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId,
+      selectedLongNoteMode);
 }
 
 std::optional<ScoreBestSnapshot>
 score_repository_detail::LoadBestScoreOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
-    const std::optional<std::string> &excludeAttemptId) {
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode) {
   const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
-  const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
   const bool legacyLongNoteModeFallback = longNoteMode == 1;
   const std::string effectiveClearRank =
       score_cache_queries::detail::fullComboClearRankExpr("s");
@@ -937,7 +941,9 @@ score_repository_detail::LoadBestScoreOnConnection(
       "s", effectiveClearRank, "id");
 
   std::string query =
-      "SELECT score, max_score, max_combo, combo_break, final_gauge, ";
+      "SELECT score, max_score, max_combo, combo_break, "
+      "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
+      "CAST(kpoor AS INTEGER), final_gauge, ";
   query += effectiveClearRank + ", created_at FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND " +
@@ -977,10 +983,16 @@ score_repository_detail::LoadBestScoreOnConnection(
   snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
   snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
   snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
+  if (sqlite3_column_type(stmt.get(), 4) == SQLITE_INTEGER) {
+    const sqlite3_int64 badPoints = sqlite3_column_int64(stmt.get(), 4);
+    if (badPoints >= 0 && badPoints <= std::numeric_limits<int>::max()) {
+      snapshot.badPoints = static_cast<int>(badPoints);
+    }
+  }
   snapshot.finalGauge =
-      static_cast<float>(sqlite3_column_double(stmt.get(), 4));
-  snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
-  snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
+      static_cast<float>(sqlite3_column_double(stmt.get(), 5));
+  snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
+  snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
   return snapshot;
 }
 

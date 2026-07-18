@@ -3,6 +3,8 @@
 #include "FileChecksum.h"
 #include "ir/IrHttpClient.h"
 
+#include "nlohmann/json.hpp"
+
 #include <chrono>
 #include <deque>
 #include <iostream>
@@ -61,8 +63,7 @@ ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
       "tachi-lr2-proof-v1\n3:lr2\n3\n" +
       std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
       std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
-      "\n" + std::to_string(entry.payloadJson.size()) + ":" +
-      entry.payloadJson;
+      "\n" + std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
   entry.rulesetProof = {
       .rulesetId = "lr2",
       .rulesetRevision = 3,
@@ -480,35 +481,109 @@ ir::IrChartQuery rankingQuery() {
   };
 }
 
+std::string rankingResolveBody(int keyMode = 7) {
+  const auto query = rankingQuery();
+  return nlohmann::json{{"success", true},
+                        {"body",
+                         {{"chart",
+                           {{"chartID", "chart-id"},
+                            {"game", keyMode == 14 ? "bms-14k" : "bms-7k"},
+                            {"data",
+                             {{"hashSHA256", "abcdefabcdefabcdefabcdefabcdefabc"
+                                             "defabcdefabcdefabcdefabcdefabcd"},
+                              {"notecount", query.totalNotes}}}}},
+                          {"song", {{"id", "song-id"}}}}}}
+      .dump();
+}
+
+std::string rankingIdentityBody(std::int64_t userId = 42) {
+  return nlohmann::json{{"success", true}, {"body", {{"whoami", userId}}}}
+      .dump();
+}
+
+nlohmann::json rankingPb(int rank, int outOf, std::int64_t userId) {
+  return {
+      {"composedFrom", nlohmann::json::array(
+                           {{{"name", "Best Score"},
+                             {"scoreID", "score-" + std::to_string(userId)}}})},
+      {"rankingData", {{"rank", rank}, {"outOf", outOf}}},
+      {"userID", userId},
+      {"chartID", "chart-id"},
+      {"game", "bms-7k"},
+      {"timeAchieved", 1700000000000LL + rank},
+      {"scoreData",
+       {{"score", 100},
+        {"lamp", "CLEAR"},
+        {"enumIndexes", {{"lamp", 4}}},
+        {"optional",
+         {{"enumIndexes", nlohmann::json::object()},
+          {"epg", 50},
+          {"lpg", 0},
+          {"egr", 0},
+          {"lgr", 0},
+          {"bp", 2},
+          {"maxCombo", 80}}}}},
+  };
+}
+
+std::string rankingPageBody(const nlohmann::json &pbs,
+                            const nlohmann::json &users) {
+  return nlohmann::json{{"success", true},
+                        {"body", {{"pbs", pbs}, {"users", users}}}}
+      .dump();
+}
+
 void testRankingRequestAndStatusClassification() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
-  http.responses.push_back(
-      {.statusCode = 200, .body = R"({"success":true,"body":[]})"});
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody()});
+  http.responses.push_back({.statusCode = 200,
+                            .body = rankingPageBody(nlohmann::json::array(),
+                                                    nlohmann::json::array())});
   auto result =
       driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
              result.ranking->entries.empty(),
          "empty remote chart ranking succeeds");
-  expect(http.requests.size() == 1, "ranking fetch performs one request");
-  if (!http.requests.empty()) {
-    const auto &request = http.requests.front();
-    expect(request.method == ir::IrHttpMethod::Get, "ranking fetch uses GET");
-    expect(
-        request.url ==
-            "https://boku.tachi.ac/ir/beatoraja/charts/"
-            "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd/"
-            "scores",
-        "ranking fetch normalizes origin and lowercases SHA-256 path");
-    expect(request.headers ==
+  expect(http.requests.size() == 3,
+         "native ranking fetch resolves, authenticates, and reads PBs");
+  if (http.requests.size() == 3) {
+    const auto &resolve = http.requests[0];
+    expect(resolve.method == ir::IrHttpMethod::Post,
+           "ranking chart resolution uses POST");
+    expect(resolve.url ==
+               "https://boku.tachi.ac/api/v1/games/bms-7k/charts/resolve",
+           "ranking fetch uses the native BMS chart resolver");
+    expect(resolve.headers ==
                std::vector<std::pair<std::string, std::string>>{
                    {"Authorization", "Bearer fresh-api-key"},
-                   {"X-TachiIR-Version", "v2.0.0"}},
-           "ranking fetch identifies the compatible Beatoraja IR protocol");
-    expect(request.maximumResponseBytes == 8 * 1024 * 1024,
-           "ranking response is capped at eight MiB");
-    expect(!request.followRedirects,
+                   {"Content-Type", "application/json"}},
+           "native chart resolution sends bearer auth and JSON");
+    expect(
+        resolve.body ==
+            R"({"identifier":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","matchType":"bmsChartHash"})",
+        "native chart resolution sends the canonical hash");
+    expect(!resolve.followRedirects,
            "authenticated ranking fetch does not follow redirects");
+
+    const auto &identity = http.requests[1];
+    expect(identity.method == ir::IrHttpMethod::Get &&
+               identity.url == "https://boku.tachi.ac/api/v1/status",
+           "ranking fetch obtains the authenticated numeric user ID");
+
+    const auto &page = http.requests[2];
+    expect(page.method == ir::IrHttpMethod::Get,
+           "native ranking page uses GET");
+    expect(page.url == "https://boku.tachi.ac/api/v1/games/bms-7k/charts/"
+                       "chart-id/pbs?startRanking=1",
+           "ranking fetch reads native PB documents");
+    expect(page.headers ==
+               std::vector<std::pair<std::string, std::string>>{
+                   {"Authorization", "Bearer fresh-api-key"}},
+           "native PB request sends only bearer auth");
+    expect(page.maximumResponseBytes == 8 * 1024 * 1024,
+           "ranking page response is capped at eight MiB");
   }
 
   http.responses.push_back({.statusCode = 404});
@@ -564,6 +639,57 @@ void testRankingRequestAndStatusClassification() {
          "cancelled ranking fetch maps separately");
 }
 
+void testNativeRankingPagination() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody(2)});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(1, 3, 1), rankingPb(2, 3, 2)}),
+           nlohmann::json::array({{{"id", 1}, {"username", "Alice"}},
+                                  {{"id", 2}, {"username", "Bob"}}}))});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(3, 3, 3)}),
+           nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
+
+  const auto result =
+      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->entries.size() == 3,
+         "native ranking follows pages until outOf is satisfied");
+  expect(result.ranking && result.ranking->entries[1].currentUser,
+         "native user ID marks the authenticated ranking entry");
+  expect(http.requests.size() == 4 &&
+             http.requests.back().url.ends_with("?startRanking=3"),
+         "native ranking continues from the next server rank");
+}
+
+void testNativeRankingRejectsDuplicateUsersAcrossPages() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back({.statusCode = 200, .body = rankingResolveBody()});
+  http.responses.push_back({.statusCode = 200, .body = rankingIdentityBody(2)});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(1, 2, 2)}),
+           nlohmann::json::array({{{"id", 2}, {"username", "Bob"}}}))});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = rankingPageBody(
+           nlohmann::json::array({rankingPb(2, 2, 2)}),
+           nlohmann::json::array({{{"id", 2}, {"username", "Bob"}}}))});
+
+  const auto result =
+      driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
+  expect(result.status == ir::ChartRankingStatus::MalformedResponse,
+         "ranking mutation cannot duplicate one user across pages");
+}
+
 void testRankingPreflightNeverLeaksCredentials() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -605,6 +731,8 @@ int main() {
   testHttpAndTransportClassification();
   testInvalidRuntimeConfigurationNeverSends();
   testRankingRequestAndStatusClassification();
+  testNativeRankingPagination();
+  testNativeRankingRejectsDuplicateUsersAcrossPages();
   testRankingPreflightNeverLeaksCredentials();
 
   if (failures != 0) {

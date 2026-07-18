@@ -1120,6 +1120,27 @@ void testProjectedRetryUpdatesSummaryCachesOnce(
       pending.score.score);
 }
 
+void testBestScoreLoadsKpoorInclusiveBadPoints(
+    const std::filesystem::path &root) {
+  const auto path = root / "best-score-ir-bp" / "score.db";
+  ScoreRepository helper(path);
+  auto pending = samplePendingScore(root, "best-score-ir-bp", 14,
+                                    "2026-07-18 12:34:56");
+  pending.score.bad = 14;
+  pending.score.poor = 8;
+  pending.score.kPoor = 40;
+  pending.score.comboBreak = 22;
+  pending.score.longNoteMode = 2;
+  assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  const auto best = helper.LoadBestScore(sampleMeta(root, "best-score-ir-bp"),
+                                         std::nullopt, std::nullopt, 2);
+  assert(best.has_value());
+  assert(best->comboBreak == 22);
+  assert(best->badPoints == 62);
+}
+
 void testPreviousBestExcludesExactAttemptAtSameTimestamp(
     const std::filesystem::path &root) {
   const auto path = root / "previous-best-exact-attempt" / "score.db";
@@ -2640,6 +2661,7 @@ int main() {
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
+  testBestScoreLoadsKpoorInclusiveBadPoints(root);
   testPreviousBestExcludesExactAttemptAtSameTimestamp(root);
   testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(root);
   testUnrelatedScoreConstraintIsStorageFailure(root);

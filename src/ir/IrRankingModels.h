@@ -34,10 +34,10 @@ struct IrChartRankingEntry {
   std::string playerName;
   int score = 0;
   int maxScore = 0;
-  int earlyPGreat = 0;
-  int latePGreat = 0;
-  int earlyGreat = 0;
-  int lateGreat = 0;
+  std::optional<int> earlyPGreat;
+  std::optional<int> latePGreat;
+  std::optional<int> earlyGreat;
+  std::optional<int> lateGreat;
   int clearType = kClearTypeFailedRank;
   std::optional<int> badPoints;
   std::optional<int> maxCombo;
@@ -127,6 +127,9 @@ struct IrRankingInvalidation {
 
 [[nodiscard]] IrChartQueryBuildOutcome
 makeIrChartQuery(const bms_parser::ChartMeta &meta) noexcept;
+
+[[nodiscard]] std::optional<int>
+calculateIrBadPoints(int bad, int poor, int kPoor) noexcept;
 
 [[nodiscard]] IrRankingCacheKeyBuildOutcome
 makeIrRankingCacheKey(const IrRankingRequest &request) noexcept;

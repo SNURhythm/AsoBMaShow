@@ -126,6 +126,10 @@ IrSubmissionBuildOutcome makeIrSubmission(
     std::optional<GaugeType> adoptedGaugeType;
     int pGreatFast = 0;
     int pGreatSlow = 0;
+    int earlyPGreat = 0;
+    int latePGreat = 0;
+    int earlyGreat = 0;
+    int lateGreat = 0;
     for (const ReplayEvent &event : attempt.replay.events) {
       if (!replayEventMutatesGauge(event)) {
         continue;
@@ -139,6 +143,17 @@ IrSubmissionBuildOutcome makeIrSubmission(
           ++pGreatFast;
         } else if (event.diffMicros > 0) {
           ++pGreatSlow;
+        }
+        if (event.diffMicros <= 0) {
+          ++earlyPGreat;
+        } else {
+          ++latePGreat;
+        }
+      } else if (event.judgement == Great) {
+        if (event.diffMicros <= 0) {
+          ++earlyGreat;
+        } else {
+          ++lateGreat;
         }
       }
     }
@@ -163,6 +178,9 @@ IrSubmissionBuildOutcome makeIrSubmission(
     if (pGreatFast > score.fast || pGreatSlow > score.slow) {
       return invalid("PGREAT timing exceeds aggregate timing counts");
     }
+    const bool judgementTimingBreakdownAvailable =
+        earlyPGreat + latePGreat == score.pGreat &&
+        earlyGreat + lateGreat == score.great;
 
     return {.value = IrSubmission{
                 .attemptId = attempt.attemptId,
@@ -183,6 +201,12 @@ IrSubmissionBuildOutcome makeIrSubmission(
                 .slow = score.slow,
                 .pGreatFast = pGreatFast,
                 .pGreatSlow = pGreatSlow,
+                .judgementTimingBreakdownAvailable =
+                    judgementTimingBreakdownAvailable,
+                .earlyPGreat = earlyPGreat,
+                .latePGreat = latePGreat,
+                .earlyGreat = earlyGreat,
+                .lateGreat = lateGreat,
                 .gaugeHistory = std::move(gaugeHistory),
                 .finalGauge = score.finalGauge,
                 .clearType = score.clearType,

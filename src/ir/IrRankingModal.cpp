@@ -312,20 +312,24 @@ IrRankingModalModel::scoreDetail(int index) const {
     return std::nullopt;
   }
   const auto &entry = presentation_.ranking->entries[index];
+  const bool judgementBreakdownAvailable =
+      entry.earlyPGreat.has_value() && entry.latePGreat.has_value() &&
+      entry.earlyGreat.has_value() && entry.lateGreat.has_value();
   return IrRankingScoreDetailPresentation{
       .rankText = rankText(entry.rank),
       .playerText = playerText(entry),
       .scoreText = scoreText(entry.score, entry.maxScore),
       .rateText = formatIrRankingRate(entry.score, entry.maxScore),
       .lampText = clearTypeRankToLabel(entry.clearType),
-      .earlyPGreatText = std::to_string(entry.earlyPGreat),
-      .latePGreatText = std::to_string(entry.latePGreat),
-      .earlyGreatText = std::to_string(entry.earlyGreat),
-      .lateGreatText = std::to_string(entry.lateGreat),
+      .earlyPGreatText = integerOrMissing(entry.earlyPGreat),
+      .latePGreatText = integerOrMissing(entry.latePGreat),
+      .earlyGreatText = integerOrMissing(entry.earlyGreat),
+      .lateGreatText = integerOrMissing(entry.lateGreat),
       .badPointsText = integerOrMissing(entry.badPoints),
       .maxComboText = integerOrMissing(entry.maxCombo),
       .achievementTimeText =
           formatIrRankingTimestamp(entry.achievedAtUnixMillis),
+      .judgementBreakdownAvailable = judgementBreakdownAvailable,
       .clearType = entry.clearType,
       .highlighted = entry.currentUser,
   };

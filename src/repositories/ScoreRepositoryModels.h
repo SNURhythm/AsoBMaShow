@@ -28,6 +28,7 @@ struct ScoreBestSnapshot {
   int maxScore = 0;
   int maxCombo = 0;
   int comboBreak = 0;
+  std::optional<int> badPoints;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;

@@ -753,50 +753,25 @@ git commit -m "feat: submit and poll Tachi imports"
 - Create: `tests/tachi_ranking_parser_tests.cpp`
 - Modify: `CMakeLists.txt`
 
-- [ ] Write parser fixtures for empty ranking, one authenticated user, all clear indices, valid/invalid UTF-8 names, control characters, 64/65 code-point names, duplicate current user, note-count mismatch, score overflow, BP/combo/time bounds, malformed row, 20,000/20,001 rows, and oversized-body status.
+- [x] Write native parser fixtures for identity, SHA-256 chart resolution,
+  authentic and missing judgement timing, all BMS lamp strings, user mapping,
+  page ordering, field bounds, and oversized responses.
 
-- [ ] Add ordering tests with deliberately shuffled input. Require EX descending, clear descending, BP descending, time ascending with unknown last, UTF-8 byte order only inside a complete tuple tie, and competition ranks such as `1, 1, 3`.
-
-- [ ] Confirm the tests fail, then implement the row normalization:
-
-```cpp
-entry.score = (epg + lpg) * 2 + egr + lgr;
-entry.maxScore = query.totalNotes * 2;
-entry.playerName = player.empty() ? "You" : player;
-entry.currentUser = player.empty();
-entry.badPoints = minbp;
-entry.maxCombo = maxcombo;
-entry.achievedAtUnixMillis = parsedDate;
-```
-
-Use this beatoraja clear mapping: 0/1 to failed, 2/3 to assisted-easy, 4 to easy, 5 to normal, 6 to hard, 7 to ex-hard, and 8/9 to full combo; reject other integers. Treat `date == 0` as unknown and a positive `date` as Unix milliseconds, matching Tachi's pinned conversion route. Treat `maxcombo: null` as absent and a valid integer as present; retain `minbp == 0` as a real BP value.
-
-Reject the whole response if any row is invalid. Do not retain the raw JSON after parsing.
-
-- [ ] Implement a ranking tuple independent of display name:
-
-```cpp
-struct RankingTuple {
-  int score;
-  int clearIndex;
-  int badPoints;
-  std::optional<std::int64_t> achievedAt;
-  bool operator==(const RankingTuple &) const = default;
-};
-```
-
-After sorting, set `rank = 1` for the first entry and use the one-based vector index when the tuple changes; identical tuples share the previous rank.
-
-- [ ] Implement `TachiDriver::fetchChartRanking` with an 8 MiB response cap:
+- [x] Implement `TachiDriver::fetchChartRanking` with native BMS routes:
 
 ```text
-GET <normalized-origin>/ir/beatoraja/charts/<lowercase-sha256>/scores
+POST <normalized-origin>/api/v1/games/bms-{7k|14k}/charts/resolve
+GET  <normalized-origin>/api/v1/status
+GET  <normalized-origin>/api/v1/games/bms-{7k|14k}/charts/<chartID>/pbs?startRanking=N
 Authorization: Bearer <current-key>
 ```
 
-Return `ChartNotFound` for 404, `AuthenticationRequired` for 401/403, transient for transport/408/429/5xx, and malformed for other invalid responses. Require `success: true` and an array body.
+Validate the resolved game, SHA-256, and note count. Use native server ranks,
+page until `outOf` is satisfied, and reject changed or incomplete pagination.
+Normalize native score, lamp, optional BP/combo/time, and authentic optional
+`epg/lpg/egr/lgr`; do not use the beatoraja compatibility conversion.
 
-- [ ] Run and pass both tests:
+- [x] Run and pass both tests:
 
 ```bash
 cmake --build cmake-build-debug --target tachi_driver_tests tachi_ranking_parser_tests -j 6

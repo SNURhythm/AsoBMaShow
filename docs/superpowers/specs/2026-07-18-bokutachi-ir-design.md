@@ -621,10 +621,16 @@ completion triggers a poll, never a second POST.
 ### Chart rankings
 
 For a chart with a valid lowercase SHA-256 digest, the Bokutachi driver reads
-the server's beatoraja-compatible personal-best leaderboard:
+the native Tachi BMS personal-best leaderboard. It first resolves the chart,
+then obtains the authenticated numeric user ID, then pages the PB route:
 
 ```text
-GET <server-origin>/ir/beatoraja/charts/<sha256>/scores
+POST <server-origin>/api/v1/games/bms-{7k|14k}/charts/resolve
+{"identifier":"<sha256>","matchType":"bmsChartHash"}
+
+GET <server-origin>/api/v1/status
+
+GET <server-origin>/api/v1/games/bms-{7k|14k}/charts/<chartID>/pbs?startRanking=<rank>
 Authorization: Bearer <current-api-key>
 ```
 
@@ -633,34 +639,28 @@ found` empty state. HTTP 401/403 becomes `authentication required`; transport,
 408, 429, and 5xx failures are transient. Other invalid responses become
 bounded, sanitized errors and are not cached.
 
-The driver requires `success: true` and an array body. Tachi's compatibility
-route does not guarantee SQL response order or return its stored rank, so the
-driver validates every row and reconstructs current Tachi BMS PB ordering:
-EX score descending, clear index descending, BP descending, then achievement
-time ascending with unknown times last. Entries with an identical complete
-ranking tuple share a competition rank; validated player-name UTF-8 byte order
-provides only a deterministic display order within that tie. The driver then
-normalizes fields as follows. BP descending is intentional here: it reproduces
-the current Tachi BMS ranking-value and materialized-view source rather than
-substituting a client preference.
+The resolved document must match the requested game, SHA-256, and note count.
+Native PB pages supply authoritative server ranks and `outOf`; the driver
+validates page ordering and continues until every PB is present. A ranking that
+changes or becomes incomplete during pagination is rejected rather than shown
+partially.
 
-- An empty `player` value is the authenticated user and is displayed as
-  `You`; other player names must be valid UTF-8 with 1 through 64 Unicode code
-  points and no control characters.
-- EX score is reconstructed as `(epg + lpg) * 2 + egr + lgr` and validated
-  against `notes * 2`.
-- Returned note count must equal the query's positive `totalNotes`; score, BP,
-  combo, clear index, and time must be in their valid ranges.
-- The beatoraja clear index maps to AsoBMaShow's canonical clear rank.
-- `minbp`, `maxcombo`, and `date` populate BP, max combo, and achievement time
-  when valid.
+- PB `userID` maps through the page's user documents; the ID returned by
+  `/api/v1/status` marks the current user. Names must be valid UTF-8 with 1
+  through 64 Unicode code points and no control characters.
+- Native `scoreData.score` is validated against `totalNotes * 2`.
+- Native BMS lamp strings map to AsoBMaShow's canonical clear rank.
+- `scoreData.optional.bp`, `maxCombo`, and `timeAchieved` populate BP, max
+  combo, and achievement time when present and valid.
+- Native optional `epg/lpg/egr/lgr` populate judgement detail only when all
+  four exist and reproduce the stored EX score. Missing timing evidence is a
+  valid historical PB and is displayed as unavailable.
 - Invalid rows fail the whole response instead of shifting ranks in a
   partially displayed remote list.
-- At most one empty player value may mark the authenticated user.
 
-The ranking request accepts at most 8 MiB and 20,000 entries. Exceeding either
-limit produces an oversized-response error rather than truncating the
-leaderboard.
+Each ranking page accepts at most 8 MiB and 100 entries; the assembled ranking
+accepts at most 20,000 entries. Exceeding a limit produces an oversized-response
+error rather than truncating the leaderboard.
 
 ## Retry Classification
 
@@ -1029,9 +1029,9 @@ completions into no-ops.
   <https://docs.tachi.ac/game-support/games/bms-7K/>
 - Tachi BMS 14K support:
   <https://docs.tachi.ac/game-support/games/bms-14K/>
-- Tachi beatoraja chart-ranking route:
-  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/ir/beatoraja/charts/_chartSHA256/router.ts>
-- Tachi beatoraja ranking conversion:
+- Tachi native chart resolve and PB routes:
+  <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/api/v1/games/router.ts>
+- Tachi beatoraja conversion avoided by native ranking reads:
   <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/server/router/ir/beatoraja/charts/_chartSHA256/convert-scores.ts>
 - Tachi BMS PB ranking keys:
   <https://github.com/zkldi/Tachi/blob/233bc992f74cd314c8ef9bc2730d714904838dfc/typescript/server/src/game-implementations/games/_common.ts#L82-L89>
