@@ -634,6 +634,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(course_identity_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_driver_tests
+        tests/ir_driver_tests.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
+
     add_executable(replay_repository_tests
         tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
@@ -1826,6 +1838,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_summary_list_tests
         replay_record_filters_tests
         course_identity_tests
+        ir_driver_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests

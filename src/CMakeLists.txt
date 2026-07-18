@@ -1,4 +1,5 @@
 add_subdirectory(audio)
+add_subdirectory(ir)
 add_subdirectory(rendering)
 add_subdirectory(scene)
 add_subdirectory(video)
