@@ -8,6 +8,10 @@ its durable replay proves that the result is eligible and has not already
 been submitted. A recalled course is browsed manually from its first stage,
 through every later stage, to the aggregate course result.
 
+Eligible single-chart rows also show an amber `IR ↑` badge until their
+Bokutachi outbox entry reaches `Succeeded`, making uploadable saved results
+discoverable before the user opens the result screen.
+
 ## Scope
 
 - Replace the Records modal's `Export Photo` action with `View Result`.
@@ -45,6 +49,15 @@ Legacy records without a durable attempt identity, records whose chart no
 longer matches, and records whose reconstruction fails fingerprint validation
 still open as result screens but do not expose a new submission action.
 
+The Records list shows an amber `IR ↑` badge when a persisted single-chart
+row has canonical durable attempt metadata, its stored provenance satisfies
+Bokutachi's LR2 eligibility policy, and its Bokutachi outbox state is absent
+or anything other than `Succeeded`. The badge therefore remains visible for
+queued, uploading, polling, blocked, and failed attempts. It disappears only
+after successful upload. Auto Play, course, legacy/unverified, Beatoraja,
+assisted, and otherwise modified results never show it. Opening the result
+screen remains the place to inspect the exact delivery state and action.
+
 ### Course records
 
 `View Result` loads and validates every saved course stage before leaving the
@@ -81,6 +94,14 @@ credential is introduced into replay or outbox rows.
 
 Legacy rows with null attempt columns are valid for viewing but cannot be
 turned into a new IR submission.
+
+The existing single-chart replay summary read will also return the stored
+provenance, canonical attempt metadata availability, and the requested IR
+provider's outbox state from the same database snapshot. The outbox lookup is
+indexed by provider and attempt ID and is part of the summary query; the UI
+must not issue one database call per row. The already-decoded provenance is
+reused for the Bokutachi eligibility check, so list markers require neither
+chart parsing nor replay-event reconstruction.
 
 ## Single-chart Reconstruction
 
@@ -156,6 +177,12 @@ The old Records-modal batch photo-export entry point is removed from the
 footer. Photo export remains available from every recalled result screen.
 Video export is unchanged.
 
+Each replay row owns a compact badge view between its descriptive copy and
+score column. The badge shows `IR ↑` with the amber semantic color only when
+the summary has been annotated as an eligible unfinished Bokutachi upload.
+The badge is hidden and collapses its width for every other row, preserving
+the existing virtualized-row layout and selection styling.
+
 ## Error Handling and Safety
 
 - Missing replay, missing chart, cancelled parsing, invalid provenance, and
@@ -184,6 +211,12 @@ Focused tests will cover:
   they do immediately after play.
 - The Records footer contains `View Result`, no longer contains its photo
   action, disables Auto Play, and preserves other action availability.
+- Replay summaries derive the Bokutachi marker from canonical attempt
+  metadata, verified LR2 provenance, and the provider's outbox state in one
+  snapshot without replay parsing or per-row database calls.
+- The `IR ↑` badge is visible for eligible absent/pending/uploading/polling/
+  blocked/failed states, hidden for `Succeeded`, and hidden for Auto Play,
+  course, legacy, Beatoraja, assisted, and modified records.
 - Single-chart recall enters `ResultScene` with replay-result behavior and the
   original attempt ID.
 - Course recall prepares every stage, advances stage-by-stage only when `Next`
