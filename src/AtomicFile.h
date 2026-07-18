@@ -40,6 +40,10 @@ bool writeWithBackup(const std::filesystem::path &path,
                      std::string &errorMessage,
                      const Operations *operations = nullptr);
 
+bool removeBackupArtifacts(const std::filesystem::path &path,
+                           std::string &errorMessage,
+                           const Operations *operations = nullptr);
+
 bool writeWithoutBackup(const std::filesystem::path &path,
                         std::span<const std::byte> contents,
                         std::string &errorMessage,

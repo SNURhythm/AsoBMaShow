@@ -181,6 +181,45 @@ bool syncDirectoryMetadata(const std::filesystem::path &path,
 #endif
 }
 
+bool inspectEntryWithoutFollowingLinks(const std::filesystem::path &path,
+                                       bool &exists,
+                                       std::string &errorMessage) {
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error == std::errc::no_such_file_or_directory) {
+    exists = false;
+    return true;
+  }
+  if (error) {
+    errorMessage = "unable to inspect atomic file artifact '" + path.string() +
+                   "': " + error.message();
+    return false;
+  }
+  exists = status.type() != std::filesystem::file_type::not_found;
+  return true;
+}
+
+bool removeAndVerify(const std::filesystem::path &path,
+                     const Operations &operations, bool &removed,
+                     std::string &errorMessage) {
+  bool existed = false;
+  if (!inspectEntryWithoutFollowingLinks(path, existed, errorMessage)) {
+    return false;
+  }
+  operations.remove(path);
+  bool remains = false;
+  if (!inspectEntryWithoutFollowingLinks(path, remains, errorMessage)) {
+    return false;
+  }
+  removed = existed && !remains;
+  if (remains) {
+    errorMessage =
+        "atomic file artifact remains after removal: " + path.string();
+    return false;
+  }
+  return true;
+}
+
 void appendError(std::string &errorMessage, std::string_view prefix,
                  const std::string &detail) {
   if (!errorMessage.empty()) {
@@ -279,6 +318,46 @@ Operations defaultOperations() {
   return {.writeAndSync = realWriteAndSync,
           .replace = realReplace,
           .remove = realRemove};
+}
+
+bool removeBackupArtifacts(const std::filesystem::path &path,
+                           std::string &errorMessage,
+                           const Operations *operations) {
+  errorMessage.clear();
+  const Operations defaults = defaultOperations();
+  const Operations &ops = operations == nullptr ? defaults : *operations;
+  if (!ops.remove) {
+    errorMessage = "atomic file operations are incomplete";
+    return false;
+  }
+
+  bool succeeded = true;
+  bool removedAny = false;
+  for (const std::string_view suffix :
+       {".bak", ".bak.pending", ".bak.previous"}) {
+    bool removed = false;
+    std::string removalError;
+    if (!removeAndVerify(path.string() + std::string(suffix), ops, removed,
+                         removalError)) {
+      appendError(errorMessage, "backup artifact cleanup failed: ",
+                  removalError);
+      succeeded = false;
+    }
+    removedAny = removedAny || removed;
+  }
+
+  if (removedAny) {
+    const auto parent = path.parent_path().empty()
+                            ? std::filesystem::path(".")
+                            : path.parent_path();
+    std::string syncError;
+    if (!syncDirectory(parent, syncError)) {
+      appendError(errorMessage, "backup cleanup metadata sync failed: ",
+                  syncError);
+      succeeded = false;
+    }
+  }
+  return succeeded;
 }
 
 bool writeWithBackup(const std::filesystem::path &path,
@@ -481,16 +560,25 @@ bool writeWithoutBackup(const std::filesystem::path &path,
   }
 
   const std::filesystem::path temporary = path.string() + ".tmp";
-  ops.remove(temporary);
-  ops.remove(path.string() + ".bak");
-  ops.remove(path.string() + ".bak.pending");
-  ops.remove(path.string() + ".bak.previous");
+  if (!removeBackupArtifacts(path, errorMessage, &ops)) {
+    return false;
+  }
+  bool removed = false;
+  if (!removeAndVerify(temporary, ops, removed, errorMessage)) {
+    return false;
+  }
   if (!ops.writeAndSync(temporary, contents, errorMessage)) {
-    ops.remove(temporary);
+    std::string cleanupError;
+    if (!removeAndVerify(temporary, ops, removed, cleanupError)) {
+      appendError(errorMessage, "temporary cleanup failed: ", cleanupError);
+    }
     return false;
   }
   if (!ops.replace(temporary, path, errorMessage)) {
-    ops.remove(temporary);
+    std::string cleanupError;
+    if (!removeAndVerify(temporary, ops, removed, cleanupError)) {
+      appendError(errorMessage, "temporary cleanup failed: ", cleanupError);
+    }
     return false;
   }
   return syncDirectoryMetadata(path, metadataSyncRoot, errorMessage);

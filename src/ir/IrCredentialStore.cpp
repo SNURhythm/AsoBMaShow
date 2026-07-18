@@ -66,7 +66,7 @@ bool validateCredentials(const IrCredentials &credentials,
       return false;
     }
     if (!validApiKey(apiKey)) {
-      diagnostic = "credential API key length is invalid";
+      diagnostic = "credential API key format or length is invalid";
       return false;
     }
   }
@@ -152,7 +152,8 @@ IrCredentialStore::load(const std::filesystem::path &path) {
     const std::string value = apiKey->get<std::string>();
     if (!validApiKey(value)) {
       result.status = IrCredentialLoadStatus::Invalid;
-      result.diagnostics.push_back("credential API key length is invalid");
+      result.diagnostics.push_back(
+          "credential API key format or length is invalid");
       return result;
     }
     credentials.apiKeys.emplace(providerId, value);
@@ -187,7 +188,7 @@ IrCredentialWriteResult IrCredentialStore::replaceApiKey(
     return invalidWrite("credential provider ID is invalid");
   }
   if (!validApiKey(apiKey)) {
-    return invalidWrite("credential API key length is invalid");
+    return invalidWrite("credential API key format or length is invalid");
   }
   auto loaded = load(path);
   if (loaded.status != IrCredentialLoadStatus::Loaded &&
@@ -206,6 +207,10 @@ IrCredentialWriteResult IrCredentialStore::removeApiKey(
   }
   auto loaded = load(path);
   if (loaded.status == IrCredentialLoadStatus::Missing) {
+    std::string diagnostic;
+    if (!atomic_file::removeBackupArtifacts(path, diagnostic, operations)) {
+      return invalidWrite(std::move(diagnostic));
+    }
     return {.succeeded = true};
   }
   if (loaded.status != IrCredentialLoadStatus::Loaded) {

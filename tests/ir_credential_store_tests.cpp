@@ -52,7 +52,13 @@ void expectNoBackupArtifacts(const std::filesystem::path &path,
                              std::string_view operation) {
   for (const std::string_view suffix :
        {".bak", ".bak.pending", ".bak.previous"}) {
-    expect(!std::filesystem::exists(path.string() + std::string(suffix)),
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(
+        path.string() + std::string(suffix), error);
+    const bool missing =
+        error == std::errc::no_such_file_or_directory ||
+        (!error && status.type() == std::filesystem::file_type::not_found);
+    expect(missing,
            std::string(operation) + " removes credential artifact " +
                std::string(suffix));
   }
@@ -159,6 +165,25 @@ void testKeyAndProviderValidationDoesNotLeakSecrets() {
          "a key at the four KiB limit is accepted");
 }
 
+void testMissingRemovalCleansLegacyCredentialArtifacts() {
+  TempDirectory temp;
+  const auto path = temp.path() / "ir-credentials.json";
+  const std::string sentinel = "sentinel-secret-from-legacy-backup";
+  for (const std::string_view suffix :
+       {".bak", ".bak.pending", ".bak.previous"}) {
+    writeFile(path.string() + std::string(suffix), sentinel);
+  }
+
+  const auto removed = ir::IrCredentialStore::removeApiKey(path, "tachi");
+  expect(removed.succeeded,
+         "removing a missing credential cleans legacy artifacts");
+  expectNoBackupArtifacts(path, "missing credential removal");
+  expect(!std::filesystem::exists(path),
+         "missing credential removal does not create a canonical file");
+  expect(std::filesystem::is_empty(temp.path()),
+         "missing credential removal leaves no secret-bearing files");
+}
+
 void testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad() {
   TempDirectory temp;
   const std::array invalidKeys = {
@@ -176,6 +201,9 @@ void testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad() {
         ir::IrCredentialStore::replaceApiKey(path, "tachi", apiKey);
     expect(!result.succeeded,
            "credential save rejects " + std::string(name));
+    expect(result.diagnostic ==
+               "credential API key format or length is invalid",
+           "credential save reports format or length without key material");
     expect(!std::filesystem::exists(path),
            "rejected credential save creates no file");
   }
@@ -196,9 +224,49 @@ void testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad() {
     const auto loaded = ir::IrCredentialStore::load(path);
     expect(loaded.status == ir::IrCredentialLoadStatus::Invalid,
            "credential load rejects " + std::string(name));
+    expect(loaded.diagnostics.size() == 1 &&
+               loaded.diagnostics.front() ==
+                   "credential API key format or length is invalid",
+           "credential load reports format or length without key material");
     expect(loaded.credentials.apiKeys.empty(),
            "invalid loaded credential exposes no keys");
   }
+}
+
+void testRefusedBackupCleanupFailsClosed() {
+  TempDirectory temp;
+  const auto path = temp.path() / "ir-credentials.json";
+  const std::string oldSecret = "old-canonical-secret";
+  const std::string backupSecret = "sentinel-secret-in-refused-backup";
+  const std::string replacementSecret = "replacement-secret-must-be-redacted";
+  expect(ir::IrCredentialStore::replaceApiKey(path, "tachi", oldSecret)
+             .succeeded,
+         "refused cleanup fixture saves initial credentials");
+  const auto backup = std::filesystem::path(path.string() + ".bak");
+  writeFile(backup, backupSecret);
+
+  atomic_file::Operations operations = atomic_file::defaultOperations();
+  const auto realRemove = operations.remove;
+  operations.remove = [backup, realRemove](const auto &candidate) {
+    if (candidate != backup) {
+      realRemove(candidate);
+    }
+  };
+
+  ir::IrCredentials replacement;
+  replacement.apiKeys["tachi"] = replacementSecret;
+  const auto failed =
+      ir::IrCredentialStore::save(path, replacement, &operations);
+  expect(!failed.succeeded, "refused credential backup cleanup fails closed");
+  expect(!failed.diagnostic.empty(),
+         "refused credential backup cleanup returns a diagnostic");
+  expect(failed.diagnostic.find(replacementSecret) == std::string::npos &&
+             failed.diagnostic.find(backupSecret) == std::string::npos,
+         "refused cleanup diagnostic excludes credential material");
+  const auto loaded = ir::IrCredentialStore::load(path);
+  expect(loaded.status == ir::IrCredentialLoadStatus::Loaded &&
+             loaded.credentials.apiKeys.at("tachi") == oldSecret,
+         "refused backup cleanup preserves canonical credentials");
 }
 
 void testAtomicFailureRollsBackPriorCredentials() {
@@ -238,7 +306,9 @@ int main() {
   testMissingSaveLoadReplaceAndRemove();
   testMalformedFutureAndOversizedFilesFailClosed();
   testKeyAndProviderValidationDoesNotLeakSecrets();
+  testMissingRemovalCleansLegacyCredentialArtifacts();
   testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad();
+  testRefusedBackupCleanupFailsClosed();
   testAtomicFailureRollsBackPriorCredentials();
   if (failures != 0) {
     std::cerr << failures << " IR credential store test(s) failed\n";
