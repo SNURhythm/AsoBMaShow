@@ -3,4 +3,5 @@ target_sources(main PRIVATE
     IrOutboxModels.cpp
     IrRankingModels.cpp
     IrSubmission.cpp
+    tachi/TachiBatchManual.cpp
 )

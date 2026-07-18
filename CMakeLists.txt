@@ -646,6 +646,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
 
+    add_executable(tachi_batch_manual_tests
+        tests/tachi_batch_manual_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(tachi_batch_manual_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(tachi_batch_manual_tests PRIVATE cxx_std_23)
+
     add_executable(replay_repository_tests
         tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
@@ -1839,6 +1849,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         course_identity_tests
         ir_driver_tests
+        tachi_batch_manual_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests
