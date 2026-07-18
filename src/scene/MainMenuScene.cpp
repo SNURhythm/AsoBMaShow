@@ -2697,6 +2697,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (willStart.load())
       return;
     selectedChartRecord = item;
+    refreshRankingsButton();
     const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
     if (selectedView) {
