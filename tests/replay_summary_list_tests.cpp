@@ -254,6 +254,22 @@ int main() {
               << std::endl;
     return 1;
   }
+  if (autoExport.provenance.ruleset !=
+      RulesetDescriptor::For(GameplayRuleset::LR2)) {
+    std::cerr << "synthetic Auto export defaults to LR2 provenance"
+              << std::endl;
+    return 1;
+  }
+  const ReplayData beatorajaAutoExport = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Normal, GaugeAutoShiftMode::None, {}, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, false,
+      GaugeType::AssistedEasy, GameplayRuleset::Beatoraja);
+  if (beatorajaAutoExport.provenance.ruleset !=
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
+    std::cerr << "synthetic Auto export retains a selected Beatoraja ruleset"
+              << std::endl;
+    return 1;
+  }
 
   const ReplaySummary assistedAutoSummary = replay_autoplay::BuildSummary(
       chart.Meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
@@ -266,13 +282,40 @@ int main() {
     return 1;
   }
 
+  bms_parser::ChartMeta rulesetMeta;
+  rulesetMeta.KeyMode = 7;
+  rulesetMeta.TotalNotes = 100;
+  rulesetMeta.HasTotal = true;
+  rulesetMeta.Total = 100.5;
+  const ReplaySummary lr2AutoSummary = replay_autoplay::BuildSummary(
+      rulesetMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  bms_parser::Chart rulesetChart;
+  rulesetChart.Meta = rulesetMeta;
+  RhythmState expectedLr2Auto(&rulesetChart, false, GameplayRuleset::LR2);
+  expectedLr2Auto.configureGauge(GaugeType::Normal,
+                                 GaugeAutoShiftMode::None);
+  for (int note = 0; note < rulesetMeta.TotalNotes; ++note) {
+    expectedLr2Auto.applyGaugeJudgement(PGreat);
+  }
+  if (std::abs(lr2AutoSummary.finalGauge -
+               expectedLr2Auto.currentGauge) > 0.01f) {
+    std::cerr << "synthetic Auto summary defaults to the LR2 gauge ruleset"
+              << std::endl;
+    return 1;
+  }
+
   bms_parser::ChartMeta pmsMeta;
   pmsMeta.KeyMode = 9;
   pmsMeta.TotalNotes = 100;
   pmsMeta.HasTotal = true;
   pmsMeta.Total = 100.0;
-  const ReplaySummary pmsAutoSummary = replay_autoplay::BuildSummary(
-      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  const auto buildBeatorajaSummary = [](const bms_parser::ChartMeta &meta) {
+    return replay_autoplay::BuildSummary(
+        meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
+        std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, {},
+        GameplayRuleset::Beatoraja);
+  };
+  const ReplaySummary pmsAutoSummary = buildBeatorajaSummary(pmsMeta);
   if (pmsAutoSummary.finalGauge != 120.0f) {
     std::cerr << "synthetic Auto summary must use the PMS gauge result"
               << std::endl;
@@ -280,8 +323,7 @@ int main() {
   }
 
   pmsMeta.Total = 10.0;
-  const ReplaySummary lowTotalAutoSummary = replay_autoplay::BuildSummary(
-      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  const ReplaySummary lowTotalAutoSummary = buildBeatorajaSummary(pmsMeta);
   if (std::abs(lowTotalAutoSummary.finalGauge - 40.0f) > 0.01f) {
     std::cerr << "synthetic Auto summary must respect authored TOTAL"
               << std::endl;

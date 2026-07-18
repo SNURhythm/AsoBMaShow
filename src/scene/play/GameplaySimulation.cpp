@@ -1393,6 +1393,14 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     markIdentityResolved(multiBadId);
     multiBadState.played = true;
     multiBadState.playedTimeMicros = judgedTime;
+    if (multiBadNote.kind == NoteKind::LongHead) {
+      clearPairHolding(multiBadId);
+      if (multiBadNote.pairId != kInvalidNoteId &&
+          noteAllowed(multiBadNote.pairId) &&
+          !noteStates_[multiBadNote.pairId].played) {
+        markMissed(multiBadNote.pairId, judgedTime, false);
+      }
+    }
     GameplayInputResult multiBad;
     multiBad.noteId = multiBadId;
     multiBad.hasJudge = true;

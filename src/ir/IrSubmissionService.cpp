@@ -238,7 +238,8 @@ struct IrSubmissionService::Impl {
   }
 
   void loadProfileSnapshots(const IrActiveProfileConfig &config,
-                            std::uint64_t expectedGeneration) {
+                            std::uint64_t expectedGeneration,
+                            bool refreshCredentials = true) {
     IrOutboxBatchOutcome entries =
         repository.ListIrOutbox(kMaximumAttemptStatusSnapshots);
     std::map<std::string, IrOutboxCounts, std::less<>> counts;
@@ -246,9 +247,11 @@ struct IrSubmissionService::Impl {
     for (const auto &[providerId, settings] : config.providers) {
       (void)settings;
       counts.emplace(providerId, repository.CountIrOutbox(providerId));
-      const std::string credential =
-          lookupCredential(options, config.profileId, providerId);
-      fingerprints.emplace(providerId, fingerprint(credential));
+      if (refreshCredentials) {
+        const std::string credential =
+            lookupCredential(options, config.profileId, providerId);
+        fingerprints.emplace(providerId, fingerprint(credential));
+      }
     }
     std::lock_guard lock(mutex);
     if (generation != expectedGeneration) {
@@ -257,7 +260,9 @@ struct IrSubmissionService::Impl {
     statusSnapshots.clear();
     rowKeys.clear();
     countSnapshots = std::move(counts);
-    credentials = std::move(fingerprints);
+    if (refreshCredentials) {
+      credentials = std::move(fingerprints);
+    }
     ++statusRevision;
     if (entries.status == IrOutboxBatchStatus::Loaded) {
       for (auto iterator = entries.entries.rbegin();
@@ -356,6 +361,12 @@ struct IrSubmissionService::Impl {
     if (changedAny) {
       loadProfileSnapshots(config, expectedGeneration);
     }
+  }
+
+  [[nodiscard]] bool
+  requestMayStartLocked(std::uint64_t expectedGeneration) const noexcept {
+    return generation == expectedGeneration && !stopped && !profilePaused &&
+           applicationActive;
   }
 
   std::optional<std::int64_t>
@@ -484,6 +495,12 @@ struct IrSubmissionService::Impl {
 
       const std::string credential =
           lookupCredential(options, config.profileId, entry.providerId);
+      {
+        std::lock_guard lock(mutex);
+        if (!requestMayStartLocked(expectedGeneration)) {
+          return std::nullopt;
+        }
+      }
       if (credential.empty()) {
         {
           std::lock_guard lock(mutex);
@@ -508,7 +525,7 @@ struct IrSubmissionService::Impl {
       std::stop_token requestToken;
       {
         std::lock_guard lock(mutex);
-        if (generation != expectedGeneration) {
+        if (!requestMayStartLocked(expectedGeneration)) {
           return std::nullopt;
         }
         publishLocked(claimed);
@@ -679,11 +696,51 @@ void IrSubmissionService::activateProfile(IrActiveProfileConfig config) {
 }
 
 void IrSubmissionService::setApplicationActive(bool active) {
+  if (!active) {
+    {
+      std::lock_guard lock(impl_->mutex);
+      impl_->applicationActive = false;
+      impl_->requestStop.request_stop();
+    }
+    impl_->signal();
+    return;
+  }
+
+  IrActiveProfileConfig config;
+  std::uint64_t currentGeneration = 0;
+  {
+    std::unique_lock lock(impl_->mutex);
+    if (impl_->applicationActive) {
+      lock.unlock();
+      impl_->signal();
+      return;
+    }
+    if (!impl_->started || impl_->stopped) {
+      impl_->applicationActive = true;
+      lock.unlock();
+      impl_->signal();
+      return;
+    }
+    impl_->requestStop.request_stop();
+    lock.unlock();
+    impl_->signal();
+    lock.lock();
+    impl_->condition.wait(lock, [&] {
+      return !impl_->workerBusy || impl_->stopped;
+    });
+    if (impl_->stopped) {
+      return;
+    }
+    config = impl_->profile;
+    currentGeneration = impl_->generation;
+  }
+
+  impl_->repository.RecoverStaleIrOutbox(safeNow(impl_->options));
+  impl_->loadProfileSnapshots(config, currentGeneration, false);
   {
     std::lock_guard lock(impl_->mutex);
-    impl_->applicationActive = active;
-    if (!active) {
-      impl_->requestStop.request_stop();
+    if (!impl_->stopped) {
+      impl_->applicationActive = true;
     }
   }
   impl_->signal();

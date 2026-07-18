@@ -8803,7 +8803,8 @@ MainMenuScene::autoPlayReplaySummary(const ChartMetaRecord &record) const {
       profileSelections.gaugeAutoShift, playOption, std::nullopt, std::nullopt,
       std::nullopt, profileSelections.assistOption,
       {.percent = context.settings.selectedPlaybackRatePercent,
-       .mode = context.settings.selectedPlaybackMode});
+       .mode = context.settings.selectedPlaybackMode},
+      profileSelections.ruleset);
 }
 
 bool MainMenuScene::prepareAutoPlayChartForRecord(
@@ -9528,6 +9529,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       .mode = context.settings.selectedPlaybackMode,
   };
   const bool autoPlayClubMode = context.settings.gameplayClubModeEnabled;
+  const GameplayRuleset autoPlayRuleset = profileSelections.ruleset;
   const int autoPlayLongNoteMode =
       long_note_mode::valueFromId(profileSelections.longNoteMode);
   const SelectedChartRandomInfo autoPlayRandomInfo =
@@ -9537,7 +9539,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
                     autoPlayGaugeType, autoPlayGaugeAutoShift,
                     autoPlayGaugeAutoShiftLowerBound,
                     autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
-                    autoPlayClubMode, autoPlayLongNoteMode,
+                    autoPlayClubMode, autoPlayRuleset, autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
     try {
       if (loadThread.joinable()) {
@@ -9599,7 +9601,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
             autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
             playInfo.seed2, autoPlayAssistOption, autoPlayClubMode,
-            autoPlayGaugeAutoShiftLowerBound);
+            autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset);
         ReplayVideoExportOptions exportOptions = options;
         exportOptions.renderTouchPoints = false;
         exportOptions.renderReplayGhosts = false;

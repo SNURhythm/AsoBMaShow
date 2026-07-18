@@ -254,14 +254,21 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.gaugeProfile = replay.provenance.gaugeProfile;
   options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
   options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
-  options.requiredRulesetDescriptor = replay.provenance.ruleset;
-  if (const auto recordedRuleset =
-          gameplayRulesetFromId(replay.provenance.ruleset.id)) {
-    options.ruleset = *recordedRuleset;
+  if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+    options.ruleset = GameplayRuleset::Beatoraja;
+    options.requiredRulesetDescriptor =
+        RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    options.replayRulesetOverride.reset();
+  } else {
+    options.requiredRulesetDescriptor = replay.provenance.ruleset;
+    if (const auto recordedRuleset =
+            gameplayRulesetFromId(replay.provenance.ruleset.id)) {
+      options.ruleset = *recordedRuleset;
+    }
+    options.replayRulesetOverride =
+        play_start_detail::replayJudgeOverrideForChart(replay.provenance,
+                                                       replay.chartMeta);
   }
-  options.replayRulesetOverride =
-      play_start_detail::replayJudgeOverrideForChart(replay.provenance,
-                                                     replay.chartMeta);
 }
 
 [[nodiscard]] inline gameplay::CandidateSelectionMode
@@ -308,8 +315,11 @@ buildGameplayRulesetPolicyAtPlayStart(
            candidateSelectionForNotePriority(notePriorityMode),
        .requiredDescriptor = std::move(requiredDescriptor),
        .replaySnapshot = options.replayRulesetOverride});
+  const bool legacyReplayFallback =
+      options.replayData != nullptr &&
+      options.replayData->provenance.ruleset == RulesetDescriptor::Legacy();
   if (outcome.built() && options.replayData != nullptr &&
-      !options.replayRulesetOverride.has_value()) {
+      !options.replayRulesetOverride.has_value() && !legacyReplayFallback) {
     outcome.status =
         gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot;
     outcome.policy.reset();

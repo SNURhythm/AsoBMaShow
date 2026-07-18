@@ -256,9 +256,21 @@ public:
     };
     options.credentialLookup = [this](std::string_view,
                                       std::string_view providerId) {
-      std::lock_guard lock(credentialsMutex);
-      const auto found = credentials.find(providerId);
-      return found == credentials.end() ? std::string{} : found->second;
+      std::string value;
+      {
+        std::lock_guard lock(credentialsMutex);
+        const auto found = credentials.find(providerId);
+        value = found == credentials.end() ? std::string{} : found->second;
+      }
+      std::unique_lock lock(credentialLookupMutex);
+      if (credentialLookupBlocked) {
+        credentialLookupEntered = true;
+        credentialLookupChanged.notify_all();
+        credentialLookupChanged.wait(
+            lock, [&] { return credentialLookupReleased; });
+        credentialLookupBlocked = false;
+      }
+      return value;
     };
     options.waitUntil =
         [this](std::stop_token token,
@@ -299,6 +311,25 @@ public:
     } else {
       credentials["fake"] = std::move(value);
     }
+  }
+
+  void blockNextCredentialLookup() {
+    std::lock_guard lock(credentialLookupMutex);
+    credentialLookupBlocked = true;
+    credentialLookupEntered = false;
+    credentialLookupReleased = false;
+  }
+
+  bool waitForCredentialLookup() {
+    std::unique_lock lock(credentialLookupMutex);
+    return credentialLookupChanged.wait_for(
+        lock, 3s, [&] { return credentialLookupEntered; });
+  }
+
+  void releaseCredentialLookup() {
+    std::lock_guard lock(credentialLookupMutex);
+    credentialLookupReleased = true;
+    credentialLookupChanged.notify_all();
   }
 
   [[nodiscard]] std::size_t credentialChangeCount() const {
@@ -342,6 +373,11 @@ public:
   ManualWaiter waiter;
   mutable std::mutex credentialsMutex;
   std::map<std::string, std::string, std::less<>> credentials;
+  std::mutex credentialLookupMutex;
+  std::condition_variable credentialLookupChanged;
+  bool credentialLookupBlocked = false;
+  bool credentialLookupEntered = false;
+  bool credentialLookupReleased = false;
   mutable std::mutex successMutex;
   std::vector<std::string> successes;
   std::vector<std::string> credentialChanges;
@@ -817,6 +853,101 @@ void testPauseCancelsInflightAndRecoversClaim() {
          "paused service performs no additional requests");
 }
 
+void testForegroundRecoversAbandonedClaim() {
+  Harness harness;
+  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
+      draft(18, harness.now.load()), false);
+  expect(inserted.entry.has_value(), "foreground recovery fixture inserts");
+  harness.service->start(profile(false));
+  harness.service->setApplicationActive(false);
+  if (!inserted.entry) {
+    return;
+  }
+  expect(harness.repository
+                 .ClaimIrOutbox(inserted.entry->id,
+                                ir::IrOutboxState::Pending,
+                                harness.now.load())
+                 .status == ir::IrOutboxClaimStatus::Claimed,
+         "suspended request fixture leaves an uploading claim");
+
+  harness.service->setApplicationActive(true);
+
+  const auto recovered = load(harness, 18);
+  const auto snapshot = harness.service->status("fake", attemptId(18));
+  expect(recovered.state == ir::IrOutboxState::Pending &&
+             recovered.requestAttemptCount == 1 && snapshot.found &&
+             snapshot.state == ir::IrOutboxState::Pending,
+         "foreground activation recovers and republishes an abandoned claim");
+}
+
+void testForegroundPreservesPendingCredentialChange() {
+  Harness harness;
+  harness.repository.EnqueueReadyIrOutboxDraft(draft(19, harness.now.load()),
+                                                false);
+  harness.service->start(profile(true));
+  expect(harness.waitForState(attemptId(19),
+                              ir::IrOutboxState::BlockedConfiguration),
+         "missing credential blocks the foreground-change fixture");
+
+  harness.service->setApplicationActive(false);
+  harness.setCredential("replacement-key");
+  harness.service->notifyConfigurationChanged();
+  harness.service->setApplicationActive(true);
+
+  expect(harness.driver->waitForCalls(1) &&
+             harness.waitForState(attemptId(19),
+                                  ir::IrOutboxState::Succeeded),
+         "a credential changed in background unblocks delivery on foreground");
+}
+
+void testLifecycleCancellationWinsBeforeRequestStarts() {
+  Harness harness;
+  harness.setCredential("captured-key");
+  harness.service->start(profile(true));
+  expect(harness.waiter.waitForEntries(1),
+         "pre-request race worker reaches its idle wait");
+  harness.driver->blockRequestsUntilCancelled();
+  harness.blockNextCredentialLookup();
+  harness.repository.EnqueueReadyIrOutboxDraft(draft(22, harness.now.load()),
+                                                false);
+  harness.service->notifyOutboxChanged();
+  expect(harness.waitForCredentialLookup(),
+         "pre-request race pauses after capturing the credential");
+
+  harness.setCredential({});
+  harness.service->setApplicationActive(false);
+  std::atomic_bool foregroundReturned{false};
+  std::thread foreground([&] {
+    harness.service->setApplicationActive(true);
+    foregroundReturned.store(true);
+  });
+  harness.releaseCredentialLookup();
+
+  bool requestStartedWhileInactive = false;
+  bool blockedAfterForeground = false;
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    requestStartedWhileInactive = !harness.driver->calls().empty();
+    const auto snapshot =
+        harness.service->status("fake", attemptId(22));
+    blockedAfterForeground =
+        foregroundReturned.load() && snapshot.found &&
+        snapshot.state == ir::IrOutboxState::BlockedConfiguration;
+    if (requestStartedWhileInactive || blockedAfterForeground) {
+      break;
+    }
+    std::this_thread::yield();
+  }
+  if (requestStartedWhileInactive || !foregroundReturned.load()) {
+    harness.service->stop();
+  }
+  foreground.join();
+
+  expect(!requestStartedWhileInactive && foregroundReturned.load() &&
+             blockedAfterForeground,
+         "lifecycle cancellation prevents a fresh request before foreground");
+}
+
 } // namespace
 
 int main() {
@@ -833,6 +964,9 @@ int main() {
   testPermanentFailureRetryAllAndDeferredPreservation();
   testSucceededPurgeAndSnapshotReads();
   testPauseCancelsInflightAndRecoversClaim();
+  testForegroundRecoversAbandonedClaim();
+  testForegroundPreservesPendingCredentialChange();
+  testLifecycleCancellationWinsBeforeRequestStarts();
 
   if (failures != 0) {
     std::cerr << failures << " IR submission service test(s) failed\n";

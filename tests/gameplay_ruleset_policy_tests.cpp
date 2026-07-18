@@ -237,6 +237,49 @@ void testReplayStartRequiresValidatedSnapshot() {
               !outcome.policy.has_value(),
           "a replay start never falls back when its snapshot is incomplete");
 }
+
+void testLegacyReplayUsesBeatorajaFallback() {
+  auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  meta.MD5 = std::string(32, 'b');
+  meta.SHA256 = std::string(64, 'a');
+  auto replay = std::make_shared<ReplayData>();
+  replay->chartMeta = meta;
+  replay->provenance = ScoreProvenance::Legacy();
+  StartOptions options{.replayData = replay};
+  applyReplayProvenanceToStartOptions(options, *replay);
+
+  const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+  require(options.ruleset == GameplayRuleset::Beatoraja &&
+              options.requiredRulesetDescriptor ==
+                  RulesetDescriptor::For(GameplayRuleset::Beatoraja) &&
+              !options.replayRulesetOverride.has_value() && outcome.built() &&
+              outcome.policy->id == GameplayRuleset::Beatoraja,
+          "a migrated legacy replay remains playable with Beatoraja rules");
+
+  replay->provenance.stages = {completeReplaySnapshot(meta)};
+  StartOptions legacyWithStage{.replayData = replay};
+  applyReplayProvenanceToStartOptions(legacyWithStage, *replay);
+  const auto stagedLegacyOutcome = buildGameplayRulesetPolicyAtPlayStart(
+      legacyWithStage, meta, AppSettings::NotePriorityMode::Lowest);
+  require(!legacyWithStage.replayRulesetOverride.has_value() &&
+              stagedLegacyOutcome.built() &&
+              stagedLegacyOutcome.policy->canonical,
+          "legacy stage data cannot override the canonical Beatoraja fallback");
+
+  auto session = std::make_shared<CoursePlaySession>();
+  session->snapshotRulesetFromReplay(*replay);
+  const StartOptions courseOptions =
+      makeCourseReplayStageStartOptions(session, replay);
+  const auto courseOutcome = buildGameplayRulesetPolicyAtPlayStart(
+      courseOptions, meta, AppSettings::NotePriorityMode::Lowest);
+  require(session->ruleset == GameplayRuleset::Beatoraja &&
+              session->rulesetDescriptor ==
+                  RulesetDescriptor::For(GameplayRuleset::Beatoraja) &&
+              courseOutcome.built() &&
+              courseOutcome.policy->id == GameplayRuleset::Beatoraja,
+          "a migrated legacy course replay uses the same Beatoraja fallback");
+}
 } // namespace
 
 int main() {
@@ -246,5 +289,6 @@ int main() {
   testValidatedReplayAndCourseConsistency();
   testCanonicalReplaySnapshotStaysCanonical();
   testReplayStartRequiresValidatedSnapshot();
+  testLegacyReplayUsesBeatorajaFallback();
   return 0;
 }

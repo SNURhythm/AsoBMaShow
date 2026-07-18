@@ -49,10 +49,11 @@ inline ReplayEvent makeAutoPlayEvent(ReplayEventAction action,
 
 inline float perfectPlayGauge(const bms_parser::ChartMeta &meta,
                               GaugeType gaugeType,
-                              GaugeAutoShiftMode gaugeAutoShift) {
+                              GaugeAutoShiftMode gaugeAutoShift,
+                              GameplayRuleset ruleset) {
   bms_parser::Chart chart;
   chart.Meta = meta;
-  RhythmState state(&chart, false);
+  RhythmState state(&chart, false, ruleset);
   state.configureGauge(gaugeType, gaugeAutoShift);
   for (int note = 0; note < std::max(0, meta.TotalNotes); ++note) {
     state.applyGaugeJudgement(PGreat);
@@ -67,7 +68,8 @@ inline ReplaySummary BuildSummary(
     const std::optional<std::string> &playOption2 = std::nullopt,
     const std::optional<long long> &playOption2Seed = std::nullopt,
     const std::string &assistOption = assist_options::kOff,
-    audio::PlaybackRate playback = {}) {
+    audio::PlaybackRate playback = {},
+    GameplayRuleset ruleset = kDefaultGameplayRuleset) {
   ReplaySummary summary;
   summary.id = kReplayId;
   summary.autoPlay = true;
@@ -76,7 +78,8 @@ inline ReplaySummary BuildSummary(
   summary.finalScore = std::max(0, meta.TotalNotes) * 2;
   summary.maxScore = summary.finalScore;
   summary.maxCombo = std::max(0, meta.TotalNotes);
-  summary.finalGauge = perfectPlayGauge(meta, gaugeType, gaugeAutoShift);
+  summary.finalGauge =
+      perfectPlayGauge(meta, gaugeType, gaugeAutoShift, ruleset);
   summary.clearType = clear_policy::fullComboRankForPlayback(
       kClearTypeFullComboRank, true, playback);
   summary.createdAt = kLabel;
@@ -101,7 +104,8 @@ inline ReplayData BuildReplayData(
     const std::optional<long long> &playOption2Seed = std::nullopt,
     const std::string &assistOption = assist_options::kOff,
     bool clubMode = false,
-    GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy) {
+    GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
+    GameplayRuleset ruleset = kDefaultGameplayRuleset) {
   ReplayData replay;
   replay.id = kReplayId;
   replay.autoPlay = true;
@@ -118,13 +122,14 @@ inline ReplayData BuildReplayData(
   replay.gaugeAutoShift = gaugeAutoShift;
   replay.gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound;
   replay.provenance.playback = playback;
+  replay.provenance.ruleset = RulesetDescriptor::For(ruleset);
   replay.provenance.autoPlay = true;
   replay.provenance.clubMode = clubMode;
   replay.createdAt = kLabel;
   replay.events.reserve(static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) *
                         2U);
 
-  RhythmState state(&chart, false);
+  RhythmState state(&chart, false, ruleset);
   state.configureGauge(gaugeType, gaugeAutoShift, GaugeProfile::Standard,
                        gaugeAutoShiftLowerBound);
   state.setAssistClearMark(assist_options::isEnabled(replay.assistOption));

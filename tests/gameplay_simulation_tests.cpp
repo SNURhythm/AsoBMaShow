@@ -1767,6 +1767,34 @@ void testLr2MultiBadBatchAndFixedSelection() {
   }
 }
 
+void testLr2MultiBadLongHeadConsumesTail() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 850'000)->SetNote(1, new bms_parser::Note(1));
+  addLongNote(*measure, 1'150'000, 1'800'000, 2,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge = lr2Judge()});
+
+  const auto batch =
+      simulation.pressLane(1, 2, {.songTimeMicros = 1'000'000});
+  require(batch.transactions.size() == 2 &&
+              batch.transactions.front().noteId == 1 &&
+              batch.transactions.front().hasJudge &&
+              batch.transactions.front().judge.judgement == Bad &&
+              simulation.noteState(1).played &&
+              simulation.noteState(2).played,
+          "LR2 multi-BAD consumes a long-note head and its paired tail");
+
+  const auto afterTail = simulation.advanceTo(2'000'001, 2'000'001);
+  require(afterTail.transactions.empty() &&
+              simulation.snapshot().judgeCounts[Poor] == 0,
+          "a multi-BAD long-note tail cannot produce a later automatic POOR");
+}
+
 void testBeatorajaStillEmitsOnePrioritySelectedTransaction() {
   const auto run = [](AppSettings::NotePriorityMode mode) {
     bms_parser::Chart chart;
@@ -2089,6 +2117,7 @@ int main() {
   testLr2CandidateFilterGoldenClusters();
   testLr2RepeatedKpoorAndStrictAutomaticPoor();
   testLr2MultiBadBatchAndFixedSelection();
+  testLr2MultiBadLongHeadConsumesTail();
   testBeatorajaStillEmitsOnePrioritySelectedTransaction();
   testLegacyControllerUsesSharedLr2BatchResolution();
   testLr2LongTailBoundaryTableAcrossAuthorities();
