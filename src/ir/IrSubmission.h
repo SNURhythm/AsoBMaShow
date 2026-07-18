@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ir {
 
@@ -25,6 +26,9 @@ struct IrSubmission {
   int kPoor = 0;
   int fast = 0;
   int slow = 0;
+  int pGreatFast = 0;
+  int pGreatSlow = 0;
+  std::vector<float> gaugeHistory;
   float finalGauge = 0.0F;
   int clearType = kClearTypeFailedRank;
   std::int64_t playedAtUnixMillis = 0;

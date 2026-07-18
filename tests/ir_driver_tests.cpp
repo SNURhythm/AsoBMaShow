@@ -3,9 +3,11 @@
 #include "ir/IrSubmission.h"
 
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -90,6 +92,9 @@ void testCanonicalSubmissionBuildsFromAttempt() {
          "submission normalizes sha256");
   expect(submission.score == 7 && submission.maxScore == 10,
          "submission retains EX score values");
+  expect(submission.gaugeHistory.empty() && submission.pGreatFast == 0 &&
+             submission.pGreatSlow == 0,
+         "empty replay keeps detailed evidence optional");
   expect(submission.playedAtUnixMillis == 1700000000123LL,
          "submission retains capture time");
 }
@@ -112,6 +117,60 @@ void testCanonicalSubmissionRejectsInvalidInput() {
 
   expect(!ir::makeIrSubmission(validAttempt(), 0).value.has_value(),
          "submission rejects nonpositive capture time");
+}
+
+void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
+  auto attempt = validAttempt();
+  attempt.replay.events = {
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = -12'000,
+       .gauge = 24.0F},
+      {.action = ReplayEventAction::Release,
+       .judgement = PGreat,
+       .diffMicros = 8'000,
+       .gauge = 25.5F},
+      {.action = ReplayEventAction::Press,
+       .judgement = Great,
+       .diffMicros = -6'000,
+       .gauge = 27.0F},
+      {.action = ReplayEventAction::Press,
+       .judgement = None,
+       .diffMicros = -1'000,
+       .gauge = 99.0F},
+      {.action = ReplayEventAction::Mine, .gauge = 11.0F},
+  };
+
+  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  expect(outcome.value.has_value(), "replay evidence builds");
+  if (outcome.value) {
+    expect(outcome.value->gaugeHistory ==
+               std::vector<float>{24.0F, 25.5F, 27.0F, 11.0F},
+           "only gauge-mutating replay events become gauge history");
+    expect(outcome.value->pGreatFast == 1 &&
+               outcome.value->pGreatSlow == 1,
+           "PGREAT early and late evidence is separated");
+  }
+}
+
+void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
+  auto attempt = validAttempt();
+  attempt.replay.events = {{.action = ReplayEventAction::Press,
+                            .judgement = Great,
+                            .diffMicros = -1,
+                            .gauge =
+                                std::numeric_limits<float>::quiet_NaN()}};
+  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+         "non-finite gauge history is rejected");
+
+  attempt = validAttempt();
+  attempt.score.fast = 0;
+  attempt.replay.events = {{.action = ReplayEventAction::Press,
+                            .judgement = PGreat,
+                            .diffMicros = -1,
+                            .gauge = 20.0F}};
+  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+         "PGREAT timing cannot exceed aggregate timing");
 }
 
 void testChartQueryNormalizesIdentity() {
@@ -227,6 +286,8 @@ void testBaseBuildDraftIsUnsupported() {
 int main() {
   testCanonicalSubmissionBuildsFromAttempt();
   testCanonicalSubmissionRejectsInvalidInput();
+  testCanonicalSubmissionExtractsGaugeAndPGreatTiming();
+  testCanonicalSubmissionRejectsInvalidDetailedEvidence();
   testChartQueryNormalizesIdentity();
   testCapabilityValidation();
   testRegistryRejectsInvalidAndDuplicateDrivers();

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <string_view>
+#include <utility>
 
 namespace ir {
 namespace {
@@ -53,6 +54,19 @@ bool isKnownClearRank(int value) {
 
 IrSubmissionBuildOutcome invalid(std::string_view diagnostic) {
   return {.diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
+bool replayEventMutatesGauge(const ReplayEvent &event) {
+  switch (event.action) {
+  case ReplayEventAction::Mine:
+  case ReplayEventAction::Gauge:
+    return true;
+  case ReplayEventAction::Press:
+  case ReplayEventAction::Release:
+  case ReplayEventAction::Miss:
+    return event.judgement != None;
+  }
+  return false;
 }
 
 } // namespace
@@ -109,6 +123,30 @@ IrSubmissionBuildOutcome makeIrSubmission(
       return invalid("score gauge or clear rank is invalid");
     }
 
+    std::vector<float> gaugeHistory;
+    gaugeHistory.reserve(attempt.replay.events.size());
+    int pGreatFast = 0;
+    int pGreatSlow = 0;
+    for (const ReplayEvent &event : attempt.replay.events) {
+      if (!replayEventMutatesGauge(event)) {
+        continue;
+      }
+      if (!std::isfinite(event.gauge)) {
+        return invalid("replay gauge history is not finite");
+      }
+      gaugeHistory.push_back(event.gauge);
+      if (event.judgement == PGreat) {
+        if (event.diffMicros < 0) {
+          ++pGreatFast;
+        } else if (event.diffMicros > 0) {
+          ++pGreatSlow;
+        }
+      }
+    }
+    if (pGreatFast > score.fast || pGreatSlow > score.slow) {
+      return invalid("PGREAT timing exceeds aggregate timing counts");
+    }
+
     return {.value = IrSubmission{
                 .attemptId = attempt.attemptId,
                 .keyMode = meta.KeyMode,
@@ -126,6 +164,9 @@ IrSubmissionBuildOutcome makeIrSubmission(
                 .kPoor = score.kPoor,
                 .fast = score.fast,
                 .slow = score.slow,
+                .pGreatFast = pGreatFast,
+                .pGreatSlow = pGreatSlow,
+                .gaugeHistory = std::move(gaugeHistory),
                 .finalGauge = score.finalGauge,
                 .clearType = score.clearType,
                 .playedAtUnixMillis = playedAtUnixMillis,
