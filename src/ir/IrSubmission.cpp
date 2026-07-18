@@ -130,7 +130,11 @@ IrSubmissionBuildOutcome makeIrSubmission(
     int latePGreat = 0;
     int earlyGreat = 0;
     int lateGreat = 0;
+    std::int64_t observedReplayScore = 0;
     for (const ReplayEvent &event : attempt.replay.events) {
+      const std::int64_t eventScore = event.score;
+      const std::int64_t scoreDelta = eventScore - observedReplayScore;
+      observedReplayScore = std::max(observedReplayScore, eventScore);
       if (!replayEventMutatesGauge(event)) {
         continue;
       }
@@ -138,7 +142,11 @@ IrSubmissionBuildOutcome makeIrSubmission(
         return invalid("replay gauge history is not finite");
       }
       adoptedGaugeType = event.gaugeType;
-      if (event.judgement == PGreat) {
+      const bool canProvideJudgementTiming =
+          event.action == ReplayEventAction::Press ||
+          event.action == ReplayEventAction::Release;
+      if (canProvideJudgementTiming && event.judgement == PGreat &&
+          scoreDelta == 2) {
         if (event.diffMicros < 0) {
           ++pGreatFast;
         } else if (event.diffMicros > 0) {
@@ -149,7 +157,8 @@ IrSubmissionBuildOutcome makeIrSubmission(
         } else {
           ++latePGreat;
         }
-      } else if (event.judgement == Great) {
+      } else if (canProvideJudgementTiming && event.judgement == Great &&
+                 scoreDelta == 1) {
         if (event.diffMicros <= 0) {
           ++earlyGreat;
         } else {

@@ -126,24 +126,29 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
       {.action = ReplayEventAction::Press,
        .judgement = PGreat,
        .diffMicros = -12'000,
-       .gauge = 24.0F},
+       .gauge = 24.0F,
+       .score = 2},
       {.action = ReplayEventAction::Release,
        .judgement = PGreat,
        .diffMicros = 8'000,
-       .gauge = 25.5F},
+       .gauge = 25.5F,
+       .score = 4},
       {.action = ReplayEventAction::Press,
        .judgement = Great,
        .diffMicros = -6'000,
-       .gauge = 27.0F},
+       .gauge = 27.0F,
+       .score = 5},
       {.action = ReplayEventAction::Press,
        .judgement = PGreat,
        .diffMicros = 0,
-       .gauge = 28.0F},
+       .gauge = 28.0F,
+       .score = 7},
       {.action = ReplayEventAction::Press,
        .judgement = None,
        .diffMicros = -1'000,
-       .gauge = 99.0F},
-      {.action = ReplayEventAction::Mine, .gauge = 11.0F},
+       .gauge = 99.0F,
+       .score = 7},
+      {.action = ReplayEventAction::Mine, .gauge = 11.0F, .score = 7},
   };
 
   const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
@@ -164,6 +169,92 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
   }
 }
 
+void testCanonicalSubmissionExcludesNonScoringClassicLongNoteHeadTiming() {
+  auto attempt = validAttempt();
+  attempt.replay.events = {
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = -20'000,
+       .gauge = 20.0F,
+       .score = 0},
+      {.action = ReplayEventAction::Release,
+       .judgement = PGreat,
+       .diffMicros = 8'000,
+       .gauge = 22.0F,
+       .score = 2},
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = -12'000,
+       .gauge = 24.0F,
+       .score = 4},
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = 0,
+       .gauge = 26.0F,
+       .score = 6},
+      {.action = ReplayEventAction::Press,
+       .judgement = Great,
+       .diffMicros = 6'000,
+       .gauge = 28.0F,
+       .score = 7},
+  };
+
+  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  expect(outcome.value.has_value(), "classic long-note evidence builds");
+  if (outcome.value) {
+    expect(outcome.value->gaugeHistory ==
+               std::vector<float>{20.0F, 22.0F, 24.0F, 26.0F, 28.0F},
+           "non-scoring long-note heads remain in gauge history");
+    expect(outcome.value->pGreatFast == 1 &&
+               outcome.value->pGreatSlow == 1,
+           "non-scoring long-note head timing is excluded from fast slow");
+    expect(outcome.value->judgementTimingBreakdownAvailable &&
+               outcome.value->earlyPGreat == 2 &&
+               outcome.value->latePGreat == 1 &&
+               outcome.value->earlyGreat == 0 &&
+               outcome.value->lateGreat == 1,
+           "only score-contributing replay events provide judgement timing");
+  }
+}
+
+void testCanonicalSubmissionExcludesGaugeTickJudgementTiming() {
+  auto attempt = validAttempt();
+  attempt.replay.events = {
+      {.action = ReplayEventAction::Gauge,
+       .judgement = Great,
+       .diffMicros = 0,
+       .gauge = 19.0F,
+       .score = 1},
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = -12'000,
+       .gauge = 21.0F,
+       .score = 3},
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = 8'000,
+       .gauge = 23.0F,
+       .score = 5},
+      {.action = ReplayEventAction::Press,
+       .judgement = PGreat,
+       .diffMicros = 0,
+       .gauge = 25.0F,
+       .score = 7},
+  };
+
+  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  expect(outcome.value.has_value(), "gauge tick evidence builds");
+  if (outcome.value) {
+    expect(outcome.value->gaugeHistory ==
+               std::vector<float>{19.0F, 21.0F, 23.0F, 25.0F},
+           "gauge ticks remain in gauge history");
+    expect(!outcome.value->judgementTimingBreakdownAvailable &&
+               outcome.value->earlyGreat == 0 &&
+               outcome.value->lateGreat == 0,
+           "gauge tick judgements never provide score timing evidence");
+  }
+}
+
 void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
   auto attempt = validAttempt();
   attempt.replay.events = {
@@ -171,20 +262,24 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
        .judgement = PGreat,
        .diffMicros = -12'000,
        .gauge = 72.0F,
-       .gaugeType = GaugeType::Hard},
+       .gaugeType = GaugeType::Hard,
+       .score = 2},
       {.action = ReplayEventAction::Release,
        .judgement = PGreat,
        .diffMicros = 8'000,
        .gauge = 24.0F,
-       .gaugeType = GaugeType::Normal},
+       .gaugeType = GaugeType::Normal,
+       .score = 4},
       {.action = ReplayEventAction::Press,
        .judgement = Great,
        .diffMicros = -6'000,
        .gauge = 64.0F,
-       .gaugeType = GaugeType::Hard},
+       .gaugeType = GaugeType::Hard,
+       .score = 5},
       {.action = ReplayEventAction::Mine,
        .gauge = 26.0F,
-       .gaugeType = GaugeType::Normal},
+       .gaugeType = GaugeType::Normal,
+       .score = 5},
   };
 
   auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
@@ -231,7 +326,8 @@ void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   attempt.replay.events = {{.action = ReplayEventAction::Press,
                             .judgement = PGreat,
                             .diffMicros = -1,
-                            .gauge = 20.0F}};
+                            .gauge = 20.0F,
+                            .score = 2}};
   expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
          "PGREAT timing cannot exceed aggregate timing");
 }
@@ -360,6 +456,8 @@ int main() {
   testCanonicalSubmissionBuildsFromAttempt();
   testCanonicalSubmissionRejectsInvalidInput();
   testCanonicalSubmissionExtractsGaugeAndPGreatTiming();
+  testCanonicalSubmissionExcludesNonScoringClassicLongNoteHeadTiming();
+  testCanonicalSubmissionExcludesGaugeTickJudgementTiming();
   testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory();
   testCanonicalSubmissionRejectsInvalidDetailedEvidence();
   testChartQueryNormalizesIdentity();

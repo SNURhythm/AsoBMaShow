@@ -14,10 +14,11 @@ detects that the replay counts disagree with the result counts and omits
 
 Use the cumulative EX-score snapshot already stored on every `ReplayEvent` to
 identify score-contributing PGREAT and GREAT judgements. While traversing replay
-events in order, a PGREAT contributes timing evidence only when its event score
-advances the observed cumulative score by exactly 2; a GREAT contributes only
-when it advances it by exactly 1. All events continue to advance the observed
-cumulative-score position when their stored score is greater.
+events in order, a PGREAT `Press` or `Release` contributes timing evidence only
+when its event score advances the observed cumulative score by exactly 2; a
+GREAT `Press` or `Release` contributes only when it advances it by exactly 1.
+All events continue to advance the observed cumulative-score position when
+their stored score is greater.
 
 This preserves the informational long-note-head judgement for replay playback,
 does not require a replay schema or database migration, and excludes classic
