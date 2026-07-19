@@ -187,6 +187,8 @@ void testCourseBuildPreparesEveryStage() {
     auto stage = validRecord().replay;
     stage.id = 100 + index;
     stage.chartMeta.Title = "Stage " + std::to_string(index + 1);
+    stage.events.front().combo = index + 1;
+    stage.maxCombo = index + 1;
     replay.stages.push_back({.replay = std::move(stage),
                              .restMicrosAfterStage = 500000});
   }
@@ -243,6 +245,51 @@ void testCourseBuildDoesNotPublishPartialSession() {
   assert(calls == 2);
 }
 
+void testCourseBuildCarriesComboSnapshotBetweenStages() {
+  CourseReplayData replay;
+  replay.id = 10;
+  replay.courseName = "Combo Carry Course";
+  replay.courseGroupName = "Records";
+  replay.constraintJson = "{}";
+  replay.gaugeProfile = GaugeProfile::Standard;
+  replay.initialGaugeType = GaugeType::Normal;
+
+  auto first = validRecord().replay;
+  first.id = 201;
+  auto second = validRecord().replay;
+  second.id = 202;
+  second.events.clear();
+  second.events.push_back(
+      {.action = ReplayEventAction::Press,
+       .lane = 0,
+       .noteTimeMicros = 1000,
+       .songTimeMicros = 1000,
+       .judgeTimeMicros = 1000,
+       .judgement = Bad,
+       .diffMicros = 0,
+       .gauge = 90.0F,
+       .gaugeType = GaugeType::Normal,
+       .combo = 0,
+       .score = 0});
+  second.finalScore = 0;
+  second.maxCombo = first.maxCombo;
+  second.finalGauge = 90.0F;
+  second.clearType = kClearTypeNormalClearRank;
+
+  replay.stages.push_back({.replay = std::move(first)});
+  replay.stages.push_back({.replay = std::move(second)});
+  replay.completedCharts = 2;
+  replay.totalCharts = 2;
+  replay.provenance = replay.stages.back().replay.provenance;
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildCourseResult(
+      std::move(replay), cancelled, chartLoader());
+  assert(outcome.value.has_value());
+  assert(outcome.value->session->completedResults.size() == 2);
+  assert(outcome.value->session->completedResults.back().state.maxCombo == 1);
+}
+
 } // namespace
 
 int main() {
@@ -252,5 +299,6 @@ int main() {
   testInvalidIntegrityMetadataSuppressesOnlyIr();
   testCourseBuildPreparesEveryStage();
   testCourseBuildDoesNotPublishPartialSession();
+  testCourseBuildCarriesComboSnapshotBetweenStages();
   return 0;
 }

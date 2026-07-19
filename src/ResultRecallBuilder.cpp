@@ -143,7 +143,8 @@ CourseBuildOutcome BuildCourseResult(CourseReplayData replay,
       auto chart = std::shared_ptr<bms_parser::Chart>(std::move(loadedChart));
       RhythmState state = replay_result::BuildResultState(
           *chart, stageReplay, replay.gaugeProfile,
-          carriedGauge.has_value() ? &*carriedGauge : nullptr);
+          carriedGauge.has_value() ? &*carriedGauge : nullptr,
+          session->carriedCombo, session->maxCombo);
       const bool fullCombo = chart->Meta.TotalNotes > 0 &&
                              state.comboBreak == 0 &&
                              state.maxCombo >= chart->Meta.TotalNotes;

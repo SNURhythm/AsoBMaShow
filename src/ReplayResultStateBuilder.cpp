@@ -122,10 +122,13 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
 RhythmState BuildResultState(bms_parser::Chart &chart,
                              const ReplayData &replay,
                              GaugeProfile gaugeProfile,
-                             const GaugeStateSnapshot *carriedGauge) {
+                             const GaugeStateSnapshot *carriedGauge,
+                             int carriedCombo, int carriedMaxCombo) {
   const auto lookup = buildReplayNoteLookup(chart);
   RhythmState state =
       BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
+  state.combo = std::max(0, carriedCombo);
+  state.maxCombo = std::max(state.combo, carriedMaxCombo);
 
   for (const auto &event : replay.events) {
     if (event.action == ReplayEventAction::Gauge) {
