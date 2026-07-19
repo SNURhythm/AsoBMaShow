@@ -2737,6 +2737,71 @@ void testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot() {
   }
 }
 
+void testManualBatchDoesNotReenqueueReceiptSettledStaleSelection() {
+  constexpr std::string_view origin = "https://boku.tachi.ac";
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.service->setApplicationActive(false);
+  const auto staleDraft = draft(37, harness.now.load());
+  const auto pending = harness.enqueueReady(staleDraft, false);
+  expect(pending.entry.has_value(),
+         "stale manual selection fixture inserts pending work");
+  if (!pending.entry) {
+    return;
+  }
+
+  const auto candidates =
+      harness.repository.LoadIrReconciliationCandidates("fake", origin);
+  expect(candidates.status ==
+             ir::IrReconciliationReadOutcome::Status::Loaded,
+         "stale manual selection fixture loads reconciliation evidence");
+  const auto remote = remoteScore("remote-stale-selection");
+  const auto plan = ir::planScoreReconciliation(
+      "fake", origin, candidates.candidates, std::span{&remote, 1},
+      harness.now.load());
+  expect(plan.status == ir::IrScoreReconciliationPlan::Status::Planned &&
+             plan.upsertedReceipts.size() == 1 &&
+             plan.settledOutboxRowIds ==
+                 std::vector<std::int64_t>{pending.entry->id},
+         "snapshot plan identifies the selected pending row");
+
+  const auto applied = harness.repository.ApplyIrRemoteSnapshot({
+      .providerId = "fake",
+      .serverOrigin = std::string(origin),
+      .synchronizedAtUnixMillis = harness.now.load(),
+      .scores = {remote},
+      .upsertedReceipts = plan.upsertedReceipts,
+      .deletedReceiptIds = plan.deletedReceiptIds,
+      .settledOutboxRowIds = plan.settledOutboxRowIds,
+      .purgedSucceededOutboxRowIds = plan.purgedSucceededOutboxRowIds,
+  });
+  expect(applied.status ==
+                 ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
+             applied.outboxRowsSettled == 1 &&
+             harness.repository.LoadIrOutbox("fake", staleDraft.attemptId)
+                     .status == ir::IrOutboxReadStatus::NotFound,
+         "snapshot apply persists the receipt and removes pending work");
+
+  harness.service->start(profile(true, true, std::string(origin)));
+  const auto outcome = harness.service->enqueueManualBatch(
+      std::span{&staleDraft, 1});
+  expect(outcome.storageAvailable && outcome.items.size() == 1 &&
+             outcome.items.front().status ==
+                 ir::IrManualBatchItemStatus::AlreadySubmitted &&
+             !outcome.items.front().entry,
+         "manual enqueue checks the active-origin receipt instead of recreating work");
+  const auto due = harness.repository.ListDueIrOutbox("fake",
+                                                       harness.now.load());
+  const auto counts = harness.service->counts("fake");
+  expect(due.status == ir::IrOutboxBatchStatus::Loaded &&
+             due.entries.empty() && counts.storageAvailable &&
+             counts.total == 0,
+         "receipt-settled stale selection leaves no processable outbox row");
+}
+
 void testProjectionFailurePublishesFailedButKeepsCommittedMirror() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
@@ -3093,6 +3158,7 @@ int main() {
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
   testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();
+  testManualBatchDoesNotReenqueueReceiptSettledStaleSelection();
   testProjectionFailurePublishesFailedButKeepsCommittedMirror();
   testEmptyReconciliationStillProjectsDeletionSnapshot();
   testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin();

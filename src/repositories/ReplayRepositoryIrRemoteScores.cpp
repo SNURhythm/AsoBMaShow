@@ -701,8 +701,10 @@ bool deleteOutboxIds(sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
             "replay WHERE replay.id=receipt.replay_id AND "
             "replay.attempt_id=ir_outbox.attempt_id))"
           : "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND state IN "
-            "(0,3,4) AND EXISTS(SELECT 1 FROM ir_submission_receipts receipt "
-            "WHERE receipt.provider_id=? AND receipt.server_origin=? AND "
+            "(0,3,4) AND local_result_ready=1 AND (remote_origin IS NULL OR "
+            "remote_origin=?) AND EXISTS(SELECT 1 FROM "
+            "ir_submission_receipts receipt WHERE receipt.provider_id=? AND "
+            "receipt.server_origin=? AND "
             "receipt.attempt_id=ir_outbox.attempt_id)";
   SqliteStatementHandle statement;
   if (prepareSqliteStatement(db, query, statement) != SQLITE_OK) {
@@ -713,14 +715,38 @@ bool deleteOutboxIds(sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
         sqlite3_clear_bindings(statement.get()) != SQLITE_OK ||
         sqlite3_bind_int64(statement.get(), 1, id) != SQLITE_OK ||
         !bindSqliteText(statement.get(), 2, mutation.providerId) ||
-        !bindSqliteText(statement.get(), 3, mutation.providerId) ||
-        !bindSqliteText(statement.get(), 4, mutation.serverOrigin) ||
+        (!succeededOnly &&
+         !bindSqliteText(statement.get(), 3, mutation.serverOrigin)) ||
+        !bindSqliteText(statement.get(), succeededOnly ? 3 : 4,
+                        mutation.providerId) ||
+        !bindSqliteText(statement.get(), succeededOnly ? 4 : 5,
+                        mutation.serverOrigin) ||
         sqlite3_step(statement.get()) != SQLITE_DONE ||
         sqlite3_changes(db) != 1) {
       return false;
     }
     ++deletedCount;
   }
+  return true;
+}
+
+bool deleteNewlyRepresentedOutbox(
+    sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
+    int &deletedCount) {
+  constexpr const char *query =
+      "DELETE FROM ir_outbox WHERE provider_id=?1 AND state IN (0,3,4) "
+      "AND local_result_ready=1 AND (remote_origin IS NULL OR "
+      "remote_origin=?2) AND EXISTS(SELECT 1 FROM ir_submission_receipts "
+      "receipt WHERE receipt.provider_id=?1 AND receipt.server_origin=?2 "
+      "AND receipt.attempt_id=ir_outbox.attempt_id)";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(db, query, statement) != SQLITE_OK ||
+      !bindSqliteText(statement.get(), 1, mutation.providerId) ||
+      !bindSqliteText(statement.get(), 2, mutation.serverOrigin) ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return false;
+  }
+  deletedCount += sqlite3_changes(db);
   return true;
 }
 
@@ -821,7 +847,9 @@ ir::IrRemoteSnapshotApplyOutcome ReplayRepository::ApplyIrRemoteSnapshot(
   if (!deleteOutboxIds(database, mutation, mutation.settledOutboxRowIds, false,
                        outboxRowsSettled) ||
       !deleteOutboxIds(database, mutation, mutation.purgedSucceededOutboxRowIds,
-                       true, outboxRowsSettled)) {
+                       true, outboxRowsSettled) ||
+      !deleteNewlyRepresentedOutbox(database, mutation,
+                                    outboxRowsSettled)) {
     return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
             .diagnostic = "could not settle represented IR outbox work"};
   }

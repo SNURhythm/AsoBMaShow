@@ -340,6 +340,32 @@ void testDuplicateBatchOutcomesFailClosed() {
          "duplicate outcomes fail closed for the ambiguous attempt ID");
 }
 
+void testMaximumQueuedReplayFilterHasLinearOperationCount() {
+  constexpr std::size_t count = kMaximumIrUploadCandidateRows;
+  std::vector<int> failedReplayIds;
+  std::vector<int> queuedReplayIds;
+  failedReplayIds.reserve(count);
+  queuedReplayIds.reserve(count / 2);
+  for (std::size_t index = 0; index < count; ++index) {
+    failedReplayIds.push_back(static_cast<int>(index + 1));
+  }
+  for (std::size_t replayId = count; replayId > 0; replayId -= 2) {
+    queuedReplayIds.push_back(static_cast<int>(replayId));
+  }
+
+  const std::size_t operations = ir_uploads::detail::eraseQueuedReplayIds(
+      failedReplayIds, queuedReplayIds);
+
+  bool exact = failedReplayIds.size() == count / 2;
+  for (std::size_t index = 0; exact && index < failedReplayIds.size(); ++index) {
+    exact = failedReplayIds[index] == static_cast<int>(index * 2 + 1);
+  }
+  expect(exact, "maximum-bound queued filtering preserves failed input order");
+  expect(operations == count + count / 2,
+         "maximum-bound queued filtering performs one index and one membership "
+         "operation per supplied row");
+}
+
 } // namespace
 
 int main() {
@@ -352,6 +378,7 @@ int main() {
   testBatchOutcomesMapByAttemptId();
   testCompactedBatchOutcomesFailClosed();
   testDuplicateBatchOutcomesFailClosed();
+  testMaximumQueuedReplayFilterHasLinearOperationCount();
   if (failures != 0) {
     std::cerr << failures << " IR uploads controller test(s) failed\n";
     return 1;

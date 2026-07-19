@@ -5341,8 +5341,8 @@ void testManualIrBatchEnqueueMutatesMixedAttemptsAtomically(
   auto conflict = conflictStored;
   conflict.payloadJson = R"({"score":999})";
   const std::array drafts{absent, failed, pending, succeeded, conflict};
-  const auto outcome =
-      helper.EnqueueReadyIrOutboxDrafts(drafts, true, 20'000);
+  const auto outcome = helper.EnqueueReadyIrOutboxDrafts(
+      drafts, "https://boku.tachi.ac", true, 20'000);
 
   assert(outcome.storageAvailable && outcome.diagnostic.empty());
   assert(outcome.items.size() == drafts.size());
@@ -5398,8 +5398,8 @@ void testManualIrBatchEnqueueRollsBackOnSqliteFailure(
   db.reset();
 
   const std::array drafts{failed, absent};
-  const auto outcome =
-      helper.EnqueueReadyIrOutboxDrafts(drafts, true, 21'000);
+  const auto outcome = helper.EnqueueReadyIrOutboxDrafts(
+      drafts, "https://boku.tachi.ac", true, 21'000);
   assert(!outcome.storageAvailable && !outcome.diagnostic.empty());
   assert(outcome.items.size() == 2 &&
          outcome.items[0].status == ir::IrManualBatchItemStatus::Failed &&
@@ -6432,6 +6432,82 @@ ir::IrSubmissionReceipt snapshotReceipt(
       .observedInSnapshot = true,
       .confirmedAtUnixMillis = 3'000,
   };
+}
+
+ir::IrOutboxDraft draftFromEntry(const ir::IrOutboxEntry &entry) {
+  return {
+      .providerId = entry.providerId,
+      .attemptId = entry.attemptId,
+      .chartMd5 = entry.chartMd5,
+      .chartSha256 = entry.chartSha256,
+      .payloadJson = entry.payloadJson,
+      .rulesetProof = entry.rulesetProof,
+      .createdAtUnixMillis = entry.createdAtUnixMillis,
+  };
+}
+
+ir::IrRemoteScore remoteScoreFor(
+    const ClaimedCanonicalIrAttempt &fixture, std::string remoteScoreId) {
+  auto remote = sampleIrRemoteScore(std::move(remoteScoreId), 'b', 'a', 91);
+  remote.chartMd5 = fixture.chartMd5.empty() ? std::string(32, 'b')
+                                             : fixture.chartMd5;
+  remote.chartSha256 = fixture.chartSha256;
+  remote.lampRank = kClearTypeHardClearRank;
+  return remote;
+}
+
+void testSnapshotApplySettlesOutboxEnqueuedAfterReconciliationPlanning(
+    const std::filesystem::path &root) {
+  constexpr std::string_view origin = "https://boku.tachi.ac";
+  const auto path = root / "ir-snapshot-settles-racing-manual-enqueue" /
+                    "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto fixture = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-snapshot-settles-racing-manual-enqueue", 215);
+  const auto claimed = helper.LoadIrOutbox("tachi", fixture.attemptId);
+  assert(claimed.status == ir::IrOutboxReadStatus::Found && claimed.entry);
+  const auto staleDraft = draftFromEntry(*claimed.entry);
+  assert(helper.DiscardIrOutbox(fixture.rowId).status ==
+         ir::IrOutboxMutationStatus::Updated);
+
+  const auto candidates =
+      helper.LoadIrReconciliationCandidates("tachi", origin);
+  assert(candidates.status == ir::IrReconciliationReadOutcome::Status::Loaded);
+  const auto remote = remoteScoreFor(fixture, "remote-racing-enqueue");
+  const auto plan = ir::planScoreReconciliation(
+      "tachi", origin, candidates.candidates, std::span{&remote, 1}, 3'000);
+  assert(plan.status == ir::IrScoreReconciliationPlan::Status::Planned &&
+         plan.upsertedReceipts.size() == 1 &&
+         plan.settledOutboxRowIds.empty());
+
+  const auto enqueued = helper.EnqueueReadyIrOutboxDrafts(
+      std::span{&staleDraft, 1}, origin, true, 3'001);
+  assert(enqueued.storageAvailable && enqueued.items.size() == 1 &&
+         enqueued.items.front().status ==
+             ir::IrManualBatchItemStatus::Inserted &&
+         enqueued.items.front().entry);
+
+  ir::IrRemoteSnapshotMutation mutation{
+      .providerId = "tachi",
+      .serverOrigin = std::string(origin),
+      .synchronizedAtUnixMillis = 3'000,
+      .scores = {remote},
+      .upsertedReceipts = plan.upsertedReceipts,
+      .deletedReceiptIds = plan.deletedReceiptIds,
+      .settledOutboxRowIds = plan.settledOutboxRowIds,
+      .purgedSucceededOutboxRowIds = plan.purgedSucceededOutboxRowIds,
+  };
+  const auto applied = helper.ApplyIrRemoteSnapshot(mutation);
+  assert(applied.status ==
+             ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
+         applied.outboxRowsSettled == 1);
+  assert(helper.LoadIrOutbox("tachi", fixture.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  const auto due = helper.ListDueIrOutbox("tachi", 10'000);
+  assert(due.status == ir::IrOutboxBatchStatus::Loaded &&
+         due.entries.empty());
 }
 
 void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
@@ -7807,6 +7883,7 @@ int main() {
   testListIrUploadCandidateReplaysRejectsOversizedSnapshot(root);
   testClearIrSubmissionReceiptsIsOriginScoped(root);
   testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
+  testSnapshotApplySettlesOutboxEnqueuedAfterReconciliationPlanning(root);
   testApplyIrRemoteSnapshotReplacesOneOriginAtomically(root);
   testSnapshotReceiptCannotAuthorizeSucceededOutboxPurge(root);
   testApplyIrRemoteSnapshotValidatesBeforeTransaction(root);

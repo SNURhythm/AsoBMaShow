@@ -17,6 +17,18 @@ bool accepted(ir::IrManualBatchItemStatus status) noexcept {
 
 } // namespace
 
+std::size_t detail::eraseQueuedReplayIds(
+    std::vector<int> &failedReplayIds,
+    std::span<const int> queuedReplayIds) {
+  std::unordered_set<int> queued;
+  queued.reserve(queuedReplayIds.size());
+  queued.insert(queuedReplayIds.begin(), queuedReplayIds.end());
+  const std::size_t membershipOperations = failedReplayIds.size();
+  std::erase_if(failedReplayIds,
+                [&](int replayId) { return queued.contains(replayId); });
+  return queuedReplayIds.size() + membershipOperations;
+}
+
 void DurableEnqueueGate::requestCancellation() noexcept {
   std::lock_guard lock(mutex_);
   if (!enqueueStarted_) {
@@ -147,10 +159,8 @@ PreparationOutcome prepareSelectedCandidates(
         outcome.queuedReplayIds.push_back(uniqueSubmissionReplayIds[index]);
       }
     }
-    std::erase_if(outcome.failedReplayIds, [&](int replayId) {
-      return std::ranges::find(outcome.queuedReplayIds, replayId) !=
-             outcome.queuedReplayIds.end();
-    });
+    (void)detail::eraseQueuedReplayIds(outcome.failedReplayIds,
+                                       outcome.queuedReplayIds);
     return outcome;
   } catch (const std::exception &) {
     return outcome;

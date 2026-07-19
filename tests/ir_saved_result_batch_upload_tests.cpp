@@ -1,7 +1,9 @@
 #include "ir/IrSavedResultBatchUpload.h"
 
 #include <cstdio>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -24,6 +26,13 @@ std::string attemptId(int suffix) {
   std::snprintf(value, sizeof(value),
                 "123e4567-e89b-42d3-a456-426614174%03d", suffix);
   return value;
+}
+
+std::string maximumBoundAttemptId(std::size_t suffix) {
+  std::ostringstream value;
+  value << "123e4567-e89b-42d3-a456-" << std::hex << std::nouppercase
+        << std::setw(12) << std::setfill('0') << suffix;
+  return value.str();
 }
 
 ir::IrSubmission submission(int suffix) {
@@ -134,11 +143,70 @@ void testMissingOrThrowingDependenciesFailWithoutEscaping() {
          "enqueue exception is contained and sanitized");
 }
 
+void testUnknownMissingAndDuplicateOutcomesFailClosed() {
+  const std::vector submissions{submission(65), submission(66), submission(67)};
+  ir::IrSavedResultBatchUploadDependencies dependencies;
+  dependencies.buildDraft = [](const ir::IrSubmission &value) {
+    return ir::BuildDraftOutcome{.status = ir::BuildDraftStatus::Built,
+                                 .draft = draftFor(value)};
+  };
+  dependencies.enqueueBatch = [](std::span<const ir::IrOutboxDraft>) {
+    return ir::IrManualBatchEnqueueOutcome{
+        .storageAvailable = true,
+        .items = {
+            {.attemptId = attemptId(65),
+             .status = ir::IrManualBatchItemStatus::Inserted},
+            {.attemptId = attemptId(65),
+             .status = ir::IrManualBatchItemStatus::AlreadyQueued},
+            {.attemptId = attemptId(67),
+             .status = ir::IrManualBatchItemStatus::RetryQueued},
+            {.attemptId = attemptId(68),
+             .status = ir::IrManualBatchItemStatus::Inserted},
+        }};
+  };
+
+  const auto result = ir::executeIrSavedResultBatchUpload(
+      "tachi", submissions, dependencies);
+
+  expect(result.items[0].status == ir::IrManualBatchItemStatus::Failed &&
+             result.items[1].status == ir::IrManualBatchItemStatus::Failed &&
+             result.items[2].status ==
+                 ir::IrManualBatchItemStatus::RetryQueued,
+         "duplicate and missing attempt outcomes fail closed while an unknown "
+         "outcome cannot displace an exact unique match");
+}
+
+void testMaximumBatchOutcomeIndexHasLinearOperationCount() {
+  constexpr std::size_t count = 16'384;
+  std::vector<ir::IrManualBatchItemOutcome> outcomes;
+  outcomes.reserve(count);
+  for (std::size_t index = count; index > 0; --index) {
+    outcomes.push_back({
+        .attemptId = maximumBoundAttemptId(index - 1),
+        .status = ir::IrManualBatchItemStatus::Inserted,
+    });
+  }
+
+  ir::detail::IrManualBatchOutcomeIndex indexed(outcomes);
+  bool exact = true;
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto found = indexed.findUnique(maximumBoundAttemptId(index));
+    exact = exact && found.has_value() && *found == count - index - 1;
+  }
+
+  expect(exact, "maximum-bound outcomes retain exact attempt-ID mapping");
+  expect(indexed.operationCount() == count * 2,
+         "maximum-bound mapping performs one index and one lookup operation "
+         "per row");
+}
+
 } // namespace
 
 int main() {
   testBuildsEverySubmissionThenEnqueuesValidDraftsOnce();
   testMissingOrThrowingDependenciesFailWithoutEscaping();
+  testUnknownMissingAndDuplicateOutcomesFailClosed();
+  testMaximumBatchOutcomeIndexHasLinearOperationCount();
   if (failures != 0) {
     std::cerr << failures << " saved-result batch upload test(s) failed\n";
     return 1;

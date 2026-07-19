@@ -15,6 +15,29 @@ std::string failureDiagnostic(std::string_view diagnostic,
 
 } // namespace
 
+detail::IrManualBatchOutcomeIndex::IrManualBatchOutcomeIndex(
+    std::span<const IrManualBatchItemOutcome> outcomes) {
+  outcomes_.reserve(outcomes.size());
+  for (std::size_t index = 0; index < outcomes.size(); ++index) {
+    ++operationCount_;
+    const auto [found, inserted] = outcomes_.try_emplace(
+        outcomes[index].attemptId, IndexedOutcome{.index = index});
+    if (!inserted) {
+      found->second.duplicate = true;
+    }
+  }
+}
+
+std::optional<std::size_t>
+detail::IrManualBatchOutcomeIndex::findUnique(std::string_view attemptId) {
+  ++operationCount_;
+  const auto found = outcomes_.find(attemptId);
+  if (found == outcomes_.end() || found->second.duplicate) {
+    return std::nullopt;
+  }
+  return found->second.index;
+}
+
 IrSavedResultBatchUploadResult executeIrSavedResultBatchUpload(
     std::string_view providerId, std::span<const IrSubmission> submissions,
     const IrSavedResultBatchUploadDependencies &dependencies) noexcept {
@@ -73,21 +96,12 @@ IrSavedResultBatchUploadResult executeIrSavedResultBatchUpload(
   try {
     IrManualBatchEnqueueOutcome enqueued = dependencies.enqueueBatch(drafts);
     result.diagnostic = sanitizeDiagnostic(enqueued.diagnostic);
-    std::vector<bool> consumed(enqueued.items.size(), false);
+    detail::IrManualBatchOutcomeIndex indexed(enqueued.items);
     for (std::size_t draftIndex = 0; draftIndex < drafts.size(); ++draftIndex) {
       const std::size_t resultIndex = draftIndexes[draftIndex];
-      std::optional<std::size_t> match;
-      for (std::size_t itemIndex = 0; itemIndex < enqueued.items.size();
-           ++itemIndex) {
-        if (!consumed[itemIndex] &&
-            enqueued.items[itemIndex].attemptId ==
-                drafts[draftIndex].attemptId) {
-          match = itemIndex;
-          break;
-        }
-      }
+      const std::optional<std::size_t> match =
+          indexed.findUnique(drafts[draftIndex].attemptId);
       if (match) {
-        consumed[*match] = true;
         result.items[resultIndex] = std::move(enqueued.items[*match]);
         result.items[resultIndex].diagnostic =
             sanitizeDiagnostic(result.items[resultIndex].diagnostic);

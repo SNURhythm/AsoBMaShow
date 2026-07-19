@@ -16,6 +16,14 @@
 
 namespace ir_uploads {
 
+namespace detail {
+
+[[nodiscard]] std::size_t
+eraseQueuedReplayIds(std::vector<int> &failedReplayIds,
+                     std::span<const int> queuedReplayIds);
+
+} // namespace detail
+
 struct VerificationOutcome {
   std::optional<ir::IrSubmission> submission;
   std::string diagnostic;

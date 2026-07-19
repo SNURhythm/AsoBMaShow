@@ -1404,13 +1404,19 @@ IrManualBatchEnqueueOutcome IrSubmissionService::enqueueManualBatch(
     return {.diagnostic = "IR manual batch is empty"};
   }
   const std::string providerId = drafts.front().providerId;
+  std::string requestOrigin;
   std::uint64_t currentGeneration = 0;
   {
     std::lock_guard lock(impl_->mutex);
     const auto provider = impl_->profile.providers.find(providerId);
+    const auto normalizedOrigin =
+        provider == impl_->profile.providers.end()
+            ? std::optional<std::string>{}
+            : normalizeServerOrigin(provider->second.serverOrigin);
     if (!impl_->started || impl_->stopped || impl_->profilePaused ||
         provider == impl_->profile.providers.end() ||
         !provider->second.enabled ||
+        !normalizedOrigin ||
         !std::ranges::all_of(drafts, [&](const IrOutboxDraft &draft) {
           return draft.providerId == providerId;
         }) ||
@@ -1424,10 +1430,11 @@ IrManualBatchEnqueueOutcome IrSubmissionService::enqueueManualBatch(
       }
       return unavailable;
     }
+    requestOrigin = *normalizedOrigin;
     currentGeneration = impl_->generation;
   }
   auto result = impl_->repository.EnqueueReadyIrOutboxDrafts(
-      drafts, true, safeNow(impl_->options));
+      drafts, requestOrigin, true, safeNow(impl_->options));
   {
     std::lock_guard lock(impl_->mutex);
     if (impl_->generation == currentGeneration) {

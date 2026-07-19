@@ -631,8 +631,8 @@ ReplayRepository::EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft,
 }
 
 ir::IrManualBatchEnqueueOutcome ReplayRepository::EnqueueReadyIrOutboxDrafts(
-    std::span<const ir::IrOutboxDraft> drafts, bool userIntent,
-    std::int64_t nowMs) {
+    std::span<const ir::IrOutboxDraft> drafts,
+    std::string_view requestOrigin, bool userIntent, std::int64_t nowMs) {
   ir::IrManualBatchEnqueueOutcome result;
   result.items.resize(drafts.size());
   struct DraftGroup {
@@ -676,8 +676,10 @@ ir::IrManualBatchEnqueueOutcome ReplayRepository::EnqueueReadyIrOutboxDrafts(
           "manual IR batch contains conflicting drafts for one attempt";
     }
   }
-  if (nowMs < 0) {
-    result.diagnostic = "IR manual batch timestamp is invalid";
+  const auto normalizedOrigin = ir::normalizeServerOrigin(requestOrigin);
+  if (nowMs < 0 || !normalizedOrigin || *normalizedOrigin != requestOrigin) {
+    result.diagnostic = nowMs < 0 ? "IR manual batch timestamp is invalid"
+                                  : "IR manual batch request origin is invalid";
     for (auto &item : result.items) {
       item.diagnostic = result.diagnostic;
     }
@@ -723,17 +725,47 @@ ir::IrManualBatchEnqueueOutcome ReplayRepository::EnqueueReadyIrOutboxDrafts(
       "next_request_user_intent=1, last_error_code=NULL,"
       "last_error_message=NULL, updated_at_ms=? "
       "WHERE id=? AND state=4 AND local_result_ready=1";
+  constexpr const char *receiptQuery =
+      "SELECT COUNT(*) FROM ir_submission_receipts WHERE provider_id=? AND "
+      "server_origin=? AND attempt_id=?";
   SqliteStatementHandle insert;
   SqliteStatementHandle retry;
+  SqliteStatementHandle receipt;
   if (prepareSqliteStatement(impl_->sessionDatabase, insertQuery, insert) !=
           SQLITE_OK ||
       prepareSqliteStatement(impl_->sessionDatabase, retryQuery, retry) !=
+          SQLITE_OK ||
+      prepareSqliteStatement(impl_->sessionDatabase, receiptQuery, receipt) !=
           SQLITE_OK) {
     return storageFailure("could not prepare IR manual batch enqueue");
   }
 
   for (DraftGroup *group : ready) {
     const ir::IrOutboxDraft &draft = *group->draft;
+    if (sqlite3_reset(receipt.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(receipt.get()) != SQLITE_OK ||
+        !bindSqliteText(receipt.get(), 1, draft.providerId) ||
+        !bindSqliteText(receipt.get(), 2, *normalizedOrigin) ||
+        !bindSqliteText(receipt.get(), 3, draft.attemptId) ||
+        sqlite3_step(receipt.get()) != SQLITE_ROW ||
+        !columnIs(receipt.get(), 0, SQLITE_INTEGER)) {
+      return storageFailure("could not inspect IR manual batch receipts");
+    }
+    const sqlite3_int64 receiptCount = sqlite3_column_int64(receipt.get(), 0);
+    if (receiptCount < 0 || receiptCount > 1 ||
+        sqlite3_step(receipt.get()) != SQLITE_DONE) {
+      return storageFailure("IR manual batch receipt identity is invalid");
+    }
+    if (receiptCount == 1) {
+      const ir::IrManualBatchItemOutcome item{
+          .attemptId = draft.attemptId,
+          .status = ir::IrManualBatchItemStatus::AlreadySubmitted,
+      };
+      for (const std::size_t index : group->indexes) {
+        result.items[index] = item;
+      }
+      continue;
+    }
     if (sqlite3_reset(insert.get()) != SQLITE_OK ||
         sqlite3_clear_bindings(insert.get()) != SQLITE_OK ||
         !bindSqliteText(insert.get(), 1, draft.providerId) ||
