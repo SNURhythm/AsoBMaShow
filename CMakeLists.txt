@@ -1631,6 +1631,47 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(ir_upload_candidate_list_view_tests
+        tests/ir_upload_candidate_list_view_tests.cpp
+        src/view/IrUploadCandidateListView.cpp
+        src/view/ImageView.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ir/IrReplayRecordState.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(ir_upload_candidate_list_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_upload_candidate_list_view_tests PRIVATE
+        cxx_std_23
+    )
+    target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE iconv)
+    endif()
+
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
@@ -2586,6 +2627,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         button_enabled_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
+        ir_upload_candidate_list_view_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()
