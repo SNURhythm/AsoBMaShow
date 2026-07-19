@@ -435,6 +435,7 @@ ResultSkinData ResultScene::makeResultSkinData() const {
 
 void ResultScene::saveCourseScore() {
   if (!isCourseFinalResult() || courseOptions.session == nullptr ||
+      courseOptions.savedResultBrowsing ||
       courseOptions.session->courseReplayPlayback ||
       courseOptions.session->courseScoreSaved) {
     return;
@@ -498,6 +499,7 @@ void ResultScene::loadDifficultyLabel() {
 void ResultScene::saveCourseReplay() {
   auto session = courseOptions.session;
   if (!isCourseFinalResult() || session == nullptr ||
+      courseOptions.savedResultBrowsing ||
       session->courseReplayPlayback || session->courseReplaySaved) {
     return;
   }
@@ -1279,7 +1281,11 @@ void ResultScene::addCourseButtons() {
       backButton != nullptr) {
     backButton->setOnClickListener([this]() {
       if (isCourseStageResult()) {
-        showCourseExitConfirmation();
+        if (courseOptions.savedResultBrowsing) {
+          exitResult();
+        } else {
+          showCourseExitConfirmation();
+        }
       } else {
         exitResult();
       }
@@ -1288,7 +1294,8 @@ void ResultScene::addCourseButtons() {
 }
 
 void ResultScene::buildCourseExitConfirmation() {
-  if (!isCourseStageResult() || rootLayout == nullptr) {
+  if (!isCourseStageResult() || courseOptions.savedResultBrowsing ||
+      rootLayout == nullptr) {
     return;
   }
 
@@ -1392,6 +1399,7 @@ void ResultScene::hideCourseExitConfirmation() {
 void ResultScene::recordCourseStageRestTime() {
   if (!isCourseStageResult() || courseStageRestRecorded ||
       courseOptions.session == nullptr ||
+      courseOptions.savedResultBrowsing ||
       courseOptions.session->courseReplayPlayback ||
       courseStageResultShownMicros <= 0) {
     return;
@@ -1456,6 +1464,16 @@ void ResultScene::continueCourse() {
   }
   courseTransitionStarted = true;
   recordCourseStageRestTime();
+
+  if (courseOptions.savedResultBrowsing) {
+    if (session->currentIndex + 1 >= session->completedResults.size()) {
+      showCourseResult();
+      return;
+    }
+    ++session->currentIndex;
+    showSavedCourseStage();
+    return;
+  }
 
   if (session->courseReplayPlayback) {
     if (!session->hasNextCourseReplayStage()) {
@@ -1545,6 +1563,28 @@ void ResultScene::continueCourse() {
       false);
 }
 
+void ResultScene::showSavedCourseStage() {
+  auto session = courseOptions.session;
+  if (session == nullptr || session->courseReplayData == nullptr ||
+      session->currentIndex >= session->completedResults.size() ||
+      session->currentIndex >= session->courseReplayData->stages.size()) {
+    exitResult();
+    return;
+  }
+  const auto &result = session->completedResults[session->currentIndex];
+  const auto &replay =
+      session->courseReplayData->stages[session->currentIndex].replay;
+  session->applyReplayStagePlayOptions(replay);
+  context.sceneManager->changeScene(
+      std::make_unique<ResultScene>(
+          context, result.meta, result.state, replay.provenance, nullptr,
+          ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
+          ResultCourseOptions{.mode = ResultCourseMode::Stage,
+                              .session = session,
+                              .savedResultBrowsing = true}),
+      false);
+}
+
 void ResultScene::showCourseResult() {
   auto session = courseOptions.session;
   if (session == nullptr) {
@@ -1560,7 +1600,9 @@ void ResultScene::showCourseResult() {
           nullptr, ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{},
           false,
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
-                              .session = session}),
+                              .session = session,
+                              .savedResultBrowsing =
+                                  courseOptions.savedResultBrowsing}),
       false);
 }
 
@@ -2035,7 +2077,9 @@ void ResultScene::init() {
   addIrResultStatus();
   if (isCourseStageResult() || isCourseFinalResult()) {
     addCourseButtons();
-    buildCourseExitConfirmation();
+    if (!courseOptions.savedResultBrowsing) {
+      buildCourseExitConfirmation();
+    }
   } else {
     addRetryButtons();
   }

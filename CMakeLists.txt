@@ -544,6 +544,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(records_ir_marker_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME saved_course_result_browse_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_saved_course_result_browse.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(saved_course_result_browse_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 
     add_executable(repository_boundary_tests
         tests/repository_boundary_tests.cpp

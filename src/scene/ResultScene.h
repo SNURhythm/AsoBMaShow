@@ -56,6 +56,7 @@ enum class ResultCourseMode {
 struct ResultCourseOptions {
   ResultCourseMode mode = ResultCourseMode::None;
   std::shared_ptr<CoursePlaySession> session = nullptr;
+  bool savedResultBrowsing = false;
 };
 
 struct ResultPersistenceOptions {
@@ -123,6 +124,7 @@ private:
   void startCourseReplay();
   void startCourseReplayStage(std::shared_ptr<CoursePlaySession> session);
   void continueCourse();
+  void showSavedCourseStage();
   void showCourseResult();
   void exportPhoto();
   void exitResult();
