@@ -672,7 +672,8 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
   auto awaiting = load(harness, 8);
   expect(awaiting.remoteJobId == "job-remote" &&
              awaiting.remoteOrigin == "https://old.example.test" &&
-             awaiting.nextAttemptAtUnixMillis == harness.now.load() + 10'000,
+             awaiting.remotePollCount == 0 &&
+             awaiting.nextAttemptAtUnixMillis == harness.now.load() + 200,
          "202 persists job, request origin, and poll delay");
 
   harness.service->activateProfile(
@@ -698,6 +699,9 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
          "ongoing poll remains awaiting");
 
   awaiting = load(harness, 8);
+  expect(awaiting.remotePollCount == 1 &&
+             awaiting.nextAttemptAtUnixMillis == harness.now.load() + 1'000,
+         "ongoing response advances the adaptive polling stage");
   expect(harness.service->retry(awaiting.id).status ==
              ir::IrOutboxMutationStatus::Updated,
          "second deferred retry is accepted");
@@ -712,6 +716,100 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
              callbacks.front().find("https://old.example.test") !=
                  std::string::npos,
          "completion invalidates ranking cache at persisted origin");
+}
+
+void testAdaptiveDeferredPollingCadence() {
+  Harness harness;
+  harness.setCredential("key");
+  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
+      draft(24, harness.now.load()), false);
+  expect(inserted.entry.has_value(), "adaptive polling fixture inserts");
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Deferred,
+      .remoteJobId = "job-adaptive",
+      .remoteOrigin = "https://old.example.test",
+  });
+  for (int index = 0; index < 6; ++index) {
+    harness.driver->pushPoll({.status = ir::DeliveryStatus::Ongoing});
+  }
+
+  harness.service->start(profile(true));
+  expect(harness.waitForSnapshot(
+             attemptId(24), [](const auto &snapshot) {
+               return snapshot.state ==
+                          ir::IrOutboxState::AwaitingRemoteResult &&
+                      snapshot.requestAttemptCount == 1;
+             }),
+         "accepted upload reaches its first deferred wait");
+  auto awaiting = load(harness, 24);
+  expect(awaiting.remotePollCount == 0 &&
+             awaiting.nextAttemptAtUnixMillis == harness.now.load() + 200,
+         "first remote poll is scheduled after 200 ms");
+
+  const std::vector<std::int64_t> delays{1'000, 2'000, 3'000,
+                                         5'000, 10'000, 10'000};
+  for (std::size_t index = 0; index < delays.size(); ++index) {
+    harness.now = *awaiting.nextAttemptAtUnixMillis;
+    harness.service->notifyOutboxChanged();
+    expect(harness.driver->waitForCalls(index + 2),
+           "scheduled adaptive poll reaches the driver");
+    expect(harness.waitForSnapshot(
+               attemptId(24), [&](const auto &snapshot) {
+                 return snapshot.state ==
+                            ir::IrOutboxState::AwaitingRemoteResult &&
+                        snapshot.requestAttemptCount >=
+                            static_cast<int>(index + 2);
+               }),
+           "ongoing adaptive poll is persisted");
+    awaiting = load(harness, 24);
+    expect(awaiting.remotePollCount == static_cast<int>(index + 1) &&
+               awaiting.nextAttemptAtUnixMillis ==
+                   harness.now.load() + delays[index],
+           "ongoing polls advance through the capped adaptive cadence");
+  }
+}
+
+void testDeferredInitialPollIgnoresEarlierPostFailures() {
+  Harness harness;
+  harness.setCredential("key");
+  harness.repository.EnqueueReadyIrOutboxDraft(draft(25, harness.now.load()),
+                                               false);
+  harness.driver->pushSubmit({.status = ir::DeliveryStatus::TransientFailure});
+  harness.driver->pushSubmit({.status = ir::DeliveryStatus::TransientFailure});
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Deferred,
+      .remoteJobId = "job-after-retries",
+      .remoteOrigin = "https://old.example.test",
+  });
+
+  harness.service->start(profile(true));
+  const std::vector<std::int64_t> postDelays{10'000, 30'000};
+  for (std::size_t index = 0; index < postDelays.size(); ++index) {
+    expect(harness.driver->waitForCalls(index + 1),
+           "transient POST reaches the driver");
+    expect(harness.waitForSnapshot(
+               attemptId(25), [&](const auto &snapshot) {
+                 return snapshot.state == ir::IrOutboxState::Pending &&
+                        snapshot.consecutiveFailureCount ==
+                            static_cast<int>(index + 1);
+               }),
+           "transient POST backoff is persisted");
+    harness.now += postDelays[index];
+    harness.service->notifyOutboxChanged();
+  }
+  expect(harness.driver->waitForCalls(3),
+         "POST succeeds after earlier transport failures");
+  expect(harness.waitForSnapshot(
+             attemptId(25), [](const auto &snapshot) {
+               return snapshot.state ==
+                          ir::IrOutboxState::AwaitingRemoteResult &&
+                      snapshot.requestAttemptCount == 3;
+             }),
+         "deferred response is persisted after POST retries");
+  const auto awaiting = load(harness, 25);
+  expect(awaiting.remotePollCount == 0 &&
+             awaiting.nextAttemptAtUnixMillis == harness.now.load() + 200,
+         "earlier POST failures do not skip the 200 ms first poll");
 }
 
 void testPersistedBackoffAndRetryAfter() {
@@ -988,6 +1086,8 @@ int main() {
   testManualEnqueueRequiresFreshRulesetProof();
   testAutomaticAndManualRequestsUseCurrentOrigin();
   testDeferredPollingPinsOriginAndNeverReposts();
+  testAdaptiveDeferredPollingCadence();
+  testDeferredInitialPollIgnoresEarlierPostFailures();
   testPersistedBackoffAndRetryAfter();
   testPermanentFailureRetryAllAndDeferredPreservation();
   testSucceededPurgeAndSnapshotReads();

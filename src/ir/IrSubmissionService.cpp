@@ -23,7 +23,6 @@ namespace {
 using SteadyTimePoint = IrSubmissionServiceOptions::SteadyTimePoint;
 using StatusKey = std::pair<std::string, std::string>;
 
-constexpr std::int64_t kPollDelayMs = 10'000;
 constexpr std::int64_t kSucceededRetentionMs = 7LL * 24 * 60 * 60 * 1000;
 constexpr std::size_t kWorkerBatchSize = 64;
 
@@ -67,6 +66,14 @@ std::int64_t backoffDelay(int consecutiveFailures) {
                                                3'600'000};
   const std::size_t index = static_cast<std::size_t>(std::clamp(
       consecutiveFailures - 1, 0, static_cast<int>(delays.size() - 1)));
+  return delays[index];
+}
+
+std::int64_t remotePollDelay(int completedPollCount) {
+  constexpr std::array<std::int64_t, 6> delays{200, 1'000, 2'000,
+                                               3'000, 5'000, 10'000};
+  const std::size_t index = static_cast<std::size_t>(std::clamp(
+      completedPollCount, 0, static_cast<int>(delays.size() - 1)));
   return delays[index];
 }
 
@@ -427,6 +434,7 @@ struct IrSubmissionService::Impl {
     };
     const auto preserveRemote = [&] {
       if (originalState == IrOutboxState::AwaitingRemoteResult) {
+        update.remotePollCount = claimed.remotePollCount;
         update.remoteJobId = claimed.remoteJobId;
         update.remoteOrigin = claimed.remoteOrigin;
       }
@@ -438,14 +446,19 @@ struct IrSubmissionService::Impl {
       break;
     case DeliveryStatus::Deferred:
       update.nextState = IrOutboxState::AwaitingRemoteResult;
-      update.nextAttemptAtUnixMillis = safeAdd(now, kPollDelayMs);
+      update.remotePollCount = 0;
+      update.nextAttemptAtUnixMillis = safeAdd(now, remotePollDelay(0));
       update.remoteJobId = outcome.remoteJobId;
       update.remoteOrigin = outcome.remoteOrigin;
       break;
     case DeliveryStatus::Ongoing:
       update.nextState = IrOutboxState::AwaitingRemoteResult;
-      update.nextAttemptAtUnixMillis = safeAdd(now, kPollDelayMs);
       preserveRemote();
+      if (update.remotePollCount < std::numeric_limits<int>::max()) {
+        ++update.remotePollCount;
+      }
+      update.nextAttemptAtUnixMillis =
+          safeAdd(now, remotePollDelay(update.remotePollCount));
       break;
     case DeliveryStatus::TransientFailure: {
       update.nextState = originalState;
