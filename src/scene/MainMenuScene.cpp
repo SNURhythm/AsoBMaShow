@@ -1328,6 +1328,7 @@ void MainMenuScene::init() {
     folderClearData = {};
     scoreClearRanksRevision = 0;
     projectedIrReconciliationRevision = 0;
+    projectedIrAccountEvidenceRevision = 0;
     publishedIrScoreProjectionDiagnostic.clear();
     replayIrObservedRevisions.clear();
   };
@@ -4502,17 +4503,27 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
 }
 
 void MainMenuScene::refreshIrScoreProjectionIfNeeded() {
-  if (context.irSubmissionService == nullptr) {
+  bool projectionNeedsRefresh = false;
+  const std::uint64_t accountEvidenceRevision =
+      context.irAccountEvidenceRevision.load(std::memory_order_acquire);
+  if (accountEvidenceRevision != projectedIrAccountEvidenceRevision) {
+    projectedIrAccountEvidenceRevision = accountEvidenceRevision;
+    projectionNeedsRefresh = true;
+  }
+
+  if (context.irSubmissionService != nullptr) {
+    const auto status = context.irSubmissionService->reconciliationStatus(
+        ir::kTachiProviderId);
+    if (status.phase == ir::IrReconciliationPhase::Succeeded &&
+        status.revision != 0 &&
+        status.revision != projectedIrReconciliationRevision) {
+      projectedIrReconciliationRevision = status.revision;
+      projectionNeedsRefresh = true;
+    }
+  }
+  if (!projectionNeedsRefresh) {
     return;
   }
-  const auto status = context.irSubmissionService->reconciliationStatus(
-      ir::kTachiProviderId);
-  if (status.phase != ir::IrReconciliationPhase::Succeeded ||
-      status.revision == 0 ||
-      status.revision == projectedIrReconciliationRevision) {
-    return;
-  }
-  projectedIrReconciliationRevision = status.revision;
   if (refreshScoreClearRankViews().has_value()) {
     const bool hadVisibleScoreState = scoreClearRanksRevision != 0;
     scoreClearRanks = {};

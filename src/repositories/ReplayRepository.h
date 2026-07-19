@@ -285,6 +285,8 @@ public:
   ir::IrOutboxMutationOutcome
   ClearIrAccountEvidence(std::string_view providerId,
                          std::string_view serverOrigin);
+  ir::IrOutboxMutationOutcome
+  ClearIrProviderAccountEvidence(std::string_view providerId);
   ir::IrOutboxMutationOutcome RetryIrOutbox(std::int64_t rowId,
                                             std::int64_t nowMs);
   ir::IrOutboxMutationOutcome RetryAllIrOutbox(std::string_view providerId,

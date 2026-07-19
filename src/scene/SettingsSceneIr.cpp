@@ -144,22 +144,15 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           [this](std::string &diagnostic) {
             return context.pauseIrProfileServices(diagnostic);
           },
-      .invalidateRemoteIdentity =
-          [this](std::string_view providerId, std::string_view serverOrigin,
-                 std::string &diagnostic) {
+      .invalidateProviderIdentity =
+          [this](std::string_view providerId, std::string &diagnostic) {
             if (!context.profileReady()) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
-            const auto normalizedOrigin =
-                ir::normalizeServerOrigin(serverOrigin);
-            if (!normalizedOrigin) {
-              diagnostic = "The current IR server origin is invalid.";
-              return false;
-            }
             const auto cleared =
-                context.replayRepository.ClearIrAccountEvidence(
-                    providerId, *normalizedOrigin);
+                context.replayRepository.ClearIrProviderAccountEvidence(
+                    providerId);
             if (cleared.status != ir::IrOutboxMutationStatus::Updated &&
                 cleared.status != ir::IrOutboxMutationStatus::NotFound) {
               diagnostic = cleared.diagnostic.empty()
@@ -175,6 +168,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               }
               return false;
             }
+            if (context.irRankingService) {
+              context.irRankingService->invalidate(
+                  {.profileId = context.profileManager.activeProfile().id,
+                   .providerId = std::string(providerId)});
+            }
+            context.irAccountEvidenceRevision.fetch_add(
+                1, std::memory_order_release);
             return true;
           },
       .replaceCredential =
@@ -203,13 +203,6 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           },
       .credentialCommitted =
           [this]() {
-            const std::string profileId =
-                context.profileManager.activeProfile().id;
-            if (context.irRankingService) {
-              context.irRankingService->invalidate(
-                  {.profileId = profileId,
-                   .providerId = std::string(kProviderId)});
-            }
             if (context.irSubmissionService) {
               context.irSubmissionService->notifyConfigurationChanged();
             }

@@ -7,6 +7,7 @@
 #include "../src/ScoreProvenance.h"
 #include "../src/ir/IrRemoteScoreModels.h"
 #include "../src/ir/IrScoreReconciliation.h"
+#include "../src/ir/IrSettingsPresentation.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 #include "../src/targets.h"
@@ -6823,6 +6824,354 @@ void testClearIrAccountEvidenceRollsBackEveryDelete(
   }
 }
 
+void testClearIrProviderAccountEvidenceIsAtomicAcrossOrigins(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-provider-account-evidence-clear" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://origin-a.example", 1'000,
+                 {sampleIrRemoteScore("origin-a-score", 'a', 'b')}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://origin-b.example", 1'000,
+                 {sampleIrRemoteScore("origin-b-score", 'c', 'd')}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "other", "https://origin-a.example", 1'000,
+                 {sampleIrRemoteScore("other-provider-score", 'e', 'f')}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  const auto originA = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-provider-account-origin-a", 142);
+  const auto originB = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-provider-account-origin-b", 143);
+  const auto otherProvider = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-provider-account-other-provider", 144, "other");
+  const auto pending = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-provider-account-pending", 145);
+  const auto receiptlessSucceeded = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-provider-account-receiptless", 146);
+  assert(helper
+             .ApplyIrOutboxDelivery(successfulDelivery(
+                 originA.rowId, "https://origin-a.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+  assert(helper
+             .ApplyIrOutboxDelivery(successfulDelivery(
+                 originB.rowId, "https://origin-b.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+  assert(helper
+             .ApplyIrOutboxDelivery(successfulDelivery(
+                 otherProvider.rowId, "https://origin-a.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE ir_outbox SET state=0 WHERE id=" +
+                            std::to_string(pending.rowId));
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET state=5,completed_at_ms=2000 WHERE id=" +
+                  std::to_string(receiptlessSucceeded.rowId));
+  db.reset();
+
+  assert(helper.ClearIrProviderAccountEvidence("Tachi").status ==
+         ir::IrOutboxMutationStatus::Invalid);
+  const auto cleared = helper.ClearIrProviderAccountEvidence("tachi");
+  assert(cleared.status == ir::IrOutboxMutationStatus::Updated &&
+         cleared.affectedRows == 6);
+
+  for (const auto origin : {std::string_view("https://origin-a.example"),
+                            std::string_view("https://origin-b.example")}) {
+    const auto mirror = helper.ListIrRemoteScores("tachi", origin);
+    assert(mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+           mirror.scores.empty());
+  }
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://origin-a.example",
+                                      originA.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://origin-b.example",
+                                      originB.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", originA.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", originB.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", pending.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", receiptlessSucceeded.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  assert(remoteScoreIds(helper, "other", "https://origin-a.example") ==
+         std::vector<std::string>({"other-provider-score"}));
+  assert(helper
+             .LoadIrSubmissionReceipt("other", "https://origin-a.example",
+                                      otherProvider.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper.LoadIrOutbox("other", otherProvider.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+
+  helper.Shutdown();
+  const auto returnedToOriginA = helper.ListReplays(
+      originA.chartMeta, 0, "tachi", "https://origin-a.example");
+  assert(returnedToOriginA.size() == 1 &&
+         !returnedToOriginA.front().hasIrReceipt &&
+         !returnedToOriginA.front().requestedIrOutboxState &&
+         ir::resolveIrRecordState(
+             {.eligible = true,
+              .hasReceipt = returnedToOriginA.front().hasIrReceipt,
+              .outboxState = returnedToOriginA.front().requestedIrOutboxState}) ==
+             ir::IrRecordState::Eligible);
+}
+
+void testClearIrProviderAccountEvidenceRollsBackEveryDelete(
+    const std::filesystem::path &root) {
+  for (int failureStage = 0; failureStage < 3; ++failureStage) {
+    const auto path = root /
+                      ("ir-provider-account-clear-rollback-" +
+                       std::to_string(failureStage)) /
+                      "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://origin-a.example", 1'000,
+                   {sampleIrRemoteScore("origin-a-score", 'a', 'b')}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://origin-b.example", 1'000,
+                   {sampleIrRemoteScore("origin-b-score", 'c', 'd')}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const auto originA = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-provider-account-rollback-a", 147 + failureStage * 2);
+    const auto originB = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-provider-account-rollback-b",
+        148 + failureStage * 2);
+    assert(helper
+               .ApplyIrOutboxDelivery(successfulDelivery(
+                   originA.rowId, "https://origin-a.example"))
+               .status == ir::IrOutboxMutationStatus::Updated);
+    assert(helper
+               .ApplyIrOutboxDelivery(successfulDelivery(
+                   originB.rowId, "https://origin-b.example"))
+               .status == ir::IrOutboxMutationStatus::Updated);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    const char *table = failureStage == 0
+                            ? "ir_outbox"
+                        : failureStage == 1 ? "ir_submission_receipts"
+                                            : "ir_remote_scores";
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_provider_account_clear BEFORE DELETE ON " +
+                    std::string(table) +
+                    " BEGIN SELECT RAISE(ABORT,'forced provider account "
+                    "clear failure'); END");
+    db.reset();
+
+    assert(helper.ClearIrProviderAccountEvidence("tachi").status ==
+           ir::IrOutboxMutationStatus::StorageFailure);
+    assert(remoteScoreIds(helper, "tachi", "https://origin-a.example") ==
+           std::vector<std::string>({"origin-a-score"}));
+    assert(remoteScoreIds(helper, "tachi", "https://origin-b.example") ==
+           std::vector<std::string>({"origin-b-score"}));
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://origin-a.example",
+                                        originA.attemptId)
+               .status == ir::IrReceiptReadStatus::Found);
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://origin-b.example",
+                                        originB.attemptId)
+               .status == ir::IrReceiptReadStatus::Found);
+    assert(helper.LoadIrOutbox("tachi", originA.attemptId).status ==
+           ir::IrOutboxReadStatus::Found);
+    assert(helper.LoadIrOutbox("tachi", originB.attemptId).status ==
+           ir::IrOutboxReadStatus::Found);
+  }
+}
+
+void testInvalidCredentialActionPreservesDurableEvidence(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-invalid-credential-preserves-evidence" /
+                    "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://origin-a.example", 1'000,
+                 {sampleIrRemoteScore("origin-a-score", 'a', 'b')}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  const auto completed = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-invalid-credential-evidence", 154);
+  assert(helper
+             .ApplyIrOutboxDelivery(successfulDelivery(
+                 completed.rowId, "https://origin-a.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+
+  int quiesceCalls = 0;
+  int invalidationCalls = 0;
+  int credentialWrites = 0;
+  int committedCalls = 0;
+  int reactivationCalls = 0;
+  ir::IrSettingsActionModel model(
+      "tachi", {.scoreSubmission = true, .deferredSubmission = true},
+      {.enabled = true,
+       .autoSubmit = true,
+       .serverOrigin = "https://origin-a.example"},
+      true,
+      {.quiesceRemoteWork =
+           [&](std::string &) {
+             ++quiesceCalls;
+             return true;
+           },
+       .invalidateProviderIdentity =
+           [&](std::string_view providerId, std::string &diagnostic) {
+             ++invalidationCalls;
+             const auto cleared =
+                 helper.ClearIrProviderAccountEvidence(providerId);
+             diagnostic = cleared.diagnostic;
+             return cleared.status == ir::IrOutboxMutationStatus::Updated ||
+                    cleared.status == ir::IrOutboxMutationStatus::NotFound;
+           },
+       .replaceCredential =
+           [&](std::string_view, std::string &) {
+             ++credentialWrites;
+             return true;
+           },
+       .credentialCommitted = [&] { ++committedCalls; },
+       .reactivateRemoteWork =
+           [&](std::string &) {
+             ++reactivationCalls;
+             return true;
+           }});
+
+  const auto rejected = model.replaceCredential("pasted-key\n");
+  assert(rejected.status == ir::IrSettingsActionResult::Status::Invalid);
+  assert(quiesceCalls == 0 && invalidationCalls == 0 && credentialWrites == 0 &&
+         committedCalls == 0 && reactivationCalls == 0);
+
+  helper.Shutdown();
+  assert(remoteScoreIds(helper, "tachi", "https://origin-a.example") ==
+         std::vector<std::string>({"origin-a-score"}));
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://origin-a.example",
+                                      completed.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", completed.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  const auto returnedToOriginA = helper.ListReplays(
+      completed.chartMeta, 0, "tachi", "https://origin-a.example");
+  assert(returnedToOriginA.size() == 1 &&
+         returnedToOriginA.front().hasIrReceipt &&
+         returnedToOriginA.front().requestedIrOutboxState ==
+             ir::IrOutboxState::Succeeded &&
+         ir::resolveIrRecordState(
+             {.eligible = true,
+              .hasReceipt = returnedToOriginA.front().hasIrReceipt,
+              .outboxState = returnedToOriginA.front().requestedIrOutboxState}) ==
+             ir::IrRecordState::Uploaded);
+}
+
+void testCredentialChangesCannotReExposeAnotherOriginsEvidence(
+    const std::filesystem::path &root) {
+  for (const bool removeCredential : {false, true}) {
+    const auto path = root /
+                      (removeCredential ? "ir-provider-removal-action"
+                                        : "ir-provider-replacement-action") /
+                      "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://origin-a.example", 1'000,
+                   {sampleIrRemoteScore("origin-a-score", 'a', 'b')}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://origin-b.example", 1'000,
+                   {sampleIrRemoteScore("origin-b-score", 'c', 'd')}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const int suffixBase = removeCredential ? 157 : 155;
+    const auto originA = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-provider-action-origin-a", suffixBase);
+    const auto originB = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-provider-action-origin-b", suffixBase + 1);
+    assert(helper
+               .ApplyIrOutboxDelivery(successfulDelivery(
+                   originA.rowId, "https://origin-a.example"))
+               .status == ir::IrOutboxMutationStatus::Updated);
+    assert(helper
+               .ApplyIrOutboxDelivery(successfulDelivery(
+                   originB.rowId, "https://origin-b.example"))
+               .status == ir::IrOutboxMutationStatus::Updated);
+
+    int invalidationCalls = 0;
+    int credentialWrites = 0;
+    ir::IrSettingsActionModel model(
+        "tachi", {.scoreSubmission = true, .deferredSubmission = true},
+        {.enabled = true,
+         .autoSubmit = true,
+         .serverOrigin = "https://origin-b.example"},
+        true,
+        {.quiesceRemoteWork = [](std::string &) { return true; },
+         .invalidateProviderIdentity =
+             [&](std::string_view providerId, std::string &diagnostic) {
+               ++invalidationCalls;
+               const auto cleared =
+                   helper.ClearIrProviderAccountEvidence(providerId);
+               diagnostic = cleared.diagnostic;
+               return cleared.status == ir::IrOutboxMutationStatus::Updated ||
+                      cleared.status == ir::IrOutboxMutationStatus::NotFound;
+             },
+         .replaceCredential =
+             [&](std::string_view, std::string &) {
+               ++credentialWrites;
+               return true;
+             },
+         .removeCredential =
+             [&](std::string &) {
+               ++credentialWrites;
+               return true;
+             },
+         .reactivateRemoteWork = [](std::string &) { return true; }});
+
+    const auto changed = removeCredential ? model.removeCredential()
+                                          : model.replaceCredential("new-key");
+    assert(changed.succeeded() && invalidationCalls == 1 &&
+           credentialWrites == 1);
+
+    helper.Shutdown();
+    for (const auto &[origin, fixture] :
+         {std::pair{std::string_view("https://origin-a.example"), &originA},
+          std::pair{std::string_view("https://origin-b.example"), &originB}}) {
+      const auto mirror = helper.ListIrRemoteScores("tachi", origin);
+      assert(mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.empty());
+      assert(helper
+                 .LoadIrSubmissionReceipt("tachi", origin,
+                                          fixture->attemptId)
+                 .status == ir::IrReceiptReadStatus::NotFound);
+      assert(helper.LoadIrOutbox("tachi", fixture->attemptId).status ==
+             ir::IrOutboxReadStatus::NotFound);
+    }
+    const auto returnedToOriginA = helper.ListReplays(
+        originA.chartMeta, 0, "tachi", "https://origin-a.example");
+    assert(returnedToOriginA.size() == 1 &&
+           !returnedToOriginA.front().hasIrReceipt &&
+           !returnedToOriginA.front().requestedIrOutboxState &&
+           ir::resolveIrRecordState(
+               {.eligible = true,
+                .hasReceipt = returnedToOriginA.front().hasIrReceipt,
+                .outboxState =
+                    returnedToOriginA.front().requestedIrOutboxState}) ==
+               ir::IrRecordState::Eligible);
+  }
+}
+
 void testIrOutboxRecoveryCountsRetryAndValidation(
     const std::filesystem::path &root) {
   const auto path = root / "ir-outbox-recovery" / "replay.db";
@@ -7034,6 +7383,10 @@ int main() {
   testIrRemoteScoreExactReadIsTypedScopedAndStrict(root);
   testClearIrAccountEvidenceIsAtomicAndOriginScoped(root);
   testClearIrAccountEvidenceRollsBackEveryDelete(root);
+  testClearIrProviderAccountEvidenceIsAtomicAcrossOrigins(root);
+  testClearIrProviderAccountEvidenceRollsBackEveryDelete(root);
+  testInvalidCredentialActionPreservesDurableEvidence(root);
+  testCredentialChangesCannotReExposeAnotherOriginsEvidence(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);
   testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);

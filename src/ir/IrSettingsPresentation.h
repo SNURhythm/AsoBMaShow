@@ -71,9 +71,8 @@ struct IrSettingsActionDependencies {
       storeSettings;
   std::function<void(const IrProviderSettings &candidate)> settingsCommitted;
   std::function<bool(std::string &diagnostic)> quiesceRemoteWork;
-  std::function<bool(std::string_view providerId, std::string_view serverOrigin,
-                     std::string &diagnostic)>
-      invalidateRemoteIdentity;
+  std::function<bool(std::string_view providerId, std::string &diagnostic)>
+      invalidateProviderIdentity;
   std::function<bool(std::string_view apiKey, std::string &diagnostic)>
       replaceCredential;
   std::function<bool(std::string &diagnostic)> removeCredential;

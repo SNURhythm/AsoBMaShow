@@ -116,6 +116,7 @@ public:
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
   std::unique_ptr<ir::IrRankingService> irRankingService;
   std::unique_ptr<ir::IrSubmissionService> irSubmissionService;
+  std::atomic<std::uint64_t> irAccountEvidenceRevision{0};
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};

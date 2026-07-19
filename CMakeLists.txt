@@ -969,6 +969,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrSettingsPresentation.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp

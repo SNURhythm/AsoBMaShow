@@ -81,10 +81,11 @@ require_in_order(
 require_settings_in_order(
     ".quiesceRemoteWork =",
     "context.pauseIrProfileServices(diagnostic)",
-    ".invalidateRemoteIdentity =",
-    "ir::normalizeServerOrigin(serverOrigin)",
-    "context.replayRepository.ClearIrAccountEvidence(",
+    ".invalidateProviderIdentity =",
+    "context.replayRepository.ClearIrProviderAccountEvidence(",
     "context.bokutachiCacheStore->clearUserIds(diagnostic)",
+    "context.irRankingService->invalidate(",
+    "context.irAccountEvidenceRevision.fetch_add(",
     ".replaceCredential =",
     ".removeCredential =",
     ".credentialCommitted =",
@@ -92,14 +93,24 @@ require_settings_in_order(
     "context.activateIrProfileServices(",
 )
 require(
+    "context.irAccountEvidenceRevision.load(" in source
+    and "projectedIrAccountEvidenceRevision" in source
+    and "refreshScoreClearRankViews()" in source
+    and "reloadReplayRecordModels(true)" in source,
+    "the retained Main Menu must observe provider account-evidence revisions "
+    "and rebuild projected score and Records views",
+)
+require(
     settings_source.count("clearUserIds(diagnostic)") == 1,
     "cached Bokutachi identity clearing must live only in remote invalidation",
 )
 require(
-    settings_source.count("ClearIrAccountEvidence(") == 1
+    settings_source.count("ClearIrProviderAccountEvidence(") == 1
+    and "ClearIrAccountEvidence(" not in settings_source
     and "ClearIrSubmissionReceipts(" not in settings_source
     and "ClearIrRemoteScores(" not in settings_source,
-    "credential changes must use one atomic account-evidence repository call",
+    "credential changes must use one atomic provider-wide account-evidence "
+    "repository call",
 )
 require_settings_in_order(
     "if (presentation.showQueueActions)",

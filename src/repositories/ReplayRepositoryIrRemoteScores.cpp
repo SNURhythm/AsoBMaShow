@@ -1192,3 +1192,88 @@ ReplayRepository::ClearIrAccountEvidence(std::string_view providerId,
                                       : ir::IrOutboxMutationStatus::Updated,
           .affectedRows = affectedRows};
 }
+
+ir::IrOutboxMutationOutcome ReplayRepository::ClearIrProviderAccountEvidence(
+    std::string_view providerId) {
+  if (!validProviderId(providerId)) {
+    return invalidClearIdentity();
+  }
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  sqlite3 *database = impl_->sessionDatabase;
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic =
+                "could not start provider IR account evidence clear"};
+  }
+
+  std::size_t affectedRows = 0;
+  SqliteStatementHandle outboxStatement;
+  constexpr const char *outboxQuery =
+      "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
+      "SELECT 1 FROM ir_submission_receipts receipt WHERE "
+      "receipt.provider_id=? AND receipt.attempt_id=ir_outbox.attempt_id AND "
+      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays replay "
+      "WHERE replay.id=receipt.replay_id AND "
+      "replay.attempt_id=ir_outbox.attempt_id))";
+  if (prepareSqliteStatement(database, outboxQuery, outboxStatement) !=
+          SQLITE_OK ||
+      sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(outboxStatement.get(), 2, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_step(outboxStatement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic =
+                "could not clear provider receipt-backed IR outbox rows"};
+  }
+  affectedRows +=
+      static_cast<std::size_t>(std::max(0, sqlite3_changes(database)));
+
+  SqliteStatementHandle receiptStatement;
+  if (prepareSqliteStatement(
+          database,
+          "DELETE FROM ir_submission_receipts WHERE provider_id=?",
+          receiptStatement) != SQLITE_OK ||
+      sqlite3_bind_text(receiptStatement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_step(receiptStatement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not clear provider IR submission receipts"};
+  }
+  affectedRows +=
+      static_cast<std::size_t>(std::max(0, sqlite3_changes(database)));
+
+  SqliteStatementHandle remoteStatement;
+  if (prepareSqliteStatement(
+          database, "DELETE FROM ir_remote_scores WHERE provider_id=?",
+          remoteStatement) != SQLITE_OK ||
+      sqlite3_bind_text(remoteStatement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_step(remoteStatement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not clear provider IR remote scores"};
+  }
+  affectedRows +=
+      static_cast<std::size_t>(std::max(0, sqlite3_changes(database)));
+
+  if (!transaction.commit(transactionError)) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic =
+                "could not commit provider IR account evidence clear"};
+  }
+  return {.status = affectedRows == 0 ? ir::IrOutboxMutationStatus::NotFound
+                                      : ir::IrOutboxMutationStatus::Updated,
+          .affectedRows = affectedRows};
+}

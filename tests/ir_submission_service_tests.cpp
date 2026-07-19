@@ -1359,17 +1359,16 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
               harness.service->pauseAndCancel();
               return true;
             },
-        .invalidateRemoteIdentity =
-            [&](std::string_view providerId, std::string_view serverOrigin,
-                std::string &diagnostic) {
+        .invalidateProviderIdentity =
+            [&](std::string_view providerId, std::string &diagnostic) {
               {
                 std::lock_guard lock(orderMutex);
                 invalidationEntered = true;
                 order.emplace_back("invalidate");
                 orderChanged.notify_all();
               }
-              const auto cleared = harness.repository.ClearIrSubmissionReceipts(
-                  providerId, serverOrigin);
+              const auto cleared =
+                  harness.repository.ClearIrProviderAccountEvidence(providerId);
               diagnostic = cleared.diagnostic;
               return cleared.status == ir::IrOutboxMutationStatus::Updated ||
                      cleared.status == ir::IrOutboxMutationStatus::NotFound;

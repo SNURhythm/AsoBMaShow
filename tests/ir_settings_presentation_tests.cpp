@@ -274,13 +274,11 @@ struct FakeActions {
               }
               return true;
             },
-        .invalidateRemoteIdentity =
-            [this](std::string_view providerId, std::string_view serverOrigin,
-                   std::string &diagnostic) {
+        .invalidateProviderIdentity =
+            [this](std::string_view providerId, std::string &diagnostic) {
               ++invalidationCalls;
               credentialActionOrder.push_back("invalidate:" +
-                                              std::string(providerId) + ":" +
-                                              std::string(serverOrigin));
+                                              std::string(providerId));
               if (!invalidationSucceeds) {
                 diagnostic = "identity invalidation failed";
                 return false;
@@ -412,7 +410,7 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 2);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac",
+               "quiesce", "invalidate:tachi",
                "reactivate"}));
   REQUIRE(failedInvalidation.diagnostic.find(secret) == std::string::npos);
 
@@ -429,7 +427,7 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 3);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "replace",
+               "quiesce", "invalidate:tachi", "replace",
                "reactivate"}));
   REQUIRE(failedReplace.diagnostic.find(secret) == std::string::npos);
 
@@ -442,7 +440,7 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 4);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "replace",
+               "quiesce", "invalidate:tachi", "replace",
                "committed", "reactivate"}));
 
   fake.credentialActionOrder.clear();
@@ -455,7 +453,7 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 5);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac",
+               "quiesce", "invalidate:tachi",
                "reactivate"}));
 
   fake.credentialActionOrder.clear();
@@ -469,7 +467,7 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 6);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "remove",
+               "quiesce", "invalidate:tachi", "remove",
                "reactivate"}));
 
   fake.credentialActionOrder.clear();
@@ -481,7 +479,7 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 7);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "remove",
+               "quiesce", "invalidate:tachi", "remove",
                "committed", "reactivate"}));
 
   fake.credentialActionOrder.clear();
@@ -494,8 +492,48 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.reactivationCalls == 8);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "replace",
+               "quiesce", "invalidate:tachi", "replace",
                "committed", "reactivate"}));
+}
+
+void testStoreInvalidCredentialFormatsHaveNoSideEffects() {
+  const std::vector<std::string> invalidKeys{
+      {},
+      " leading",
+      "trailing ",
+      "line\nbreak",
+      std::string("key") + static_cast<char>(0x01) + "value",
+      std::string("key") + static_cast<char>(0x7f) + "value",
+      std::string(4U * 1024U + 1U, 'x'),
+  };
+
+  for (const auto &apiKey : invalidKeys) {
+    FakeActions fake;
+    fake.credentialPresent = true;
+    ir::IrSettingsActionModel model(
+        "tachi",
+        {.chartRankings = true,
+         .scoreSubmission = true,
+         .deferredSubmission = true},
+        initialSettings(), true, fake.dependencies());
+
+    const auto result = model.replaceCredential(apiKey);
+
+    REQUIRE(result.status == ir::IrSettingsActionResult::Status::Invalid);
+    REQUIRE(model.hasCredential());
+    REQUIRE(fake.credentialPresent);
+    REQUIRE(fake.settingsStores == 0);
+    REQUIRE(fake.settingsPublishes == 0);
+    REQUIRE(fake.quiesceCalls == 0);
+    REQUIRE(fake.invalidationCalls == 0);
+    REQUIRE(fake.replaceCredentialCalls == 0);
+    REQUIRE(fake.removeCredentialCalls == 0);
+    REQUIRE(fake.credentialPublishes == 0);
+    REQUIRE(fake.reactivationCalls == 0);
+    REQUIRE(fake.credentialActionOrder.empty());
+    REQUIRE(apiKey.empty() || result.diagnostic.find(apiKey) ==
+                                  std::string::npos);
+  }
 }
 
 void testQueueActionsAreCapabilityGatedAndFailureSafe() {
@@ -548,6 +586,7 @@ int main() {
   testRecordSyncProjectsEveryPhaseAndBoundedMutationSummary();
   testSettingsActionsPublishOnlyAfterDurableStore();
   testCredentialActionsNeverRetainKeyAndPublishAfterStore();
+  testStoreInvalidCredentialFormatsHaveNoSideEffects();
   testQueueActionsAreCapabilityGatedAndFailureSafe();
   testActionModelObservesReconciliationRevisionAndCooldownChanges();
   return 0;

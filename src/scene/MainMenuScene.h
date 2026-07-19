@@ -470,6 +470,7 @@ private:
   ScoreBestCache scoreBestScores;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t projectedIrReconciliationRevision = 0;
+  std::uint64_t projectedIrAccountEvidenceRevision = 0;
   std::string publishedIrScoreProjectionDiagnostic;
   std::uint64_t libraryRevision = 0;
   chart_library::FolderClearDataByLongNoteMode folderClearData;

@@ -26,14 +26,6 @@ bool validProviderId(std::string_view value) {
   });
 }
 
-bool validApiKey(std::string_view value) {
-  return !value.empty() &&
-         value.size() <= IrCredentialStore::kMaximumApiKeyBytes &&
-         std::ranges::none_of(value, [](unsigned char character) {
-           return character <= 0x20 || character == 0x7f;
-         });
-}
-
 std::string redactKeys(std::string diagnostic,
                        const IrCredentials &credentials) {
   for (const auto &[providerId, key] : credentials.apiKeys) {
@@ -65,7 +57,7 @@ bool validateCredentials(const IrCredentials &credentials,
       diagnostic = "credential provider ID is invalid";
       return false;
     }
-    if (!validApiKey(apiKey)) {
+    if (!IrCredentialStore::isApiKeyFormatValid(apiKey)) {
       diagnostic = "credential API key format or length is invalid";
       return false;
     }
@@ -150,7 +142,7 @@ IrCredentialStore::load(const std::filesystem::path &path) {
       return result;
     }
     const std::string value = apiKey->get<std::string>();
-    if (!validApiKey(value)) {
+    if (!IrCredentialStore::isApiKeyFormatValid(value)) {
       result.status = IrCredentialLoadStatus::Invalid;
       result.diagnostics.push_back(
           "credential API key format or length is invalid");
@@ -194,7 +186,7 @@ IrCredentialWriteResult IrCredentialStore::replaceApiKey(
   if (!validProviderId(providerId)) {
     return invalidWrite("credential provider ID is invalid");
   }
-  if (!validApiKey(apiKey)) {
+  if (!IrCredentialStore::isApiKeyFormatValid(apiKey)) {
     return invalidWrite("credential API key format or length is invalid");
   }
   auto loaded = load(path);

@@ -1,5 +1,7 @@
 #include "IrSettingsPresentation.h"
 
+#include "IrCredentialStore.h"
+
 #include <algorithm>
 #include <chrono>
 #include <string>
@@ -252,24 +254,19 @@ IrSettingsActionModel::setServerOrigin(std::string_view serverOrigin) {
 
 IrSettingsActionResult
 IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
-  if (apiKey.empty() || apiKey.size() > 4U * 1024U) {
+  if (!IrCredentialStore::isApiKeyFormatValid(apiKey)) {
     return {.status = IrSettingsActionResult::Status::Invalid,
-            .diagnostic = "Enter a non-empty API key."};
+            .diagnostic = "Enter a valid API key."};
   }
   if (!dependencies_.replaceCredential) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
   if (!dependencies_.quiesceRemoteWork ||
-      !dependencies_.invalidateRemoteIdentity ||
+      !dependencies_.invalidateProviderIdentity ||
       !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account mutation isolation is unavailable."};
-  }
-  const auto origin = normalizeServerOrigin(settings_.serverOrigin);
-  if (!origin) {
-    return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "The current IR server origin is invalid."};
   }
   std::string ignoredDiagnostic;
   RemoteWorkReactivationGuard reactivation(
@@ -284,8 +281,8 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
             .diagnostic = "IR account work could not be paused."};
   }
   try {
-    if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
-                                                 ignoredDiagnostic)) {
+    if (!dependencies_.invalidateProviderIdentity(providerId_,
+                                                   ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
               .diagnostic =
                   "IR account evidence could not be invalidated."};
@@ -325,15 +322,10 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
             .diagnostic = "API key storage is unavailable."};
   }
   if (!dependencies_.quiesceRemoteWork ||
-      !dependencies_.invalidateRemoteIdentity ||
+      !dependencies_.invalidateProviderIdentity ||
       !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account mutation isolation is unavailable."};
-  }
-  const auto origin = normalizeServerOrigin(settings_.serverOrigin);
-  if (!origin) {
-    return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "The current IR server origin is invalid."};
   }
   std::string ignoredDiagnostic;
   RemoteWorkReactivationGuard reactivation(
@@ -348,8 +340,8 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
             .diagnostic = "IR account work could not be paused."};
   }
   try {
-    if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
-                                                 ignoredDiagnostic)) {
+    if (!dependencies_.invalidateProviderIdentity(providerId_,
+                                                   ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
               .diagnostic =
                   "IR account evidence could not be invalidated."};
