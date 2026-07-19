@@ -125,6 +125,11 @@ struct ReplaySummary {
   int rulesetVersion = 0;
   ScoreEligibility eligibility = ScoreEligibility::LegacyUnverified;
   audio::PlaybackRate playback;
+  std::shared_ptr<const ScoreProvenance> provenance;
+  std::optional<std::string> attemptId;
+  bool hasCanonicalAttemptFingerprint = false;
+  std::optional<ir::IrOutboxState> requestedIrOutboxState;
+  bool irUploadPending = false;
 };
 
 struct ReplayResultRecord {
@@ -210,8 +215,9 @@ public:
   ClearIrOutboxSnapshot(const std::filesystem::path &snapshotDatabasePath,
                         std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
-  std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
-                                         int limit = 100);
+  std::vector<ReplaySummary>
+  ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100,
+              std::string_view irProviderId = {});
   std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
                                                int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,

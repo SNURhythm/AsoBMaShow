@@ -266,6 +266,52 @@ void testCanonicalLr2EligibilityMatrix() {
   }
 }
 
+void testReplayUploadMarkerPolicy() {
+  const ir::IrSubmission submission = validSubmission();
+  bms_parser::ChartMeta meta;
+  meta.KeyMode = submission.keyMode;
+  meta.MD5 = submission.chartMd5;
+  meta.SHA256 = submission.chartSha256;
+  meta.TotalNotes = submission.maxScore / 2;
+
+  const auto show = [&](std::optional<ir::IrOutboxState> state,
+                        const ScoreProvenance &provenance,
+                        std::string_view attemptId =
+                            "123e4567-e89b-42d3-a456-426614174000",
+                        bool hasFingerprint = true) {
+    return ir::tachi::shouldShowReplayUploadMarker(
+        attemptId, hasFingerprint, meta, provenance, state);
+  };
+
+  expect(show(std::nullopt, submission.provenance),
+         "eligible result without an outbox row shows the marker");
+  for (const auto state : {ir::IrOutboxState::Pending,
+                           ir::IrOutboxState::Uploading,
+                           ir::IrOutboxState::AwaitingRemoteResult,
+                           ir::IrOutboxState::BlockedConfiguration,
+                           ir::IrOutboxState::FailedPermanent}) {
+    expect(show(state, submission.provenance),
+           "unfinished outbox result shows the marker");
+  }
+  expect(!show(ir::IrOutboxState::Succeeded, submission.provenance),
+         "successful outbox result hides the marker");
+  expect(!show(std::nullopt, submission.provenance, "", true),
+         "missing attempt identity hides the marker");
+  expect(!show(std::nullopt, submission.provenance,
+               "123e4567-e89b-42d3-a456-426614174000", false),
+         "missing canonical fingerprint hides the marker");
+
+  ScoreProvenance modified = submission.provenance;
+  modified.assistOption = assist_options::kDrag;
+  modified.eligibility = ScoreEligibility::Modified;
+  expect(!show(std::nullopt, modified),
+         "modified result hides the marker");
+  ScoreProvenance beatoraja = submission.provenance;
+  beatoraja.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  expect(!show(std::nullopt, beatoraja),
+         "Beatoraja result hides the marker");
+}
+
 void testRejectsNonCanonicalLr2Proof() {
   auto submission = validSubmission();
   submission.provenance.ruleset =
@@ -523,6 +569,7 @@ void testPayloadNeverContainsCredentialMaterial() {
 int main() {
   testBuildsOneScoreBatchManual();
   testCanonicalLr2EligibilityMatrix();
+  testReplayUploadMarkerPolicy();
   testRejectsNonCanonicalLr2Proof();
   testMapsPlaytypesAndHashFallback();
   testMapsEveryLamp();

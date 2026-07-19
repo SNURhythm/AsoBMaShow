@@ -19,6 +19,7 @@ public:
   ReplaySummaryListItemView() {
     clearLamp = new View();
     textColumn = new View();
+    irBadge = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
     scoreColumn = new View();
     titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
@@ -47,6 +48,17 @@ public:
     textColumn->addView(titleText);
     textColumn->addView(detailText);
     addView(textColumn);
+
+    irBadge->setText("IR ↑");
+    irBadge->setWidth(0)->setHeight(28)->setFlexShrink(0);
+    irBadge->setAlign(TextView::TextAlign::CENTER);
+    irBadge->setVAlign(TextView::TextVAlign::MIDDLE);
+    irBadge->setCornerRadius(6.0F);
+    irBadge->setThemedBackgroundColor(ui_theme::amber);
+    irBadge->setThemedColor(
+        [] { return ui_theme::textOn(ui_theme::amber()); });
+    irBadge->setVisible(false);
+    addView(irBadge);
 
     scoreColumn->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignFlexEnd)
@@ -85,6 +97,10 @@ public:
                                             summary.maxScore);
     rankText->setText(score_rank::displayLabelForScore(summary.finalScore,
                                                        summary.maxScore));
+
+    const bool showIrBadge = summary.irUploadPending;
+    irBadge->setVisible(showIrBadge);
+    irBadge->setWidth(showIrBadge ? 54.0F : 0.0F);
 
     const int clearRank = replay_clear_mark::effectiveClearRank(summary);
     if (hasClearLampColor(clearRank)) {
@@ -129,6 +145,7 @@ private:
 
   View *clearLamp = nullptr;
   View *textColumn = nullptr;
+  TextView *irBadge = nullptr;
   View *scoreColumn = nullptr;
   TextView *titleText = nullptr;
   TextView *detailText = nullptr;

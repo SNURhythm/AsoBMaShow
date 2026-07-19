@@ -45,7 +45,8 @@ std::optional<int> SaveCourseReplayOnConnection(
     const std::vector<std::string> &stageProvenanceJson);
 std::vector<ReplaySummary>
 ListReplaysOnConnection(sqlite3 *database,
-                        const bms_parser::ChartMeta &chartMeta, int limit);
+                        const bms_parser::ChartMeta &chartMeta, int limit,
+                        std::string_view irProviderId = {});
 std::vector<ReplaySummary>
 ListCourseReplaysOnConnection(sqlite3 *database,
                               const CourseReplayLookup &lookup, int limit);

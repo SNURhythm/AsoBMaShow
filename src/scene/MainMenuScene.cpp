@@ -18,6 +18,7 @@
 #include "../RAII.h"
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
+#include "../ir/tachi/TachiBatchManual.h"
 #include "../path.h"
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
@@ -8310,7 +8311,17 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
          .legacyCourseId = activeFolder.courseId},
         0);
   } else {
-    replaySummaries = context.replayRepository.ListReplays(record.meta, 0);
+    replaySummaries = context.replayRepository.ListReplays(
+        record.meta, 0, ir::kTachiProviderId);
+    for (ReplaySummary &summary : replaySummaries) {
+      if (!summary.autoPlay && !summary.courseReplay && summary.chartMeta &&
+          summary.provenance && summary.attemptId) {
+        summary.irUploadPending = ir::tachi::shouldShowReplayUploadMarker(
+            *summary.attemptId, summary.hasCanonicalAttemptFingerprint,
+            *summary.chartMeta, *summary.provenance,
+            summary.requestedIrOutboxState);
+      }
+    }
     replaySummaries.insert(replaySummaries.begin(),
                            autoPlayReplaySummary(record));
   }

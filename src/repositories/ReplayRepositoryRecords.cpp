@@ -55,6 +55,14 @@ bool isHexDigest(std::string_view value, std::size_t expectedLength) {
          });
 }
 
+bool isLowerHexDigest(std::string_view value, std::size_t expectedLength) {
+  return value.size() == expectedLength &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return std::isdigit(character) != 0 ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
 std::optional<course_identity::ChartIdentity>
 strictChartIdentity(std::string sha256, std::string md5) {
   const bool hadSha256 = !sha256.empty();
@@ -2068,18 +2076,20 @@ std::optional<int> replay_repository_detail::SaveCourseReplayOnConnection(
 }
 
 std::vector<ReplaySummary>
-ReplayRepository::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit) {
+ReplayRepository::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit,
+                              std::string_view irProviderId) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
     return {};
   }
   return replay_repository_detail::ListReplaysOnConnection(
-      impl_->sessionDatabase, chartMeta, limit);
+      impl_->sessionDatabase, chartMeta, limit, irProviderId);
 }
 
 std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
-    sqlite3 *db, const bms_parser::ChartMeta &chartMeta, int limit) {
+    sqlite3 *db, const bms_parser::ChartMeta &chartMeta, int limit,
+    std::string_view irProviderId) {
   std::vector<ReplaySummary> replays;
 
   std::string snapshotError;
@@ -2176,7 +2186,10 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
       "r.play_option2_seed, r.assist_option, r.max_combo,"
       "(SELECT COUNT(*) FROM replay_events e WHERE e.replay_id = r.id),"
       "(SELECT COUNT(*) FROM replay_touch_samples t WHERE t.replay_id = r.id),"
-      "r.ruleset_version, r.eligibility, r.provenance_json "
+      "r.ruleset_version, r.eligibility, r.provenance_json,"
+      "r.attempt_id, r.attempt_fingerprint,"
+      "(SELECT o.state FROM ir_outbox o "
+      "WHERE o.provider_id = ? AND o.attempt_id = r.attempt_id LIMIT 1) "
       "FROM replays r WHERE r.id = ?";
   SqliteStatementHandle detailStmt;
   if (!prepareSqliteStatementLogged(db, detailQuery, detailStmt,
@@ -2188,7 +2201,8 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
   for (const int replayId : validIds) {
     sqlite3_reset(detailStmt.get());
     sqlite3_clear_bindings(detailStmt.get());
-    sqlite3_bind_int(detailStmt.get(), 1, replayId);
+    bindTextView(detailStmt.get(), 1, irProviderId);
+    sqlite3_bind_int(detailStmt.get(), 2, replayId);
     const int rc = sqlite3_step(detailStmt.get());
     if (rc == SQLITE_DONE) {
       continue;
@@ -2205,6 +2219,25 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
       continue;
     }
     summary.playback = provenance->playback;
+    summary.provenance =
+        std::make_shared<const ScoreProvenance>(std::move(*provenance));
+    if (sqlite3_column_type(detailStmt.get(), 23) == SQLITE_TEXT) {
+      std::string attemptId = readText(detailStmt.get(), 23);
+      if (uuid::isCanonicalLowerV4(attemptId)) {
+        summary.attemptId = std::move(attemptId);
+      }
+    }
+    if (sqlite3_column_type(detailStmt.get(), 24) == SQLITE_TEXT) {
+      summary.hasCanonicalAttemptFingerprint =
+          isLowerHexDigest(readText(detailStmt.get(), 24), 64);
+    }
+    if (sqlite3_column_type(detailStmt.get(), 25) == SQLITE_INTEGER) {
+      const int state = sqlite3_column_int(detailStmt.get(), 25);
+      if (ir::isKnownIrOutboxState(state)) {
+        summary.requestedIrOutboxState =
+            static_cast<ir::IrOutboxState>(state);
+      }
+    }
     summary.maxScore = maxScore;
     summary.chartMeta = chartMeta;
     replays.push_back(std::move(summary));

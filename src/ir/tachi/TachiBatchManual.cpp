@@ -1,5 +1,6 @@
 #include "TachiBatchManual.h"
 
+#include "../../BmsMetadataText.h"
 #include "../../FileChecksum.h"
 #include "../../Uuid.h"
 #include "../../scene/play/GameplayGaugeRules.h"
@@ -277,6 +278,28 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
     return rejected(SubmissionEligibilityReason::InvalidSubmission,
                     "Score provenance validation failed.");
   }
+}
+
+bool shouldShowReplayUploadMarker(
+    std::string_view attemptId, bool hasCanonicalAttemptFingerprint,
+    const bms_parser::ChartMeta &meta, const ScoreProvenance &provenance,
+    std::optional<IrOutboxState> outboxState) noexcept {
+  if (!uuid::isCanonicalLowerV4(attemptId) ||
+      !hasCanonicalAttemptFingerprint ||
+      outboxState == IrOutboxState::Succeeded || meta.TotalNotes <= 0 ||
+      meta.TotalNotes > std::numeric_limits<int>::max() / 2) {
+    return false;
+  }
+
+  IrSubmission probe;
+  probe.attemptId = std::string(attemptId);
+  probe.keyMode = meta.KeyMode;
+  probe.chartMd5 = asobmshow::bms_metadata::normalizedHash(meta.MD5);
+  probe.chartSha256 = asobmshow::bms_metadata::normalizedHash(meta.SHA256);
+  probe.maxScore = meta.TotalNotes * 2;
+  probe.provenance = provenance;
+  return validateBokutachiEligibility(probe).reason ==
+         SubmissionEligibilityReason::Eligible;
 }
 
 BuildDraftOutcome

@@ -2367,6 +2367,34 @@ void testReplayResultRecordMetadata(const std::filesystem::path &root) {
          "0123456789abcdef0123456789abcdef");
   assert(recalled->playedAtUnixMillis == 1784430245000LL);
 
+  auto summaries = repository.ListReplays(replay.chartMeta, 0, "tachi");
+  assert(summaries.size() == 1);
+  assert(summaries.front().attemptId ==
+         "123e4567-e89b-42d3-a456-426614174000");
+  assert(summaries.front().hasCanonicalAttemptFingerprint);
+  assert(summaries.front().provenance != nullptr);
+  assert(!summaries.front().requestedIrOutboxState.has_value());
+
+  db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "INSERT INTO ir_outbox("
+      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,"
+      "ruleset_id,ruleset_revision,validation_fingerprint,state,"
+      "local_result_ready,created_at_ms,updated_at_ms,completed_at_ms) VALUES("
+      "'tachi','123e4567-e89b-42d3-a456-426614174000',"
+      "'0123456789abcdef0123456789abcdef',"
+      "'0123456789abcdef0123456789abcdef"
+      "0123456789abcdef0123456789abcdef','{}','lr2',3,"
+      "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',5,1,1,1,1)");
+  db.reset();
+
+  summaries = repository.ListReplays(replay.chartMeta, 0, "tachi");
+  assert(summaries.size() == 1);
+  assert(summaries.front().requestedIrOutboxState ==
+         ir::IrOutboxState::Succeeded);
+
   db = openDatabase(path);
   execOrAbort(db.get(),
               "UPDATE replays SET attempt_id=NULL,"
