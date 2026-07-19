@@ -1,4 +1,5 @@
 #include "ir/tachi/TachiDriver.h"
+#include "ir/tachi/TachiResponseParser.h"
 
 #include "ir/tachi/BokutachiCacheStore.h"
 
@@ -287,6 +288,69 @@ void testImmediateWarningsAndRejection() {
          "converter rejection has a stable error code");
   expect(result.diagnostic.find("chart was not found") != std::string::npos,
          "converter diagnostic is retained");
+}
+
+void testImmediateImportPreservesIdentity() {
+  const auto outcome = ir::tachi::parseImmediateImportResponse(
+      R"({"success":true,"body":{"userID":42,"scoreIDs":["Tscore"],"errors":[]}})");
+  expect(outcome.status == ir::DeliveryStatus::Succeeded,
+         "identity import succeeds");
+  expect(outcome.remoteUserId == 42, "user identity is retained");
+  expect(outcome.remoteScoreId == "Tscore", "score identity is retained");
+}
+
+void testDuplicateImportIsIdempotentSuccess() {
+  const auto outcome = ir::tachi::parseImmediateImportResponse(
+      R"({"success":true,"body":{"userID":42,"scoreIDs":[],"errors":[]}})");
+  expect(outcome.status == ir::DeliveryStatus::Succeeded,
+         "duplicate import is successful");
+  expect(outcome.code == "already_exists", "duplicate has stable code");
+  expect(!outcome.remoteScoreId, "duplicate has no fabricated score ID");
+}
+
+void testEmptyRejectedImportRemainsPermanentFailure() {
+  const auto outcome = ir::tachi::parseImmediateImportResponse(
+      R"({"success":true,"body":{"userID":42,"scoreIDs":[],"errors":[{"type":"ConverterError","message":"chart was not found"}]}})");
+  expect(outcome.status == ir::DeliveryStatus::PermanentFailure,
+         "empty rejected import remains a permanent failure");
+  expect(outcome.code == "import_rejected",
+         "empty rejected import retains its rejection code");
+}
+
+void testInvalidImportUserIdentityIsIgnored() {
+  for (const std::string_view userId : {
+           std::string_view{"-1"}, std::string_view{"0"},
+           std::string_view{"\"invalid\""},
+           std::string_view{"9223372036854775808"},
+       }) {
+    const auto outcome = ir::tachi::parseImmediateImportResponse(
+        std::string(R"({"success":true,"body":{"userID":)") +
+        std::string(userId) + R"(,"scoreIDs":["Tscore"],"errors":[]}})");
+    expect(outcome.status == ir::DeliveryStatus::Succeeded,
+           "invalid user identity does not reject the import");
+    expect(!outcome.remoteUserId,
+           "invalid or negative user identity is not retained");
+  }
+}
+
+void testOversizedScoreIdentityIsMalformed() {
+  const auto outcome = ir::tachi::parseImmediateImportResponse(
+      std::string(R"({"success":true,"body":{"userID":42,"scoreIDs":[")") +
+      std::string(ir::kMaximumIrRemoteValueBytes + 1, 's') +
+      R"("],"errors":[]}})");
+  expect(outcome.status == ir::DeliveryStatus::PermanentFailure,
+         "oversized score identity is rejected");
+  expect(outcome.code == "malformed_response",
+         "oversized score identity remains malformed");
+}
+
+void testMultipleScoreIdentitiesAreMalformed() {
+  const auto outcome = ir::tachi::parseImmediateImportResponse(
+      R"({"success":true,"body":{"userID":42,"scoreIDs":["score-1","score-2"],"errors":[]}})");
+  expect(outcome.status == ir::DeliveryStatus::PermanentFailure,
+         "multiple score identities violate the single-score contract");
+  expect(outcome.code == "malformed_response",
+         "multiple score identities are malformed");
 }
 
 void testMalformedAndBoundedDiagnostics() {
@@ -999,6 +1063,12 @@ int main() {
   testAutomaticSubmissionOmitsUserIntent();
   testBlocksLegacyAndMismatchedRulesetProofsBeforeHttp();
   testImmediateWarningsAndRejection();
+  testImmediateImportPreservesIdentity();
+  testDuplicateImportIsIdempotentSuccess();
+  testEmptyRejectedImportRemainsPermanentFailure();
+  testInvalidImportUserIdentityIsIgnored();
+  testOversizedScoreIdentityIsMalformed();
+  testMultipleScoreIdentitiesAreMalformed();
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();
   testPollUsesPersistedOriginAndCurrentKey();

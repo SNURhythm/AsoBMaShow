@@ -5,6 +5,8 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <string>
 
 namespace ir::tachi {
@@ -81,6 +83,24 @@ DeliveryOutcome parseImportDocument(const Json &document) {
   if (!diagnostic) {
     return malformed("Tachi Import Document errors are invalid");
   }
+  std::optional<std::int64_t> parsedUserId;
+  const auto userId = document.find("userID");
+  if (userId != document.end()) {
+    if (userId->is_number_unsigned()) {
+      const auto value = userId->get<std::uint64_t>();
+      if (value > 0 &&
+          value <=
+              static_cast<std::uint64_t>(
+                  std::numeric_limits<std::int64_t>::max())) {
+        parsedUserId = static_cast<std::int64_t>(value);
+      }
+    } else if (userId->is_number_integer()) {
+      const auto value = userId->get<std::int64_t>();
+      if (value > 0) {
+        parsedUserId = value;
+      }
+    }
+  }
   for (const auto &scoreId : *scoreIds) {
     if (!scoreId.is_string()) {
       return malformed("Tachi Import Document score ID is invalid");
@@ -92,17 +112,22 @@ DeliveryOutcome parseImportDocument(const Json &document) {
   }
   if (scoreIds->size() == 1) {
     return {.status = DeliveryStatus::Succeeded,
+            .remoteUserId = parsedUserId,
+            .remoteScoreId = scoreIds->front().get<std::string>(),
             .code =
                 diagnostic->empty() ? std::string{} : "accepted_with_warnings",
             .diagnostic = *diagnostic};
   }
-  if (scoreIds->empty() && !errors->empty()) {
+  if (scoreIds->empty() && errors->empty()) {
+    return {.status = DeliveryStatus::Succeeded,
+            .remoteUserId = parsedUserId,
+            .code = "already_exists"};
+  }
+  if (scoreIds->empty()) {
     return rejected(diagnostic->empty() ? "Tachi rejected the score"
                                         : *diagnostic);
   }
-  return malformed(scoreIds->empty()
-                       ? "Tachi completed the import without a score result"
-                       : "Tachi accepted an unexpected number of scores");
+  return malformed("Tachi accepted an unexpected number of scores");
 }
 
 std::optional<Json> parseObject(std::string_view body,

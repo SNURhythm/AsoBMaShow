@@ -7,6 +7,7 @@
 #include "IrSubmission.h"
 
 #include <chrono>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -71,6 +72,8 @@ struct BuildDraftOutcome {
 
 struct DeliveryOutcome {
   DeliveryStatus status = DeliveryStatus::PermanentFailure;
+  std::optional<std::int64_t> remoteUserId;
+  std::optional<std::string> remoteScoreId;
   std::optional<std::string> remoteJobId;
   std::optional<std::string> remoteOrigin;
   std::optional<std::chrono::milliseconds> retryAfterDelay;
