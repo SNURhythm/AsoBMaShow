@@ -463,6 +463,8 @@ private:
   ScoreClearRankCache scoreClearRanks;
   ScoreBestCache scoreBestScores;
   std::uint64_t scoreClearRanksRevision = 0;
+  std::uint64_t projectedIrReconciliationRevision = 0;
+  std::string publishedIrScoreProjectionDiagnostic;
   std::uint64_t libraryRevision = 0;
   chart_library::FolderClearDataByLongNoteMode folderClearData;
   struct CourseValidationCache {
@@ -570,10 +572,14 @@ private:
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
   void reloadChartList(bool preserveViewState = false);
   std::optional<std::string> reloadScoreClearRanks();
+  bool projectActiveIrScoreMirror(ScoreClearRankCache &clearRanks,
+                                  ScoreBestCache &bestScores);
+  void publishIrScoreProjectionDiagnostic(std::string_view diagnostic);
   std::optional<std::string> prepareScoreQueryDatabase();
   std::optional<std::string> refreshScoreClearRankViews();
   void refreshLongNoteModeClearRankViews();
   void refreshScoreClearRanksIfNeeded();
+  void refreshIrScoreProjectionIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
   void startLibraryRebuild();

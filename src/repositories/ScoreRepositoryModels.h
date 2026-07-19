@@ -4,6 +4,7 @@
 #include "../scene/play/RhythmState.h"
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,16 +24,44 @@ struct ScoreRankByLongNoteMode {
   [[nodiscard]] int bestRankForMode(int lnMode) const;
 };
 
+enum class ScoreBestSource {
+  Local,
+  ImportedIr,
+};
+
 struct ScoreBestSnapshot {
   int score = 0;
   int maxScore = 0;
-  int maxCombo = 0;
-  int comboBreak = 0;
+  std::optional<int> maxCombo;
+  std::optional<int> comboBreak;
   std::optional<int> badPoints;
-  float finalGauge = 0.0f;
+  std::optional<float> finalGauge;
   int clearType = kClearTypeFailedRank;
-  std::string createdAt;
+  std::optional<std::string> createdAt;
+  std::optional<std::string> bestOrderTime;
+  ScoreBestSource source = ScoreBestSource::Local;
 };
+
+[[nodiscard]] inline bool scoreBestSnapshotIsBetter(
+    const ScoreBestSnapshot &candidate,
+    const std::optional<ScoreBestSnapshot> &current) {
+  if (!current.has_value()) {
+    return true;
+  }
+  if (candidate.score != current->score) {
+    return candidate.score > current->score;
+  }
+  if (candidate.clearType != current->clearType) {
+    return candidate.clearType > current->clearType;
+  }
+  const auto &candidateTime =
+      candidate.bestOrderTime.has_value() ? candidate.bestOrderTime
+                                          : candidate.createdAt;
+  const auto &currentTime =
+      current->bestOrderTime.has_value() ? current->bestOrderTime
+                                         : current->createdAt;
+  return candidateTime > currentTime;
+}
 
 struct ScoreBestByLongNoteMode {
   std::array<std::optional<ScoreBestSnapshot>, 4> snapshots{};
@@ -43,6 +72,10 @@ struct ScoreBestByLongNoteMode {
 using ScoreRankMap = std::unordered_map<std::string, ScoreRankByLongNoteMode,
                                         TransparentStringHash,
                                         std::equal_to<>>;
+using ScoreRankBySha256Map = ScoreRankMap;
+using ScoreRankMd5FallbackMap =
+    std::unordered_map<std::string, ScoreRankBySha256Map,
+                       TransparentStringHash, std::equal_to<>>;
 
 struct CourseScoreRankByLongNoteMode {
   std::array<int, 4> ranks{kNoClearTypeRank, kNoClearTypeRank,
@@ -60,9 +93,15 @@ using LegacyCourseScoreRankMap =
 using ScoreBestMap = std::unordered_map<std::string, ScoreBestByLongNoteMode,
                                         TransparentStringHash,
                                         std::equal_to<>>;
+using ScoreBestBySha256Map = ScoreBestMap;
+using ScoreBestMd5FallbackMap =
+    std::unordered_map<std::string, ScoreBestBySha256Map,
+                       TransparentStringHash, std::equal_to<>>;
 
 struct ScoreClearRankCache {
   ScoreRankMap rankBySha256;
+  ScoreRankMap importedIrRankBySha256;
+  ScoreRankMd5FallbackMap importedIrRankByMd5;
   CourseScoreRankMap rankByCourseKey;
   LegacyCourseScoreRankMap rankByLegacyCourseId;
 
@@ -96,6 +135,8 @@ struct CourseScoreRecoveryResult {
 
 struct ScoreBestCache {
   ScoreBestMap scoreBySha256;
+  ScoreBestMap importedIrScoreBySha256;
+  ScoreBestMd5FallbackMap importedIrScoreByMd5;
 
   [[nodiscard]] std::optional<ScoreBestSnapshot>
   bestFor(const bms_parser::ChartMeta &chartMeta,

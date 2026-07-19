@@ -1717,9 +1717,10 @@ void testQueuedReconciliationRejectsAChangedCredentialGeneration() {
 
   expect(failed && harness.driver->reconciliationCalls() == 0,
          "queued reconciliation cannot rebind to a replacement credential");
-  expect(harness.repository
-             .ListIrRemoteScores("fake", "https://boku.tachi.ac")
-             .empty(),
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  expect(mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.empty(),
          "credential-generation cancellation leaves the remote mirror alone");
 }
 
@@ -1748,10 +1749,11 @@ void testPauseCancelsAQueuedReconciliationBeforeAnyApply() {
              cancelled.revision > queued.revision &&
              !cancelled.diagnostic.empty(),
          "pausing publishes bounded cancellation for queued reconciliation");
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
   expect(harness.driver->reconciliationCalls() == 0 &&
-             harness.repository
-                 .ListIrRemoteScores("fake", "https://boku.tachi.ac")
-                 .empty(),
+             mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.empty(),
          "paused queued reconciliation performs no fetch or repository apply");
 }
 
@@ -1893,9 +1895,12 @@ void testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply() {
   const auto newMirror = harness.repository.ListIrRemoteScores(
       "fake", "https://new.example.test");
   const auto status = harness.service->reconciliationStatus("fake");
-  expect(oldMirror.size() == 1 &&
-             oldMirror.front().remoteScoreId == "existing-remote-score" &&
-             newMirror.empty(),
+  expect(oldMirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             newMirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             oldMirror.scores.size() == 1 &&
+             oldMirror.scores.front().remoteScoreId ==
+                 "existing-remote-score" &&
+             newMirror.scores.empty(),
          "late old-profile snapshot cannot replace either origin mirror");
   expect(status.phase == ir::IrReconciliationPhase::Idle &&
              harness.driver->reconciliationCalls() == 1,
@@ -1941,7 +1946,8 @@ void testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot() {
              receipt.receipt->remoteScoreId == "remote-score-1" &&
              receipt.receipt->observedInSnapshot,
          "candidate load and pure planner repair the matching durable receipt");
-  expect(mirror.size() == 1 && completed.remoteScores == 1 &&
+  expect(mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.size() == 1 && completed.remoteScores == 1 &&
              completed.remoteScoresAdded == 1 &&
              completed.receiptsUpserted == 1,
          "one atomic apply publishes its remote and receipt mutation counts");
@@ -1990,8 +1996,9 @@ void testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot() {
   expect(!failed.diagnostic.empty() && failed.remoteScores == 0 &&
              failed.nextAllowedAt.has_value(),
          "repository failure publishes bounded failure with cooldown only");
-  expect(mirror.size() == 1 &&
-             mirror.front().remoteScoreId == "prior-remote-score",
+  expect(mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.size() == 1 &&
+             mirror.scores.front().remoteScoreId == "prior-remote-score",
          "failed atomic apply leaves the previous remote mirror unchanged");
 }
 

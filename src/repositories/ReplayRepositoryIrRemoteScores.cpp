@@ -820,16 +820,18 @@ ir::IrRemoteSnapshotApplyOutcome ReplayRepository::ApplyIrRemoteSnapshot(
   };
 }
 
-std::vector<ir::IrRemoteScore>
+ir::IrRemoteScoreReadOutcome
 ReplayRepository::ListIrRemoteScores(std::string_view providerId,
                                      std::string_view serverOrigin) {
   if (!validOriginIdentity(providerId, serverOrigin)) {
-    return {};
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+            .diagnostic = "IR remote score identity is invalid"};
   }
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
-    return {};
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
   }
   const std::string query =
       std::string("SELECT ") + kIrRemoteScoreColumns +
@@ -844,7 +846,8 @@ ReplayRepository::ListIrRemoteScores(std::string_view providerId,
       sqlite3_bind_text(statement.get(), 2, serverOrigin.data(),
                         static_cast<int>(serverOrigin.size()),
                         SQLITE_TRANSIENT) != SQLITE_OK) {
-    return {};
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::StorageFailure,
+            .diagnostic = "could not prepare the IR remote score read"};
   }
 
   std::vector<ir::IrRemoteScore> result;
@@ -853,7 +856,8 @@ ReplayRepository::ListIrRemoteScores(std::string_view providerId,
   while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
     if (result.size() >= ir::kMaximumIrRemoteScoreSnapshotEntries) {
       SDL_Log("IR remote score mirror exceeds its model bound");
-      return {};
+      return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+              .diagnostic = "IR remote score mirror exceeds its model bound"};
     }
     ir::IrRemoteScore score;
     std::int64_t generation = 0;
@@ -861,19 +865,24 @@ ReplayRepository::ListIrRemoteScores(std::string_view providerId,
     if (!decodeRemoteScoreRow(statement.get(), score, generation, diagnostic)) {
       SDL_Log("Rejecting malformed IR remote score mirror row: %s",
               diagnostic.c_str());
-      return {};
+      return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+              .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
     }
     if (expectedGeneration && *expectedGeneration != generation) {
       SDL_Log("Rejecting IR remote score mirror with mixed generations");
-      return {};
+      return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+              .diagnostic =
+                  "IR remote score mirror has mixed generations"};
     }
     expectedGeneration = generation;
     result.push_back(std::move(score));
   }
   if (rc != SQLITE_DONE) {
-    return {};
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::StorageFailure,
+            .diagnostic = "could not read the IR remote score mirror"};
   }
-  return result;
+  return {.status = ir::IrRemoteScoreReadOutcome::Status::Loaded,
+          .scores = std::move(result)};
 }
 
 ir::IrOutboxMutationOutcome

@@ -20,6 +20,7 @@
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
 #include "../ir/IrProfileSettings.h"
+#include "../ir/IrScoreHistoryProjection.h"
 #include "../ir/IrSavedResultUpload.h"
 #include "../ir/IrSubmissionService.h"
 #include "../path.h"
@@ -1278,6 +1279,8 @@ void MainMenuScene::init() {
     scoreBestScores = {};
     folderClearData = {};
     scoreClearRanksRevision = 0;
+    projectedIrReconciliationRevision = 0;
+    publishedIrScoreProjectionDiagnostic.clear();
     replayIrObservedRevisions.clear();
   };
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -1327,7 +1330,13 @@ void MainMenuScene::onResume() {
   syncLibraryTaskPauseStateWithForegroundScene();
   startLibraryTaskWorker();
   if (scoreQueryReady) {
-    refreshScoreClearRanksIfNeeded();
+    if (refreshScoreClearRankViews().has_value()) {
+      scoreClearRanks = {};
+      scoreBestScores = {};
+      folderClearData = {};
+      scoreClearRanksRevision = 0;
+      refreshLongNoteModeClearRankViews();
+    }
   } else {
     // Never render the previous profile's score-derived state while attachment
     // retries continue from update().
@@ -4302,14 +4311,74 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
             error->c_str());
     return error;
   }
-  scoreClearRanks = context.scoreRepository.LoadBestClearRanks(
+  ScoreClearRankCache localClearRanks =
+      context.scoreRepository.LoadBestClearRanks(
       *chartSession, score_cache_queries::kScoreDatabaseSchema);
-  scoreBestScores = context.scoreRepository.LoadBestScores(
+  ScoreBestCache localBestScores = context.scoreRepository.LoadBestScores(
       *chartSession, score_cache_queries::kScoreDatabaseSchema);
+  ScoreClearRankCache projectedClearRanks = localClearRanks;
+  ScoreBestCache projectedBestScores = localBestScores;
+  if (projectActiveIrScoreMirror(projectedClearRanks, projectedBestScores)) {
+    scoreClearRanks = std::move(projectedClearRanks);
+    scoreBestScores = std::move(projectedBestScores);
+  } else {
+    scoreClearRanks = std::move(localClearRanks);
+    scoreBestScores = std::move(localBestScores);
+  }
   scoreClearRanksRevision = context.scoreRepository.GetRevision();
   folderClearData =
       chartSession->LoadFolderClearDataByLongNoteMode(scoreClearRanks);
   return std::nullopt;
+}
+
+bool MainMenuScene::projectActiveIrScoreMirror(
+    ScoreClearRankCache &clearRanks, ScoreBestCache &bestScores) {
+  const auto provider = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (provider == context.settings.irProviders.end() ||
+      !provider->second.enabled) {
+    publishedIrScoreProjectionDiagnostic.clear();
+    return true;
+  }
+  const auto origin =
+      ir::normalizeServerOrigin(provider->second.serverOrigin);
+  if (!origin) {
+    publishIrScoreProjectionDiagnostic(
+        "IR score history provider origin is invalid");
+    return false;
+  }
+
+  const auto loaded = context.replayRepository.ListIrRemoteScores(
+      ir::kTachiProviderId, *origin);
+  if (loaded.status != ir::IrRemoteScoreReadOutcome::Status::Loaded) {
+    publishIrScoreProjectionDiagnostic(
+        loaded.diagnostic.empty() ? "IR score history mirror is unavailable"
+                                  : loaded.diagnostic);
+    return false;
+  }
+
+  try {
+    ir::projectIrRemoteScores(loaded.scores, clearRanks, bestScores);
+    publishedIrScoreProjectionDiagnostic.clear();
+    return true;
+  } catch (...) {
+    publishIrScoreProjectionDiagnostic(
+        "IR score history projection could not be formed");
+    return false;
+  }
+}
+
+void MainMenuScene::publishIrScoreProjectionDiagnostic(
+    std::string_view diagnostic) {
+  const std::string safe = ir::sanitizeDiagnostic(
+      std::string("IR score history unavailable: ") +
+      std::string(diagnostic));
+  if (safe.empty() || safe == publishedIrScoreProjectionDiagnostic) {
+    return;
+  }
+  publishedIrScoreProjectionDiagnostic = safe;
+  SDL_Log("%s", safe.c_str());
+  archive_file::appendDebugLogLine(safe);
 }
 
 std::optional<std::string> MainMenuScene::prepareScoreQueryDatabase() {
@@ -4360,6 +4429,30 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
     return;
   }
 
+  if (refreshScoreClearRankViews().has_value()) {
+    const bool hadVisibleScoreState = scoreClearRanksRevision != 0;
+    scoreClearRanks = {};
+    scoreBestScores = {};
+    folderClearData = {};
+    scoreClearRanksRevision = 0;
+    if (hadVisibleScoreState) {
+      refreshLongNoteModeClearRankViews();
+    }
+  }
+}
+
+void MainMenuScene::refreshIrScoreProjectionIfNeeded() {
+  if (context.irSubmissionService == nullptr) {
+    return;
+  }
+  const auto status = context.irSubmissionService->reconciliationStatus(
+      ir::kTachiProviderId);
+  if (status.phase != ir::IrReconciliationPhase::Succeeded ||
+      status.revision == 0 ||
+      status.revision == projectedIrReconciliationRevision) {
+    return;
+  }
+  projectedIrReconciliationRevision = status.revision;
   if (refreshScoreClearRankViews().has_value()) {
     const bool hadVisibleScoreState = scoreClearRanksRevision != 0;
     scoreClearRanks = {};
@@ -10163,6 +10256,7 @@ void MainMenuScene::update(float dt) {
   previewLoadDebouncer.update();
   reapRetiredPreviewLoadThreads();
   refreshScoreClearRanksIfNeeded();
+  refreshIrScoreProjectionIfNeeded();
   refreshTasksButton();
   applyPendingUiUpdates();
   applyFindBmsUpdates();

@@ -477,16 +477,7 @@ void storeBestCourseRank(CourseScoreRankByLongNoteMode &ranks, int lnMode,
 
 bool isBetterScoreSnapshot(const ScoreBestSnapshot &candidate,
                            const std::optional<ScoreBestSnapshot> &current) {
-  if (!current.has_value()) {
-    return true;
-  }
-  if (candidate.score != current->score) {
-    return candidate.score > current->score;
-  }
-  if (candidate.clearType != current->clearType) {
-    return candidate.clearType > current->clearType;
-  }
-  return candidate.createdAt > current->createdAt;
+  return scoreBestSnapshotIsBetter(candidate, current);
 }
 
 void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
@@ -645,9 +636,22 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 
 int ScoreClearRankCache::bestRankFor(const bms_parser::ChartMeta &chartMeta,
                                      int selectedLongNoteMode) const {
-  return bestRankForHash(
-      chartMeta.SHA256,
-      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
+  const std::string sha256 = normalizedHash(chartMeta.SHA256);
+  int rank = bestRankForStoredKey(sha256, longNoteMode);
+  const std::string md5 = normalizedHash(chartMeta.MD5);
+  const auto md5It = importedIrRankByMd5.find(md5);
+  if (md5It == importedIrRankByMd5.end()) {
+    return rank;
+  }
+  for (const auto &[remoteSha256, byMode] : md5It->second) {
+    if (!sha256.empty() && !remoteSha256.empty() && remoteSha256 != sha256) {
+      continue;
+    }
+    rank = std::max(rank, byMode.bestRankForMode(longNoteMode));
+  }
+  return rank;
 }
 
 int ScoreClearRankCache::bestRankForHash(const std::string &sha256,
@@ -658,12 +662,16 @@ int ScoreClearRankCache::bestRankForHash(const std::string &sha256,
 
 int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
                                               int longNoteMode) const {
+  int rank = kNoClearTypeRank;
   const auto shaIt = rankBySha256.find(sha256);
   if (shaIt != rankBySha256.end()) {
-    return shaIt->second.bestRankForMode(longNoteMode);
+    rank = shaIt->second.bestRankForMode(longNoteMode);
   }
-
-  return kNoClearTypeRank;
+  const auto importedIt = importedIrRankBySha256.find(sha256);
+  if (importedIt != importedIrRankBySha256.end()) {
+    rank = std::max(rank, importedIt->second.bestRankForMode(longNoteMode));
+  }
+  return rank;
 }
 
 int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
@@ -688,8 +696,26 @@ int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
 std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestFor(const bms_parser::ChartMeta &chartMeta,
                         int selectedLongNoteMode) const {
-  return bestForHash(chartMeta.SHA256, scoreLongNoteModeForClearLamp(
-                                           chartMeta, selectedLongNoteMode));
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
+  const std::string sha256 = normalizedHash(chartMeta.SHA256);
+  std::optional<ScoreBestSnapshot> best =
+      bestForStoredKey(sha256, longNoteMode);
+  const std::string md5 = normalizedHash(chartMeta.MD5);
+  const auto md5It = importedIrScoreByMd5.find(md5);
+  if (md5It == importedIrScoreByMd5.end()) {
+    return best;
+  }
+  for (const auto &[remoteSha256, byMode] : md5It->second) {
+    if (!sha256.empty() && !remoteSha256.empty() && remoteSha256 != sha256) {
+      continue;
+    }
+    const auto candidate = byMode.bestForMode(longNoteMode);
+    if (candidate.has_value() && scoreBestSnapshotIsBetter(*candidate, best)) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 std::optional<ScoreBestSnapshot>
@@ -701,15 +727,19 @@ ScoreBestCache::bestForHash(const std::string &sha256, int longNoteMode) const {
 std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestForStoredKey(std::string_view sha256,
                                  int longNoteMode) const {
+  std::optional<ScoreBestSnapshot> best;
   const auto shaIt = scoreBySha256.find(sha256);
   if (shaIt != scoreBySha256.end()) {
-    const auto snapshot = shaIt->second.bestForMode(longNoteMode);
-    if (snapshot.has_value()) {
-      return snapshot;
+    best = shaIt->second.bestForMode(longNoteMode);
+  }
+  const auto importedIt = importedIrScoreBySha256.find(sha256);
+  if (importedIt != importedIrScoreBySha256.end()) {
+    const auto imported = importedIt->second.bestForMode(longNoteMode);
+    if (imported.has_value() && scoreBestSnapshotIsBetter(*imported, best)) {
+      best = imported;
     }
   }
-
-  return std::nullopt;
+  return best;
 }
 bool score_repository_detail::InsertCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,

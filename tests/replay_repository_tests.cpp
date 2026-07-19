@@ -5967,7 +5967,9 @@ ir::IrRemoteSnapshotMutation sampleIrRemoteMutation(
 std::vector<std::string> remoteScoreIds(
     ReplayRepository &helper, std::string_view providerId = "tachi",
     std::string_view serverOrigin = "https://boku.tachi.ac") {
-  const auto scores = helper.ListIrRemoteScores(providerId, serverOrigin);
+  const auto loaded = helper.ListIrRemoteScores(providerId, serverOrigin);
+  assert(loaded.status == ir::IrRemoteScoreReadOutcome::Status::Loaded);
+  const auto &scores = loaded.scores;
   std::vector<std::string> result;
   result.reserve(scores.size());
   for (const auto &score : scores) {
@@ -6082,9 +6084,11 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
 
   const auto listed = helper.ListIrRemoteScores(
       "tachi", "https://boku.tachi.ac");
-  assert(listed.size() == 2 && listed[0].remoteScoreId == "remote-new" &&
-         listed[1].remoteScoreId == "remote-retained");
-  const auto &roundTripped = listed[0];
+  assert(listed.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         listed.scores.size() == 2 &&
+         listed.scores[0].remoteScoreId == "remote-new" &&
+         listed.scores[1].remoteScoreId == "remote-retained");
+  const auto &roundTripped = listed.scores[0];
   assert(roundTripped.remoteUserId == 42 &&
          roundTripped.game == "bms-7k" &&
          roundTripped.remoteChartId == "remote-chart" &&
@@ -6101,7 +6105,7 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
          roundTripped.random == "RANDOM" && roundTripped.gauge == "HARD" &&
          roundTripped.inputDevice == "keyboard" &&
          roundTripped.client == "client");
-  const auto &nullableRoundTripped = listed[1];
+  const auto &nullableRoundTripped = listed.scores[1];
   assert(!nullableRoundTripped.timeAchievedUnixMillis &&
          !nullableRoundTripped.difficulty &&
          !nullableRoundTripped.levelNumber &&
@@ -6349,7 +6353,12 @@ void testIrRemoteScoreReadRejectsMalformedGaugeHistory(
               "UPDATE ir_remote_scores SET gauge_history_json='[true]' "
               "WHERE remote_score_id='malformed-history'");
   db.reset();
-  assert(helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac").empty());
+  const auto malformed =
+      helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac");
+  assert(malformed.status == ir::IrRemoteScoreReadOutcome::Status::Invalid &&
+         malformed.scores.empty() && !malformed.diagnostic.empty() &&
+         malformed.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
 }
 
 void testIrRemoteScoreReadRejectsMixedGenerations(
@@ -6369,7 +6378,43 @@ void testIrRemoteScoreReadRejectsMixedGenerations(
               "UPDATE ir_remote_scores SET sync_generation=sync_generation+1 "
               "WHERE remote_score_id='second'");
   db.reset();
-  assert(helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac").empty());
+  const auto mixed =
+      helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac");
+  assert(mixed.status == ir::IrRemoteScoreReadOutcome::Status::Invalid &&
+         mixed.scores.empty() && !mixed.diagnostic.empty() &&
+         mixed.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+}
+
+void testIrRemoteScoreReadDistinguishesEmptyInvalidAndStorageFailure(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-read-status" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto empty =
+      helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac");
+  assert(empty.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         empty.scores.empty() && empty.diagnostic.empty());
+
+  const auto invalid =
+      helper.ListIrRemoteScores("tachi", "HTTPS://BOKU.TACHI.AC:443/");
+  assert(invalid.status == ir::IrRemoteScoreReadOutcome::Status::Invalid &&
+         invalid.scores.empty() && !invalid.diagnostic.empty() &&
+         invalid.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_remote_scores");
+  db.reset();
+  const auto unavailable =
+      helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac");
+  assert(unavailable.status ==
+             ir::IrRemoteScoreReadOutcome::Status::StorageFailure &&
+         unavailable.scores.empty() && !unavailable.diagnostic.empty() &&
+         unavailable.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
 }
 
 void testClearIrAccountEvidenceIsAtomicAndOriginScoped(
@@ -6418,7 +6463,11 @@ void testClearIrAccountEvidenceIsAtomicAndOriginScoped(
       "tachi", "https://boku.tachi.ac");
   assert(cleared.status == ir::IrOutboxMutationStatus::Updated &&
          cleared.affectedRows == 3);
-  assert(helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac").empty());
+  const auto targetMirror =
+      helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac");
+  assert(targetMirror.status ==
+             ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         targetMirror.scores.empty());
   assert(remoteScoreIds(helper, "tachi", "https://other.example") ==
          std::vector<std::string>({"other-score"}));
   assert(helper
@@ -6439,7 +6488,11 @@ void testClearIrAccountEvidenceIsAtomicAndOriginScoped(
       helper.ClearIrRemoteScores("tachi", "https://other.example");
   assert(remoteOnlyClear.status == ir::IrOutboxMutationStatus::Updated &&
          remoteOnlyClear.affectedRows == 1);
-  assert(helper.ListIrRemoteScores("tachi", "https://other.example").empty());
+  const auto otherMirror =
+      helper.ListIrRemoteScores("tachi", "https://other.example");
+  assert(otherMirror.status ==
+             ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         otherMirror.scores.empty());
   assert(helper
              .LoadIrSubmissionReceipt("tachi", "https://other.example",
                                       otherOrigin.attemptId)
@@ -6709,6 +6762,7 @@ int main() {
   testApplyIrRemoteSnapshotRollsBackEveryMutationStage(root);
   testIrRemoteScoreReadRejectsMalformedGaugeHistory(root);
   testIrRemoteScoreReadRejectsMixedGenerations(root);
+  testIrRemoteScoreReadDistinguishesEmptyInvalidAndStorageFailure(root);
   testClearIrAccountEvidenceIsAtomicAndOriginScoped(root);
   testClearIrAccountEvidenceRollsBackEveryDelete(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);

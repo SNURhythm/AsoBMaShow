@@ -46,6 +46,14 @@ struct IrRemoteSnapshotApplyOutcome {
   std::string diagnostic;
 };
 
+struct IrRemoteScoreReadOutcome {
+  enum class Status { Loaded, Invalid, StorageFailure };
+
+  Status status = Status::StorageFailure;
+  std::vector<IrRemoteScore> scores;
+  std::string diagnostic;
+};
+
 } // namespace ir
 
 namespace result_persistence {
@@ -246,7 +254,7 @@ public:
                                  std::string_view serverOrigin);
   ir::IrRemoteSnapshotApplyOutcome
   ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
-  std::vector<ir::IrRemoteScore>
+  ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);
   ir::IrOutboxMutationOutcome
