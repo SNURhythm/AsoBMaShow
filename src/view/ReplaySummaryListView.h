@@ -5,13 +5,16 @@
 #include "../ReplaySummaryFormatting.h"
 #include "../ScoreRankUtils.h"
 #include "ClearLampColors.h"
+#include "Button.h"
 #include "RecyclerView.h"
 #include "TextView.h"
 #include "UiTheme.h"
 #include "View.h"
 
 #include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class ReplaySummaryListItemView : public View {
@@ -19,7 +22,8 @@ public:
   ReplaySummaryListItemView() {
     clearLamp = new View();
     textColumn = new View();
-    irBadge = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+    irBadge = new Button();
+    irBadgeText = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
     scoreColumn = new View();
     titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
@@ -49,14 +53,27 @@ public:
     textColumn->addView(detailText);
     addView(textColumn);
 
-    irBadge->setText("IR ↑");
     irBadge->setWidth(0)->setHeight(28)->setFlexShrink(0);
-    irBadge->setAlign(TextView::TextAlign::CENTER);
-    irBadge->setVAlign(TextView::TextVAlign::MIDDLE);
     irBadge->setCornerRadius(6.0F);
-    irBadge->setThemedBackgroundColor(ui_theme::amber);
-    irBadge->setThemedColor(
+    irBadge->setName("irUploadBadge");
+    irBadge->setThemedBackgroundColors(
+        ui_theme::amber,
+        [] { return ui_theme::withAlpha(ui_theme::amber(), 226); },
+        [] { return ui_theme::withAlpha(ui_theme::amber(), 194); });
+    irBadgeText->setText("IR ↑");
+    irBadgeText->setAlign(TextView::TextAlign::CENTER);
+    irBadgeText->setVAlign(TextView::TextVAlign::MIDDLE);
+    irBadgeText->setOverflow(TextView::TextOverflow::Hidden);
+    irBadgeText->setThemedColor(
         [] { return ui_theme::textOn(ui_theme::amber()); });
+    irBadge->setContentView(irBadgeText);
+    irBadge->setOnClickListener([this]() {
+      if (!irUploadBusy && currentSummary.irUploadPending &&
+          irUploadHandler) {
+        irUploadHandler(currentSummary);
+      }
+    });
+    irBadge->setEnabled(false);
     irBadge->setVisible(false);
     addView(irBadge);
 
@@ -84,7 +101,14 @@ public:
     onUnselected();
   }
 
-  void setSummary(const ReplaySummary &summary) {
+  void setIrUploadHandler(
+      std::function<void(const ReplaySummary &)> handler) {
+    irUploadHandler = std::move(handler);
+  }
+
+  void setSummary(const ReplaySummary &summary, bool uploadBusy = false) {
+    currentSummary = summary;
+    irUploadBusy = uploadBusy;
     titleText->setText(summary.autoPlay
                            ? "AUTO PLAY"
                            : (summary.createdAt.empty()
@@ -101,6 +125,21 @@ public:
     const bool showIrBadge = summary.irUploadPending;
     irBadge->setVisible(showIrBadge);
     irBadge->setWidth(showIrBadge ? 54.0F : 0.0F);
+    // Keep a visible busy badge as an event sink so repeat taps cannot fall
+    // through and select the row while the upload action is running.
+    irBadge->setEnabled(showIrBadge);
+    if (irUploadBusy) {
+      irBadge->setThemedBackgroundColors(
+          [] { return ui_theme::withAlpha(ui_theme::amber(), 142); },
+          [] { return ui_theme::withAlpha(ui_theme::amber(), 142); },
+          [] { return ui_theme::withAlpha(ui_theme::amber(), 142); });
+    } else {
+      irBadge->setThemedBackgroundColors(
+          ui_theme::amber,
+          [] { return ui_theme::withAlpha(ui_theme::amber(), 226); },
+          [] { return ui_theme::withAlpha(ui_theme::amber(), 194); });
+    }
+    irBadgeText->setText(irUploadBusy ? "IR …" : "IR ↑");
 
     const int clearRank = replay_clear_mark::effectiveClearRank(summary);
     if (hasClearLampColor(clearRank)) {
@@ -145,13 +184,17 @@ private:
 
   View *clearLamp = nullptr;
   View *textColumn = nullptr;
-  TextView *irBadge = nullptr;
+  Button *irBadge = nullptr;
+  TextView *irBadgeText = nullptr;
   View *scoreColumn = nullptr;
   TextView *titleText = nullptr;
   TextView *detailText = nullptr;
   TextView *scoreText = nullptr;
   TextView *rankText = nullptr;
   std::string currentRank;
+  ReplaySummary currentSummary;
+  bool irUploadBusy = false;
+  std::function<void(const ReplaySummary &)> irUploadHandler;
 };
 
 class ReplaySummaryListView : public RecyclerView<ReplaySummary> {
@@ -162,15 +205,24 @@ public:
               return a.id == b.id;
             }) {
     itemHeight = 74;
-    onCreateView = [](const ReplaySummary &) {
-      return new ReplaySummaryListItemView();
+    onCreateView = [this](const ReplaySummary &) {
+      auto *itemView = new ReplaySummaryListItemView();
+      itemView->setIrUploadHandler([this](const ReplaySummary &summary) {
+        if (onIrUploadRequested) {
+          onIrUploadRequested(summary);
+        }
+      });
+      return itemView;
     };
-    onBind = [](View *view, const ReplaySummary &item, int, bool isSelected) {
+    onBind = [this](View *view, const ReplaySummary &item, int,
+                    bool isSelected) {
       auto *itemView = dynamic_cast<ReplaySummaryListItemView *>(view);
       if (itemView == nullptr) {
         return;
       }
-      itemView->setSummary(item);
+      itemView->setSummary(
+          item, irUploadInProgress.has_value() &&
+                    *irUploadInProgress == item.id);
       if (isSelected) {
         itemView->onSelected();
       } else {
@@ -218,8 +270,15 @@ public:
 
   [[nodiscard]] int selectedReplayIndex() const { return selectedIndex; }
 
+  void setIrUploadInProgress(std::optional<int> replayId) {
+    irUploadInProgress = replayId;
+    rebindVisibleItems();
+  }
+
   std::function<void(int)> onSelectionChanged;
+  std::function<void(const ReplaySummary &)> onIrUploadRequested;
 
 private:
   int lastSelectedIndex = -1;
+  std::optional<int> irUploadInProgress;
 };
