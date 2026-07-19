@@ -803,6 +803,8 @@ private:
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
   void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
+  void startRemoteResultRecall(IrRemoteRecordId identity,
+                               std::string selectedStableKey);
   void startReplayIrUpload(const ChartMetaRecord &record,
                            ReplaySummary summary);
   void finishReplayIrUpload(int replayId, std::string message);
@@ -815,6 +817,7 @@ private:
       ir::IrRecordActivity activity = ir::IrRecordActivity::None);
   void startCourseReplayResultRecall(int replayId);
   void finishReplayResultRecallFailure(std::string diagnostic = {});
+  void finishRemoteResultRecallFailure(std::string diagnostic = {});
   void applyReplayExportProgress();
   void applyReplayExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

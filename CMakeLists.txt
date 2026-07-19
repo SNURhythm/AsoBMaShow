@@ -2065,6 +2065,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(remote_result_scene_tests
+        tests/remote_result_scene_tests.cpp
+        src/bms_parser.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/rendering/Color.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/scene/ResultGaugeHistory.cpp
+        src/scene/ResultPresentationModel.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(remote_result_scene_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(remote_result_scene_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(remote_result_scene_tests PRIVATE cxx_std_23)
+    target_link_libraries(remote_result_scene_tests PRIVATE ${COMMON_LIBS})
+
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
@@ -2513,6 +2537,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
     asobmashow_register_test(result_gauge_history_tests)
+    asobmashow_register_test(remote_result_scene_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)

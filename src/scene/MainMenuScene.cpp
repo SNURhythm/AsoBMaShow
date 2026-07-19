@@ -8437,11 +8437,19 @@ void MainMenuScene::buildReplayModal() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
         replayIrUploadInProgress ||
         !selectedResultRecordSummary.has_value() ||
-        !selectedResultRecordSummary->capabilities.resultRecall ||
-        !selectedReplaySummary.has_value()) {
+        !selectedResultRecordSummary->capabilities.resultRecall) {
       return;
     }
-    startReplayResultRecall(replayModalChart, selectedReplaySummary->id);
+    if (selectedReplaySummary.has_value()) {
+      startReplayResultRecall(replayModalChart, selectedReplaySummary->id);
+      return;
+    }
+    const auto *remoteIdentity = std::get_if<IrRemoteRecordId>(
+        &selectedResultRecordSummary->identity);
+    if (remoteIdentity == nullptr || !selectedResultRecordStableKey) {
+      return;
+    }
+    startRemoteResultRecall(*remoteIdentity, *selectedResultRecordStableKey);
   });
   replayModalExportButton->setOnClickListener([this]() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
@@ -10257,6 +10265,120 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
       1, true);
 }
 
+void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
+                                            std::string selectedStableKey) {
+  if (replayResultRecallInProgress || replayExportInProgress.load() ||
+      replayIrUploadInProgress || identity.providerId.empty() ||
+      identity.serverOrigin.empty() || identity.remoteScoreId.empty() ||
+      selectedStableKey.empty()) {
+    return;
+  }
+  const auto selectedIdentityStillMatches =
+      [this, &identity, &selectedStableKey]() {
+        if (!selectedResultRecordSummary.has_value() ||
+            selectedResultRecordSummary->stableKey() != selectedStableKey) {
+          return false;
+        }
+        const auto *current = std::get_if<IrRemoteRecordId>(
+            &selectedResultRecordSummary->identity);
+        return current != nullptr && *current == identity &&
+               selectedResultRecordSummary->remote.has_value() &&
+               selectedResultRecordSummary->remote->remoteScoreId ==
+                   identity.remoteScoreId;
+      };
+  if (!selectedIdentityStillMatches()) {
+    return;
+  }
+
+  replayResultRecallInProgress = true;
+  refreshReplayModalActions();
+  cancelActivePreviewLoading();
+  defer(
+      [this, identity = std::move(identity),
+       selectedStableKey = std::move(selectedStableKey)]() {
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+        joinRetiredPreviewLoadThreads();
+
+        const auto selectedIdentityStillMatches =
+            [this, &identity, &selectedStableKey]() {
+              if (!selectedResultRecordSummary.has_value() ||
+                  selectedResultRecordSummary->stableKey() !=
+                      selectedStableKey) {
+                return false;
+              }
+              const auto *current = std::get_if<IrRemoteRecordId>(
+                  &selectedResultRecordSummary->identity);
+              return current != nullptr && *current == identity &&
+                     selectedResultRecordSummary->remote.has_value() &&
+                     selectedResultRecordSummary->remote->remoteScoreId ==
+                         identity.remoteScoreId;
+            };
+        if (!selectedIdentityStillMatches()) {
+          finishRemoteResultRecallFailure(
+              "selected synchronized result changed");
+          return true;
+        }
+
+        auto loaded = context.replayRepository.LoadIrRemoteScore(
+            identity.providerId, identity.serverOrigin,
+            identity.remoteScoreId);
+        using LookupStatus = ir::IrRemoteScoreLookupOutcome::Status;
+        if (loaded.status != LookupStatus::Loaded || !loaded.score) {
+          switch (loaded.status) {
+          case LookupStatus::NotFound:
+            finishRemoteResultRecallFailure(
+                "synchronized result is no longer available");
+            break;
+          case LookupStatus::Invalid:
+            finishRemoteResultRecallFailure(
+                "synchronized result could not be verified");
+            break;
+          case LookupStatus::StorageFailure:
+          case LookupStatus::Loaded:
+            finishRemoteResultRecallFailure(
+                "synchronized result storage is unavailable");
+            break;
+          }
+          return true;
+        }
+
+        std::string validationDiagnostic;
+        if (!ir::validateIrRemoteScore(*loaded.score, validationDiagnostic) ||
+            loaded.score->remoteScoreId != identity.remoteScoreId ||
+            !selectedIdentityStillMatches()) {
+          finishRemoteResultRecallFailure(
+              "synchronized result identity changed");
+          return true;
+        }
+
+        ResultRemoteOptions remote{
+            .score = std::move(*loaded.score),
+            .providerId = identity.providerId,
+            .serverOrigin = identity.serverOrigin,
+        };
+        remote.rankingQuery = makeRemoteResultRankingQuery(remote.score);
+        try {
+          auto next =
+              std::make_unique<ResultScene>(context, std::move(remote));
+          if (!selectedIdentityStillMatches()) {
+            finishRemoteResultRecallFailure(
+                "selected synchronized result changed");
+            return true;
+          }
+          replayResultRecallInProgress = false;
+          context.jukebox.stop();
+          context.sceneManager->changeScene(std::move(next), true);
+        } catch (...) {
+          finishRemoteResultRecallFailure(
+              "synchronized result could not be opened");
+        }
+        return true;
+      },
+      1, true);
+}
+
 void MainMenuScene::startCourseReplayResultRecall(int replayId) {
   auto stored = context.replayRepository.LoadCourseReplay(replayId);
   std::atomic_bool cancelled = false;
@@ -10307,6 +10429,11 @@ void MainMenuScene::finishReplayResultRecallFailure(std::string diagnostic) {
         return true;
       },
       1400, true);
+}
+
+void MainMenuScene::finishRemoteResultRecallFailure(std::string diagnostic) {
+  reloadReplayRecordModels(true);
+  finishReplayResultRecallFailure(std::move(diagnostic));
 }
 
 void MainMenuScene::applyReplayExportProgress() {

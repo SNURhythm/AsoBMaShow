@@ -4,6 +4,7 @@
 #include "../ir/IrSubmission.h"
 #include "../ir/IrResultPresentation.h"
 #include "../ir/IrRankingModal.h"
+#include "ResultPresentationModel.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
 #include "../practice/PracticeSession.h"
@@ -12,10 +13,16 @@
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
 #include "../skin/SkinTypes.h"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <variant>
 
 struct CoursePlaySession;
 
@@ -65,6 +72,137 @@ struct ResultPersistenceOptions {
   result_persistence::SaveOutcome outcome;
 };
 
+struct ResultRemoteOptions {
+  ir::IrRemoteScore score;
+  std::optional<ir::IrChartQuery> rankingQuery;
+  std::string providerId;
+  std::string serverOrigin;
+};
+
+struct ResultSceneActionAvailability {
+  bool back = false;
+  bool rankings = false;
+  bool exportPhoto = false;
+  bool readOnlyIrUploaded = false;
+  bool persistence = false;
+  bool retry = false;
+  bool retrySame = false;
+  bool replay = false;
+  bool practice = false;
+  bool course = false;
+  bool irSubmit = false;
+  bool irRetry = false;
+};
+
+[[nodiscard]] inline ResultSceneActionAvailability
+remoteResultSceneActions(bool rankingsAvailable) noexcept {
+  return {.back = true,
+          .rankings = rankingsAvailable,
+          .exportPhoto = true,
+          .readOnlyIrUploaded = true};
+}
+
+namespace result_scene_detail {
+[[nodiscard]] inline bool isLowerHexDigest(std::string_view value,
+                                           std::size_t size) noexcept {
+  return value.size() == size &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+} // namespace result_scene_detail
+
+[[nodiscard]] inline std::optional<ir::IrChartQuery>
+makeRemoteResultRankingQuery(const ir::IrRemoteScore &score) noexcept {
+  try {
+    std::string diagnostic;
+    if (!ir::validateIrRemoteScore(score, diagnostic) ||
+        (score.game != "bms-7k" && score.game != "bms-14k") ||
+        score.noteCount <= 0 ||
+        !result_scene_detail::isLowerHexDigest(score.chartSha256, 64) ||
+        (!score.chartMd5.empty() &&
+         !result_scene_detail::isLowerHexDigest(score.chartMd5, 32))) {
+      return std::nullopt;
+    }
+    return ir::IrChartQuery{
+        .keyMode = score.game == "bms-14k" ? 14 : 7,
+        .chartMd5 = score.chartMd5,
+        .chartSha256 = score.chartSha256,
+        .totalNotes = score.noteCount,
+    };
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+struct LocalResultSource {
+  bms_parser::ChartMeta meta;
+  RhythmState resultState;
+  ScoreProvenance attemptProvenance;
+  std::optional<ReplayData> presentationReplay;
+  std::optional<ReplayData> retryData;
+  std::optional<ReplayData> analyticsData;
+  std::optional<ResultPreviousBestData> previousBest;
+  ResultPersistenceOptions persistenceOptions;
+  ResultPracticeOptions practiceOptions;
+  ResultCourseOptions courseOptions;
+  std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
+  bms_parser::Chart *reusableRetryChart = nullptr;
+  std::string pacemakerTarget;
+  std::optional<ResultPacemakerData> pacemakerOverride;
+  std::string playModeLabel;
+  std::string laneOrderLabel;
+  std::string difficultyLabel;
+  std::optional<std::string> headerDifficultyLabelOverride;
+  std::optional<std::string> currentClearLabelOverride;
+  std::optional<int> currentClearRankOverride;
+  ResultPresentationModel presentation;
+  bool replayResult = false;
+  bool autoPlayResult = false;
+  bool previousBestLoaded = false;
+  bool persistenceContinueChosen = false;
+  bool courseTransitionStarted = false;
+  bool courseStageRestRecorded = false;
+  long long courseStageResultShownMicros = 0;
+  std::uint64_t irObservedSnapshotRevision = 0;
+  bool irObservedSnapshotInitialized = false;
+  std::string irActionDiagnostic;
+};
+
+struct RemoteResultSource {
+  const ir::IrRemoteScore score;
+  const std::optional<ir::IrChartQuery> rankingQuery;
+  const std::string providerId;
+  const std::string serverOrigin;
+  const ResultPresentationModel presentation;
+};
+
+[[nodiscard]] inline RemoteResultSource
+makeResultRemoteSource(ResultRemoteOptions remote) {
+  std::string diagnostic;
+  if (!ir::validateIrRemoteScore(remote.score, diagnostic)) {
+    throw std::invalid_argument(
+        diagnostic.empty() ? "remote result score is invalid" : diagnostic);
+  }
+  const auto normalizedOrigin = ir::normalizeServerOrigin(remote.serverOrigin);
+  if (remote.providerId != ir::kTachiProviderId || !normalizedOrigin ||
+      *normalizedOrigin != remote.serverOrigin) {
+    throw std::invalid_argument("remote result origin identity is invalid");
+  }
+  const auto exactRankingQuery = makeRemoteResultRankingQuery(remote.score);
+  if (remote.rankingQuery != exactRankingQuery) {
+    throw std::invalid_argument("remote result ranking identity is invalid");
+  }
+  ResultPresentationModel presentation =
+      makeRemoteResultPresentation(remote.score);
+  return {.score = std::move(remote.score),
+          .rankingQuery = std::move(remote.rankingQuery),
+          .providerId = std::move(remote.providerId),
+          .serverOrigin = std::move(remote.serverOrigin),
+          .presentation = std::move(presentation)};
+}
+
 class TextView;
 class Button;
 class PracticeAnalyticsView;
@@ -84,6 +222,7 @@ public:
       bms_parser::Chart *reusableRetryChart = nullptr,
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
       const ReplayData *analyticsSource = nullptr);
+  ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override = default;
 
   void init() override;
@@ -112,6 +251,8 @@ private:
   void refreshResultSummary();
   void addTimingAnalytics(std::optional<practice::ResultModel> analyticsModel);
   void addRetryButtons();
+  void addRemoteButtons();
+  void addRemoteIrStatus();
   void addCourseButtons();
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
@@ -140,27 +281,14 @@ private:
   selectedPracticeLaunchRequest() const;
   [[nodiscard]] practice::LaunchRequest
   makePracticeLaunchRequest(long long startMicros, long long endMicros) const;
+  [[nodiscard]] LocalResultSource *localSource() noexcept;
+  [[nodiscard]] const LocalResultSource *localSource() const noexcept;
+  [[nodiscard]] RemoteResultSource *remoteSource() noexcept;
+  [[nodiscard]] const RemoteResultSource *remoteSource() const noexcept;
+  void rebuildLocalPresentation(
+      std::optional<practice::ResultModel> analyticsModel = std::nullopt);
 
-  bms_parser::ChartMeta meta;
-  RhythmState resultState;
-  const ScoreProvenance attemptProvenance;
-  std::optional<ReplayData> presentationReplay;
-  std::optional<ReplayData> retryData;
-  std::optional<ReplayData> analyticsData;
-  std::optional<ResultPreviousBestData> previousBest;
-  ResultPersistenceOptions persistenceOptions;
-  ResultPracticeOptions practiceOptions;
-  ResultCourseOptions courseOptions;
-  std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
-  bms_parser::Chart *reusableRetryChart = nullptr;
-  std::string pacemakerTarget;
-  std::optional<ResultPacemakerData> pacemakerOverride;
-  std::string playModeLabel;
-  std::string laneOrderLabel;
-  std::string difficultyLabel;
-  std::optional<std::string> headerDifficultyLabelOverride;
-  std::optional<std::string> currentClearLabelOverride;
-  std::optional<int> currentClearRankOverride;
+  std::variant<LocalResultSource, RemoteResultSource> source;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
   View *normalResultActions = nullptr;
@@ -182,15 +310,5 @@ private:
   Button *practiceSectionButton = nullptr;
   TextView *practiceSectionButtonText = nullptr;
   std::unique_ptr<ISkin> skin;
-  bool replayResult = false;
-  bool autoPlayResult = false;
-  bool previousBestLoaded = false;
-  bool persistenceContinueChosen = false;
   bool resultPhotoExportInProgress = false;
-  bool courseTransitionStarted = false;
-  bool courseStageRestRecorded = false;
-  long long courseStageResultShownMicros = 0;
-  std::uint64_t irObservedSnapshotRevision = 0;
-  bool irObservedSnapshotInitialized = false;
-  std::string irActionDiagnostic;
 };
