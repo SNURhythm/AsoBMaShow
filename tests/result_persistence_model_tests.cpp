@@ -133,8 +133,13 @@ struct AttemptFixture {
     state.judgeCount[Bad] = 1;
     state.judgeCount[Poor] = 2;
     state.judgeCount[Kpoor] = 1;
-    state.fastCount = 7;
-    state.slowCount = 5;
+    state.judgementFastSlowCount[PGreat] = {.fast = 1, .slow = 0};
+    state.judgementFastSlowCount[Great] = {.fast = 0, .slow = 1};
+    state.judgementFastSlowCount[Good] = {.fast = 1, .slow = 0};
+    state.judgementFastSlowCount[Bad] = {.fast = 0, .slow = 1};
+    state.judgementFastSlowCount[Poor] = {.fast = 1, .slow = 1};
+    state.fastCount = 3;
+    state.slowCount = 3;
 
     provenance = populatedProvenance(meta);
 
@@ -260,7 +265,7 @@ void testScoreCapture() {
   expect(score.pGreat == 2 && score.great == 1 && score.good == 1 &&
              score.bad == 1 && score.poor == 2 && score.kPoor == 1,
          "capture stores named judgement counts");
-  expect(score.fast == 7 && score.slow == 5,
+  expect(score.fast == 3 && score.slow == 3,
          "capture stores fast and slow counts");
   expect(score.finalGauge == fixture.state.currentGauge &&
              score.clearType == fixture.state.getClearTypeRank(),
@@ -301,6 +306,18 @@ void testAttemptValidationAndFingerprint() {
   expect(attempt && attempt->adoptedGaugeHistory ==
                         std::vector<float>({61.0f, 72.5f, 84.5f}),
          "attempt snapshots the complete final adopted gauge series");
+  expect(attempt && attempt->judgementTiming.has_value() &&
+             attempt->judgementTiming->byJudgement[PGreat] ==
+                 JudgementFastSlowCount{.fast = 1, .slow = 0} &&
+             attempt->judgementTiming->byJudgement[Great] ==
+                 JudgementFastSlowCount{.fast = 0, .slow = 1} &&
+             attempt->judgementTiming->byJudgement[Good] ==
+                 JudgementFastSlowCount{.fast = 1, .slow = 0} &&
+             attempt->judgementTiming->byJudgement[Bad] ==
+                 JudgementFastSlowCount{.fast = 0, .slow = 1} &&
+             attempt->judgementTiming->byJudgement[Poor] ==
+                 JudgementFastSlowCount{.fast = 1, .slow = 1},
+         "attempt snapshots authoritative per-judgement timing");
   expect(attempt && attempt->payloadFingerprint.find_first_not_of(
                         "0123456789abcdef") == std::string::npos,
          "attempt fingerprint is canonical lower hex");

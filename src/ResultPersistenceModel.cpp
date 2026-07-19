@@ -293,6 +293,18 @@ int judgementCount(const RhythmState &state, Judgement judgement) {
   return found == state.judgeCount.end() ? 0 : found->second;
 }
 
+ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
+  ChartJudgementTiming timing;
+  for (int index = 0; index < JudgementCount; ++index) {
+    const auto judgement = static_cast<Judgement>(index);
+    const auto found = state.judgementFastSlowCount.find(judgement);
+    if (found != state.judgementFastSlowCount.end()) {
+      timing.byJudgement[static_cast<std::size_t>(index)] = found->second;
+    }
+  }
+  return timing;
+}
+
 bool isHexDigest(std::string_view value, std::size_t expectedSize) {
   return value.size() == expectedSize &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -431,11 +443,15 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
   const std::string fingerprint = payloadFingerprint(replay, score);
   std::vector<float> adoptedGaugeHistory =
       state.gaugeHistoryFor(state.gaugeType);
+  ChartJudgementTiming judgementTiming =
+      captureChartJudgementTiming(state);
   return ChartResultAttempt{.attemptId = std::move(attemptId),
                             .replay = std::move(replay),
                             .score = std::move(score),
                             .adoptedGaugeHistory =
                                 std::move(adoptedGaugeHistory),
+                            .judgementTiming =
+                                std::move(judgementTiming),
                             .payloadFingerprint = fingerprint};
 }
 
