@@ -541,8 +541,8 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     });
     syncBody->addView(syncRecords);
     column->addView(makeCard(
-        metrics, "Record Safety Sync",
-        "Reconcile the active profile with complete Bokutachi history.",
+        metrics, "IR Record Import",
+        "Import Bokutachi history and reconcile existing upload receipts.",
         syncBody, metrics.compact ? 240 : 280, metrics.cardsWidth));
   }
 

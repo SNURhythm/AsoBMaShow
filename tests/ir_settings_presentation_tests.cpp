@@ -103,10 +103,11 @@ void testRecordSyncRequiresCompleteActiveConfiguration() {
   const auto available = ir::makeIrSettingsPresentation(input);
   REQUIRE(available.showRecordSync);
   REQUIRE(available.canSyncRecords);
-  REQUIRE(available.recordSyncButtonLabel == "Sync IR records");
+  REQUIRE(available.recordSyncButtonLabel == "Import & Reconcile");
   REQUIRE(available.recordSyncHelperText ==
           "Uses exactly two requests (7K, then 14K) to import remote score "
-          "history and reconcile upload receipts atomically.");
+          "history and reconcile existing upload receipts. Local scores are "
+          "not uploaded.");
 
   input.capabilities.scoreReconciliation = false;
   const auto unsupported = ir::makeIrSettingsPresentation(input);

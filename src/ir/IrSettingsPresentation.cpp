@@ -173,10 +173,11 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
       .serverOrigin = std::move(input.settings.serverOrigin),
       .credentialLabel =
           input.hasCredential ? "API key saved (••••••••)" : "No API key saved",
-      .recordSyncButtonLabel = "Sync IR records",
+      .recordSyncButtonLabel = "Import & Reconcile",
       .recordSyncHelperText =
           "Uses exactly two requests (7K, then 14K) to import remote score "
-          "history and reconcile upload receipts atomically.",
+          "history and reconcile existing upload receipts. Local scores are "
+          "not uploaded.",
       .recordSyncStatusText = std::move(syncStatus),
       .recordSyncCooldownText =
           recordSyncCooldownText(input.reconciliationStatus, input.now),
