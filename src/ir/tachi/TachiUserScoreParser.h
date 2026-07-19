@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../IrHttpClient.h"
 #include "../IrRemoteScoreModels.h"
 
 #include <cstddef>
@@ -9,7 +10,7 @@
 namespace ir::tachi {
 
 inline constexpr std::size_t kMaximumTachiUserScoreResponseBytes =
-    64U * 1024U * 1024U;
+    kMaximumIrHttpResponseBytes;
 
 struct ParsedUserGameScores {
   std::vector<IrRemoteScore> scores;

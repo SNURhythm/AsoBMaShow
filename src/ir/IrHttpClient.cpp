@@ -19,7 +19,6 @@ namespace {
 
 constexpr std::size_t kMaximumUrlBytes = 8 * 1024;
 constexpr std::size_t kMaximumRequestBodyBytes = 4 * 1024 * 1024;
-constexpr std::size_t kMaximumResponseBodyBytes = 8 * 1024 * 1024;
 constexpr std::size_t kMaximumHeaderCount = 64;
 constexpr std::size_t kMaximumHeaderNameBytes = 128;
 constexpr std::size_t kMaximumHeaderValueBytes = 8 * 1024;
@@ -151,7 +150,7 @@ bool validateRequest(const IrHttpRequest &request, std::string &diagnostic) {
   }
   if (request.body.size() > kMaximumRequestBodyBytes ||
       request.maximumResponseBytes == 0 ||
-      request.maximumResponseBytes > kMaximumResponseBodyBytes) {
+      request.maximumResponseBytes > kMaximumIrHttpResponseBytes) {
     diagnostic = "IR HTTP request or response size limit is invalid";
     return false;
   }

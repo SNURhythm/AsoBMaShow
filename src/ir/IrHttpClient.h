@@ -3,6 +3,7 @@
 #include "../ThreadCompat.h"
 
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -11,6 +12,9 @@
 #include <vector>
 
 namespace ir {
+
+inline constexpr std::size_t kMaximumIrHttpResponseBytes =
+    64U * 1024U * 1024U;
 
 enum class IrHttpMethod { Get, Post };
 

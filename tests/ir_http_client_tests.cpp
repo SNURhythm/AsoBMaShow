@@ -117,6 +117,29 @@ void testResponseBodyCapIsEnforcedAcrossChunks() {
   assert(rejected.body.empty());
 }
 
+void testFullUserScoreResponseLimitReachesTransport() {
+  auto fullSnapshot = request();
+  fullSnapshot.maximumResponseBytes = kMaximumIrHttpResponseBytes;
+  std::size_t calls = 0;
+  Transport transport = [&](const IrHttpRequest &, std::stop_token) {
+    ++calls;
+    return TransportResponse{.statusCode = 200, .bodyChunks = {"ok"}};
+  };
+
+  const auto accepted = PerformWithTransport(fullSnapshot, {}, transport);
+  assert(accepted.transportError == IrTransportError::None);
+  assert(accepted.statusCode == 200);
+  assert(accepted.body == "ok");
+  assert(calls == 1);
+
+  fullSnapshot.maximumResponseBytes += 1;
+  const auto rejected = PerformWithTransport(fullSnapshot, {}, transport);
+  assert(rejected.transportError == IrTransportError::Other);
+  assert(rejected.diagnostic ==
+         "IR HTTP request or response size limit is invalid");
+  assert(calls == 1);
+}
+
 void testCancellationMapsWithoutLeakingIntoTransportErrors() {
   std::size_t calls = 0;
   Transport transport = [&](const IrHttpRequest &, std::stop_token) {
@@ -180,6 +203,7 @@ int main() {
   testInvalidRequestsNeverReachTransport();
   testSafeHeaderLookupIsCaseInsensitive();
   testResponseBodyCapIsEnforcedAcrossChunks();
+  testFullUserScoreResponseLimitReachesTransport();
   testCancellationMapsWithoutLeakingIntoTransportErrors();
   testAuthenticatedRedirectsAreRejectedWithoutSecretDiagnostics();
   testHttpErrorsRemainHttpResponses();
