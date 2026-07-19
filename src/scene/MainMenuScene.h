@@ -96,8 +96,8 @@ private:
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
-  std::optional<int> replayIrUploadReplayId;
   std::uint64_t replayIrUploadFeedbackRevision = 0;
+  std::unordered_map<std::string, std::uint64_t> replayIrObservedRevisions;
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool addFolderPickerInProgress = false;
   std::atomic_bool archiveImportPickerInProgress = false;
@@ -789,7 +789,13 @@ private:
   void startReplayIrUpload(const ChartMetaRecord &record,
                            ReplaySummary summary);
   void finishReplayIrUpload(int replayId, std::string message);
-  void refreshReplayIrMarker(int replayId);
+  void publishReplayIrStatusFeedback(ir::IrRecordState state);
+  void observeReplayIrServiceRevisions();
+  [[nodiscard]] std::optional<std::string>
+  activeReplayIrServerOrigin() const;
+  void refreshReplayIrMarker(
+      int replayId,
+      ir::IrRecordActivity activity = ir::IrRecordActivity::None);
   void startCourseReplayResultRecall(int replayId);
   void finishReplayResultRecallFailure(std::string diagnostic = {});
   void applyReplayExportProgress();

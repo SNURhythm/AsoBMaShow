@@ -19,7 +19,9 @@
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
+#include "../ir/IrProfileSettings.h"
 #include "../ir/IrSavedResultUpload.h"
+#include "../ir/IrSubmissionService.h"
 #include "../path.h"
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
@@ -113,6 +115,37 @@ constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr uint32_t kIconSort = 0xf0dc;
 constexpr uint32_t kIconFileLines = 0xf15c;
 constexpr uint32_t kIconCalculator = 0xf1ec;
+
+ir::IrRecordActivity
+recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
+  switch (activeRequest) {
+  case ir::IrActiveRequestKind::None:
+    return ir::IrRecordActivity::None;
+  case ir::IrActiveRequestKind::Submit:
+    return ir::IrRecordActivity::Submitting;
+  case ir::IrActiveRequestKind::Poll:
+    return ir::IrRecordActivity::Polling;
+  }
+  return ir::IrRecordActivity::None;
+}
+
+void resolveReplayIrRecordState(
+    ReplaySummary &summary,
+    ir::IrRecordActivity activity = ir::IrRecordActivity::None) {
+  summary.irSubmissionEligible =
+      summary.attemptId.has_value() && summary.chartMeta.has_value() &&
+      summary.provenance != nullptr &&
+      ir::tachi::isReplayEligibleForBokutachi(
+          *summary.attemptId, summary.hasCanonicalAttemptFingerprint,
+          *summary.chartMeta, *summary.provenance);
+  summary.irRecordState = ir::resolveIrRecordState({
+      .eligible = summary.irSubmissionEligible,
+      .hasReceipt = summary.hasIrReceipt,
+      .outboxState = summary.requestedIrOutboxState,
+      .activity = activity,
+  });
+}
+
 constexpr const char *kDefaultDifficultyTableUrls[] = {
     "https://rattoto10.jounin.jp/table.html",
     "https://rattoto10.jounin.jp/table_insane.html",
@@ -1245,6 +1278,7 @@ void MainMenuScene::init() {
     scoreBestScores = {};
     folderClearData = {};
     scoreClearRanksRevision = 0;
+    replayIrObservedRevisions.clear();
   };
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   context.requestAddChartFolderFromFiles = [this]() {
@@ -1284,6 +1318,7 @@ void MainMenuScene::onPause() {
 void MainMenuScene::onResume() {
   context.profileSwitchBlockers.scene =
       context.profileSwitchBlockers.background;
+  replayIrObservedRevisions.clear();
   applyThemeChange();
   const bool scoreQueryReady = !prepareScoreQueryDatabase().has_value();
   // Gameplay selections belong to the committed profile even when its score
@@ -2589,8 +2624,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
-  replayIrUploadReplayId.reset();
   replayIrUploadFeedbackRevision = 0;
+  replayIrObservedRevisions.clear();
   unzipInProgress = false;
   tasksModalOpenRequested = false;
   findBmsJobRunning = false;
@@ -7746,6 +7781,10 @@ void MainMenuScene::buildReplayModal() {
       [this](const ReplaySummary &summary) {
         startReplayIrUpload(replayModalChart, summary);
       };
+  replayListView->onIrStatusFeedbackRequested =
+      [this](const ReplaySummary &summary) {
+        publishReplayIrStatusFeedback(summary.irRecordState);
+      };
   replayListView->setFlex(1);
   replayListView->clearBackgroundColor();
   replayListView->setThemedBorderColor(ui_theme::hairline);
@@ -8314,9 +8353,8 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
   replayModalChart = record;
   replayExportSelection.reset();
   replayIrUploadInProgress = false;
-  replayIrUploadReplayId.reset();
+  replayIrObservedRevisions.clear();
   ++replayIrUploadFeedbackRevision;
-  replayListView->setIrUploadInProgress(std::nullopt);
   const bool courseReplayList =
       record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -8327,16 +8365,12 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
          .legacyCourseId = activeFolder.courseId},
         0);
   } else {
+    const std::string irServerOrigin =
+        activeReplayIrServerOrigin().value_or(std::string{});
     replaySummaries = context.replayRepository.ListReplays(
-        record.meta, 0, ir::kTachiProviderId);
+        record.meta, 0, ir::kTachiProviderId, irServerOrigin);
     for (ReplaySummary &summary : replaySummaries) {
-      if (!summary.autoPlay && !summary.courseReplay && summary.chartMeta &&
-          summary.provenance && summary.attemptId) {
-        summary.irUploadPending = ir::tachi::shouldShowReplayUploadMarker(
-            *summary.attemptId, summary.hasCanonicalAttemptFingerprint,
-            *summary.chartMeta, *summary.provenance,
-            summary.requestedIrOutboxState);
-      }
+      resolveReplayIrRecordState(summary);
     }
     replaySummaries.insert(replaySummaries.begin(),
                            autoPlayReplaySummary(record));
@@ -8431,11 +8465,8 @@ void MainMenuScene::hideReplayModal() {
     return;
   }
   replayModalRoot->setVisible(false);
-  replayIrUploadReplayId.reset();
+  replayIrObservedRevisions.clear();
   ++replayIrUploadFeedbackRevision;
-  if (replayListView != nullptr) {
-    replayListView->setIrUploadInProgress(std::nullopt);
-  }
   clearReplayModalSelection();
   replayExportSelection.reset();
   if (replayWatchButtonText != nullptr) {
@@ -9669,11 +9700,96 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 #endif
 }
 
+std::optional<std::string>
+MainMenuScene::activeReplayIrServerOrigin() const {
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (settings == context.settings.irProviders.end()) {
+    return std::nullopt;
+  }
+  return ir::normalizeServerOrigin(settings->second.serverOrigin);
+}
+
+void MainMenuScene::publishReplayIrStatusFeedback(
+    ir::IrRecordState state) {
+  const char *message = nullptr;
+  switch (state) {
+  case ir::IrRecordState::Queued:
+    message = "IR upload is queued.";
+    break;
+  case ir::IrRecordState::Uploading:
+    message = "IR upload is in progress.";
+    break;
+  case ir::IrRecordState::AwaitingRemote:
+    message = "IR is awaiting the remote result.";
+    break;
+  case ir::IrRecordState::Blocked:
+    message = "IR upload is blocked. Check Settings > IR.";
+    break;
+  case ir::IrRecordState::Uploaded:
+    message = "IR upload is complete.";
+    break;
+  case ir::IrRecordState::Hidden:
+  case ir::IrRecordState::Eligible:
+  case ir::IrRecordState::Failed:
+    return;
+  }
+
+  if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText(message);
+  }
+  const std::uint64_t feedbackRevision = ++replayIrUploadFeedbackRevision;
+  defer(
+      [this, feedbackRevision]() {
+        if (feedbackRevision != replayIrUploadFeedbackRevision ||
+            replayIrUploadInProgress) {
+          return true;
+        }
+        if (replayModalRoot != nullptr && replayModalRoot->getVisible() &&
+            replayListContent != nullptr && replayListContent->getVisible() &&
+            replayModalTitleText != nullptr) {
+          replayModalTitleText->setText("Records");
+          replayModalRoot->applyYogaLayoutFromRoot();
+        }
+        return true;
+      },
+      1400, true);
+}
+
+void MainMenuScene::observeReplayIrServiceRevisions() {
+  if (replayModalRoot == nullptr || !replayModalRoot->getVisible() ||
+      replayListContent == nullptr || !replayListContent->getVisible() ||
+      context.irSubmissionService == nullptr) {
+    return;
+  }
+
+  for (const ReplaySummary &summary : replaySummaries) {
+    if (summary.autoPlay || summary.courseReplay ||
+        !summary.attemptId.has_value()) {
+      continue;
+    }
+    const auto status = context.irSubmissionService->status(
+        ir::kTachiProviderId, *summary.attemptId);
+    const auto observed =
+        replayIrObservedRevisions.find(*summary.attemptId);
+    if (observed != replayIrObservedRevisions.end() &&
+        observed->second == status.revision) {
+      continue;
+    }
+    replayIrObservedRevisions[*summary.attemptId] = status.revision;
+    refreshReplayIrMarker(summary.id,
+                          recordActivityFor(status.activeRequest));
+  }
+}
+
 void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
                                         ReplaySummary summary) {
+  const bool actionableState =
+      summary.irRecordState == ir::IrRecordState::Eligible ||
+      summary.irRecordState == ir::IrRecordState::Failed;
   if (replayIrUploadInProgress || replayResultRecallInProgress ||
       replayExportInProgress.load() || record.courseStart ||
-      summary.autoPlay || summary.courseReplay || !summary.irUploadPending) {
+      summary.autoPlay || summary.courseReplay || !actionableState) {
     return;
   }
 
@@ -9703,11 +9819,7 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
   }
 
   replayIrUploadInProgress = true;
-  replayIrUploadReplayId = summary.id;
   ++replayIrUploadFeedbackRevision;
-  if (replayListView != nullptr) {
-    replayListView->setIrUploadInProgress(summary.id);
-  }
   if (replayModalTitleText != nullptr) {
     replayModalTitleText->setText("Preparing IR...");
   }
@@ -9774,10 +9886,6 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
 
 void MainMenuScene::finishReplayIrUpload(int replayId, std::string message) {
   replayIrUploadInProgress = false;
-  replayIrUploadReplayId.reset();
-  if (replayListView != nullptr) {
-    replayListView->setIrUploadInProgress(std::nullopt);
-  }
   refreshReplayIrMarker(replayId);
 
   std::string safeMessage = ir::sanitizeDiagnostic(message);
@@ -9807,37 +9915,39 @@ void MainMenuScene::finishReplayIrUpload(int replayId, std::string message) {
       1400, true);
 }
 
-void MainMenuScene::refreshReplayIrMarker(int replayId) {
+void MainMenuScene::refreshReplayIrMarker(
+    int replayId, ir::IrRecordActivity activity) {
   auto summary = std::find_if(
       replaySummaries.begin(), replaySummaries.end(),
       [replayId](const ReplaySummary &candidate) {
         return candidate.id == replayId;
       });
-  if (summary == replaySummaries.end() || !summary->attemptId.has_value() ||
-      !summary->chartMeta.has_value() || !summary->provenance) {
+  if (summary == replaySummaries.end() || replayModalChart.courseStart) {
     return;
   }
 
-  const auto loaded = context.replayRepository.LoadIrOutbox(
-      ir::kTachiProviderId, *summary->attemptId);
-  if (loaded.status == ir::IrOutboxReadStatus::Found) {
-    if (!loaded.entry.has_value()) {
-      return;
-    }
-    summary->requestedIrOutboxState = loaded.entry->state;
-  } else if (loaded.status == ir::IrOutboxReadStatus::NotFound) {
-    summary->requestedIrOutboxState.reset();
-  } else {
+  const std::string irServerOrigin =
+      activeReplayIrServerOrigin().value_or(std::string{});
+  auto latestSummaries = context.replayRepository.ListReplays(
+      replayModalChart.meta, 0, ir::kTachiProviderId, irServerOrigin);
+  auto latest = std::find_if(
+      latestSummaries.begin(), latestSummaries.end(),
+      [replayId](const ReplaySummary &candidate) {
+        return candidate.id == replayId;
+      });
+  if (latest == latestSummaries.end()) {
     return;
   }
-  summary->irUploadPending = ir::tachi::shouldShowReplayUploadMarker(
-      *summary->attemptId, summary->hasCanonicalAttemptFingerprint,
-      *summary->chartMeta, *summary->provenance,
-      summary->requestedIrOutboxState);
 
+  const std::optional<int> preferredReplayId =
+      selectedReplaySummary.has_value()
+          ? std::optional<int>(selectedReplaySummary->id)
+          : std::nullopt;
   const float previousScrollOffset =
       replayListView != nullptr ? replayListView->scrollOffset : 0.0F;
-  applyReplayRecordFilters();
+  resolveReplayIrRecordState(*latest, activity);
+  *summary = std::move(*latest);
+  applyReplayRecordFilters(preferredReplayId);
   if (replayListView != nullptr) {
     replayListView->scrollOffset = previousScrollOffset;
     replayListView->rebindVisibleItems();
@@ -10060,6 +10170,7 @@ void MainMenuScene::update(float dt) {
   applyUnzipResult();
   applyReplayExportProgress();
   applyReplayExportResult();
+  observeReplayIrServiceRevisions();
 #if TARGET_OS_ANDROID
   pollPendingAndroidArchiveImport();
   applyPendingAndroidArchiveImport();
@@ -10368,7 +10479,7 @@ void MainMenuScene::cleanupScene() {
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
-  replayIrUploadReplayId.reset();
+  replayIrObservedRevisions.clear();
   ++replayIrUploadFeedbackRevision;
   unzipInProgress = false;
   findBmsJobRunning = false;

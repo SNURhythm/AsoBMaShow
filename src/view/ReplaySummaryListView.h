@@ -6,16 +6,74 @@
 #include "../ScoreRankUtils.h"
 #include "ClearLampColors.h"
 #include "Button.h"
+#include "IconText.h"
 #include "RecyclerView.h"
 #include "TextView.h"
 #include "UiTheme.h"
 #include "View.h"
 
 #include <functional>
-#include <optional>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace replay_summary_list_ui {
+
+inline Color blockedYellow() { return Color(255, 224, 92, 255); }
+
+struct IrBadgeBinding {
+  bool visible = false;
+  bool actionable = false;
+  std::uint32_t codepoint = 0;
+  Color (*accent)() = ui_theme::amber;
+};
+
+inline IrBadgeBinding bindingForIrRecordState(
+    ir::IrRecordState state) noexcept {
+  switch (state) {
+  case ir::IrRecordState::Hidden:
+    return {};
+  case ir::IrRecordState::Eligible:
+    return {.visible = true,
+            .actionable = true,
+            .codepoint = 0xf0ee,
+            .accent = ui_theme::amber};
+  case ir::IrRecordState::Queued:
+    return {.visible = true,
+            .actionable = false,
+            .codepoint = 0xf017,
+            .accent = ui_theme::amber};
+  case ir::IrRecordState::Uploading:
+    return {.visible = true,
+            .actionable = false,
+            .codepoint = 0xf2f1,
+            .accent = ui_theme::cyan};
+  case ir::IrRecordState::AwaitingRemote:
+    return {.visible = true,
+            .actionable = false,
+            .codepoint = 0xf252,
+            .accent = ui_theme::cyan};
+  case ir::IrRecordState::Blocked:
+    return {.visible = true,
+            .actionable = false,
+            .codepoint = 0xf084,
+            .accent = blockedYellow};
+  case ir::IrRecordState::Failed:
+    return {.visible = true,
+            .actionable = true,
+            .codepoint = 0xf071,
+            .accent = ui_theme::coral};
+  case ir::IrRecordState::Uploaded:
+    return {.visible = true,
+            .actionable = false,
+            .codepoint = 0xf00c,
+            .accent = ui_theme::lime};
+  }
+  return {};
+}
+
+} // namespace replay_summary_list_ui
 
 class ReplaySummaryListItemView : public View {
 public:
@@ -23,7 +81,9 @@ public:
     clearLamp = new View();
     textColumn = new View();
     irBadge = new Button();
-    irBadgeText = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+    irBadgeContent = new View();
+    irBadgeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 14);
+    irBadgeIcon = new TextView(ui_icons::kFontAwesomeSolidPath, 14);
     scoreColumn = new View();
     titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     detailText = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
@@ -56,21 +116,28 @@ public:
     irBadge->setWidth(0)->setHeight(28)->setFlexShrink(0);
     irBadge->setCornerRadius(6.0F);
     irBadge->setName("irUploadBadge");
-    irBadge->setThemedBackgroundColors(
-        ui_theme::amber,
-        [] { return ui_theme::withAlpha(ui_theme::amber(), 226); },
-        [] { return ui_theme::withAlpha(ui_theme::amber(), 194); });
-    irBadgeText->setText("IR ↑");
-    irBadgeText->setAlign(TextView::TextAlign::CENTER);
-    irBadgeText->setVAlign(TextView::TextVAlign::MIDDLE);
-    irBadgeText->setOverflow(TextView::TextOverflow::Hidden);
-    irBadgeText->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::amber()); });
-    irBadge->setContentView(irBadgeText);
+    irBadgeContent->setFlexDirection(FlexDirection::Row)
+        ->setAlignItems(YGAlignCenter)
+        ->setJustifyContent(YGJustifyCenter)
+        ->setGap(6);
+    irBadgeLabel->setName("irBadgeLabel");
+    irBadgeLabel->setWidth(20)->setHeight(28)->setFlexShrink(0);
+    irBadgeLabel->setAlign(TextView::TextAlign::CENTER);
+    irBadgeLabel->setVAlign(TextView::TextVAlign::MIDDLE);
+    irBadgeLabel->setOverflow(TextView::TextOverflow::Hidden);
+    irBadgeIcon->setName("irBadgeIcon");
+    irBadgeIcon->setWidth(20)->setHeight(28)->setFlexShrink(0);
+    irBadgeIcon->setAlign(TextView::TextAlign::CENTER);
+    irBadgeIcon->setVAlign(TextView::TextVAlign::MIDDLE);
+    irBadgeIcon->setOverflow(TextView::TextOverflow::Hidden);
+    irBadgeContent->addView(irBadgeLabel);
+    irBadgeContent->addView(irBadgeIcon);
+    irBadge->setContentView(irBadgeContent);
     irBadge->setOnClickListener([this]() {
-      if (!irUploadBusy && currentSummary.irUploadPending &&
-          irUploadHandler) {
+      if (irBadgeActionable && irUploadHandler) {
         irUploadHandler(currentSummary);
+      } else if (!irBadgeActionable && irStatusFeedbackHandler) {
+        irStatusFeedbackHandler(currentSummary);
       }
     });
     irBadge->setEnabled(false);
@@ -106,9 +173,17 @@ public:
     irUploadHandler = std::move(handler);
   }
 
-  void setSummary(const ReplaySummary &summary, bool uploadBusy = false) {
+  void setIrStatusFeedbackHandler(
+      std::function<void(const ReplaySummary &)> handler) {
+    irStatusFeedbackHandler = std::move(handler);
+  }
+
+  [[nodiscard]] std::string irBadgeIconFontPath() const {
+    return ui_icons::kFontAwesomeSolidPath;
+  }
+
+  void setSummary(const ReplaySummary &summary) {
     currentSummary = summary;
-    irUploadBusy = uploadBusy;
     titleText->setText(summary.autoPlay
                            ? "AUTO PLAY"
                            : (summary.createdAt.empty()
@@ -122,24 +197,27 @@ public:
     rankText->setText(score_rank::displayLabelForScore(summary.finalScore,
                                                        summary.maxScore));
 
-    const bool showIrBadge = summary.irUploadPending;
-    irBadge->setVisible(showIrBadge);
-    irBadge->setWidth(showIrBadge ? 54.0F : 0.0F);
-    // Keep a visible busy badge as an event sink so repeat taps cannot fall
-    // through and select the row while the upload action is running.
-    irBadge->setEnabled(showIrBadge);
-    if (irUploadBusy) {
-      irBadge->setThemedBackgroundColors(
-          [] { return ui_theme::withAlpha(ui_theme::amber(), 142); },
-          [] { return ui_theme::withAlpha(ui_theme::amber(), 142); },
-          [] { return ui_theme::withAlpha(ui_theme::amber(), 142); });
-    } else {
-      irBadge->setThemedBackgroundColors(
-          ui_theme::amber,
-          [] { return ui_theme::withAlpha(ui_theme::amber(), 226); },
-          [] { return ui_theme::withAlpha(ui_theme::amber(), 194); });
-    }
-    irBadgeText->setText(irUploadBusy ? "IR …" : "IR ↑");
+    const replay_summary_list_ui::IrBadgeBinding badge =
+        replay_summary_list_ui::bindingForIrRecordState(
+            summary.irRecordState);
+    irBadgeActionable = badge.actionable;
+    irBadge->setVisible(badge.visible);
+    irBadge->setWidth(badge.visible ? 62.0F : 0.0F);
+    // Non-actionable badges stay enabled as pointer event sinks. The bound
+    // semantic action flag prevents queued/active/blocked/uploaded clicks from
+    // dispatching an upload or falling through to select the row.
+    irBadge->setEnabled(badge.visible);
+    irBadgeLabel->setText(badge.visible ? "IR" : "");
+    irBadgeIcon->setText(
+        badge.visible ? ui_icons::textForCodepoint(badge.codepoint) : "");
+    const auto accent = badge.accent;
+    irBadge->setThemedBackgroundColors(
+        accent,
+        [accent] { return ui_theme::withAlpha(accent(), 226); },
+        [accent] { return ui_theme::withAlpha(accent(), 194); });
+    const auto foreground = [accent] { return ui_theme::textOn(accent()); };
+    irBadgeLabel->setThemedColor(foreground);
+    irBadgeIcon->setThemedColor(foreground);
 
     const int clearRank = replay_clear_mark::effectiveClearRank(summary);
     if (hasClearLampColor(clearRank)) {
@@ -185,7 +263,9 @@ private:
   View *clearLamp = nullptr;
   View *textColumn = nullptr;
   Button *irBadge = nullptr;
-  TextView *irBadgeText = nullptr;
+  View *irBadgeContent = nullptr;
+  TextView *irBadgeLabel = nullptr;
+  TextView *irBadgeIcon = nullptr;
   View *scoreColumn = nullptr;
   TextView *titleText = nullptr;
   TextView *detailText = nullptr;
@@ -193,8 +273,9 @@ private:
   TextView *rankText = nullptr;
   std::string currentRank;
   ReplaySummary currentSummary;
-  bool irUploadBusy = false;
+  bool irBadgeActionable = false;
   std::function<void(const ReplaySummary &)> irUploadHandler;
+  std::function<void(const ReplaySummary &)> irStatusFeedbackHandler;
 };
 
 class ReplaySummaryListView : public RecyclerView<ReplaySummary> {
@@ -212,6 +293,12 @@ public:
           onIrUploadRequested(summary);
         }
       });
+      itemView->setIrStatusFeedbackHandler(
+          [this](const ReplaySummary &summary) {
+            if (onIrStatusFeedbackRequested) {
+              onIrStatusFeedbackRequested(summary);
+            }
+          });
       return itemView;
     };
     onBind = [this](View *view, const ReplaySummary &item, int,
@@ -220,9 +307,7 @@ public:
       if (itemView == nullptr) {
         return;
       }
-      itemView->setSummary(
-          item, irUploadInProgress.has_value() &&
-                    *irUploadInProgress == item.id);
+      itemView->setSummary(item);
       if (isSelected) {
         itemView->onSelected();
       } else {
@@ -270,15 +355,10 @@ public:
 
   [[nodiscard]] int selectedReplayIndex() const { return selectedIndex; }
 
-  void setIrUploadInProgress(std::optional<int> replayId) {
-    irUploadInProgress = replayId;
-    rebindVisibleItems();
-  }
-
   std::function<void(int)> onSelectionChanged;
   std::function<void(const ReplaySummary &)> onIrUploadRequested;
+  std::function<void(const ReplaySummary &)> onIrStatusFeedbackRequested;
 
 private:
   int lastSelectedIndex = -1;
-  std::optional<int> irUploadInProgress;
 };
