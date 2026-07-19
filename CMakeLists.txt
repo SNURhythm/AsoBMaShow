@@ -669,6 +669,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
 
+    add_executable(result_record_summary_tests
+        tests/result_record_summary_tests.cpp
+        src/ResultRecordSummary.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+    )
+    target_include_directories(result_record_summary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_record_summary_tests PRIVATE cxx_std_23)
+
     add_executable(course_identity_tests
         tests/course_identity_tests.cpp
         src/CourseIdentity.cpp
@@ -2353,6 +2364,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         gbattle_tests
         replay_summary_list_tests
         replay_record_filters_tests
+        result_record_summary_tests
         course_identity_tests
         ir_driver_tests
         ir_receipt_models_tests
