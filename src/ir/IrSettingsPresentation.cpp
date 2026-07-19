@@ -113,7 +113,21 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
+  if (!dependencies_.invalidateRemoteIdentity) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account invalidation is unavailable."};
+  }
+  const auto origin = normalizeServerOrigin(settings_.serverOrigin);
+  if (!origin) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "The current IR server origin is invalid."};
+  }
   std::string ignoredDiagnostic;
+  if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
+                                               ignoredDiagnostic)) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account evidence could not be invalidated."};
+  }
   if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key could not be saved."};
@@ -130,7 +144,21 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
+  if (!dependencies_.invalidateRemoteIdentity) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account invalidation is unavailable."};
+  }
+  const auto origin = normalizeServerOrigin(settings_.serverOrigin);
+  if (!origin) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "The current IR server origin is invalid."};
+  }
   std::string ignoredDiagnostic;
+  if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
+                                               ignoredDiagnostic)) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account evidence could not be invalidated."};
+  }
   if (!dependencies_.removeCredential(ignoredDiagnostic)) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key could not be removed."};

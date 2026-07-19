@@ -133,17 +133,43 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                 diagnostic);
           },
       .settingsCommitted = std::move(committedSettings),
-      .replaceCredential =
-          [this](std::string_view apiKey, std::string &diagnostic) {
+      .invalidateRemoteIdentity =
+          [this](std::string_view providerId, std::string_view serverOrigin,
+                 std::string &diagnostic) {
             if (!context.profileReady()) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
-            if (!context.bokutachiCacheStore->clearUserIds(diagnostic)) {
+            const auto normalizedOrigin =
+                ir::normalizeServerOrigin(serverOrigin);
+            if (!normalizedOrigin) {
+              diagnostic = "The current IR server origin is invalid.";
+              return false;
+            }
+            const auto cleared =
+                context.replayRepository.ClearIrSubmissionReceipts(
+                    providerId, *normalizedOrigin);
+            if (cleared.status != ir::IrOutboxMutationStatus::Updated &&
+                cleared.status != ir::IrOutboxMutationStatus::NotFound) {
+              diagnostic = cleared.diagnostic.empty()
+                               ? "IR submission receipts could not be cleared."
+                               : cleared.diagnostic;
+              return false;
+            }
+            if (!context.bokutachiCacheStore ||
+                !context.bokutachiCacheStore->clearUserIds(diagnostic)) {
               if (diagnostic.empty()) {
                 diagnostic =
                     "The cached Bokutachi identity could not be invalidated.";
               }
+              return false;
+            }
+            return true;
+          },
+      .replaceCredential =
+          [this](std::string_view apiKey, std::string &diagnostic) {
+            if (!context.profileReady()) {
+              diagnostic = "The active profile is unavailable.";
               return false;
             }
             auto result = ir::IrCredentialStore::replaceApiKey(
@@ -156,13 +182,6 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           [this](std::string &diagnostic) {
             if (!context.profileReady()) {
               diagnostic = "The active profile is unavailable.";
-              return false;
-            }
-            if (!context.bokutachiCacheStore->clearUserIds(diagnostic)) {
-              if (diagnostic.empty()) {
-                diagnostic =
-                    "The cached Bokutachi identity could not be invalidated.";
-              }
               return false;
             }
             auto result = ir::IrCredentialStore::removeApiKey(

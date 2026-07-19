@@ -1047,6 +1047,39 @@ ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(
           .receipt = std::move(receipt)};
 }
 
+ir::IrOutboxMutationOutcome ReplayRepository::ClearIrSubmissionReceipts(
+    std::string_view providerId, std::string_view serverOrigin) {
+  const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
+  if (!validProviderId(providerId) || !normalizedOrigin ||
+      *normalizedOrigin != serverOrigin) {
+    return {.status = ir::IrOutboxMutationStatus::Invalid,
+            .diagnostic = "IR receipt identity is invalid"};
+  }
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          impl_->sessionDatabase,
+          "DELETE FROM ir_submission_receipts WHERE provider_id=? AND "
+          "server_origin=?",
+          statement) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 2, serverOrigin.data(),
+                        static_cast<int>(serverOrigin.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not clear IR submission receipts"};
+  }
+  return mutationFromChanges(impl_->sessionDatabase);
+}
+
 ir::IrOutboxMutationOutcome
 ReplayRepository::RetryIrOutbox(std::int64_t rowId, std::int64_t nowMs) {
   if (rowId <= 0 || nowMs < 0) {

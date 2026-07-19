@@ -11,12 +11,17 @@ root = (
     else pathlib.Path(__file__).parent.parent
 ).resolve()
 source_path = root / "src/scene/MainMenuScene.cpp"
+settings_source_path = root / "src/scene/SettingsSceneIr.cpp"
 
 if not source_path.is_file():
     print("FAIL: missing src/scene/MainMenuScene.cpp", file=sys.stderr)
     raise SystemExit(1)
+if not settings_source_path.is_file():
+    print("FAIL: missing src/scene/SettingsSceneIr.cpp", file=sys.stderr)
+    raise SystemExit(1)
 
 source = source_path.read_text(encoding="utf-8")
+settings_source = settings_source_path.read_text(encoding="utf-8")
 block_start = source.find("auto right = new View();")
 block_end = source.find("rootLayout->addView(right);", block_start)
 if block_start < 0 or block_end < 0:
@@ -42,6 +47,18 @@ def require_in_order(*needles: str) -> None:
         position = next_position
 
 
+def require_settings_in_order(*needles: str) -> None:
+    position = -1
+    for needle in needles:
+        next_position = settings_source.find(needle, position + 1)
+        if next_position < 0:
+            failures.append(
+                f"missing or out-of-order credential invalidation step: {needle}"
+            )
+            return
+        position = next_position
+
+
 require(
     "rightContent->addView(settingsButton);" not in block,
     "Settings must not scroll with chart actions",
@@ -59,6 +76,19 @@ require_in_order(
     "right->addView(rightScroll);",
     "right->addView(settingsButton);",
     "rootLayout->addView(right);",
+)
+require_settings_in_order(
+    ".invalidateRemoteIdentity =",
+    "ir::normalizeServerOrigin(serverOrigin)",
+    "context.replayRepository.ClearIrSubmissionReceipts(",
+    "context.bokutachiCacheStore->clearUserIds(diagnostic)",
+    ".replaceCredential =",
+    ".removeCredential =",
+    ".credentialCommitted =",
+)
+require(
+    settings_source.count("clearUserIds(diagnostic)") == 1,
+    "cached Bokutachi identity clearing must live only in remote invalidation",
 )
 
 if failures:
