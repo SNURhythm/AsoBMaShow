@@ -5,6 +5,7 @@
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
 #include "../ir/IrRemoteScoreModels.h"
+#include "../ir/IrScoreReconciliation.h"
 #include "ScoreRepositoryModels.h"
 #include "../bms_parser.hpp"
 
@@ -240,6 +241,9 @@ public:
   ir::IrOutboxMutationOutcome
   ClearIrSubmissionReceipts(std::string_view providerId,
                             std::string_view serverOrigin);
+  ir::IrReconciliationReadOutcome
+  LoadIrReconciliationCandidates(std::string_view providerId,
+                                 std::string_view serverOrigin);
   ir::IrRemoteSnapshotApplyOutcome
   ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
   std::vector<ir::IrRemoteScore>

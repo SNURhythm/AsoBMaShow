@@ -6,6 +6,7 @@
 #include "../src/LongNoteModeUtils.h"
 #include "../src/ScoreProvenance.h"
 #include "../src/ir/IrRemoteScoreModels.h"
+#include "../src/ir/IrScoreReconciliation.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 #include "../src/targets.h"
@@ -22,6 +23,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if !TARGET_OS_WINDOWS
@@ -5353,6 +5355,268 @@ successfulDelivery(std::int64_t rowId,
   };
 }
 
+void testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-reconciliation-candidates" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto represented = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-reconciliation-represented", 130);
+  assert(helper.ApplyIrOutboxDelivery(successfulDelivery(represented.rowId))
+             .status == ir::IrOutboxMutationStatus::Updated);
+  const auto representedAttempt =
+      sampleChartAttempt(root, "ir-reconciliation-represented", 130);
+  const auto otherProviderDraft =
+      automaticIrDraft(representedAttempt, "other", 2'100);
+  assert(helper.EnqueueReadyIrOutboxDraft(otherProviderDraft, false).status ==
+         ir::IrOutboxInsertStatus::Inserted);
+
+  const auto otherOrigin = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-reconciliation-other-origin", 132);
+  assert(helper
+             .ApplyIrOutboxDelivery(successfulDelivery(
+                 otherOrigin.rowId, "https://other.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+
+  auto modified =
+      sampleChartAttempt(root, "ir-reconciliation-modified", 131);
+  modified.replay.provenance.playback = {
+      .percent = 75, .mode = audio::PlaybackMode::PitchShift};
+  modified.replay.provenance.eligibility = ScoreEligibility::Modified;
+  modified.replay.clearType = kClearTypeAssistedEasyClearRank;
+  modified.score.clearType = kClearTypeAssistedEasyClearRank;
+  modified.score.provenance = modified.replay.provenance;
+  modified.payloadFingerprint =
+      result_persistence::payloadFingerprint(modified.replay, modified.score);
+  const auto modifiedStage = helper.StageChartResult(modified, {});
+  assert(modifiedStage.status == result_persistence::StageStatus::Staged &&
+         modifiedStage.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 modified.attemptId, modifiedStage.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET payload_json='"
+              "{\"meta\":{\"game\":\"bms\",\"playtype\":\"7K\"},"
+              "\"scores\":[]}' WHERE id=" +
+                  std::to_string(represented.rowId));
+  db.reset();
+
+  const auto invalid = helper.LoadIrReconciliationCandidates(
+      "tachi", "HTTPS://BOKU.TACHI.AC:443/");
+  assert(invalid.status == ir::IrReconciliationReadOutcome::Status::Invalid &&
+         invalid.candidates.empty());
+
+  const auto loaded = helper.LoadIrReconciliationCandidates(
+      "tachi", "https://boku.tachi.ac");
+  assert(loaded.status == ir::IrReconciliationReadOutcome::Status::Loaded);
+  assert(loaded.diagnostic.empty());
+  assert(loaded.candidates.size() == 3);
+  const auto representedCandidate = std::ranges::find(
+      loaded.candidates, represented.replayId,
+      &ir::IrLocalReceiptCandidate::replayId);
+  assert(representedCandidate != loaded.candidates.end());
+  assert(representedCandidate->attemptId == represented.attemptId);
+  assert(representedCandidate->keyMode == 7);
+  assert(representedCandidate->chartMd5 == represented.chartMd5);
+  assert(representedCandidate->chartSha256 == represented.chartSha256);
+  assert(representedCandidate->score == 91);
+  assert(representedCandidate->lampRank == kClearTypeHardClearRank);
+  assert(representedCandidate->eligible);
+  assert(representedCandidate->currentReceipt &&
+         representedCandidate->currentReceipt->providerId == "tachi" &&
+         representedCandidate->currentReceipt->serverOrigin ==
+             "https://boku.tachi.ac" &&
+         representedCandidate->currentReceipt->remoteScoreId == "Tscore");
+  assert(representedCandidate->outboxRowId == represented.rowId);
+  assert(representedCandidate->outboxState == ir::IrOutboxState::Succeeded);
+
+  const auto modifiedCandidate = std::ranges::find(
+      loaded.candidates, modifiedStage.receipt->replayId,
+      &ir::IrLocalReceiptCandidate::replayId);
+  assert(modifiedCandidate != loaded.candidates.end());
+  assert(!modifiedCandidate->eligible);
+  assert(!modifiedCandidate->currentReceipt);
+  assert(!modifiedCandidate->outboxRowId);
+  assert(!modifiedCandidate->outboxState);
+
+  const auto otherOriginCandidate = std::ranges::find(
+      loaded.candidates, otherOrigin.replayId,
+      &ir::IrLocalReceiptCandidate::replayId);
+  assert(otherOriginCandidate != loaded.candidates.end());
+  assert(!otherOriginCandidate->currentReceipt);
+  assert(otherOriginCandidate->outboxRowId == otherOrigin.rowId);
+  assert(otherOriginCandidate->outboxState == ir::IrOutboxState::Succeeded);
+}
+
+void testLoadIrReconciliationCandidatesSkipsCorruptionWithBoundedDiagnostic(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-reconciliation-corrupt" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  const auto valid =
+      sampleChartAttempt(root, "ir-reconciliation-valid", 133);
+  const auto corrupt =
+      sampleChartAttempt(root, "ir-reconciliation-corrupt", 134);
+  const auto validStage = helper.StageChartResult(valid, {});
+  const auto corruptStage = helper.StageChartResult(corrupt, {});
+  assert(validStage.receipt && corruptStage.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 valid.attemptId, validStage.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 corrupt.attemptId, corruptStage.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
+                            std::to_string(corruptStage.receipt->replayId));
+  db.reset();
+
+  const auto loaded = helper.LoadIrReconciliationCandidates(
+      "tachi", "https://boku.tachi.ac");
+  assert(loaded.status == ir::IrReconciliationReadOutcome::Status::Loaded);
+  assert(loaded.candidates.size() == 1);
+  assert(loaded.candidates.front().replayId == validStage.receipt->replayId);
+  assert(!loaded.diagnostic.empty());
+  assert(loaded.diagnostic.size() <= ir::kMaximumDiagnosticBytes);
+  assert(loaded.diagnostic.find("inspected=2") != std::string::npos);
+  assert(loaded.diagnostic.find("rejected=1") != std::string::npos);
+}
+
+void testLoadIrReconciliationCandidatesStorageFailureReturnsNoPartialRows(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-reconciliation-storage-failure" / "replay.db";
+  ReplayRepository helper(path);
+  const auto attempt =
+      sampleChartAttempt(root, "ir-reconciliation-storage-failure", 135);
+  const auto staged = helper.StageChartResult(attempt, {});
+  assert(staged.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 attempt.attemptId, staged.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_submission_receipts");
+  db.reset();
+
+  const auto loaded = helper.LoadIrReconciliationCandidates(
+      "tachi", "https://boku.tachi.ac");
+  assert(loaded.status ==
+         ir::IrReconciliationReadOutcome::Status::StorageFailure);
+  assert(loaded.candidates.empty());
+  assert(!loaded.diagnostic.empty());
+}
+
+void testLoadIrReconciliationCandidatesUsesOneReadSnapshot(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-reconciliation-snapshot" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  const auto represented = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-reconciliation-snapshot", 136);
+  assert(helper.ApplyIrOutboxDelivery(successfulDelivery(represented.rowId))
+             .status == ir::IrOutboxMutationStatus::Updated);
+  helper.Shutdown();
+
+  constexpr int duplicateCount = 4'000;
+  auto db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "WITH RECURSIVE seq(value) AS (SELECT 1 UNION ALL SELECT value+1 "
+      "FROM seq WHERE value<" +
+          std::to_string(duplicateCount) +
+          ") INSERT INTO replays("
+          "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+          "gauge_type,gauge_auto_shift,final_score,max_combo,final_gauge,"
+          "clear_type,assist_option,ruleset_version,eligibility,"
+          "provenance_json,attempt_id,attempt_fingerprint) SELECT "
+          "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+          "gauge_type,gauge_auto_shift,final_score,max_combo,final_gauge,"
+          "clear_type,assist_option,ruleset_version,eligibility,"
+          "provenance_json,printf('20000000-0000-4000-8000-%012x',value),"
+          "NULL FROM replays,seq WHERE id=" +
+          std::to_string(represented.replayId));
+  execOrAbort(
+      db.get(),
+      "INSERT INTO ir_submission_receipts("
+      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+      "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
+      "observed_in_snapshot,confirmed_at_ms) SELECT "
+      "'tachi','https://boku.tachi.ac',id,attempt_id,chart_md5,chart_sha256,"
+      "42,'snapshot-chart',printf('snapshot-score-%d',id),0,0,2000 "
+      "FROM replays WHERE id<>" +
+          std::to_string(represented.replayId));
+  db.reset();
+  assert(helper.EnsureSchema());
+
+  ir::IrReconciliationReadOutcome loaded;
+  std::thread reader([&] {
+    loaded = helper.LoadIrReconciliationCandidates(
+        "tachi", "https://boku.tachi.ac");
+  });
+  bool observedRead = false;
+  for (int attempt = 0; attempt < 100'000; ++attempt) {
+    if (ReplayRepository::HasActiveReads()) {
+      observedRead = true;
+      break;
+    }
+    std::this_thread::yield();
+  }
+  assert(observedRead);
+  db = openDatabase(path);
+  sqlite3_busy_timeout(db.get(), 5'000);
+  execOrAbort(db.get(), "DELETE FROM ir_submission_receipts");
+  db.reset();
+  reader.join();
+
+  assert(loaded.status == ir::IrReconciliationReadOutcome::Status::Loaded);
+  assert(loaded.candidates.size() ==
+         static_cast<std::size_t>(duplicateCount + 1));
+  const auto receiptCount = std::ranges::count_if(
+      loaded.candidates,
+      [](const auto &candidate) { return candidate.currentReceipt.has_value(); });
+  assert(receiptCount == 0 || receiptCount == duplicateCount + 1);
+}
+
+void testLoadIrReconciliationCandidatesKeepsUnknownOutboxKeyMode(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-reconciliation-unknown-mode" / "replay.db";
+  ReplayRepository helper(path);
+  const auto attempt =
+      sampleChartAttempt(root, "ir-reconciliation-unknown-mode", 137);
+  const auto draft = automaticIrDraft(attempt, "tachi", 1'000);
+  const auto staged = helper.StageChartResult(attempt, {&draft, 1});
+  assert(staged.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 attempt.attemptId, staged.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  const auto outbox = helper.LoadIrOutbox("tachi", attempt.attemptId);
+  assert(outbox.entry);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET payload_json='"
+              "{\"meta\":{\"game\":7,\"playtype\":[]}}' WHERE id=" +
+                  std::to_string(outbox.entry->id));
+  db.reset();
+
+  const auto loaded = helper.LoadIrReconciliationCandidates(
+      "tachi", "https://boku.tachi.ac");
+  assert(loaded.status == ir::IrReconciliationReadOutcome::Status::Loaded);
+  assert(loaded.candidates.size() == 1);
+  assert(loaded.candidates.front().keyMode == 0);
+  assert(loaded.candidates.front().outboxRowId == outbox.entry->id);
+}
+
 void assertClaimedWithoutReceipt(ReplayRepository &helper,
                                  const ClaimedCanonicalIrAttempt &fixture) {
   const auto outbox = helper.LoadIrOutbox("tachi", fixture.attemptId);
@@ -6433,6 +6697,11 @@ int main() {
   testCurrentVersionRejectsMalformedIrRemoteScoreSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxSuccessCommitsReceiptAtomically(root);
+  testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(root);
+  testLoadIrReconciliationCandidatesSkipsCorruptionWithBoundedDiagnostic(root);
+  testLoadIrReconciliationCandidatesStorageFailureReturnsNoPartialRows(root);
+  testLoadIrReconciliationCandidatesUsesOneReadSnapshot(root);
+  testLoadIrReconciliationCandidatesKeepsUnknownOutboxKeyMode(root);
   testClearIrSubmissionReceiptsIsOriginScoped(root);
   testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
   testApplyIrRemoteSnapshotReplacesOneOriginAtomically(root);

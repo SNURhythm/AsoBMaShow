@@ -11,6 +11,8 @@
 #include "../Utils.h"
 #include "../path.h"
 
+#include <nlohmann/json.hpp>
+
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <bit>
@@ -2074,6 +2076,288 @@ std::optional<int> replay_repository_detail::SaveCourseReplayOnConnection(
     return std::nullopt;
   }
   return courseReplayId;
+}
+
+ir::IrReconciliationReadOutcome
+ReplayRepository::LoadIrReconciliationCandidates(
+    std::string_view providerId, std::string_view serverOrigin) {
+  const auto validProviderId = [](std::string_view value) {
+    return !value.empty() && value.size() <= ir::kMaximumIrProviderIdBytes &&
+           value.front() >= 'a' && value.front() <= 'z' &&
+           std::ranges::all_of(value, [](unsigned char character) {
+             return (character >= 'a' && character <= 'z') ||
+                    (character >= '0' && character <= '9') ||
+                    character == '_' || character == '-';
+           });
+  };
+  const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
+  if (!validProviderId(providerId) || !normalizedOrigin ||
+      *normalizedOrigin != serverOrigin) {
+    return {.status = ir::IrReconciliationReadOutcome::Status::Invalid,
+            .diagnostic = "IR reconciliation identity is invalid"};
+  }
+
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status =
+                ir::IrReconciliationReadOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+
+  sqlite3 *database = impl_->sessionDatabase;
+  std::string snapshotError;
+  SqliteTransactionHandle snapshot(database, "BEGIN TRANSACTION",
+                                   snapshotError);
+  if (!snapshot.active()) {
+    return {.status =
+                ir::IrReconciliationReadOutcome::Status::StorageFailure,
+            .diagnostic =
+                "could not start the IR reconciliation read snapshot"};
+  }
+
+  constexpr const char *query =
+      "SELECT r.id,r.attempt_id,r.chart_md5,r.chart_sha256,r.final_score,"
+      "r.clear_type,r.ruleset_version,r.eligibility,r.provenance_json,"
+      "receipt.id,receipt.provider_id,receipt.server_origin,receipt.replay_id,"
+      "receipt.attempt_id,receipt.chart_md5,receipt.chart_sha256,"
+      "receipt.remote_user_id,receipt.remote_chart_id,"
+      "receipt.remote_score_id,receipt.confirmation_source,"
+      "receipt.observed_in_snapshot,receipt.confirmed_at_ms,"
+      "outbox.id,outbox.state,outbox.payload_json,outbox.chart_md5,"
+      "outbox.chart_sha256,outbox.local_result_ready "
+      "FROM replays r "
+      "LEFT JOIN ir_submission_receipts receipt ON receipt.provider_id=?1 "
+      "AND receipt.server_origin=?2 AND receipt.replay_id=r.id "
+      "LEFT JOIN ir_outbox outbox ON outbox.provider_id=?1 "
+      "AND outbox.attempt_id=r.attempt_id "
+      "WHERE r.attempt_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM "
+      "course_replay_stages stage WHERE stage.replay_id=r.id) "
+      "ORDER BY r.id LIMIT ?3";
+  constexpr std::size_t scanLimit =
+      ir::kMaximumIrRemoteScoreSnapshotEntries +
+      replay_summary_scan::kCorruptCandidateAllowance + 1;
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 2, serverOrigin.data(),
+                        static_cast<int>(serverOrigin.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 3,
+                         static_cast<sqlite3_int64>(scanLimit)) != SQLITE_OK) {
+    return {.status =
+                ir::IrReconciliationReadOutcome::Status::StorageFailure,
+            .diagnostic =
+                "could not prepare the IR reconciliation candidate read"};
+  }
+
+  const auto nullableText = [&](int column) {
+    const int type = sqlite3_column_type(statement.get(), column);
+    return type == SQLITE_NULL || type == SQLITE_TEXT;
+  };
+  const auto nullableInteger = [&](int column) {
+    const int type = sqlite3_column_type(statement.get(), column);
+    return type == SQLITE_NULL || type == SQLITE_INTEGER;
+  };
+  std::vector<ir::IrLocalReceiptCandidate> candidates;
+  std::unordered_set<int> replayIds;
+  std::size_t inspected = 0;
+  std::size_t rejected = 0;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    ++inspected;
+    const auto rejectRow = [&] { ++rejected; };
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 1) != SQLITE_TEXT ||
+        !nullableText(2) || !nullableText(3) ||
+        sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 5) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 8) != SQLITE_TEXT) {
+      rejectRow();
+      continue;
+    }
+    const sqlite3_int64 storedReplayId = sqlite3_column_int64(statement.get(), 0);
+    const sqlite3_int64 storedScore = sqlite3_column_int64(statement.get(), 4);
+    const sqlite3_int64 storedLamp = sqlite3_column_int64(statement.get(), 5);
+    if (storedReplayId <= 0 ||
+        storedReplayId > std::numeric_limits<int>::max() || storedScore < 0 ||
+        storedScore > std::numeric_limits<int>::max() ||
+        storedLamp < std::numeric_limits<int>::min() ||
+        storedLamp > std::numeric_limits<int>::max()) {
+      rejectRow();
+      continue;
+    }
+    const int replayId = static_cast<int>(storedReplayId);
+    if (!replayIds.emplace(replayId).second) {
+      return {.status = ir::IrReconciliationReadOutcome::Status::Invalid,
+              .diagnostic =
+                  "IR reconciliation candidate joins are not unique"};
+    }
+    const std::string attemptId = readText(statement.get(), 1);
+    auto identity = strictChartIdentity(readText(statement.get(), 3),
+                                        readText(statement.get(), 2));
+    std::string provenanceError;
+    auto provenance = decodeStoredProvenance(statement.get(), 6, 7, 8,
+                                             provenanceError);
+    if (!uuid::isCanonicalLowerV4(attemptId) || !identity || !provenance ||
+        provenance->stages.size() != 1 ||
+        !isKnownClearRank(static_cast<int>(storedLamp))) {
+      rejectRow();
+      continue;
+    }
+    bms_parser::ChartMeta chartMeta;
+    chartMeta.MD5 = identity->md5;
+    chartMeta.SHA256 = identity->sha256;
+    if (!score_provenance::stageMatchesChart(provenance->stages.front(),
+                                             chartMeta)) {
+      rejectRow();
+      continue;
+    }
+
+    ir::IrLocalReceiptCandidate candidate{
+        .replayId = replayId,
+        .attemptId = attemptId,
+        .chartMd5 = identity->md5,
+        .chartSha256 = identity->sha256,
+        .score = static_cast<int>(storedScore),
+        .lampRank = static_cast<int>(storedLamp),
+        .eligible = provenance->eligibility == ScoreEligibility::Verified &&
+                    scoreEligibilityForProvenance(*provenance) ==
+                        ScoreEligibility::Verified &&
+                    !gaugeProfileIsCourse(provenance->gaugeProfile) &&
+                    (providerId != ir::kTachiProviderId ||
+                     provenance->ruleset ==
+                         RulesetDescriptor::For(GameplayRuleset::LR2)),
+    };
+
+    if (sqlite3_column_type(statement.get(), 9) != SQLITE_NULL) {
+      if (sqlite3_column_type(statement.get(), 9) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 10) != SQLITE_TEXT ||
+          sqlite3_column_type(statement.get(), 11) != SQLITE_TEXT ||
+          sqlite3_column_type(statement.get(), 12) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 13) != SQLITE_TEXT ||
+          !nullableText(14) ||
+          sqlite3_column_type(statement.get(), 15) != SQLITE_TEXT ||
+          !nullableInteger(16) || !nullableText(17) || !nullableText(18) ||
+          sqlite3_column_type(statement.get(), 19) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 20) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 21) != SQLITE_INTEGER) {
+        rejectRow();
+        continue;
+      }
+      ir::IrSubmissionReceipt receipt{
+          .id = sqlite3_column_int64(statement.get(), 9),
+          .providerId = readText(statement.get(), 10),
+          .serverOrigin = readText(statement.get(), 11),
+          .replayId = sqlite3_column_int(statement.get(), 12),
+          .attemptId = readText(statement.get(), 13),
+          .chartMd5 = readText(statement.get(), 14),
+          .chartSha256 = readText(statement.get(), 15),
+          .remoteUserId =
+              sqlite3_column_type(statement.get(), 16) == SQLITE_NULL
+                  ? std::optional<std::int64_t>{}
+                  : sqlite3_column_int64(statement.get(), 16),
+          .remoteChartId = readText(statement.get(), 17),
+          .remoteScoreId = readText(statement.get(), 18),
+          .source = static_cast<ir::IrReceiptConfirmationSource>(
+              sqlite3_column_int(statement.get(), 19)),
+          .observedInSnapshot = sqlite3_column_int(statement.get(), 20) != 0,
+          .confirmedAtUnixMillis = sqlite3_column_int64(statement.get(), 21),
+      };
+      std::string diagnostic;
+      if (!ir::validateIrSubmissionReceipt(receipt, diagnostic) ||
+          receipt.providerId != providerId ||
+          receipt.serverOrigin != serverOrigin || receipt.replayId != replayId ||
+          receipt.attemptId != attemptId ||
+          (!identity->md5.empty() && !receipt.chartMd5.empty() &&
+           receipt.chartMd5 != identity->md5) ||
+          (!identity->sha256.empty() &&
+           receipt.chartSha256 != identity->sha256)) {
+        rejectRow();
+        continue;
+      }
+      candidate.currentReceipt = std::move(receipt);
+    }
+
+    if (sqlite3_column_type(statement.get(), 22) != SQLITE_NULL) {
+      if (sqlite3_column_type(statement.get(), 22) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 23) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 24) != SQLITE_TEXT ||
+          !nullableText(25) ||
+          sqlite3_column_type(statement.get(), 26) != SQLITE_TEXT ||
+          sqlite3_column_type(statement.get(), 27) != SQLITE_INTEGER) {
+        rejectRow();
+        continue;
+      }
+      const sqlite3_int64 outboxId = sqlite3_column_int64(statement.get(), 22);
+      const int state = sqlite3_column_int(statement.get(), 23);
+      const int localResultReady = sqlite3_column_int(statement.get(), 27);
+      const std::string outboxMd5 = readText(statement.get(), 25);
+      const std::string outboxSha256 = readText(statement.get(), 26);
+      if (outboxId <= 0 || !ir::isKnownIrOutboxState(state) ||
+          (localResultReady != 0 && localResultReady != 1) ||
+          (!identity->md5.empty() && !outboxMd5.empty() &&
+           identity->md5 != outboxMd5) ||
+          (!identity->sha256.empty() && identity->sha256 != outboxSha256)) {
+        rejectRow();
+        continue;
+      }
+      candidate.outboxRowId = outboxId;
+      candidate.outboxState = static_cast<ir::IrOutboxState>(state);
+      const auto document = nlohmann::json::parse(
+          readText(statement.get(), 24), nullptr, false, false);
+      if (document.is_object()) {
+        const auto meta = document.find("meta");
+        if (meta != document.end() && meta->is_object()) {
+          const auto game = meta->find("game");
+          const auto playtype = meta->find("playtype");
+          if (game != meta->end() && game->is_string() &&
+              game->get_ref<const std::string &>() == "bms" &&
+              playtype != meta->end() && playtype->is_string()) {
+            const auto &value = playtype->get_ref<const std::string &>();
+            candidate.keyMode = value == "7K" ? 7 : value == "14K" ? 14 : 0;
+          }
+        }
+      }
+    }
+
+    if (candidates.size() >= ir::kMaximumIrRemoteScoreSnapshotEntries) {
+      return {.status = ir::IrReconciliationReadOutcome::Status::Invalid,
+              .diagnostic =
+                  "IR reconciliation candidate collection is oversized"};
+    }
+    candidates.push_back(std::move(candidate));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status =
+                ir::IrReconciliationReadOutcome::Status::StorageFailure,
+            .diagnostic = "IR reconciliation candidate read failed"};
+  }
+  if (inspected >= scanLimit) {
+    return {.status = ir::IrReconciliationReadOutcome::Status::Invalid,
+            .diagnostic =
+                "IR reconciliation candidate scan budget was exhausted"};
+  }
+  if (!snapshot.commit(snapshotError)) {
+    return {.status =
+                ir::IrReconciliationReadOutcome::Status::StorageFailure,
+            .diagnostic =
+                "could not complete the IR reconciliation read snapshot"};
+  }
+
+  std::string diagnostic;
+  if (rejected != 0) {
+    diagnostic = ir::sanitizeDiagnostic(
+        "IR reconciliation candidates: inspected=" +
+        std::to_string(inspected) + " rejected=" + std::to_string(rejected));
+  }
+  return {.status = ir::IrReconciliationReadOutcome::Status::Loaded,
+          .candidates = std::move(candidates),
+          .diagnostic = std::move(diagnostic)};
 }
 
 std::vector<ReplaySummary>
