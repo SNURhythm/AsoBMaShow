@@ -9,6 +9,7 @@ target_sources(main PRIVATE
     IrRankingModels.cpp
     IrRankingService.cpp
     IrResultPresentation.cpp
+    IrSavedResultUpload.cpp
     IrSettingsPresentation.cpp
     IrSubmission.cpp
     IrSubmissionService.cpp
