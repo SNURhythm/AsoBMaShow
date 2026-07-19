@@ -15,10 +15,30 @@ ReplayResultRecord validRecord() {
   ReplayResultRecord record;
   record.replay.id = 41;
   record.replay.chartMeta.BmsPath = "recall.bms";
+  record.replay.chartMeta.Folder = "charts/recall";
   record.replay.chartMeta.MD5 = "0123456789abcdef0123456789abcdef";
   record.replay.chartMeta.SHA256 =
       "0123456789abcdef0123456789abcdef"
       "0123456789abcdef0123456789abcdef";
+  record.replay.chartMeta.Artist = "Recall Artist";
+  record.replay.chartMeta.SubArtist = "Recall Subartist";
+  record.replay.chartMeta.Bpm = 173.5;
+  record.replay.chartMeta.Genre = "Recall Genre";
+  record.replay.chartMeta.Title = "Recall Title";
+  record.replay.chartMeta.SubTitle = "Recall Subtitle";
+  record.replay.chartMeta.Rank = 2;
+  record.replay.chartMeta.Total = 165.25;
+  record.replay.chartMeta.HasTotal = true;
+  record.replay.chartMeta.PlayLength = 1'234'567;
+  record.replay.chartMeta.TotalLength = 2'345'678;
+  record.replay.chartMeta.Banner = "banner.png";
+  record.replay.chartMeta.StageFile = "stage.png";
+  record.replay.chartMeta.BackBmp = "back.png";
+  record.replay.chartMeta.Preview = "preview.ogg";
+  record.replay.chartMeta.Difficulty = 4;
+  record.replay.chartMeta.PlayLevel = 11.5;
+  record.replay.chartMeta.MinBpm = 86.75;
+  record.replay.chartMeta.MaxBpm = 347.0;
   record.replay.chartMeta.KeyMode = 7;
   record.replay.chartMeta.TotalNotes = 1;
   record.replay.initialGaugeType = GaugeType::Normal;
@@ -59,6 +79,20 @@ ReplayResultRecord validRecord() {
   return record;
 }
 
+bms_parser::ChartMeta
+databaseShapedMeta(const bms_parser::ChartMeta &complete) {
+  bms_parser::ChartMeta stored;
+  stored.BmsPath = complete.BmsPath;
+  stored.MD5 = complete.MD5;
+  stored.SHA256 = complete.SHA256;
+  stored.Title = complete.Title;
+  stored.Artist = complete.Artist;
+  stored.KeyMode = complete.KeyMode;
+  stored.TotalNotes = complete.TotalNotes;
+  stored.LnMode = complete.LnMode;
+  return stored;
+}
+
 result_recall::ReplayChartLoader chartLoader() {
   return [](const ReplayData &replay, std::atomic_bool &) {
     auto chart = std::make_unique<bms_parser::Chart>();
@@ -77,6 +111,45 @@ void testMatchingAttemptEnablesHistoricalIr() {
   assert(outcome.value->historicalIr->submission->playedAtUnixMillis ==
          1784420645000LL);
   assert(outcome.value->historicalIr->saveOutcome.saved());
+}
+
+void testParsedChartMetadataRestoresHistoricalIr() {
+  auto record = validRecord();
+  const auto completeMeta = record.replay.chartMeta;
+  record.replay.chartMeta = databaseShapedMeta(completeMeta);
+  result_recall::ReplayChartLoader parsedChartLoader =
+      [completeMeta](const ReplayData &, std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta = completeMeta;
+        return chart;
+      };
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      std::move(record), cancelled, std::move(parsedChartLoader));
+  assert(outcome.value.has_value());
+  assert(outcome.value->historicalIr.has_value());
+  assert(outcome.value->replay.chartMeta.Genre == completeMeta.Genre);
+  assert(outcome.value->replay.chartMeta.Total == completeMeta.Total);
+}
+
+void testParsedChartMetadataStillRejectsChangedChart() {
+  auto record = validRecord();
+  auto changedMeta = record.replay.chartMeta;
+  record.replay.chartMeta = databaseShapedMeta(changedMeta);
+  changedMeta.Genre = "Changed Genre";
+  result_recall::ReplayChartLoader changedChartLoader =
+      [changedMeta](const ReplayData &, std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta = changedMeta;
+        return chart;
+      };
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      std::move(record), cancelled, std::move(changedChartLoader));
+  assert(outcome.value.has_value());
+  assert(!outcome.value->historicalIr.has_value());
 }
 
 void testInvalidIntegrityMetadataSuppressesOnlyIr() {
@@ -174,6 +247,8 @@ void testCourseBuildDoesNotPublishPartialSession() {
 
 int main() {
   testMatchingAttemptEnablesHistoricalIr();
+  testParsedChartMetadataRestoresHistoricalIr();
+  testParsedChartMetadataStillRejectsChangedChart();
   testInvalidIntegrityMetadataSuppressesOnlyIr();
   testCourseBuildPreparesEveryStage();
   testCourseBuildDoesNotPublishPartialSession();

@@ -74,7 +74,7 @@ ChartBuildOutcome BuildChartResult(ReplayResultRecord record,
       return {.diagnostic = "saved chart is unavailable"};
     }
 
-    record.replay.chartMeta.BmsPath = chart->Meta.BmsPath;
+    record.replay.chartMeta = chart->Meta;
     RhythmState state =
         replay_result::BuildResultState(*chart, record.replay);
     auto historicalIr = historicalIrFor(record, chart->Meta, state);
