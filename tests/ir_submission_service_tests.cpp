@@ -23,6 +23,8 @@
 #include <utility>
 #include <vector>
 
+#include <sqlite3.h>
+
 namespace {
 
 using namespace std::chrono_literals;
@@ -104,6 +106,68 @@ public:
     return perform(true, entry, config, token);
   }
 
+  ir::IrUserScoreSnapshotOutcome fetchUserScoreSnapshot(
+      const ir::IrProviderRuntimeConfig &config, ir::IrHttpClient &,
+      std::stop_token token, ir::IrUserScoreProgress progress) const override {
+    std::stop_callback stopped(token,
+                               [this] { reconciliationChanged_.notify_all(); });
+    std::unique_lock lock(mutex_);
+    activeReconciliationToken_ = token;
+    ++reconciliationCalls_;
+    reconciliationApiKeys_.push_back(config.apiKey);
+    reconciliationChanged_.notify_all();
+    lock.unlock();
+
+    progress("bms-7k", 0, 2);
+    lock.lock();
+    reconciliationStage_ = 1;
+    reconciliationChanged_.notify_all();
+    if (ignoreReconciliationCancellation_) {
+      reconciliationChanged_.wait(
+          lock, [&] { return reconciliationReleaseStage_ >= 1; });
+    } else {
+      reconciliationChanged_.wait(lock, token, [&] {
+        return token.stop_requested() || reconciliationReleaseStage_ >= 1;
+      });
+    }
+    if (token.stop_requested() && !ignoreReconciliationCancellation_) {
+      return {.status = ir::IrUserScoreSnapshotStatus::Cancelled,
+              .code = "cancelled",
+              .diagnostic = "fake reconciliation was cancelled"};
+    }
+    lock.unlock();
+
+    progress("bms-7k", 1, 2);
+    progress("bms-14k", 1, 2);
+    lock.lock();
+    reconciliationStage_ = 2;
+    reconciliationChanged_.notify_all();
+    if (ignoreReconciliationCancellation_) {
+      reconciliationChanged_.wait(
+          lock, [&] { return reconciliationReleaseStage_ >= 2; });
+    } else {
+      reconciliationChanged_.wait(lock, token, [&] {
+        return token.stop_requested() || reconciliationReleaseStage_ >= 2;
+      });
+    }
+    if (token.stop_requested() && !ignoreReconciliationCancellation_) {
+      return {.status = ir::IrUserScoreSnapshotStatus::Cancelled,
+              .code = "cancelled",
+              .diagnostic = "fake reconciliation was cancelled"};
+    }
+    lock.unlock();
+
+    progress("bms-14k", 2, 2);
+    lock.lock();
+    if (reconciliationOutcomes_.empty()) {
+      return {.status = ir::IrUserScoreSnapshotStatus::Succeeded,
+              .snapshot = ir::IrUserScoreSnapshot{}};
+    }
+    auto outcome = std::move(reconciliationOutcomes_.front());
+    reconciliationOutcomes_.pop_front();
+    return outcome;
+  }
+
   void pushSubmit(ir::DeliveryOutcome outcome) {
     std::lock_guard lock(mutex_);
     submitOutcomes_.push_back(std::move(outcome));
@@ -112,6 +176,11 @@ public:
   void pushPoll(ir::DeliveryOutcome outcome) {
     std::lock_guard lock(mutex_);
     pollOutcomes_.push_back(std::move(outcome));
+  }
+
+  void pushReconciliation(ir::IrUserScoreSnapshotOutcome outcome) {
+    std::lock_guard lock(mutex_);
+    reconciliationOutcomes_.push_back(std::move(outcome));
   }
 
   void blockRequestsUntilCancelled() {
@@ -134,6 +203,43 @@ public:
     std::unique_lock lock(mutex_);
     return callsChanged_.wait_for(lock, 3s,
                                   [&] { return calls_.size() >= count; });
+  }
+
+  bool waitForReconciliationStage(int stage) const {
+    std::unique_lock lock(mutex_);
+    return reconciliationChanged_.wait_for(
+        lock, 3s, [&] { return reconciliationStage_ >= stage; });
+  }
+
+  bool waitForReconciliationCalls(std::size_t count) const {
+    std::unique_lock lock(mutex_);
+    return reconciliationChanged_.wait_for(
+        lock, 3s, [&] { return reconciliationCalls_ >= count; });
+  }
+
+  bool waitForReconciliationCancellation() const {
+    std::unique_lock lock(mutex_);
+    return reconciliationChanged_.wait_for(lock, 3s, [&] {
+      return activeReconciliationToken_ &&
+             activeReconciliationToken_->stop_requested();
+    });
+  }
+
+  void releaseReconciliationStage(int stage) {
+    std::lock_guard lock(mutex_);
+    reconciliationReleaseStage_ =
+        std::max(reconciliationReleaseStage_, stage);
+    reconciliationChanged_.notify_all();
+  }
+
+  void ignoreReconciliationCancellation() {
+    std::lock_guard lock(mutex_);
+    ignoreReconciliationCancellation_ = true;
+  }
+
+  std::size_t reconciliationCalls() const {
+    std::lock_guard lock(mutex_);
+    return reconciliationCalls_;
   }
 
   std::vector<DriverCall> calls() const {
@@ -174,9 +280,17 @@ private:
   mutable std::mutex mutex_;
   mutable std::condition_variable_any callsChanged_;
   mutable std::condition_variable_any blockChanged_;
+  mutable std::condition_variable_any reconciliationChanged_;
   mutable std::vector<DriverCall> calls_;
   mutable std::deque<ir::DeliveryOutcome> submitOutcomes_;
   mutable std::deque<ir::DeliveryOutcome> pollOutcomes_;
+  mutable std::deque<ir::IrUserScoreSnapshotOutcome> reconciliationOutcomes_;
+  mutable std::vector<std::string> reconciliationApiKeys_;
+  mutable std::optional<std::stop_token> activeReconciliationToken_;
+  mutable std::size_t reconciliationCalls_ = 0;
+  mutable int reconciliationStage_ = 0;
+  mutable int reconciliationReleaseStage_ = 0;
+  mutable bool ignoreReconciliationCancellation_ = false;
   mutable bool block_ = false;
   mutable bool blockUntilReleased_ = false;
 };
@@ -240,6 +354,25 @@ ir::IrOutboxDraft draft(int suffix, std::int64_t createdAt) {
               .validationFingerprint = std::string(64, 'd'),
           },
       .createdAtUnixMillis = createdAt};
+}
+
+ir::IrRemoteScore remoteScore(std::string id = "remote-score-1") {
+  return {
+      .remoteUserId = 42,
+      .game = "bms-7k",
+      .remoteScoreId = std::move(id),
+      .remoteChartId = "remote-chart-1",
+      .chartMd5 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      .chartSha256 =
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      .title = "IR service fixture",
+      .artist = "Test",
+      .service = "Fake IR",
+      .noteCount = 50,
+      .score = 91,
+      .lampRank = kClearTypeHardClearRank,
+      .timeAddedUnixMillis = 1'000'000'000'000LL,
+  };
 }
 
 ir::IrActiveProfileConfig
@@ -356,6 +489,13 @@ public:
     ir::IrSubmissionServiceOptions options;
     options.wallNowUnixMillis = [this] { return now.load(); };
     options.monotonicNow = [this] {
+      if (monotonicHook) {
+        monotonicHook();
+      }
+      if (useIndependentSteady.load()) {
+        return std::chrono::steady_clock::time_point(
+            std::chrono::milliseconds(steadyNow.load()));
+      }
       return std::chrono::steady_clock::time_point(
           std::chrono::milliseconds(now.load()));
     };
@@ -382,7 +522,12 @@ public:
                std::optional<std::chrono::steady_clock::time_point> deadline) {
           waiter.wait(token, deadline);
         };
-    options.wake = [this] { waiter.wake(); };
+    options.wake = [this] {
+      if (wakeHook) {
+        wakeHook();
+      }
+      waiter.wake();
+    };
     options.submissionSucceeded = [this](std::string_view profileId,
                                          std::string_view providerId,
                                          std::string_view origin,
@@ -491,6 +636,8 @@ public:
   std::shared_ptr<FakeDriver> driver;
   FakeHttpClient http;
   std::atomic<std::int64_t> now{1'000'000'000'000LL};
+  std::atomic<std::int64_t> steadyNow{5'000};
+  std::atomic_bool useIndependentSteady{false};
   ManualWaiter waiter;
   mutable std::mutex credentialsMutex;
   std::map<std::string, std::string, std::less<>> credentials;
@@ -502,6 +649,8 @@ public:
   mutable std::mutex successMutex;
   std::vector<std::string> successes;
   std::vector<std::string> credentialChanges;
+  std::function<void()> wakeHook;
+  std::function<void()> monotonicHook;
   std::unique_ptr<ir::IrSubmissionService> service;
 };
 
@@ -511,6 +660,73 @@ ir::IrOutboxEntry load(Harness &harness, int suffix) {
   expect(result.status == ir::IrOutboxReadStatus::Found && result.entry,
          "expected outbox row exists");
   return result.entry.value_or(ir::IrOutboxEntry{});
+}
+
+bool waitForReconciliationPhase(Harness &harness,
+                                ir::IrReconciliationPhase phase) {
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (harness.service->reconciliationStatus("fake").phase == phase) {
+      return true;
+    }
+    std::this_thread::yield();
+  }
+  return false;
+}
+
+std::optional<std::int64_t>
+remoteMirrorGeneration(const std::filesystem::path &databasePath,
+                       std::string_view providerId,
+                       std::string_view serverOrigin) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open_v2(databasePath.string().c_str(), &database,
+                      SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+    if (database) {
+      sqlite3_close(database);
+    }
+    return std::nullopt;
+  }
+  sqlite3_stmt *statement = nullptr;
+  const char *query =
+      "SELECT MIN(sync_generation),MAX(sync_generation) "
+      "FROM ir_remote_scores WHERE provider_id=? AND server_origin=?";
+  std::optional<std::int64_t> result;
+  if (sqlite3_prepare_v2(database, query, -1, &statement, nullptr) ==
+          SQLITE_OK &&
+      sqlite3_bind_text(statement, 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) == SQLITE_OK &&
+      sqlite3_bind_text(statement, 2, serverOrigin.data(),
+                        static_cast<int>(serverOrigin.size()),
+                        SQLITE_TRANSIENT) == SQLITE_OK &&
+      sqlite3_step(statement) == SQLITE_ROW &&
+      sqlite3_column_type(statement, 0) == SQLITE_INTEGER &&
+      sqlite3_column_type(statement, 1) == SQLITE_INTEGER &&
+      sqlite3_column_int64(statement, 0) ==
+          sqlite3_column_int64(statement, 1)) {
+    result = sqlite3_column_int64(statement, 0);
+  }
+  sqlite3_finalize(statement);
+  sqlite3_close(database);
+  return result;
+}
+
+bool executeSql(const std::filesystem::path &databasePath,
+                std::string_view sql) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open(databasePath.string().c_str(), &database) != SQLITE_OK) {
+    if (database) {
+      sqlite3_close(database);
+    }
+    return false;
+  }
+  char *error = nullptr;
+  const bool succeeded =
+      sqlite3_exec(database, std::string(sql).c_str(), nullptr, nullptr,
+                   &error) == SQLITE_OK;
+  sqlite3_free(error);
+  sqlite3_close(database);
+  return succeeded;
 }
 
 void makeFailed(Harness &harness, int suffix) {
@@ -1390,6 +1606,464 @@ void testLifecycleCancellationWinsBeforeRequestStarts() {
          "lifecycle cancellation prevents a fresh request before foreground");
 }
 
+void testReconciliationPublishesEverySuccessfulWorkerPhase() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  harness.service->start(
+      profile(true, true, "HTTPS://BOKU.TACHI.AC:443/"));
+  expect(harness.waiter.waitForEntries(1),
+         "reconciliation fixture worker reaches idle wait");
+
+  std::mutex phasesMutex;
+  std::vector<ir::IrReconciliationStatusSnapshot> observed;
+  const auto observe = [&] {
+    const auto snapshot = harness.service->reconciliationStatus("fake");
+    std::lock_guard lock(phasesMutex);
+    if (observed.empty() || observed.back().revision != snapshot.revision) {
+      observed.push_back(snapshot);
+    }
+  };
+  harness.wakeHook = observe;
+  harness.monotonicHook = observe;
+
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted,
+         "configured reconciliation request is accepted");
+  expect(harness.driver->waitForReconciliationStage(1),
+         "reconciliation reaches the 7K request");
+  observe();
+  harness.driver->releaseReconciliationStage(1);
+  expect(harness.driver->waitForReconciliationStage(2),
+         "reconciliation reaches the 14K request");
+  observe();
+  harness.driver->releaseReconciliationStage(2);
+
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    observe();
+    if (harness.service->reconciliationStatus("fake").phase ==
+        ir::IrReconciliationPhase::Succeeded) {
+      break;
+    }
+    std::this_thread::yield();
+  }
+  observe();
+
+  std::vector<ir::IrReconciliationPhase> phases;
+  std::uint64_t previousRevision = 0;
+  {
+    std::lock_guard lock(phasesMutex);
+    for (const auto &snapshot : observed) {
+      expect(snapshot.revision > previousRevision,
+             "every observed reconciliation change increments revision");
+      previousRevision = snapshot.revision;
+      if (phases.empty() || phases.back() != snapshot.phase) {
+        phases.push_back(snapshot.phase);
+      }
+    }
+  }
+  const std::vector expected{
+      ir::IrReconciliationPhase::Queued,
+      ir::IrReconciliationPhase::Fetching7K,
+      ir::IrReconciliationPhase::Fetching14K,
+      ir::IrReconciliationPhase::Applying,
+      ir::IrReconciliationPhase::Succeeded,
+  };
+  expect(phases == expected,
+         "one worker command publishes queued, both fetches, apply, success");
+  const auto completed = harness.service->reconciliationStatus("fake");
+  expect(harness.driver->reconciliationCalls() == 1 &&
+             completed.remoteScores == 0 && completed.nextAllowedAt.has_value(),
+         "successful empty snapshot completes once and starts cooldown");
+}
+
+void testQueuedReconciliationRejectsAChangedCredentialGeneration() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("old-record-sync-key");
+  harness.enqueueReady(draft(31, harness.now.load()), false);
+  harness.driver->blockRequestsUntilCancelled();
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.driver->waitForCalls(1),
+         "credential-generation fixture starts older outbox work");
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted,
+         "reconciliation queues behind the active outbox request");
+
+  harness.setCredential("replacement-record-sync-key");
+  harness.service->notifyConfigurationChanged();
+
+  bool failed = false;
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    failed = harness.service->reconciliationStatus("fake").phase ==
+             ir::IrReconciliationPhase::Failed;
+    if (failed || harness.driver->reconciliationCalls() != 0) {
+      break;
+    }
+    std::this_thread::yield();
+  }
+  if (harness.driver->reconciliationCalls() != 0) {
+    harness.driver->releaseReconciliationStage(2);
+  }
+
+  expect(failed && harness.driver->reconciliationCalls() == 0,
+         "queued reconciliation cannot rebind to a replacement credential");
+  expect(harness.repository
+             .ListIrRemoteScores("fake", "https://boku.tachi.ac")
+             .empty(),
+         "credential-generation cancellation leaves the remote mirror alone");
+}
+
+void testPauseCancelsAQueuedReconciliationBeforeAnyApply() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  harness.enqueueReady(draft(32, harness.now.load()), false);
+  harness.driver->blockRequestsUntilCancelled();
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.driver->waitForCalls(1),
+         "pause fixture starts older outbox work");
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted,
+         "pause fixture queues reconciliation behind outbox work");
+  const auto queued = harness.service->reconciliationStatus("fake");
+
+  harness.service->pauseAndCancel();
+
+  const auto cancelled = harness.service->reconciliationStatus("fake");
+  expect(cancelled.phase == ir::IrReconciliationPhase::Failed &&
+             cancelled.revision > queued.revision &&
+             !cancelled.diagnostic.empty(),
+         "pausing publishes bounded cancellation for queued reconciliation");
+  expect(harness.driver->reconciliationCalls() == 0 &&
+             harness.repository
+                 .ListIrRemoteScores("fake", "https://boku.tachi.ac")
+                 .empty(),
+         "paused queued reconciliation performs no fetch or repository apply");
+}
+
+void testReconciliationCoalescesAndSerializesNewOutboxDelivery() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.waiter.waitForEntries(1),
+         "serialization fixture worker reaches idle wait");
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             harness.driver->waitForReconciliationStage(1),
+         "serialization fixture starts reconciliation");
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::AlreadyRunning,
+         "a running reconciliation coalesces another tap");
+
+  const auto inserted =
+      harness.enqueueReady(draft(33, harness.now.load()), false);
+  expect(inserted.entry.has_value(),
+         "new outbox work is durable during reconciliation");
+  harness.service->notifyOutboxChanged();
+  std::this_thread::yield();
+  expect(harness.driver->calls().empty() &&
+             harness.driver->reconciliationCalls() == 1,
+         "outbox HTTP cannot overlap the reconciliation operation");
+
+  harness.driver->releaseReconciliationStage(2);
+  expect(waitForReconciliationPhase(harness,
+                                    ir::IrReconciliationPhase::Succeeded),
+         "serialized reconciliation completes");
+  expect(harness.driver->waitForCalls(1) &&
+             harness.waitForState(attemptId(33),
+                                  ir::IrOutboxState::Succeeded),
+         "new outbox work runs immediately after reconciliation without starvation");
+  expect(harness.driver->reconciliationCalls() == 1,
+         "coalesced tap never creates a second reconciliation call");
+}
+
+void testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure() {
+  const auto run = [](bool failFirst) {
+    Harness harness({.readOnly = false,
+                     .chartRankings = false,
+                     .scoreSubmission = true,
+                     .deferredSubmission = true,
+                     .scoreReconciliation = true});
+    harness.useIndependentSteady = true;
+    harness.steadyNow = failFirst ? 7'000 : 5'000;
+    harness.setCredential("record-sync-secret");
+    if (failFirst) {
+      harness.driver->pushReconciliation({
+          .status = ir::IrUserScoreSnapshotStatus::TransientFailure,
+          .code = "transport_error",
+          .diagnostic = "provider echoed record-sync-secret",
+      });
+    }
+    harness.driver->releaseReconciliationStage(2);
+    harness.service->start(
+        profile(true, true, "https://boku.tachi.ac"));
+    expect(harness.service->requestUserScoreReconciliation("fake") ==
+               ir::IrReconciliationRequestStatus::Accepted,
+           "cooldown fixture accepts its first run");
+    const auto terminalPhase = failFirst ? ir::IrReconciliationPhase::Failed
+                                         : ir::IrReconciliationPhase::Succeeded;
+    expect(waitForReconciliationPhase(harness, terminalPhase),
+           "cooldown fixture reaches its terminal phase");
+    const auto completed = harness.service->reconciliationStatus("fake");
+    const auto expectedExpiry = std::chrono::steady_clock::time_point(
+        std::chrono::milliseconds(harness.steadyNow.load() + 60'000));
+    expect(completed.nextAllowedAt == expectedExpiry,
+           "cooldown starts exactly sixty seconds after completion");
+    if (failFirst) {
+      expect(completed.diagnostic == "provider echoed [redacted]" &&
+                 completed.diagnostic.find("record-sync-secret") ==
+                     std::string::npos,
+             "failed reconciliation publishes a bounded secret-free diagnostic");
+    }
+
+    harness.now += 24LL * 60 * 60 * 1000;
+    expect(harness.service->requestUserScoreReconciliation("fake") ==
+               ir::IrReconciliationRequestStatus::Cooldown,
+           "wall-clock changes cannot expire reconciliation cooldown");
+    harness.steadyNow += 59'999;
+    expect(harness.service->requestUserScoreReconciliation("fake") ==
+               ir::IrReconciliationRequestStatus::Cooldown,
+           "cooldown still rejects one millisecond before expiry");
+    ++harness.steadyNow;
+    expect(harness.service->requestUserScoreReconciliation("fake") ==
+               ir::IrReconciliationRequestStatus::Accepted,
+           "cooldown accepts a new run exactly at monotonic expiry");
+    expect(harness.driver->waitForReconciliationCalls(2),
+           "accepted expiry request reaches the driver once");
+  };
+
+  run(false);
+  run(true);
+}
+
+void testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  const auto seeded = harness.repository.ApplyIrRemoteSnapshot({
+      .providerId = "fake",
+      .serverOrigin = "https://boku.tachi.ac",
+      .synchronizedAtUnixMillis = harness.now.load(),
+      .scores = {remoteScore("existing-remote-score")},
+  });
+  expect(seeded.status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied,
+         "profile-change fixture seeds the prior remote mirror");
+  harness.driver->ignoreReconciliationCancellation();
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             harness.driver->waitForReconciliationStage(1),
+         "profile-change fixture starts reconciliation");
+
+  auto replacement = profile(true, true, "https://new.example.test");
+  replacement.profileId = "profile-b";
+  std::thread switchProfile([&] {
+    harness.service->activateProfile(std::move(replacement));
+  });
+  expect(harness.driver->waitForReconciliationCancellation(),
+         "profile change requests cancellation of the old snapshot");
+  harness.driver->releaseReconciliationStage(2);
+  switchProfile.join();
+
+  const auto oldMirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  const auto newMirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://new.example.test");
+  const auto status = harness.service->reconciliationStatus("fake");
+  expect(oldMirror.size() == 1 &&
+             oldMirror.front().remoteScoreId == "existing-remote-score" &&
+             newMirror.empty(),
+         "late old-profile snapshot cannot replace either origin mirror");
+  expect(status.phase == ir::IrReconciliationPhase::Idle &&
+             harness.driver->reconciliationCalls() == 1,
+         "replacement profile starts with idle reconciliation state");
+}
+
+void testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  const auto local = harness.enqueueReady(draft(34, harness.now.load()), false);
+  expect(local.entry.has_value(),
+         "planner fixture stores an eligible local replay");
+  if (local.entry) {
+    expect(harness.repository.DiscardIrOutbox(local.entry->id).status ==
+               ir::IrOutboxMutationStatus::Updated,
+           "planner fixture leaves the replay without requested outbox work");
+  }
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{.scores = {remoteScore()}},
+  });
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Succeeded),
+         "complete snapshot reconciles successfully");
+  const auto completed = harness.service->reconciliationStatus("fake");
+  const auto receipt = harness.repository.LoadIrSubmissionReceipt(
+      "fake", "https://boku.tachi.ac", attemptId(34));
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  const auto generation = remoteMirrorGeneration(
+      harness.temp.path() / "replays.db", "fake", "https://boku.tachi.ac");
+  expect(receipt.status == ir::IrReceiptReadStatus::Found && receipt.receipt &&
+             receipt.receipt->remoteScoreId == "remote-score-1" &&
+             receipt.receipt->observedInSnapshot,
+         "candidate load and pure planner repair the matching durable receipt");
+  expect(mirror.size() == 1 && completed.remoteScores == 1 &&
+             completed.remoteScoresAdded == 1 &&
+             completed.receiptsUpserted == 1,
+         "one atomic apply publishes its remote and receipt mutation counts");
+  expect(generation == harness.now.load(),
+         "fresh reconciliation invokes atomic snapshot apply exactly once");
+}
+
+void testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  expect(harness.repository
+                 .ApplyIrRemoteSnapshot({
+                     .providerId = "fake",
+                     .serverOrigin = "https://boku.tachi.ac",
+                     .synchronizedAtUnixMillis = harness.now.load(),
+                     .scores = {remoteScore("prior-remote-score")},
+                 })
+                 .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied,
+         "repository-failure fixture seeds its prior snapshot");
+  expect(executeSql(
+             harness.temp.path() / "replays.db",
+             "CREATE TRIGGER fail_service_remote_insert BEFORE INSERT ON "
+             "ir_remote_scores BEGIN SELECT RAISE(ABORT,'injected'); END"),
+         "repository-failure fixture installs an apply failure");
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{
+          .scores = {remoteScore("replacement-remote-score")}},
+  });
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Failed),
+         "repository failure publishes failed instead of succeeded");
+  const auto failed = harness.service->reconciliationStatus("fake");
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  expect(!failed.diagnostic.empty() && failed.remoteScores == 0 &&
+             failed.nextAllowedAt.has_value(),
+         "repository failure publishes bounded failure with cooldown only");
+  expect(mirror.size() == 1 &&
+             mirror.front().remoteScoreId == "prior-remote-score",
+         "failed atomic apply leaves the previous remote mirror unchanged");
+}
+
+void testReconciliationRefreshesSettledOutboxSnapshots() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  const auto pending =
+      harness.enqueueReady(draft(35, harness.now.load() + 60'000), false);
+  expect(pending.entry.has_value(),
+         "settled-outbox fixture stores future pending work");
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{.scores = {remoteScore()}},
+  });
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(
+      profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.waiter.waitForEntries(1),
+         "settled-outbox fixture worker waits for future delivery");
+
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Succeeded),
+         "remote representation settles matching pending work");
+  const auto completed = harness.service->reconciliationStatus("fake");
+  expect(completed.outboxRowsSettled == 1 &&
+             harness.repository.LoadIrOutbox("fake", attemptId(35)).status ==
+                 ir::IrOutboxReadStatus::NotFound,
+         "atomic reconciliation removes the represented outbox row");
+  expect(harness.service->counts("fake").pending == 0 &&
+             !harness.service->status("fake", attemptId(35)).found,
+         "service snapshots refresh after reconciliation settles outbox work");
+}
+
+void testReconciliationRequestRejectsUnavailableServiceAndConfiguration() {
+  Harness unsupported;
+  expect(unsupported.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Unsupported,
+         "driver without reconciliation capability is unsupported");
+
+  const ir::IrDriverCapabilities capabilities{
+      .readOnly = true,
+      .chartRankings = false,
+      .scoreSubmission = false,
+      .deferredSubmission = false,
+      .scoreReconciliation = true,
+  };
+  Harness inactive(capabilities);
+  inactive.setCredential("record-sync-key");
+  expect(inactive.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::ServiceInactive,
+         "supported reconciliation requires an active service");
+
+  Harness disabled(capabilities);
+  disabled.setCredential("record-sync-key");
+  disabled.service->start(profile(false, false));
+  expect(disabled.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::ConfigurationRequired,
+         "disabled provider requires configuration before reconciliation");
+
+  Harness missingCredential(capabilities);
+  missingCredential.service->start(profile(true, false));
+  expect(missingCredential.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::ConfigurationRequired,
+         "missing credential requires configuration before reconciliation");
+}
+
 } // namespace
 
 int main() {
@@ -1415,6 +2089,16 @@ int main() {
   testForegroundRecoversAbandonedClaim();
   testForegroundPreservesPendingCredentialChange();
   testLifecycleCancellationWinsBeforeRequestStarts();
+  testReconciliationPublishesEverySuccessfulWorkerPhase();
+  testQueuedReconciliationRejectsAChangedCredentialGeneration();
+  testPauseCancelsAQueuedReconciliationBeforeAnyApply();
+  testReconciliationCoalescesAndSerializesNewOutboxDelivery();
+  testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
+  testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
+  testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();
+  testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot();
+  testReconciliationRefreshesSettledOutboxSnapshots();
+  testReconciliationRequestRejectsUnavailableServiceAndConfiguration();
 
   if (failures != 0) {
     std::cerr << failures << " IR submission service test(s) failed\n";

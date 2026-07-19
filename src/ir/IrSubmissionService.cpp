@@ -1,6 +1,7 @@
 #include "IrSubmissionService.h"
 
 #include "IrHttpClient.h"
+#include "IrScoreReconciliation.h"
 #include "../repositories/ReplayRepository.h"
 
 #include <algorithm>
@@ -25,6 +26,7 @@ using StatusKey = std::pair<std::string, std::string>;
 
 constexpr std::int64_t kSucceededRetentionMs = 7LL * 24 * 60 * 60 * 1000;
 constexpr std::size_t kWorkerBatchSize = 64;
+constexpr auto kReconciliationCooldown = std::chrono::seconds(60);
 
 std::int64_t systemWallNowMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -146,6 +148,12 @@ bool providerCanSubmit(const IrDriverRegistry &drivers,
   return !capabilities.readOnly && capabilities.scoreSubmission;
 }
 
+bool providerCanReconcile(const IrDriverRegistry &drivers,
+                          std::string_view providerId) {
+  const auto driver = drivers.find(providerId);
+  return driver && driver->capabilities().scoreReconciliation;
+}
+
 std::optional<std::string> requestOrigin(const IrOutboxEntry &entry,
                                          const IrProviderSettings &settings) {
   if (!entry.remoteOrigin.empty()) {
@@ -179,6 +187,14 @@ providersWithChangedRuntime(const IrActiveProfileConfig &previous,
 } // namespace
 
 struct IrSubmissionService::Impl {
+  struct ReconciliationCommand {
+    std::string providerId;
+    std::string profileId;
+    std::string serverOrigin;
+    std::uint64_t serviceGeneration = 0;
+    std::uint64_t credentialGeneration = 0;
+  };
+
   ReplayRepository &repository;
   const IrDriverRegistry &drivers;
   IrHttpClient &http;
@@ -194,19 +210,66 @@ struct IrSubmissionService::Impl {
   bool workerBusy = false;
   bool configurationDirty = false;
   std::uint64_t generation = 0;
+  std::uint64_t credentialGeneration = 0;
   std::uint64_t wakeRevision = 0;
   std::uint64_t statusRevision = 0;
+  std::uint64_t reconciliationRevision = 0;
   IrActiveProfileConfig profile;
   std::stop_source requestStop;
+  std::optional<ReconciliationCommand> pendingReconciliation;
+  std::optional<ReconciliationCommand> activeReconciliation;
   std::map<StatusKey, IrAttemptStatusSnapshot> statusSnapshots;
   std::map<std::int64_t, StatusKey> rowKeys;
   std::map<std::string, IrOutboxCounts, std::less<>> countSnapshots;
   std::map<std::string, CredentialFingerprint, std::less<>> credentials;
+  std::map<std::string, IrReconciliationStatusSnapshot, std::less<>>
+      reconciliationSnapshots;
 
   Impl(ReplayRepository &repositoryValue, const IrDriverRegistry &driversValue,
        IrHttpClient &httpValue, IrSubmissionServiceOptions optionsValue)
       : repository(repositoryValue), drivers(driversValue), http(httpValue),
         options(std::move(optionsValue)) {}
+
+  void publishReconciliationPhaseLocked(std::string_view providerId,
+                                        IrReconciliationPhase phase,
+                                        std::string diagnostic = {}) {
+    auto &snapshot = reconciliationSnapshots[std::string(providerId)];
+    if (phase == IrReconciliationPhase::Queued) {
+      snapshot = {};
+    }
+    snapshot.revision = ++reconciliationRevision;
+    snapshot.phase = phase;
+    snapshot.diagnostic = sanitizeDiagnostic(diagnostic);
+  }
+
+  void publishReconciliationSuccessLocked(
+      std::string_view providerId,
+      const IrRemoteSnapshotApplyOutcome &outcome,
+      SteadyTimePoint nextAllowedAt) {
+    auto &snapshot = reconciliationSnapshots[std::string(providerId)];
+    snapshot.revision = ++reconciliationRevision;
+    snapshot.phase = IrReconciliationPhase::Succeeded;
+    snapshot.remoteScores = outcome.remoteScoreCount;
+    snapshot.remoteScoresAdded = outcome.remoteScoresAdded;
+    snapshot.remoteScoresRemoved = outcome.remoteScoresRemoved;
+    snapshot.receiptsUpserted = outcome.receiptsUpserted;
+    snapshot.receiptsDeleted = outcome.receiptsDeleted;
+    snapshot.outboxRowsSettled = outcome.outboxRowsSettled;
+    snapshot.ambiguousReceiptsPreserved =
+        outcome.ambiguousReceiptsPreserved;
+    snapshot.nextAllowedAt = nextAllowedAt;
+    snapshot.diagnostic.clear();
+  }
+
+  void publishReconciliationFailureLocked(std::string_view providerId,
+                                          std::string diagnostic,
+                                          SteadyTimePoint nextAllowedAt) {
+    auto &snapshot = reconciliationSnapshots[std::string(providerId)];
+    snapshot.revision = ++reconciliationRevision;
+    snapshot.phase = IrReconciliationPhase::Failed;
+    snapshot.nextAllowedAt = nextAllowedAt;
+    snapshot.diagnostic = sanitizeDiagnostic(diagnostic);
+  }
 
   void signal() {
     {
@@ -314,6 +377,10 @@ struct IrSubmissionService::Impl {
       currentGeneration = generation;
       profilePaused = false;
       configurationDirty = false;
+      pendingReconciliation.reset();
+      activeReconciliation.reset();
+      reconciliationSnapshots.clear();
+      ++reconciliationRevision;
     }
     loadProfileSnapshots(profile, currentGeneration);
     signal();
@@ -396,6 +463,199 @@ struct IrSubmissionService::Impl {
   requestMayStartLocked(std::uint64_t expectedGeneration) const noexcept {
     return generation == expectedGeneration && !stopped && !profilePaused &&
            applicationActive;
+  }
+
+  [[nodiscard]] bool reconciliationIsCurrentLocked(
+      const ReconciliationCommand &command) const {
+    if (!requestMayStartLocked(command.serviceGeneration) ||
+        credentialGeneration != command.credentialGeneration ||
+        profile.profileId != command.profileId) {
+      return false;
+    }
+    const auto provider = profile.providers.find(command.providerId);
+    if (provider == profile.providers.end() || !provider->second.enabled) {
+      return false;
+    }
+    const auto origin = normalizeServerOrigin(provider->second.serverOrigin);
+    return origin && *origin == command.serverOrigin;
+  }
+
+  void failReconciliation(const ReconciliationCommand &command,
+                          std::string diagnostic) {
+    const SteadyTimePoint nextAllowedAt =
+        monotonicNow(options) + kReconciliationCooldown;
+    std::lock_guard lock(mutex);
+    if (activeReconciliation &&
+        activeReconciliation->providerId == command.providerId) {
+      activeReconciliation.reset();
+    }
+    if (generation == command.serviceGeneration) {
+      publishReconciliationFailureLocked(command.providerId,
+                                         std::move(diagnostic), nextAllowedAt);
+    }
+  }
+
+  void runReconciliation(const ReconciliationCommand &command) {
+    const std::string credential =
+        lookupCredential(options, command.profileId, command.providerId);
+    std::stop_token requestToken;
+    {
+      std::lock_guard lock(mutex);
+      if (reconciliationIsCurrentLocked(command) && !credential.empty()) {
+        requestStop = std::stop_source{};
+        requestToken = requestStop.get_token();
+        publishReconciliationPhaseLocked(command.providerId,
+                                         IrReconciliationPhase::Fetching7K);
+      }
+    }
+    if (!requestToken.stop_possible()) {
+      failReconciliation(command,
+                         credential.empty()
+                             ? "IR API key is required"
+                             : "IR reconciliation was cancelled");
+      return;
+    }
+
+    const IrProviderRuntimeConfig runtime{
+        .profileId = command.profileId,
+        .serverOrigin = command.serverOrigin,
+        .apiKey = credential,
+    };
+    IrUserScoreSnapshotOutcome fetched = drivers.fetchUserScoreSnapshot(
+        command.providerId, runtime, http, requestToken,
+        [this, command](std::string_view game, int, int) {
+          std::lock_guard lock(mutex);
+          if (!activeReconciliation ||
+              activeReconciliation->providerId != command.providerId ||
+              !reconciliationIsCurrentLocked(command)) {
+            return;
+          }
+          std::optional<IrReconciliationPhase> phase;
+          if (game == "bms-7k") {
+            phase = IrReconciliationPhase::Fetching7K;
+          } else if (game == "bms-14k") {
+            phase = IrReconciliationPhase::Fetching14K;
+          }
+          if (!phase) {
+            return;
+          }
+          auto &snapshot = reconciliationSnapshots[command.providerId];
+          if (snapshot.phase != *phase) {
+            publishReconciliationPhaseLocked(command.providerId, *phase);
+          }
+        });
+    fetched.code = redactCredential(std::move(fetched.code), credential);
+    fetched.diagnostic =
+        redactCredential(std::move(fetched.diagnostic), credential);
+
+    {
+      std::lock_guard lock(mutex);
+      if (!reconciliationIsCurrentLocked(command) ||
+          requestToken.stop_requested()) {
+        fetched.status = IrUserScoreSnapshotStatus::Cancelled;
+        fetched.snapshot.reset();
+        fetched.diagnostic = "IR reconciliation was cancelled";
+      }
+    }
+    if (fetched.status != IrUserScoreSnapshotStatus::Succeeded ||
+        !fetched.snapshot) {
+      failReconciliation(
+          command,
+          fetched.diagnostic.empty() ? "IR reconciliation failed"
+                                     : std::move(fetched.diagnostic));
+      return;
+    }
+
+    {
+      std::lock_guard lock(mutex);
+      if (!reconciliationIsCurrentLocked(command)) {
+        fetched.snapshot.reset();
+      } else {
+        publishReconciliationPhaseLocked(command.providerId,
+                                         IrReconciliationPhase::Applying);
+      }
+    }
+    if (!fetched.snapshot) {
+      failReconciliation(command, "IR reconciliation was cancelled");
+      return;
+    }
+
+    const std::int64_t synchronizedAt = safeNow(options);
+    IrReconciliationReadOutcome candidates =
+        repository.LoadIrReconciliationCandidates(command.providerId,
+                                                   command.serverOrigin);
+    if (candidates.status != IrReconciliationReadOutcome::Status::Loaded) {
+      failReconciliation(
+          command, candidates.diagnostic.empty()
+                       ? "Could not load IR reconciliation candidates"
+                       : std::move(candidates.diagnostic));
+      return;
+    }
+    IrScoreReconciliationPlan plan = planScoreReconciliation(
+        command.providerId, command.serverOrigin, candidates.candidates,
+        fetched.snapshot->scores, synchronizedAt);
+    if (plan.status != IrScoreReconciliationPlan::Status::Planned) {
+      failReconciliation(command,
+                         plan.diagnostic.empty()
+                             ? "Could not plan IR reconciliation"
+                             : std::move(plan.diagnostic));
+      return;
+    }
+
+    IrRemoteSnapshotMutation mutation{
+        .providerId = command.providerId,
+        .serverOrigin = command.serverOrigin,
+        .synchronizedAtUnixMillis = synchronizedAt,
+        .scores = std::move(fetched.snapshot->scores),
+        .upsertedReceipts = std::move(plan.upsertedReceipts),
+        .deletedReceiptIds = std::move(plan.deletedReceiptIds),
+        .settledOutboxRowIds = std::move(plan.settledOutboxRowIds),
+        .purgedSucceededOutboxRowIds =
+            std::move(plan.purgedSucceededOutboxRowIds),
+    };
+    IrRemoteSnapshotApplyOutcome applied;
+    bool applyAttempted = false;
+    {
+      std::lock_guard lock(mutex);
+      if (reconciliationIsCurrentLocked(command)) {
+        applyAttempted = true;
+        applied = repository.ApplyIrRemoteSnapshot(mutation);
+      }
+    }
+    if (!applyAttempted) {
+      failReconciliation(command, "IR reconciliation was cancelled");
+      return;
+    }
+    if (applied.status != IrRemoteSnapshotApplyOutcome::Status::Applied) {
+      failReconciliation(command,
+                         applied.diagnostic.empty()
+                             ? "Could not apply IR reconciliation"
+                             : std::move(applied.diagnostic));
+      return;
+    }
+
+    IrActiveProfileConfig refreshedProfile;
+    {
+      std::lock_guard lock(mutex);
+      if (generation == command.serviceGeneration) {
+        refreshedProfile = profile;
+      }
+    }
+    if (!refreshedProfile.profileId.empty()) {
+      loadProfileSnapshots(refreshedProfile, command.serviceGeneration, false);
+    }
+
+    const SteadyTimePoint nextAllowedAt =
+        monotonicNow(options) + kReconciliationCooldown;
+    std::lock_guard lock(mutex);
+    if (activeReconciliation &&
+        activeReconciliation->providerId == command.providerId) {
+      activeReconciliation.reset();
+    }
+    if (generation == command.serviceGeneration) {
+      publishReconciliationSuccessLocked(command.providerId, applied,
+                                         nextAllowedAt);
+    }
   }
 
   std::optional<std::int64_t>
@@ -654,6 +914,7 @@ struct IrSubmissionService::Impl {
     while (!stopToken.stop_requested()) {
       IrActiveProfileConfig config;
       std::uint64_t currentGeneration = 0;
+      std::optional<ReconciliationCommand> reconciliation;
       {
         std::unique_lock lock(mutex);
         while (!stopToken.stop_requested() &&
@@ -666,13 +927,29 @@ struct IrSubmissionService::Impl {
         workerBusy = true;
         config = profile;
         currentGeneration = generation;
+        if (pendingReconciliation) {
+          reconciliation = std::move(pendingReconciliation);
+          pendingReconciliation.reset();
+          activeReconciliation = reconciliation;
+        }
       }
 
       std::optional<std::int64_t> nextWallTime;
       try {
-        nextWallTime = runOne(currentGeneration, config);
+        if (reconciliation) {
+          runReconciliation(*reconciliation);
+          nextWallTime = safeNow(options);
+        } else {
+          nextWallTime = runOne(currentGeneration, config);
+        }
       } catch (...) {
-        repository.RecoverStaleIrOutbox(safeNow(options));
+        if (reconciliation) {
+          failReconciliation(*reconciliation,
+                             "IR reconciliation failed unexpectedly");
+          nextWallTime = safeNow(options);
+        } else {
+          repository.RecoverStaleIrOutbox(safeNow(options));
+        }
       }
 
       std::unique_lock lock(mutex);
@@ -730,11 +1007,28 @@ void IrSubmissionService::pauseAndCancel() {
   if (!impl_->started || impl_->stopped) {
     return;
   }
+  std::optional<std::string> cancelledProvider;
+  const std::uint64_t pausedGeneration = impl_->generation;
+  if (impl_->pendingReconciliation) {
+    cancelledProvider = impl_->pendingReconciliation->providerId;
+    impl_->pendingReconciliation.reset();
+  }
   impl_->profilePaused = true;
   impl_->requestStop.request_stop();
   ++impl_->wakeRevision;
   impl_->condition.notify_all();
   lock.unlock();
+  if (cancelledProvider) {
+    const SteadyTimePoint nextAllowedAt =
+        monotonicNow(impl_->options) + kReconciliationCooldown;
+    lock.lock();
+    if (impl_->generation == pausedGeneration) {
+      impl_->publishReconciliationFailureLocked(
+          *cancelledProvider, "IR reconciliation was cancelled",
+          nextAllowedAt);
+    }
+    lock.unlock();
+  }
   if (impl_->options.wake) {
     try {
       impl_->options.wake();
@@ -827,6 +1121,7 @@ void IrSubmissionService::notifyConfigurationChanged() {
   {
     std::lock_guard lock(impl_->mutex);
     impl_->configurationDirty = true;
+    ++impl_->credentialGeneration;
     impl_->requestStop.request_stop();
   }
   impl_->signal();
@@ -981,6 +1276,94 @@ IrSubmissionService::status(std::string_view providerId,
       StatusKey{std::string(providerId), std::string(attemptId)});
   if (found == impl_->statusSnapshots.end()) {
     return {.revision = impl_->statusRevision};
+  }
+  return found->second;
+}
+
+IrReconciliationRequestStatus
+IrSubmissionService::requestUserScoreReconciliation(
+    std::string_view providerId) {
+  if (!providerCanReconcile(impl_->drivers, providerId)) {
+    return IrReconciliationRequestStatus::Unsupported;
+  }
+
+  std::unique_lock lock(impl_->mutex);
+  const auto configured = [&]() -> std::optional<std::string> {
+    const auto provider = impl_->profile.providers.find(providerId);
+    if (provider == impl_->profile.providers.end() ||
+        !provider->second.enabled) {
+      return std::nullopt;
+    }
+    const auto origin = normalizeServerOrigin(provider->second.serverOrigin);
+    const auto credential = impl_->credentials.find(providerId);
+    if (!origin || credential == impl_->credentials.end() ||
+        !credential->second.present) {
+      return std::nullopt;
+    }
+    return origin;
+  };
+  const auto serviceActive = [&] {
+    return impl_->started && !impl_->stopped && !impl_->profilePaused &&
+           impl_->applicationActive;
+  };
+  if (!serviceActive()) {
+    return IrReconciliationRequestStatus::ServiceInactive;
+  }
+  if (impl_->pendingReconciliation || impl_->activeReconciliation) {
+    return IrReconciliationRequestStatus::AlreadyRunning;
+  }
+  auto origin = configured();
+  if (!origin) {
+    return IrReconciliationRequestStatus::ConfigurationRequired;
+  }
+
+  auto status = impl_->reconciliationSnapshots.find(providerId);
+  if (status != impl_->reconciliationSnapshots.end() &&
+      status->second.nextAllowedAt) {
+    lock.unlock();
+    const SteadyTimePoint now = monotonicNow(impl_->options);
+    lock.lock();
+    if (!serviceActive()) {
+      return IrReconciliationRequestStatus::ServiceInactive;
+    }
+    if (impl_->pendingReconciliation || impl_->activeReconciliation) {
+      return IrReconciliationRequestStatus::AlreadyRunning;
+    }
+    origin = configured();
+    if (!origin) {
+      return IrReconciliationRequestStatus::ConfigurationRequired;
+    }
+    status = impl_->reconciliationSnapshots.find(providerId);
+    if (status != impl_->reconciliationSnapshots.end() &&
+        status->second.nextAllowedAt && now < *status->second.nextAllowedAt) {
+      if (status->second.phase != IrReconciliationPhase::Cooldown) {
+        status->second.revision = ++impl_->reconciliationRevision;
+        status->second.phase = IrReconciliationPhase::Cooldown;
+      }
+      return IrReconciliationRequestStatus::Cooldown;
+    }
+  }
+
+  impl_->pendingReconciliation = IrSubmissionService::Impl::ReconciliationCommand{
+      .providerId = std::string(providerId),
+      .profileId = impl_->profile.profileId,
+      .serverOrigin = *origin,
+      .serviceGeneration = impl_->generation,
+      .credentialGeneration = impl_->credentialGeneration,
+  };
+  impl_->publishReconciliationPhaseLocked(providerId,
+                                          IrReconciliationPhase::Queued);
+  lock.unlock();
+  impl_->signal();
+  return IrReconciliationRequestStatus::Accepted;
+}
+
+IrReconciliationStatusSnapshot IrSubmissionService::reconciliationStatus(
+    std::string_view providerId) const {
+  std::lock_guard lock(impl_->mutex);
+  const auto found = impl_->reconciliationSnapshots.find(providerId);
+  if (found == impl_->reconciliationSnapshots.end()) {
+    return {.revision = impl_->reconciliationRevision};
   }
   return found->second;
 }

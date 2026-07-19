@@ -41,6 +41,42 @@ struct IrAttemptStatusSnapshot {
   bool operator==(const IrAttemptStatusSnapshot &) const = default;
 };
 
+enum class IrReconciliationPhase {
+  Idle,
+  Queued,
+  Fetching7K,
+  Fetching14K,
+  Applying,
+  Succeeded,
+  Failed,
+  Cooldown,
+};
+
+struct IrReconciliationStatusSnapshot {
+  std::uint64_t revision = 0;
+  IrReconciliationPhase phase = IrReconciliationPhase::Idle;
+  int remoteScores = 0;
+  int remoteScoresAdded = 0;
+  int remoteScoresRemoved = 0;
+  int receiptsUpserted = 0;
+  int receiptsDeleted = 0;
+  int outboxRowsSettled = 0;
+  int ambiguousReceiptsPreserved = 0;
+  std::optional<std::chrono::steady_clock::time_point> nextAllowedAt;
+  std::string diagnostic;
+
+  bool operator==(const IrReconciliationStatusSnapshot &) const = default;
+};
+
+enum class IrReconciliationRequestStatus {
+  Accepted,
+  AlreadyRunning,
+  Cooldown,
+  Unsupported,
+  ConfigurationRequired,
+  ServiceInactive,
+};
+
 struct IrSubmissionServiceOptions {
   using SteadyTimePoint = std::chrono::steady_clock::time_point;
 
@@ -87,6 +123,10 @@ public:
   statuses(std::string_view providerId) const;
   [[nodiscard]] IrAttemptStatusSnapshot
   status(std::string_view providerId, std::string_view attemptId) const;
+  [[nodiscard]] IrReconciliationRequestStatus
+  requestUserScoreReconciliation(std::string_view providerId);
+  [[nodiscard]] IrReconciliationStatusSnapshot
+  reconciliationStatus(std::string_view providerId) const;
 
 private:
   struct Impl;
