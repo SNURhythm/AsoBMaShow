@@ -711,6 +711,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(ir_remote_score_models_tests PRIVATE cxx_std_23)
 
+    add_executable(tachi_user_score_parser_tests
+        tests/tachi_user_score_parser_tests.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
+    )
+    target_include_directories(tachi_user_score_parser_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(tachi_user_score_parser_tests PRIVATE cxx_std_23)
+
     add_executable(tachi_batch_manual_tests
         tests/tachi_batch_manual_tests.cpp
         src/FileChecksum.cpp
@@ -2287,6 +2297,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_driver_tests
         ir_receipt_models_tests
         ir_remote_score_models_tests
+        tachi_user_score_parser_tests
         tachi_batch_manual_tests
         tachi_driver_tests
         bokutachi_cache_store_tests

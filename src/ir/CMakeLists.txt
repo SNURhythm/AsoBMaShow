@@ -20,4 +20,5 @@ target_sources(main PRIVATE
     tachi/TachiDriver.cpp
     tachi/TachiRankingParser.cpp
     tachi/TachiResponseParser.cpp
+    tachi/TachiUserScoreParser.cpp
 )
