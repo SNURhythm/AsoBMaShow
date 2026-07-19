@@ -5,6 +5,7 @@
 #include "../src/FileChecksum.h"
 #include "../src/LongNoteModeUtils.h"
 #include "../src/ScoreProvenance.h"
+#include "../src/ir/IrRemoteScoreModels.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/Utils.h"
 #include "../src/targets.h"
@@ -4836,6 +4837,164 @@ void assertExactIrSubmissionReceiptSchema(sqlite3 *db) {
   assert(sqlite3_step(foreignKeys.get()) == SQLITE_DONE);
 }
 
+constexpr const char *kExpectedIrRemoteScoresTableSql =
+    "CREATE TABLE ir_remote_scores ("
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "remote_score_id TEXT NOT NULL,"
+    "remote_user_id INTEGER NOT NULL,"
+    "game TEXT NOT NULL,"
+    "remote_chart_id TEXT NOT NULL,"
+    "chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,"
+    "title TEXT NOT NULL,"
+    "artist TEXT NOT NULL,"
+    "difficulty TEXT,"
+    "level TEXT,"
+    "level_number REAL,"
+    "note_count INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,"
+    "lamp_rank INTEGER NOT NULL,"
+    "service TEXT NOT NULL,"
+    "time_achieved_ms INTEGER,"
+    "time_added_ms INTEGER NOT NULL,"
+    "pgreat INTEGER,great INTEGER,good INTEGER,bad INTEGER,poor INTEGER,"
+    "early_pgreat INTEGER,late_pgreat INTEGER,"
+    "early_great INTEGER,late_great INTEGER,"
+    "early_good INTEGER,late_good INTEGER,"
+    "early_bad INTEGER,late_bad INTEGER,"
+    "early_poor INTEGER,late_poor INTEGER,"
+    "fast INTEGER,slow INTEGER,max_combo INTEGER,bad_points INTEGER,"
+    "final_gauge REAL,"
+    "gauge_history_json TEXT,"
+    "random_mode TEXT,gauge_mode TEXT,input_device TEXT,client TEXT,"
+    "sync_generation INTEGER NOT NULL,"
+    "PRIMARY KEY(provider_id,server_origin,remote_score_id),"
+    "CHECK(game IN ('bms-7k','bms-14k')),"
+    "CHECK(remote_user_id > 0),"
+    "CHECK(length(chart_md5)=32 AND chart_md5=lower(chart_md5) AND "
+    "chart_md5 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(note_count >= 0 AND score >= 0 AND score <= note_count * 2),"
+    "CHECK(lamp_rank IN (0,100,150,200,300,400,500,600)),"
+    "CHECK(time_achieved_ms IS NULL OR time_achieved_ms > 0),"
+    "CHECK(time_added_ms > 0),"
+    "CHECK(pgreat IS NULL OR pgreat >= 0),"
+    "CHECK(great IS NULL OR great >= 0),"
+    "CHECK(good IS NULL OR good >= 0),"
+    "CHECK(bad IS NULL OR bad >= 0),"
+    "CHECK(poor IS NULL OR poor >= 0),"
+    "CHECK(early_pgreat IS NULL OR early_pgreat >= 0),"
+    "CHECK(late_pgreat IS NULL OR late_pgreat >= 0),"
+    "CHECK(early_great IS NULL OR early_great >= 0),"
+    "CHECK(late_great IS NULL OR late_great >= 0),"
+    "CHECK(early_good IS NULL OR early_good >= 0),"
+    "CHECK(late_good IS NULL OR late_good >= 0),"
+    "CHECK(early_bad IS NULL OR early_bad >= 0),"
+    "CHECK(late_bad IS NULL OR late_bad >= 0),"
+    "CHECK(early_poor IS NULL OR early_poor >= 0),"
+    "CHECK(late_poor IS NULL OR late_poor >= 0),"
+    "CHECK(fast IS NULL OR fast >= 0),"
+    "CHECK(slow IS NULL OR slow >= 0),"
+    "CHECK(max_combo IS NULL OR max_combo >= 0),"
+    "CHECK(bad_points IS NULL OR bad_points >= 0),"
+    "CHECK(final_gauge IS NULL OR (final_gauge >= 0 AND final_gauge <= 100)),"
+    "CHECK(sync_generation > 0)"
+    ")";
+
+constexpr const char *kExpectedIrRemoteScoresSha256IndexSql =
+    "CREATE INDEX idx_ir_remote_scores_chart_sha256 ON "
+    "ir_remote_scores(provider_id,server_origin,chart_sha256)";
+
+constexpr const char *kExpectedIrRemoteScoresChartIdIndexSql =
+    "CREATE INDEX idx_ir_remote_scores_remote_chart_id ON "
+    "ir_remote_scores(provider_id,server_origin,remote_chart_id)";
+
+void assertExactIrRemoteScoreSchema(sqlite3 *db) {
+  assert(queryText(
+             db,
+             "SELECT sql FROM sqlite_master WHERE type='table' AND "
+             "name='ir_remote_scores'") == kExpectedIrRemoteScoresTableSql);
+  assert(queryText(
+             db,
+             "SELECT sql FROM sqlite_master WHERE type='index' AND "
+             "name='idx_ir_remote_scores_chart_sha256'") ==
+         kExpectedIrRemoteScoresSha256IndexSql);
+  assert(queryText(
+             db,
+             "SELECT sql FROM sqlite_master WHERE type='index' AND "
+             "name='idx_ir_remote_scores_remote_chart_id'") ==
+         kExpectedIrRemoteScoresChartIdIndexSql);
+  assert(indexColumns(db, "idx_ir_remote_scores_chart_sha256") ==
+         std::vector<std::string>(
+             {"provider_id", "server_origin", "chart_sha256"}));
+  assert(indexColumns(db, "idx_ir_remote_scores_remote_chart_id") ==
+         std::vector<std::string>(
+             {"provider_id", "server_origin", "remote_chart_id"}));
+  for (const char *forbidden : {"api_key", "authorization", "credential",
+                                "raw_response", "payload_json"}) {
+    assert(!columnExists(db, "ir_remote_scores", forbidden));
+  }
+}
+
+void testFreshDatabaseCreatesIrRemoteScores(
+    const std::filesystem::path &root) {
+  const auto path = root / "fresh-ir-remote-scores" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assertExactIrRemoteScoreSchema(db.get());
+}
+
+void testVersion9MigrationAddsIrRemoteScores(
+    const std::filesystem::path &root) {
+  const auto path = root / "version-9-ir-remote-scores" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_remote_scores");
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('version-9-kept')");
+  execOrAbort(db.get(), "PRAGMA user_version=9");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryText(db.get(), "SELECT value FROM sentinel") ==
+         "version-9-kept");
+  assertExactIrRemoteScoreSchema(db.get());
+}
+
+void testCurrentVersionRejectsMalformedIrRemoteScoreSchema(
+    const std::filesystem::path &root) {
+  const auto path = root / "malformed-ir-remote-scores" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_remote_scores");
+  execOrAbort(db.get(),
+              "CREATE TABLE ir_remote_scores(sentinel TEXT NOT NULL)");
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  const auto before = schemaSnapshot(db.get());
+  db.reset();
+
+  assert(!helper.EnsureSchema());
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(schemaSnapshot(db.get()) == before);
+}
+
 void testFreshDatabaseCreatesIrSubmissionReceipts(
     const std::filesystem::path &root) {
   const auto path = root / "fresh-ir-submission-receipts" / "replay.db";
@@ -4844,8 +5003,8 @@ void testFreshDatabaseCreatesIrSubmissionReceipts(
   helper.Shutdown();
 
   auto db = openDatabase(path);
-  assert(ReplayRepository::kCurrentSchemaVersion == 9);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(ReplayRepository::kCurrentSchemaVersion == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
   assertExactIrSubmissionReceiptSchema(db.get());
 }
 
@@ -4866,7 +5025,7 @@ void testVersion8MigrationAddsIrSubmissionReceipts(
   assert(helper.EnsureSchema());
   helper.Shutdown();
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
   assert(queryText(db.get(), "SELECT value FROM sentinel") ==
          "version-8-kept");
   assertExactIrSubmissionReceiptSchema(db.get());
@@ -5480,6 +5639,608 @@ void testClearIrSubmissionReceiptsRollsBackBothDeletes(
              .status == ir::IrReceiptReadStatus::Found);
 }
 
+ir::IrRemoteScore sampleIrRemoteScore(std::string remoteScoreId,
+                                      char md5Digit, char sha256Digit,
+                                      int score = 150) {
+  ir::IrRemoteScore remote;
+  remote.remoteUserId = 42;
+  remote.game = "bms-7k";
+  remote.remoteScoreId = std::move(remoteScoreId);
+  remote.remoteChartId = "remote-chart";
+  remote.chartMd5 = std::string(32, md5Digit);
+  remote.chartSha256 = std::string(64, sha256Digit);
+  remote.title = "Remote title";
+  remote.artist = "Remote artist";
+  remote.service = "Bokutachi";
+  remote.difficulty = "ANOTHER";
+  remote.level = "12";
+  remote.levelNumber = 12.5;
+  remote.noteCount = 100;
+  remote.score = score;
+  remote.lampRank = kClearTypeNormalClearRank;
+  remote.timeAchievedUnixMillis = 900;
+  remote.timeAddedUnixMillis = 1'000;
+  remote.judgements.pGreat = 60;
+  remote.judgements.great = 30;
+  remote.judgements.good = 5;
+  remote.judgements.bad = 3;
+  remote.judgements.poor = 2;
+  remote.timing.earlyPGreat = 20;
+  remote.timing.latePGreat = 40;
+  remote.timing.earlyGreat = 10;
+  remote.timing.lateGreat = 20;
+  remote.timing.earlyGood = 2;
+  remote.timing.lateGood = 3;
+  remote.timing.earlyBad = 1;
+  remote.timing.lateBad = 2;
+  remote.timing.earlyPoor = 0;
+  remote.timing.latePoor = 2;
+  remote.fast = 11;
+  remote.slow = 12;
+  remote.maxCombo = 80;
+  remote.badPoints = 7;
+  remote.finalGauge = 78.5f;
+  remote.gaugeHistory = {0.0f, std::nullopt, 100.0f};
+  remote.random = "RANDOM";
+  remote.gauge = "HARD";
+  remote.inputDevice = "keyboard";
+  remote.client = "client";
+  return remote;
+}
+
+ir::IrRemoteSnapshotMutation sampleIrRemoteMutation(
+    std::string providerId, std::string serverOrigin,
+    std::int64_t synchronizedAtUnixMillis,
+    std::vector<ir::IrRemoteScore> scores) {
+  return {
+      .providerId = std::move(providerId),
+      .serverOrigin = std::move(serverOrigin),
+      .synchronizedAtUnixMillis = synchronizedAtUnixMillis,
+      .scores = std::move(scores),
+  };
+}
+
+std::vector<std::string> remoteScoreIds(
+    ReplayRepository &helper, std::string_view providerId = "tachi",
+    std::string_view serverOrigin = "https://boku.tachi.ac") {
+  const auto scores = helper.ListIrRemoteScores(providerId, serverOrigin);
+  std::vector<std::string> result;
+  result.reserve(scores.size());
+  for (const auto &score : scores) {
+    result.push_back(score.remoteScoreId);
+  }
+  return result;
+}
+
+ir::IrSubmissionReceipt snapshotReceipt(
+    const ClaimedCanonicalIrAttempt &fixture,
+    std::string remoteScoreId = "remote-new") {
+  return {
+      .id = 0,
+      .providerId = "tachi",
+      .serverOrigin = "https://boku.tachi.ac",
+      .replayId = fixture.replayId,
+      .attemptId = fixture.attemptId,
+      .chartMd5 = fixture.chartMd5,
+      .chartSha256 = fixture.chartSha256,
+      .remoteUserId = 42,
+      .remoteChartId = "remote-chart",
+      .remoteScoreId = std::move(remoteScoreId),
+      .source = ir::IrReceiptConfirmationSource::Snapshot,
+      .observedInSnapshot = true,
+      .confirmedAtUnixMillis = 3'000,
+  };
+}
+
+void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-atomic-replace" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  auto retained = sampleIrRemoteScore("remote-retained", 'a', 'b');
+  auto removed = sampleIrRemoteScore("remote-removed", 'c', 'd', 140);
+  auto initial = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 2'000, {retained, removed});
+  const auto initialOutcome = helper.ApplyIrRemoteSnapshot(initial);
+  assert(initialOutcome.status ==
+             ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
+         initialOutcome.remoteScoreCount == 2 &&
+         initialOutcome.remoteScoresAdded == 2 &&
+         initialOutcome.remoteScoresRemoved == 0);
+
+  auto otherOriginScore =
+      sampleIrRemoteScore("other-origin-score", 'e', 'f');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://other.example", 2'000,
+                 {otherOriginScore}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  auto otherProviderScore =
+      sampleIrRemoteScore("other-provider-score", '1', '2');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "other", "https://boku.tachi.ac", 2'000,
+                 {otherProviderScore}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  const auto settled = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-remote-settled", 113);
+  const auto purged = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-remote-purged", 114);
+  const auto stale = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-remote-stale", 115);
+  assert(helper.ApplyIrOutboxDelivery(successfulDelivery(purged.rowId)).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  assert(helper.ApplyIrOutboxDelivery(successfulDelivery(stale.rowId)).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  const auto staleReceipt = helper.LoadIrSubmissionReceipt(
+      "tachi", "https://boku.tachi.ac", stale.attemptId);
+  assert(staleReceipt.receipt);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE ir_outbox SET state=0 WHERE id=" +
+                            std::to_string(settled.rowId));
+  execOrAbort(db.get(),
+              "UPDATE ir_submission_receipts SET observed_in_snapshot=1 "
+              "WHERE id=" +
+                  std::to_string(staleReceipt.receipt->id));
+  const auto previousGeneration = queryInt(
+      db.get(),
+      "SELECT MAX(sync_generation) FROM ir_remote_scores WHERE "
+      "provider_id='tachi' AND server_origin='https://boku.tachi.ac'");
+  db.reset();
+
+  retained.title = "Updated remote title";
+  retained.timeAchievedUnixMillis.reset();
+  retained.difficulty.reset();
+  retained.levelNumber.reset();
+  retained.judgements.good = 0;
+  retained.timing.earlyPoor.reset();
+  retained.finalGauge.reset();
+  retained.gaugeHistory.clear();
+  auto added = sampleIrRemoteScore("remote-new", '3', '4', 160);
+  auto mutation = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 1'500, {retained, added});
+  mutation.upsertedReceipts.push_back(snapshotReceipt(settled));
+  mutation.deletedReceiptIds.push_back(staleReceipt.receipt->id);
+  mutation.settledOutboxRowIds.push_back(settled.rowId);
+  mutation.purgedSucceededOutboxRowIds.push_back(purged.rowId);
+
+  const auto applied = helper.ApplyIrRemoteSnapshot(mutation);
+  assert(applied.status ==
+             ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
+         applied.remoteScoreCount == 2 && applied.remoteScoresAdded == 1 &&
+         applied.remoteScoresRemoved == 1 && applied.receiptsUpserted == 1 &&
+         applied.receiptsDeleted == 1 && applied.outboxRowsSettled == 2 &&
+         applied.ambiguousReceiptsPreserved == 1);
+
+  const auto listed = helper.ListIrRemoteScores(
+      "tachi", "https://boku.tachi.ac");
+  assert(listed.size() == 2 && listed[0].remoteScoreId == "remote-new" &&
+         listed[1].remoteScoreId == "remote-retained");
+  const auto &roundTripped = listed[0];
+  assert(roundTripped.remoteUserId == 42 &&
+         roundTripped.game == "bms-7k" &&
+         roundTripped.remoteChartId == "remote-chart" &&
+         roundTripped.difficulty == "ANOTHER" &&
+         roundTripped.level == "12" &&
+         roundTripped.levelNumber == 12.5 &&
+         roundTripped.timeAchievedUnixMillis == 900 &&
+         roundTripped.judgements.pGreat == 60 &&
+         roundTripped.timing.earlyPoor == 0 && roundTripped.fast == 11 &&
+         roundTripped.finalGauge == 78.5f &&
+         roundTripped.gaugeHistory ==
+             std::vector<std::optional<float>>(
+                 {0.0f, std::nullopt, 100.0f}) &&
+         roundTripped.random == "RANDOM" && roundTripped.gauge == "HARD" &&
+         roundTripped.inputDevice == "keyboard" &&
+         roundTripped.client == "client");
+  const auto &nullableRoundTripped = listed[1];
+  assert(!nullableRoundTripped.timeAchievedUnixMillis &&
+         !nullableRoundTripped.difficulty &&
+         !nullableRoundTripped.levelNumber &&
+         nullableRoundTripped.judgements.good == 0 &&
+         !nullableRoundTripped.timing.earlyPoor &&
+         !nullableRoundTripped.finalGauge &&
+         nullableRoundTripped.gaugeHistory.empty());
+  assert(remoteScoreIds(helper, "tachi", "https://other.example") ==
+         std::vector<std::string>({"other-origin-score"}));
+  assert(remoteScoreIds(helper, "other", "https://boku.tachi.ac") ==
+         std::vector<std::string>({"other-provider-score"}));
+  assert(helper.LoadIrOutbox("tachi", settled.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", purged.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", stale.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                      settled.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                      stale.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(),
+                  "SELECT MIN(sync_generation)=MAX(sync_generation) FROM "
+                  "ir_remote_scores WHERE provider_id='tachi' AND "
+                  "server_origin='https://boku.tachi.ac'") == 1);
+  assert(queryInt(db.get(),
+                  "SELECT MAX(sync_generation) FROM ir_remote_scores WHERE "
+                  "provider_id='tachi' AND "
+                  "server_origin='https://boku.tachi.ac'") >
+         previousGeneration);
+  assert(queryText(db.get(),
+                   "SELECT gauge_history_json FROM ir_remote_scores WHERE "
+                   "remote_score_id='remote-new'") ==
+         "[0.0,null,100.0]");
+}
+
+void testApplyIrRemoteSnapshotValidatesBeforeTransaction(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-invalid" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  auto original = sampleIrRemoteScore("original", 'a', 'b');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000, {original}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  auto missingMd5 = sampleIrRemoteScore("invalid", 'c', 'd');
+  missingMd5.chartMd5.clear();
+  auto invalid = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 2'000, {missingMd5});
+  assert(helper.ApplyIrRemoteSnapshot(invalid).status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::Invalid);
+  auto missingSha256 = sampleIrRemoteScore("invalid-sha", 'c', 'd');
+  missingSha256.chartSha256.clear();
+  invalid = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 2'000, {missingSha256});
+  assert(helper.ApplyIrRemoteSnapshot(invalid).status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::Invalid);
+  invalid = sampleIrRemoteMutation("tachi", "HTTPS://BOKU.TACHI.AC:443/",
+                                   2'000, {original});
+  assert(helper.ApplyIrRemoteSnapshot(invalid).status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::Invalid);
+  assert(remoteScoreIds(helper) == std::vector<std::string>({"original"}));
+}
+
+void testApplyIrRemoteSnapshotRollsBackEveryMutationStage(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "ir-remote-reject-active-settle" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto original = sampleIrRemoteScore("original", 'a', 'b');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 1'000, {original}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const auto active = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-remote-reject-active-settle", 116);
+    auto replacement = sampleIrRemoteScore("replacement", 'c', 'd');
+    auto mutation = sampleIrRemoteMutation(
+        "tachi", "https://boku.tachi.ac", 2'000, {replacement});
+    mutation.upsertedReceipts.push_back(snapshotReceipt(active));
+    mutation.settledOutboxRowIds.push_back(active.rowId);
+    assert(helper.ApplyIrRemoteSnapshot(mutation).status ==
+           ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure);
+    assert(remoteScoreIds(helper) == std::vector<std::string>({"original"}));
+    assert(helper.LoadIrOutbox("tachi", active.attemptId).status ==
+           ir::IrOutboxReadStatus::Found);
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                        active.attemptId)
+               .status == ir::IrReceiptReadStatus::NotFound);
+  }
+
+  {
+    const auto path = root / "ir-remote-fail-insert" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto original = sampleIrRemoteScore("original", 'a', 'b');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 1'000, {original}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_remote_insert BEFORE INSERT ON "
+                "ir_remote_scores BEGIN SELECT RAISE(ABORT,'forced remote "
+                "insert failure'); END");
+    db.reset();
+    auto replacement = sampleIrRemoteScore("replacement", 'c', 'd');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 2'000, {replacement}))
+               .status ==
+           ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure);
+    assert(remoteScoreIds(helper) == std::vector<std::string>({"original"}));
+  }
+
+  {
+    const auto path = root / "ir-remote-fail-receipt-upsert" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto original = sampleIrRemoteScore("original", 'a', 'b');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 1'000, {original}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const auto target = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-remote-fail-receipt-upsert", 127);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_receipt_upsert BEFORE INSERT ON "
+                "ir_submission_receipts BEGIN SELECT RAISE(ABORT,'forced "
+                "receipt upsert failure'); END");
+    db.reset();
+    auto replacement = sampleIrRemoteScore("replacement", 'c', 'd');
+    auto mutation = sampleIrRemoteMutation(
+        "tachi", "https://boku.tachi.ac", 2'000, {replacement});
+    mutation.upsertedReceipts.push_back(snapshotReceipt(target));
+    assert(helper.ApplyIrRemoteSnapshot(mutation).status ==
+           ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure);
+    assert(remoteScoreIds(helper) == std::vector<std::string>({"original"}));
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                        target.attemptId)
+               .status == ir::IrReceiptReadStatus::NotFound);
+  }
+
+  {
+    const auto path = root / "ir-remote-fail-receipt-delete" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto original = sampleIrRemoteScore("original", 'a', 'b');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 1'000, {original}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const auto target = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-remote-fail-receipt-delete", 128);
+    assert(helper.ApplyIrOutboxDelivery(successfulDelivery(target.rowId)).status ==
+           ir::IrOutboxMutationStatus::Updated);
+    const auto receipt = helper.LoadIrSubmissionReceipt(
+        "tachi", "https://boku.tachi.ac", target.attemptId);
+    assert(receipt.receipt);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_receipt_delete BEFORE DELETE ON "
+                "ir_submission_receipts BEGIN SELECT RAISE(ABORT,'forced "
+                "receipt delete failure'); END");
+    db.reset();
+    auto replacement = sampleIrRemoteScore("replacement", 'c', 'd');
+    auto mutation = sampleIrRemoteMutation(
+        "tachi", "https://boku.tachi.ac", 2'000, {replacement});
+    mutation.deletedReceiptIds.push_back(receipt.receipt->id);
+    assert(helper.ApplyIrRemoteSnapshot(mutation).status ==
+           ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure);
+    assert(remoteScoreIds(helper) == std::vector<std::string>({"original"}));
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                        target.attemptId)
+               .status == ir::IrReceiptReadStatus::Found);
+  }
+
+  {
+    const auto path = root / "ir-remote-fail-outbox-settle" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto original = sampleIrRemoteScore("original", 'a', 'b');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 1'000, {original}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const auto target = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-remote-fail-outbox-settle", 129);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "UPDATE ir_outbox SET state=0 WHERE id=" +
+                              std::to_string(target.rowId));
+    execOrAbort(db.get(),
+                "CREATE TRIGGER fail_outbox_settle BEFORE DELETE ON ir_outbox "
+                "BEGIN SELECT RAISE(ABORT,'forced outbox settle failure'); "
+                "END");
+    db.reset();
+    auto replacement = sampleIrRemoteScore("replacement", 'c', 'd');
+    auto mutation = sampleIrRemoteMutation(
+        "tachi", "https://boku.tachi.ac", 2'000, {replacement});
+    mutation.upsertedReceipts.push_back(snapshotReceipt(target));
+    mutation.settledOutboxRowIds.push_back(target.rowId);
+    assert(helper.ApplyIrRemoteSnapshot(mutation).status ==
+           ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure);
+    assert(remoteScoreIds(helper) == std::vector<std::string>({"original"}));
+    assert(helper.LoadIrOutbox("tachi", target.attemptId).status ==
+           ir::IrOutboxReadStatus::Found);
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                        target.attemptId)
+               .status == ir::IrReceiptReadStatus::NotFound);
+  }
+}
+
+void testIrRemoteScoreReadRejectsMalformedGaugeHistory(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-malformed-history" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  auto score = sampleIrRemoteScore("malformed-history", 'a', 'b');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000, {score}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_remote_scores SET gauge_history_json='[true]' "
+              "WHERE remote_score_id='malformed-history'");
+  db.reset();
+  assert(helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac").empty());
+}
+
+void testIrRemoteScoreReadRejectsMixedGenerations(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-mixed-generation" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  auto first = sampleIrRemoteScore("first", 'a', 'b');
+  auto second = sampleIrRemoteScore("second", 'c', 'd');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000, {first, second}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_remote_scores SET sync_generation=sync_generation+1 "
+              "WHERE remote_score_id='second'");
+  db.reset();
+  assert(helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac").empty());
+}
+
+void testClearIrAccountEvidenceIsAtomicAndOriginScoped(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-account-evidence-clear" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  auto targetScore = sampleIrRemoteScore("target-score", 'a', 'b');
+  auto otherScore = sampleIrRemoteScore("other-score", 'c', 'd');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000, {targetScore}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://other.example", 1'000, {otherScore}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  const auto completed = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-account-evidence-completed", 119);
+  const auto otherOrigin = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-account-evidence-other", 120);
+  const auto unfinished = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-account-evidence-unfinished", 121);
+  const auto legacy = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-account-evidence-legacy", 122);
+  assert(helper.ApplyIrOutboxDelivery(successfulDelivery(completed.rowId)).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  assert(helper
+             .ApplyIrOutboxDelivery(successfulDelivery(
+                 otherOrigin.rowId, "https://other.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "UPDATE ir_outbox SET state=0 WHERE id=" +
+                            std::to_string(unfinished.rowId));
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET state=5,completed_at_ms=2000 WHERE id=" +
+                  std::to_string(legacy.rowId));
+  const auto replayCount = queryInt(db.get(), "SELECT COUNT(*) FROM replays");
+  db.reset();
+
+  assert(helper
+             .ClearIrAccountEvidence("tachi", "HTTPS://BOKU.TACHI.AC:443/")
+             .status == ir::IrOutboxMutationStatus::Invalid);
+  const auto cleared = helper.ClearIrAccountEvidence(
+      "tachi", "https://boku.tachi.ac");
+  assert(cleared.status == ir::IrOutboxMutationStatus::Updated &&
+         cleared.affectedRows == 3);
+  assert(helper.ListIrRemoteScores("tachi", "https://boku.tachi.ac").empty());
+  assert(remoteScoreIds(helper, "tachi", "https://other.example") ==
+         std::vector<std::string>({"other-score"}));
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                      completed.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://other.example",
+                                      otherOrigin.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", completed.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", unfinished.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", legacy.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  const auto remoteOnlyClear =
+      helper.ClearIrRemoteScores("tachi", "https://other.example");
+  assert(remoteOnlyClear.status == ir::IrOutboxMutationStatus::Updated &&
+         remoteOnlyClear.affectedRows == 1);
+  assert(helper.ListIrRemoteScores("tachi", "https://other.example").empty());
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://other.example",
+                                      otherOrigin.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper.ClearIrRemoteScores("tachi", "https://other.example").status ==
+         ir::IrOutboxMutationStatus::NotFound);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == replayCount);
+}
+
+void testClearIrAccountEvidenceRollsBackEveryDelete(
+    const std::filesystem::path &root) {
+  for (int failureStage = 0; failureStage < 3; ++failureStage) {
+    const char *fixtureName = failureStage == 0
+                                  ? "ir-account-clear-fail-outbox"
+                              : failureStage == 1
+                                  ? "ir-account-clear-fail-receipt"
+                                  : "ir-account-clear-fail-remote";
+    const auto path = root / fixtureName / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto score = sampleIrRemoteScore("target-score", 'a', 'b');
+    assert(helper
+               .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                   "tachi", "https://boku.tachi.ac", 1'000, {score}))
+               .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+    const auto completed = stageActivateAndClaimIrAttempt(
+        helper, root, fixtureName, 123 + failureStage);
+    assert(helper.ApplyIrOutboxDelivery(successfulDelivery(completed.rowId)).status ==
+           ir::IrOutboxMutationStatus::Updated);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    if (failureStage == 0) {
+      execOrAbort(db.get(),
+                  "CREATE TRIGGER fail_account_outbox_delete BEFORE DELETE ON "
+                  "ir_outbox BEGIN SELECT RAISE(ABORT,'forced outbox delete "
+                  "failure'); END");
+    } else if (failureStage == 1) {
+      execOrAbort(db.get(),
+                  "CREATE TRIGGER fail_account_receipt_delete BEFORE DELETE "
+                  "ON ir_submission_receipts BEGIN SELECT "
+                  "RAISE(ABORT,'forced receipt delete failure'); END");
+    } else {
+      execOrAbort(db.get(),
+                  "CREATE TRIGGER fail_account_remote_delete BEFORE DELETE ON "
+                  "ir_remote_scores BEGIN SELECT RAISE(ABORT,'forced remote "
+                  "delete failure'); END");
+    }
+    db.reset();
+
+    assert(helper
+               .ClearIrAccountEvidence("tachi", "https://boku.tachi.ac")
+               .status == ir::IrOutboxMutationStatus::StorageFailure);
+    assert(remoteScoreIds(helper) ==
+           std::vector<std::string>({"target-score"}));
+    assert(helper
+               .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                        completed.attemptId)
+               .status == ir::IrReceiptReadStatus::Found);
+    assert(helper.LoadIrOutbox("tachi", completed.attemptId).status ==
+           ir::IrOutboxReadStatus::Found);
+  }
+}
+
 void testIrOutboxRecoveryCountsRetryAndValidation(
     const std::filesystem::path &root) {
   const auto path = root / "ir-outbox-recovery" / "replay.db";
@@ -5667,10 +6428,20 @@ int main() {
   testVersion8MigrationAddsIrSubmissionReceipts(root);
   testVersion8MigrationRejectsMalformedExistingOutbox(root);
   testCurrentVersionRejectsMalformedIrSubmissionReceiptSchema(root);
+  testFreshDatabaseCreatesIrRemoteScores(root);
+  testVersion9MigrationAddsIrRemoteScores(root);
+  testCurrentVersionRejectsMalformedIrRemoteScoreSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxSuccessCommitsReceiptAtomically(root);
   testClearIrSubmissionReceiptsIsOriginScoped(root);
   testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
+  testApplyIrRemoteSnapshotReplacesOneOriginAtomically(root);
+  testApplyIrRemoteSnapshotValidatesBeforeTransaction(root);
+  testApplyIrRemoteSnapshotRollsBackEveryMutationStage(root);
+  testIrRemoteScoreReadRejectsMalformedGaugeHistory(root);
+  testIrRemoteScoreReadRejectsMixedGenerations(root);
+  testClearIrAccountEvidenceIsAtomicAndOriginScoped(root);
+  testClearIrAccountEvidenceRollsBackEveryDelete(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);
   testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);

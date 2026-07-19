@@ -511,9 +511,84 @@ constexpr const char *kIrSubmissionReceiptsRemoteScoreIndexSql =
     "CREATE INDEX idx_ir_submission_receipts_remote_score ON "
     "ir_submission_receipts(provider_id, server_origin, remote_score_id)";
 
+constexpr const char *kIrRemoteScoresTableSql =
+    "CREATE TABLE ir_remote_scores ("
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "remote_score_id TEXT NOT NULL,"
+    "remote_user_id INTEGER NOT NULL,"
+    "game TEXT NOT NULL,"
+    "remote_chart_id TEXT NOT NULL,"
+    "chart_md5 TEXT NOT NULL,"
+    "chart_sha256 TEXT NOT NULL,"
+    "title TEXT NOT NULL,"
+    "artist TEXT NOT NULL,"
+    "difficulty TEXT,"
+    "level TEXT,"
+    "level_number REAL,"
+    "note_count INTEGER NOT NULL,"
+    "score INTEGER NOT NULL,"
+    "lamp_rank INTEGER NOT NULL,"
+    "service TEXT NOT NULL,"
+    "time_achieved_ms INTEGER,"
+    "time_added_ms INTEGER NOT NULL,"
+    "pgreat INTEGER,great INTEGER,good INTEGER,bad INTEGER,poor INTEGER,"
+    "early_pgreat INTEGER,late_pgreat INTEGER,"
+    "early_great INTEGER,late_great INTEGER,"
+    "early_good INTEGER,late_good INTEGER,"
+    "early_bad INTEGER,late_bad INTEGER,"
+    "early_poor INTEGER,late_poor INTEGER,"
+    "fast INTEGER,slow INTEGER,max_combo INTEGER,bad_points INTEGER,"
+    "final_gauge REAL,"
+    "gauge_history_json TEXT,"
+    "random_mode TEXT,gauge_mode TEXT,input_device TEXT,client TEXT,"
+    "sync_generation INTEGER NOT NULL,"
+    "PRIMARY KEY(provider_id,server_origin,remote_score_id),"
+    "CHECK(game IN ('bms-7k','bms-14k')),"
+    "CHECK(remote_user_id > 0),"
+    "CHECK(length(chart_md5)=32 AND chart_md5=lower(chart_md5) AND "
+    "chart_md5 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
+    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
+    "CHECK(note_count >= 0 AND score >= 0 AND score <= note_count * 2),"
+    "CHECK(lamp_rank IN (0,100,150,200,300,400,500,600)),"
+    "CHECK(time_achieved_ms IS NULL OR time_achieved_ms > 0),"
+    "CHECK(time_added_ms > 0),"
+    "CHECK(pgreat IS NULL OR pgreat >= 0),"
+    "CHECK(great IS NULL OR great >= 0),"
+    "CHECK(good IS NULL OR good >= 0),"
+    "CHECK(bad IS NULL OR bad >= 0),"
+    "CHECK(poor IS NULL OR poor >= 0),"
+    "CHECK(early_pgreat IS NULL OR early_pgreat >= 0),"
+    "CHECK(late_pgreat IS NULL OR late_pgreat >= 0),"
+    "CHECK(early_great IS NULL OR early_great >= 0),"
+    "CHECK(late_great IS NULL OR late_great >= 0),"
+    "CHECK(early_good IS NULL OR early_good >= 0),"
+    "CHECK(late_good IS NULL OR late_good >= 0),"
+    "CHECK(early_bad IS NULL OR early_bad >= 0),"
+    "CHECK(late_bad IS NULL OR late_bad >= 0),"
+    "CHECK(early_poor IS NULL OR early_poor >= 0),"
+    "CHECK(late_poor IS NULL OR late_poor >= 0),"
+    "CHECK(fast IS NULL OR fast >= 0),"
+    "CHECK(slow IS NULL OR slow >= 0),"
+    "CHECK(max_combo IS NULL OR max_combo >= 0),"
+    "CHECK(bad_points IS NULL OR bad_points >= 0),"
+    "CHECK(final_gauge IS NULL OR (final_gauge >= 0 AND final_gauge <= 100)),"
+    "CHECK(sync_generation > 0)"
+    ")";
+
+constexpr const char *kIrRemoteScoresSha256IndexSql =
+    "CREATE INDEX idx_ir_remote_scores_chart_sha256 ON "
+    "ir_remote_scores(provider_id,server_origin,chart_sha256)";
+
+constexpr const char *kIrRemoteScoresChartIdIndexSql =
+    "CREATE INDEX idx_ir_remote_scores_remote_chart_id ON "
+    "ir_remote_scores(provider_id,server_origin,remote_chart_id)";
+
 enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
 enum class IrOutboxSchemaState { Absent, Exact, Malformed };
 enum class IrSubmissionReceiptsSchemaState { Absent, Exact, Malformed };
+enum class IrRemoteScoresSchemaState { Absent, Exact, Malformed };
 
 struct NamedSchemaObjectInspection {
   bool present = false;
@@ -1000,6 +1075,49 @@ bool inspectIrSubmissionReceiptsSchema(
   return true;
 }
 
+bool inspectIrRemoteScoresSchema(sqlite3 *db,
+                                 IrRemoteScoresSchemaState &state) {
+  NamedSchemaObjectInspection table;
+  NamedSchemaObjectInspection sha256Index;
+  NamedSchemaObjectInspection chartIdIndex;
+  bool sha256ShapeExact = false;
+  bool chartIdShapeExact = false;
+  if (!inspectNamedSchemaObject(
+          db, "ir_remote_scores", "table", "ir_remote_scores",
+          kIrRemoteScoresTableSql, table,
+          "reading IR remote scores table schema") ||
+      !inspectNamedSchemaObject(
+          db, "idx_ir_remote_scores_chart_sha256", "index",
+          "ir_remote_scores", kIrRemoteScoresSha256IndexSql, sha256Index,
+          "reading IR remote scores SHA-256 index") ||
+      !inspectNamedSchemaObject(
+          db, "idx_ir_remote_scores_remote_chart_id", "index",
+          "ir_remote_scores", kIrRemoteScoresChartIdIndexSql, chartIdIndex,
+          "reading IR remote scores chart ID index") ||
+      !inspectNamedIndexShape(
+          db, "ir_remote_scores", "idx_ir_remote_scores_chart_sha256", false,
+          false, {"provider_id", "server_origin", "chart_sha256"},
+          sha256ShapeExact, "reading IR remote scores SHA-256 index shape") ||
+      !inspectNamedIndexShape(
+          db, "ir_remote_scores", "idx_ir_remote_scores_remote_chart_id",
+          false, false,
+          {"provider_id", "server_origin", "remote_chart_id"},
+          chartIdShapeExact,
+          "reading IR remote scores chart ID index shape")) {
+    return false;
+  }
+  if (!table.present && !sha256Index.present && !chartIdIndex.present) {
+    state = IrRemoteScoresSchemaState::Absent;
+  } else if (table.present && table.exact && sha256Index.present &&
+             sha256Index.exact && sha256ShapeExact && chartIdIndex.present &&
+             chartIdIndex.exact && chartIdShapeExact) {
+    state = IrRemoteScoresSchemaState::Exact;
+  } else {
+    state = IrRemoteScoresSchemaState::Malformed;
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -1014,16 +1132,19 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
     IrSubmissionReceiptsSchemaState receiptState{};
+    IrRemoteScoresSchemaState remoteScoresState{};
     if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
         !inspectIrOutboxSchema(db, irOutboxState) ||
-        !inspectIrSubmissionReceiptsSchema(db, receiptState)) {
+        !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+        !inspectIrRemoteScoresSchema(db, remoteScoresState)) {
       return false;
     }
     if (resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
         irOutboxState != IrOutboxSchemaState::Exact ||
-        receiptState != IrSubmissionReceiptsSchemaState::Exact) {
+        receiptState != IrSubmissionReceiptsSchemaState::Exact ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
-              "outbox or receipt schema");
+              "outbox, receipt, or remote score schema");
       return false;
     }
     return true;
@@ -1247,17 +1368,46 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
       return false;
     }
   }
+  if (*version < 10) {
+    IrRemoteScoresSchemaState remoteScoresState{};
+    if (!inspectIrRemoteScoresSchema(db, remoteScoresState)) {
+      return false;
+    }
+    if (remoteScoresState == IrRemoteScoresSchemaState::Malformed) {
+      SDL_Log("Refusing IR remote score migration from a partial or "
+              "unexpected schema");
+      return false;
+    }
+    if (remoteScoresState == IrRemoteScoresSchemaState::Absent &&
+        (!execSql(db, kIrRemoteScoresTableSql,
+                  "creating IR remote scores") ||
+         !execSql(db, kIrRemoteScoresSha256IndexSql,
+                  "creating IR remote scores SHA-256 index") ||
+         !execSql(db, kIrRemoteScoresChartIdIndexSql,
+                  "creating IR remote scores chart ID index"))) {
+      return false;
+    }
+    if (!inspectIrRemoteScoresSchema(db, remoteScoresState) ||
+        remoteScoresState != IrRemoteScoresSchemaState::Exact) {
+      SDL_Log("Refusing migrated IR remote scores with a partial or "
+              "unexpected schema");
+      return false;
+    }
+  }
   ReplayResultOutboxSchemaState resultOutboxState{};
   IrOutboxSchemaState irOutboxState{};
   IrSubmissionReceiptsSchemaState receiptState{};
+  IrRemoteScoresSchemaState remoteScoresState{};
   if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
       !inspectIrOutboxSchema(db, irOutboxState) ||
       !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+      !inspectIrRemoteScoresSchema(db, remoteScoresState) ||
       resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
       irOutboxState != IrOutboxSchemaState::Exact ||
-      receiptState != IrSubmissionReceiptsSchemaState::Exact) {
+      receiptState != IrSubmissionReceiptsSchemaState::Exact ||
+      remoteScoresState != IrRemoteScoresSchemaState::Exact) {
     SDL_Log("Refusing migrated replay database with a partial or unexpected "
-            "outbox or receipt schema");
+            "outbox, receipt, or remote score schema");
     return false;
   }
   if (!setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {

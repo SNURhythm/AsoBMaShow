@@ -4,6 +4,7 @@
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
+#include "../ir/IrRemoteScoreModels.h"
 #include "ScoreRepositoryModels.h"
 #include "../bms_parser.hpp"
 
@@ -16,6 +17,35 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace ir {
+
+struct IrRemoteSnapshotMutation {
+  std::string providerId;
+  std::string serverOrigin;
+  std::int64_t synchronizedAtUnixMillis = 0;
+  std::vector<IrRemoteScore> scores;
+  std::vector<IrSubmissionReceipt> upsertedReceipts;
+  std::vector<std::int64_t> deletedReceiptIds;
+  std::vector<std::int64_t> settledOutboxRowIds;
+  std::vector<std::int64_t> purgedSucceededOutboxRowIds;
+};
+
+struct IrRemoteSnapshotApplyOutcome {
+  enum class Status { Applied, Invalid, StorageFailure };
+
+  Status status = Status::StorageFailure;
+  int remoteScoreCount = 0;
+  int remoteScoresAdded = 0;
+  int remoteScoresRemoved = 0;
+  int receiptsUpserted = 0;
+  int receiptsDeleted = 0;
+  int outboxRowsSettled = 0;
+  int ambiguousReceiptsPreserved = 0;
+  std::string diagnostic;
+};
+
+} // namespace ir
 
 namespace result_persistence {
 
@@ -149,7 +179,7 @@ struct CourseReplayLookup {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 9;
+  static constexpr int kCurrentSchemaVersion = 10;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -210,6 +240,17 @@ public:
   ir::IrOutboxMutationOutcome
   ClearIrSubmissionReceipts(std::string_view providerId,
                             std::string_view serverOrigin);
+  ir::IrRemoteSnapshotApplyOutcome
+  ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
+  std::vector<ir::IrRemoteScore>
+  ListIrRemoteScores(std::string_view providerId,
+                     std::string_view serverOrigin);
+  ir::IrOutboxMutationOutcome
+  ClearIrRemoteScores(std::string_view providerId,
+                      std::string_view serverOrigin);
+  ir::IrOutboxMutationOutcome
+  ClearIrAccountEvidence(std::string_view providerId,
+                         std::string_view serverOrigin);
   ir::IrOutboxMutationOutcome RetryIrOutbox(std::int64_t rowId,
                                             std::int64_t nowMs);
   ir::IrOutboxMutationOutcome RetryAllIrOutbox(std::string_view providerId,
