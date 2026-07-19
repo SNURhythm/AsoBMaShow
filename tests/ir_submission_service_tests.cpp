@@ -809,6 +809,17 @@ public:
     return successes;
   }
 
+  bool waitForSucceededCallbacks(std::size_t expected) const {
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (succeededCallbacks().size() >= expected) {
+        return true;
+      }
+      std::this_thread::yield();
+    }
+    return false;
+  }
+
   TemporaryDirectory temp;
   ReplayRepository repository;
   ir::IrDriverRegistry registry;
@@ -1033,7 +1044,8 @@ void testDueAttemptsSubmitAsOneAtomicGroup() {
                receipt.receipt && receipt.receipt->remoteScoreId.empty(),
            "multi-entry success stores no guessed remote score identity");
   }
-  expect(harness.succeededCallbacks().size() == 3,
+  expect(harness.waitForSucceededCallbacks(3) &&
+             harness.succeededCallbacks().size() == 3,
          "each committed grouped chart publishes its success callback");
 }
 
