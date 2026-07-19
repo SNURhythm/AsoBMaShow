@@ -156,10 +156,49 @@ void testFailsClosedForAmbiguousAndInvalidHydration() {
          "projection diagnostic excludes filesystem paths and provenance data");
 }
 
+void testProjectsBulkHydratedChartsAndOmitsMissingPaths() {
+  const ChartMetaRecord first = complete7kChart("library/first/chart.bms");
+  ChartMetaRecord second = complete7kChart("library/second/chart.bms");
+  second.meta.TotalNotes = 900;
+  second.meta.StageFile = "second-stage.png";
+  ReplaySummary firstReplay = replay(31, first);
+  ReplaySummary missingReplay = replay(32, first);
+  missingReplay.chartMeta->BmsPath = "library/missing/chart.bms";
+  ReplaySummary secondReplay = replay(33, second);
+
+  const std::array replayPaths{firstReplay.chartMeta->BmsPath,
+                               missingReplay.chartMeta->BmsPath,
+                               secondReplay.chartMeta->BmsPath};
+  ChartMetaPathBatchReadOutcome bulkCharts;
+  bulkCharts.status = ChartMetaPathBatchReadStatus::Loaded;
+  bulkCharts.records = {first, second};
+  bulkCharts.missingPaths = 1;
+
+  const std::array replays{firstReplay, missingReplay, secondReplay};
+  const auto projected = ir::projectIrUploadCandidates(replays, bulkCharts.records);
+
+  expect(replayPaths.size() == bulkCharts.records.size() + bulkCharts.missingPaths,
+         "bulk result accounts for every replay chart path");
+  expect(projected.candidates.size() == 2 && projected.omittedRows == 1,
+         "missing bulk chart paths are omitted from the projection");
+  expect(projected.candidates[0].replay.chartMeta.has_value() &&
+             projected.candidates[0].replay.chartMeta->BmsPath ==
+                 first.meta.BmsPath &&
+             projected.candidates[0].replay.chartMeta->TotalNotes ==
+                 projected.candidates[0].chart.meta.TotalNotes &&
+             projected.candidates[1].replay.chartMeta.has_value() &&
+             projected.candidates[1].replay.chartMeta->BmsPath ==
+                 second.meta.BmsPath &&
+             projected.candidates[1].replay.chartMeta->TotalNotes ==
+                 projected.candidates[1].chart.meta.TotalNotes,
+         "complete bulk-hydrated charts resolve identically to chart records");
+}
+
 } // namespace
 
 int main() {
   testProjectsOnlyCanonicalActionableAttempts();
   testFailsClosedForAmbiguousAndInvalidHydration();
+  testProjectsBulkHydratedChartsAndOmitsMissingPaths();
   return failures == 0 ? 0 : 1;
 }

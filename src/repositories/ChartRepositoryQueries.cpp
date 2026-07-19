@@ -1208,6 +1208,12 @@ void ChartRepository::Session::QueryChartMeta(
   queryChartMeta(impl_->database(), query, chartMetas);
 }
 
+ChartMetaPathBatchReadOutcome ChartRepository::Session::SelectChartMetaByPaths(
+    std::span<const std::filesystem::path> paths) {
+  return chart_repository_detail::SelectChartMetaByPaths(impl_->database(),
+                                                          paths);
+}
+
 int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
   std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
   if (chartMetaQueryNeedsScoreCache(query)) {
@@ -1959,6 +1965,109 @@ std::string difficultyTableLabelsForChart(
 }
 
 } // namespace
+
+ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
+    sqlite3 *database, std::span<const std::filesystem::path> paths) {
+  constexpr std::size_t kMaximumDistinctPaths = 16'384;
+  constexpr std::size_t kPathsPerQuery = 256;
+  ChartMetaPathBatchReadOutcome outcome;
+  try {
+    std::vector<std::string> normalizedPaths;
+    normalizedPaths.reserve(paths.size());
+    std::unordered_set<std::string> seenPaths;
+    seenPaths.reserve(paths.size());
+    for (const auto &path : paths) {
+      const std::string normalized =
+          chart_storage_identity::StoredPathText(path);
+      if (normalized.empty() || !seenPaths.insert(normalized).second) {
+        continue;
+      }
+      normalizedPaths.push_back(normalized);
+      if (normalizedPaths.size() > kMaximumDistinctPaths) {
+        outcome.status = ChartMetaPathBatchReadStatus::Invalid;
+        outcome.diagnostic = "too many chart paths";
+        return outcome;
+      }
+    }
+
+    if (normalizedPaths.empty()) {
+      outcome.status = ChartMetaPathBatchReadStatus::Loaded;
+      return outcome;
+    }
+
+    std::string transactionError;
+    SqliteTransactionHandle transaction(database, "BEGIN TRANSACTION",
+                                        transactionError);
+    if (!transaction.active()) {
+      outcome.diagnostic = "could not begin chart metadata lookup: " +
+                           transactionError;
+      return outcome;
+    }
+
+    std::unordered_map<std::string, ChartMetaRecord> recordsByPath;
+    recordsByPath.reserve(normalizedPaths.size());
+    for (std::size_t first = 0; first < normalizedPaths.size();
+         first += kPathsPerQuery) {
+      const std::size_t count =
+          std::min(kPathsPerQuery, normalizedPaths.size() - first);
+      std::string query = "SELECT ";
+      query += kChartMetaSelectColumns;
+      query += " FROM chart_meta cm WHERE cm.path IN (";
+      for (std::size_t index = 0; index < count; ++index) {
+        query += index == 0 ? "?" : ",?";
+      }
+      query += ")";
+
+      SqliteStatementHandle statement;
+      if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+        outcome.diagnostic = "could not prepare chart metadata lookup";
+        return outcome;
+      }
+      for (std::size_t index = 0; index < count; ++index) {
+        if (!bindSqliteText(statement.get(), static_cast<int>(index + 1),
+                            normalizedPaths[first + index])) {
+          outcome.diagnostic = "could not bind chart metadata lookup";
+          return outcome;
+        }
+      }
+      while (true) {
+        const int stepResult = sqlite3_step(statement.get());
+        if (stepResult == SQLITE_DONE) {
+          break;
+        }
+        if (stepResult != SQLITE_ROW) {
+          outcome.diagnostic = "could not read chart metadata lookup";
+          return outcome;
+        }
+        ChartMetaRecord record = readChartMetaRecord(statement.get());
+        recordsByPath.emplace(
+            chart_storage_identity::StoredPathText(record.meta.BmsPath),
+            std::move(record));
+      }
+    }
+
+    if (!transaction.commit(transactionError)) {
+      outcome.diagnostic = "could not complete chart metadata lookup: " +
+                           transactionError;
+      return outcome;
+    }
+
+    outcome.status = ChartMetaPathBatchReadStatus::Loaded;
+    outcome.records.reserve(recordsByPath.size());
+    for (const std::string &path : normalizedPaths) {
+      auto found = recordsByPath.find(path);
+      if (found == recordsByPath.end()) {
+        ++outcome.missingPaths;
+        continue;
+      }
+      outcome.records.push_back(std::move(found->second));
+    }
+  } catch (...) {
+    outcome = {};
+    outcome.diagnostic = "chart metadata lookup failed";
+  }
+  return outcome;
+}
 
 void chart_repository_detail::SelectAllChartMeta(
     sqlite3 *database, std::vector<bms_parser::ChartMeta> &chartMetas) {

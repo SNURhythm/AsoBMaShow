@@ -358,6 +358,83 @@ void testSessionRoundTripAndReadinessCost() {
   assert(sqliteColumnString(journalMode.get(), 0) == "wal");
 }
 
+void testSelectChartMetaByPathsHydratesInInputOrder() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto first = chartMeta(temporary.path());
+  first.BmsPath = temporary.path() / "first.bms";
+  first.StageFile = "first-stage.png";
+  first.Title = "First title";
+  first.SubTitle = "First subtitle";
+  first.Artist = "First artist";
+  first.KeyMode = 7;
+  first.TotalNotes = 701;
+  first.MD5 = "11111111111111111111111111111111";
+  first.SHA256 =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  auto second = chartMeta(temporary.path());
+  second.BmsPath = temporary.path() / "second.bms";
+  second.StageFile = "second-stage.png";
+  second.Title = "Second title";
+  second.SubTitle = "Second subtitle";
+  second.Artist = "Second artist";
+  second.KeyMode = 14;
+  second.TotalNotes = 1402;
+  second.MD5 = "22222222222222222222222222222222";
+  second.SHA256 =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  assert(session->InsertChartMeta(first));
+  assert(session->InsertChartMeta(second));
+
+  const auto missing = temporary.path() / "missing.bms";
+  const std::array requestedPaths{first.BmsPath, second.BmsPath,
+                                  first.BmsPath, missing};
+  const auto loaded = session->SelectChartMetaByPaths(requestedPaths);
+  assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(loaded.records.size() == 2);
+  assert(loaded.records[0].meta.BmsPath == first.BmsPath);
+  assert(loaded.records[0].meta.StageFile == first.StageFile);
+  assert(loaded.records[0].meta.Title == first.Title);
+  assert(loaded.records[0].meta.SubTitle == first.SubTitle);
+  assert(loaded.records[0].meta.Artist == first.Artist);
+  assert(loaded.records[0].meta.KeyMode == first.KeyMode);
+  assert(loaded.records[0].meta.MD5 == first.MD5);
+  assert(loaded.records[0].meta.SHA256 == first.SHA256);
+  assert(loaded.records[0].meta.TotalNotes == first.TotalNotes);
+  assert(loaded.records[1].meta.BmsPath == second.BmsPath);
+  assert(loaded.records[1].meta.StageFile == second.StageFile);
+  assert(loaded.records[1].meta.TotalNotes == second.TotalNotes);
+  assert(loaded.missingPaths == 1);
+
+  const auto empty = session->SelectChartMetaByPaths({});
+  assert(empty.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(empty.records.empty());
+  assert(empty.missingPaths == 0);
+
+  std::vector<std::filesystem::path> oversizedPaths;
+  oversizedPaths.reserve(16'385);
+  for (int index = 0; index < 16'385; ++index) {
+    oversizedPaths.push_back(temporary.path() /
+                             ("oversized-" + std::to_string(index) + ".bms"));
+  }
+  const auto oversized = session->SelectChartMetaByPaths(oversizedPaths);
+  assert(oversized.status == ChartMetaPathBatchReadStatus::Invalid);
+  assert(oversized.records.empty());
+
+  Database database = openDatabase(databasePath);
+  assert(database);
+  assert(execute(database.get(), "DROP TABLE chart_meta"));
+  const std::array failurePath{first.BmsPath};
+  const auto storageFailure = session->SelectChartMetaByPaths(failurePath);
+  assert(storageFailure.status == ChartMetaPathBatchReadStatus::StorageFailure);
+  assert(storageFailure.records.empty());
+}
+
 void testRejectedFamiliesRemainUnchanged() {
   TempDirectory temporary;
 
@@ -649,6 +726,7 @@ int main() {
   testScanBatchRetainsSessionStorage();
   testScanBatchReusesPreparedInsertAndTransaction();
   testSessionRoundTripAndReadinessCost();
+  testSelectChartMetaByPathsHydratesInInputOrder();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
   testChartMigrationCompatibilityMatrix();

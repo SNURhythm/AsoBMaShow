@@ -8,6 +8,7 @@
 #include "../sqlite3.h"
 
 #include <mutex>
+#include <span>
 
 struct ChartRepository::Impl {
   explicit Impl(std::filesystem::path path);
@@ -44,6 +45,8 @@ void InvalidateDifficultyLabelCache();
 void BumpLibraryRevision();
 void SelectAllChartMeta(sqlite3 *database,
                         std::vector<bms_parser::ChartMeta> &chartMetas);
+ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
+    sqlite3 *database, std::span<const std::filesystem::path> paths);
 
 chart_library::FolderClearDataByLongNoteMode
 LoadFolderClearDataByLongNoteMode(
