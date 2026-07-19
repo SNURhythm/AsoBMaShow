@@ -150,6 +150,17 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               diagnostic = "The active profile is unavailable.";
               return false;
             }
+            const auto imported =
+                context.scoreRepository.ClearImportedIrScores(providerId);
+            if (imported.status !=
+                    ImportedIrScoreProjectionStatus::Applied &&
+                imported.status !=
+                    ImportedIrScoreProjectionStatus::AlreadyCurrent) {
+              diagnostic = imported.diagnostic.empty()
+                               ? "Imported IR scores could not be cleared."
+                               : imported.diagnostic;
+              return false;
+            }
             const auto cleared =
                 context.replayRepository.ClearIrProviderAccountEvidence(
                     providerId);

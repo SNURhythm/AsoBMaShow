@@ -20,7 +20,6 @@
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
 #include "../ir/IrProfileSettings.h"
-#include "../ir/IrScoreHistoryProjection.h"
 #include "../ir/IrSavedResultUpload.h"
 #include "../ir/IrSubmissionService.h"
 #include "../path.h"
@@ -1188,45 +1187,7 @@ void MainMenuScene::ChartListPageCache::reset(
   query.limit = 0;
   query.offset = 0;
   leadingRecord = std::move(leading);
-  ownedRecords.clear();
-  referencedRecords = nullptr;
-  referencedIndices.clear();
   totalCount = std::max(0, count) + (leadingRecord.has_value() ? 1 : 0);
-  pages.clear();
-  pageOrder.clear();
-}
-
-void MainMenuScene::ChartListPageCache::resetOwned(
-    std::vector<ChartMetaRecord> records, const ChartMetaQuery &chartQuery,
-    std::optional<ChartMetaRecord> leading) {
-  session = nullptr;
-  query = chartQuery;
-  query.limit = 0;
-  query.offset = 0;
-  leadingRecord = std::move(leading);
-  ownedRecords = std::move(records);
-  referencedRecords = nullptr;
-  referencedIndices.clear();
-  totalCount = static_cast<int>(ownedRecords.size()) +
-               (leadingRecord.has_value() ? 1 : 0);
-  pages.clear();
-  pageOrder.clear();
-}
-
-void MainMenuScene::ChartListPageCache::resetReferenced(
-    const std::vector<ChartMetaRecord> &records,
-    std::vector<std::size_t> indices, const ChartMetaQuery &chartQuery,
-    std::optional<ChartMetaRecord> leading) {
-  session = nullptr;
-  query = chartQuery;
-  query.limit = 0;
-  query.offset = 0;
-  leadingRecord = std::move(leading);
-  ownedRecords.clear();
-  referencedRecords = &records;
-  referencedIndices = std::move(indices);
-  totalCount = static_cast<int>(referencedIndices.size()) +
-               (leadingRecord.has_value() ? 1 : 0);
   pages.clear();
   pageOrder.clear();
 }
@@ -1240,9 +1201,6 @@ void MainMenuScene::ChartListPageCache::clear() {
   session = nullptr;
   totalCount = 0;
   leadingRecord.reset();
-  ownedRecords.clear();
-  referencedRecords = nullptr;
-  referencedIndices.clear();
   pages.clear();
   pageOrder.clear();
 }
@@ -1256,23 +1214,6 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
       return *leadingRecord;
     }
     index--;
-  }
-  if (!ownedRecords.empty()) {
-    if (index >= static_cast<int>(ownedRecords.size())) {
-      return fallbackRecord;
-    }
-    return ownedRecords[static_cast<std::size_t>(index)];
-  }
-  if (referencedRecords != nullptr) {
-    if (index >= static_cast<int>(referencedIndices.size())) {
-      return fallbackRecord;
-    }
-    const std::size_t referencedIndex =
-        referencedIndices[static_cast<std::size_t>(index)];
-    if (referencedIndex >= referencedRecords->size()) {
-      return fallbackRecord;
-    }
-    return (*referencedRecords)[referencedIndex];
   }
   if (session == nullptr) {
     return fallbackRecord;
@@ -1297,33 +1238,6 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
     return fallbackRecord;
   }
   return pageIt->second[localIndex];
-}
-
-int MainMenuScene::ChartListPageCache::findPath(
-    const std::filesystem::path &path) const {
-  if (path.empty()) {
-    return -1;
-  }
-  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
-  if (!ownedRecords.empty()) {
-    const int ownedIndex = ir::findProjectedChartPathIndex(ownedRecords, path);
-    return ownedIndex < 0 ? -1 : ownedIndex + leadingOffset;
-  }
-  if (referencedRecords != nullptr) {
-    for (std::size_t index = 0; index < referencedIndices.size(); ++index) {
-      const std::size_t referencedIndex = referencedIndices[index];
-      if (referencedIndex < referencedRecords->size() &&
-          (*referencedRecords)[referencedIndex].meta.BmsPath == path) {
-        return static_cast<int>(index) + leadingOffset;
-      }
-    }
-    return -1;
-  }
-  if (session == nullptr) {
-    return -1;
-  }
-  const int databaseIndex = session->FindChartMetaIndex(query, path);
-  return databaseIndex < 0 ? -1 : databaseIndex + leadingOffset;
 }
 
 void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
@@ -1377,9 +1291,8 @@ void MainMenuScene::init() {
     scoreBestScores = {};
     folderClearData = {};
     scoreClearRanksRevision = 0;
-    projectedIrReconciliationRevision = 0;
-    projectedIrAccountEvidenceRevision = 0;
-    publishedIrScoreProjectionDiagnostic.clear();
+    observedIrReconciliationRevision = 0;
+    observedIrAccountEvidenceRevision = 0;
     replayIrObservedRevisions.clear();
   };
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -4316,24 +4229,11 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     leadingRecord = std::move(courseRecord);
   }
 
-  if (ir::chartMetaQueryUsesProjectedScores(query)) {
-    const auto &projectedRecords = projectedChartMetadataCache.recordsFor(
-        query, context.chartRepository.GetLibraryRevision(),
-        [this](const ChartMetaQuery &baseQuery,
-               std::vector<ChartMetaRecord> &records) {
-          chartSession->QueryChartMeta(baseQuery, records);
-        });
-    auto projectedIndices = ir::projectedScoreQueryIndices(
-        query, scoreClearRanks, scoreBestScores, projectedRecords);
-    chartListCache.resetReferenced(projectedRecords,
-                                   std::move(projectedIndices), query,
-                                   std::move(leadingRecord));
-  } else {
-    const int databaseCount = chartSession->CountChartMeta(query);
-    chartListCache.reset(*chartSession, query, databaseCount,
-                         std::move(leadingRecord));
-  }
-  const int count = chartListCache.totalCount;
+  const int databaseCount = chartSession->CountChartMeta(query);
+  const int count = databaseCount + (leadingRecord.has_value() ? 1 : 0);
+  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
+  chartListCache.reset(*chartSession, query, databaseCount,
+                       std::move(leadingRecord));
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
@@ -4369,8 +4269,12 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int index =
-        chartListCache.findPath(std::filesystem::path(path));
+    const int databaseIndex = chartSession->FindChartMetaIndex(
+        query, std::filesystem::path(path));
+    if (databaseIndex < 0) {
+      return -1;
+    }
+    const int index = databaseIndex + leadingOffset;
     return index >= 0 && index < count ? index : -1;
   };
 
@@ -4423,76 +4327,17 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
             error->c_str());
     return error;
   }
-  ScoreClearRankCache localClearRanks =
-      context.scoreRepository.LoadBestClearRanks(
+  scoreClearRanks = context.scoreRepository.LoadBestClearRanks(
       *chartSession, score_cache_queries::kScoreDatabaseSchema);
-  ScoreBestCache localBestScores = context.scoreRepository.LoadBestScores(
+  scoreBestScores = context.scoreRepository.LoadBestScores(
       *chartSession, score_cache_queries::kScoreDatabaseSchema);
-  ScoreClearRankCache projectedClearRanks = localClearRanks;
-  ScoreBestCache projectedBestScores = localBestScores;
-  const bool projected =
-      projectActiveIrScoreMirror(projectedClearRanks, projectedBestScores);
+  const ScoreClearRankCache localClearRanks =
+      context.scoreRepository.LoadLocalBestClearRanks(
+          *chartSession, score_cache_queries::kScoreDatabaseSchema);
   folderClearData = chartSession->LoadFolderClearDataByLongNoteMode(
-      projected ? projectedClearRanks : localClearRanks, localClearRanks);
-  if (projected) {
-    scoreClearRanks = std::move(projectedClearRanks);
-    scoreBestScores = std::move(projectedBestScores);
-  } else {
-    scoreClearRanks = std::move(localClearRanks);
-    scoreBestScores = std::move(localBestScores);
-  }
+      scoreClearRanks, localClearRanks);
   scoreClearRanksRevision = context.scoreRepository.GetRevision();
   return std::nullopt;
-}
-
-bool MainMenuScene::projectActiveIrScoreMirror(
-    ScoreClearRankCache &clearRanks, ScoreBestCache &bestScores) {
-  const auto provider = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
-  if (provider == context.settings.irProviders.end() ||
-      !provider->second.enabled) {
-    publishedIrScoreProjectionDiagnostic.clear();
-    return true;
-  }
-  const auto origin =
-      ir::normalizeServerOrigin(provider->second.serverOrigin);
-  if (!origin) {
-    publishIrScoreProjectionDiagnostic(
-        "IR score history provider origin is invalid");
-    return false;
-  }
-
-  const auto loaded = context.replayRepository.ListIrRemoteScores(
-      ir::kTachiProviderId, *origin);
-  if (loaded.status != ir::IrRemoteScoreReadOutcome::Status::Loaded) {
-    publishIrScoreProjectionDiagnostic(
-        loaded.diagnostic.empty() ? "IR score history mirror is unavailable"
-                                  : loaded.diagnostic);
-    return false;
-  }
-
-  try {
-    ir::projectIrRemoteScores(loaded.scores, clearRanks, bestScores);
-    publishedIrScoreProjectionDiagnostic.clear();
-    return true;
-  } catch (...) {
-    publishIrScoreProjectionDiagnostic(
-        "IR score history projection could not be formed");
-    return false;
-  }
-}
-
-void MainMenuScene::publishIrScoreProjectionDiagnostic(
-    std::string_view diagnostic) {
-  const std::string safe = ir::sanitizeDiagnostic(
-      std::string("IR score history unavailable: ") +
-      std::string(diagnostic));
-  if (safe.empty() || safe == publishedIrScoreProjectionDiagnostic) {
-    return;
-  }
-  publishedIrScoreProjectionDiagnostic = safe;
-  SDL_Log("%s", safe.c_str());
-  archive_file::appendDebugLogLine(safe);
 }
 
 std::optional<std::string> MainMenuScene::prepareScoreQueryDatabase() {
@@ -4555,13 +4400,13 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
   }
 }
 
-void MainMenuScene::refreshIrScoreProjectionIfNeeded() {
-  bool projectionNeedsRefresh = false;
+void MainMenuScene::refreshIrRecordListIfNeeded() {
+  bool recordsNeedRefresh = false;
   const std::uint64_t accountEvidenceRevision =
       context.irAccountEvidenceRevision.load(std::memory_order_acquire);
-  if (accountEvidenceRevision != projectedIrAccountEvidenceRevision) {
-    projectedIrAccountEvidenceRevision = accountEvidenceRevision;
-    projectionNeedsRefresh = true;
+  if (accountEvidenceRevision != observedIrAccountEvidenceRevision) {
+    observedIrAccountEvidenceRevision = accountEvidenceRevision;
+    recordsNeedRefresh = true;
   }
 
   if (context.irSubmissionService != nullptr) {
@@ -4569,23 +4414,13 @@ void MainMenuScene::refreshIrScoreProjectionIfNeeded() {
         ir::kTachiProviderId);
     if (status.phase == ir::IrReconciliationPhase::Succeeded &&
         status.revision != 0 &&
-        status.revision != projectedIrReconciliationRevision) {
-      projectedIrReconciliationRevision = status.revision;
-      projectionNeedsRefresh = true;
+        status.revision != observedIrReconciliationRevision) {
+      observedIrReconciliationRevision = status.revision;
+      recordsNeedRefresh = true;
     }
   }
-  if (!projectionNeedsRefresh) {
+  if (!recordsNeedRefresh) {
     return;
-  }
-  if (refreshScoreClearRankViews().has_value()) {
-    const bool hadVisibleScoreState = scoreClearRanksRevision != 0;
-    scoreClearRanks = {};
-    scoreBestScores = {};
-    folderClearData = {};
-    scoreClearRanksRevision = 0;
-    if (hadVisibleScoreState) {
-      refreshLongNoteModeClearRankViews();
-    }
   }
   if (replayModalRoot != nullptr && replayModalRoot->getVisible()) {
     reloadReplayRecordModels(true);
@@ -4677,7 +4512,12 @@ void MainMenuScene::selectChartByPathAfterReload(
     return;
   }
   const path_t target = fspath_to_path_t(path);
-  const int index = chartListCache.findPath(path);
+  const ChartMetaQuery query = chartQueryForActiveFolder();
+  int index = chartSession->FindChartMetaIndex(query, path);
+  if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0) {
+    index += 1;
+  }
   if (index >= 0 && index < recyclerView->size()) {
     const ChartMetaRecord &record = recyclerView->get(index);
     if (fspath_to_path_t(record.meta.BmsPath) == target) {
@@ -5323,8 +5163,14 @@ void MainMenuScene::startSelectedCourse() {
     const auto &missingRecord =
         records[static_cast<std::size_t>(firstMissingIndex)];
     if (!missingRecord.meta.BmsPath.empty()) {
-      visibleMissingIndex = chartListCache.findPath(
-          missingRecord.meta.BmsPath);
+      const int databaseIndex = chartSession.has_value()
+                                    ? chartSession->FindChartMetaIndex(
+                                          chartQueryForActiveFolder(),
+                                          missingRecord.meta.BmsPath)
+                                    : -1;
+      if (databaseIndex >= 0) {
+        visibleMissingIndex = databaseIndex + 1;
+      }
     } else if (searchText.empty()) {
       visibleMissingIndex = firstMissingIndex + 1;
     }
@@ -10538,7 +10384,7 @@ void MainMenuScene::update(float dt) {
   previewLoadDebouncer.update();
   reapRetiredPreviewLoadThreads();
   refreshScoreClearRanksIfNeeded();
-  refreshIrScoreProjectionIfNeeded();
+  refreshIrRecordListIfNeeded();
   refreshTasksButton();
   applyPendingUiUpdates();
   applyFindBmsUpdates();
@@ -10682,7 +10528,6 @@ void MainMenuScene::cleanupScene() {
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
   chartListCache.clear();
-  projectedChartMetadataCache.clear();
   chartListCache.session = nullptr;
   chartSession.reset();
   recyclerView = nullptr;

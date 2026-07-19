@@ -29,6 +29,25 @@ enum class ScoreBestSource {
   ImportedIr,
 };
 
+enum class ScoreStorageSource : int {
+  LocalGameplay = 0,
+  ImportedIr = 1,
+};
+
+enum class ImportedIrScoreProjectionStatus {
+  Applied,
+  AlreadyCurrent,
+  Invalid,
+  StorageFailure,
+};
+
+struct ImportedIrScoreProjectionOutcome {
+  ImportedIrScoreProjectionStatus status =
+      ImportedIrScoreProjectionStatus::StorageFailure;
+  int projectedScores = 0;
+  std::string diagnostic;
+};
+
 struct ScoreBestSnapshot {
   int score = 0;
   int maxScore = 0;
@@ -72,10 +91,6 @@ struct ScoreBestByLongNoteMode {
 using ScoreRankMap = std::unordered_map<std::string, ScoreRankByLongNoteMode,
                                         TransparentStringHash,
                                         std::equal_to<>>;
-using ScoreRankBySha256Map = ScoreRankMap;
-using ScoreRankMd5FallbackMap =
-    std::unordered_map<std::string, ScoreRankBySha256Map,
-                       TransparentStringHash, std::equal_to<>>;
 
 struct CourseScoreRankByLongNoteMode {
   std::array<int, 4> ranks{kNoClearTypeRank, kNoClearTypeRank,
@@ -93,15 +108,9 @@ using LegacyCourseScoreRankMap =
 using ScoreBestMap = std::unordered_map<std::string, ScoreBestByLongNoteMode,
                                         TransparentStringHash,
                                         std::equal_to<>>;
-using ScoreBestBySha256Map = ScoreBestMap;
-using ScoreBestMd5FallbackMap =
-    std::unordered_map<std::string, ScoreBestBySha256Map,
-                       TransparentStringHash, std::equal_to<>>;
 
 struct ScoreClearRankCache {
   ScoreRankMap rankBySha256;
-  ScoreRankMap importedIrRankBySha256;
-  ScoreRankMd5FallbackMap importedIrRankByMd5;
   CourseScoreRankMap rankByCourseKey;
   LegacyCourseScoreRankMap rankByLegacyCourseId;
 
@@ -111,9 +120,6 @@ struct ScoreClearRankCache {
                                     int longNoteMode = 0) const;
   [[nodiscard]] int bestRankForStoredKey(std::string_view sha256,
                                          int longNoteMode = 0) const;
-  [[nodiscard]] int bestRankForStoredIdentity(std::string_view sha256,
-                                              std::string_view md5,
-                                              int longNoteMode = 0) const;
   [[nodiscard]] int bestCourseRankFor(std::string_view courseKey,
                                       int legacyCourseId, int lnMode) const;
 };
@@ -138,8 +144,6 @@ struct CourseScoreRecoveryResult {
 
 struct ScoreBestCache {
   ScoreBestMap scoreBySha256;
-  ScoreBestMap importedIrScoreBySha256;
-  ScoreBestMd5FallbackMap importedIrScoreByMd5;
 
   [[nodiscard]] std::optional<ScoreBestSnapshot>
   bestFor(const bms_parser::ChartMeta &chartMeta,

@@ -11,11 +11,13 @@ root = (
     else pathlib.Path(__file__).parent.parent
 ).resolve()
 source_path = root / "src/scene/MainMenuScene.cpp"
+header_path = root / "src/scene/MainMenuScene.h"
 if not source_path.is_file():
     print("FAIL: missing src/scene/MainMenuScene.cpp", file=sys.stderr)
     raise SystemExit(1)
 
 source = source_path.read_text(encoding="utf-8")
+header = header_path.read_text(encoding="utf-8")
 failures: list[str] = []
 
 
@@ -45,22 +47,27 @@ if "chartListCache.releasePages();" not in pause:
     failures.append("onPause must release only reloadable lazy chart pages")
 
 required_reload_steps = [
-    "projectedChartMetadataCache.recordsFor(",
-    "projectedScoreQueryIndices(",
-    "chartListCache.resetReferenced(",
+    "chartSession->CountChartMeta(query)",
+    "chartListCache.reset(*chartSession, query",
 ]
 position = -1
 for step in required_reload_steps:
     position = reload_list.find(step, position + 1)
     if position < 0:
-        failures.append(f"missing projected chart-list cache step: {step}")
+        failures.append(f"missing paginated chart-list step: {step}")
         break
 
-if "chartSession->QueryChartMeta(baseQuery, projectedRecords);" in reload_list:
-    failures.append(
-        "each projected lamp selection must not synchronously reload all base "
-        "metadata"
-    )
+obsolete_projection_symbols = [
+    "projectedChartMetadataCache",
+    "projectedScoreQueryIndices(",
+    "resetReferenced(",
+    "IrScoreHistoryProjection.h",
+]
+for symbol in obsolete_projection_symbols:
+    if symbol in source or symbol in header:
+        failures.append(
+            f"obsolete in-memory IR chart projection remains: {symbol}"
+        )
 
 if failures:
     for failure in failures:

@@ -365,6 +365,71 @@ public:
                                                      : found->second;
   }
 
+  bool projectMirroredIrScores(std::string_view profileId,
+                               std::string_view providerId,
+                               std::string_view serverOrigin,
+                               std::string &diagnostic) noexcept {
+    try {
+      if (!profileReady() || profileManager.activeProfile().id != profileId) {
+        diagnostic = "The active profile changed during IR score import.";
+        return false;
+      }
+      const auto state = replayRepository.LoadIrRemoteScoreMirrorState(
+          providerId, serverOrigin);
+      if (state.status !=
+          ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded) {
+        diagnostic = state.diagnostic.empty()
+                         ? "The synchronized IR score mirror is unavailable."
+                         : state.diagnostic;
+        return false;
+      }
+      if (scoreRepository.ImportedIrScoresAreCurrent(
+              providerId, serverOrigin, state.syncGeneration,
+              state.scoreCount)) {
+        return true;
+      }
+      const auto mirrored =
+          replayRepository.ListIrRemoteScores(providerId, serverOrigin);
+      if (mirrored.status != ir::IrRemoteScoreReadOutcome::Status::Loaded ||
+          mirrored.scores.size() != state.scoreCount) {
+        diagnostic = mirrored.diagnostic.empty()
+                         ? "The synchronized IR score mirror is inconsistent."
+                         : mirrored.diagnostic;
+        return false;
+      }
+      const std::int64_t generation =
+          state.syncGeneration > 0 ? state.syncGeneration : 1;
+      const auto projected = scoreRepository.ReplaceImportedIrScores(
+          providerId, serverOrigin, generation, mirrored.scores);
+      if (projected.status == ImportedIrScoreProjectionStatus::Applied ||
+          projected.status ==
+              ImportedIrScoreProjectionStatus::AlreadyCurrent) {
+        return true;
+      }
+      diagnostic = projected.diagnostic.empty()
+                       ? "Synchronized IR scores could not be imported."
+                       : projected.diagnostic;
+      return false;
+    } catch (...) {
+      diagnostic = "Synchronized IR scores could not be imported.";
+      return false;
+    }
+  }
+
+  void restoreMirroredIrScores(std::string_view profileId,
+                               const AppSettings &profileSettings) noexcept {
+    for (const auto &[providerId, stored] : profileSettings.irProviders) {
+      ir::IrProviderSettings provider = stored;
+      ir::sanitizeProviderSettings(provider);
+      std::string diagnostic;
+      if (!projectMirroredIrScores(profileId, providerId,
+                                   provider.serverOrigin, diagnostic)) {
+        SDL_Log("Synchronized IR score import could not be restored: %s",
+                diagnostic.c_str());
+      }
+    }
+  }
+
   bool startIrServices() noexcept {
     try {
       if (!profileReady()) {
@@ -428,10 +493,36 @@ public:
             });
           }
         };
+        options.remoteSnapshotApplied =
+            [this](std::string_view profileId, std::string_view providerId,
+                   std::string_view serverOrigin,
+                   std::int64_t syncGeneration,
+                   std::span<const ir::IrRemoteScore> scores,
+                   std::string &diagnostic) {
+              if (!profileReady() ||
+                  profileManager.activeProfile().id != profileId) {
+                diagnostic =
+                    "The active profile changed during IR score import.";
+                return false;
+              }
+              const auto projected = scoreRepository.ReplaceImportedIrScores(
+                  providerId, serverOrigin, syncGeneration, scores);
+              if (projected.status ==
+                      ImportedIrScoreProjectionStatus::Applied ||
+                  projected.status ==
+                      ImportedIrScoreProjectionStatus::AlreadyCurrent) {
+                return true;
+              }
+              diagnostic = projected.diagnostic.empty()
+                               ? "Synchronized IR scores could not be imported."
+                               : projected.diagnostic;
+              return false;
+            };
         irSubmissionService = std::make_unique<ir::IrSubmissionService>(
             replayRepository, irDrivers, *irHttpClient, std::move(options));
       }
       const std::string profileId = profileManager.activeProfile().id;
+      restoreMirroredIrScores(profileId, settings);
       irRankingService->activateProfile(profileId);
       irSubmissionService->start(irProfileConfig(profileId, settings));
       irSubmissionService->setApplicationActive(
@@ -472,6 +563,7 @@ public:
       if (irRankingService) {
         irRankingService->activateProfile(profileId);
       }
+      restoreMirroredIrScores(profileId, profileSettings);
       if (irSubmissionService) {
         irSubmissionService->activateProfile(
             irProfileConfig(profileId, profileSettings));

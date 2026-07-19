@@ -747,14 +747,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(ir_score_reconciliation_tests PRIVATE cxx_std_23)
 
-    add_executable(ir_score_history_projection_tests
-        tests/ir_score_history_projection_tests.cpp
+    add_executable(ir_score_import_projection_tests
+        tests/ir_score_import_projection_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ResultPersistenceModel.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
-        src/ir/IrScoreHistoryProjection.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
@@ -764,22 +766,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/sqlite3.c
         src/scene/play/GameplayGaugeRules.cpp
     )
-    target_include_directories(ir_score_history_projection_tests PRIVATE
+    target_include_directories(ir_score_import_projection_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
-    target_compile_features(ir_score_history_projection_tests PRIVATE
+    target_compile_features(ir_score_import_projection_tests PRIVATE
         cxx_std_23
     )
     if(TARGET SDL2::SDL2)
-        target_link_libraries(ir_score_history_projection_tests PRIVATE
+        target_link_libraries(ir_score_import_projection_tests PRIVATE
             SDL2::SDL2
         )
     elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(ir_score_history_projection_tests PRIVATE
+        target_link_libraries(ir_score_import_projection_tests PRIVATE
             SDL2::SDL2-static
         )
     elseif(TARGET SDL2)
-        target_link_libraries(ir_score_history_projection_tests PRIVATE SDL2)
+        target_link_libraries(ir_score_import_projection_tests PRIVATE SDL2)
     endif()
 
     add_executable(tachi_user_score_parser_tests
@@ -1024,7 +1026,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
-        src/ir/IrScoreHistoryProjection.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/repositories/ChartRepository.cpp
         src/repositories/ChartScanStore.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
@@ -1032,6 +1036,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartRepositoryQueries.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
@@ -2490,7 +2495,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_receipt_models_tests
         ir_remote_score_models_tests
         ir_score_reconciliation_tests
-        ir_score_history_projection_tests
+        ir_score_import_projection_tests
         tachi_user_score_parser_tests
         tachi_batch_manual_tests
         tachi_driver_tests

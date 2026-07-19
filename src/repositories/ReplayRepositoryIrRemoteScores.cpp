@@ -843,7 +843,60 @@ ir::IrRemoteSnapshotApplyOutcome ReplayRepository::ApplyIrRemoteSnapshot(
       .receiptsDeleted = receiptsDeleted,
       .outboxRowsSettled = outboxRowsSettled,
       .ambiguousReceiptsPreserved = *ambiguous,
+      .syncGeneration = *generation,
   };
+}
+
+ir::IrRemoteScoreMirrorStateOutcome
+ReplayRepository::LoadIrRemoteScoreMirrorState(
+    std::string_view providerId, std::string_view serverOrigin) {
+  if (!validOriginIdentity(providerId, serverOrigin)) {
+    return {.status = ir::IrRemoteScoreMirrorStateOutcome::Status::Invalid,
+            .diagnostic = "IR remote score mirror identity is invalid"};
+  }
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {
+        .status = ir::IrRemoteScoreMirrorStateOutcome::Status::StorageFailure,
+        .diagnostic = "replay storage is unavailable"};
+  }
+
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "SELECT COUNT(*), COALESCE(MIN(sync_generation),0), "
+      "COALESCE(MAX(sync_generation),0) FROM ir_remote_scores WHERE "
+      "provider_id=? AND server_origin=?";
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      !bindSqliteText(statement.get(), 1, std::string(providerId)) ||
+      !bindSqliteText(statement.get(), 2, std::string(serverOrigin)) ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      !columnIs(statement.get(), 0, SQLITE_INTEGER) ||
+      !columnIs(statement.get(), 1, SQLITE_INTEGER) ||
+      !columnIs(statement.get(), 2, SQLITE_INTEGER)) {
+    return {
+        .status = ir::IrRemoteScoreMirrorStateOutcome::Status::StorageFailure,
+        .diagnostic = "could not read IR remote score mirror state"};
+  }
+  const sqlite3_int64 count = sqlite3_column_int64(statement.get(), 0);
+  const sqlite3_int64 minimum = sqlite3_column_int64(statement.get(), 1);
+  const sqlite3_int64 maximum = sqlite3_column_int64(statement.get(), 2);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE || count < 0 ||
+      static_cast<std::uint64_t>(count) >
+          std::numeric_limits<std::size_t>::max()) {
+    return {
+        .status = ir::IrRemoteScoreMirrorStateOutcome::Status::StorageFailure,
+        .diagnostic = "IR remote score mirror state is out of range"};
+  }
+  if (count > 0 && (minimum <= 0 || minimum != maximum)) {
+    return {.status = ir::IrRemoteScoreMirrorStateOutcome::Status::Invalid,
+            .diagnostic =
+                "IR remote score mirror has inconsistent generations"};
+  }
+  return {.status = ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded,
+          .syncGeneration = count == 0 ? 0 : maximum,
+          .scoreCount = static_cast<std::size_t>(count)};
 }
 
 ir::IrRemoteScoreReadOutcome

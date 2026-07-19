@@ -634,6 +634,27 @@ struct IrSubmissionService::Impl {
       return;
     }
 
+    if (options.remoteSnapshotApplied) {
+      std::string projectionDiagnostic;
+      bool projected = false;
+      try {
+        projected = options.remoteSnapshotApplied(
+            command.profileId, command.providerId, command.serverOrigin,
+            applied.syncGeneration, mutation.scores, projectionDiagnostic);
+      } catch (...) {
+        projectionDiagnostic =
+            "Synchronized IR scores could not be imported";
+      }
+      if (!projected) {
+        failReconciliation(
+            command,
+            projectionDiagnostic.empty()
+                ? "Synchronized IR scores could not be imported"
+                : sanitizeDiagnostic(projectionDiagnostic));
+        return;
+      }
+    }
+
     IrActiveProfileConfig refreshedProfile;
     {
       std::lock_guard lock(mutex);

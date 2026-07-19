@@ -543,6 +543,31 @@ public:
       std::lock_guard lock(successMutex);
       credentialChanges.emplace_back(providerId);
     };
+    options.remoteSnapshotApplied =
+        [this](std::string_view profileId, std::string_view providerId,
+               std::string_view origin, std::int64_t syncGeneration,
+               std::span<const ir::IrRemoteScore> scores,
+               std::string &diagnostic) {
+          const auto mirror = repository.ListIrRemoteScores(providerId, origin);
+          std::lock_guard lock(projectionMutex);
+          ++projectionCalls;
+          projectedProfile = profileId;
+          projectedProvider = providerId;
+          projectedOrigin = origin;
+          projectedGeneration = syncGeneration;
+          projectedScoreIds.clear();
+          for (const auto &score : scores) {
+            projectedScoreIds.push_back(score.remoteScoreId);
+          }
+          projectionSawCommittedMirror =
+              mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+              mirror.scores.size() == scores.size();
+          if (!projectionShouldSucceed) {
+            diagnostic = "could not project synchronized scores";
+            return false;
+          }
+          return true;
+        };
     service = std::make_unique<ir::IrSubmissionService>(
         repository, registry, http, std::move(options));
   }
@@ -651,6 +676,15 @@ public:
   std::vector<std::string> credentialChanges;
   std::function<void()> wakeHook;
   std::function<void()> monotonicHook;
+  mutable std::mutex projectionMutex;
+  bool projectionShouldSucceed = true;
+  int projectionCalls = 0;
+  std::string projectedProfile;
+  std::string projectedProvider;
+  std::string projectedOrigin;
+  std::int64_t projectedGeneration = 0;
+  std::vector<std::string> projectedScoreIds;
+  bool projectionSawCommittedMirror = false;
   std::unique_ptr<ir::IrSubmissionService> service;
 };
 
@@ -1952,6 +1986,80 @@ void testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot() {
          "one atomic apply publishes its remote and receipt mutation counts");
   expect(generation == harness.now.load(),
          "fresh reconciliation invokes atomic snapshot apply exactly once");
+  {
+    std::lock_guard lock(harness.projectionMutex);
+    expect(harness.projectionCalls == 1 &&
+               harness.projectedProfile == "profile-a" &&
+               harness.projectedProvider == "fake" &&
+               harness.projectedOrigin == "https://boku.tachi.ac" &&
+               harness.projectedGeneration == generation &&
+               harness.projectedScoreIds ==
+                   std::vector<std::string>{"remote-score-1"} &&
+               harness.projectionSawCommittedMirror,
+           "successful reconciliation projects the committed mirror once");
+  }
+}
+
+void testProjectionFailurePublishesFailedButKeepsCommittedMirror() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  harness.projectionShouldSucceed = false;
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{
+          .scores = {remoteScore("projection-failure-score")}},
+  });
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Failed),
+         "score projection failure publishes failed reconciliation");
+  const auto failed = harness.service->reconciliationStatus("fake");
+  const auto mirror = harness.repository.ListIrRemoteScores(
+      "fake", "https://boku.tachi.ac");
+  expect(failed.diagnostic == "could not project synchronized scores" &&
+             mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+             mirror.scores.size() == 1 &&
+             mirror.scores.front().remoteScoreId ==
+                 "projection-failure-score",
+         "projection failure leaves the durable mirror available for retry");
+  std::lock_guard lock(harness.projectionMutex);
+  expect(harness.projectionCalls == 1 &&
+             harness.projectionSawCommittedMirror,
+         "failing projection observes the committed mirror exactly once");
+}
+
+void testEmptyReconciliationStillProjectsDeletionSnapshot() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{},
+  });
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Succeeded),
+         "empty remote snapshot reconciles successfully");
+  std::lock_guard lock(harness.projectionMutex);
+  expect(harness.projectionCalls == 1 &&
+             harness.projectedScoreIds.empty() &&
+             harness.projectedGeneration > 0 &&
+             harness.projectionSawCommittedMirror,
+         "empty snapshot reaches projection to delete stale imported rows");
 }
 
 void testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin() {
@@ -2234,6 +2342,8 @@ int main() {
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
   testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();
+  testProjectionFailurePublishesFailedButKeepsCommittedMirror();
+  testEmptyReconciliationStillProjectsDeletionSnapshot();
   testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin();
   testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot();
   testReconciliationRefreshesSettledOutboxSnapshots();

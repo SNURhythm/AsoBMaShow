@@ -11,7 +11,6 @@
 #include "../ReplayVideoExporter.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
-#include "../ir/IrScoreHistoryProjection.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
 #include "../utils/Debouncer.h"
@@ -230,29 +229,16 @@ private:
     mutable std::deque<int> pageOrder;
     mutable ChartMetaRecord fallbackRecord;
     std::optional<ChartMetaRecord> leadingRecord;
-    std::vector<ChartMetaRecord> ownedRecords;
-    const std::vector<ChartMetaRecord> *referencedRecords = nullptr;
-    std::vector<std::size_t> referencedIndices;
-
     void reset(ChartRepository::Session &chartSession,
                const ChartMetaQuery &chartQuery, int count,
                std::optional<ChartMetaRecord> leading = std::nullopt);
-    void resetOwned(std::vector<ChartMetaRecord> records,
-                    const ChartMetaQuery &chartQuery,
-                    std::optional<ChartMetaRecord> leading = std::nullopt);
-    void resetReferenced(
-        const std::vector<ChartMetaRecord> &records,
-        std::vector<std::size_t> indices, const ChartMetaQuery &chartQuery,
-        std::optional<ChartMetaRecord> leading = std::nullopt);
     void releasePages();
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
-    [[nodiscard]] int findPath(const std::filesystem::path &path) const;
 
   private:
     void touchPage(int pageIndex) const;
   };
-  ir::ProjectedChartMetadataCache projectedChartMetadataCache;
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
@@ -478,9 +464,8 @@ private:
   ScoreClearRankCache scoreClearRanks;
   ScoreBestCache scoreBestScores;
   std::uint64_t scoreClearRanksRevision = 0;
-  std::uint64_t projectedIrReconciliationRevision = 0;
-  std::uint64_t projectedIrAccountEvidenceRevision = 0;
-  std::string publishedIrScoreProjectionDiagnostic;
+  std::uint64_t observedIrReconciliationRevision = 0;
+  std::uint64_t observedIrAccountEvidenceRevision = 0;
   std::uint64_t libraryRevision = 0;
   chart_library::FolderClearDataByLongNoteMode folderClearData;
   struct CourseValidationCache {
@@ -592,14 +577,11 @@ private:
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
   void reloadChartList(bool preserveViewState = false);
   std::optional<std::string> reloadScoreClearRanks();
-  bool projectActiveIrScoreMirror(ScoreClearRankCache &clearRanks,
-                                  ScoreBestCache &bestScores);
-  void publishIrScoreProjectionDiagnostic(std::string_view diagnostic);
   std::optional<std::string> prepareScoreQueryDatabase();
   std::optional<std::string> refreshScoreClearRankViews();
   void refreshLongNoteModeClearRankViews();
   void refreshScoreClearRanksIfNeeded();
-  void refreshIrScoreProjectionIfNeeded();
+  void refreshIrRecordListIfNeeded();
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
   void startLibraryRebuild();

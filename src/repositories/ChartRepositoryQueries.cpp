@@ -2018,8 +2018,8 @@ void addFolderChartForAllLongNoteModes(
     std::unordered_map<std::string, FolderClearAggregateByLongNoteMode>
         &aggregates,
     const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
-    std::string_view sha256, std::string_view md5, int chartLongNoteMode,
-    int totalLongNotes, int totalBackSpinNotes) {
+    std::string_view sha256, int chartLongNoteMode, int totalLongNotes,
+    int totalBackSpinNotes) {
   auto &aggregateByMode = aggregates[folderKey];
   for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
     auto &aggregate =
@@ -2030,22 +2030,21 @@ void addFolderChartForAllLongNoteModes(
     const int longNoteMode = scoreLongNoteModeForClearLamp(
         chartLongNoteMode, totalLongNotes, totalBackSpinNotes,
         selectedLongNoteMode);
-    aggregate.addChart(scoreRanks.bestRankForStoredIdentity(
-        sha256, md5, longNoteMode));
+    aggregate.addChart(scoreRanks.bestRankForStoredKey(sha256, longNoteMode));
   }
 }
 
 void addClearMarkCountsForAllLongNoteModes(
     std::array<FolderClearMarkCounts, 4> &countsByMode,
     const ScoreClearRankCache &scoreRanks, const std::string &folderKey,
-    std::string_view sha256, std::string_view md5, int chartLongNoteMode,
-    int totalLongNotes, int totalBackSpinNotes) {
+    std::string_view sha256, int chartLongNoteMode, int totalLongNotes,
+    int totalBackSpinNotes) {
   for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
     const int longNoteMode = scoreLongNoteModeForClearLamp(
         chartLongNoteMode, totalLongNotes, totalBackSpinNotes,
         selectedLongNoteMode);
-    const int clearRank = scoreRanks.bestRankForStoredIdentity(
-        sha256, md5, longNoteMode);
+    const int clearRank =
+        scoreRanks.bestRankForStoredKey(sha256, longNoteMode);
     addClearMarkCount(
         countsByMode[static_cast<std::size_t>(selectedLongNoteMode)], folderKey,
         clearRank);
@@ -2073,20 +2072,19 @@ LoadFolderClearDataByLongNoteMode(
     }
   };
 
-  runQuery("SELECT cm.sha256, cm.md5, cm.ln_mode, "
+  runQuery("SELECT cm.sha256, cm.ln_mode, "
            "cm.total_long_notes, cm.total_backspin_notes "
            "FROM chart_meta cm WHERE " +
                preferredChartPredicate("cm"),
            [&](sqlite3_stmt *row) {
              addFolderChartForAllLongNoteModes(
                  aggregates, projectedChartRanks, "all", columnText(row, 0),
-                 columnText(row, 1), sqlite3_column_int(row, 2),
-                 sqlite3_column_int(row, 3), sqlite3_column_int(row, 4));
+                 sqlite3_column_int(row, 1), sqlite3_column_int(row, 2),
+                 sqlite3_column_int(row, 3));
              addClearMarkCountsForAllLongNoteModes(
                  data.clearMarkCounts, projectedChartRanks, "all",
-                 columnText(row, 0), columnText(row, 1),
-                 sqlite3_column_int(row, 2), sqlite3_column_int(row, 3),
-                 sqlite3_column_int(row, 4));
+                 columnText(row, 0), sqlite3_column_int(row, 1),
+                 sqlite3_column_int(row, 2), sqlite3_column_int(row, 3));
            });
 
   int currentTableId = 0;
@@ -2096,7 +2094,6 @@ LoadFolderClearDataByLongNoteMode(
   runQuery(
       "SELECT dte.table_id, dte.level, "
       "COALESCE(NULLIF(dte.sha256, ''), cm.sha256, ''), "
-      "COALESCE(NULLIF(dte.md5, ''), cm.md5, ''), "
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_table_entries dte "
@@ -2120,22 +2117,20 @@ LoadFolderClearDataByLongNoteMode(
 
         addFolderChartForAllLongNoteModes(
             aggregates, projectedChartRanks, currentTableKey,
-            columnText(row, 2), columnText(row, 3), sqlite3_column_int(row, 4),
-            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
+            columnText(row, 2), sqlite3_column_int(row, 3),
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
         addFolderChartForAllLongNoteModes(
             aggregates, projectedChartRanks, currentLevelKey,
-            columnText(row, 2), columnText(row, 3), sqlite3_column_int(row, 4),
-            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
+            columnText(row, 2), sqlite3_column_int(row, 3),
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
         addClearMarkCountsForAllLongNoteModes(
             data.clearMarkCounts, projectedChartRanks, currentTableKey,
-            columnText(row, 2), columnText(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6));
+            columnText(row, 2), sqlite3_column_int(row, 3),
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
         addClearMarkCountsForAllLongNoteModes(
             data.clearMarkCounts, projectedChartRanks, currentLevelKey,
-            columnText(row, 2), columnText(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6));
+            columnText(row, 2), sqlite3_column_int(row, 3),
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
       });
 
   int currentCourseId = 0;
@@ -2148,7 +2143,6 @@ LoadFolderClearDataByLongNoteMode(
   runQuery(
       "SELECT dc.id, dc.table_id, dc.group_name, "
       "COALESCE(NULLIF(dce.sha256, ''), cm.sha256, ''), "
-      "COALESCE(NULLIF(dce.md5, ''), cm.md5, ''), "
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
       "COALESCE(cm.total_backspin_notes, 0) "
       "FROM difficulty_courses dc "
@@ -2179,20 +2173,20 @@ LoadFolderClearDataByLongNoteMode(
 
         addFolderChartForAllLongNoteModes(
             aggregates, localCourseRanks, "courses", columnText(row, 3),
-            columnText(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
+            sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
             aggregates, localCourseRanks, currentCourseTableKey,
-            columnText(row, 3), columnText(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
+            columnText(row, 3), sqlite3_column_int(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
             aggregates, localCourseRanks, currentCourseGroupKey,
-            columnText(row, 3), columnText(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
+            columnText(row, 3), sqlite3_column_int(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
             aggregates, localCourseRanks, currentCourseKey, columnText(row, 3),
-            columnText(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
+            sqlite3_column_int(row, 6));
       });
 
   for (const auto &[key, aggregateByMode] : aggregates) {

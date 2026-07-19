@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -94,6 +95,11 @@ struct IrSubmissionServiceOptions {
       submissionSucceeded;
   std::function<void(std::string_view profileId, std::string_view providerId)>
       credentialChanged;
+  std::function<bool(
+      std::string_view profileId, std::string_view providerId,
+      std::string_view serverOrigin, std::int64_t syncGeneration,
+      std::span<const IrRemoteScore> scores, std::string &diagnostic)>
+      remoteSnapshotApplied;
 };
 
 class IrSubmissionService {

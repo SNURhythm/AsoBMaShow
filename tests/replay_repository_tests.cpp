@@ -6033,7 +6033,14 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
              ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
          initialOutcome.remoteScoreCount == 2 &&
          initialOutcome.remoteScoresAdded == 2 &&
-         initialOutcome.remoteScoresRemoved == 0);
+         initialOutcome.remoteScoresRemoved == 0 &&
+         initialOutcome.syncGeneration > 0);
+  const auto initialState = helper.LoadIrRemoteScoreMirrorState(
+      "tachi", "https://boku.tachi.ac");
+  assert(initialState.status ==
+             ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded &&
+         initialState.scoreCount == 2 &&
+         initialState.syncGeneration == initialOutcome.syncGeneration);
 
   auto otherOriginScore =
       sampleIrRemoteScore("other-origin-score", 'e', 'f');
@@ -6100,7 +6107,15 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
          applied.remoteScoreCount == 2 && applied.remoteScoresAdded == 1 &&
          applied.remoteScoresRemoved == 1 && applied.receiptsUpserted == 1 &&
          applied.receiptsDeleted == 1 && applied.outboxRowsSettled == 2 &&
-         applied.ambiguousReceiptsPreserved == 1);
+         applied.ambiguousReceiptsPreserved == 1 &&
+         applied.syncGeneration > initialOutcome.syncGeneration);
+
+  const auto replacedState = helper.LoadIrRemoteScoreMirrorState(
+      "tachi", "https://boku.tachi.ac");
+  assert(replacedState.status ==
+             ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded &&
+         replacedState.scoreCount == 2 &&
+         replacedState.syncGeneration == applied.syncGeneration);
 
   const auto listed = helper.ListIrRemoteScores(
       "tachi", "https://boku.tachi.ac");

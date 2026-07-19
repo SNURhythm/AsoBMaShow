@@ -5,7 +5,6 @@ target_sources(main PRIVATE
     IrOutboxModels.cpp
     IrReceiptModels.cpp
     IrRemoteScoreModels.cpp
-    IrScoreHistoryProjection.cpp
     IrScoreReconciliation.cpp
     IrProfileSettings.cpp
     IrRankingModal.cpp

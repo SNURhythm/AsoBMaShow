@@ -43,6 +43,16 @@ struct IrRemoteSnapshotApplyOutcome {
   int receiptsDeleted = 0;
   int outboxRowsSettled = 0;
   int ambiguousReceiptsPreserved = 0;
+  std::int64_t syncGeneration = 0;
+  std::string diagnostic;
+};
+
+struct IrRemoteScoreMirrorStateOutcome {
+  enum class Status { Loaded, Invalid, StorageFailure };
+
+  Status status = Status::StorageFailure;
+  std::int64_t syncGeneration = 0;
+  std::size_t scoreCount = 0;
   std::string diagnostic;
 };
 
@@ -272,6 +282,8 @@ public:
   ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);
+  ir::IrRemoteScoreMirrorStateOutcome LoadIrRemoteScoreMirrorState(
+      std::string_view providerId, std::string_view serverOrigin);
   ir::IrRemoteScoreReadOutcome ListIrRemoteScoresForChart(
       std::string_view providerId, std::string_view serverOrigin,
       std::string_view chartMd5, std::string_view chartSha256);
