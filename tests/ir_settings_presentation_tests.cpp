@@ -1,5 +1,6 @@
 #include "ir/IrSettingsPresentation.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -87,6 +88,140 @@ void testReadOnlyPresentationHidesSubmissionControls() {
   REQUIRE(!presentation.canRetryAll);
   REQUIRE(!presentation.canDiscard);
   REQUIRE(presentation.credentialLabel == "No API key saved");
+}
+
+void testRecordSyncRequiresCompleteActiveConfiguration() {
+  ir::IrSettingsPresentationInput input{
+      .providerId = "tachi",
+      .displayName = "Bokutachi",
+      .capabilities = {.scoreReconciliation = true},
+      .settings = {.enabled = true, .serverOrigin = "https://boku.tachi.ac"},
+      .hasCredential = true,
+      .serviceActive = true,
+  };
+
+  const auto available = ir::makeIrSettingsPresentation(input);
+  REQUIRE(available.showRecordSync);
+  REQUIRE(available.canSyncRecords);
+  REQUIRE(available.recordSyncButtonLabel == "Sync IR records");
+  REQUIRE(available.recordSyncHelperText ==
+          "Uses exactly two requests (7K, then 14K) to import remote score "
+          "history and reconcile upload receipts atomically.");
+
+  input.capabilities.scoreReconciliation = false;
+  const auto unsupported = ir::makeIrSettingsPresentation(input);
+  REQUIRE(!unsupported.showRecordSync);
+  REQUIRE(!unsupported.canSyncRecords);
+
+  input.capabilities.scoreReconciliation = true;
+  input.settings.enabled = false;
+  const auto disabled = ir::makeIrSettingsPresentation(input);
+  REQUIRE(!disabled.showRecordSync);
+  REQUIRE(!disabled.canSyncRecords);
+
+  input.settings.enabled = true;
+  input.hasCredential = false;
+  const auto uncredentialed = ir::makeIrSettingsPresentation(input);
+  REQUIRE(!uncredentialed.showRecordSync);
+  REQUIRE(!uncredentialed.canSyncRecords);
+
+  input.hasCredential = true;
+  input.serviceActive = false;
+  const auto inactive = ir::makeIrSettingsPresentation(input);
+  REQUIRE(!inactive.showRecordSync);
+  REQUIRE(!inactive.canSyncRecords);
+}
+
+ir::IrSettingsPresentationInput recordSyncInput(
+    ir::IrReconciliationPhase phase,
+    std::chrono::steady_clock::time_point now =
+        std::chrono::steady_clock::time_point{std::chrono::seconds{100}}) {
+  return {
+      .providerId = "tachi",
+      .displayName = "Bokutachi",
+      .capabilities = {.scoreReconciliation = true},
+      .settings = {.enabled = true, .serverOrigin = "https://boku.tachi.ac"},
+      .hasCredential = true,
+      .serviceActive = true,
+      .reconciliationStatus = {.revision = 7, .phase = phase},
+      .now = now,
+  };
+}
+
+void testRecordSyncProjectsEveryPhaseAndBoundedMutationSummary() {
+  const auto idle = ir::makeIrSettingsPresentation(
+      recordSyncInput(ir::IrReconciliationPhase::Idle));
+  REQUIRE(idle.canSyncRecords);
+  REQUIRE(idle.recordSyncStatusText ==
+          "Ready to import remote records and reconcile upload receipts.");
+
+  const auto queued = ir::makeIrSettingsPresentation(
+      recordSyncInput(ir::IrReconciliationPhase::Queued));
+  REQUIRE(!queued.canSyncRecords);
+  REQUIRE(queued.recordSyncStatusText ==
+          "Sync queued. Waiting for active uploads to finish.");
+
+  const auto fetching7K = ir::makeIrSettingsPresentation(
+      recordSyncInput(ir::IrReconciliationPhase::Fetching7K));
+  REQUIRE(!fetching7K.canSyncRecords);
+  REQUIRE(fetching7K.recordSyncStatusText ==
+          "Request 1 of 2: fetching 7K records.");
+
+  const auto fetching14K = ir::makeIrSettingsPresentation(
+      recordSyncInput(ir::IrReconciliationPhase::Fetching14K));
+  REQUIRE(!fetching14K.canSyncRecords);
+  REQUIRE(fetching14K.recordSyncStatusText ==
+          "Request 2 of 2: fetching 14K records.");
+
+  const auto applying = ir::makeIrSettingsPresentation(
+      recordSyncInput(ir::IrReconciliationPhase::Applying));
+  REQUIRE(!applying.canSyncRecords);
+  REQUIRE(applying.recordSyncStatusText ==
+          "Both requests validated. Applying records and receipts atomically.");
+
+  auto succeededInput = recordSyncInput(ir::IrReconciliationPhase::Succeeded);
+  succeededInput.reconciliationStatus.remoteScores = 20;
+  succeededInput.reconciliationStatus.remoteScoresAdded = 3;
+  succeededInput.reconciliationStatus.remoteScoresRemoved = 2;
+  succeededInput.reconciliationStatus.receiptsUpserted = 4;
+  succeededInput.reconciliationStatus.receiptsDeleted = 1;
+  succeededInput.reconciliationStatus.ambiguousReceiptsPreserved = 5;
+  succeededInput.reconciliationStatus.outboxRowsSettled = 6;
+  succeededInput.reconciliationStatus.nextAllowedAt =
+      succeededInput.now + std::chrono::seconds{42};
+  const auto succeeded = ir::makeIrSettingsPresentation(succeededInput);
+  REQUIRE(!succeeded.canSyncRecords);
+  REQUIRE(succeeded.recordSyncStatusText ==
+          "Sync complete. Records: 20 total, 3 added, 2 removed. Receipts: 4 "
+          "confirmed, 1 removed, 5 ambiguous. Settled outbox rows: 6.");
+  REQUIRE(succeeded.recordSyncCooldownText == "Available again in 42 seconds.");
+
+  auto failedInput = recordSyncInput(ir::IrReconciliationPhase::Failed);
+  failedInput.reconciliationStatus.diagnostic = std::string(2048, 'x');
+  const auto failed = ir::makeIrSettingsPresentation(failedInput);
+  REQUIRE(failed.recordSyncStatusIsError);
+  REQUIRE(failed.recordSyncStatusText.starts_with("Sync failed: "));
+  REQUIRE(failed.recordSyncStatusText.ends_with(
+      " Existing records and receipts were left unchanged."));
+  REQUIRE(failed.recordSyncStatusText.size() <=
+          ir::kMaximumRecordSyncStatusBytes);
+  REQUIRE(failed.recordSyncStatusText.find("private-api-key") ==
+          std::string::npos);
+
+  auto cooldownInput = recordSyncInput(ir::IrReconciliationPhase::Cooldown);
+  cooldownInput.reconciliationStatus.nextAllowedAt =
+      cooldownInput.now + std::chrono::milliseconds{1501};
+  const auto cooldown = ir::makeIrSettingsPresentation(cooldownInput);
+  REQUIRE(!cooldown.canSyncRecords);
+  REQUIRE(cooldown.recordSyncStatusText == "Sync cooldown is active.");
+  REQUIRE(cooldown.recordSyncCooldownText == "Available again in 2 seconds.");
+
+  cooldownInput.now = *cooldownInput.reconciliationStatus.nextAllowedAt;
+  const auto cooldownExpired = ir::makeIrSettingsPresentation(cooldownInput);
+  REQUIRE(cooldownExpired.canSyncRecords);
+  REQUIRE(cooldownExpired.recordSyncStatusText ==
+          "Sync cooldown complete. Record sync is available.");
+  REQUIRE(cooldownExpired.recordSyncCooldownText.empty());
 }
 
 struct FakeActions {
@@ -389,13 +524,31 @@ void testQueueActionsAreCapabilityGatedAndFailureSafe() {
   REQUIRE(readOnly.discardCalls == 0);
 }
 
+void testActionModelObservesReconciliationRevisionAndCooldownChanges() {
+  FakeActions fake;
+  ir::IrSettingsActionModel model("tachi", {.scoreReconciliation = true},
+                                  initialSettings(), true, fake.dependencies());
+
+  REQUIRE(model.observeReconciliationRevision(12));
+  REQUIRE(!model.observeReconciliationRevision(12));
+  REQUIRE(model.observeReconciliationRevision(13));
+
+  REQUIRE(model.observeReconciliationCooldown(true));
+  REQUIRE(!model.observeReconciliationCooldown(true));
+  REQUIRE(model.observeReconciliationCooldown(false));
+  REQUIRE(!model.observeReconciliationCooldown(false));
+}
+
 } // namespace
 
 int main() {
   testBokutachiPresentationExposesWriteControlsWithoutSecrets();
   testReadOnlyPresentationHidesSubmissionControls();
+  testRecordSyncRequiresCompleteActiveConfiguration();
+  testRecordSyncProjectsEveryPhaseAndBoundedMutationSummary();
   testSettingsActionsPublishOnlyAfterDurableStore();
   testCredentialActionsNeverRetainKeyAndPublishAfterStore();
   testQueueActionsAreCapabilityGatedAndFailureSafe();
+  testActionModelObservesReconciliationRevisionAndCooldownChanges();
   return 0;
 }

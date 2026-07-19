@@ -3,7 +3,9 @@
 #include "IrDriver.h"
 #include "IrOutboxModels.h"
 #include "IrProfileSettings.h"
+#include "IrSubmissionService.h"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -11,13 +13,18 @@
 
 namespace ir {
 
+inline constexpr std::size_t kMaximumRecordSyncStatusBytes = 640;
+
 struct IrSettingsPresentationInput {
   std::string providerId;
   std::string displayName;
   IrDriverCapabilities capabilities;
   IrProviderSettings settings;
   bool hasCredential = false;
+  bool serviceActive = false;
   IrOutboxCounts counts;
+  IrReconciliationStatusSnapshot reconciliationStatus;
+  std::chrono::steady_clock::time_point now{};
 };
 
 struct IrSettingsPresentation {
@@ -31,9 +38,16 @@ struct IrSettingsPresentation {
   bool showQueueActions = false;
   bool canRetryAll = false;
   bool canDiscard = false;
+  bool showRecordSync = false;
+  bool canSyncRecords = false;
   bool insecureServerOrigin = false;
   std::string serverOrigin;
   std::string credentialLabel;
+  std::string recordSyncButtonLabel;
+  std::string recordSyncHelperText;
+  std::string recordSyncStatusText;
+  std::string recordSyncCooldownText;
+  bool recordSyncStatusIsError = false;
   IrOutboxCounts counts;
 };
 
@@ -57,8 +71,7 @@ struct IrSettingsActionDependencies {
       storeSettings;
   std::function<void(const IrProviderSettings &candidate)> settingsCommitted;
   std::function<bool(std::string &diagnostic)> quiesceRemoteWork;
-  std::function<bool(std::string_view providerId,
-                     std::string_view serverOrigin,
+  std::function<bool(std::string_view providerId, std::string_view serverOrigin,
                      std::string &diagnostic)>
       invalidateRemoteIdentity;
   std::function<bool(std::string_view apiKey, std::string &diagnostic)>
@@ -79,6 +92,9 @@ public:
 
   [[nodiscard]] const IrProviderSettings &settings() const noexcept;
   [[nodiscard]] bool hasCredential() const noexcept;
+  [[nodiscard]] bool
+  observeReconciliationRevision(std::uint64_t revision) noexcept;
+  [[nodiscard]] bool observeReconciliationCooldown(bool active) noexcept;
 
   [[nodiscard]] IrSettingsActionResult setEnabled(bool enabled);
   [[nodiscard]] IrSettingsActionResult setAutoSubmit(bool autoSubmit);
@@ -99,6 +115,10 @@ private:
   IrDriverCapabilities capabilities_;
   IrProviderSettings settings_;
   bool hasCredential_ = false;
+  bool hasObservedReconciliationRevision_ = false;
+  std::uint64_t observedReconciliationRevision_ = 0;
+  bool hasObservedReconciliationCooldown_ = false;
+  bool observedReconciliationCooldownActive_ = false;
   IrSettingsActionDependencies dependencies_;
 };
 

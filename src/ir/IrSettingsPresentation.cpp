@@ -1,5 +1,8 @@
 #include "IrSettingsPresentation.h"
 
+#include <algorithm>
+#include <chrono>
+#include <string>
 #include <utility>
 
 namespace ir {
@@ -16,6 +19,74 @@ IrSettingsActionResult mutationResult(const IrOutboxMutationOutcome &outcome) {
   }
   return {.status = IrSettingsActionResult::Status::StorageFailure,
           .diagnostic = sanitizeDiagnostic(outcome.diagnostic)};
+}
+
+bool recordSyncIsRunning(IrReconciliationPhase phase) noexcept {
+  return phase == IrReconciliationPhase::Queued ||
+         phase == IrReconciliationPhase::Fetching7K ||
+         phase == IrReconciliationPhase::Fetching14K ||
+         phase == IrReconciliationPhase::Applying;
+}
+
+std::string
+recordSyncMutationSummary(const IrReconciliationStatusSnapshot &status) {
+  return "Sync complete. Records: " +
+         std::to_string(std::max(0, status.remoteScores)) + " total, " +
+         std::to_string(std::max(0, status.remoteScoresAdded)) + " added, " +
+         std::to_string(std::max(0, status.remoteScoresRemoved)) +
+         " removed. Receipts: " +
+         std::to_string(std::max(0, status.receiptsUpserted)) + " confirmed, " +
+         std::to_string(std::max(0, status.receiptsDeleted)) + " removed, " +
+         std::to_string(std::max(0, status.ambiguousReceiptsPreserved)) +
+         " ambiguous. Settled outbox rows: " +
+         std::to_string(std::max(0, status.outboxRowsSettled)) + ".";
+}
+
+std::string recordSyncFailureSummary(std::string_view diagnostic) {
+  const std::string bounded = sanitizeDiagnostic(diagnostic);
+  if (bounded.empty()) {
+    return "Sync failed. Existing records and receipts were left unchanged.";
+  }
+  return "Sync failed: " + bounded +
+         " Existing records and receipts were left unchanged.";
+}
+
+std::string recordSyncStatusText(const IrReconciliationStatusSnapshot &status,
+                                 bool cooldownActive) {
+  switch (status.phase) {
+  case IrReconciliationPhase::Idle:
+    return "Ready to import remote records and reconcile upload receipts.";
+  case IrReconciliationPhase::Queued:
+    return "Sync queued. Waiting for active uploads to finish.";
+  case IrReconciliationPhase::Fetching7K:
+    return "Request 1 of 2: fetching 7K records.";
+  case IrReconciliationPhase::Fetching14K:
+    return "Request 2 of 2: fetching 14K records.";
+  case IrReconciliationPhase::Applying:
+    return "Both requests validated. Applying records and receipts atomically.";
+  case IrReconciliationPhase::Succeeded:
+    return recordSyncMutationSummary(status);
+  case IrReconciliationPhase::Failed:
+    return recordSyncFailureSummary(status.diagnostic);
+  case IrReconciliationPhase::Cooldown:
+    return cooldownActive ? "Sync cooldown is active."
+                          : "Sync cooldown complete. Record sync is available.";
+  }
+  return "Record sync status is unavailable.";
+}
+
+std::string recordSyncCooldownText(const IrReconciliationStatusSnapshot &status,
+                                   std::chrono::steady_clock::time_point now) {
+  if (!status.nextAllowedAt || now >= *status.nextAllowedAt) {
+    return {};
+  }
+  const auto remaining = *status.nextAllowedAt - now;
+  auto seconds = std::chrono::duration_cast<std::chrono::seconds>(remaining);
+  if (seconds < remaining) {
+    seconds += std::chrono::seconds{1};
+  }
+  return "Available again in " + std::to_string(seconds.count()) +
+         (seconds == std::chrono::seconds{1} ? " second." : " seconds.");
 }
 
 class RemoteWorkReactivationGuard {
@@ -60,6 +131,19 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
       !input.capabilities.readOnly && input.capabilities.scoreSubmission;
   const bool supportsQueue =
       supportsSubmission && input.capabilities.deferredSubmission;
+  const bool supportsRecordSync = input.capabilities.scoreReconciliation &&
+                                  input.settings.enabled &&
+                                  input.hasCredential && input.serviceActive;
+  const bool cooldownActive =
+      input.reconciliationStatus.nextAllowedAt &&
+      input.now < *input.reconciliationStatus.nextAllowedAt;
+  const bool recordSyncRunning =
+      recordSyncIsRunning(input.reconciliationStatus.phase);
+  std::string syncStatus =
+      recordSyncStatusText(input.reconciliationStatus, cooldownActive);
+  if (syncStatus.size() > kMaximumRecordSyncStatusBytes) {
+    syncStatus.resize(kMaximumRecordSyncStatusBytes);
+  }
   return {
       .providerId = std::move(input.providerId),
       .displayName = std::move(input.displayName),
@@ -79,11 +163,23 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
           (input.counts.pending > 0 || input.counts.awaitingRemoteResult > 0 ||
            input.counts.blockedConfiguration > 0 ||
            input.counts.failedPermanent > 0),
+      .showRecordSync = supportsRecordSync,
+      .canSyncRecords =
+          supportsRecordSync && !recordSyncRunning && !cooldownActive,
       .insecureServerOrigin =
           input.settings.serverOrigin.starts_with("http://"),
       .serverOrigin = std::move(input.settings.serverOrigin),
       .credentialLabel =
           input.hasCredential ? "API key saved (••••••••)" : "No API key saved",
+      .recordSyncButtonLabel = "Sync IR records",
+      .recordSyncHelperText =
+          "Uses exactly two requests (7K, then 14K) to import remote score "
+          "history and reconcile upload receipts atomically.",
+      .recordSyncStatusText = std::move(syncStatus),
+      .recordSyncCooldownText =
+          recordSyncCooldownText(input.reconciliationStatus, input.now),
+      .recordSyncStatusIsError =
+          input.reconciliationStatus.phase == IrReconciliationPhase::Failed,
       .counts = std::move(input.counts),
   };
 }
@@ -107,6 +203,24 @@ const IrProviderSettings &IrSettingsActionModel::settings() const noexcept {
 
 bool IrSettingsActionModel::hasCredential() const noexcept {
   return hasCredential_;
+}
+
+bool IrSettingsActionModel::observeReconciliationRevision(
+    std::uint64_t revision) noexcept {
+  const bool changed = !hasObservedReconciliationRevision_ ||
+                       revision != observedReconciliationRevision_;
+  hasObservedReconciliationRevision_ = true;
+  observedReconciliationRevision_ = revision;
+  return changed;
+}
+
+bool IrSettingsActionModel::observeReconciliationCooldown(
+    bool active) noexcept {
+  const bool changed = !hasObservedReconciliationCooldown_ ||
+                       active != observedReconciliationCooldownActive_;
+  hasObservedReconciliationCooldown_ = true;
+  observedReconciliationCooldownActive_ = active;
+  return changed;
 }
 
 IrSettingsActionResult IrSettingsActionModel::setEnabled(bool enabled) {

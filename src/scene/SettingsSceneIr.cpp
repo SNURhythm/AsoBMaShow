@@ -6,6 +6,7 @@
 #include "../ir/IrSubmissionService.h"
 
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 
 using namespace settings_scene;
@@ -103,9 +104,15 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   }
 
   ir::IrOutboxCounts counts;
+  ir::IrReconciliationStatusSnapshot reconciliationStatus;
   if (context.irSubmissionService) {
     counts = context.irSubmissionService->counts(kProviderId);
+    reconciliationStatus =
+        context.irSubmissionService->reconciliationStatus(kProviderId);
   }
+  const bool serviceActive =
+      context.irSubmissionService && context.profileReady() &&
+      !context.appInBackground.load(std::memory_order_acquire);
 
   auto committedSettings = [this](const ir::IrProviderSettings &candidate) {
     context.settings.irProviders[std::string(kProviderId)] = candidate;
@@ -151,12 +158,12 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               return false;
             }
             const auto cleared =
-                context.replayRepository.ClearIrSubmissionReceipts(
+                context.replayRepository.ClearIrAccountEvidence(
                     providerId, *normalizedOrigin);
             if (cleared.status != ir::IrOutboxMutationStatus::Updated &&
                 cleared.status != ir::IrOutboxMutationStatus::NotFound) {
               diagnostic = cleared.diagnostic.empty()
-                               ? "IR submission receipts could not be cleared."
+                               ? "IR account evidence could not be cleared."
                                : cleared.diagnostic;
               return false;
             }
@@ -239,6 +246,14 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   irSettingsModel = std::make_unique<ir::IrSettingsActionModel>(
       std::string(kProviderId), capabilities, providerSettings, hasCredential,
       std::move(dependencies));
+  const auto reconciliationNow = std::chrono::steady_clock::now();
+  const bool reconciliationCooldownActive =
+      reconciliationStatus.nextAllowedAt &&
+      reconciliationNow < *reconciliationStatus.nextAllowedAt;
+  (void)irSettingsModel->observeReconciliationRevision(
+      reconciliationStatus.revision);
+  (void)irSettingsModel->observeReconciliationCooldown(
+      reconciliationCooldownActive);
 
   const auto presentation = ir::makeIrSettingsPresentation(
       {.providerId = std::string(kProviderId),
@@ -246,7 +261,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
        .capabilities = capabilities,
        .settings = irSettingsModel->settings(),
        .hasCredential = irSettingsModel->hasCredential(),
-       .counts = counts});
+       .serviceActive = serviceActive,
+       .counts = counts,
+       .reconciliationStatus = reconciliationStatus,
+       .now = reconciliationNow});
 
   auto publishResult = [this](const ir::IrSettingsActionResult &result,
                               std::string successMessage) {
@@ -490,6 +508,40 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
         queueBody, metrics.compact ? 360 : 420, metrics.cardsWidth));
   }
 
+  if (presentation.showRecordSync) {
+    auto *syncBody = new View();
+    syncBody->setFlexDirection(FlexDirection::Column);
+    syncBody->setGap(metrics.compact ? 10.0F : 14.0F);
+    syncBody->addView(makeWrappedText(presentation.recordSyncHelperText,
+                                      metrics.smallTextSize,
+                                      ui_theme::textSecondary()));
+    syncBody->addView(makeWrappedText(
+        presentation.recordSyncStatusText, metrics.bodyTextSize,
+        presentation.recordSyncStatusIsError ? ui_theme::coral()
+                                             : ui_theme::textPrimary()));
+    if (!presentation.recordSyncCooldownText.empty()) {
+      syncBody->addView(makeWrappedText(presentation.recordSyncCooldownText,
+                                        metrics.smallTextSize,
+                                        ui_theme::amber()));
+    }
+    auto *syncRecords = makeIrButton(
+        metrics, presentation.recordSyncButtonLabel, ui_theme::lime());
+    syncRecords->setEnabled(presentation.canSyncRecords);
+    syncRecords->setOnClickListener([this]() {
+      if (!context.irSubmissionService) {
+        return;
+      }
+      (void)context.irSubmissionService->requestUserScoreReconciliation(
+          kProviderId);
+      lastLayoutWidth = -1;
+    });
+    syncBody->addView(syncRecords);
+    column->addView(makeCard(
+        metrics, "Record Safety Sync",
+        "Reconcile the active profile with complete Bokutachi history.",
+        syncBody, metrics.compact ? 240 : 280, metrics.cardsWidth));
+  }
+
   if (!irStatusMessage.empty()) {
     irStatusText =
         makeWrappedText(irStatusMessage, metrics.bodyTextSize,
@@ -524,5 +576,20 @@ void SettingsScene::refreshIrSettingsPresentation() {
   if (irFailedCountText) {
     irFailedCountText->setText("Failed: " +
                                std::to_string(counts.failedPermanent));
+  }
+  const auto status =
+      context.irSubmissionService->reconciliationStatus(kProviderId);
+  if (!irSettingsModel) {
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  const bool cooldownActive =
+      status.nextAllowedAt && now < *status.nextAllowedAt;
+  const bool revisionChanged =
+      irSettingsModel->observeReconciliationRevision(status.revision);
+  const bool cooldownChanged =
+      irSettingsModel->observeReconciliationCooldown(cooldownActive);
+  if (revisionChanged || cooldownChanged) {
+    lastLayoutWidth = -1;
   }
 }

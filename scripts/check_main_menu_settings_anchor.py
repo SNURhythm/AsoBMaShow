@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 
@@ -82,7 +83,7 @@ require_settings_in_order(
     "context.pauseIrProfileServices(diagnostic)",
     ".invalidateRemoteIdentity =",
     "ir::normalizeServerOrigin(serverOrigin)",
-    "context.replayRepository.ClearIrSubmissionReceipts(",
+    "context.replayRepository.ClearIrAccountEvidence(",
     "context.bokutachiCacheStore->clearUserIds(diagnostic)",
     ".replaceCredential =",
     ".removeCredential =",
@@ -93,6 +94,31 @@ require_settings_in_order(
 require(
     settings_source.count("clearUserIds(diagnostic)") == 1,
     "cached Bokutachi identity clearing must live only in remote invalidation",
+)
+require(
+    settings_source.count("ClearIrAccountEvidence(") == 1
+    and "ClearIrSubmissionReceipts(" not in settings_source
+    and "ClearIrRemoteScores(" not in settings_source,
+    "credential changes must use one atomic account-evidence repository call",
+)
+require_settings_in_order(
+    "if (presentation.showQueueActions)",
+    "if (presentation.showRecordSync)",
+    "requestUserScoreReconciliation(",
+)
+record_sync_requests = re.findall(
+    r"requestUserScoreReconciliation\s*\(\s*kProviderId\s*\)",
+    settings_source,
+)
+require(
+    len(record_sync_requests) == 1
+    and "fetchUserScoreSnapshot" not in settings_source
+    and "irHttpClient" not in settings_source,
+    "the Settings sync action must only request serialized service work",
+)
+require_settings_in_order(
+    "context.irSubmissionService->reconciliationStatus(kProviderId)",
+    "irSettingsModel->observeReconciliationRevision(status.revision)",
 )
 
 if failures:
