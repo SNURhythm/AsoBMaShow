@@ -1,17 +1,44 @@
 #include "scene/ResultPresentationModel.h"
 
+#include "rendering/UniformCache.h"
 #include "scene/play/GameplayGaugeTypes.h"
+#include "skin/DefaultSkin.h"
 #include "view/ClearLampColors.h"
+#include "view/TextView.h"
 #include "view/UiTheme.h"
 
+#include <bgfx/bgfx.h>
+
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace rendering {
+bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
+bgfx::VertexLayout PosColorVertex::ms_decl;
+bgfx::VertexLayout PosTexVertex::ms_decl;
+int window_width = design_width;
+int window_height = design_height;
+int render_width = design_width;
+int render_height = design_height;
+float widthScale = 1.0f;
+float heightScale = 1.0f;
+float ui_scale_x = 1.0f;
+float ui_scale_y = 1.0f;
+int ui_offset_x = 0;
+int ui_offset_y = 0;
+int ui_view_width = design_width;
+int ui_view_height = design_height;
+} // namespace rendering
+
+void SceneManager::changeScene(const std::string &, bool) {}
 
 namespace {
 int failures = 0;
@@ -26,6 +53,84 @@ void expect(bool condition, std::string_view message) {
 bool sameColor(const Color &left, const Color &right) {
   return left.r == right.r && left.g == right.g && left.b == right.b &&
          left.a == right.a;
+}
+
+const TextView *textView(View *root, std::string_view name) {
+  return root == nullptr ? nullptr
+                         : dynamic_cast<const TextView *>(
+                               root->findViewByName(std::string(name)));
+}
+
+std::vector<std::string> descendantTexts(const View &root) {
+  std::vector<std::string> result;
+  const auto collect = [&result](const auto &self, const View &view) -> void {
+    if (const auto *text = dynamic_cast<const TextView *>(&view)) {
+      result.push_back(text->getText());
+    }
+    for (const View *child : const_cast<View &>(view).getChildren()) {
+      self(self, *child);
+    }
+  };
+  collect(collect, root);
+  return result;
+}
+
+ResultLocalPresentationOptions localOptions();
+
+std::unique_ptr<View>
+buildPresentationLayout(const ResultPresentationModel &model, int width = 1920,
+                        int height = 1080, bool showControls = false) {
+  rendering::window_width = width;
+  rendering::window_height = height;
+  rendering::render_width = width;
+  rendering::render_height = height;
+  rendering::ui_view_width = width;
+  rendering::ui_view_height = height;
+
+  auto root = std::make_unique<View>(0, 0, width, height);
+  ResultSkinData skinData{};
+  skinData.showControls = showControls;
+  skinData.showTimingAnalytics = true;
+  skinData.showResultGraph = true;
+  skinData.presentation = &model;
+  DefaultSkin skin;
+  skin.buildLayout("Result", root.get(), &skinData);
+  root->applyYogaLayout();
+  return root;
+}
+
+std::unique_ptr<View> buildLegacyLayout(const bms_parser::ChartMeta &meta,
+                                        const RhythmState &state) {
+  rendering::window_width = rendering::design_width;
+  rendering::window_height = rendering::design_height;
+  rendering::render_width = rendering::design_width;
+  rendering::render_height = rendering::design_height;
+  rendering::ui_view_width = rendering::design_width;
+  rendering::ui_view_height = rendering::design_height;
+
+  auto root = std::make_unique<View>(0, 0, rendering::design_width,
+                                     rendering::design_height);
+  ResultSkinData skinData{&state, &meta, nullptr};
+  skinData.showControls = false;
+  skinData.playModeLabel = "R-RANDOM";
+  skinData.laneOrderLabel = "123S4567";
+  skinData.difficultyLabel = "★12";
+  skinData.previousBest = localOptions().previousBest;
+  DefaultSkin skin;
+  skin.buildLayout("Result", root.get(), &skinData);
+  root->applyYogaLayout();
+  return root;
+}
+
+ResultComparisonCard currentOnlyCard(std::string title, std::string value,
+                                     Color accent = ui_theme::textPrimary()) {
+  return {
+      .title = std::move(title),
+      .current = {.label = "CURRENT",
+                  .value = std::move(value),
+                  .detail = {},
+                  .accent = accent},
+  };
 }
 
 const ResultInfoTile *findInfo(const ResultPresentationModel &model,
@@ -585,9 +690,282 @@ void testRemoteUnknownLampDoesNotInventPresentation() {
              !model.gaugeSeries.front().clearRank,
          "unknown remote lamp has no invented label, color, or graph rank");
 }
+
+void testDefaultSkinLocalPresentationContract() {
+  auto options = localOptions();
+  bms_parser::Chart chart;
+  chart.Meta = localMeta();
+  const std::span<const ReplayData> noAttempts;
+  options.timingAnalytics.emplace(chart, noAttempts, 2);
+  const auto model = makeLocalResultPresentation(localMeta(), localState(),
+                                                 std::move(options));
+  const auto root = buildPresentationLayout(model, 1920, 1080, true);
+
+  expect(textView(root.get(), "title") &&
+             textView(root.get(), "title")->getText() == "Local Result" &&
+             textView(root.get(), "difficulty") &&
+             textView(root.get(), "artist"),
+         "authoritative local presentation keeps existing header descendants");
+  expect(root->findViewByName("resultSummary") &&
+             root->findViewByName("resultSummaryCard:grade") &&
+             root->findViewByName("resultSummaryCard:score") &&
+             root->findViewByName("resultSummaryCard:lamp") &&
+             root->findViewByName("resultSummaryCard:combo") &&
+             textView(root.get(), "grade") &&
+             textView(root.get(), "grade")->getText() == "AA",
+         "local presentation keeps the named grade and comparison cards");
+  auto *gradeCardView = root->findViewByName("resultSummaryCard:grade");
+  auto *scoreCardView = root->findViewByName("resultSummaryCard:score");
+  auto *lampCardView = root->findViewByName("resultSummaryCard:lamp");
+  auto *comboCardView = root->findViewByName("resultSummaryCard:combo");
+  expect(
+      gradeCardView && scoreCardView && lampCardView && comboCardView &&
+          std::abs(gradeCardView->getWidth() - scoreCardView->getWidth()) <=
+              1 &&
+          std::abs(scoreCardView->getWidth() - lampCardView->getWidth()) <= 1 &&
+          std::abs(lampCardView->getWidth() - comboCardView->getWidth()) <= 1,
+      "complete authoritative local summary cards share width evenly");
+  expect(root->findViewByName("resultInfoGrid") &&
+             root->findViewByName("resultInfoTile:total-notes") &&
+             textView(root.get(), "resultInfoLabel:total-notes") &&
+             textView(root.get(), "TOTAL NOTES") &&
+             root->findViewByName("resultInfoTile:play-mode") &&
+             textView(root.get(), "PLAY MODE"),
+         "local information values keep their names and gain semantic names");
+  expect(
+      root->findViewByName("detailsGrid") &&
+          root->findViewByName("resultJudgementTile:pgreat") &&
+          textView(root.get(), "pgreat") &&
+          textView(root.get(), "pgreatFast") &&
+          textView(root.get(), "pgreatSlow") &&
+          root->findViewByName("resultJudgementTile:kpoor") &&
+          textView(root.get(), "kpoor") && textView(root.get(), "break") &&
+          textView(root.get(), "fast") && textView(root.get(), "slow"),
+      "local judgement, KPOOR, BREAK, FAST, and SLOW names remain available");
+  expect(root->findViewByName("graph") != nullptr,
+         "local model gauge history keeps the graph in the skin view tree");
+  expect(root->findViewByName("resultVisuals") &&
+             root->findViewByName("timingAnalytics") &&
+             root->findViewByName("backButton"),
+         "local model keeps supplied replay analytics and current controls");
+
+  auto noPreviousOptions = localOptions();
+  noPreviousOptions.previousBest.reset();
+  const auto noPreviousModel = makeLocalResultPresentation(
+      localMeta(), localState(), std::move(noPreviousOptions));
+  const auto noPreviousRoot = buildPresentationLayout(noPreviousModel);
+  const auto localTexts = descendantTexts(*noPreviousRoot);
+  expect(std::ranges::find(localTexts, "DELTA --") != localTexts.end() &&
+             std::ranges::find(localTexts, "COMBO -- / BREAK --") !=
+                 localTexts.end() &&
+             std::ranges::find(localTexts, "NO PLAY") != localTexts.end(),
+         "local no-previous comparison placeholders remain rendered");
+}
+
+void testDefaultSkinLegacyNullPresentationParity() {
+  const auto meta = localMeta();
+  const auto state = localState();
+  const auto root = buildLegacyLayout(meta, state);
+
+  expect(textView(root.get(), "title") && textView(root.get(), "artist") &&
+             textView(root.get(), "difficulty") &&
+             !root->findViewByName("playtype"),
+         "legacy null presentation keeps the original result header");
+  auto *summary = root->findViewByName("resultSummary");
+  auto *gradePanel = root->findViewByName("resultSummaryCard:grade");
+  auto *scorePanel = root->findViewByName("resultSummaryCard:score");
+  auto *lampPanel = root->findViewByName("resultSummaryCard:lamp");
+  auto *comboPanel = root->findViewByName("resultSummaryCard:combo");
+  expect(summary && gradePanel && scorePanel &&
+             summary->getChildren().size() == 4 &&
+             gradePanel->getWidth() == 196 &&
+             scorePanel->getWidth() > gradePanel->getWidth() && lampPanel &&
+             comboPanel && lampPanel->getWidth() > gradePanel->getWidth() &&
+             comboPanel->getWidth() > gradePanel->getWidth(),
+         "legacy null presentation keeps fixed grade and comparison geometry");
+  expect(
+      root->findViewByName("resultInfoGrid") &&
+          textView(root.get(), "NEXT GRADE") &&
+          textView(root.get(), "TOTAL NOTES") && root->findViewByName("BPM") &&
+          textView(root.get(), "JUDGE RANK") &&
+          textView(root.get(), "DURATION") && textView(root.get(), "PLAY MODE"),
+      "legacy null presentation retains every current information value");
+  expect(textView(root.get(), "pgreat") && textView(root.get(), "kpoor") &&
+             textView(root.get(), "break") && textView(root.get(), "fast") &&
+             textView(root.get(), "slow") && root->findViewByName("graph"),
+         "legacy null presentation retains judgements, metrics, and graph");
+
+  auto emptyMeta = meta;
+  emptyMeta.TotalNotes = 0;
+  const auto emptyRoot = buildLegacyLayout(emptyMeta, state);
+  expect(textView(emptyRoot.get(), "grade") &&
+             textView(emptyRoot.get(), "grade")->getText().empty() &&
+             textView(emptyRoot.get(), "resultGradeRate") &&
+             textView(emptyRoot.get(), "resultGradeRate")->getText() == "0.00%",
+         "legacy null presentation retains the zero-note grade panel");
+}
+
+void testDefaultSkinSparseRemoteOmitsUnsupportedViews() {
+  auto remote = remoteScore();
+  remote.game.clear();
+  remote.artist.clear();
+  remote.service.clear();
+  remote.difficulty.reset();
+  remote.level.reset();
+  remote.noteCount = 0;
+  remote.score = 0;
+  remote.lampRank = 999;
+  remote.judgements = {};
+  remote.timing = {};
+  remote.fast.reset();
+  remote.slow.reset();
+  remote.maxCombo.reset();
+  remote.badPoints.reset();
+  remote.finalGauge.reset();
+  remote.gaugeHistory.clear();
+  remote.random.reset();
+  remote.gauge.reset();
+  remote.inputDevice.reset();
+  remote.client.reset();
+  const auto model = makeRemoteResultPresentation(remote);
+  const auto root = buildPresentationLayout(model);
+
+  expect(textView(root.get(), "title") &&
+             textView(root.get(), "title")->getText() == "Remote Result",
+         "sparse remote result still renders its supplied title");
+  expect(!root->findViewByName("resultSummary") &&
+             !root->findViewByName("grade") &&
+             !root->findViewByName("resultInfoGrid") &&
+             !root->findViewByName("detailsGrid") &&
+             !root->findViewByName("graph") &&
+             !root->findViewByName("timingAnalytics"),
+         "missing remote cards, grids, graph, and analytics consume no views");
+  expect(!root->findViewByName("kpoor") &&
+             !root->findViewByName("resultJudgementTile:kpoor"),
+         "remote skin never fabricates KPOOR descendants");
+  const auto texts = descendantTexts(*root);
+  expect(std::ranges::none_of(texts,
+                              [](const std::string &text) {
+                                return text.find("--") != std::string::npos;
+                              }),
+         "sparse remote skin contains no placeholder dashes");
+  expect(std::ranges::none_of(texts,
+                              [](const std::string &text) {
+                                return text == "0" || text == "0.0%" ||
+                                       text == "0.00%";
+                              }),
+         "missing remote values do not become dummy zero text");
+}
+
+void testDefaultSkinSummaryCardsFlexWithoutAbsentSpace() {
+  ResultPresentationModel one;
+  one.title = "One Card";
+  one.scoreComparison = currentOnlyCard("SCORE", "1234");
+  const auto oneRoot = buildPresentationLayout(one, 1000, 1080);
+  auto *oneRow = oneRoot->findViewByName("resultSummary");
+  auto *oneCard = oneRoot->findViewByName("resultSummaryCard:score");
+  expect(oneRow && oneCard && oneRow->getChildren().size() == 1 &&
+             std::abs(oneCard->getWidth() - oneRow->getWidth()) <= 1,
+         "one present summary card expands across the complete row");
+  expect(!oneRoot->findViewByName("resultSummaryCard:grade") &&
+             !oneRoot->findViewByName("resultSummaryCard:lamp") &&
+             !oneRoot->findViewByName("resultSummaryCard:combo"),
+         "absent summary cards add no descendant or width consumer");
+
+  ResultPresentationModel three = one;
+  three.lampComparison =
+      currentOnlyCard("CLEAR LAMP", "NORMAL CLEAR", ui_theme::lime());
+  three.comboComparison = currentOnlyCard("COMBO / BREAK", "700");
+  const auto threeRoot = buildPresentationLayout(three, 1000, 1080);
+  auto *threeRow = threeRoot->findViewByName("resultSummary");
+  auto *score = threeRoot->findViewByName("resultSummaryCard:score");
+  auto *lamp = threeRoot->findViewByName("resultSummaryCard:lamp");
+  auto *combo = threeRoot->findViewByName("resultSummaryCard:combo");
+  expect(threeRow && score && lamp && combo &&
+             threeRow->getChildren().size() == 3 &&
+             std::abs(score->getWidth() - lamp->getWidth()) <= 1 &&
+             std::abs(lamp->getWidth() - combo->getWidth()) <= 1 &&
+             score->getWidth() < oneCard->getWidth(),
+         "multiple present summary cards divide available width evenly");
+}
+
+void testDefaultSkinExplicitZerosAndMobileMetadataWrap() {
+  auto remote = remoteScore();
+  remote.score = 0;
+  remote.judgements = {.pGreat = 0, .great = 0, .good = 0, .bad = 0, .poor = 0};
+  remote.timing = {.earlyPGreat = 0,
+                   .latePGreat = 0,
+                   .earlyGreat = 0,
+                   .lateGreat = 0,
+                   .earlyGood = 0,
+                   .lateGood = 0,
+                   .earlyBad = 0,
+                   .lateBad = 0,
+                   .earlyPoor = 0,
+                   .latePoor = 0};
+  remote.fast = 0;
+  remote.slow = 0;
+  remote.maxCombo = 0;
+  remote.badPoints = 0;
+  remote.finalGauge = 0.0F;
+  remote.gaugeHistory = {0.0F};
+  const auto model = makeRemoteResultPresentation(remote);
+  const auto root = buildPresentationLayout(model, 640, 885, true);
+
+  expect(textView(root.get(), "grade") &&
+             root->findViewByName("resultSummaryCard:combo") &&
+             textView(root.get(), "BP") &&
+             textView(root.get(), "BP")->getText() == "0" &&
+             textView(root.get(), "pgreat") &&
+             textView(root.get(), "pgreat")->getText() == "0" &&
+             textView(root.get(), "pgreatFast") &&
+             textView(root.get(), "pgreatFast")->getText() == "0" &&
+             textView(root.get(), "break") &&
+             textView(root.get(), "break")->getText() == "0" &&
+             textView(root.get(), "fast") &&
+             textView(root.get(), "fast")->getText() == "0" &&
+             textView(root.get(), "slow") &&
+             textView(root.get(), "slow")->getText() == "0",
+         "explicit remote zeros remain rendered in every supplied card or row");
+  expect(!root->findViewByName("kpoor"),
+         "explicit remote zero totals still do not invent KPOOR");
+  expect(!root->findViewByName("timingAnalytics"),
+         "remote graph never creates replay analytics from supplied totals");
+
+  auto *grid = root->findViewByName("resultInfoGrid");
+  auto *first = root->findViewByName("resultInfoTile:total-notes");
+  auto *last = root->findViewByName("resultInfoTile:level");
+  expect(grid && first && last && last->getY() > first->getY(),
+         "remote metadata tiles wrap to another row at mobile width");
+  bool contained = grid != nullptr;
+  if (grid != nullptr) {
+    for (View *tile : grid->getChildren()) {
+      contained = contained && tile->getX() >= grid->getContentX() &&
+                  tile->getY() >= grid->getContentY() &&
+                  tile->getX() + tile->getWidth() <=
+                      grid->getContentX() + grid->getContentWidth() + 1 &&
+                  tile->getY() + tile->getHeight() <=
+                      grid->getContentY() + grid->getContentHeight() + 1;
+    }
+  }
+  expect(contained,
+         "wrapped metadata tiles stay within the responsive information grid");
+  expect(textView(root.get(), "resultInfoLabel:service") &&
+             textView(root.get(), "resultInfoLabel:input-device") &&
+             textView(root.get(), "resultInfoLabel:gauge-type"),
+         "remote metadata labels have deterministic semantic names");
+}
 } // namespace
 
 int main() {
+  bgfx::Init init;
+  init.type = bgfx::RendererType::Noop;
+  init.resolution.width = 64;
+  init.resolution.height = 64;
+  if (!bgfx::init(init)) {
+    std::cerr << "FAIL: headless bgfx initialization failed\n";
+    return 1;
+  }
   ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
   testLocalNormalParity();
   testLocalPacemakerAndRecallParity();
@@ -599,6 +977,13 @@ int main() {
   testRemoteIndependentOptionalCardsAndMetadata();
   testRemoteMissingVersusExplicitZero();
   testRemoteUnknownLampDoesNotInventPresentation();
+  testDefaultSkinLocalPresentationContract();
+  testDefaultSkinLegacyNullPresentationParity();
+  testDefaultSkinSparseRemoteOmitsUnsupportedViews();
+  testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
+  testDefaultSkinExplicitZerosAndMobileMetadataWrap();
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::shutdown();
   if (failures != 0) {
     std::cerr << failures << " result presentation model test(s) failed\n";
     return 1;

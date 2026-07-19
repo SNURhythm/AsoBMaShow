@@ -8,6 +8,7 @@
 #include <string>
 
 class View;
+struct ResultPresentationModel;
 
 struct ResultPreviousBestData {
   int score = 0;
@@ -42,4 +43,5 @@ struct ResultSkinData {
   std::optional<int> currentClearRankOverride;
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<ResultPacemakerData> pacemaker;
+  const ResultPresentationModel *presentation = nullptr;
 };

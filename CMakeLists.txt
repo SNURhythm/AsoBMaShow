@@ -2041,6 +2041,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
         src/ScoreProvenance.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
@@ -2049,11 +2051,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/ResultPresentationModel.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
+        src/skin/DefaultSkin.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
     )
     target_include_directories(result_presentation_model_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(result_presentation_model_tests PRIVATE cxx_std_23)
+    target_link_libraries(result_presentation_model_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
 
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
