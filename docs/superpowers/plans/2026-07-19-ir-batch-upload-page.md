@@ -86,7 +86,7 @@ void intersectIrUploadSelection(
 }
 ```
 
-- [ ] **Step 1: Write failing projection and selection tests**
+- [x] **Step 1: Write failing projection and selection tests**
 
 Add cases that construct complete 7K metadata and verified LR2 provenance using the existing test fixture helpers. Exercise every semantic state, duplicate attempts for one chart, missing chart paths, path deduplication, and selection intersection:
 
@@ -110,7 +110,7 @@ expect(selected == std::unordered_set<int>{eligible.id},
 
 Assert projection hydrates `replay.chartMeta` from the chart record, calculates `maxScore = TotalNotes * 2`, reruns the canonical resolver, reports one bounded omission diagnostic, and never promotes pre-labelled but ineligible rows.
 
-- [ ] **Step 2: Register and run the new test to verify RED**
+- [x] **Step 2: Register and run the new test to verify RED**
 
 Add `ir_upload_candidates_tests` to root `CMakeLists.txt` with these production sources: `IrReplayRecordState.cpp`, `IrUploadCandidates.cpp`, `IrReceiptModels.cpp`, `IrProfileSettings.cpp`, `TachiBatchManual.cpp`, `FileChecksum.cpp`, `ScoreProvenance.cpp`, gameplay gauge/judge rules, `Judge.cpp`, `Uuid.cpp`, and `ChartStorageIdentity.cpp`. Add it to the registered test target list.
 
@@ -123,7 +123,7 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^ir_upload_candidates
 
 Expected: compilation fails because the new headers/functions do not exist.
 
-- [ ] **Step 3: Implement the shared state resolver**
+- [x] **Step 3: Implement the shared state resolver**
 
 Move the anonymous `resolveReplayIrRecordState` logic out of `MainMenuScene.cpp` without changing it:
 
@@ -147,7 +147,7 @@ void resolveReplayIrRecordState(ReplaySummary &summary,
 
 Include the new header in `MainMenuScene.cpp` and replace both calls with `ir::resolveReplayIrRecordState`.
 
-- [ ] **Step 4: Implement fail-closed candidate projection**
+- [x] **Step 4: Implement fail-closed candidate projection**
 
 Build a path-keyed map using `chart_storage_identity::StoredPathText`. For each replay, require positive replay ID, non-course/non-Auto Play, a stored chart path, exactly one hydrated chart, and consistent MD5/SHA-256 when both stored and hydrated values are present. Copy the full chart metadata into the replay, resolve state again, and publish only `Eligible` or `Failed`:
 
@@ -172,7 +172,7 @@ result.candidates.push_back({.replay = std::move(hydrated),
 
 Sanitize the aggregate diagnostic and never include a filesystem path or provenance payload.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run:
 
@@ -249,11 +249,11 @@ BuildTachiOutboxBatchOutcome buildBatchManualOutboxDocument(
 
 Add `std::vector<std::string> remoteScoreIds` and `bool importHadErrors` to `DeliveryOutcome`; retain `remoteScoreId` only for the exact one-ID compatibility case.
 
-- [ ] **Step 1: Add failing generic driver fallback tests**
+- [x] **Step 1: Add failing generic driver fallback tests**
 
 Assert the base driver plans the first row only, singular fallback accepts exactly one entry, and registry plan validation rejects duplicate, unknown, or out-of-input row IDs.
 
-- [ ] **Step 2: Add failing Tachi composer tests**
+- [x] **Step 2: Add failing Tachi composer tests**
 
 Create valid 7K and 14K entries with distinct attempts. Assert:
 
@@ -269,11 +269,11 @@ expect(json.at("scores").size() == entries.size(),
 
 Assert mixed playtypes select only the first compatible group, invalid proof/payload rejects before HTTP, 65 rows cap at 64, and gauge-heavy rows split at the last score keeping serialized payload at or below `kMaximumPayloadBytes`.
 
-- [ ] **Step 3: Add failing response and HTTP tests**
+- [x] **Step 3: Add failing response and HTTP tests**
 
 Replace the old multiple-ID rejection test: multiple bounded IDs with empty errors succeed and populate `remoteScoreIds`; empty IDs/empty errors remains idempotent success. Multi-entry requests with non-empty errors become `ambiguous_partial_import`; one-entry one-ID warnings retain `accepted_with_warnings`. Assert `submitBatch` sends one POST/body and one user-intent header.
 
-- [ ] **Step 4: Run focused tests to verify RED**
+- [x] **Step 4: Run focused tests to verify RED**
 
 ```bash
 cmake --build cmake-build-debug --target ir_driver_tests tachi_batch_manual_tests tachi_driver_tests -j 6
@@ -282,13 +282,13 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^(ir_driver_tests|tac
 
 Expected: missing batch contracts and the old parser restriction fail.
 
-- [ ] **Step 5: Implement generic fallback and deterministic composition**
+- [x] **Step 5: Implement generic fallback and deterministic composition**
 
 The default plan returns the first valid row. Default batch submission copies the only entry, applies `userIntent`, and calls the singular method. Registry wrappers catch exceptions and require 1–64 unique planned IDs present in `due`.
 
 For Tachi, validate each proof, parse exactly one score/meta object from each payload, choose the first row's playtype, and append compatible due rows in order until 64 entries or the next serialized document exceeds 64 KiB. Skip later incompatible playtypes for the next worker iteration; reject an invalid first row. Awaiting plans group exact shared `remoteJobId` and normalized `remoteOrigin` and poll once.
 
-- [ ] **Step 6: Implement batch-aware response classification**
+- [x] **Step 6: Implement batch-aware response classification**
 
 Parse every bounded score ID and set `remoteScoreId` only when the vector size is one. Then apply:
 
@@ -305,7 +305,7 @@ if (outcome.remoteScoreIds.size() > entries.size()) {
 
 Fewer IDs with no errors is valid because equivalent scores may already exist.
 
-- [ ] **Step 7: Run tests and commit**
+- [x] **Step 7: Run tests and commit**
 
 ```bash
 cmake --build cmake-build-debug --target ir_driver_tests tachi_batch_manual_tests tachi_driver_tests -j 6
@@ -359,11 +359,11 @@ IrOutboxMutationOutcome ApplyIrOutboxDeliveries(
 
 Singular claim/apply methods delegate to one-item batches.
 
-- [ ] **Step 1: Write failing atomic repository tests**
+- [x] **Step 1: Write failing atomic repository tests**
 
 Claim three pending rows and assert one transaction advances all, increments attempts, consumes aggregate user intent, and returns input order. A state mismatch claims none. Apply shared deferred updates; then apply successful receipt updates. Inject receipt failure and assert the whole group remains Uploading.
 
-- [ ] **Step 2: Upgrade the fake driver and write failing worker tests**
+- [x] **Step 2: Upgrade the fake driver and write failing worker tests**
 
 Add fake batch overrides and assert:
 
@@ -376,7 +376,7 @@ expect(calls.size() == 1 && calls.front().rowIds.size() == 3,
 
 Add mixed-plan two-call, shared deferred one-poll, cancellation, missing-credential, and ambiguous-partial tests.
 
-- [ ] **Step 3: Run tests to verify RED**
+- [x] **Step 3: Run tests to verify RED**
 
 ```bash
 cmake --build cmake-build-debug --target replay_repository_tests ir_submission_service_tests -j 6
@@ -385,15 +385,15 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^(replay_repository_t
 
 Expected: missing group APIs and old one-row worker assumptions fail.
 
-- [ ] **Step 4: Implement atomic claim and apply**
+- [x] **Step 4: Implement atomic claim and apply**
 
 Validate non-empty input, 64-row maximum, unique positive IDs, and allowed states. Under one immediate transaction, load/validate all rows before any update, update/reload all, then commit. For apply, refactor singular delivery/receipt SQL into a connection helper and require exactly one affected row for each update before commit.
 
-- [ ] **Step 5: Replace `runOne` transport with one planned group**
+- [x] **Step 5: Replace `runOne` transport with one planned group**
 
 Plan after due sorting, resolve plan IDs, require a common request kind, check credentials, and claim atomically. Call `submitBatch` or `pollBatch` once. Build one delivery update/receipt per row; use a response score ID only for one input/one ID, otherwise store no guessed ID. Apply once, publish all statuses, refresh counts once, and call `submissionSucceeded` per committed chart.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```bash
 cmake --build cmake-build-debug --target replay_repository_tests ir_submission_service_tests tachi_driver_tests -j 6
@@ -438,7 +438,7 @@ public:
 
 Add read-only `ImageView::imagePath()` returning `const path_t &` for recycled-jacket tests.
 
-- [ ] **Step 1: Write failing headless view tests**
+- [x] **Step 1: Write failing headless view tests**
 
 Use Noop bgfx. Bind/click an eligible row, then rebind to a failed row with another jacket and no selection:
 
@@ -456,7 +456,7 @@ expect(text(row, "irUploadStatus")->getText() == "Retry",
 
 Also assert no-jacket cleanup, checkbox state, clear lamp/rank, combo/date/option text, lock suppression, and no event fallthrough.
 
-- [ ] **Step 2: Register and run the test to verify RED**
+- [x] **Step 2: Register and run the test to verify RED**
 
 Register the target with the new view, `ImageView.cpp`, basic view/rendering sources, archive/path/BMS sources, candidate sources and IR/provenance dependencies; link `${COMMON_LIBS} bgfx yogacore` plus platform libraries matching existing view targets.
 
@@ -467,7 +467,7 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^ir_upload_candidate_
 
 Expected: compilation fails because the list view is absent.
 
-- [ ] **Step 3: Implement complete bind replacement**
+- [x] **Step 3: Implement complete bind replacement**
 
 Use the Chart list's 84-pixel artwork frame and a 108-pixel row: checkbox, clear lamp, jacket, title/artist, attempt detail, difficulty/key-mode, score/rank, and status chip. Every bind replaces replay ID, selection, callbacks, text, colors, and image:
 
@@ -488,7 +488,7 @@ statusText_->setText(candidate.state == ir::IrRecordState::Failed
 
 Capture replay ID by value in callbacks. Copy the selected-ID set before `setItems`.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 cmake --build cmake-build-debug --target ir_upload_candidate_list_view_tests -j 6
@@ -538,7 +538,7 @@ IrUploadReplayReadOutcome ListIrUploadCandidateReplays(
     std::string_view providerId, std::string_view serverOrigin);
 ```
 
-- [ ] **Step 1: Add failing repository coverage**
+- [x] **Step 1: Add failing repository coverage**
 
 Persist two eligible attempts for one chart and one for another. Add receipt/outbox variants, a course stage, malformed provenance, and an oversized direct-row fixture. Assert newest-first all-chart results, stored partial chart identity, failed-row inclusion, queued/active/awaiting/blocked/succeeded exclusion, origin-scoped receipt suppression, invalid-origin failure, storage failure, and explicit oversized failure rather than a prefix.
 
@@ -550,7 +550,7 @@ assert((replayIds(loaded.replays) == std::vector<int>{newest, older, other}));
 assert(loaded.replays[0].chartMeta->BmsPath == newestReplay.chartMeta.BmsPath);
 ```
 
-- [ ] **Step 2: Run the repository test to verify RED**
+- [x] **Step 2: Run the repository test to verify RED**
 
 ```bash
 cmake --build cmake-build-debug --target replay_repository_tests -j 6
@@ -559,7 +559,7 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^replay_repository_te
 
 Expected: compilation fails because the candidate read API does not exist.
 
-- [ ] **Step 3: Implement one snapshot query with integrity checks**
+- [x] **Step 3: Implement one snapshot query with integrity checks**
 
 Validate provider/origin, start one read transaction, select at most 16,385 rows, and use this boundary:
 
@@ -581,7 +581,7 @@ LIMIT 16385
 
 Join `ir_outbox` on provider/attempt. Read summary columns plus stored path, hashes, title, artist, and outbox state. Decode provenance; skip corrupt rows with one aggregate count. Require canonical UUID/fingerprint shapes and build partial `ChartMeta` without fabricating jacket, key-mode, or note-count data. Return no rows on overflow or snapshot failure.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 cmake --build cmake-build-debug --target replay_repository_tests -j 6
@@ -625,7 +625,7 @@ ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
     std::span<const std::filesystem::path> paths);
 ```
 
-- [ ] **Step 1: Write failing bulk-read tests**
+- [x] **Step 1: Write failing bulk-read tests**
 
 Insert charts with stage files, title/subtitle, artist, difficulty, key mode, hashes, and notes. Query two paths, a duplicate, and a missing path. Assert stable input-first order after deduplication, complete metadata, `missingPaths == 1`, and explicit empty/oversized/storage outcomes.
 
@@ -639,7 +639,7 @@ assert(loaded.records[1].meta.TotalNotes == second.meta.TotalNotes);
 assert(loaded.missingPaths == 1);
 ```
 
-- [ ] **Step 2: Run the chart repository test to verify RED**
+- [x] **Step 2: Run the chart repository test to verify RED**
 
 ```bash
 cmake --build cmake-build-debug --target chart_repository_tests -j 6
@@ -648,11 +648,11 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^chart_repository_tes
 
 Expected: compilation fails because `SelectChartMetaByPaths` is missing.
 
-- [ ] **Step 3: Implement chunked bulk lookup**
+- [x] **Step 3: Implement chunked bulk lookup**
 
 Normalize with `chart_storage_identity::StoredPathText`, reject more than 16,384 distinct non-empty paths, and preserve first occurrence order. Start one read transaction; build a parameterized `IN` list for each chunk of at most 256 paths using `kChartMetaSelectColumns`/`readChartMetaRecord`; reorder results by normalized input index. Return `StorageFailure` for prepare/bind/step/commit failures rather than empty success.
 
-- [ ] **Step 4: Connect and test the full candidate load**
+- [x] **Step 4: Connect and test the full candidate load**
 
 Extend the candidate test with replay paths, a bulk chart result, and projection. Assert missing charts are omitted and complete charts resolve identically to Records.
 
@@ -739,11 +739,11 @@ IrSavedResultBatchUploadResult executeIrSavedResultBatchUpload(
     const IrSavedResultBatchUploadDependencies &dependencies) noexcept;
 ```
 
-- [ ] **Step 1: Write failing repository batch-mutation tests**
+- [x] **Step 1: Write failing repository batch-mutation tests**
 
 Seed absent, failed, pending, succeeded, and payload-conflicting attempts. Assert absent insert, failed retry, unchanged pending/succeeded, isolated logical conflict, one commit, and full rollback on injected SQLite failure.
 
-- [ ] **Step 2: Write failing pure orchestration and service tests**
+- [x] **Step 2: Write failing pure orchestration and service tests**
 
 ```cpp
 int enqueueCalls = 0;
@@ -761,7 +761,7 @@ expect(result.buildFailures == 1, "invalid construction remains isolated");
 
 Service tests assert provider availability is checked once, entries publish under one generation, counts refresh once, the worker wakes once, and singular `enqueueManual` delegates through one item.
 
-- [ ] **Step 3: Register and run tests to verify RED**
+- [x] **Step 3: Register and run tests to verify RED**
 
 Register `ir_saved_result_batch_upload_tests` with the new source and existing IR model dependencies.
 
@@ -772,7 +772,7 @@ ctest --test-dir cmake-build-debug --output-on-failure -R '^(ir_saved_result_bat
 
 Expected: compilation fails on missing batch types/APIs.
 
-- [ ] **Step 4: Implement the transaction and adapters**
+- [x] **Step 4: Implement the transaction and adapters**
 
 Validate/deduplicate drafts before the transaction. Reuse prepared insert, identity lookup, and this retry update:
 
@@ -788,7 +788,7 @@ Require existing payload/hash/proof/time equality. Map `FailedPermanent` to `Ret
 
 `enqueueManualBatch` accepts one enabled writable provider, calls the repository once with `safeNow`, publishes entries, refreshes once, and signals once. `executeIrSavedResultBatchUpload` builds every submission, records sanitized failures, then calls the batch enqueue dependency once.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```bash
 cmake --build cmake-build-debug --target ir_saved_result_batch_upload_tests replay_repository_tests ir_submission_service_tests ir_saved_result_upload_tests -j 6
@@ -846,7 +846,7 @@ public:
 };
 ```
 
-- [ ] **Step 1: Write the failing integration audit**
+- [x] **Step 1: Write the failing integration audit**
 
 Create/register `scripts/check_ir_uploads_flow.py` with exact contracts:
 
@@ -870,7 +870,7 @@ python3 scripts/check_ir_uploads_flow.py .
 
 Expected: failure because scene/entry are absent.
 
-- [ ] **Step 2: Add an explicit Settings destination**
+- [x] **Step 2: Add an explicit Settings destination**
 
 Initialize the tab from the constructor:
 
@@ -886,15 +886,15 @@ SettingsScene::SettingsScene(ApplicationContext &context,
 
 Keep registered Settings default behavior. `Open IR Settings` uses a temporary IR-targeted Settings scene; its Back action returns to retained Main Menu.
 
-- [ ] **Step 3: Build page shell and explicit load states**
+- [x] **Step 3: Build page shell and explicit load states**
 
 Follow Music Player safe-area patterns. Build Back/title/count/Refresh, provider card, Select All/Clear/count, flexing list, distinct empty/error text, and sticky upload footer. `reloadCandidates()` performs one replay read, one chart batch read, projection, selection intersection, and scroll restore. Read only credential presence through `IrCredentialStore`.
 
-- [ ] **Step 4: Implement selection and live refresh**
+- [x] **Step 4: Implement selection and live refresh**
 
 Row toggles mutate selected IDs and rebind. Select All inserts all candidate IDs; Clear empties them. Observe account-evidence and attempt-status revisions, coalescing changes into one reload per update tick.
 
-- [ ] **Step 5: Implement cancellable local preparation**
+- [x] **Step 5: Implement cancellable local preparation**
 
 Snapshot selection, lock controls, and launch one `std::jthread`. For each candidate:
 
@@ -918,7 +918,7 @@ submissions.push_back(*recalled.value->historicalIr->submission);
 
 After verification, call the pure batch helper using `irDrivers.buildDraft` and exactly one `irSubmissionService->enqueueManualBatch`. Publish progress/result through a mutex mailbox. Refresh, remove queued items, retain failed selections, and show `N queued, M failed`. Back/cleanup requests stop and joins; already committed rows remain durable.
 
-- [ ] **Step 6: Add the Song Select header entry**
+- [x] **Step 6: Add the Song Select header entry**
 
 Add button fields beside Music/Tasks. Click cancels preview and retains Main Menu:
 
@@ -929,7 +929,7 @@ context.sceneManager->changeScene(
 
 Reset pointers during cleanup.
 
-- [ ] **Step 7: Run audit/build/tests and commit**
+- [x] **Step 7: Run audit/build/tests and commit**
 
 ```bash
 python3 scripts/check_ir_uploads_flow.py .
@@ -957,7 +957,7 @@ Expected: audit/tests pass and `main` links.
 - Consumes: all feature tasks.
 - Produces: clean built/tested source with no deployment.
 
-- [ ] **Step 1: Run the focused feature suite**
+- [x] **Step 1: Run the focused feature suite**
 
 ```bash
 cmake --build cmake-build-debug --target \
@@ -972,7 +972,7 @@ ctest --test-dir cmake-build-debug --output-on-failure -R \
 
 Expected: all selected targets/tests pass.
 
-- [ ] **Step 2: Run the complete configured suite**
+- [x] **Step 2: Run the complete configured suite**
 
 ```bash
 ctest --test-dir cmake-build-debug --output-on-failure
@@ -980,7 +980,7 @@ ctest --test-dir cmake-build-debug --output-on-failure
 
 Expected: zero failures.
 
-- [ ] **Step 3: Run final source/build checks**
+- [x] **Step 3: Run final source/build checks**
 
 ```bash
 git diff --check
@@ -991,6 +991,6 @@ git log --oneline -10
 
 Expected: no whitespace errors, desktop `main` succeeds, and status lists only intentional execution-plan checkbox changes if they remain uncommitted.
 
-- [ ] **Step 4: Prepare the handoff summary**
+- [x] **Step 4: Prepare the handoff summary**
 
 Report the header entry/direct Settings link, included/excluded states, selection/local verification behavior, proof of one compatible multi-score POST and one shared deferred poll, focused/full CTest results, desktop build result, and confirmation that Firebase was not used.
