@@ -123,3 +123,27 @@ Focused regression binaries also passed independently: `tachi_driver_tests`, `re
 ## Remaining Concerns
 
 None identified. The only verification noise is the pre-existing warning from vendored bgfx macro headers noted above.
+
+## Re-review Follow-up — Paused ranking pagination admission
+
+**Root cause:** `pauseAndCancel()` advanced the service generation while intentionally retaining an idle successful snapshot. `queueNextPage()` compared the caller only with that retained snapshot generation, not with the current service generation or paused state. Consequently, `loadNextPage(oldGeneration)` could enqueue old-account pagination after the service was paused. Worker admission also trusted queued work without rechecking pause/generation state.
+
+**RED evidence:** A successful first page with `page-2` was loaded, the service was paused, and pagination was requested with the old generation. Before the fix, `ir_ranking_service_tests` failed with:
+
+- `FAIL: paused ranking service rejects stale continuation generation`
+- `FAIL: stale continuation cannot reach the old-account driver`
+
+**Fix:** `queueNextPage()` now rejects requests while paused and rejects any requested generation that differs from either the current service generation or visible snapshot generation. The worker additionally discards work at admission if the profile is paused or the work generation is stale.
+
+**GREEN evidence:**
+
+- `./cmake-build-debug/ir_ranking_service_tests`
+  - PASS: `IR ranking service tests passed`.
+- `./cmake-build-debug/ir_settings_presentation_tests`
+  - PASS.
+- `ctest --test-dir cmake-build-debug --output-on-failure`
+  - PASS: 113/113 tests, 0 failed, 51.35 seconds.
+- `cmake --build cmake-build-debug --target main -j 6`
+  - PASS: desktop `main` linked successfully.
+
+No push or deployment was performed.

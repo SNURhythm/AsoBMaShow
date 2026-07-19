@@ -755,6 +755,23 @@ void testPauseKeepsRankingWorkQuiescedUntilProfileReactivation() {
          "profile reactivation admits ranking work again");
 }
 
+void testPauseRejectsStalePagination() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", request().chart, "first", "page-2")});
+  const auto oldGeneration = harness.openAndWait(request());
+  const auto callsBeforePause = driver->calls().size();
+
+  harness.service->pauseAndCancel();
+
+  expect(!harness.service->loadNextPage(oldGeneration),
+         "paused ranking service rejects stale continuation generation");
+  std::this_thread::sleep_for(20ms);
+  expect(driver->calls().size() == callsBeforePause,
+         "stale continuation cannot reach the old-account driver");
+}
+
 } // namespace
 
 int main() {
@@ -769,6 +786,7 @@ int main() {
   testCacheIdentityAndCredentialFreeDebugTypes();
   testInvalidationAndShutdown();
   testPauseKeepsRankingWorkQuiescedUntilProfileReactivation();
+  testPauseRejectsStalePagination();
 
   if (failures != 0) {
     std::cerr << failures << " IR ranking service test(s) failed\n";

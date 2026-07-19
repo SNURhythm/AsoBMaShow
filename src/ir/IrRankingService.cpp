@@ -210,7 +210,8 @@ struct IrRankingService::Impl {
 
   bool queueNextPage(std::uint64_t requestedGeneration) {
     std::lock_guard lock(mutex);
-    if (stopped || current.generation != requestedGeneration ||
+    if (stopped || profilePaused || generation != requestedGeneration ||
+        current.generation != requestedGeneration ||
         current.state != IrRankingSnapshotState::Succeeded ||
         !current.request || !current.ranking || current.loadingNextPage ||
         current.paginationBlocked || pending || activeGeneration != 0 ||
@@ -244,6 +245,10 @@ struct IrRankingService::Impl {
         });
         if (stopToken.stop_requested() || stopped) {
           break;
+        }
+        if (profilePaused || pending->generation != generation) {
+          pending.reset();
+          continue;
         }
         work = std::move(*pending);
         pending.reset();
