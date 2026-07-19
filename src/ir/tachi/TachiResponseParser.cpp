@@ -105,8 +105,8 @@ DeliveryOutcome parseImportDocument(const Json &document) {
                        : "Tachi accepted an unexpected number of scores");
 }
 
-std::optional<Json> parseEnvelope(std::string_view body,
-                                  DeliveryOutcome &failure) {
+std::optional<Json> parseObject(std::string_view body,
+                                DeliveryOutcome &failure) {
   Json document;
   try {
     document = Json::parse(body);
@@ -118,6 +118,11 @@ std::optional<Json> parseEnvelope(std::string_view body,
     failure = malformed("Tachi response is not an object");
     return std::nullopt;
   }
+  return document;
+}
+
+std::optional<Json> parseEnvelopeDocument(const Json &document,
+                                          DeliveryOutcome &failure) {
   const auto success = document.find("success");
   if (success == document.end() || !success->is_boolean()) {
     failure = malformed("Tachi response success field is invalid");
@@ -135,6 +140,12 @@ std::optional<Json> parseEnvelope(std::string_view body,
     return std::nullopt;
   }
   return *bodyValue;
+}
+
+std::optional<Json> parseEnvelope(std::string_view body,
+                                  DeliveryOutcome &failure) {
+  const auto document = parseObject(body, failure);
+  return document ? parseEnvelopeDocument(*document, failure) : std::nullopt;
 }
 
 } // namespace
@@ -165,12 +176,21 @@ parseDeferredImportResponse(std::string_view body,
                             std::string_view requestOrigin) noexcept {
   try {
     DeliveryOutcome failure;
-    const auto envelopeBody = parseEnvelope(body, failure);
-    if (!envelopeBody) {
+    const auto document = parseObject(body, failure);
+    if (!document) {
       return failure;
     }
-    const auto importId = envelopeBody->find("importID");
-    if (importId == envelopeBody->end() || !importId->is_string() ||
+    std::optional<Json> envelopeBody;
+    const Json *queuedImport = &*document;
+    if (document->contains("success")) {
+      envelopeBody = parseEnvelopeDocument(*document, failure);
+      if (!envelopeBody) {
+        return failure;
+      }
+      queuedImport = &*envelopeBody;
+    }
+    const auto importId = queuedImport->find("importID");
+    if (importId == queuedImport->end() || !importId->is_string() ||
         !isValidImportId(importId->get_ref<const std::string &>())) {
       return {.status = DeliveryStatus::PermanentFailure,
               .code = "invalid_import_id",

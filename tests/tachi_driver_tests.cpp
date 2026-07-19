@@ -333,6 +333,18 @@ void testDeferredAcceptanceAndValidation() {
   expect(result.remoteOrigin != "https://evil.example",
          "response-provided polling URL is ignored");
 
+  http.responses.push_back(
+      {.statusCode = 202,
+       .body =
+           R"({"url":"https://evil.example/poll","importID":"raw-import-123"})"});
+  result = driver.submit(pendingEntry(), runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::Deferred,
+         "documented raw queued import is deferred");
+  expect(result.remoteJobId == "raw-import-123",
+         "raw queued import persists its validated import ID");
+  expect(result.remoteOrigin == "https://boku.tachi.ac",
+         "raw queued import keeps the normalized request origin");
+
   for (const std::string body : {
            deferred(R"("url":"https://evil.example/poll")"),
            deferred(R"("importID":"bad/id")"),
