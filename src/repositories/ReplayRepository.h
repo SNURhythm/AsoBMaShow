@@ -276,6 +276,9 @@ public:
   ir::IrOutboxClaimOutcome ClaimIrOutbox(std::int64_t rowId,
                                          ir::IrOutboxState expectedState,
                                          std::int64_t nowMs);
+  ir::IrOutboxBatchClaimOutcome
+  ClaimIrOutboxBatch(std::span<const ir::IrOutboxClaimRequest> requests,
+                     std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   BlockIrOutboxConfiguration(std::int64_t rowId,
                              ir::IrOutboxState expectedState,
@@ -283,6 +286,8 @@ public:
                              std::string_view errorMessage, std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
+  ir::IrOutboxMutationOutcome ApplyIrOutboxDeliveries(
+      std::span<const ir::IrOutboxDeliveryUpdate> updates);
   ir::IrReceiptReadOutcome
   LoadIrSubmissionReceipt(std::string_view providerId,
                           std::string_view serverOrigin,

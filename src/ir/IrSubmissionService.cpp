@@ -802,15 +802,52 @@ struct IrSubmissionService::Impl {
       due.entries.resize(kWorkerBatchSize);
     }
 
-    for (const IrOutboxEntry &entry : due.entries) {
-      const auto provider = config.providers.find(entry.providerId);
+    for (const IrOutboxEntry &firstDue : due.entries) {
+      const auto provider = config.providers.find(firstDue.providerId);
       if (provider == config.providers.end() || !provider->second.enabled ||
-          !providerCanSubmit(drivers, entry.providerId)) {
+          !providerCanSubmit(drivers, firstDue.providerId)) {
         continue;
       }
 
+      const bool polling =
+          firstDue.state == IrOutboxState::AwaitingRemoteResult;
+      std::vector<IrOutboxEntry> providerDue;
+      providerDue.reserve(due.entries.size());
+      for (const auto &candidate : due.entries) {
+        if (candidate.providerId == firstDue.providerId &&
+            (candidate.state == IrOutboxState::AwaitingRemoteResult) ==
+                polling) {
+          providerDue.push_back(candidate);
+        }
+      }
+      const auto plan = drivers.planBatch(firstDue.providerId, providerDue);
+      if (plan.status != IrOutboxBatchPlanStatus::Planned) {
+        return safeAdd(now, 1'000);
+      }
+
+      std::vector<IrOutboxEntry> planned;
+      planned.reserve(plan.rowIds.size());
+      for (const std::int64_t rowId : plan.rowIds) {
+        const auto found = std::ranges::find(
+            providerDue, rowId, &IrOutboxEntry::id);
+        if (found == providerDue.end()) {
+          planned.clear();
+          break;
+        }
+        planned.push_back(*found);
+      }
+      if (planned.empty()) {
+        return safeAdd(now, 1'000);
+      }
+      if (std::ranges::any_of(planned, [&](const IrOutboxEntry &entry) {
+            return (entry.state == IrOutboxState::AwaitingRemoteResult) !=
+                   polling;
+          })) {
+        return safeAdd(now, 1'000);
+      }
+
       const std::string credential =
-          lookupCredential(options, config.profileId, entry.providerId);
+          lookupCredential(options, config.profileId, firstDue.providerId);
       {
         std::lock_guard lock(mutex);
         if (!requestMayStartLocked(expectedGeneration)) {
@@ -824,34 +861,44 @@ struct IrSubmissionService::Impl {
             return std::nullopt;
           }
         }
-        repository.BlockIrOutboxConfiguration(entry.id, entry.state,
-                                              "missing_api_key",
-                                              "IR API key is required", now);
-        const StatusKey key{entry.providerId, entry.attemptId};
-        refreshEntry(key, expectedGeneration);
-        refreshCount(entry.providerId, expectedGeneration);
+        for (const auto &entry : planned) {
+          repository.BlockIrOutboxConfiguration(
+              entry.id, entry.state, "missing_api_key",
+              "IR API key is required", now);
+        }
+        for (const auto &entry : planned) {
+          refreshEntry({entry.providerId, entry.attemptId},
+                       expectedGeneration);
+        }
+        refreshCount(firstDue.providerId, expectedGeneration);
         return now;
       }
 
-      const auto claim = repository.ClaimIrOutbox(entry.id, entry.state, now);
-      if (claim.status != IrOutboxClaimStatus::Claimed || !claim.entry) {
+      std::vector<IrOutboxClaimRequest> claimRequests;
+      claimRequests.reserve(planned.size());
+      for (const auto &entry : planned) {
+        claimRequests.push_back(
+            {.rowId = entry.id, .expectedState = entry.state});
+      }
+      auto claim = repository.ClaimIrOutboxBatch(claimRequests, now);
+      if (claim.status != IrOutboxClaimStatus::Claimed ||
+          claim.entries.size() != planned.size()) {
         continue;
       }
-      IrOutboxEntry claimed = *claim.entry;
       std::stop_token requestToken;
       {
         std::lock_guard lock(mutex);
         if (!requestMayStartLocked(expectedGeneration)) {
           return std::nullopt;
         }
-        publishLocked(claimed);
+        for (const auto &entry : claim.entries) {
+          publishLocked(entry);
+        }
         requestStop = std::stop_source{};
         requestToken = requestStop.get_token();
       }
-      refreshCount(entry.providerId, expectedGeneration);
+      refreshCount(firstDue.providerId, expectedGeneration);
 
-      IrOutboxEntry requestEntry = claimed;
-      requestEntry.nextRequestUserIntent = claim.consumedUserIntent;
       const IrProviderRuntimeConfig runtime{
           .profileId = config.profileId,
           .serverOrigin = provider->second.serverOrigin,
@@ -859,11 +906,13 @@ struct IrSubmissionService::Impl {
       };
       DeliveryOutcome outcome;
       try {
-        outcome = entry.state == IrOutboxState::AwaitingRemoteResult
-                      ? drivers.poll(entry.providerId, requestEntry, runtime,
-                                     http, requestToken)
-                      : drivers.submit(entry.providerId, requestEntry, runtime,
-                                       http, requestToken);
+        outcome = polling
+                      ? drivers.pollBatch(firstDue.providerId, claim.entries,
+                                          runtime, http, requestToken)
+                      : drivers.submitBatch(
+                            firstDue.providerId, claim.entries,
+                            claim.consumedUserIntent, runtime, http,
+                            requestToken);
       } catch (...) {
         outcome = {.status = DeliveryStatus::TransientFailure,
                    .code = "worker_exception",
@@ -880,52 +929,91 @@ struct IrSubmissionService::Impl {
           return std::nullopt;
         }
       }
-      std::optional<std::string> successfulOrigin;
-      std::optional<IrSuccessfulReceiptDraft> successfulReceipt;
+
+      std::string singularRemoteScoreId;
       if (outcome.status == DeliveryStatus::Succeeded) {
-        successfulOrigin = requestOrigin(entry, provider->second);
-        if (successfulOrigin) {
-          successfulReceipt = IrSuccessfulReceiptDraft{
-              .serverOrigin = *successfulOrigin,
-              .remoteUserId = outcome.remoteUserId,
-              .remoteScoreId =
-                  outcome.remoteScoreId.value_or(std::string{}),
-              .source = IrReceiptConfirmationSource::Submission,
-              .observedInSnapshot = false,
-              .confirmedAtUnixMillis = completedAt,
-          };
+        bool scoreIdentityValid = true;
+        if (planned.size() == 1) {
+          if (outcome.remoteScoreIds.size() > 1 ||
+              (outcome.remoteScoreId && !outcome.remoteScoreIds.empty() &&
+               *outcome.remoteScoreId != outcome.remoteScoreIds.front())) {
+            scoreIdentityValid = false;
+          } else if (outcome.remoteScoreIds.size() == 1) {
+            singularRemoteScoreId = outcome.remoteScoreIds.front();
+          } else if (outcome.remoteScoreId) {
+            singularRemoteScoreId = *outcome.remoteScoreId;
+          }
         }
-        std::string receiptDiagnostic;
-        if (!successfulReceipt ||
-            !validateIrSuccessfulReceiptDraft(*successfulReceipt,
-                                              receiptDiagnostic)) {
+        if (!scoreIdentityValid) {
           outcome = {
               .status = DeliveryStatus::PermanentFailure,
               .code = "malformed_response",
               .diagnostic = "IR delivery returned invalid receipt identity",
           };
-          successfulOrigin.reset();
-          successfulReceipt.reset();
         }
       }
-      auto update = deliveryUpdate(claimed, entry.state, outcome, completedAt);
-      if (successfulReceipt) {
-        update.successfulReceipt = std::move(successfulReceipt);
+
+      std::vector<IrOutboxDeliveryUpdate> updates;
+      std::vector<std::optional<std::string>> successfulOrigins(planned.size());
+      updates.reserve(planned.size());
+      for (std::size_t index = 0; index < planned.size(); ++index) {
+        if (outcome.status == DeliveryStatus::Succeeded) {
+          successfulOrigins[index] =
+              requestOrigin(planned[index], provider->second);
+          std::string receiptDiagnostic;
+          const IrSuccessfulReceiptDraft receipt{
+              .serverOrigin = successfulOrigins[index].value_or(std::string{}),
+              .remoteUserId = outcome.remoteUserId,
+              .remoteScoreId = singularRemoteScoreId,
+              .source = IrReceiptConfirmationSource::Submission,
+              .observedInSnapshot = false,
+              .confirmedAtUnixMillis = completedAt,
+          };
+          if (!successfulOrigins[index] ||
+              !validateIrSuccessfulReceiptDraft(receipt, receiptDiagnostic)) {
+            outcome = {
+                .status = DeliveryStatus::PermanentFailure,
+                .code = "malformed_response",
+                .diagnostic = "IR delivery returned invalid receipt identity",
+            };
+            std::ranges::fill(successfulOrigins, std::nullopt);
+            break;
+          }
+        }
       }
-      const auto applied = repository.ApplyIrOutboxDelivery(update);
-      const StatusKey key{entry.providerId, entry.attemptId};
+      for (std::size_t index = 0; index < planned.size(); ++index) {
+        auto update = deliveryUpdate(claim.entries[index], planned[index].state,
+                                     outcome, completedAt);
+        if (outcome.status == DeliveryStatus::Succeeded) {
+          update.successfulReceipt = IrSuccessfulReceiptDraft{
+              .serverOrigin = *successfulOrigins[index],
+              .remoteUserId = outcome.remoteUserId,
+              .remoteScoreId = singularRemoteScoreId,
+              .source = IrReceiptConfirmationSource::Submission,
+              .observedInSnapshot = false,
+              .confirmedAtUnixMillis = completedAt,
+          };
+        }
+        updates.push_back(std::move(update));
+      }
+      const auto applied = repository.ApplyIrOutboxDeliveries(updates);
+      for (const auto &entry : planned) {
+        refreshEntry({entry.providerId, entry.attemptId}, expectedGeneration);
+      }
+      refreshCount(firstDue.providerId, expectedGeneration);
       if (applied.status == IrOutboxMutationStatus::Updated &&
           outcome.status == DeliveryStatus::Succeeded &&
-          successfulOrigin && options.submissionSucceeded) {
-        try {
-          options.submissionSucceeded(config.profileId, entry.providerId,
-                                      *successfulOrigin,
-                                      entry.chartMd5, entry.chartSha256);
-        } catch (...) {
+          options.submissionSucceeded) {
+        for (std::size_t index = 0; index < planned.size(); ++index) {
+          try {
+            options.submissionSucceeded(
+                config.profileId, planned[index].providerId,
+                *successfulOrigins[index], planned[index].chartMd5,
+                planned[index].chartSha256);
+          } catch (...) {
+          }
         }
       }
-      refreshEntry(key, expectedGeneration);
-      refreshCount(entry.providerId, expectedGeneration);
       return completedAt;
     }
     return nextEligibleFutureTime(expectedGeneration, config, now);

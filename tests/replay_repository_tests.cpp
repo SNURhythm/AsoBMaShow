@@ -5363,6 +5363,151 @@ successfulDelivery(std::int64_t rowId,
   };
 }
 
+void assertClaimedWithoutReceipt(ReplayRepository &helper,
+                                 const ClaimedCanonicalIrAttempt &fixture);
+
+void testIrOutboxBatchClaimAndDeliveryAreAtomic(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-batch-atomic" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  std::vector<ClaimedCanonicalIrAttempt> fixtures;
+  fixtures.reserve(3);
+  for (int index = 0; index < 3; ++index) {
+    const auto attempt = sampleChartAttempt(
+        root, "ir-outbox-batch-atomic-" + std::to_string(index), 160 + index);
+    assert(helper.StageChartResult(attempt, {}).status ==
+           result_persistence::StageStatus::Staged);
+    const auto inserted = helper.EnqueueReadyIrOutboxDraft(
+        automaticIrDraft(attempt, "tachi", 1'000 + index), index == 1);
+    assert(inserted.status == ir::IrOutboxInsertStatus::Inserted &&
+           inserted.entry);
+    fixtures.push_back({.attemptId = attempt.attemptId,
+                        .chartMd5 = attempt.score.chartMd5,
+                        .chartSha256 = attempt.score.chartSha256,
+                        .rowId = inserted.entry->id});
+  }
+
+  const std::vector mismatchRequests{
+      ir::IrOutboxClaimRequest{
+          .rowId = fixtures[2].rowId,
+          .expectedState = ir::IrOutboxState::Pending},
+      ir::IrOutboxClaimRequest{
+          .rowId = fixtures[1].rowId,
+          .expectedState = ir::IrOutboxState::AwaitingRemoteResult},
+      ir::IrOutboxClaimRequest{
+          .rowId = fixtures[0].rowId,
+          .expectedState = ir::IrOutboxState::Pending},
+  };
+  const auto mismatch = helper.ClaimIrOutboxBatch(mismatchRequests, 1'500);
+  assert(mismatch.status == ir::IrOutboxClaimStatus::StateMismatch &&
+         mismatch.entries.empty());
+  for (const auto &fixture : fixtures) {
+    const auto loaded = helper.LoadIrOutbox("tachi", fixture.attemptId);
+    assert(loaded.entry &&
+           loaded.entry->state == ir::IrOutboxState::Pending &&
+           loaded.entry->requestAttemptCount == 0);
+  }
+
+  const std::vector requests{
+      ir::IrOutboxClaimRequest{
+          .rowId = fixtures[2].rowId,
+          .expectedState = ir::IrOutboxState::Pending},
+      ir::IrOutboxClaimRequest{
+          .rowId = fixtures[1].rowId,
+          .expectedState = ir::IrOutboxState::Pending},
+      ir::IrOutboxClaimRequest{
+          .rowId = fixtures[0].rowId,
+          .expectedState = ir::IrOutboxState::Pending},
+  };
+  const auto claimed = helper.ClaimIrOutboxBatch(requests, 1'501);
+  assert(claimed.status == ir::IrOutboxClaimStatus::Claimed &&
+         claimed.entries.size() == 3 && claimed.consumedUserIntent);
+  for (std::size_t index = 0; index < requests.size(); ++index) {
+    assert(claimed.entries[index].id == requests[index].rowId &&
+           claimed.entries[index].state == ir::IrOutboxState::Uploading &&
+           claimed.entries[index].requestAttemptCount == 1 &&
+           !claimed.entries[index].nextRequestUserIntent);
+  }
+
+  std::vector<ir::IrOutboxDeliveryUpdate> deferred;
+  deferred.reserve(claimed.entries.size());
+  for (const auto &entry : claimed.entries) {
+    deferred.push_back({
+        .rowId = entry.id,
+        .nextState = ir::IrOutboxState::AwaitingRemoteResult,
+        .nextAttemptAtUnixMillis = 2'000,
+        .remoteJobId = "shared-job",
+        .remoteOrigin = "https://boku.tachi.ac",
+        .updatedAtUnixMillis = 1'600,
+    });
+  }
+  const auto deferredApplied = helper.ApplyIrOutboxDeliveries(deferred);
+  assert(deferredApplied.status == ir::IrOutboxMutationStatus::Updated &&
+         deferredApplied.affectedRows == 3);
+
+  std::vector<ir::IrOutboxClaimRequest> pollRequests;
+  pollRequests.reserve(fixtures.size());
+  for (const auto &fixture : fixtures) {
+    pollRequests.push_back({
+        .rowId = fixture.rowId,
+        .expectedState = ir::IrOutboxState::AwaitingRemoteResult,
+    });
+  }
+  const auto pollClaim = helper.ClaimIrOutboxBatch(pollRequests, 2'000);
+  assert(pollClaim.status == ir::IrOutboxClaimStatus::Claimed &&
+         pollClaim.entries.size() == 3 && !pollClaim.consumedUserIntent);
+
+  std::vector<ir::IrOutboxDeliveryUpdate> successful;
+  successful.reserve(fixtures.size());
+  for (const auto &fixture : fixtures) {
+    successful.push_back(successfulDelivery(fixture.rowId));
+  }
+  const auto succeeded = helper.ApplyIrOutboxDeliveries(successful);
+  assert(succeeded.status == ir::IrOutboxMutationStatus::Updated &&
+         succeeded.affectedRows == 3);
+  for (const auto &fixture : fixtures) {
+    const auto loaded = helper.LoadIrOutbox("tachi", fixture.attemptId);
+    const auto receipt = helper.LoadIrSubmissionReceipt(
+        "tachi", "https://boku.tachi.ac", fixture.attemptId);
+    assert(loaded.entry &&
+           loaded.entry->state == ir::IrOutboxState::Succeeded &&
+           receipt.status == ir::IrReceiptReadStatus::Found);
+  }
+
+  const auto rollbackPath = root / "ir-outbox-batch-receipt-rollback" /
+                            "replay.db";
+  ReplayRepository rollback(rollbackPath);
+  assert(rollback.EnsureSchema());
+  const auto rollbackFirst = stageActivateAndClaimIrAttempt(
+      rollback, root, "ir-outbox-batch-receipt-rollback-a", 163);
+  const auto rollbackSecond = stageActivateAndClaimIrAttempt(
+      rollback, root, "ir-outbox-batch-receipt-rollback-b", 164);
+  rollback.Shutdown();
+  auto database = openDatabase(rollbackPath);
+  execOrAbort(database.get(),
+              "CREATE TRIGGER fail_ir_batch_receipt BEFORE INSERT ON "
+              "ir_submission_receipts BEGIN SELECT RAISE(ABORT, "
+              "'forced batch receipt failure'); END");
+  database.reset();
+
+  const std::vector rollbackUpdates{
+      successfulDelivery(rollbackFirst.rowId),
+      successfulDelivery(rollbackSecond.rowId),
+  };
+  const auto rolledBack = rollback.ApplyIrOutboxDeliveries(rollbackUpdates);
+  assert(rolledBack.status == ir::IrOutboxMutationStatus::StorageFailure &&
+         rolledBack.affectedRows == 0);
+  assertClaimedWithoutReceipt(rollback, rollbackFirst);
+  assertClaimedWithoutReceipt(rollback, rollbackSecond);
+
+  assert(helper.ClaimIrOutboxBatch({}, 0).status ==
+         ir::IrOutboxClaimStatus::Invalid);
+  assert(helper.ApplyIrOutboxDeliveries({}).status ==
+         ir::IrOutboxMutationStatus::Invalid);
+}
+
 void testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(
     const std::filesystem::path &root) {
   const auto path = root / "ir-reconciliation-candidates" / "replay.db";
@@ -7539,6 +7684,7 @@ int main() {
   testVersion9MigrationAddsIrRemoteScores(root);
   testCurrentVersionRejectsMalformedIrRemoteScoreSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
+  testIrOutboxBatchClaimAndDeliveryAreAtomic(root);
   testIrOutboxSuccessCommitsReceiptAtomically(root);
   testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(root);
   testLoadIrReconciliationCandidatesSkipsCorruptionWithBoundedDiagnostic(root);

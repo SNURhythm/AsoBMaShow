@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <mutex>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -242,6 +243,167 @@ ir::IrOutboxMutationOutcome mutationFromChanges(sqlite3 *db) {
   return {.status = changes > 0 ? ir::IrOutboxMutationStatus::Updated
                                 : ir::IrOutboxMutationStatus::NotFound,
           .affectedRows = static_cast<std::size_t>(std::max(0, changes))};
+}
+
+bool validateDeliveryUpdate(const ir::IrOutboxDeliveryUpdate &update,
+                            std::string &diagnostic) {
+  const bool hasJob = update.remoteJobId && !update.remoteJobId->empty();
+  const bool hasOrigin = update.remoteOrigin && !update.remoteOrigin->empty();
+  const bool remotePairValid =
+      hasJob == hasOrigin &&
+      (!hasJob ||
+       (update.remoteJobId->size() <= ir::kMaximumIrRemoteValueBytes &&
+        update.remoteOrigin->size() <= ir::kMaximumIrRemoteValueBytes));
+  const bool targetValid =
+      update.nextState == ir::IrOutboxState::Pending ||
+      update.nextState == ir::IrOutboxState::AwaitingRemoteResult ||
+      update.nextState == ir::IrOutboxState::BlockedConfiguration ||
+      update.nextState == ir::IrOutboxState::FailedPermanent ||
+      update.nextState == ir::IrOutboxState::Succeeded;
+  const bool succeeds = update.nextState == ir::IrOutboxState::Succeeded;
+  if (update.rowId <= 0 || update.updatedAtUnixMillis < 0 ||
+      update.consecutiveFailureCount < 0 || update.remotePollCount < 0 ||
+      (update.nextAttemptAtUnixMillis && *update.nextAttemptAtUnixMillis < 0) ||
+      (update.completedAtUnixMillis && *update.completedAtUnixMillis < 0) ||
+      !targetValid || !remotePairValid ||
+      (update.nextState == ir::IrOutboxState::AwaitingRemoteResult &&
+       !hasJob) ||
+      (update.nextState != ir::IrOutboxState::AwaitingRemoteResult &&
+       update.nextState != ir::IrOutboxState::BlockedConfiguration && hasJob) ||
+      (succeeds != update.completedAtUnixMillis.has_value()) ||
+      (succeeds != update.successfulReceipt.has_value())) {
+    diagnostic = "IR delivery update is invalid";
+    return false;
+  }
+  return !update.successfulReceipt || ir::validateIrSuccessfulReceiptDraft(
+                                          *update.successfulReceipt, diagnostic);
+}
+
+ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
+    sqlite3 *database, const ir::IrOutboxEntry &claimed,
+    const ir::IrOutboxDeliveryUpdate &update) {
+  const bool hasJob = update.remoteJobId && !update.remoteJobId->empty();
+  const bool hasOrigin = update.remoteOrigin && !update.remoteOrigin->empty();
+  std::string errorCode = ir::sanitizeDiagnostic(update.lastErrorCode);
+  if (errorCode.size() > ir::kMaximumIrErrorCodeBytes) {
+    errorCode.resize(ir::kMaximumIrErrorCodeBytes);
+  }
+  const std::string errorMessage =
+      ir::sanitizeDiagnostic(update.lastErrorMessage);
+  const std::optional<std::string> remoteJob =
+      hasJob ? update.remoteJobId : std::nullopt;
+  const std::optional<std::string> remoteOrigin =
+      hasOrigin ? update.remoteOrigin : std::nullopt;
+  const std::optional<std::string> storedErrorCode =
+      errorCode.empty() ? std::nullopt : std::optional<std::string>(errorCode);
+  const std::optional<std::string> storedErrorMessage =
+      errorMessage.empty() ? std::nullopt
+                           : std::optional<std::string>(errorMessage);
+
+  SqliteStatementHandle statement;
+  constexpr const char *query =
+      "UPDATE ir_outbox SET state=?,consecutive_failure_count=?,"
+      "remote_poll_count=?,next_attempt_at_ms=?,remote_job_id=?,remote_origin=?,"
+      "last_error_code=?,last_error_message=?,updated_at_ms=?,"
+      "completed_at_ms=? WHERE id=? AND state=1";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1,
+                       static_cast<int>(update.nextState)) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 2, update.consecutiveFailureCount) !=
+          SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 3, update.remotePollCount) != SQLITE_OK ||
+      !bindOptionalInteger(statement.get(), 4, update.nextAttemptAtUnixMillis) ||
+      !bindOptionalText(statement.get(), 5, remoteJob) ||
+      !bindOptionalText(statement.get(), 6, remoteOrigin) ||
+      !bindOptionalText(statement.get(), 7, storedErrorCode) ||
+      !bindOptionalText(statement.get(), 8, storedErrorMessage) ||
+      sqlite3_bind_int64(statement.get(), 9, update.updatedAtUnixMillis) !=
+          SQLITE_OK ||
+      !bindOptionalInteger(statement.get(), 10,
+                           update.completedAtUnixMillis) ||
+      sqlite3_bind_int64(statement.get(), 11, update.rowId) != SQLITE_OK ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not apply IR outbox delivery"};
+  }
+  if (sqlite3_changes(database) != 1) {
+    return {.status = ir::IrOutboxMutationStatus::StateMismatch};
+  }
+  if (update.nextState != ir::IrOutboxState::Succeeded) {
+    return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
+  }
+
+  SqliteStatementHandle replay;
+  if (prepareSqliteStatement(database,
+                             "SELECT id FROM replays WHERE attempt_id=?",
+                             replay) != SQLITE_OK ||
+      !bindSqliteText(replay.get(), 1, claimed.attemptId)) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not prepare IR receipt replay lookup"};
+  }
+  const int replayStep = sqlite3_step(replay.get());
+  if (replayStep != SQLITE_ROW ||
+      sqlite3_column_type(replay.get(), 0) != SQLITE_INTEGER) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = replayStep == SQLITE_DONE
+                              ? "IR receipt replay attempt is missing"
+                              : "IR receipt replay lookup did not complete"};
+  }
+  const sqlite3_int64 replayId = sqlite3_column_int64(replay.get(), 0);
+  if (replayId <= 0 || replayId > std::numeric_limits<int>::max() ||
+      sqlite3_step(replay.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "IR receipt replay lookup is invalid"};
+  }
+
+  const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
+  constexpr const char *receiptQuery =
+      "INSERT INTO ir_submission_receipts("
+      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+      "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
+      "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+      "ON CONFLICT(provider_id,server_origin,replay_id) DO UPDATE SET "
+      "attempt_id=excluded.attempt_id,"
+      "chart_md5=excluded.chart_md5,"
+      "chart_sha256=excluded.chart_sha256,"
+      "remote_user_id=COALESCE(excluded.remote_user_id,remote_user_id),"
+      "remote_chart_id=CASE WHEN excluded.remote_chart_id<>'' THEN "
+      "excluded.remote_chart_id ELSE remote_chart_id END,"
+      "remote_score_id=CASE WHEN excluded.remote_score_id<>'' THEN "
+      "excluded.remote_score_id ELSE remote_score_id END,"
+      "confirmation_source=excluded.confirmation_source,"
+      "observed_in_snapshot=MAX(observed_in_snapshot,"
+      "excluded.observed_in_snapshot),"
+      "confirmed_at_ms=MAX(confirmed_at_ms,excluded.confirmed_at_ms)";
+  SqliteStatementHandle receiptStatement;
+  if (prepareSqliteStatement(database, receiptQuery, receiptStatement) !=
+          SQLITE_OK ||
+      !bindSqliteText(receiptStatement.get(), 1, claimed.providerId) ||
+      !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
+      sqlite3_bind_int64(receiptStatement.get(), 3, replayId) != SQLITE_OK ||
+      !bindSqliteText(receiptStatement.get(), 4, claimed.attemptId) ||
+      (claimed.chartMd5.empty()
+           ? sqlite3_bind_null(receiptStatement.get(), 5) != SQLITE_OK
+           : !bindSqliteText(receiptStatement.get(), 5, claimed.chartMd5)) ||
+      !bindSqliteText(receiptStatement.get(), 6, claimed.chartSha256) ||
+      (receipt.remoteUserId
+           ? sqlite3_bind_int64(receiptStatement.get(), 7,
+                                *receipt.remoteUserId) != SQLITE_OK
+           : sqlite3_bind_null(receiptStatement.get(), 7) != SQLITE_OK) ||
+      !bindSqliteText(receiptStatement.get(), 8, receipt.remoteChartId) ||
+      !bindSqliteText(receiptStatement.get(), 9, receipt.remoteScoreId) ||
+      sqlite3_bind_int(receiptStatement.get(), 10,
+                       static_cast<int>(receipt.source)) != SQLITE_OK ||
+      sqlite3_bind_int(receiptStatement.get(), 11,
+                       receipt.observedInSnapshot ? 1 : 0) != SQLITE_OK ||
+      sqlite3_bind_int64(receiptStatement.get(), 12,
+                         receipt.confirmedAtUnixMillis) != SQLITE_OK ||
+      sqlite3_step(receiptStatement.get()) != SQLITE_DONE ||
+      sqlite3_changes(database) != 1) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not persist IR submission receipt"};
+  }
+  return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
 }
 
 } // namespace
@@ -671,11 +833,34 @@ ir::IrOutboxBatchOutcome ReplayRepository::ListIrOutbox(std::size_t limit) {
 
 ir::IrOutboxClaimOutcome ReplayRepository::ClaimIrOutbox(
     std::int64_t rowId, ir::IrOutboxState expectedState, std::int64_t nowMs) {
-  if (rowId <= 0 || nowMs < 0 ||
-      (expectedState != ir::IrOutboxState::Pending &&
-       expectedState != ir::IrOutboxState::AwaitingRemoteResult)) {
+  const ir::IrOutboxClaimRequest request{.rowId = rowId,
+                                         .expectedState = expectedState};
+  auto batch = ClaimIrOutboxBatch(std::span(&request, 1), nowMs);
+  return {.status = batch.status,
+          .entry = batch.entries.empty()
+                       ? std::nullopt
+                       : std::optional<ir::IrOutboxEntry>(
+                             std::move(batch.entries.front())),
+          .consumedUserIntent = batch.consumedUserIntent,
+          .diagnostic = std::move(batch.diagnostic)};
+}
+
+ir::IrOutboxBatchClaimOutcome ReplayRepository::ClaimIrOutboxBatch(
+    std::span<const ir::IrOutboxClaimRequest> requests, std::int64_t nowMs) {
+  if (requests.empty() || requests.size() > 64 || nowMs < 0) {
     return {.status = ir::IrOutboxClaimStatus::Invalid,
-            .diagnostic = "IR outbox claim is invalid"};
+            .diagnostic = "IR outbox batch claim is invalid"};
+  }
+  std::unordered_set<std::int64_t> rowIds;
+  rowIds.reserve(requests.size());
+  for (const auto &request : requests) {
+    if (request.rowId <= 0 ||
+        (request.expectedState != ir::IrOutboxState::Pending &&
+         request.expectedState != ir::IrOutboxState::AwaitingRemoteResult) ||
+        !rowIds.insert(request.rowId).second) {
+      return {.status = ir::IrOutboxClaimStatus::Invalid,
+              .diagnostic = "IR outbox batch claim is invalid"};
+    }
   }
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
@@ -688,60 +873,77 @@ ir::IrOutboxClaimOutcome ReplayRepository::ClaimIrOutbox(
       impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
   if (!transaction.active()) {
     return {.status = ir::IrOutboxClaimStatus::StorageFailure,
-            .diagnostic = "could not start IR outbox claim"};
+            .diagnostic = "could not start IR outbox batch claim"};
   }
-  RowLookup before = loadById(impl_->sessionDatabase, rowId);
-  if (before.status == RowLookupStatus::NotFound) {
-    return {.status = ir::IrOutboxClaimStatus::NotFound};
+
+  bool consumedUserIntent = false;
+  for (const auto &request : requests) {
+    RowLookup before = loadById(impl_->sessionDatabase, request.rowId);
+    if (before.status == RowLookupStatus::NotFound) {
+      return {.status = ir::IrOutboxClaimStatus::NotFound};
+    }
+    if (before.status == RowLookupStatus::Invalid) {
+      return {.status = ir::IrOutboxClaimStatus::IntegrityConflict,
+              .diagnostic = std::move(before.diagnostic)};
+    }
+    if (before.status != RowLookupStatus::Found || !before.entry) {
+      return {.status = ir::IrOutboxClaimStatus::StorageFailure,
+              .diagnostic = std::move(before.diagnostic)};
+    }
+    if (before.entry->state != request.expectedState ||
+        !before.entry->localResultReady) {
+      return {.status = ir::IrOutboxClaimStatus::StateMismatch};
+    }
+    consumedUserIntent =
+        consumedUserIntent ||
+        (request.expectedState == ir::IrOutboxState::Pending &&
+         before.entry->nextRequestUserIntent);
   }
-  if (before.status == RowLookupStatus::Invalid) {
-    return {.status = ir::IrOutboxClaimStatus::IntegrityConflict,
-            .diagnostic = std::move(before.diagnostic)};
-  }
-  if (before.status != RowLookupStatus::Found || !before.entry) {
-    return {.status = ir::IrOutboxClaimStatus::StorageFailure,
-            .diagnostic = std::move(before.diagnostic)};
-  }
-  if (before.entry->state != expectedState || !before.entry->localResultReady) {
-    return {.status = ir::IrOutboxClaimStatus::StateMismatch};
-  }
-  const bool consumed = expectedState == ir::IrOutboxState::Pending &&
-                        before.entry->nextRequestUserIntent;
-  SqliteStatementHandle update;
+
   const char *query =
       "UPDATE ir_outbox SET state=1,request_attempt_count="
       "request_attempt_count+1,next_request_user_intent="
       "CASE WHEN ?=0 THEN 0 ELSE next_request_user_intent END,updated_at_ms=? "
       "WHERE id=? AND state=? AND local_result_ready=1";
-  if (prepareSqliteStatement(impl_->sessionDatabase, query, update) !=
-          SQLITE_OK ||
-      sqlite3_bind_int(update.get(), 1, static_cast<int>(expectedState)) !=
-          SQLITE_OK ||
-      sqlite3_bind_int64(update.get(), 2, nowMs) != SQLITE_OK ||
-      sqlite3_bind_int64(update.get(), 3, rowId) != SQLITE_OK ||
-      sqlite3_bind_int(update.get(), 4, static_cast<int>(expectedState)) !=
-          SQLITE_OK ||
-      sqlite3_step(update.get()) != SQLITE_DONE) {
-    return {.status = ir::IrOutboxClaimStatus::StorageFailure,
-            .diagnostic = "could not claim IR outbox row"};
+  for (const auto &request : requests) {
+    SqliteStatementHandle update;
+    if (prepareSqliteStatement(impl_->sessionDatabase, query, update) !=
+            SQLITE_OK ||
+        sqlite3_bind_int(update.get(), 1,
+                         static_cast<int>(request.expectedState)) != SQLITE_OK ||
+        sqlite3_bind_int64(update.get(), 2, nowMs) != SQLITE_OK ||
+        sqlite3_bind_int64(update.get(), 3, request.rowId) != SQLITE_OK ||
+        sqlite3_bind_int(update.get(), 4,
+                         static_cast<int>(request.expectedState)) != SQLITE_OK ||
+        sqlite3_step(update.get()) != SQLITE_DONE) {
+      return {.status = ir::IrOutboxClaimStatus::StorageFailure,
+              .diagnostic = "could not claim IR outbox batch"};
+    }
+    if (sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ir::IrOutboxClaimStatus::StateMismatch};
+    }
   }
-  if (sqlite3_changes(impl_->sessionDatabase) != 1) {
-    return {.status = ir::IrOutboxClaimStatus::StateMismatch};
-  }
-  RowLookup after = loadById(impl_->sessionDatabase, rowId);
-  if (after.status != RowLookupStatus::Found || !after.entry) {
-    return {.status = after.status == RowLookupStatus::Invalid
-                          ? ir::IrOutboxClaimStatus::IntegrityConflict
-                          : ir::IrOutboxClaimStatus::StorageFailure,
-            .diagnostic = std::move(after.diagnostic)};
+
+  ir::IrOutboxBatchClaimOutcome outcome{
+      .status = ir::IrOutboxClaimStatus::Claimed,
+      .consumedUserIntent = consumedUserIntent,
+  };
+  outcome.entries.reserve(requests.size());
+  for (const auto &request : requests) {
+    RowLookup after = loadById(impl_->sessionDatabase, request.rowId);
+    if (after.status != RowLookupStatus::Found || !after.entry) {
+      return {.status = after.status == RowLookupStatus::Invalid
+                            ? ir::IrOutboxClaimStatus::IntegrityConflict
+                            : ir::IrOutboxClaimStatus::StorageFailure,
+              .diagnostic = std::move(after.diagnostic)};
+    }
+    outcome.entries.push_back(std::move(*after.entry));
   }
   if (!transaction.commit(transactionError)) {
     return {.status = ir::IrOutboxClaimStatus::StorageFailure,
-            .diagnostic = "could not commit IR outbox claim"};
+            .diagnostic = "could not commit IR outbox batch claim"};
   }
-  return {.status = ir::IrOutboxClaimStatus::Claimed,
-          .entry = std::move(after.entry),
-          .consumedUserIntent = consumed};
+  return outcome;
 }
 
 ir::IrOutboxMutationOutcome ReplayRepository::BlockIrOutboxConfiguration(
@@ -800,40 +1002,24 @@ ir::IrOutboxMutationOutcome ReplayRepository::BlockIrOutboxConfiguration(
 
 ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
     const ir::IrOutboxDeliveryUpdate &update) {
-  const bool hasJob = update.remoteJobId && !update.remoteJobId->empty();
-  const bool hasOrigin = update.remoteOrigin && !update.remoteOrigin->empty();
-  const bool remotePairValid =
-      hasJob == hasOrigin &&
-      (!hasJob ||
-       (update.remoteJobId->size() <= ir::kMaximumIrRemoteValueBytes &&
-        update.remoteOrigin->size() <= ir::kMaximumIrRemoteValueBytes));
-  const bool targetValid =
-      update.nextState == ir::IrOutboxState::Pending ||
-      update.nextState == ir::IrOutboxState::AwaitingRemoteResult ||
-      update.nextState == ir::IrOutboxState::BlockedConfiguration ||
-      update.nextState == ir::IrOutboxState::FailedPermanent ||
-      update.nextState == ir::IrOutboxState::Succeeded;
-  const bool succeeds = update.nextState == ir::IrOutboxState::Succeeded;
-  if (update.rowId <= 0 || update.updatedAtUnixMillis < 0 ||
-      update.consecutiveFailureCount < 0 || update.remotePollCount < 0 ||
-      (update.nextAttemptAtUnixMillis && *update.nextAttemptAtUnixMillis < 0) ||
-      (update.completedAtUnixMillis && *update.completedAtUnixMillis < 0) ||
-      !targetValid || !remotePairValid ||
-      (update.nextState == ir::IrOutboxState::AwaitingRemoteResult &&
-       !hasJob) ||
-      (update.nextState != ir::IrOutboxState::AwaitingRemoteResult &&
-       update.nextState != ir::IrOutboxState::BlockedConfiguration && hasJob) ||
-      (succeeds != update.completedAtUnixMillis.has_value()) ||
-      (succeeds != update.successfulReceipt.has_value())) {
+  return ApplyIrOutboxDeliveries(std::span(&update, 1));
+}
+
+ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDeliveries(
+    std::span<const ir::IrOutboxDeliveryUpdate> updates) {
+  if (updates.empty() || updates.size() > 64) {
     return {.status = ir::IrOutboxMutationStatus::Invalid,
-            .diagnostic = "IR delivery update is invalid"};
+            .diagnostic = "IR delivery batch is invalid"};
   }
-  if (update.successfulReceipt) {
+  std::unordered_set<std::int64_t> rowIds;
+  rowIds.reserve(updates.size());
+  for (const auto &update : updates) {
     std::string diagnostic;
-    if (!ir::validateIrSuccessfulReceiptDraft(*update.successfulReceipt,
-                                              diagnostic)) {
+    if (!validateDeliveryUpdate(update, diagnostic) ||
+        !rowIds.insert(update.rowId).second) {
       return {.status = ir::IrOutboxMutationStatus::Invalid,
-              .diagnostic = std::move(diagnostic)};
+              .diagnostic = diagnostic.empty() ? "IR delivery batch is invalid"
+                                               : std::move(diagnostic)};
     }
   }
   profile_database_activity::WriteGuard operation;
@@ -842,152 +1028,46 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = "replay storage is unavailable"};
   }
-  std::string errorCode = ir::sanitizeDiagnostic(update.lastErrorCode);
-  if (errorCode.size() > ir::kMaximumIrErrorCodeBytes) {
-    errorCode.resize(ir::kMaximumIrErrorCodeBytes);
-  }
-  const std::string errorMessage =
-      ir::sanitizeDiagnostic(update.lastErrorMessage);
-  SqliteStatementHandle stmt;
-  const char *query =
-      "UPDATE ir_outbox SET state=?,consecutive_failure_count=?,"
-      "remote_poll_count=?,next_attempt_at_ms=?,remote_job_id=?,remote_origin=?,"
-      "last_error_code=?,last_error_message=?,updated_at_ms=?,"
-      "completed_at_ms=? WHERE id=? AND state=1";
-  const std::optional<std::string> remoteJob =
-      hasJob ? update.remoteJobId : std::nullopt;
-  const std::optional<std::string> remoteOrigin =
-      hasOrigin ? update.remoteOrigin : std::nullopt;
-  const std::optional<std::string> storedErrorCode =
-      errorCode.empty() ? std::nullopt : std::optional<std::string>(errorCode);
-  const std::optional<std::string> storedErrorMessage =
-      errorMessage.empty() ? std::nullopt
-                           : std::optional<std::string>(errorMessage);
   std::string transactionError;
   SqliteTransactionHandle transaction(
       impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
   if (!transaction.active()) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "could not start IR delivery update"};
+            .diagnostic = "could not start IR delivery batch"};
   }
-  RowLookup claimed = loadById(impl_->sessionDatabase, update.rowId);
-  if (claimed.status == RowLookupStatus::NotFound) {
-    return {.status = ir::IrOutboxMutationStatus::NotFound};
-  }
-  if (claimed.status != RowLookupStatus::Found || !claimed.entry) {
-    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = claimed.diagnostic.empty()
-                              ? "could not load claimed IR outbox row"
-                              : std::move(claimed.diagnostic)};
-  }
-  if (claimed.entry->state != ir::IrOutboxState::Uploading) {
-    return {.status = ir::IrOutboxMutationStatus::StateMismatch};
-  }
-  if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
-          SQLITE_OK ||
-      sqlite3_bind_int(stmt.get(), 1, static_cast<int>(update.nextState)) !=
-          SQLITE_OK ||
-      sqlite3_bind_int(stmt.get(), 2, update.consecutiveFailureCount) !=
-          SQLITE_OK ||
-      sqlite3_bind_int(stmt.get(), 3, update.remotePollCount) != SQLITE_OK ||
-      !bindOptionalInteger(stmt.get(), 4, update.nextAttemptAtUnixMillis) ||
-      !bindOptionalText(stmt.get(), 5, remoteJob) ||
-      !bindOptionalText(stmt.get(), 6, remoteOrigin) ||
-      !bindOptionalText(stmt.get(), 7, storedErrorCode) ||
-      !bindOptionalText(stmt.get(), 8, storedErrorMessage) ||
-      sqlite3_bind_int64(stmt.get(), 9, update.updatedAtUnixMillis) !=
-          SQLITE_OK ||
-      !bindOptionalInteger(stmt.get(), 10, update.completedAtUnixMillis) ||
-      sqlite3_bind_int64(stmt.get(), 11, update.rowId) != SQLITE_OK ||
-      sqlite3_step(stmt.get()) != SQLITE_DONE) {
-    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "could not apply IR outbox delivery"};
-  }
-  if (sqlite3_changes(impl_->sessionDatabase) != 1) {
-    RowLookup current = loadById(impl_->sessionDatabase, update.rowId);
-    return {.status = current.status == RowLookupStatus::NotFound
-                          ? ir::IrOutboxMutationStatus::NotFound
-                          : ir::IrOutboxMutationStatus::StateMismatch};
-  }
-  if (succeeds) {
-    SqliteStatementHandle replay;
-    if (prepareSqliteStatement(
-            impl_->sessionDatabase,
-            "SELECT id FROM replays WHERE attempt_id=?", replay) != SQLITE_OK ||
-        !bindSqliteText(replay.get(), 1, claimed.entry->attemptId)) {
-      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-              .diagnostic = "could not prepare IR receipt replay lookup"};
+  std::vector<ir::IrOutboxEntry> claimedEntries;
+  claimedEntries.reserve(updates.size());
+  for (const auto &update : updates) {
+    RowLookup claimed = loadById(impl_->sessionDatabase, update.rowId);
+    if (claimed.status == RowLookupStatus::NotFound) {
+      return {.status = ir::IrOutboxMutationStatus::NotFound};
     }
-    const int replayStep = sqlite3_step(replay.get());
-    if (replayStep != SQLITE_ROW ||
-        sqlite3_column_type(replay.get(), 0) != SQLITE_INTEGER) {
+    if (claimed.status != RowLookupStatus::Found || !claimed.entry) {
       return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-              .diagnostic = replayStep == SQLITE_DONE
-                                ? "IR receipt replay attempt is missing"
-                                : "IR receipt replay lookup did not complete"};
+              .diagnostic = claimed.diagnostic.empty()
+                                ? "could not load claimed IR outbox row"
+                                : std::move(claimed.diagnostic)};
     }
-    const sqlite3_int64 replayId = sqlite3_column_int64(replay.get(), 0);
-    if (replayId <= 0 || replayId > std::numeric_limits<int>::max() ||
-        sqlite3_step(replay.get()) != SQLITE_DONE) {
-      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-              .diagnostic = "IR receipt replay lookup is invalid"};
+    if (claimed.entry->state != ir::IrOutboxState::Uploading) {
+      return {.status = ir::IrOutboxMutationStatus::StateMismatch};
     }
-
-    const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
-    constexpr const char *receiptQuery =
-        "INSERT INTO ir_submission_receipts("
-        "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
-        "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
-        "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(provider_id,server_origin,replay_id) DO UPDATE SET "
-        "attempt_id=excluded.attempt_id,"
-        "chart_md5=excluded.chart_md5,"
-        "chart_sha256=excluded.chart_sha256,"
-        "remote_user_id=COALESCE(excluded.remote_user_id,remote_user_id),"
-        "remote_chart_id=CASE WHEN excluded.remote_chart_id<>'' THEN "
-        "excluded.remote_chart_id ELSE remote_chart_id END,"
-        "remote_score_id=CASE WHEN excluded.remote_score_id<>'' THEN "
-        "excluded.remote_score_id ELSE remote_score_id END,"
-        "confirmation_source=excluded.confirmation_source,"
-        "observed_in_snapshot=MAX(observed_in_snapshot,"
-        "excluded.observed_in_snapshot),"
-        "confirmed_at_ms=MAX(confirmed_at_ms,excluded.confirmed_at_ms)";
-    SqliteStatementHandle receiptStatement;
-    if (prepareSqliteStatement(impl_->sessionDatabase, receiptQuery,
-                               receiptStatement) != SQLITE_OK ||
-        !bindSqliteText(receiptStatement.get(), 1,
-                        claimed.entry->providerId) ||
-        !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
-        sqlite3_bind_int64(receiptStatement.get(), 3, replayId) != SQLITE_OK ||
-        !bindSqliteText(receiptStatement.get(), 4, claimed.entry->attemptId) ||
-        (claimed.entry->chartMd5.empty()
-             ? sqlite3_bind_null(receiptStatement.get(), 5) != SQLITE_OK
-             : !bindSqliteText(receiptStatement.get(), 5,
-                               claimed.entry->chartMd5)) ||
-        !bindSqliteText(receiptStatement.get(), 6,
-                        claimed.entry->chartSha256) ||
-        (receipt.remoteUserId
-             ? sqlite3_bind_int64(receiptStatement.get(), 7,
-                                  *receipt.remoteUserId) != SQLITE_OK
-             : sqlite3_bind_null(receiptStatement.get(), 7) != SQLITE_OK) ||
-        !bindSqliteText(receiptStatement.get(), 8, receipt.remoteChartId) ||
-        !bindSqliteText(receiptStatement.get(), 9, receipt.remoteScoreId) ||
-        sqlite3_bind_int(receiptStatement.get(), 10,
-                         static_cast<int>(receipt.source)) != SQLITE_OK ||
-        sqlite3_bind_int(receiptStatement.get(), 11,
-                         receipt.observedInSnapshot ? 1 : 0) != SQLITE_OK ||
-        sqlite3_bind_int64(receiptStatement.get(), 12,
-                           receipt.confirmedAtUnixMillis) != SQLITE_OK ||
-        sqlite3_step(receiptStatement.get()) != SQLITE_DONE) {
-      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-              .diagnostic = "could not persist IR submission receipt"};
+    claimedEntries.push_back(std::move(*claimed.entry));
+  }
+  for (std::size_t index = 0; index < updates.size(); ++index) {
+    const auto applied = applyDeliveryOnConnection(
+        impl_->sessionDatabase, claimedEntries[index], updates[index]);
+    if (applied.status != ir::IrOutboxMutationStatus::Updated ||
+        applied.affectedRows != 1) {
+      return {.status = applied.status,
+              .diagnostic = std::move(applied.diagnostic)};
     }
   }
   if (!transaction.commit(transactionError)) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "could not commit IR delivery update"};
+            .diagnostic = "could not commit IR delivery batch"};
   }
-  return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
+  return {.status = ir::IrOutboxMutationStatus::Updated,
+          .affectedRows = updates.size()};
 }
 
 ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(

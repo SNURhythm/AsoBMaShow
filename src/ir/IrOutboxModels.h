@@ -136,6 +136,18 @@ enum class IrOutboxClaimStatus {
   IntegrityConflict,
 };
 
+struct IrOutboxClaimRequest {
+  std::int64_t rowId = 0;
+  IrOutboxState expectedState = IrOutboxState::Pending;
+};
+
+struct IrOutboxBatchClaimOutcome {
+  IrOutboxClaimStatus status = IrOutboxClaimStatus::StorageFailure;
+  std::vector<IrOutboxEntry> entries;
+  bool consumedUserIntent = false;
+  std::string diagnostic;
+};
+
 struct IrOutboxClaimOutcome {
   IrOutboxClaimStatus status = IrOutboxClaimStatus::StorageFailure;
   std::optional<IrOutboxEntry> entry;

@@ -72,6 +72,7 @@ public:
 struct DriverCall {
   bool poll = false;
   bool userIntent = false;
+  std::vector<std::int64_t> rowIds;
   std::string configuredOrigin;
   std::string apiKey;
   std::string remoteJobId;
@@ -92,18 +93,57 @@ public:
     return capabilities_;
   }
 
+  ir::IrOutboxBatchPlan
+  planBatch(std::span<const ir::IrOutboxEntry> due) const override {
+    if (due.empty()) {
+      return {.status = ir::IrOutboxBatchPlanStatus::Invalid,
+              .diagnostic = "fake batch has no rows"};
+    }
+    const auto &first = due.front();
+    std::vector<std::int64_t> rowIds;
+    for (const auto &entry : due) {
+      if (entry.state != first.state) {
+        continue;
+      }
+      if (entry.state == ir::IrOutboxState::AwaitingRemoteResult &&
+          (entry.remoteJobId != first.remoteJobId ||
+           entry.remoteOrigin != first.remoteOrigin)) {
+        continue;
+      }
+      rowIds.push_back(entry.id);
+    }
+    return {.status = ir::IrOutboxBatchPlanStatus::Planned,
+            .rowIds = std::move(rowIds)};
+  }
+
   ir::DeliveryOutcome submit(const ir::IrOutboxEntry &entry,
                              const ir::IrProviderRuntimeConfig &config,
                              ir::IrHttpClient &,
                              std::stop_token token) const override {
-    return perform(false, entry, config, token);
+    return perform(false, std::span<const ir::IrOutboxEntry>(&entry, 1),
+                   entry.nextRequestUserIntent, config, token);
+  }
+
+  ir::DeliveryOutcome submitBatch(
+      std::span<const ir::IrOutboxEntry> entries, bool userIntent,
+      const ir::IrProviderRuntimeConfig &config, ir::IrHttpClient &,
+      std::stop_token token) const override {
+    return perform(false, entries, userIntent, config, token);
   }
 
   ir::DeliveryOutcome poll(const ir::IrOutboxEntry &entry,
                            const ir::IrProviderRuntimeConfig &config,
                            ir::IrHttpClient &,
                            std::stop_token token) const override {
-    return perform(true, entry, config, token);
+    return perform(true, std::span<const ir::IrOutboxEntry>(&entry, 1), false,
+                   config, token);
+  }
+
+  ir::DeliveryOutcome pollBatch(
+      std::span<const ir::IrOutboxEntry> entries,
+      const ir::IrProviderRuntimeConfig &config, ir::IrHttpClient &,
+      std::stop_token token) const override {
+    return perform(true, entries, false, config, token);
   }
 
   ir::IrUserScoreSnapshotOutcome fetchUserScoreSnapshot(
@@ -248,16 +288,26 @@ public:
   }
 
 private:
-  ir::DeliveryOutcome perform(bool poll, const ir::IrOutboxEntry &entry,
+  ir::DeliveryOutcome perform(bool poll,
+                              std::span<const ir::IrOutboxEntry> entries,
+                              bool userIntent,
                               const ir::IrProviderRuntimeConfig &config,
                               std::stop_token token) const {
     std::unique_lock lock(mutex_);
+    std::vector<std::int64_t> rowIds;
+    rowIds.reserve(entries.size());
+    for (const auto &entry : entries) {
+      rowIds.push_back(entry.id);
+    }
+    const ir::IrOutboxEntry empty;
+    const auto &first = entries.empty() ? empty : entries.front();
     calls_.push_back({.poll = poll,
-                      .userIntent = entry.nextRequestUserIntent,
+                      .userIntent = userIntent,
+                      .rowIds = std::move(rowIds),
                       .configuredOrigin = config.serverOrigin,
                       .apiKey = config.apiKey,
-                      .remoteJobId = entry.remoteJobId,
-                      .remoteOrigin = entry.remoteOrigin});
+                      .remoteJobId = first.remoteJobId,
+                      .remoteOrigin = first.remoteOrigin});
     callsChanged_.notify_all();
     if (block_) {
       blockChanged_.wait(lock, token,
@@ -814,6 +864,173 @@ std::int64_t makeAwaiting(Harness &harness, int suffix,
   return inserted.entry->id;
 }
 
+void testDueAttemptsSubmitAsOneAtomicGroup() {
+  Harness harness;
+  harness.setCredential("key");
+  for (int suffix = 200; suffix < 203; ++suffix) {
+    expect(harness.enqueueReady(draft(suffix, harness.now.load()),
+                                suffix == 201)
+               .entry.has_value(),
+           "grouped submit fixture inserts");
+  }
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Succeeded,
+      .remoteUserId = 42,
+      .remoteScoreIds = {"score-1", "score-2", "score-3"},
+  });
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.driver->waitForCalls(1), "one grouped request starts");
+  const auto calls = harness.driver->calls();
+  expect(calls.size() == 1 && calls.front().rowIds.size() == 3,
+         "three due attempts share one provider request");
+  expect(calls.front().userIntent,
+         "grouped request consumes aggregate manual intent");
+  for (int suffix = 200; suffix < 203; ++suffix) {
+    expect(harness.waitForState(attemptId(suffix),
+                                ir::IrOutboxState::Succeeded),
+           "every grouped attempt publishes success");
+    const auto receipt = harness.repository.LoadIrSubmissionReceipt(
+        "fake", "https://boku.tachi.ac", attemptId(suffix));
+    expect(receipt.status == ir::IrReceiptReadStatus::Found &&
+               receipt.receipt && receipt.receipt->remoteScoreId.empty(),
+           "multi-entry success stores no guessed remote score identity");
+  }
+  expect(harness.succeededCallbacks().size() == 3,
+         "each committed grouped chart publishes its success callback");
+}
+
+void testMixedRequestKindsUseTwoPlannedCalls() {
+  Harness harness;
+  harness.setCredential("key");
+  makeAwaiting(harness, 203);
+  harness.now += 10'000;
+  expect(harness.enqueueReady(draft(204, harness.now.load()), false)
+             .entry.has_value(),
+         "mixed-plan pending fixture inserts");
+  harness.driver->pushPoll({.status = ir::DeliveryStatus::Succeeded});
+  harness.driver->pushSubmit({.status = ir::DeliveryStatus::Succeeded});
+  harness.service->start(profile(true));
+
+  expect(harness.driver->waitForCalls(2),
+         "mixed request kinds perform two planned calls");
+  const auto calls = harness.driver->calls();
+  expect(calls.size() == 2 && calls[0].poll != calls[1].poll &&
+             calls[0].rowIds.size() == 1 && calls[1].rowIds.size() == 1,
+         "poll and submit rows never share one provider request");
+  expect(harness.waitForState(attemptId(203), ir::IrOutboxState::Succeeded) &&
+             harness.waitForState(attemptId(204),
+                                  ir::IrOutboxState::Succeeded),
+         "both mixed planned groups complete");
+}
+
+void testSharedDeferredGroupPollsOnce() {
+  Harness harness;
+  harness.setCredential("key");
+  for (int suffix = 205; suffix < 208; ++suffix) {
+    expect(harness.enqueueReady(draft(suffix, harness.now.load()), false)
+               .entry.has_value(),
+           "shared deferred fixture inserts");
+  }
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Deferred,
+      .remoteJobId = "shared-job",
+      .remoteOrigin = "https://boku.tachi.ac",
+  });
+  harness.driver->pushPoll({
+      .status = ir::DeliveryStatus::Succeeded,
+      .remoteUserId = 42,
+      .remoteScoreIds = {"score-1", "score-2", "score-3"},
+  });
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.driver->waitForCalls(1), "shared deferred submit starts");
+  for (int suffix = 205; suffix < 208; ++suffix) {
+    expect(harness.waitForState(attemptId(suffix),
+                                ir::IrOutboxState::AwaitingRemoteResult),
+           "shared deferred state is committed for every row");
+  }
+  harness.now += 200;
+  harness.service->notifyOutboxChanged();
+  expect(harness.driver->waitForCalls(2), "shared deferred poll starts");
+  const auto calls = harness.driver->calls();
+  expect(calls.size() == 2 && !calls[0].poll && calls[0].rowIds.size() == 3 &&
+             calls[1].poll && calls[1].rowIds.size() == 3 &&
+             calls[1].remoteJobId == "shared-job",
+         "one shared remote job performs one grouped poll");
+}
+
+void testGroupedCancellationRecoversEveryClaim() {
+  Harness harness;
+  harness.setCredential("key");
+  for (int suffix = 208; suffix < 211; ++suffix) {
+    harness.enqueueReady(draft(suffix, harness.now.load()), false);
+  }
+  harness.driver->blockRequestsUntilCancelled();
+  harness.service->start(profile(true));
+  expect(harness.driver->waitForCalls(1), "grouped cancellation starts");
+  expect(harness.driver->calls().front().rowIds.size() == 3,
+         "grouped cancellation owns every planned row");
+
+  harness.service->pauseAndCancel();
+  for (int suffix = 208; suffix < 211; ++suffix) {
+    const auto recovered = load(harness, suffix);
+    expect(recovered.state == ir::IrOutboxState::Pending &&
+               recovered.requestAttemptCount == 1,
+           "grouped cancellation recovers every claimed row");
+  }
+  expect(harness.driver->calls().size() == 1,
+         "grouped cancellation performs no replacement transport");
+}
+
+void testMissingCredentialBlocksWholePlannedGroup() {
+  Harness harness;
+  for (int suffix = 211; suffix < 214; ++suffix) {
+    harness.enqueueReady(draft(suffix, harness.now.load()), suffix == 212);
+  }
+  harness.service->start(profile(true));
+  for (int suffix = 211; suffix < 214; ++suffix) {
+    expect(harness.waitForState(attemptId(suffix),
+                                ir::IrOutboxState::BlockedConfiguration),
+           "missing credential blocks every planned row");
+    const auto blocked = load(harness, suffix);
+    expect(blocked.requestAttemptCount == 0 &&
+               blocked.nextRequestUserIntent == (suffix == 212),
+           "credential block does not claim or consume grouped intent");
+  }
+  expect(harness.driver->calls().empty(),
+         "missing grouped credential performs no transport");
+}
+
+void testAmbiguousPartialResultFailsWholeGroup() {
+  Harness harness;
+  harness.setCredential("key");
+  for (int suffix = 214; suffix < 217; ++suffix) {
+    harness.enqueueReady(draft(suffix, harness.now.load()), false);
+  }
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::PermanentFailure,
+      .remoteUserId = 42,
+      .remoteScoreIds = {"score-1"},
+      .importHadErrors = true,
+      .code = "ambiguous_partial_import",
+      .diagnostic = "provider returned an ambiguous partial result",
+  });
+  harness.service->start(profile(true));
+
+  expect(harness.driver->waitForCalls(1), "ambiguous grouped request starts");
+  expect(harness.driver->calls().size() == 1 &&
+             harness.driver->calls().front().rowIds.size() == 3,
+         "ambiguous response belongs to one grouped transport");
+  for (int suffix = 214; suffix < 217; ++suffix) {
+    expect(harness.waitForState(attemptId(suffix),
+                                ir::IrOutboxState::FailedPermanent),
+           "ambiguous partial result fails every grouped row");
+    expect(load(harness, suffix).lastErrorCode == "ambiguous_partial_import",
+           "ambiguous partial failure is persisted consistently");
+  }
+}
+
 void testActiveRequestSnapshotsDistinguishSubmitAndPoll() {
   Harness submit;
   submit.setCredential("key");
@@ -1001,17 +1218,15 @@ void testAutomaticAndManualRequestsUseCurrentOrigin() {
   harness.enqueueReady(draft(7, harness.now.load() + 1), true);
   harness.enqueueReady(draft(18, harness.now.load() + 2), false);
   harness.service->start(profile(true, true, "https://new.example.test"));
-  expect(harness.driver->waitForCalls(3),
-         "the worker drains every due automatic and manual row");
+  expect(harness.driver->waitForCalls(1),
+         "the worker groups every due automatic and manual row");
   const auto calls = harness.driver->calls();
-  expect(calls.size() >= 3 && !calls[0].userIntent && calls[1].userIntent &&
-             !calls[2].userIntent,
-         "automatic POST omits intent while manual POST carries it");
-  expect(calls.size() >= 3 &&
-             calls[0].configuredOrigin == "https://new.example.test" &&
-             calls[1].configuredOrigin == "https://new.example.test" &&
-             calls[2].configuredOrigin == "https://new.example.test",
-         "pending rows use the origin configured when POST begins");
+  expect(calls.size() == 1 && calls[0].rowIds.size() == 3 &&
+             calls[0].userIntent,
+         "grouped POST carries aggregate manual intent");
+  expect(calls.size() == 1 &&
+             calls[0].configuredOrigin == "https://new.example.test",
+         "grouped pending rows use the current configured origin");
 }
 
 void testDeferredPollingPinsOriginAndNeverReposts() {
@@ -1073,6 +1288,11 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
          "awaiting row is POSTed once and polled thereafter");
   expect(harness.waitForState(attemptId(8), ir::IrOutboxState::Succeeded),
          "completed poll succeeds");
+  const auto callbackDeadline = std::chrono::steady_clock::now() + 3s;
+  while (harness.succeededCallbacks().empty() &&
+         std::chrono::steady_clock::now() < callbackDeadline) {
+    std::this_thread::yield();
+  }
   const auto callbacks = harness.succeededCallbacks();
   expect(callbacks.size() == 1 &&
              callbacks.front().find("https://old.example.test") !=
@@ -2314,6 +2534,12 @@ void testReconciliationRequestRejectsUnavailableServiceAndConfiguration() {
 
 int main() {
   static_assert(ir::kMaximumAttemptStatusSnapshots > 0);
+  testDueAttemptsSubmitAsOneAtomicGroup();
+  testMixedRequestKindsUseTwoPlannedCalls();
+  testSharedDeferredGroupPollsOnce();
+  testGroupedCancellationRecoversEveryClaim();
+  testMissingCredentialBlocksWholePlannedGroup();
+  testAmbiguousPartialResultFailsWholeGroup();
   testActiveRequestSnapshotsDistinguishSubmitAndPoll();
   testStartupRecovery();
   testDisabledAndReadOnlyProvidersStayPaused();
