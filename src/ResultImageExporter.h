@@ -12,6 +12,7 @@
 #include <array>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -30,6 +31,16 @@ struct PresentationPlan {
   std::optional<result_gauge_history::ResultGaugeGraph> gauge;
   std::string filename;
 };
+
+struct PresentationExportDestination {
+  std::filesystem::path outputDirectory;
+  std::string timestamp;
+};
+
+using PresentationRenderBackend = std::function<ResultImageExportResult(
+    ResultSkinData,
+    std::optional<result_gauge_history::ResultGaugeGraph>,
+    const std::filesystem::path &)>;
 
 namespace detail {
 
@@ -107,6 +118,13 @@ presentationPlanFor(const ResultPresentationModel &presentation,
 
 class ResultImageExporter {
 public:
+  // Shared presentation export orchestration. Production supplies the bgfx
+  // renderer; controlled/headless callers can supply another artifact writer
+  // while exercising the same destination, filename, skin, and gauge plan.
+  static ResultImageExportResult Export(
+      const ResultPresentationModel &presentation,
+      const result_image_export::PresentationExportDestination &destination,
+      const result_image_export::PresentationRenderBackend &renderBackend);
   static ResultImageExportResult
   Export(ApplicationContext &context,
          const ResultPresentationModel &presentation);

@@ -1,13 +1,17 @@
 #include "scene/ResultScene.h"
+#include "scene/RemoteResultRecallController.h"
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -177,10 +181,178 @@ void testRemoteActionMatrixIsReadOnly() {
           "remote rankings disappear without exact query dependencies");
 }
 
-void testLifecycleAndLocalRegressionContracts() {
+ResultRecordSummary
+remoteRecordSummary(std::string origin = "https://ir.example.test:8443") {
+  return makeRemoteResultRecord(ir::kTachiProviderId, origin, remoteScore());
+}
+
+struct RemoteRecallFixture {
+  ResultRecordSummary selected = remoteRecordSummary();
+  bool recordsModalOpen = true;
+  bool resultSceneOpen = false;
+  bool retainedRecordsScene = false;
+  int selectionChecks = 0;
+  int lookupCalls = 0;
+  int transitionCalls = 0;
+  int reloadCalls = 0;
+  int failCalls = 0;
+  int staleAfterCheck = -1;
+  ir::IrRemoteScoreLookupOutcome lookupOutcome{
+      .status = ir::IrRemoteScoreLookupOutcome::Status::Loaded,
+      .score = remoteScore(),
+  };
+  std::optional<IrRemoteRecordId> lookedUpIdentity;
+  std::optional<ResultRemoteOptions> transitionedRemote;
+  std::string failure;
+
+  [[nodiscard]] RemoteResultRecallRequest request() const {
+    return {
+        .identity = std::get<IrRemoteRecordId>(selected.identity),
+        .selectedStableKey = selected.stableKey(),
+    };
+  }
+
+  [[nodiscard]] RemoteResultRecallCallbacks callbacks() {
+    return {
+        .selectionStillMatches =
+            [this](const auto &request) {
+              ++selectionChecks;
+              if (staleAfterCheck >= 0 && selectionChecks > staleAfterCheck) {
+                return false;
+              }
+              return remoteResultRecallSelectionMatches(selected, request);
+            },
+        .loadExact =
+            [this](const IrRemoteRecordId &identity) {
+              ++lookupCalls;
+              lookedUpIdentity = identity;
+              return lookupOutcome;
+            },
+        .transition =
+            [this](ResultRemoteOptions remote, bool retainCurrentScene) {
+              ++transitionCalls;
+              transitionedRemote = std::move(remote);
+              retainedRecordsScene = retainCurrentScene && recordsModalOpen;
+              recordsModalOpen = false;
+              resultSceneOpen = true;
+              return true;
+            },
+        .failAndReload =
+            [this](std::string diagnostic) {
+              ++failCalls;
+              ++reloadCalls;
+              failure = std::move(diagnostic);
+              recordsModalOpen = true;
+              resultSceneOpen = false;
+            },
+    };
+  }
+
+  void pressBack() {
+    require(resultSceneOpen, "Back starts from the recalled result scene");
+    const bool returned = executeRemoteResultBack([this]() {
+      resultSceneOpen = false;
+      if (retainedRecordsScene) {
+        recordsModalOpen = true;
+      }
+    });
+    require(returned, "remote Back executes the retained Records return");
+  }
+};
+
+void testRemoteRecordViewResultActionIsPresentedEnabled() {
+  const auto remote = remoteRecordSummary();
+  const ResultRecordRecallActionState available =
+      resultRecordRecallActionState(remote, true, false);
+  require(available.visible && available.enabled,
+          "selected remote View Result is visibly enabled");
+
+  const ResultRecordRecallActionState busy =
+      resultRecordRecallActionState(remote, true, true);
+  require(busy.visible && !busy.enabled,
+          "an active modal operation disables but does not hide View Result");
+  require(!resultRecordRecallActionState(std::nullopt, true, false).visible &&
+              !resultRecordRecallActionState(remote, false, false).visible,
+          "View Result is absent without a tagged selection or in another "
+          "modal mode");
+}
+
+void testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle() {
+  RemoteRecallFixture fixture;
+  const auto request = fixture.request();
+  auto callbacks = fixture.callbacks();
+  const RemoteResultRecallStatus status =
+      executeRemoteResultRecall(request, callbacks);
+
+  require(status == RemoteResultRecallStatus::Transitioned &&
+              fixture.lookupCalls == 1 && fixture.transitionCalls == 1 &&
+              fixture.failCalls == 0 && fixture.lookedUpIdentity.has_value(),
+          "valid remote recall performs one lookup and one transition");
+  require(fixture.lookedUpIdentity->providerId == request.identity.providerId &&
+              fixture.lookedUpIdentity->serverOrigin ==
+                  "https://ir.example.test:8443" &&
+              fixture.lookedUpIdentity->remoteScoreId ==
+                  request.identity.remoteScoreId,
+          "recall lookup uses exact provider, normalized configured origin, "
+          "and remote ID");
+  require(fixture.transitionedRemote.has_value() &&
+              fixture.transitionedRemote->providerId ==
+                  request.identity.providerId &&
+              fixture.transitionedRemote->serverOrigin ==
+                  request.identity.serverOrigin &&
+              fixture.transitionedRemote->score.remoteScoreId ==
+                  request.identity.remoteScoreId &&
+              fixture.retainedRecordsScene && fixture.resultSceneOpen &&
+              !fixture.recordsModalOpen,
+          "transition retains the live Records scene behind the remote result");
+
+  fixture.pressBack();
+  require(fixture.recordsModalOpen && !fixture.resultSceneOpen &&
+              remoteResultRecallSelectionMatches(fixture.selected, request),
+          "Back returns to the still-live Records modal and selection");
+}
+
+void testRemoteRecallFailsClosedForConcurrentDeletion() {
+  RemoteRecallFixture fixture;
+  fixture.lookupOutcome = {
+      .status = ir::IrRemoteScoreLookupOutcome::Status::NotFound,
+  };
+  auto callbacks = fixture.callbacks();
+  const RemoteResultRecallStatus status =
+      executeRemoteResultRecall(fixture.request(), callbacks);
+
+  require(status == RemoteResultRecallStatus::NotFound &&
+              fixture.lookupCalls == 1 && fixture.transitionCalls == 0 &&
+              fixture.reloadCalls == 1 && fixture.recordsModalOpen &&
+              fixture.failure.find("no longer available") != std::string::npos,
+          "a concurrently deleted score reloads the still-open Records modal");
+}
+
+void testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup() {
+  RemoteRecallFixture staleBefore;
+  staleBefore.staleAfterCheck = 0;
+  auto staleBeforeCallbacks = staleBefore.callbacks();
+  const RemoteResultRecallStatus beforeStatus =
+      executeRemoteResultRecall(staleBefore.request(), staleBeforeCallbacks);
+  require(beforeStatus == RemoteResultRecallStatus::StaleSelection &&
+              staleBefore.lookupCalls == 0 &&
+              staleBefore.transitionCalls == 0 && staleBefore.reloadCalls == 1,
+          "stale selection before lookup cannot read or transition");
+
+  RemoteRecallFixture staleAfter;
+  staleAfter.staleAfterCheck = 1;
+  auto staleAfterCallbacks = staleAfter.callbacks();
+  const RemoteResultRecallStatus afterStatus =
+      executeRemoteResultRecall(staleAfter.request(), staleAfterCallbacks);
+  require(afterStatus == RemoteResultRecallStatus::StaleSelection &&
+              staleAfter.lookupCalls == 1 && staleAfter.selectionChecks == 2 &&
+              staleAfter.transitionCalls == 0 && staleAfter.reloadCalls == 1,
+          "selection changed during lookup cannot transition");
+}
+
+void testLocalRegressionContractsRemainPresent() {
   const std::string header = readSource("src/scene/ResultScene.h");
   const std::string result = readSource("src/scene/ResultScene.cpp");
-  const std::string menu = readSource("src/scene/MainMenuScene.cpp");
   const std::string combined = header + result;
 
   requireContains(combined,
@@ -198,18 +370,6 @@ void testLifecycleAndLocalRegressionContracts() {
                   "remote init installs read-only uploaded IR state");
   requireContains(result, "addRemoteButtons();",
                   "remote init installs only the remote action row");
-  requireContains(menu, "LoadIrRemoteScore",
-                  "Records re-loads the exact remote row before transition");
-  requireContains(menu, "selectedResultRecordStableKey",
-                  "remote recall reconciles against stable selection identity");
-  requireContains(menu, "std::make_unique<ResultScene>",
-                  "validated remote recall transitions to ResultScene");
-  requireContains(menu, "changeScene(std::move(next), true)",
-                  "remote transition retains the live Records scene");
-  requireContains(
-      menu, "reloadReplayRecordModels(true);",
-      "remote recall failure reloads while preserving Records state");
-
   for (const char *localToken :
        {"Retry Same", "Replay", "Practice Section",
         "addResultPersistenceStatus();", "addIrResultStatus();",
@@ -227,7 +387,11 @@ int main() {
   testRemoteSourceOwnsOnlyValidatedRemoteData();
   testRemoteRankingDependenciesFailClosed();
   testRemoteActionMatrixIsReadOnly();
-  testLifecycleAndLocalRegressionContracts();
+  testRemoteRecordViewResultActionIsPresentedEnabled();
+  testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle();
+  testRemoteRecallFailsClosedForConcurrentDeletion();
+  testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
+  testLocalRegressionContractsRemainPresent();
   std::cout << "remote result scene tests passed\n";
   return 0;
 }

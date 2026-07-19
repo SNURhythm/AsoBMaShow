@@ -763,18 +763,17 @@ ResultImageExportResult ResultImageExporter::Export(
   }
 #endif
 
-  const auto outputDir = Utils::GetDocumentsPath("result_exports");
-  if (const auto error = ensureExportDirectoryError(
-          outputDir, "Failed to create result export directory")) {
-    return {.success = false, .message = *error};
-  }
-
-  auto plan = result_image_export::presentationPlanFor(presentation,
-                                                        makeTimestamp());
-  const auto outputPath = outputDir / plan.filename;
-  return renderResultImageWithSkinData(
-      context, std::move(plan.skinData), plan.gauge, std::nullopt, true,
-      outputPath);
+  return Export(
+      presentation,
+      {.outputDirectory = Utils::GetDocumentsPath("result_exports"),
+       .timestamp = makeTimestamp()},
+      [&context](ResultSkinData skinData,
+                 std::optional<result_gauge_history::ResultGaugeGraph> gauge,
+                 const std::filesystem::path &outputPath) {
+        return renderResultImageWithSkinData(
+            context, std::move(skinData), gauge, std::nullopt, true,
+            outputPath);
+      });
 }
 
 ResultImageExportResult

@@ -10,9 +10,11 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -155,6 +157,58 @@ std::string readSource(const std::filesystem::path &relative) {
   return {std::istreambuf_iterator<char>(input),
           std::istreambuf_iterator<char>()};
 }
+
+class TemporaryDirectory {
+public:
+  TemporaryDirectory() {
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    path = std::filesystem::temp_directory_path() /
+           ("asobmashow-result-export-" + std::to_string(nonce));
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    expect(!error, "temporary export directory is created");
+  }
+
+  ~TemporaryDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path, ignored);
+  }
+
+  std::filesystem::path path;
+};
+
+struct ControlledExportBackend {
+  int calls = 0;
+  std::filesystem::path outputPath;
+  std::set<std::string> cards;
+  std::optional<result_gauge_history::ResultGaugeGraph> gauge;
+  bool succeed = true;
+
+  ResultImageExportResult operator()(
+      ResultSkinData skinData,
+      std::optional<result_gauge_history::ResultGaugeGraph> selectedGauge,
+      const std::filesystem::path &path) {
+    ++calls;
+    outputPath = path;
+    gauge = std::move(selectedGauge);
+    const auto root = buildLayout(skinData, false);
+    cards = namedCardAndGraphSet(*root);
+    if (!succeed) {
+      return {.success = false,
+              .outputPath = path,
+              .message = "controlled render failure"};
+    }
+    std::ofstream artifact(path, std::ios::binary);
+    artifact << "controlled-result-image";
+    if (!artifact.good()) {
+      return {.success = false,
+              .outputPath = path,
+              .message = "controlled artifact write failed"};
+    }
+    return {.success = true, .outputPath = path, .message = "Exported"};
+  }
+};
 
 void testCompletePresentationUsesSceneCardsAndGaugePlan() {
   const ResultPresentationModel presentation =
@@ -354,11 +408,7 @@ void testFilenameFallbackAndRemoteSceneExportContract() {
          "sanitized presentation filename keeps the existing 80-byte title "
          "bound and timestamp policy");
 
-  const std::string header = readSource("src/ResultImageExporter.h");
   const std::string scene = readSource("src/scene/ResultScene.cpp");
-  expect(header.find("const ResultPresentationModel &presentation") !=
-             std::string::npos,
-         "exporter exposes the presentation-only overload");
   expect(scene.find("ResultImageExporter::Export(context, "
                     "remote->presentation)") != std::string::npos,
          "remote ResultScene passes its immutable presentation to export");
@@ -366,6 +416,111 @@ void testFilenameFallbackAndRemoteSceneExportContract() {
          "temporary Task 7 unavailable branch is removed");
   expect(scene.find("local->meta, local->resultState") != std::string::npos,
          "local ResultScene keeps the legacy export path");
+}
+
+void testProductionPresentationExportWritesCompleteAndSparseArtifacts() {
+  TemporaryDirectory temporary;
+  const result_image_export::PresentationExportDestination destination{
+      .outputDirectory = temporary.path,
+      .timestamp = "20260719_123456",
+  };
+
+  ControlledExportBackend completeBackend;
+  const ResultPresentationModel complete =
+      makeRemoteResultPresentation(completeRemoteScore());
+  const ResultImageExportResult completeResult = ResultImageExporter::Export(
+      complete, destination, std::ref(completeBackend));
+  expect(completeResult.success && completeBackend.calls == 1 &&
+             completeResult.outputPath == completeBackend.outputPath &&
+             completeResult.outputPath.filename() ==
+                 "Remote_Result_Complete_20260719_123456.png" &&
+             std::filesystem::is_regular_file(completeResult.outputPath),
+         "production presentation export writes one safe complete artifact");
+  expect(completeBackend.cards.contains("resultSummaryCard:combo") &&
+             completeBackend.cards.contains("resultJudgementTile:poor") &&
+             completeBackend.cards.contains("resultInfoTile:service") &&
+             completeBackend.cards.contains("graph") &&
+             !completeBackend.cards.contains("resultJudgementTile:kpoor"),
+         "production export backend receives the complete remote card set");
+  expect(completeBackend.gauge.has_value() &&
+             completeBackend.gauge->geometry.strips.size() == 2 &&
+             completeBackend.gauge->geometry.segments.size() == 2,
+         "production export preserves nullable gauge gaps");
+
+  ResultPresentationModel sparse;
+  sparse.title = "../Sparse / Score Lamp";
+  sparse.score = 0;
+  sparse.maxScore = 2'000;
+  sparse.scoreComparison = ResultComparisonCard{
+      .title = "SCORE",
+      .current = {.label = "CURRENT",
+                  .value = "0",
+                  .detail = "MAX 2000",
+                  .accent = ui_theme::textPrimary()},
+  };
+  sparse.lampRank = kClearTypeFailedRank;
+  sparse.lampComparison = ResultComparisonCard{
+      .title = "CLEAR LAMP",
+      .current = {.label = "CURRENT",
+                  .value = "FAILED",
+                  .detail = {},
+                  .accent = clearLampColorForRank(kClearTypeFailedRank)},
+  };
+  sparse.readOnlyIrUploaded = true;
+
+  ControlledExportBackend sparseBackend;
+  const auto sparseDestination =
+      result_image_export::PresentationExportDestination{
+          .outputDirectory = temporary.path,
+          .timestamp = "20260719_234500",
+      };
+  const ResultImageExportResult sparseResult = ResultImageExporter::Export(
+      sparse, sparseDestination, std::ref(sparseBackend));
+  expect(sparseResult.success && sparseBackend.calls == 1 &&
+             sparseResult.outputPath.parent_path() == temporary.path &&
+             sparseResult.outputPath.filename() ==
+                 "Sparse_Score_Lamp_20260719_234500.png" &&
+             std::filesystem::is_regular_file(sparseResult.outputPath),
+         "production sparse export remains inside its destination");
+  expect(sparseBackend.cards ==
+                 std::set<std::string>({"resultSummaryCard:grade",
+                                        "resultSummaryCard:lamp",
+                                        "resultSummaryCard:score"}) &&
+             !sparseBackend.gauge.has_value(),
+         "production sparse export omits unavailable cards and gauge");
+}
+
+void testProductionPresentationExportPropagatesFailures() {
+  TemporaryDirectory temporary;
+  const result_image_export::PresentationExportDestination destination{
+      .outputDirectory = temporary.path,
+      .timestamp = "20260719_123457",
+  };
+  ControlledExportBackend failingBackend;
+  failingBackend.succeed = false;
+  ResultPresentationModel presentation;
+  presentation.title = "Failure Case";
+  const ResultImageExportResult failed = ResultImageExporter::Export(
+      presentation, destination, std::ref(failingBackend));
+  expect(!failed.success && failingBackend.calls == 1 &&
+             failed.message == "controlled render failure" &&
+             !std::filesystem::exists(failed.outputPath),
+         "production presentation export propagates renderer failure");
+
+  const auto blockedDirectory = temporary.path / "not-a-directory";
+  {
+    std::ofstream file(blockedDirectory);
+    file << "blocking file";
+  }
+  ControlledExportBackend unreachableBackend;
+  const ResultImageExportResult directoryFailure = ResultImageExporter::Export(
+      presentation,
+      {.outputDirectory = blockedDirectory, .timestamp = "20260719_123458"},
+      std::ref(unreachableBackend));
+  expect(!directoryFailure.success && unreachableBackend.calls == 0 &&
+             directoryFailure.message.find("directory") != std::string::npos,
+         "production presentation export fails before rendering when its "
+         "destination cannot be created");
 }
 } // namespace
 
@@ -390,6 +545,8 @@ int main() {
   testSparseAndExplicitZeroPresentationPhysicallyOmitMissingCards();
   testExplicitRemoteZerosRemainSuppliedExportValues();
   testFilenameFallbackAndRemoteSceneExportContract();
+  testProductionPresentationExportWritesCompleteAndSparseArtifacts();
+  testProductionPresentationExportPropagatesFailures();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

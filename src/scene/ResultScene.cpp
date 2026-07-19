@@ -21,6 +21,7 @@
 #include "ChartViewerScene.h"
 #include "PracticeAnalyticsPresentation.h"
 #include "PracticeAnalyticsView.h"
+#include "RemoteResultRecallController.h"
 #include "ResultGaugeHistory.h"
 
 #include "../rendering/Color.h"
@@ -2158,6 +2159,11 @@ void ResultScene::exitResult() {
     return;
   }
   context.jukebox.stop();
+  if (remoteSource() != nullptr) {
+    (void)executeRemoteResultBack(
+        [this]() { context.sceneManager->changeScene("MainMenu"); });
+    return;
+  }
   const auto *local = localSource();
   if (local != nullptr && local->practiceOptions.enabled &&
       local->practiceOptions.returnScene != nullptr) {

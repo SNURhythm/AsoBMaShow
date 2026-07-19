@@ -10,6 +10,7 @@ target_sources(main PRIVATE
     ProfileSettingsController.cpp
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
+    RemoteResultRecallController.cpp
     ResultPresentationModel.cpp
     SceneManager.cpp
     ResultGaugeHistory.cpp

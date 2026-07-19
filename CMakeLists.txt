@@ -2071,12 +2071,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/rendering/Color.cpp
+        src/ResultRecordSummary.cpp
         src/ScoreProvenance.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
         src/practice/PracticeResultModel.cpp
         src/scene/ResultGaugeHistory.cpp
         src/scene/ResultPresentationModel.cpp
+        src/scene/RemoteResultRecallController.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
     )
@@ -2104,6 +2106,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/ResultPresentationModel.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
+        src/ResultImageExporterPresentation.cpp
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
         src/view/TextView.cpp
@@ -2568,6 +2571,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
     asobmashow_register_test(result_gauge_history_tests)
+    asobmashow_register_test(result_presentation_model_tests)
     asobmashow_register_test(remote_result_scene_tests)
     asobmashow_register_test(result_image_exporter_partial_tests)
     asobmashow_register_test(chart_practice_range_tests)
