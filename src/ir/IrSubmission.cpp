@@ -56,19 +56,6 @@ IrSubmissionBuildOutcome invalid(std::string_view diagnostic) {
   return {.diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
-bool replayEventMutatesGauge(const ReplayEvent &event) {
-  switch (event.action) {
-  case ReplayEventAction::Mine:
-  case ReplayEventAction::Gauge:
-    return true;
-  case ReplayEventAction::Press:
-  case ReplayEventAction::Release:
-  case ReplayEventAction::Miss:
-    return event.judgement != None;
-  }
-  return false;
-}
-
 } // namespace
 
 IrSubmissionBuildOutcome makeIrSubmission(
@@ -123,7 +110,6 @@ IrSubmissionBuildOutcome makeIrSubmission(
       return invalid("score gauge or clear rank is invalid");
     }
 
-    std::optional<GaugeType> adoptedGaugeType;
     int pGreatFast = 0;
     int pGreatSlow = 0;
     int earlyPGreat = 0;
@@ -136,88 +122,70 @@ IrSubmissionBuildOutcome makeIrSubmission(
     int lateBad = 0;
     int earlyPoor = 0;
     int latePoor = 0;
-    std::int64_t observedReplayScore = 0;
-    for (const ReplayEvent &event : attempt.replay.events) {
-      const std::int64_t eventScore = event.score;
-      const std::int64_t scoreDelta = eventScore - observedReplayScore;
-      observedReplayScore = std::max(observedReplayScore, eventScore);
-      if (!replayEventMutatesGauge(event)) {
-        continue;
+    bool judgementTimingBreakdownAvailable = false;
+    if (attempt.judgementTiming.has_value()) {
+      const auto &timing = attempt.judgementTiming->byJudgement;
+      std::array<int, JudgementCount> judgementTotals{};
+      judgementTotals[PGreat] = score.pGreat;
+      judgementTotals[Great] = score.great;
+      judgementTotals[Good] = score.good;
+      judgementTotals[Bad] = score.bad;
+      judgementTotals[Kpoor] = score.kPoor;
+      judgementTotals[Poor] = score.poor;
+
+      std::int64_t capturedFast = 0;
+      std::int64_t capturedSlow = 0;
+      for (int index = 0; index < JudgementCount; ++index) {
+        const auto judgement = static_cast<Judgement>(index);
+        const auto &count = timing[static_cast<std::size_t>(index)];
+        if (count.fast < 0 || count.slow < 0) {
+          return invalid("captured judgement timing must not be negative");
+        }
+        if (judgement == Kpoor || judgement == None) {
+          if (count.fast != 0 || count.slow != 0) {
+            return invalid("KPOOR and NONE cannot have captured timing");
+          }
+          continue;
+        }
+        if (static_cast<std::int64_t>(count.fast) + count.slow >
+            judgementTotals[static_cast<std::size_t>(index)]) {
+          return invalid("captured judgement timing exceeds result totals");
+        }
+        capturedFast += count.fast;
+        capturedSlow += count.slow;
       }
-      if (!std::isfinite(event.gauge)) {
-        return invalid("replay gauge history is not finite");
+      if (capturedFast != score.fast || capturedSlow != score.slow) {
+        return invalid(
+            "captured judgement timing disagrees with aggregate timing");
       }
-      adoptedGaugeType = event.gaugeType;
-      const bool authenticJudgementEvent =
-          event.action == ReplayEventAction::Press ||
-          event.action == ReplayEventAction::Release ||
-          event.action == ReplayEventAction::Miss;
-      if (authenticJudgementEvent && event.judgement == PGreat &&
-          scoreDelta == 2) {
-        if (event.diffMicros < 0) {
-          ++pGreatFast;
-        } else if (event.diffMicros > 0) {
-          ++pGreatSlow;
-        }
-        if (event.diffMicros <= 0) {
-          ++earlyPGreat;
-        } else {
-          ++latePGreat;
-        }
-      } else if (authenticJudgementEvent && event.judgement == Great &&
-                 scoreDelta == 1) {
-        if (event.diffMicros <= 0) {
-          ++earlyGreat;
-        } else {
-          ++lateGreat;
-        }
-      } else if (authenticJudgementEvent && event.judgement == Good) {
-        if (event.diffMicros <= 0) {
-          ++earlyGood;
-        } else {
-          ++lateGood;
-        }
-      } else if (authenticJudgementEvent && event.judgement == Bad) {
-        if (event.diffMicros <= 0) {
-          ++earlyBad;
-        } else {
-          ++lateBad;
-        }
-      } else if (authenticJudgementEvent && event.judgement == Poor) {
-        if (event.diffMicros <= 0) {
-          ++earlyPoor;
-        } else {
-          ++latePoor;
-        }
-      }
+
+      const auto early = [&](Judgement judgement) {
+        return judgementTotals[static_cast<std::size_t>(judgement)] -
+               timing[static_cast<std::size_t>(judgement)].slow;
+      };
+      const auto late = [&](Judgement judgement) {
+        return timing[static_cast<std::size_t>(judgement)].slow;
+      };
+      pGreatFast = timing[PGreat].fast;
+      pGreatSlow = timing[PGreat].slow;
+      earlyPGreat = early(PGreat);
+      latePGreat = late(PGreat);
+      earlyGreat = early(Great);
+      lateGreat = late(Great);
+      earlyGood = early(Good);
+      lateGood = late(Good);
+      earlyBad = early(Bad);
+      lateBad = late(Bad);
+      earlyPoor = early(Poor);
+      latePoor = late(Poor);
+      judgementTimingBreakdownAvailable = true;
     }
 
-    std::vector<float> gaugeHistory;
-    if (!attempt.adoptedGaugeHistory.empty()) {
-      if (std::ranges::any_of(attempt.adoptedGaugeHistory, [](float value) {
-            return !std::isfinite(value);
-          })) {
-        return invalid("adopted gauge history is not finite");
-      }
-      gaugeHistory = attempt.adoptedGaugeHistory;
-    } else if (adoptedGaugeType) {
-      gaugeHistory.reserve(attempt.replay.events.size());
-      for (const ReplayEvent &event : attempt.replay.events) {
-        if (replayEventMutatesGauge(event) &&
-            event.gaugeType == *adoptedGaugeType) {
-          gaugeHistory.push_back(event.gauge);
-        }
-      }
+    std::vector<float> gaugeHistory = attempt.adoptedGaugeHistory;
+    if (std::ranges::any_of(gaugeHistory,
+                            [](float value) { return !std::isfinite(value); })) {
+      return invalid("adopted gauge history is not finite");
     }
-    if (pGreatFast > score.fast || pGreatSlow > score.slow) {
-      return invalid("PGREAT timing exceeds aggregate timing counts");
-    }
-    const bool judgementTimingBreakdownAvailable =
-        earlyPGreat + latePGreat == score.pGreat &&
-        earlyGreat + lateGreat == score.great &&
-        earlyGood + lateGood == score.good &&
-        earlyBad + lateBad == score.bad &&
-        earlyPoor + latePoor == score.poor;
 
     return {.value = IrSubmission{
                 .attemptId = attempt.attemptId,

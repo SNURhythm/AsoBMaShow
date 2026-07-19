@@ -120,12 +120,14 @@ void testCanonicalSubmissionRejectsInvalidInput() {
          "submission rejects nonpositive capture time");
 }
 
-void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
+void testCanonicalSubmissionUsesCapturedResultMetrics() {
   auto attempt = validAttempt();
   attempt.replay.chartMeta.TotalNotes = 7;
   attempt.score.maxScore = 14;
   attempt.score.bad = 1;
   attempt.score.poor = 1;
+  attempt.score.fast = 3;
+  attempt.score.slow = 2;
   attempt.replay.events = {
       {.action = ReplayEventAction::Press,
        .judgement = PGreat,
@@ -169,14 +171,20 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
        .score = 7},
       {.action = ReplayEventAction::Mine, .gauge = 11.0F, .score = 7},
   };
+  attempt.adoptedGaugeHistory = {24.0F, 25.5F, 27.0F, 28.0F,
+                                 26.0F, 22.0F, 18.0F, 11.0F};
+  result_persistence::ChartJudgementTiming timing;
+  timing.byJudgement[PGreat] = {.fast = 1, .slow = 1};
+  timing.byJudgement[Great] = {.fast = 1, .slow = 0};
+  timing.byJudgement[Good] = {.fast = 1, .slow = 0};
+  timing.byJudgement[Bad] = {.fast = 0, .slow = 1};
+  attempt.judgementTiming = timing;
 
   const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
-  expect(outcome.value.has_value(), "replay evidence builds");
+  expect(outcome.value.has_value(), "captured result metrics build");
   if (outcome.value) {
-    expect(outcome.value->gaugeHistory ==
-               std::vector<float>{24.0F, 25.5F, 27.0F, 28.0F, 26.0F, 22.0F,
-                                  18.0F, 11.0F},
-           "only gauge-mutating replay events become gauge history");
+    expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
+           "captured adopted gauge history becomes submission history");
     expect(outcome.value->pGreatFast == 1 &&
                outcome.value->pGreatSlow == 1,
            "PGREAT early and late evidence is separated");
@@ -191,12 +199,16 @@ void testCanonicalSubmissionExtractsGaugeAndPGreatTiming() {
                outcome.value->lateBad == 1 &&
                outcome.value->earlyPoor == 1 &&
                outcome.value->latePoor == 0,
-           "complete replay exposes every authentic LR2 judgement timing");
+           "captured state exposes every LR2 judgement timing");
   }
 }
 
-void testCanonicalSubmissionExcludesNonScoringClassicLongNoteHeadTiming() {
+void testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes() {
   auto attempt = validAttempt();
+  attempt.replay.chartMeta.TotalNotes = 6;
+  attempt.score.maxScore = 12;
+  attempt.score.bad = 1;
+  attempt.score.slow = 3;
   attempt.replay.events = {
       {.action = ReplayEventAction::Press,
        .judgement = PGreat,
@@ -228,27 +240,52 @@ void testCanonicalSubmissionExcludesNonScoringClassicLongNoteHeadTiming() {
        .diffMicros = -8'000,
        .gauge = 27.0F,
        .score = 7},
+      {.action = ReplayEventAction::Release,
+       .judgement = Good,
+       .diffMicros = -5'000,
+       .gauge = 26.0F,
+       .score = 7},
+      {.action = ReplayEventAction::Press,
+       .judgement = Bad,
+       .diffMicros = 9'000,
+       .gauge = 22.0F,
+       .score = 7},
+      {.action = ReplayEventAction::Release,
+       .judgement = Bad,
+       .diffMicros = 7'000,
+       .gauge = 18.0F,
+       .score = 7},
   };
+  attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
+  result_persistence::ChartJudgementTiming timing;
+  timing.byJudgement[PGreat] = {.fast = 1, .slow = 1};
+  timing.byJudgement[Great] = {.fast = 0, .slow = 1};
+  timing.byJudgement[Good] = {.fast = 1, .slow = 0};
+  timing.byJudgement[Bad] = {.fast = 0, .slow = 1};
+  attempt.judgementTiming = timing;
 
   const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
-  expect(outcome.value.has_value(), "classic long-note evidence builds");
+  expect(outcome.value.has_value(), "classic long-note result builds");
   if (outcome.value) {
-    expect(outcome.value->gaugeHistory ==
-               std::vector<float>{20.0F, 22.0F, 24.0F, 26.0F, 28.0F, 27.0F},
-           "non-scoring long-note heads remain in gauge history");
+    expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
+           "captured adopted gauge history is authoritative");
     expect(outcome.value->pGreatFast == 1 &&
                outcome.value->pGreatSlow == 1,
-           "non-scoring long-note head timing is excluded from fast slow");
+           "captured PGREAT timing drives fast slow exclusion");
     expect(outcome.value->judgementTimingBreakdownAvailable &&
                outcome.value->earlyPGreat == 2 &&
                outcome.value->latePGreat == 1 &&
                outcome.value->earlyGreat == 0 &&
-               outcome.value->lateGreat == 1,
-           "only score-contributing replay events provide judgement timing");
+               outcome.value->lateGreat == 1 &&
+               outcome.value->earlyGood == 1 &&
+               outcome.value->lateGood == 0 &&
+               outcome.value->earlyBad == 0 &&
+               outcome.value->lateBad == 1,
+           "captured result timing ignores informational LN head events");
   }
 }
 
-void testCanonicalSubmissionExcludesGaugeTickJudgementTiming() {
+void testCanonicalSubmissionIgnoresReplayOnlyDetailedEvidence() {
   auto attempt = validAttempt();
   attempt.replay.events = {
       {.action = ReplayEventAction::Gauge,
@@ -274,15 +311,14 @@ void testCanonicalSubmissionExcludesGaugeTickJudgementTiming() {
   };
 
   const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
-  expect(outcome.value.has_value(), "gauge tick evidence builds");
+  expect(outcome.value.has_value(), "replay-only evidence builds safely");
   if (outcome.value) {
-    expect(outcome.value->gaugeHistory ==
-               std::vector<float>{19.0F, 21.0F, 23.0F, 25.0F},
-           "gauge ticks remain in gauge history");
+    expect(outcome.value->gaugeHistory.empty(),
+           "replay gauge events cannot become submission history");
     expect(!outcome.value->judgementTimingBreakdownAvailable &&
                outcome.value->earlyGreat == 0 &&
                outcome.value->lateGreat == 0,
-           "gauge tick judgements never provide score timing evidence");
+           "replay judgements cannot become submission timing evidence");
   }
 }
 
@@ -314,12 +350,11 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
   };
 
   auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
-  expect(outcome.value && outcome.value->gaugeHistory ==
-                              std::vector<float>({24.0F, 26.0F}),
-         "legacy replay fallback keeps only the final adopted gauge");
-  expect(outcome.value && outcome.value->pGreatFast == 1 &&
-             outcome.value->pGreatSlow == 1,
-         "adopted-gauge filtering does not filter PGREAT timing evidence");
+  expect(outcome.value && outcome.value->gaugeHistory.empty(),
+         "missing adopted history does not fall back to replay gauges");
+  expect(outcome.value && outcome.value->pGreatFast == 0 &&
+             outcome.value->pGreatSlow == 0,
+         "missing captured timing does not fall back to replay timing");
 
   attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
   outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
@@ -330,13 +365,10 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
 
 void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   auto attempt = validAttempt();
-  attempt.replay.events = {{.action = ReplayEventAction::Press,
-                            .judgement = Great,
-                            .diffMicros = -1,
-                            .gauge =
-                                std::numeric_limits<float>::quiet_NaN()}};
+  attempt.adoptedGaugeHistory = {
+      std::numeric_limits<float>::quiet_NaN()};
   expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
-         "non-finite gauge history is rejected");
+         "non-finite captured gauge history is rejected");
 
   attempt = validAttempt();
   attempt.replay.events = {
@@ -349,18 +381,25 @@ void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
        .gauge = 20.0F,
        .gaugeType = GaugeType::Normal},
   };
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
-         "discarded GAS transition history is still validated");
+  expect(ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value.has_value(),
+         "non-authoritative replay gauge values are not projected");
 
   attempt = validAttempt();
   attempt.score.fast = 0;
-  attempt.replay.events = {{.action = ReplayEventAction::Press,
-                            .judgement = PGreat,
-                            .diffMicros = -1,
-                            .gauge = 20.0F,
-                            .score = 2}};
+  result_persistence::ChartJudgementTiming timing;
+  timing.byJudgement[PGreat] = {.fast = 1, .slow = 1};
+  attempt.judgementTiming = timing;
   expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
-         "PGREAT timing cannot exceed aggregate timing");
+         "captured timing must match aggregate timing");
+
+  attempt = validAttempt();
+  attempt.score.fast = 2;
+  attempt.score.slow = 0;
+  timing = {};
+  timing.byJudgement[Good] = {.fast = 2, .slow = 0};
+  attempt.judgementTiming = timing;
+  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+         "captured timing cannot exceed its judgement total");
 }
 
 void testChartQueryNormalizesIdentity() {
@@ -486,9 +525,9 @@ void testBaseBuildDraftIsUnsupported() {
 int main() {
   testCanonicalSubmissionBuildsFromAttempt();
   testCanonicalSubmissionRejectsInvalidInput();
-  testCanonicalSubmissionExtractsGaugeAndPGreatTiming();
-  testCanonicalSubmissionExcludesNonScoringClassicLongNoteHeadTiming();
-  testCanonicalSubmissionExcludesGaugeTickJudgementTiming();
+  testCanonicalSubmissionUsesCapturedResultMetrics();
+  testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes();
+  testCanonicalSubmissionIgnoresReplayOnlyDetailedEvidence();
   testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory();
   testCanonicalSubmissionRejectsInvalidDetailedEvidence();
   testChartQueryNormalizesIdentity();
