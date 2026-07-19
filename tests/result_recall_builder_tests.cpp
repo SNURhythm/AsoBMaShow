@@ -121,9 +121,17 @@ void testCourseBuildPreparesEveryStage() {
   replay.totalCharts = 3;
   replay.provenance = replay.stages.back().replay.provenance;
 
+  result_recall::ReplayChartLoader resolvedLoader =
+      [](const ReplayData &stage, std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta = stage.chartMeta;
+        chart->Meta.BmsPath =
+            std::filesystem::path("resolved") / stage.chartMeta.BmsPath;
+        return chart;
+      };
   std::atomic_bool cancelled = false;
-  auto outcome =
-      result_recall::BuildCourseResult(replay, cancelled, chartLoader());
+  auto outcome = result_recall::BuildCourseResult(
+      replay, cancelled, std::move(resolvedLoader));
   assert(outcome.value.has_value());
   const auto &session = outcome.value->session;
   assert(session->currentIndex == 0);
@@ -131,6 +139,9 @@ void testCourseBuildPreparesEveryStage() {
   assert(session->completedResults.size() == 3);
   assert(session->ownedResultBrowseCharts.size() == 3);
   assert(session->courseReplayData != nullptr);
+  assert(session->courseReplayData->stages.front()
+             .replay.chartMeta.BmsPath ==
+         std::filesystem::path("resolved") / "recall.bms");
   assert(!session->courseReplayPlayback);
 }
 

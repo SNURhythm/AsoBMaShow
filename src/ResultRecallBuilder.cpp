@@ -74,6 +74,7 @@ ChartBuildOutcome BuildChartResult(ReplayResultRecord record,
       return {.diagnostic = "saved chart is unavailable"};
     }
 
+    record.replay.chartMeta.BmsPath = chart->Meta.BmsPath;
     RhythmState state =
         replay_result::BuildResultState(*chart, record.replay);
     auto historicalIr = historicalIrFor(record, chart->Meta, state);
@@ -138,6 +139,7 @@ CourseBuildOutcome BuildCourseResult(CourseReplayData replay,
       if (loadedChart == nullptr || cancelled.load()) {
         return {.diagnostic = "saved course stage is unavailable"};
       }
+      stageReplay.chartMeta.BmsPath = loadedChart->Meta.BmsPath;
       auto chart = std::shared_ptr<bms_parser::Chart>(std::move(loadedChart));
       RhythmState state = replay_result::BuildResultState(
           *chart, stageReplay, replay.gaugeProfile,
