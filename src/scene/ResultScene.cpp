@@ -1738,39 +1738,25 @@ void ResultScene::exportPhoto() {
     return;
   }
 
-  if (remote != nullptr) {
-    // Task 8 supplies the exact ResultPresentationModel exporter overload.
-    // Until that seam exists, fail closed instead of fabricating local chart,
-    // rhythm, replay, or provenance inputs for the legacy overload.
-    exportPhotoButtonText->setText("Export Unavailable");
-    SDL_Log("Remote result photo export requires the partial result exporter");
-    if (rootLayout != nullptr) {
-      rootLayout->applyYogaLayout();
-    }
-    defer(
-        [this]() {
-          if (exportPhotoButtonText != nullptr) {
-            exportPhotoButtonText->setText("Export Photo");
-          }
-          return true;
-        },
-        1400, true);
-    return;
-  }
-  if (local == nullptr) {
+  if (local == nullptr && remote == nullptr) {
     return;
   }
 
   resultPhotoExportInProgress = true;
   exportPhotoButtonText->setText("Saving...");
-  const std::optional<ResultPacemakerData> pacemaker =
-      pacemakerDataForCurrentResult();
-  const auto analyticsModel = makeTimingAnalyticsModel();
-  const auto result = ResultImageExporter::Export(
-      context, local->meta, local->resultState, local->playModeLabel,
-      local->laneOrderLabel, local->difficultyLabel, local->previousBest,
-      local->currentClearLabelOverride, local->currentClearRankOverride,
-      local->headerDifficultyLabelOverride, pacemaker, analyticsModel);
+  ResultImageExportResult result;
+  if (remote != nullptr) {
+    result = ResultImageExporter::Export(context, remote->presentation);
+  } else {
+    const std::optional<ResultPacemakerData> pacemaker =
+        pacemakerDataForCurrentResult();
+    const auto analyticsModel = makeTimingAnalyticsModel();
+    result = ResultImageExporter::Export(
+        context, local->meta, local->resultState, local->playModeLabel,
+        local->laneOrderLabel, local->difficultyLabel, local->previousBest,
+        local->currentClearLabelOverride, local->currentClearRankOverride,
+        local->headerDifficultyLabelOverride, pacemaker, analyticsModel);
+  }
   resultPhotoExportInProgress = false;
 
   if (result.success) {

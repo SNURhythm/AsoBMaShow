@@ -2089,6 +2089,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(remote_result_scene_tests PRIVATE cxx_std_23)
     target_link_libraries(remote_result_scene_tests PRIVATE ${COMMON_LIBS})
 
+    add_executable(result_image_exporter_partial_tests
+        tests/result_image_exporter_partial_tests.cpp
+        src/bms_parser.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/scene/ResultGaugeHistory.cpp
+        src/scene/ResultPresentationModel.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/Judge.cpp
+        src/skin/DefaultSkin.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(result_image_exporter_partial_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(result_image_exporter_partial_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(result_image_exporter_partial_tests PRIVATE cxx_std_23)
+    target_link_libraries(result_image_exporter_partial_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
@@ -2538,6 +2569,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(result_layout_geometry_tests)
     asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(remote_result_scene_tests)
+    asobmashow_register_test(result_image_exporter_partial_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)

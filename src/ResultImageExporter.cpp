@@ -16,6 +16,7 @@
 #include "scene/ResultLayoutGeometry.h"
 #include "skin/DefaultSkin.h"
 #include "targets.h"
+#include "view/TextView.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
@@ -356,10 +357,68 @@ void drawResultGaugeGraphPrimitive(
   }
 }
 
+class ResultImageGaugeGraphView final : public View {
+public:
+  explicit ResultImageGaugeGraphView(
+      result_gauge_history::ResultGaugeGraph graph)
+      : graph(std::move(graph)) {
+    batch.setSubmitView(rendering::ui_view);
+  }
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (getWidth() <= 0 || getHeight() <= 0) {
+      return;
+    }
+    rendering::setScissorUI(context.scissor.x, context.scissor.y,
+                            context.scissor.width, context.scissor.height);
+    batch.begin(context.getTransformMatrix());
+    drawResultGaugeGraphPrimitive(batch, graph, static_cast<float>(getX()),
+                                  static_cast<float>(getY()),
+                                  static_cast<float>(getWidth()),
+                                  static_cast<float>(getHeight()));
+    batch.end();
+  }
+
+private:
+  result_gauge_history::ResultGaugeGraph graph;
+  rendering::SimpleBatchRenderer batch;
+};
+
+void attachPresentationGaugeGraph(
+    View *graphPlaceHolder,
+    const result_gauge_history::ResultGaugeGraph &graph) {
+  if (graphPlaceHolder == nullptr) {
+    return;
+  }
+  auto *graphView = new ResultImageGaugeGraphView(graph);
+  graphView->setWidthPercent(100.0F)->setFlex(1.0F);
+  graphPlaceHolder->addView(graphView);
+
+  if (!graph.label.has_value()) {
+    return;
+  }
+  auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+  gaugeLabel->setText(graph.label->text);
+  gaugeLabel->setAlign(TextView::CENTER);
+  gaugeLabel->setVAlign(TextView::MIDDLE);
+  gaugeLabel->setPositionType(YGPositionTypeAbsolute);
+  gaugeLabel->setPosition(Edge::Left, 12);
+  gaugeLabel->setPosition(Edge::Top, 12);
+  gaugeLabel->setWidth(142);
+  gaugeLabel->setHeight(30);
+  gaugeLabel->setCornerRadius(6);
+  gaugeLabel->setZIndex(2);
+  gaugeLabel->setName("resultGaugeLabel");
+  gaugeLabel->setBackgroundColor(graph.label->background);
+  gaugeLabel->setColor(ui_theme::sdl(ui_theme::textOn(graph.label->background)));
+  graphPlaceHolder->addView(gaugeLabel);
+}
+
 void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
-                          std::span<const ResultGaugeSeries> series,
+                          const std::optional<
+                              result_gauge_history::ResultGaugeGraph> &graph,
                           const View *graphPlaceHolder) {
-  const auto graph = result_gauge_history::graphFor(series, 0);
   if (graphPlaceHolder == nullptr || !graph.has_value()) {
     return;
   }
@@ -440,25 +499,11 @@ RhythmState courseResultStateForReplay(
   return aggregate;
 }
 
-ResultImageExportResult renderResultImage(ApplicationContext &context,
-                                          const bms_parser::ChartMeta &meta,
-                                          const RhythmState &state,
-                                          const std::string &playModeLabel,
-                                          const std::string &laneOrderLabel,
-                                          const std::string &difficultyLabel,
-                                          const std::optional<ResultPreviousBestData>
-                                              &previousBest,
-                                          const std::optional<std::string>
-                                              &currentClearLabelOverride,
-                                          const std::optional<int>
-                                              &currentClearRankOverride,
-                                          const std::optional<std::string>
-                                              &headerDifficultyLabelOverride,
-                                          const std::optional<ResultPacemakerData>
-                                              &pacemaker,
-                                          const std::optional<practice::ResultModel>
-                                              &analyticsModel,
-                                          const std::filesystem::path &path) {
+ResultImageExportResult renderResultImageWithSkinData(
+    ApplicationContext &context, ResultSkinData resultSkinData,
+    const std::optional<result_gauge_history::ResultGaugeGraph> &gaugeGraph,
+    const std::optional<practice::ResultModel> &analyticsModel,
+    bool attachGaugeAsView, const std::filesystem::path &path) {
   const int width = rendering::render_width;
   const bool mobileTarget =
       TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
@@ -532,24 +577,10 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   configureResultImageViews(width, height, outputFrameBuffer);
 
   View *graphPlaceHolder = nullptr;
-  const auto series = result_gauge_history::seriesFor(state);
   resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                       rendering::window_height);
-  ResultSkinData resultSkinData = {&state, &meta, &context};
+  resultSkinData.context = &context;
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
-  resultSkinData.showControls = false;
-  resultSkinData.showResultGraph = !analyticsModel.has_value();
-  if (series.empty()) {
-    resultSkinData.showResultGraph = false;
-  }
-  resultSkinData.playModeLabel = playModeLabel;
-  resultSkinData.laneOrderLabel = laneOrderLabel;
-  resultSkinData.difficultyLabel = difficultyLabel;
-  resultSkinData.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
-  resultSkinData.currentClearLabelOverride = currentClearLabelOverride;
-  resultSkinData.currentClearRankOverride = currentClearRankOverride;
-  resultSkinData.previousBest = previousBest;
-  resultSkinData.pacemaker = pacemaker;
   DefaultSkin resultSkin;
   resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
   if (analyticsModel.has_value()) {
@@ -636,6 +667,9 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
     }
     resultRoot->addView(photoVisuals);
   }
+  if (attachGaugeAsView && gaugeGraph.has_value()) {
+    attachPresentationGaugeGraph(graphPlaceHolder, *gaugeGraph);
+  }
   resultRoot->applyYogaLayout();
 
   RenderContext renderContext;
@@ -650,7 +684,9 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                         ui_theme::backdrop().toABGR());
   backdropBatch.end();
   resultRoot->render(renderContext);
-  drawResultGaugeGraph(graphBatch, series, graphPlaceHolder);
+  if (!attachGaugeAsView) {
+    drawResultGaugeGraph(graphBatch, gaugeGraph, graphPlaceHolder);
+  }
   bgfx::blit(rendering::readback_view, readbackTexture, 0, 0, outputTexture);
   uint32_t currentFrame = bgfx::frame();
 
@@ -681,7 +717,65 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   return {.success = true, .outputPath = path, .message = "Exported"};
 #endif
 }
+
+ResultImageExportResult renderResultImage(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const std::string &playModeLabel,
+    const std::string &laneOrderLabel, const std::string &difficultyLabel,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const std::optional<std::string> &currentClearLabelOverride,
+    const std::optional<int> &currentClearRankOverride,
+    const std::optional<std::string> &headerDifficultyLabelOverride,
+    const std::optional<ResultPacemakerData> &pacemaker,
+    const std::optional<practice::ResultModel> &analyticsModel,
+    const std::filesystem::path &path) {
+  const auto series = result_gauge_history::seriesFor(state);
+  const auto gaugeGraph = result_gauge_history::graphFor(series, 0);
+  ResultSkinData resultSkinData = {&state, &meta, &context};
+  resultSkinData.showControls = false;
+  resultSkinData.showResultGraph = !analyticsModel.has_value();
+  if (series.empty()) {
+    resultSkinData.showResultGraph = false;
+  }
+  resultSkinData.playModeLabel = playModeLabel;
+  resultSkinData.laneOrderLabel = laneOrderLabel;
+  resultSkinData.difficultyLabel = difficultyLabel;
+  resultSkinData.headerDifficultyLabelOverride = headerDifficultyLabelOverride;
+  resultSkinData.currentClearLabelOverride = currentClearLabelOverride;
+  resultSkinData.currentClearRankOverride = currentClearRankOverride;
+  resultSkinData.previousBest = previousBest;
+  resultSkinData.pacemaker = pacemaker;
+  return renderResultImageWithSkinData(context, std::move(resultSkinData),
+                                       gaugeGraph, analyticsModel, false, path);
+}
 } // namespace
+
+ResultImageExportResult ResultImageExporter::Export(
+    ApplicationContext &context,
+    const ResultPresentationModel &presentation) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
+  const auto outputDir = Utils::GetDocumentsPath("result_exports");
+  if (const auto error = ensureExportDirectoryError(
+          outputDir, "Failed to create result export directory")) {
+    return {.success = false, .message = *error};
+  }
+
+  auto plan = result_image_export::presentationPlanFor(presentation,
+                                                        makeTimestamp());
+  const auto outputPath = outputDir / plan.filename;
+  return renderResultImageWithSkinData(
+      context, std::move(plan.skinData), plan.gauge, std::nullopt, true,
+      outputPath);
+}
 
 ResultImageExportResult
 ResultImageExporter::Export(ApplicationContext &context,
