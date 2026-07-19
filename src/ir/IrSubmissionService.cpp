@@ -599,12 +599,12 @@ struct IrSubmissionService::Impl {
           return std::nullopt;
         }
       }
-      auto update = deliveryUpdate(claimed, entry.state, outcome, completedAt);
       std::optional<std::string> successfulOrigin;
+      std::optional<IrSuccessfulReceiptDraft> successfulReceipt;
       if (outcome.status == DeliveryStatus::Succeeded) {
         successfulOrigin = requestOrigin(entry, provider->second);
         if (successfulOrigin) {
-          update.successfulReceipt = IrSuccessfulReceiptDraft{
+          successfulReceipt = IrSuccessfulReceiptDraft{
               .serverOrigin = *successfulOrigin,
               .remoteUserId = outcome.remoteUserId,
               .remoteScoreId =
@@ -614,6 +614,22 @@ struct IrSubmissionService::Impl {
               .confirmedAtUnixMillis = completedAt,
           };
         }
+        std::string receiptDiagnostic;
+        if (!successfulReceipt ||
+            !validateIrSuccessfulReceiptDraft(*successfulReceipt,
+                                              receiptDiagnostic)) {
+          outcome = {
+              .status = DeliveryStatus::PermanentFailure,
+              .code = "malformed_response",
+              .diagnostic = "IR delivery returned invalid receipt identity",
+          };
+          successfulOrigin.reset();
+          successfulReceipt.reset();
+        }
+      }
+      auto update = deliveryUpdate(claimed, entry.state, outcome, completedAt);
+      if (successfulReceipt) {
+        update.successfulReceipt = std::move(successfulReceipt);
       }
       const auto applied = repository.ApplyIrOutboxDelivery(update);
       const StatusKey key{entry.providerId, entry.attemptId};

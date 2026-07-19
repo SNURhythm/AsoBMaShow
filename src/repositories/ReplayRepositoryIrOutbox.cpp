@@ -1061,23 +1061,69 @@ ir::IrOutboxMutationOutcome ReplayRepository::ClearIrSubmissionReceipts(
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = "replay storage is unavailable"};
   }
-  SqliteStatementHandle statement;
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not start IR account evidence clear"};
+  }
+
+  SqliteStatementHandle outboxStatement;
+  constexpr const char *outboxQuery =
+      "DELETE FROM ir_outbox WHERE provider_id=? AND state=? AND EXISTS("
+      "SELECT 1 FROM ir_submission_receipts receipt WHERE "
+      "receipt.provider_id=? AND receipt.server_origin=? AND "
+      "receipt.attempt_id=ir_outbox.attempt_id)";
+  if (prepareSqliteStatement(impl_->sessionDatabase, outboxQuery,
+                             outboxStatement) != SQLITE_OK ||
+      sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_int(outboxStatement.get(), 2,
+                       static_cast<int>(ir::IrOutboxState::Succeeded)) !=
+          SQLITE_OK ||
+      sqlite3_bind_text(outboxStatement.get(), 3, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(outboxStatement.get(), 4, serverOrigin.data(),
+                        static_cast<int>(serverOrigin.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_step(outboxStatement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic =
+                "could not clear receipt-backed IR outbox completions"};
+  }
+  const std::size_t deletedOutboxRows =
+      static_cast<std::size_t>(sqlite3_changes(impl_->sessionDatabase));
+
+  SqliteStatementHandle receiptStatement;
   if (prepareSqliteStatement(
           impl_->sessionDatabase,
           "DELETE FROM ir_submission_receipts WHERE provider_id=? AND "
           "server_origin=?",
-          statement) != SQLITE_OK ||
-      sqlite3_bind_text(statement.get(), 1, providerId.data(),
+          receiptStatement) != SQLITE_OK ||
+      sqlite3_bind_text(receiptStatement.get(), 1, providerId.data(),
                         static_cast<int>(providerId.size()),
                         SQLITE_TRANSIENT) != SQLITE_OK ||
-      sqlite3_bind_text(statement.get(), 2, serverOrigin.data(),
+      sqlite3_bind_text(receiptStatement.get(), 2, serverOrigin.data(),
                         static_cast<int>(serverOrigin.size()),
                         SQLITE_TRANSIENT) != SQLITE_OK ||
-      sqlite3_step(statement.get()) != SQLITE_DONE) {
+      sqlite3_step(receiptStatement.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = "could not clear IR submission receipts"};
   }
-  return mutationFromChanges(impl_->sessionDatabase);
+  const std::size_t deletedReceiptRows =
+      static_cast<std::size_t>(sqlite3_changes(impl_->sessionDatabase));
+  if (!transaction.commit(transactionError)) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not commit IR account evidence clear"};
+  }
+  const std::size_t affectedRows = deletedOutboxRows + deletedReceiptRows;
+  return {.status = affectedRows == 0
+                        ? ir::IrOutboxMutationStatus::NotFound
+                        : ir::IrOutboxMutationStatus::Updated,
+          .affectedRows = affectedRows};
 }
 
 ir::IrOutboxMutationOutcome

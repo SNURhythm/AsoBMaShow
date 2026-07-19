@@ -56,7 +56,8 @@ required = {
         "bindingForIrRecordState",
         "ui_icons::kFontAwesomeSolidPath",
         "ui_icons::textForCodepoint",
-        "irBadgeActionable",
+        "irBadgeCallbackReplayId_",
+        "irBadge->setOnClickListener({})",
     ],
 }
 texts = {

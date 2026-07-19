@@ -78,6 +78,8 @@ require_in_order(
     "rootLayout->addView(right);",
 )
 require_settings_in_order(
+    ".quiesceRemoteWork =",
+    "context.pauseIrProfileServices(diagnostic)",
     ".invalidateRemoteIdentity =",
     "ir::normalizeServerOrigin(serverOrigin)",
     "context.replayRepository.ClearIrSubmissionReceipts(",
@@ -85,6 +87,8 @@ require_settings_in_order(
     ".replaceCredential =",
     ".removeCredential =",
     ".credentialCommitted =",
+    ".reactivateRemoteWork =",
+    "context.activateIrProfileServices(",
 )
 require(
     settings_source.count("clearUserIds(diagnostic)") == 1,

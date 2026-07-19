@@ -768,6 +768,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
         src/ir/IrRankingModels.cpp
+        src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionService.cpp
         src/repositories/ReplayRepository.cpp

@@ -2,6 +2,7 @@
 
 #include "Utils.h"
 #include "ir/IrHttpClient.h"
+#include "ir/IrSettingsPresentation.h"
 #include "repositories/ReplayRepository.h"
 
 #include <atomic>
@@ -118,6 +119,17 @@ public:
     block_ = true;
   }
 
+  void blockRequestsUntilReleased() {
+    std::lock_guard lock(mutex_);
+    blockUntilReleased_ = true;
+  }
+
+  void releaseBlockedRequests() {
+    std::lock_guard lock(mutex_);
+    blockUntilReleased_ = false;
+    blockChanged_.notify_all();
+  }
+
   bool waitForCalls(std::size_t count) const {
     std::unique_lock lock(mutex_);
     return callsChanged_.wait_for(lock, 3s,
@@ -146,6 +158,9 @@ private:
                          [&] { return token.stop_requested() || !block_; });
       return {.status = ir::DeliveryStatus::Cancelled};
     }
+    if (blockUntilReleased_) {
+      blockChanged_.wait(lock, [&] { return !blockUntilReleased_; });
+    }
     auto &outcomes = poll ? pollOutcomes_ : submitOutcomes_;
     if (outcomes.empty()) {
       return {.status = ir::DeliveryStatus::Succeeded};
@@ -163,6 +178,7 @@ private:
   mutable std::deque<ir::DeliveryOutcome> submitOutcomes_;
   mutable std::deque<ir::DeliveryOutcome> pollOutcomes_;
   mutable bool block_ = false;
+  mutable bool blockUntilReleased_ = false;
 };
 
 class ManualWaiter {
@@ -1068,6 +1084,164 @@ void testSuccessfulDeliveryPersistsRemoteReceiptBeforeStatus() {
          "idempotent duplicate without score ID still creates a receipt");
 }
 
+void testInvalidSuccessfulReceiptIdentityCompletesAsFailure() {
+  Harness harness;
+  harness.setCredential("key");
+  harness.enqueueReady(draft(28, harness.now.load()), false);
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Succeeded,
+      .remoteUserId = 42,
+      .remoteScoreId = std::string("score\x01id", 8),
+  });
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.waitForState(attemptId(28),
+                              ir::IrOutboxState::FailedPermanent),
+         "invalid successful identity completes as a permanent failure");
+  const auto stored = load(harness, 28);
+  expect(stored.state == ir::IrOutboxState::FailedPermanent &&
+             stored.lastErrorCode == "malformed_response",
+         "invalid successful identity does not leave a claimed row stuck");
+  expect(harness.repository
+             .LoadIrSubmissionReceipt("fake", "https://boku.tachi.ac",
+                                      attemptId(28))
+             .status == ir::IrReceiptReadStatus::NotFound,
+         "invalid successful identity creates no receipt");
+}
+
+void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
+  const auto run = [](bool removeCredential) {
+    Harness harness;
+    harness.setCredential("old-key");
+    harness.enqueueReady(draft(removeCredential ? 30 : 29, harness.now.load()),
+                         false);
+    const std::string attempt = attemptId(removeCredential ? 30 : 29);
+    harness.driver->pushSubmit({
+        .status = ir::DeliveryStatus::Succeeded,
+        .remoteUserId = 42,
+        .remoteScoreId = "old-account-score",
+    });
+    harness.driver->blockRequestsUntilReleased();
+    harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+    expect(harness.driver->waitForCalls(1),
+           "old-account request reaches the blocked driver");
+
+    std::mutex orderMutex;
+    std::condition_variable orderChanged;
+    bool quiesceEntered = false;
+    bool invalidationEntered = false;
+    std::vector<std::string> order;
+    ir::IrSettingsActionDependencies dependencies{
+        .quiesceRemoteWork =
+            [&](std::string &) {
+              {
+                std::lock_guard lock(orderMutex);
+                quiesceEntered = true;
+                order.emplace_back("quiesce");
+                orderChanged.notify_all();
+              }
+              harness.service->pauseAndCancel();
+              return true;
+            },
+        .invalidateRemoteIdentity =
+            [&](std::string_view providerId, std::string_view serverOrigin,
+                std::string &diagnostic) {
+              {
+                std::lock_guard lock(orderMutex);
+                invalidationEntered = true;
+                order.emplace_back("invalidate");
+                orderChanged.notify_all();
+              }
+              const auto cleared = harness.repository.ClearIrSubmissionReceipts(
+                  providerId, serverOrigin);
+              diagnostic = cleared.diagnostic;
+              return cleared.status == ir::IrOutboxMutationStatus::Updated ||
+                     cleared.status == ir::IrOutboxMutationStatus::NotFound;
+            },
+        .replaceCredential =
+            [&](std::string_view key, std::string &) {
+              {
+                std::lock_guard lock(orderMutex);
+                order.emplace_back("replace");
+              }
+              harness.setCredential(std::string(key));
+              return true;
+            },
+        .removeCredential =
+            [&](std::string &) {
+              {
+                std::lock_guard lock(orderMutex);
+                order.emplace_back("remove");
+              }
+              harness.setCredential({});
+              return true;
+            },
+        .credentialCommitted =
+            [&] {
+              std::lock_guard lock(orderMutex);
+              order.emplace_back("committed");
+            },
+        .reactivateRemoteWork =
+            [&](std::string &) {
+              {
+                std::lock_guard lock(orderMutex);
+                order.emplace_back("reactivate");
+              }
+              harness.service->activateProfile(
+                  profile(true, true, "https://boku.tachi.ac"));
+              return true;
+            },
+    };
+    ir::IrSettingsActionModel model(
+        "fake", {.scoreSubmission = true, .deferredSubmission = true},
+        {.enabled = true,
+         .autoSubmit = true,
+         .serverOrigin = "https://boku.tachi.ac"},
+        true, std::move(dependencies));
+
+    std::optional<ir::IrSettingsActionResult> actionResult;
+    std::thread mutation([&] {
+      actionResult = removeCredential ? model.removeCredential()
+                                      : model.replaceCredential("new-key");
+    });
+    {
+      std::unique_lock lock(orderMutex);
+      expect(orderChanged.wait_for(lock, 3s, [&] { return quiesceEntered; }),
+             "credential mutation enters synchronous quiescence");
+      expect(!invalidationEntered,
+             "receipt invalidation cannot run while old-account I/O is blocked");
+    }
+
+    harness.driver->releaseBlockedRequests();
+    mutation.join();
+
+    expect(actionResult && actionResult->succeeded(),
+           "credential mutation succeeds after old-account work quiesces");
+    expect(harness.repository
+               .LoadIrSubmissionReceipt("fake", "https://boku.tachi.ac",
+                                        attempt)
+               .status == ir::IrReceiptReadStatus::NotFound,
+           "old-account completion cannot recreate a cleared receipt");
+    expect(harness.repository.LoadIrOutbox("fake", attempt).status ==
+               ir::IrOutboxReadStatus::NotFound,
+           "receipt-backed old-account success evidence is removed");
+    const auto calls = harness.driver->calls();
+    expect(calls.size() == 1 && calls.front().apiKey == "old-key",
+           "reactivation does not replay cleared success with the new account");
+    const std::vector<std::string> expectedOrder =
+        removeCredential
+            ? std::vector<std::string>{"quiesce", "invalidate", "remove",
+                                       "committed", "reactivate"}
+            : std::vector<std::string>{"quiesce", "invalidate", "replace",
+                                       "committed", "reactivate"};
+    expect(order == expectedOrder,
+           "credential mutation stays quiesced through evidence and key changes");
+  };
+
+  run(false);
+  run(true);
+}
+
 void testSucceededPurgeAndSnapshotReads() {
   Harness harness;
   const auto old = harness.enqueueReady(
@@ -1234,6 +1408,8 @@ int main() {
   testPersistedBackoffAndRetryAfter();
   testPermanentFailureRetryAllAndDeferredPreservation();
   testSuccessfulDeliveryPersistsRemoteReceiptBeforeStatus();
+  testInvalidSuccessfulReceiptIdentityCompletesAsFailure();
+  testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence();
   testSucceededPurgeAndSnapshotReads();
   testPauseCancelsInflightAndRecoversClaim();
   testForegroundRecoversAbandonedClaim();

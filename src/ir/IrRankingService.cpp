@@ -112,6 +112,7 @@ struct IrRankingService::Impl {
   std::condition_variable condition;
   std::jthread worker;
   bool stopped = false;
+  bool profilePaused = false;
   std::uint64_t generation = 0;
   std::uint64_t revision = 0;
   std::optional<Work> pending;
@@ -175,7 +176,7 @@ struct IrRankingService::Impl {
     request.generation = generation;
     activeStop.request_stop();
     pending.reset();
-    if (stopped) {
+    if (stopped || profilePaused) {
       publishLocked(IrRankingSnapshotState::Closed, std::nullopt);
       return generation;
     }
@@ -449,6 +450,8 @@ void IrRankingService::close(std::uint64_t generation) {
 
 void IrRankingService::pauseAndCancel() {
   std::unique_lock lock(impl_->mutex);
+  impl_->profilePaused = true;
+  ++impl_->generation;
   impl_->activeStop.request_stop();
   impl_->pending.reset();
   if (impl_->current.state == IrRankingSnapshotState::Loading) {
@@ -520,6 +523,7 @@ void IrRankingService::activateProfile(std::string_view profileId) {
   impl_->cache.clear();
   impl_->activeProfileId = std::string(profileId);
   ++impl_->generation;
+  impl_->profilePaused = false;
   impl_->publishLocked(IrRankingSnapshotState::Closed, std::nullopt);
 }
 
@@ -531,6 +535,7 @@ void IrRankingService::stop() {
       return;
     }
     impl_->stopped = true;
+    impl_->profilePaused = true;
     impl_->activeStop.request_stop();
     impl_->pending.reset();
     impl_->cache.clear();

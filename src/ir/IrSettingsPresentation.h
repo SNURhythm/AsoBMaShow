@@ -56,6 +56,7 @@ struct IrSettingsActionDependencies {
                      std::string &diagnostic)>
       storeSettings;
   std::function<void(const IrProviderSettings &candidate)> settingsCommitted;
+  std::function<bool(std::string &diagnostic)> quiesceRemoteWork;
   std::function<bool(std::string_view providerId,
                      std::string_view serverOrigin,
                      std::string &diagnostic)>
@@ -64,6 +65,7 @@ struct IrSettingsActionDependencies {
       replaceCredential;
   std::function<bool(std::string &diagnostic)> removeCredential;
   std::function<void()> credentialCommitted;
+  std::function<bool(std::string &diagnostic)> reactivateRemoteWork;
   std::function<IrOutboxMutationOutcome()> retryAll;
   std::function<IrOutboxMutationOutcome(std::int64_t rowId)> discard;
 };

@@ -344,6 +344,22 @@ void testOversizedScoreIdentityIsMalformed() {
          "oversized score identity remains malformed");
 }
 
+void testControlCharacterScoreIdentityIsMalformedForImmediateAndPoll() {
+  const auto immediateOutcome = ir::tachi::parseImmediateImportResponse(
+      R"({"success":true,"body":{"userID":42,"scoreIDs":["score\u0001id"],"errors":[]}})");
+  expect(immediateOutcome.status == ir::DeliveryStatus::PermanentFailure &&
+             immediateOutcome.code == "malformed_response" &&
+             !immediateOutcome.remoteScoreId,
+         "immediate score identity with a control character is malformed");
+
+  const auto pollOutcome = ir::tachi::parsePollStatusResponse(
+      R"({"success":true,"body":{"importStatus":"completed","import":{"userID":42,"scoreIDs":["score\u007fid"],"errors":[]}}})");
+  expect(pollOutcome.status == ir::DeliveryStatus::PermanentFailure &&
+             pollOutcome.code == "malformed_response" &&
+             !pollOutcome.remoteScoreId,
+         "completed poll score identity with a control character is malformed");
+}
+
 void testMultipleScoreIdentitiesAreMalformed() {
   const auto outcome = ir::tachi::parseImmediateImportResponse(
       R"({"success":true,"body":{"userID":42,"scoreIDs":["score-1","score-2"],"errors":[]}})");
@@ -1068,6 +1084,7 @@ int main() {
   testEmptyRejectedImportRemainsPermanentFailure();
   testInvalidImportUserIdentityIsIgnored();
   testOversizedScoreIdentityIsMalformed();
+  testControlCharacterScoreIdentityIsMalformedForImmediateAndPoll();
   testMultipleScoreIdentitiesAreMalformed();
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();

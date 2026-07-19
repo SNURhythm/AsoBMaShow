@@ -5139,6 +5139,7 @@ struct ClaimedCanonicalIrAttempt {
   std::string attemptId;
   std::string chartMd5;
   std::string chartSha256;
+  bms_parser::ChartMeta chartMeta;
   int replayId = 0;
   std::int64_t rowId = 0;
 };
@@ -5166,6 +5167,7 @@ ClaimedCanonicalIrAttempt stageActivateAndClaimIrAttempt(
   return {.attemptId = attempt.attemptId,
           .chartMd5 = outbox.entry->chartMd5,
           .chartSha256 = outbox.entry->chartSha256,
+          .chartMeta = attempt.replay.chartMeta,
           .replayId = staged.receipt->replayId,
           .rowId = outbox.entry->id};
 }
@@ -5321,6 +5323,36 @@ void testClearIrSubmissionReceiptsIsOriginScoped(
       helper, root, "ir-receipt-clear-origin", 108);
   const auto otherProvider = stageActivateAndClaimIrAttempt(
       helper, root, "ir-receipt-clear-provider", 109, "other");
+  const auto unfinishedAttempt =
+      sampleChartAttempt(root, "ir-receipt-clear-unfinished", 110);
+  const auto unfinishedDraft =
+      automaticIrDraft(unfinishedAttempt, "tachi", 1'000);
+  const auto unfinishedStage =
+      helper.StageChartResult(unfinishedAttempt, {&unfinishedDraft, 1});
+  assert(unfinishedStage.status == result_persistence::StageStatus::Staged &&
+         unfinishedStage.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 unfinishedAttempt.attemptId, unfinishedStage.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  const auto legacyAttempt =
+      sampleChartAttempt(root, "ir-receipt-clear-legacy", 111);
+  const auto legacyDraft = automaticIrDraft(legacyAttempt, "tachi", 1'000);
+  const auto legacyStage =
+      helper.StageChartResult(legacyAttempt, {&legacyDraft, 1});
+  assert(legacyStage.status == result_persistence::StageStatus::Staged &&
+         legacyStage.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 legacyAttempt.attemptId, legacyStage.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  const auto legacyOutbox =
+      helper.LoadIrOutbox("tachi", legacyAttempt.attemptId);
+  assert(legacyOutbox.entry);
+  assert(helper
+             .ClaimIrOutbox(legacyOutbox.entry->id,
+                            ir::IrOutboxState::Pending, 1'500)
+             .status == ir::IrOutboxClaimStatus::Claimed);
   assert(helper.ApplyIrOutboxDelivery(successfulDelivery(target.rowId)).status ==
          ir::IrOutboxMutationStatus::Updated);
   assert(helper
@@ -5330,6 +5362,24 @@ void testClearIrSubmissionReceiptsIsOriginScoped(
   assert(helper
              .ApplyIrOutboxDelivery(successfulDelivery(otherProvider.rowId))
              .status == ir::IrOutboxMutationStatus::Updated);
+
+  helper.Shutdown();
+  {
+    auto db = openDatabase(path);
+    execOrAbort(db.get(),
+                "UPDATE ir_outbox SET state=5,completed_at_ms=2000,"
+                "updated_at_ms=2000 WHERE id=" +
+                    std::to_string(legacyOutbox.entry->id));
+  }
+
+  const auto before = helper.ListReplays(target.chartMeta, 0, "tachi",
+                                         "https://boku.tachi.ac");
+  assert(before.size() == 1 && before.front().hasIrReceipt &&
+         ir::resolveIrRecordState(
+             {.eligible = true,
+              .hasReceipt = before.front().hasIrReceipt,
+              .outboxState = before.front().requestedIrOutboxState}) ==
+             ir::IrRecordState::Uploaded);
 
   assert(helper
              .ClearIrSubmissionReceipts("tachi",
@@ -5343,7 +5393,7 @@ void testClearIrSubmissionReceiptsIsOriginScoped(
   const auto cleared = helper.ClearIrSubmissionReceipts(
       "tachi", "https://boku.tachi.ac");
   assert(cleared.status == ir::IrOutboxMutationStatus::Updated &&
-         cleared.affectedRows == 1);
+         cleared.affectedRows == 2);
   assert(helper
              .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
                                       target.attemptId)
@@ -5357,17 +5407,77 @@ void testClearIrSubmissionReceiptsIsOriginScoped(
                                       otherProvider.attemptId)
              .status == ir::IrReceiptReadStatus::Found);
   assert(helper.LoadIrOutbox("tachi", target.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", otherOrigin.attemptId).status ==
          ir::IrOutboxReadStatus::Found);
+  assert(helper.LoadIrOutbox("other", otherProvider.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", unfinishedAttempt.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  const auto retainedLegacy =
+      helper.LoadIrOutbox("tachi", legacyAttempt.attemptId);
+  assert(retainedLegacy.entry &&
+         retainedLegacy.entry->state == ir::IrOutboxState::Succeeded);
+
+  const auto after = helper.ListReplays(target.chartMeta, 0, "tachi",
+                                        "https://boku.tachi.ac");
+  assert(after.size() == 1 && !after.front().hasIrReceipt &&
+         !after.front().requestedIrOutboxState &&
+         ir::resolveIrRecordState(
+             {.eligible = true,
+              .hasReceipt = after.front().hasIrReceipt,
+              .outboxState = after.front().requestedIrOutboxState}) ==
+             ir::IrRecordState::Eligible);
+  const auto legacySummary = helper.ListReplays(
+      legacyAttempt.replay.chartMeta, 0, "tachi", "https://boku.tachi.ac");
+  assert(legacySummary.size() == 1 && !legacySummary.front().hasIrReceipt &&
+         legacySummary.front().requestedIrOutboxState ==
+             ir::IrOutboxState::Succeeded &&
+         ir::resolveIrRecordState(
+             {.eligible = true,
+              .hasReceipt = legacySummary.front().hasIrReceipt,
+              .outboxState = legacySummary.front().requestedIrOutboxState}) ==
+             ir::IrRecordState::Uploaded);
   assert(helper
              .ClearIrSubmissionReceipts("tachi", "https://boku.tachi.ac")
              .status == ir::IrOutboxMutationStatus::NotFound);
 
   helper.Shutdown();
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 3);
-  assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_outbox") == 3);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM replays") == 5);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_outbox") == 4);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_submission_receipts") ==
          2);
+}
+
+void testClearIrSubmissionReceiptsRollsBackBothDeletes(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-receipt-clear-rollback" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  const auto target = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-receipt-clear-rollback", 112);
+  assert(helper.ApplyIrOutboxDelivery(successfulDelivery(target.rowId)).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  helper.Shutdown();
+  {
+    auto db = openDatabase(path);
+    execOrAbort(
+        db.get(),
+        "CREATE TRIGGER fail_ir_receipt_clear BEFORE DELETE ON "
+        "ir_submission_receipts BEGIN SELECT RAISE(ABORT,"
+        "'forced receipt clear failure'); END");
+  }
+
+  const auto cleared = helper.ClearIrSubmissionReceipts(
+      "tachi", "https://boku.tachi.ac");
+  assert(cleared.status == ir::IrOutboxMutationStatus::StorageFailure);
+  assert(helper.LoadIrOutbox("tachi", target.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                      target.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
 }
 
 void testIrOutboxRecoveryCountsRetryAndValidation(
@@ -5560,6 +5670,7 @@ int main() {
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxSuccessCommitsReceiptAtomically(root);
   testClearIrSubmissionReceiptsIsOriginScoped(root);
+  testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);
   testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);

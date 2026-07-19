@@ -94,15 +94,19 @@ struct FakeActions {
   ir::IrProviderSettings active;
   bool credentialPresent = false;
   bool settingsStoreSucceeds = true;
+  bool quiesceSucceeds = true;
   bool invalidationSucceeds = true;
   bool credentialStoreSucceeds = true;
+  bool reactivationSucceeds = true;
   bool mutationSucceeds = true;
   int settingsStores = 0;
   int settingsPublishes = 0;
+  int quiesceCalls = 0;
   int invalidationCalls = 0;
   int replaceCredentialCalls = 0;
   int removeCredentialCalls = 0;
   int credentialPublishes = 0;
+  int reactivationCalls = 0;
   int retryCalls = 0;
   int discardCalls = 0;
   std::vector<std::string> credentialActionOrder;
@@ -124,6 +128,16 @@ struct FakeActions {
             [this](const ir::IrProviderSettings &candidate) {
               ++settingsPublishes;
               active = candidate;
+            },
+        .quiesceRemoteWork =
+            [this](std::string &diagnostic) {
+              ++quiesceCalls;
+              credentialActionOrder.emplace_back("quiesce");
+              if (!quiesceSucceeds) {
+                diagnostic = "quiesce failed";
+                return false;
+              }
+              return true;
             },
         .invalidateRemoteIdentity =
             [this](std::string_view providerId, std::string_view serverOrigin,
@@ -164,6 +178,16 @@ struct FakeActions {
             [this]() {
               ++credentialPublishes;
               credentialActionOrder.emplace_back("committed");
+            },
+        .reactivateRemoteWork =
+            [this](std::string &diagnostic) {
+              ++reactivationCalls;
+              credentialActionOrder.emplace_back("reactivate");
+              if (!reactivationSucceeds) {
+                diagnostic = "reactivation failed";
+                return false;
+              }
+              return true;
             },
         .retryAll =
             [this]() {
@@ -230,6 +254,18 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
                                   fake.dependencies());
   const std::string secret = "private-api-key-should-not-be-retained";
 
+  fake.quiesceSucceeds = false;
+  const auto failedQuiesce = model.replaceCredential(secret);
+  REQUIRE(!failedQuiesce.succeeded());
+  REQUIRE(!model.hasCredential());
+  REQUIRE(fake.invalidationCalls == 0);
+  REQUIRE(fake.replaceCredentialCalls == 0);
+  REQUIRE(fake.reactivationCalls == 1);
+  REQUIRE((fake.credentialActionOrder ==
+           std::vector<std::string>{"quiesce", "reactivate"}));
+
+  fake.quiesceSucceeds = true;
+  fake.credentialActionOrder.clear();
   fake.invalidationSucceeds = false;
   const auto failedInvalidation = model.replaceCredential(secret);
   REQUIRE(!failedInvalidation.succeeded());
@@ -238,9 +274,11 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.invalidationCalls == 1);
   REQUIRE(fake.replaceCredentialCalls == 0);
   REQUIRE(fake.credentialPublishes == 0);
+  REQUIRE(fake.reactivationCalls == 2);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "invalidate:tachi:https://boku.tachi.ac"}));
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac",
+               "reactivate"}));
   REQUIRE(failedInvalidation.diagnostic.find(secret) == std::string::npos);
 
   fake.invalidationSucceeds = true;
@@ -253,9 +291,11 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.invalidationCalls == 2);
   REQUIRE(fake.replaceCredentialCalls == 1);
   REQUIRE(fake.credentialPublishes == 0);
+  REQUIRE(fake.reactivationCalls == 3);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "invalidate:tachi:https://boku.tachi.ac", "replace"}));
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "replace",
+               "reactivate"}));
   REQUIRE(failedReplace.diagnostic.find(secret) == std::string::npos);
 
   fake.credentialActionOrder.clear();
@@ -264,10 +304,11 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(model.hasCredential());
   REQUIRE(fake.credentialPresent);
   REQUIRE(fake.credentialPublishes == 1);
+  REQUIRE(fake.reactivationCalls == 4);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "invalidate:tachi:https://boku.tachi.ac", "replace",
-               "committed"}));
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "replace",
+               "committed", "reactivate"}));
 
   fake.credentialActionOrder.clear();
   fake.invalidationSucceeds = false;
@@ -276,9 +317,11 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.credentialPresent);
   REQUIRE(fake.removeCredentialCalls == 0);
   REQUIRE(fake.credentialPublishes == 1);
+  REQUIRE(fake.reactivationCalls == 5);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "invalidate:tachi:https://boku.tachi.ac"}));
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac",
+               "reactivate"}));
 
   fake.credentialActionOrder.clear();
   fake.invalidationSucceeds = true;
@@ -288,9 +331,11 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.credentialPresent);
   REQUIRE(fake.removeCredentialCalls == 1);
   REQUIRE(fake.credentialPublishes == 1);
+  REQUIRE(fake.reactivationCalls == 6);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "invalidate:tachi:https://boku.tachi.ac", "remove"}));
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "remove",
+               "reactivate"}));
 
   fake.credentialActionOrder.clear();
   fake.credentialStoreSucceeds = true;
@@ -298,10 +343,24 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(!model.hasCredential());
   REQUIRE(!fake.credentialPresent);
   REQUIRE(fake.credentialPublishes == 2);
+  REQUIRE(fake.reactivationCalls == 7);
   REQUIRE((fake.credentialActionOrder ==
            std::vector<std::string>{
-               "invalidate:tachi:https://boku.tachi.ac", "remove",
-               "committed"}));
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "remove",
+               "committed", "reactivate"}));
+
+  fake.credentialActionOrder.clear();
+  fake.reactivationSucceeds = false;
+  const auto failedReactivation = model.replaceCredential(secret);
+  REQUIRE(!failedReactivation.succeeded());
+  REQUIRE(model.hasCredential());
+  REQUIRE(fake.credentialPresent);
+  REQUIRE(fake.credentialPublishes == 3);
+  REQUIRE(fake.reactivationCalls == 8);
+  REQUIRE((fake.credentialActionOrder ==
+           std::vector<std::string>{
+               "quiesce", "invalidate:tachi:https://boku.tachi.ac", "replace",
+               "committed", "reactivate"}));
 }
 
 void testQueueActionsAreCapabilityGatedAndFailureSafe() {

@@ -14,6 +14,7 @@
 
 #include <functional>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -133,13 +134,6 @@ public:
     irBadgeContent->addView(irBadgeLabel);
     irBadgeContent->addView(irBadgeIcon);
     irBadge->setContentView(irBadgeContent);
-    irBadge->setOnClickListener([this]() {
-      if (irBadgeActionable && irUploadHandler) {
-        irUploadHandler(currentSummary);
-      } else if (!irBadgeActionable && irStatusFeedbackHandler) {
-        irStatusFeedbackHandler(currentSummary);
-      }
-    });
     irBadge->setEnabled(false);
     irBadge->setVisible(false);
     addView(irBadge);
@@ -182,8 +176,11 @@ public:
     return ui_icons::kFontAwesomeSolidPath;
   }
 
+  [[nodiscard]] std::optional<int> irBadgeCallbackReplayId() const noexcept {
+    return irBadgeCallbackReplayId_;
+  }
+
   void setSummary(const ReplaySummary &summary) {
-    currentSummary = summary;
     titleText->setText(summary.autoPlay
                            ? "AUTO PLAY"
                            : (summary.createdAt.empty()
@@ -200,7 +197,28 @@ public:
     const replay_summary_list_ui::IrBadgeBinding badge =
         replay_summary_list_ui::bindingForIrRecordState(
             summary.irRecordState);
-    irBadgeActionable = badge.actionable;
+    irBadgeCallbackReplayId_.reset();
+    irBadge->setOnClickListener({});
+    if (badge.visible) {
+      irBadgeCallbackReplayId_ = summary.id;
+      if (badge.actionable) {
+        const ReplaySummary boundSummary = summary;
+        const auto boundHandler = irUploadHandler;
+        irBadge->setOnClickListener([boundSummary, boundHandler]() {
+          if (boundHandler) {
+            boundHandler(boundSummary);
+          }
+        });
+      } else {
+        const ReplaySummary boundSummary = summary;
+        const auto boundHandler = irStatusFeedbackHandler;
+        irBadge->setOnClickListener([boundSummary, boundHandler]() {
+          if (boundHandler) {
+            boundHandler(boundSummary);
+          }
+        });
+      }
+    }
     irBadge->setVisible(badge.visible);
     irBadge->setWidth(badge.visible ? 62.0F : 0.0F);
     // Non-actionable badges stay enabled as pointer event sinks. The bound
@@ -272,8 +290,7 @@ private:
   TextView *scoreText = nullptr;
   TextView *rankText = nullptr;
   std::string currentRank;
-  ReplaySummary currentSummary;
-  bool irBadgeActionable = false;
+  std::optional<int> irBadgeCallbackReplayId_;
   std::function<void(const ReplaySummary &)> irUploadHandler;
   std::function<void(const ReplaySummary &)> irStatusFeedbackHandler;
 };

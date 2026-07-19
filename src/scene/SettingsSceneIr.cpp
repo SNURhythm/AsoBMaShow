@@ -133,6 +133,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                 diagnostic);
           },
       .settingsCommitted = std::move(committedSettings),
+      .quiesceRemoteWork =
+          [this](std::string &diagnostic) {
+            return context.pauseIrProfileServices(diagnostic);
+          },
       .invalidateRemoteIdentity =
           [this](std::string_view providerId, std::string_view serverOrigin,
                  std::string &diagnostic) {
@@ -202,6 +206,16 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             if (context.irSubmissionService) {
               context.irSubmissionService->notifyConfigurationChanged();
             }
+          },
+      .reactivateRemoteWork =
+          [this](std::string &diagnostic) {
+            if (!context.profileReady()) {
+              diagnostic = "The active profile is unavailable.";
+              return false;
+            }
+            return context.activateIrProfileServices(
+                context.profileManager.activeProfile().id, context.settings,
+                diagnostic);
           },
       .retryAll =
           [this]() {

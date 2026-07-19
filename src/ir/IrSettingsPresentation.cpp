@@ -18,6 +18,39 @@ IrSettingsActionResult mutationResult(const IrOutboxMutationOutcome &outcome) {
           .diagnostic = sanitizeDiagnostic(outcome.diagnostic)};
 }
 
+class RemoteWorkReactivationGuard {
+public:
+  explicit RemoteWorkReactivationGuard(
+      std::function<bool(std::string &)> callback)
+      : callback_(std::move(callback)) {}
+
+  ~RemoteWorkReactivationGuard() {
+    if (!attempted_) {
+      std::string ignored;
+      (void)reactivate(ignored);
+    }
+  }
+
+  bool reactivate(std::string &diagnostic) noexcept {
+    if (attempted_) {
+      return succeeded_;
+    }
+    attempted_ = true;
+    try {
+      succeeded_ = callback_ && callback_(diagnostic);
+    } catch (...) {
+      diagnostic = "IR account work could not be reactivated.";
+      succeeded_ = false;
+    }
+    return succeeded_;
+  }
+
+private:
+  std::function<bool(std::string &)> callback_;
+  bool attempted_ = false;
+  bool succeeded_ = false;
+};
+
 } // namespace
 
 IrSettingsPresentation
@@ -113,9 +146,11 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
-  if (!dependencies_.invalidateRemoteIdentity) {
+  if (!dependencies_.quiesceRemoteWork ||
+      !dependencies_.invalidateRemoteIdentity ||
+      !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account invalidation is unavailable."};
+            .diagnostic = "IR account mutation isolation is unavailable."};
   }
   const auto origin = normalizeServerOrigin(settings_.serverOrigin);
   if (!origin) {
@@ -123,18 +158,49 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
             .diagnostic = "The current IR server origin is invalid."};
   }
   std::string ignoredDiagnostic;
-  if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
-                                               ignoredDiagnostic)) {
+  RemoteWorkReactivationGuard reactivation(
+      dependencies_.reactivateRemoteWork);
+  try {
+    if (!dependencies_.quiesceRemoteWork(ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "IR account work could not be paused."};
+    }
+  } catch (...) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account work could not be paused."};
+  }
+  try {
+    if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
+                                                 ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic =
+                  "IR account evidence could not be invalidated."};
+    }
+  } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account evidence could not be invalidated."};
   }
-  if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
+  try {
+    if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "API key could not be saved."};
+    }
+  } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key could not be saved."};
   }
   hasCredential_ = true;
   if (dependencies_.credentialCommitted) {
-    dependencies_.credentialCommitted();
+    try {
+      dependencies_.credentialCommitted();
+    } catch (...) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "The saved API key could not be activated."};
+    }
+  }
+  if (!reactivation.reactivate(ignoredDiagnostic)) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account work could not be reactivated."};
   }
   return {.status = IrSettingsActionResult::Status::Succeeded};
 }
@@ -144,9 +210,11 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
-  if (!dependencies_.invalidateRemoteIdentity) {
+  if (!dependencies_.quiesceRemoteWork ||
+      !dependencies_.invalidateRemoteIdentity ||
+      !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account invalidation is unavailable."};
+            .diagnostic = "IR account mutation isolation is unavailable."};
   }
   const auto origin = normalizeServerOrigin(settings_.serverOrigin);
   if (!origin) {
@@ -154,18 +222,49 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
             .diagnostic = "The current IR server origin is invalid."};
   }
   std::string ignoredDiagnostic;
-  if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
-                                               ignoredDiagnostic)) {
+  RemoteWorkReactivationGuard reactivation(
+      dependencies_.reactivateRemoteWork);
+  try {
+    if (!dependencies_.quiesceRemoteWork(ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "IR account work could not be paused."};
+    }
+  } catch (...) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account work could not be paused."};
+  }
+  try {
+    if (!dependencies_.invalidateRemoteIdentity(providerId_, *origin,
+                                                 ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic =
+                  "IR account evidence could not be invalidated."};
+    }
+  } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account evidence could not be invalidated."};
   }
-  if (!dependencies_.removeCredential(ignoredDiagnostic)) {
+  try {
+    if (!dependencies_.removeCredential(ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "API key could not be removed."};
+    }
+  } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key could not be removed."};
   }
   hasCredential_ = false;
   if (dependencies_.credentialCommitted) {
-    dependencies_.credentialCommitted();
+    try {
+      dependencies_.credentialCommitted();
+    } catch (...) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "The removed API key could not be activated."};
+    }
+  }
+  if (!reactivation.reactivate(ignoredDiagnostic)) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account work could not be reactivated."};
   }
   return {.status = IrSettingsActionResult::Status::Succeeded};
 }

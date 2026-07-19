@@ -106,7 +106,10 @@ DeliveryOutcome parseImportDocument(const Json &document) {
       return malformed("Tachi Import Document score ID is invalid");
     }
     const auto &value = scoreId.get_ref<const std::string &>();
-    if (value.empty() || value.size() > kMaximumIrRemoteValueBytes) {
+    if (value.empty() || value.size() > kMaximumIrRemoteValueBytes ||
+        std::ranges::any_of(value, [](unsigned char character) {
+          return character < 0x20U || character == 0x7fU;
+        })) {
       return malformed("Tachi Import Document score ID is invalid");
     }
   }

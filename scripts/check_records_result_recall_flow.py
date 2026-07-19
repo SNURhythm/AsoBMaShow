@@ -19,7 +19,10 @@ required = [
     "refreshReplayIrMarker",
     "replayIrUploadInProgress",
     "executeIrSavedResultUpload",
-    "setIrUploadInProgress",
+    "resolveIrRecordState",
+    "observeReplayIrServiceRevisions",
+    "replayIrObservedRevisions",
+    "status.revision",
 ]
 combined = header + source
 missing = [token for token in required if token not in combined]
@@ -51,7 +54,7 @@ else:
 
 cleanup_tokens = [
     "replayIrUploadInProgress = false",
-    "replayIrUploadReplayId.reset()",
+    "replayIrObservedRevisions.clear()",
 ]
 missing += ["cleanup:" + token for token in cleanup_tokens
             if token not in combined]
@@ -59,6 +62,8 @@ forbidden = [
     "replayModalPhotoButton",
     "startReplayImageExport",
     'makeModalButton("Export Photo"',
+    "setIrUploadInProgress",
+    "replayIrUploadReplayId",
 ]
 present = [token for token in forbidden if token in combined]
 if missing or present:

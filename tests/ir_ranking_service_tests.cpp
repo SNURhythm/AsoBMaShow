@@ -711,6 +711,50 @@ void testInvalidationAndShutdown() {
          "shutdown cancels work, clears cache, and rejects new fetches");
 }
 
+void testPauseKeepsRankingWorkQuiescedUntilProfileReactivation() {
+  Harness harness;
+  auto driver = harness.driver("fake");
+  const auto oldAccountGate = std::make_shared<Gate>(true);
+  auto oldAccountRequest = request();
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", oldAccountRequest.chart, "old-account"),
+                .gate = oldAccountGate});
+  const auto oldGeneration = harness.service->open(oldAccountRequest);
+  expect(driver->waitForCalls(1),
+         "old-account ranking request reaches the blocked driver");
+
+  std::atomic_bool pauseReturned{false};
+  std::thread pausing([&] {
+    harness.service->pauseAndCancel();
+    pauseReturned.store(true);
+  });
+  expect(harness.waitFor(oldGeneration, ir::IrRankingSnapshotState::Cancelled),
+         "ranking pause publishes cancellation while waiting for old work");
+
+  const auto callsBeforePausedOpen = driver->calls().size();
+  auto pausedRequest = request();
+  pausedRequest.chart.chartSha256 = sha('e');
+  const auto pausedGeneration = harness.service->open(pausedRequest);
+  const auto pausedSnapshot = harness.service->snapshot();
+  expect(pausedSnapshot.generation == pausedGeneration &&
+             pausedSnapshot.state == ir::IrRankingSnapshotState::Closed &&
+             driver->calls().size() == callsBeforePausedOpen &&
+             !pauseReturned.load(),
+         "paused ranking service rejects new work through credential mutation");
+
+  oldAccountGate->open();
+  pausing.join();
+  expect(pauseReturned.load(),
+         "ranking pause returns only after old-account work is quiescent");
+
+  harness.service->activateProfile("profile-a");
+  driver->push({.outcome = FakeRankingDriver::success(
+                    "fake", pausedRequest.chart, "reactivated")});
+  harness.openAndWait(pausedRequest);
+  expect(driver->calls().size() == callsBeforePausedOpen + 1,
+         "profile reactivation admits ranking work again");
+}
+
 } // namespace
 
 int main() {
@@ -724,6 +768,7 @@ int main() {
   testCloseRejectsLatePaginationCompletion();
   testCacheIdentityAndCredentialFreeDebugTypes();
   testInvalidationAndShutdown();
+  testPauseKeepsRankingWorkQuiescedUntilProfileReactivation();
 
   if (failures != 0) {
     std::cerr << failures << " IR ranking service test(s) failed\n";

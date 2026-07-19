@@ -128,6 +128,8 @@ int main() {
       }
       require(row == reusedRow,
               "IR state matrix reuses one virtualized row view");
+      require(row->irBadgeCallbackReplayId() == 11,
+              "every visible bind installs a callback for its replay identity");
 
       auto *button = uploadButton(list, 0);
       require(button != nullptr && button->getVisible(),
@@ -189,6 +191,26 @@ int main() {
     clickThroughList(list, *button);
     require(uploads == uploadsBeforeHidden,
             "hidden rebind does not leak the prior badge callback");
+    require(!reusedRow->irBadgeCallbackReplayId().has_value(),
+            "hidden rebind clears the state-specific callback identity");
+
+    reusedRow->setSummary(summary(22, ir::IrRecordState::Failed));
+    button = uploadButton(list, 0);
+    require(button != nullptr &&
+                reusedRow->irBadgeCallbackReplayId() == 22,
+            "recycled actionable bind replaces the previous replay identity");
+    clickThroughList(list, *button);
+    require(uploadedReplayId == 22,
+            "recycled actionable callback cannot upload the old replay");
+
+    reusedRow->setSummary(summary(33, ir::IrRecordState::Uploaded));
+    button = uploadButton(list, 0);
+    require(button != nullptr &&
+                reusedRow->irBadgeCallbackReplayId() == 33,
+            "recycled feedback bind replaces the actionable replay identity");
+    clickThroughList(list, *button);
+    require(feedbackState == ir::IrRecordState::Uploaded,
+            "recycled feedback callback cannot emit the old row state");
   }
 
   rendering::UniformCache::getInstance().destroyAll();
