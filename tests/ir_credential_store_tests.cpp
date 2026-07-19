@@ -11,6 +11,10 @@
 #include <string_view>
 #include <tuple>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 namespace {
 
 int failures = 0;
@@ -300,6 +304,41 @@ void testAtomicFailureRollsBackPriorCredentials() {
          "atomic failure restores the prior credential file");
 }
 
+void testCredentialWritesUseOwnerOnlyPermissions() {
+#ifndef _WIN32
+  TempDirectory temp;
+  const auto path = temp.path() / "ir-credentials.json";
+  const mode_t previousUmask = ::umask(0022);
+  const auto saved =
+      ir::IrCredentialStore::replaceApiKey(path, "tachi", "private-key");
+  ::umask(previousUmask);
+  expect(saved.succeeded, "private credential fixture saves");
+
+  std::error_code error;
+  const auto permissions =
+      std::filesystem::status(path, error).permissions() &
+      std::filesystem::perms::mask;
+  expect(!error &&
+             permissions == (std::filesystem::perms::owner_read |
+                             std::filesystem::perms::owner_write),
+         "credential file is readable and writable only by its owner");
+
+  expect(::chmod(path.c_str(), 0644) == 0,
+         "loose credential fixture permissions are installed");
+  expect(ir::IrCredentialStore::replaceApiKey(path, "tachi", "rotated-key")
+             .succeeded,
+         "credential rotation succeeds after tightening a legacy file");
+  error.clear();
+  const auto tightened =
+      std::filesystem::status(path, error).permissions() &
+      std::filesystem::perms::mask;
+  expect(!error &&
+             tightened == (std::filesystem::perms::owner_read |
+                           std::filesystem::perms::owner_write),
+         "credential rotation tightens an existing loose file");
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -310,6 +349,7 @@ int main() {
   testWhitespaceAndControlBytesAreRejectedOnSaveAndLoad();
   testRefusedBackupCleanupFailsClosed();
   testAtomicFailureRollsBackPriorCredentials();
+  testCredentialWritesUseOwnerOnlyPermissions();
   if (failures != 0) {
     std::cerr << failures << " IR credential store test(s) failed\n";
     return 1;

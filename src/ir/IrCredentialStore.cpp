@@ -174,8 +174,15 @@ IrCredentialWriteResult IrCredentialStore::save(
   if (document.dump(2).size() + 1 > kMaximumFileBytes) {
     return invalidWrite("credential file exceeds size limit");
   }
-  if (!versioned_json::saveAtomicWithoutBackup(path, document, diagnostic,
-                                                operations)) {
+  if (!atomic_file::restrictToOwnerOnly(path, diagnostic)) {
+    return invalidWrite(redactKeys(std::move(diagnostic), credentials));
+  }
+  const atomic_file::Operations privateOperations =
+      atomic_file::privateFileOperations();
+  const atomic_file::Operations *writeOperations =
+      operations == nullptr ? &privateOperations : operations;
+  if (!versioned_json::saveAtomicWithoutBackup(
+          path, document, diagnostic, writeOperations)) {
     return invalidWrite(redactKeys(std::move(diagnostic), credentials));
   }
   return {.succeeded = true};

@@ -12,15 +12,18 @@
 #include <Windows.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
 namespace atomic_file {
 namespace {
-bool realWriteAndSync(const std::filesystem::path &path,
-                      std::span<const std::byte> contents,
-                      std::string &errorMessage) {
+bool realWriteAndSyncWithMode(const std::filesystem::path &path,
+                              std::span<const std::byte> contents,
+                              std::string &errorMessage,
+                              bool ownerOnly) {
 #ifdef _WIN32
+  (void)ownerOnly;
   HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
@@ -51,10 +54,23 @@ bool realWriteAndSync(const std::filesystem::path &path,
     return false;
   }
 #else
-  const int descriptor =
-      ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  int flags = O_WRONLY | O_CREAT | O_TRUNC;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  if (ownerOnly) {
+    flags |= O_NOFOLLOW;
+  }
+#endif
+  const int descriptor = ::open(path.c_str(), flags, ownerOnly ? 0600 : 0666);
   if (descriptor < 0) {
     errorMessage = "open failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  if (ownerOnly && ::fchmod(descriptor, 0600) != 0) {
+    errorMessage = "fchmod failed: " + std::string(std::strerror(errno));
+    ::close(descriptor);
     return false;
   }
   std::size_t offset = 0;
@@ -87,6 +103,18 @@ bool realWriteAndSync(const std::filesystem::path &path,
   }
 #endif
   return true;
+}
+
+bool realWriteAndSync(const std::filesystem::path &path,
+                      std::span<const std::byte> contents,
+                      std::string &errorMessage) {
+  return realWriteAndSyncWithMode(path, contents, errorMessage, false);
+}
+
+bool realPrivateWriteAndSync(const std::filesystem::path &path,
+                             std::span<const std::byte> contents,
+                             std::string &errorMessage) {
+  return realWriteAndSyncWithMode(path, contents, errorMessage, true);
 }
 
 bool realReplace(const std::filesystem::path &from,
@@ -318,6 +346,56 @@ Operations defaultOperations() {
   return {.writeAndSync = realWriteAndSync,
           .replace = realReplace,
           .remove = realRemove};
+}
+
+Operations privateFileOperations() {
+  return {.writeAndSync = realPrivateWriteAndSync,
+          .replace = realReplace,
+          .remove = realRemove};
+}
+
+bool restrictToOwnerOnly(const std::filesystem::path &path,
+                         std::string &errorMessage) {
+  errorMessage.clear();
+#ifdef _WIN32
+  (void)path;
+  return true;
+#else
+  int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  const int descriptor = ::open(path.c_str(), flags);
+  if (descriptor < 0) {
+    if (errno == ENOENT) {
+      return true;
+    }
+    errorMessage = "open private file failed: " +
+                   std::string(std::strerror(errno));
+    return false;
+  }
+  struct stat status {};
+  if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)) {
+    errorMessage = "private credential path is not a regular file";
+    ::close(descriptor);
+    return false;
+  }
+  if (::fchmod(descriptor, 0600) != 0) {
+    errorMessage = "fchmod private file failed: " +
+                   std::string(std::strerror(errno));
+    ::close(descriptor);
+    return false;
+  }
+  if (::close(descriptor) != 0) {
+    errorMessage = "close private file failed: " +
+                   std::string(std::strerror(errno));
+    return false;
+  }
+  return true;
+#endif
 }
 
 bool removeBackupArtifacts(const std::filesystem::path &path,
