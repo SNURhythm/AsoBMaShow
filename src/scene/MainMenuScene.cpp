@@ -20,6 +20,7 @@
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
 #include "../ir/IrProfileSettings.h"
+#include "../ir/IrReplayRecordState.h"
 #include "../ir/IrSavedResultUpload.h"
 #include "../ir/IrSubmissionService.h"
 #include "../path.h"
@@ -128,23 +129,6 @@ recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
     return ir::IrRecordActivity::Polling;
   }
   return ir::IrRecordActivity::None;
-}
-
-void resolveReplayIrRecordState(
-    ReplaySummary &summary,
-    ir::IrRecordActivity activity = ir::IrRecordActivity::None) {
-  summary.irSubmissionEligible =
-      summary.attemptId.has_value() && summary.chartMeta.has_value() &&
-      summary.provenance != nullptr &&
-      ir::tachi::isReplayEligibleForBokutachi(
-          *summary.attemptId, summary.hasCanonicalAttemptFingerprint,
-          *summary.chartMeta, *summary.provenance);
-  summary.irRecordState = ir::resolveIrRecordState({
-      .eligible = summary.irSubmissionEligible,
-      .hasReceipt = summary.hasIrReceipt,
-      .outboxState = summary.requestedIrOutboxState,
-      .activity = activity,
-  });
 }
 
 constexpr const char *kDefaultDifficultyTableUrls[] = {
@@ -8444,7 +8428,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     replaySummaries = context.replayRepository.ListReplays(
         replayModalChart.meta, 0, ir::kTachiProviderId, irServerOrigin);
     for (ReplaySummary &summary : replaySummaries) {
-      resolveReplayIrRecordState(summary);
+      ir::resolveReplayIrRecordState(summary);
     }
     replaySummaries.insert(replaySummaries.begin(),
                            autoPlayReplaySummary(replayModalChart));
@@ -10101,7 +10085,7 @@ void MainMenuScene::refreshReplayIrMarker(
       selectedResultRecordStableKey;
   const float previousScrollOffset =
       replayListView != nullptr ? replayListView->scrollOffset : 0.0F;
-  resolveReplayIrRecordState(*latest, activity);
+  ir::resolveReplayIrRecordState(*latest, activity);
   *summary = std::move(*latest);
   auto resultRecord = std::ranges::find_if(
       resultRecordSummaries, [replayId](const ResultRecordSummary &candidate) {

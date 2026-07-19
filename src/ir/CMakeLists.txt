@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     IrCredentialStore.cpp
     IrOutboxModels.cpp
     IrReceiptModels.cpp
+    IrReplayRecordState.cpp
     IrRemoteScoreModels.cpp
     IrScoreReconciliation.cpp
     IrProfileSettings.cpp
@@ -16,6 +17,7 @@ target_sources(main PRIVATE
     IrSettingsPresentation.cpp
     IrSubmission.cpp
     IrSubmissionService.cpp
+    IrUploadCandidates.cpp
     tachi/BokutachiCacheStore.cpp
     tachi/TachiBatchManual.cpp
     tachi/TachiDriver.cpp

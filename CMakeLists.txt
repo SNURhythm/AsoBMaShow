@@ -724,6 +724,35 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(ir_receipt_models_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_upload_candidates_tests
+        tests/ir_upload_candidates_tests.cpp
+        src/ir/IrReplayRecordState.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+        src/ArchiveFile.cpp
+        src/bms_parser.cpp
+        src/MinizBridge.c
+        src/repositories/ChartStorageIdentity.cpp
+        src/path.cpp
+    )
+    target_include_directories(ir_upload_candidates_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_upload_candidates_tests PRIVATE cxx_std_23)
+    target_link_libraries(ir_upload_candidates_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(ir_upload_candidates_tests PRIVATE iconv)
+    endif()
+
     add_executable(ir_remote_score_models_tests
         tests/ir_remote_score_models_tests.cpp
         src/ir/IrRemoteScoreModels.cpp
@@ -2493,6 +2522,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_identity_tests
         ir_driver_tests
         ir_receipt_models_tests
+        ir_upload_candidates_tests
         ir_remote_score_models_tests
         ir_score_reconciliation_tests
         ir_score_import_projection_tests
