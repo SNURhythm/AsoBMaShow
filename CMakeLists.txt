@@ -1032,6 +1032,42 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(result_recall_builder_tests
+        tests/result_recall_builder_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/ResultRecallBuilder.cpp
+        src/ReplayResultStateBuilder.cpp
+        src/ResultPersistenceModel.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrOutboxModels.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(result_recall_builder_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_recall_builder_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(result_recall_builder_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(result_recall_builder_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(result_recall_builder_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(result_recall_builder_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(result_recall_builder_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(result_recall_builder_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(result_persistence_coordinator_tests
         tests/result_persistence_coordinator_tests.cpp
         src/ResultPersistenceCoordinator.cpp
@@ -2187,6 +2223,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
+        result_recall_builder_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests
         chart_record_filters_tests
