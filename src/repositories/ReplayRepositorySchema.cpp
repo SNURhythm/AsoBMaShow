@@ -483,8 +483,37 @@ constexpr const char *kIrOutboxAttemptIndexSql =
     "CREATE INDEX idx_ir_outbox_attempt ON "
     "ir_outbox(provider_id, attempt_id)";
 
+constexpr const char *kIrSubmissionReceiptsTableSql =
+    "CREATE TABLE ir_submission_receipts ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "replay_id INTEGER NOT NULL,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "remote_user_id INTEGER,"
+    "remote_chart_id TEXT,"
+    "remote_score_id TEXT,"
+    "confirmation_source INTEGER NOT NULL,"
+    "observed_in_snapshot INTEGER NOT NULL DEFAULT 0,"
+    "confirmed_at_ms INTEGER NOT NULL,"
+    "UNIQUE(provider_id, server_origin, replay_id),"
+    "CHECK(observed_in_snapshot IN (0, 1)),"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kIrSubmissionReceiptsAttemptIndexSql =
+    "CREATE INDEX idx_ir_submission_receipts_attempt ON "
+    "ir_submission_receipts(provider_id, server_origin, attempt_id)";
+
+constexpr const char *kIrSubmissionReceiptsRemoteScoreIndexSql =
+    "CREATE INDEX idx_ir_submission_receipts_remote_score ON "
+    "ir_submission_receipts(provider_id, server_origin, remote_score_id)";
+
 enum class ReplayResultOutboxSchemaState { Absent, Exact, Malformed };
 enum class IrOutboxSchemaState { Absent, Exact, Malformed };
+enum class IrSubmissionReceiptsSchemaState { Absent, Exact, Malformed };
 
 struct NamedSchemaObjectInspection {
   bool present = false;
@@ -925,6 +954,52 @@ bool inspectIrOutboxSchema(
   return true;
 }
 
+bool inspectIrSubmissionReceiptsSchema(
+    sqlite3 *db, IrSubmissionReceiptsSchemaState &state) {
+  NamedSchemaObjectInspection table;
+  NamedSchemaObjectInspection attemptIndex;
+  NamedSchemaObjectInspection remoteScoreIndex;
+  bool attemptShapeExact = false;
+  bool remoteScoreShapeExact = false;
+  if (!inspectNamedSchemaObject(
+          db, "ir_submission_receipts", "table", "ir_submission_receipts",
+          kIrSubmissionReceiptsTableSql, table,
+          "reading IR submission receipts table schema") ||
+      !inspectNamedSchemaObject(
+          db, "idx_ir_submission_receipts_attempt", "index",
+          "ir_submission_receipts", kIrSubmissionReceiptsAttemptIndexSql,
+          attemptIndex, "reading IR submission receipts attempt index") ||
+      !inspectNamedSchemaObject(
+          db, "idx_ir_submission_receipts_remote_score", "index",
+          "ir_submission_receipts", kIrSubmissionReceiptsRemoteScoreIndexSql,
+          remoteScoreIndex,
+          "reading IR submission receipts remote score index") ||
+      !inspectNamedIndexShape(
+          db, "ir_submission_receipts",
+          "idx_ir_submission_receipts_attempt", false, false,
+          {"provider_id", "server_origin", "attempt_id"}, attemptShapeExact,
+          "reading IR submission receipts attempt index shape") ||
+      !inspectNamedIndexShape(
+          db, "ir_submission_receipts",
+          "idx_ir_submission_receipts_remote_score", false, false,
+          {"provider_id", "server_origin", "remote_score_id"},
+          remoteScoreShapeExact,
+          "reading IR submission receipts remote score index shape")) {
+    return false;
+  }
+  if (!table.present && !attemptIndex.present && !remoteScoreIndex.present) {
+    state = IrSubmissionReceiptsSchemaState::Absent;
+  } else if (table.present && table.exact && attemptIndex.present &&
+             attemptIndex.exact && attemptShapeExact &&
+             remoteScoreIndex.present && remoteScoreIndex.exact &&
+             remoteScoreShapeExact) {
+    state = IrSubmissionReceiptsSchemaState::Exact;
+  } else {
+    state = IrSubmissionReceiptsSchemaState::Malformed;
+  }
+  return true;
+}
+
 bool migrateReplayDatabaseSchema(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -938,14 +1013,17 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (*version >= kReplayDatabaseSchemaVersion) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
+    IrSubmissionReceiptsSchemaState receiptState{};
     if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
-        !inspectIrOutboxSchema(db, irOutboxState)) {
+        !inspectIrOutboxSchema(db, irOutboxState) ||
+        !inspectIrSubmissionReceiptsSchema(db, receiptState)) {
       return false;
     }
     if (resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
-        irOutboxState != IrOutboxSchemaState::Exact) {
+        irOutboxState != IrOutboxSchemaState::Exact ||
+        receiptState != IrSubmissionReceiptsSchemaState::Exact) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
-              "outbox schema");
+              "outbox or receipt schema");
       return false;
     }
     return true;
@@ -1142,6 +1220,45 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
               "poll-count schema");
       return false;
     }
+  }
+  if (*version < 9) {
+    IrSubmissionReceiptsSchemaState receiptState{};
+    if (!inspectIrSubmissionReceiptsSchema(db, receiptState)) {
+      return false;
+    }
+    if (receiptState == IrSubmissionReceiptsSchemaState::Malformed) {
+      SDL_Log("Refusing IR submission receipt migration from a partial or "
+              "unexpected schema");
+      return false;
+    }
+    if (receiptState == IrSubmissionReceiptsSchemaState::Absent &&
+        (!execSql(db, kIrSubmissionReceiptsTableSql,
+                  "creating IR submission receipts") ||
+         !execSql(db, kIrSubmissionReceiptsAttemptIndexSql,
+                  "creating IR submission receipts attempt index") ||
+         !execSql(db, kIrSubmissionReceiptsRemoteScoreIndexSql,
+                  "creating IR submission receipts remote score index"))) {
+      return false;
+    }
+    if (!inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+        receiptState != IrSubmissionReceiptsSchemaState::Exact) {
+      SDL_Log("Refusing migrated IR submission receipts with a partial or "
+              "unexpected schema");
+      return false;
+    }
+  }
+  ReplayResultOutboxSchemaState resultOutboxState{};
+  IrOutboxSchemaState irOutboxState{};
+  IrSubmissionReceiptsSchemaState receiptState{};
+  if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
+      !inspectIrOutboxSchema(db, irOutboxState) ||
+      !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
+      resultOutboxState != ReplayResultOutboxSchemaState::Exact ||
+      irOutboxState != IrOutboxSchemaState::Exact ||
+      receiptState != IrSubmissionReceiptsSchemaState::Exact) {
+    SDL_Log("Refusing migrated replay database with a partial or unexpected "
+            "outbox or receipt schema");
+    return false;
   }
   if (!setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
     return false;

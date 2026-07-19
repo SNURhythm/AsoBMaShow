@@ -691,6 +691,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_receipt_models_tests
+        tests/ir_receipt_models_tests.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_receipt_models_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_receipt_models_tests PRIVATE cxx_std_23)
+
     add_executable(tachi_batch_manual_tests
         tests/tachi_batch_manual_tests.cpp
         src/FileChecksum.cpp
@@ -755,6 +766,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionService.cpp
@@ -864,6 +876,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -1116,6 +1130,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
@@ -1946,6 +1961,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -1997,6 +2013,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -2061,6 +2078,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -2257,6 +2275,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         course_identity_tests
         ir_driver_tests
+        ir_receipt_models_tests
         tachi_batch_manual_tests
         tachi_driver_tests
         bokutachi_cache_store_tests

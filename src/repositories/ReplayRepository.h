@@ -146,7 +146,7 @@ struct CourseReplayLookup {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 8;
+  static constexpr int kCurrentSchemaVersion = 9;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -200,6 +200,13 @@ public:
                              std::string_view errorMessage, std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
+  ir::IrReceiptReadOutcome
+  LoadIrSubmissionReceipt(std::string_view providerId,
+                          std::string_view serverOrigin,
+                          std::string_view attemptId);
+  ir::IrOutboxMutationOutcome
+  ClearIrSubmissionReceipts(std::string_view providerId,
+                            std::string_view serverOrigin);
   ir::IrOutboxMutationOutcome RetryIrOutbox(std::int64_t rowId,
                                             std::int64_t nowMs);
   ir::IrOutboxMutationOutcome RetryAllIrOutbox(std::string_view providerId,

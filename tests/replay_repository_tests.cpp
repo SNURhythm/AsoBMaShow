@@ -100,6 +100,20 @@ bool indexExists(sqlite3 *db, const std::string &index) {
   return sqlite3_step(stmt.get()) == SQLITE_ROW;
 }
 
+std::vector<std::string> indexColumns(sqlite3 *db,
+                                      const std::string &index) {
+  SqliteStatementHandle stmt;
+  const std::string sql = "PRAGMA index_info(\"" + index + "\")";
+  assert(prepareSqliteStatement(db, sql, stmt) == SQLITE_OK);
+  std::vector<std::string> result;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    const auto *name = sqlite3_column_text(stmt.get(), 2);
+    assert(name != nullptr);
+    result.emplace_back(reinterpret_cast<const char *>(name));
+  }
+  return result;
+}
+
 bool indexIsUniqueAndPartial(sqlite3 *db, const std::string &table,
                              const std::string &index) {
   SqliteStatementHandle stmt;
@@ -4718,6 +4732,148 @@ void testCurrentVersionRejectsMalformedRulesetProofSchema(
   assert(schemaSnapshot(db.get()) == before);
 }
 
+constexpr const char *kExpectedIrSubmissionReceiptsTableSql =
+    "CREATE TABLE ir_submission_receipts ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "provider_id TEXT NOT NULL,"
+    "server_origin TEXT NOT NULL,"
+    "replay_id INTEGER NOT NULL,"
+    "attempt_id TEXT NOT NULL,"
+    "chart_md5 TEXT,"
+    "chart_sha256 TEXT NOT NULL,"
+    "remote_user_id INTEGER,"
+    "remote_chart_id TEXT,"
+    "remote_score_id TEXT,"
+    "confirmation_source INTEGER NOT NULL,"
+    "observed_in_snapshot INTEGER NOT NULL DEFAULT 0,"
+    "confirmed_at_ms INTEGER NOT NULL,"
+    "UNIQUE(provider_id, server_origin, replay_id),"
+    "CHECK(observed_in_snapshot IN (0, 1)),"
+    "FOREIGN KEY(replay_id) REFERENCES replays(id) ON DELETE CASCADE"
+    ")";
+
+constexpr const char *kExpectedIrSubmissionReceiptsAttemptIndexSql =
+    "CREATE INDEX idx_ir_submission_receipts_attempt ON "
+    "ir_submission_receipts(provider_id, server_origin, attempt_id)";
+
+constexpr const char *kExpectedIrSubmissionReceiptsRemoteScoreIndexSql =
+    "CREATE INDEX idx_ir_submission_receipts_remote_score ON "
+    "ir_submission_receipts(provider_id, server_origin, remote_score_id)";
+
+void assertExactIrSubmissionReceiptSchema(sqlite3 *db) {
+  assert(queryText(
+             db,
+             "SELECT sql FROM sqlite_master WHERE type='table' AND "
+             "name='ir_submission_receipts'") ==
+         kExpectedIrSubmissionReceiptsTableSql);
+  assert(queryText(
+             db,
+             "SELECT sql FROM sqlite_master WHERE type='index' AND "
+             "name='idx_ir_submission_receipts_attempt'") ==
+         kExpectedIrSubmissionReceiptsAttemptIndexSql);
+  assert(queryText(
+             db,
+             "SELECT sql FROM sqlite_master WHERE type='index' AND "
+             "name='idx_ir_submission_receipts_remote_score'") ==
+         kExpectedIrSubmissionReceiptsRemoteScoreIndexSql);
+  assert(indexColumns(db, "idx_ir_submission_receipts_attempt") ==
+         std::vector<std::string>({"provider_id", "server_origin",
+                                   "attempt_id"}));
+  assert(indexColumns(db, "idx_ir_submission_receipts_remote_score") ==
+         std::vector<std::string>({"provider_id", "server_origin",
+                                   "remote_score_id"}));
+  assert(!columnExists(db, "ir_submission_receipts", "api_key"));
+  assert(!columnExists(db, "ir_submission_receipts", "authorization"));
+  assert(!columnExists(db, "ir_submission_receipts", "payload_json"));
+
+  SqliteStatementHandle foreignKeys;
+  assert(prepareSqliteStatement(
+             db, "PRAGMA foreign_key_list(ir_submission_receipts)",
+             foreignKeys) == SQLITE_OK);
+  assert(sqlite3_step(foreignKeys.get()) == SQLITE_ROW);
+  assert(queryText(db,
+                   "SELECT \"table\" || '|' || \"from\" || '|' || "
+                   "\"to\" || '|' || on_delete FROM "
+                   "pragma_foreign_key_list('ir_submission_receipts')") ==
+         "replays|replay_id|id|CASCADE");
+  assert(sqlite3_step(foreignKeys.get()) == SQLITE_DONE);
+}
+
+void testFreshDatabaseCreatesIrSubmissionReceipts(
+    const std::filesystem::path &root) {
+  const auto path = root / "fresh-ir-submission-receipts" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  assert(ReplayRepository::kCurrentSchemaVersion == 9);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assertExactIrSubmissionReceiptSchema(db.get());
+}
+
+void testVersion8MigrationAddsIrSubmissionReceipts(
+    const std::filesystem::path &root) {
+  const auto path = root / "version-8-ir-submission-receipts" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE IF EXISTS ir_submission_receipts");
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('version-8-kept')");
+  execOrAbort(db.get(), "PRAGMA user_version=8");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(queryText(db.get(), "SELECT value FROM sentinel") ==
+         "version-8-kept");
+  assertExactIrSubmissionReceiptSchema(db.get());
+}
+
+void testVersion8MigrationRejectsMalformedExistingOutbox(
+    const std::filesystem::path &root) {
+  const auto path = root / "version-8-malformed-existing-outbox" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_submission_receipts");
+  execOrAbort(db.get(), "DROP INDEX idx_ir_outbox_due");
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  execOrAbort(db.get(), "PRAGMA user_version=8");
+  db.reset();
+
+  expectReplayMigrationRejectedWithoutMutation(path);
+}
+
+void testCurrentVersionRejectsMalformedIrSubmissionReceiptSchema(
+    const std::filesystem::path &root) {
+  const auto path = root / "malformed-ir-submission-receipts" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE IF EXISTS ir_submission_receipts");
+  execOrAbort(db.get(),
+              "CREATE TABLE ir_submission_receipts(sentinel TEXT NOT NULL)");
+  execOrAbort(db.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+  execOrAbort(db.get(), "INSERT INTO sentinel VALUES ('unchanged')");
+  execOrAbort(db.get(), "PRAGMA user_version=" +
+                            std::to_string(
+                                ReplayRepository::kCurrentSchemaVersion));
+  db.reset();
+
+  expectReplayMigrationRejectedWithoutMutation(path);
+}
+
 void testIrOutboxInsertClaimAndDeliveryTransitions(
     const std::filesystem::path &root) {
   const auto path = root / "ir-outbox-transitions" / "replay.db";
@@ -5115,6 +5271,10 @@ int main() {
   testVersion6MigrationBlocksRowsWithoutRulesetProof(root);
   testVersion7MigrationAddsIrRemotePollCount(root);
   testCurrentVersionRejectsMalformedRulesetProofSchema(root);
+  testFreshDatabaseCreatesIrSubmissionReceipts(root);
+  testVersion8MigrationAddsIrSubmissionReceipts(root);
+  testVersion8MigrationRejectsMalformedExistingOutbox(root);
+  testCurrentVersionRejectsMalformedIrSubmissionReceiptSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);

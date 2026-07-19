@@ -3,6 +3,7 @@ target_sources(main PRIVATE
     IrHttpClient.cpp
     IrCredentialStore.cpp
     IrOutboxModels.cpp
+    IrReceiptModels.cpp
     IrProfileSettings.cpp
     IrRankingModal.cpp
     IrRankingModalView.cpp

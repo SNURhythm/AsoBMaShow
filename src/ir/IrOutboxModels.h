@@ -1,5 +1,7 @@
 #pragma once
 
+#include "IrReceiptModels.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -81,6 +83,7 @@ struct IrOutboxDeliveryUpdate {
   std::string lastErrorMessage;
   std::int64_t updatedAtUnixMillis = 0;
   std::optional<std::int64_t> completedAtUnixMillis;
+  std::optional<IrSuccessfulReceiptDraft> successfulReceipt;
 };
 
 enum class IrOutboxInsertStatus {
