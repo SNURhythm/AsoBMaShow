@@ -2029,6 +2029,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(result_gauge_history_tests
         tests/result_gauge_history_tests.cpp
+        src/rendering/Color.cpp
         src/scene/ResultGaugeHistory.cpp
     )
     target_include_directories(result_gauge_history_tests PRIVATE

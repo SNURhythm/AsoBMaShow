@@ -64,6 +64,24 @@ require(
     "graphPlaceHolder->addView(graphView);" in result_scene,
     "the live result gauge view must be attached to the skin graph placeholder",
 )
+require(
+    "result_gauge_history::seriesFor(resultState)" in result_scene
+    and "result_gauge_history::graphFor(series, selectedIndex)" in result_scene
+    and "result_gauge_history::nextSeriesIndex(series, selectedIndex)"
+    in result_scene,
+    "the live result graph must use shared series choice, geometry, and cycling",
+)
+require(
+    "result_gauge_history::seriesFor(state)" in exporter
+    and "result_gauge_history::graphFor(series, 0)" in exporter,
+    "the result photo exporter must use the same initial series and geometry",
+)
+for source, consumer in ((result_scene, "scene"), (exporter, "exporter")):
+    require(
+        "resultGaugeLineColor" not in source
+        and "gaugeHistory[i - 1]" not in source,
+        f"the result {consumer} must not duplicate gauge segment or color math",
+    )
 
 render_scene_start = result_scene.find("void ResultScene::renderScene()")
 cleanup_start = result_scene.find("void ResultScene::cleanupScene()", render_scene_start)

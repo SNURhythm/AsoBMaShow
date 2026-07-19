@@ -12,6 +12,7 @@
 #include "rendering/common.h"
 #include "scene/PracticeAnalyticsPresentation.h"
 #include "scene/PracticeAnalyticsView.h"
+#include "scene/ResultGaugeHistory.h"
 #include "scene/ResultLayoutGeometry.h"
 #include "skin/DefaultSkin.h"
 #include "targets.h"
@@ -41,6 +42,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -315,19 +317,10 @@ void configureResultImageViews(int width, int height,
                             rendering::final_view);
 }
 
-Color resultGaugeLineColor(float value) {
-  if (value > 80.0f) {
-    return ui_theme::withAlpha(ui_theme::cyan(), 210);
-  }
-  if (value > 30.0f) {
-    return ui_theme::withAlpha(ui_theme::lime(), 210);
-  }
-  return ui_theme::withAlpha(ui_theme::coral(), 210);
-}
-
-void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
-                              const RhythmState &resultState, float x, float y,
-                              float w, float h) {
+void drawResultGaugeGraphPrimitive(
+    rendering::SimpleBatchRenderer &batch,
+    const result_gauge_history::ResultGaugeGraph &graph, float x, float y,
+    float w, float h) {
   batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
 
   const float padding = 8.0f;
@@ -335,57 +328,39 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
   const float graphY = y + padding;
   const float graphW = std::max(1.0f, w - padding * 2.0f);
   const float graphH = std::max(1.0f, h - padding * 2.0f);
-  const float gaugeMaximum =
-      gaugeMaximumValue(resultState.gaugeType, resultState.gaugeProfile);
-  auto clampedValue = [gaugeMaximum](float value) {
-    return std::clamp(value, 0.0f, gaugeMaximum);
+  const auto pointX = [graphX, graphW](const auto &point) {
+    return graphX + point.normalizedX * graphW;
   };
-  auto valueY = [&](float value) {
-    return graphY + graphH - (clampedValue(value) / gaugeMaximum) * graphH;
+  const auto pointY = [graphY, graphH](const auto &point) {
+    return graphY + point.normalizedY * graphH;
   };
 
   const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
-  batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
+  const float guide80Y = graphY + graph.geometry.guide80Y * graphH;
+  const float guide30Y = graphY + graph.geometry.guide30Y * graphH;
+  batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F,
                 guideColor);
-  batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
+  batch.addLine(graphX, guide30Y, graphX + graphW, guide30Y, 1.0F,
                 guideColor);
 
-  const size_t count = resultState.gaugeHistory.size();
-  if (count == 1) {
-    const float value = clampedValue(resultState.gaugeHistory.front());
-    batch.addCircle(graphX, valueY(value), 3.5f,
-                    resultGaugeLineColor(value).toABGR());
-    return;
+  for (const auto &segment : graph.geometry.segments) {
+    batch.addLine(pointX(segment.from), pointY(segment.from),
+                  pointX(segment.to), pointY(segment.to), 3.0F,
+                  segment.to.color.toABGR());
   }
 
-  for (size_t i = 1; i < count; ++i) {
-    const float prevValue = clampedValue(resultState.gaugeHistory[i - 1]);
-    const float value = clampedValue(resultState.gaugeHistory[i]);
-    const float x0 =
-        graphX + (static_cast<float>(i - 1) / static_cast<float>(count - 1)) *
-                     graphW;
-    const float x1 =
-        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
-                     graphW;
-    batch.addLine(x0, valueY(prevValue), x1, valueY(value), 3.0f,
-                  resultGaugeLineColor(value).toABGR());
-  }
-
-  const size_t markerStep = std::max<size_t>(1, count / 40);
-  for (size_t i = 0; i < count; i += markerStep) {
-    const float value = clampedValue(resultState.gaugeHistory[i]);
-    const float pointX =
-        graphX + (static_cast<float>(i) / static_cast<float>(count - 1)) *
-                     graphW;
-    batch.addCircle(pointX, valueY(value), 2.5f,
-                    resultGaugeLineColor(value).toABGR());
+  const float markerRadius = graph.geometry.segments.empty() ? 3.5F : 2.5F;
+  for (const auto &marker : graph.geometry.markers) {
+    batch.addCircle(pointX(marker), pointY(marker), markerRadius,
+                    marker.color.toABGR());
   }
 }
 
 void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
-                          const RhythmState &resultState,
+                          std::span<const ResultGaugeSeries> series,
                           const View *graphPlaceHolder) {
-  if (graphPlaceHolder == nullptr || resultState.gaugeHistory.empty()) {
+  const auto graph = result_gauge_history::graphFor(series, 0);
+  if (graphPlaceHolder == nullptr || !graph.has_value()) {
     return;
   }
 
@@ -400,7 +375,7 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
   batch.setSubmitView(rendering::ui_view);
   batch.setSubmitDepth(0);
   batch.begin();
-  drawResultGaugeLineGraph(batch, resultState, x, y, w, h);
+  drawResultGaugeGraphPrimitive(batch, *graph, x, y, w, h);
   batch.end();
 }
 
@@ -557,12 +532,16 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
   configureResultImageViews(width, height, outputFrameBuffer);
 
   View *graphPlaceHolder = nullptr;
+  const auto series = result_gauge_history::seriesFor(state);
   resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                       rendering::window_height);
   ResultSkinData resultSkinData = {&state, &meta, &context};
   resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
   resultSkinData.showControls = false;
   resultSkinData.showResultGraph = !analyticsModel.has_value();
+  if (series.empty()) {
+    resultSkinData.showResultGraph = false;
+  }
   resultSkinData.playModeLabel = playModeLabel;
   resultSkinData.laneOrderLabel = laneOrderLabel;
   resultSkinData.difficultyLabel = difficultyLabel;
@@ -671,7 +650,7 @@ ResultImageExportResult renderResultImage(ApplicationContext &context,
                         ui_theme::backdrop().toABGR());
   backdropBatch.end();
   resultRoot->render(renderContext);
-  drawResultGaugeGraph(graphBatch, state, graphPlaceHolder);
+  drawResultGaugeGraph(graphBatch, series, graphPlaceHolder);
   bgfx::blit(rendering::readback_view, readbackTexture, 0, 0, outputTexture);
   uint32_t currentFrame = bgfx::frame();
 

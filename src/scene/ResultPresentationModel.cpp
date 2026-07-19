@@ -346,7 +346,8 @@ bool hasComboBreakCard(const ResultPresentationModel &model) noexcept {
 }
 
 bool hasGaugeCard(const ResultPresentationModel &model) noexcept {
-  return !model.gaugeSeries.empty();
+  return std::ranges::any_of(
+      model.gaugeSeries, result_gauge_history::hasPresentPoints);
 }
 
 std::optional<ResultGradeCard> gradeCard(const ResultPresentationModel &model) {
@@ -430,17 +431,7 @@ makeLocalResultPresentation(const bms_parser::ChartMeta &meta,
   model.fast = state.fastCount;
   model.slow = state.slowCount;
 
-  for (const GaugeType type : result_gauge_history::availableTypes(state)) {
-    const auto &history = result_gauge_history::historyFor(state, type);
-    ResultGaugeSeries series;
-    series.points.reserve(history.size());
-    for (const float value : history) {
-      series.points.emplace_back(value);
-    }
-    series.label = gaugeDisplayShortLabel(type, state.gaugeProfile);
-    series.clearRank = gaugeTypeToClearRank(type);
-    model.gaugeSeries.push_back(std::move(series));
-  }
+  model.gaugeSeries = result_gauge_history::seriesFor(state);
   model.timingAnalytics = std::move(options.timingAnalytics);
   return model;
 }
@@ -525,12 +516,13 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   model.fast = score.fast;
   model.slow = score.slow;
 
-  if (!score.gaugeHistory.empty()) {
-    model.gaugeSeries.push_back({
+  ResultGaugeSeries gaugeSeries{
         .points = score.gaugeHistory,
         .label = model.gaugeType,
         .clearRank = model.lampRank,
-    });
+  };
+  if (result_gauge_history::hasPresentPoints(gaugeSeries)) {
+    model.gaugeSeries.push_back(std::move(gaugeSeries));
   }
   model.readOnlyIrUploaded = true;
   return model;

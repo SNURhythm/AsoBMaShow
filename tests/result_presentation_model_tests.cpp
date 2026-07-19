@@ -1,6 +1,7 @@
 #include "scene/ResultPresentationModel.h"
 
 #include "rendering/UniformCache.h"
+#include "scene/ResultGaugeHistory.h"
 #include "scene/play/GameplayGaugeTypes.h"
 #include "skin/DefaultSkin.h"
 #include "view/ClearLampColors.h"
@@ -437,6 +438,54 @@ void testLocalGasGaugeOrder() {
              model.gaugeSeries.front().clearRank == kClearTypeHardClearRank &&
              model.gaugeSeries.front().points.front() == 3.0F,
          "GAS first series is the final adopted gauge with its colored rank");
+
+  std::size_t selected = 0;
+  for (std::size_t expected = 1; expected < model.gaugeSeries.size();
+       ++expected) {
+    selected =
+        result_gauge_history::nextSeriesIndex(model.gaugeSeries, selected);
+    expect(selected == expected,
+           "presentation GAS selection advances in model series order");
+    const auto graph =
+        result_gauge_history::graphFor(model.gaugeSeries, selected);
+    expect(graph && graph->seriesIndex == selected && graph->label &&
+               graph->label->text == expectedLabels[expected] &&
+               sameColor(graph->label->background,
+                         clearLampColorForRank(
+                             *model.gaugeSeries[expected].clearRank)),
+           "presentation GAS selection keeps the selected label and color");
+  }
+  expect(result_gauge_history::nextSeriesIndex(model.gaugeSeries, selected) ==
+             0,
+         "presentation GAS selection wraps to the adopted gauge");
+}
+
+void testSceneAndExporterShareInitialGaugeChoice() {
+  const auto meta = localMeta();
+  auto state = localState();
+  state.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  state.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  state.gaugeType = GaugeType::Hard;
+  for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
+    state.gaugeHistoryFor(gaugeTypeAtIndex(index)) = {
+        static_cast<float>(index), static_cast<float>(index + 10)};
+  }
+
+  const auto model = makeLocalResultPresentation(meta, state, localOptions());
+  const auto localSeries = result_gauge_history::seriesFor(state);
+  const auto sceneChoice = result_gauge_history::graphFor(model.gaugeSeries, 0);
+  const auto exporterChoice = result_gauge_history::graphFor(localSeries, 0);
+  expect(model.gaugeSeries == localSeries && sceneChoice && exporterChoice &&
+             sceneChoice->seriesIndex == exporterChoice->seriesIndex &&
+             sceneChoice->label && exporterChoice->label &&
+             sceneChoice->label->text == exporterChoice->label->text &&
+             sameColor(sceneChoice->label->background,
+                       exporterChoice->label->background) &&
+             sceneChoice->geometry.segments.size() ==
+                 exporterChoice->geometry.segments.size() &&
+             sceneChoice->geometry.markers.size() ==
+                 exporterChoice->geometry.markers.size(),
+         "scene model and photo exporter adapter share one initial graph choice");
 }
 
 void testLocalFailedFullComboAndCourseOverrides() {
@@ -538,6 +587,14 @@ void testFullyPopulatedRemotePresentation() {
              model.gaugeSeries.front().points == remoteScore().gaugeHistory &&
              !model.gaugeSeries.front().points[1].has_value(),
          "remote gauge card preserves null segments and supplied label");
+  const auto graph = result_gauge_history::graphFor(model.gaugeSeries, 0);
+  expect(graph && graph->geometry.strips.size() == 2 &&
+             graph->geometry.segments.size() == 2 &&
+             graph->geometry.segments[0].from.index == 2 &&
+             graph->geometry.segments[0].to.index == 3 &&
+             graph->geometry.segments[1].from.index == 3 &&
+             graph->geometry.segments[1].to.index == 4,
+         "remote null history preserves separate strips with adjacent segments");
   expect(!model.timingAnalytics.has_value(),
          "remote presentation never creates replay timing analytics");
   expect(model.readOnlyIrUploaded,
@@ -628,6 +685,13 @@ void testRemoteIndependentOptionalCardsAndMetadata() {
          "missing gauge history removes only the graph card");
 
   remote = remoteScore();
+  remote.gaugeHistory = {std::nullopt, std::nullopt, std::nullopt};
+  const auto allNullHistory = makeRemoteResultPresentation(remote);
+  expect(!hasGaugeCard(allNullHistory) &&
+             allNullHistory.gaugeSeries.empty(),
+         "all-null gauge history removes the graph card and geometry source");
+
+  remote = remoteScore();
   remote.random.reset();
   const auto noRandom = makeRemoteResultPresentation(remote);
   expect(!noRandom.random && !findInfo(noRandom, "RANDOM") &&
@@ -689,6 +753,31 @@ void testRemoteUnknownLampDoesNotInventPresentation() {
              model.gaugeSeries.size() == 1 &&
              !model.gaugeSeries.front().clearRank,
          "unknown remote lamp has no invented label, color, or graph rank");
+}
+
+void testRemoteGaugeLabelAndLampFallbackSemantics() {
+  auto remote = remoteScore();
+  remote.lampRank = 999;
+  remote.gauge = "NORMAL";
+  const auto supplied = makeRemoteResultPresentation(remote);
+  const auto suppliedGraph =
+      result_gauge_history::graphFor(supplied.gaugeSeries, 0);
+  expect(suppliedGraph && suppliedGraph->label &&
+             suppliedGraph->label->text == "NORMAL" &&
+             sameColor(suppliedGraph->label->background,
+                       clearLampColorForRank(kClearTypeNormalClearRank)),
+         "remote supplied gauge label is preserved with known gauge color");
+
+  remote = remoteScore();
+  remote.gauge.reset();
+  const auto lampOnly = makeRemoteResultPresentation(remote);
+  const auto lampGraph =
+      result_gauge_history::graphFor(lampOnly.gaugeSeries, 0);
+  expect(lampGraph && lampGraph->label &&
+             lampGraph->label->text == "NORMAL CLEAR" &&
+             sameColor(lampGraph->label->background,
+                       clearLampColorForRank(kClearTypeNormalClearRank)),
+         "known remote lamp supplies lamp semantics without inventing gauge");
 }
 
 void testDefaultSkinLocalPresentationContract() {
@@ -970,6 +1059,7 @@ int main() {
   testLocalNormalParity();
   testLocalPacemakerAndRecallParity();
   testLocalGasGaugeOrder();
+  testSceneAndExporterShareInitialGaugeChoice();
   testLocalFailedFullComboAndCourseOverrides();
   testFullyPopulatedRemotePresentation();
   testRemoteGradeAndPlaytypeDependencies();
@@ -977,6 +1067,7 @@ int main() {
   testRemoteIndependentOptionalCardsAndMetadata();
   testRemoteMissingVersusExplicitZero();
   testRemoteUnknownLampDoesNotInventPresentation();
+  testRemoteGaugeLabelAndLampFallbackSemantics();
   testDefaultSkinLocalPresentationContract();
   testDefaultSkinLegacyNullPresentationParity();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();

@@ -4,20 +4,13 @@
 #include "../practice/PracticeResultModel.h"
 #include "../rendering/Color.h"
 #include "../skin/SkinTypes.h"
+#include "ResultGaugeHistory.h"
 #include "play/RhythmState.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
-
-struct ResultGaugeSeries {
-  std::vector<std::optional<float>> points;
-  std::optional<std::string> label;
-  std::optional<int> clearRank;
-
-  bool operator==(const ResultGaugeSeries &) const = default;
-};
 
 struct ResultJudgementRow {
   std::string label;
