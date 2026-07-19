@@ -22,6 +22,18 @@ ReplayChartLoader effectiveLoader(ReplayChartLoader loader) {
   };
 }
 
+bool replayOutcomeMatches(const bms_parser::ChartMeta &meta,
+                          const RhythmState &state,
+                          const ReplayData &replay) {
+  const bool fullCombo = meta.TotalNotes > 0 && state.comboBreak == 0 &&
+                         state.maxCombo >= meta.TotalNotes;
+  const int reconstructedClear = clear_policy::fullComboRankForPlayback(
+      state.getClearTypeRank(), fullCombo, replay.provenance.playback);
+  return state.getScore() == replay.finalScore &&
+         state.maxCombo == replay.maxCombo &&
+         reconstructedClear == replay.clearType;
+}
+
 std::optional<HistoricalIrContext>
 historicalIrFor(const ReplayResultRecord &record,
                 const bms_parser::ChartMeta &meta, const RhythmState &state) {
@@ -77,6 +89,9 @@ ChartBuildOutcome BuildChartResult(ReplayResultRecord record,
     record.replay.chartMeta = chart->Meta;
     RhythmState state =
         replay_result::BuildResultState(*chart, record.replay);
+    if (!replayOutcomeMatches(chart->Meta, state, record.replay)) {
+      return {.diagnostic = "saved chart outcome does not match"};
+    }
     auto historicalIr = historicalIrFor(record, chart->Meta, state);
     return {.value = ChartResult{.chart = std::move(chart),
                                  .replay = std::move(record.replay),
@@ -145,15 +160,7 @@ CourseBuildOutcome BuildCourseResult(CourseReplayData replay,
           *chart, stageReplay, replay.gaugeProfile,
           carriedGauge.has_value() ? &*carriedGauge : nullptr,
           session->carriedCombo, session->maxCombo);
-      const bool fullCombo = chart->Meta.TotalNotes > 0 &&
-                             state.comboBreak == 0 &&
-                             state.maxCombo >= chart->Meta.TotalNotes;
-      const int reconstructedClear = clear_policy::fullComboRankForPlayback(
-          state.getClearTypeRank(), fullCombo,
-          stageReplay.provenance.playback);
-      if (state.getScore() != stageReplay.finalScore ||
-          state.maxCombo != stageReplay.maxCombo ||
-          reconstructedClear != stageReplay.clearType) {
+      if (!replayOutcomeMatches(chart->Meta, state, stageReplay)) {
         return {.diagnostic = "saved course stage outcome does not match"};
       }
 

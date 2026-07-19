@@ -152,6 +152,24 @@ void testParsedChartMetadataStillRejectsChangedChart() {
   assert(!outcome.value->historicalIr.has_value());
 }
 
+void testChartBuildRejectsMismatchedPersistedOutcome() {
+  auto record = validRecord();
+  auto changedMeta = record.replay.chartMeta;
+  changedMeta.TotalNotes = 2;
+  result_recall::ReplayChartLoader changedChartLoader =
+      [changedMeta](const ReplayData &, std::atomic_bool &) {
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta = changedMeta;
+        return chart;
+      };
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      std::move(record), cancelled, std::move(changedChartLoader));
+  assert(!outcome.value.has_value());
+  assert(outcome.diagnostic == "saved chart outcome does not match");
+}
+
 void testInvalidIntegrityMetadataSuppressesOnlyIr() {
   for (int variant = 0; variant < 4; ++variant) {
     auto record = validRecord();
@@ -296,6 +314,7 @@ int main() {
   testMatchingAttemptEnablesHistoricalIr();
   testParsedChartMetadataRestoresHistoricalIr();
   testParsedChartMetadataStillRejectsChangedChart();
+  testChartBuildRejectsMismatchedPersistedOutcome();
   testInvalidIntegrityMetadataSuppressesOnlyIr();
   testCourseBuildPreparesEveryStage();
   testCourseBuildDoesNotPublishPartialSession();
