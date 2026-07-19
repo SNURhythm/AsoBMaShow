@@ -100,6 +100,27 @@ struct IrOutboxInsertOutcome {
   std::string diagnostic;
 };
 
+enum class IrManualBatchItemStatus {
+  Inserted,
+  RetryQueued,
+  AlreadyQueued,
+  AlreadySubmitted,
+  Failed,
+};
+
+struct IrManualBatchItemOutcome {
+  std::string attemptId;
+  IrManualBatchItemStatus status = IrManualBatchItemStatus::Failed;
+  std::optional<IrOutboxEntry> entry;
+  std::string diagnostic;
+};
+
+struct IrManualBatchEnqueueOutcome {
+  bool storageAvailable = false;
+  std::vector<IrManualBatchItemOutcome> items;
+  std::string diagnostic;
+};
+
 enum class IrOutboxReadStatus {
   Found,
   NotFound,

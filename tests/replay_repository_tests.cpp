@@ -5304,6 +5304,116 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
          ir::IrOutboxReadStatus::NotFound);
 }
 
+void testManualIrBatchEnqueueMutatesMixedAttemptsAtomically(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-manual-batch-enqueue" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto absent = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174060", 10'000);
+  const auto failed = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174061", 10'001);
+  const auto pending = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174062", 10'002);
+  const auto succeeded = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174063", 10'003);
+  const auto conflictStored = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174064", 10'004);
+
+  assert(helper.EnqueueReadyIrOutboxDraft(failed, false).entry);
+  assert(helper.EnqueueReadyIrOutboxDraft(pending, false).entry);
+  assert(helper.EnqueueReadyIrOutboxDraft(succeeded, false).entry);
+  assert(helper.EnqueueReadyIrOutboxDraft(conflictStored, false).entry);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET state=4,consecutive_failure_count=5,"
+              "next_attempt_at_ms=99999,last_error_code='rejected',"
+              "last_error_message='old failure' WHERE attempt_id='" +
+                  failed.attemptId + "'");
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET state=5,completed_at_ms=10004 "
+              "WHERE attempt_id='" +
+                  succeeded.attemptId + "'");
+  db.reset();
+
+  auto conflict = conflictStored;
+  conflict.payloadJson = R"({"score":999})";
+  const std::array drafts{absent, failed, pending, succeeded, conflict};
+  const auto outcome =
+      helper.EnqueueReadyIrOutboxDrafts(drafts, true, 20'000);
+
+  assert(outcome.storageAvailable && outcome.diagnostic.empty());
+  assert(outcome.items.size() == drafts.size());
+  assert(outcome.items[0].status == ir::IrManualBatchItemStatus::Inserted &&
+         outcome.items[0].entry &&
+         outcome.items[0].entry->nextRequestUserIntent);
+  assert(outcome.items[1].status ==
+             ir::IrManualBatchItemStatus::RetryQueued &&
+         outcome.items[1].entry &&
+         outcome.items[1].entry->state == ir::IrOutboxState::Pending &&
+         outcome.items[1].entry->consecutiveFailureCount == 0 &&
+         !outcome.items[1].entry->nextAttemptAtUnixMillis &&
+         outcome.items[1].entry->nextRequestUserIntent &&
+         outcome.items[1].entry->lastErrorCode.empty() &&
+         outcome.items[1].entry->lastErrorMessage.empty() &&
+         outcome.items[1].entry->updatedAtUnixMillis == 20'000);
+  assert(outcome.items[2].status ==
+             ir::IrManualBatchItemStatus::AlreadyQueued &&
+         outcome.items[2].entry &&
+         *outcome.items[2].entry ==
+             *helper.LoadIrOutbox(pending.providerId, pending.attemptId).entry);
+  assert(outcome.items[3].status ==
+             ir::IrManualBatchItemStatus::AlreadySubmitted &&
+         outcome.items[3].entry &&
+         outcome.items[3].entry->state == ir::IrOutboxState::Succeeded);
+  assert(outcome.items[4].status == ir::IrManualBatchItemStatus::Failed &&
+         !outcome.items[4].entry && !outcome.items[4].diagnostic.empty());
+  assert(helper.CountIrOutbox("tachi").total == 5);
+}
+
+void testManualIrBatchEnqueueRollsBackOnSqliteFailure(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-manual-batch-rollback" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  const auto failed = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174065", 11'000);
+  const auto absent = sampleIrDraft(
+      "123e4567-e89b-42d3-a456-426614174066", 11'001);
+  assert(helper.EnqueueReadyIrOutboxDraft(failed, false).entry);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_outbox SET state=4,consecutive_failure_count=3,"
+              "last_error_code='prior' WHERE attempt_id='" +
+                  failed.attemptId + "'");
+  execOrAbort(
+      db.get(),
+      "CREATE TRIGGER fail_manual_batch_insert BEFORE INSERT ON ir_outbox "
+      "WHEN NEW.attempt_id='" +
+          absent.attemptId +
+          "' BEGIN SELECT RAISE(ABORT,'forced manual batch failure'); END");
+  db.reset();
+
+  const std::array drafts{failed, absent};
+  const auto outcome =
+      helper.EnqueueReadyIrOutboxDrafts(drafts, true, 21'000);
+  assert(!outcome.storageAvailable && !outcome.diagnostic.empty());
+  assert(outcome.items.size() == 2 &&
+         outcome.items[0].status == ir::IrManualBatchItemStatus::Failed &&
+         outcome.items[1].status == ir::IrManualBatchItemStatus::Failed);
+  const auto retained =
+      helper.LoadIrOutbox(failed.providerId, failed.attemptId);
+  assert(retained.entry &&
+         retained.entry->state == ir::IrOutboxState::FailedPermanent &&
+         retained.entry->consecutiveFailureCount == 3 &&
+         retained.entry->lastErrorCode == "prior");
+  assert(helper.LoadIrOutbox(absent.providerId, absent.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+}
+
 struct ClaimedCanonicalIrAttempt {
   std::string attemptId;
   std::string chartMd5;
@@ -7684,6 +7794,8 @@ int main() {
   testVersion9MigrationAddsIrRemoteScores(root);
   testCurrentVersionRejectsMalformedIrRemoteScoreSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
+  testManualIrBatchEnqueueMutatesMixedAttemptsAtomically(root);
+  testManualIrBatchEnqueueRollsBackOnSqliteFailure(root);
   testIrOutboxBatchClaimAndDeliveryAreAtomic(root);
   testIrOutboxSuccessCommitsReceiptAtomically(root);
   testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(root);

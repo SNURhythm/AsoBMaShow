@@ -14,6 +14,7 @@ target_sources(main PRIVATE
     IrRankingService.cpp
     IrResultPresentation.cpp
     IrSavedResultUpload.cpp
+    IrSavedResultBatchUpload.cpp
     IrSettingsPresentation.cpp
     IrSubmission.cpp
     IrSubmissionService.cpp

@@ -263,6 +263,9 @@ public:
       std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   ir::IrOutboxInsertOutcome
   EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
+  ir::IrManualBatchEnqueueOutcome EnqueueReadyIrOutboxDrafts(
+      std::span<const ir::IrOutboxDraft> drafts, bool userIntent,
+      std::int64_t nowMs);
   ir::IrOutboxReadOutcome LoadIrOutbox(std::string_view providerId,
                                        std::string_view attemptId);
   ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,

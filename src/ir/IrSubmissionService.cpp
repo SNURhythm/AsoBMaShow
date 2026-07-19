@@ -1269,27 +1269,83 @@ void IrSubmissionService::stop() {
 
 IrOutboxInsertOutcome
 IrSubmissionService::enqueueManual(const IrOutboxDraft &draft) {
+  const auto batch =
+      enqueueManualBatch(std::span<const IrOutboxDraft>(&draft, 1));
+  if (batch.items.empty()) {
+    return {.status = IrOutboxInsertStatus::StorageFailure,
+            .diagnostic = batch.diagnostic};
+  }
+  const IrManualBatchItemOutcome &item = batch.items.front();
+  switch (item.status) {
+  case IrManualBatchItemStatus::Inserted:
+    return {.status = IrOutboxInsertStatus::Inserted,
+            .entry = item.entry,
+            .diagnostic = item.diagnostic};
+  case IrManualBatchItemStatus::RetryQueued:
+  case IrManualBatchItemStatus::AlreadyQueued:
+  case IrManualBatchItemStatus::AlreadySubmitted:
+    return {.status = IrOutboxInsertStatus::AlreadyExists,
+            .entry = item.entry,
+            .diagnostic = item.diagnostic};
+  case IrManualBatchItemStatus::Failed:
+    std::string validation;
+    if (!validateIrOutboxDraft(draft, validation) ||
+        batch.diagnostic == "IR provider is unavailable for manual submit") {
+      return {.status = IrOutboxInsertStatus::Invalid,
+              .diagnostic = item.diagnostic.empty() ? batch.diagnostic
+                                                    : item.diagnostic};
+    }
+    return {.status = batch.storageAvailable
+                        ? IrOutboxInsertStatus::IntegrityConflict
+                        : IrOutboxInsertStatus::StorageFailure,
+            .diagnostic = item.diagnostic.empty() ? batch.diagnostic
+                                                  : item.diagnostic};
+  }
+  return {.status = IrOutboxInsertStatus::StorageFailure,
+          .diagnostic = "IR manual enqueue returned an unknown result"};
+}
+
+IrManualBatchEnqueueOutcome IrSubmissionService::enqueueManualBatch(
+    std::span<const IrOutboxDraft> drafts) {
+  if (drafts.empty()) {
+    return {.diagnostic = "IR manual batch is empty"};
+  }
+  const std::string providerId = drafts.front().providerId;
   std::uint64_t currentGeneration = 0;
   {
     std::lock_guard lock(impl_->mutex);
-    const auto provider = impl_->profile.providers.find(draft.providerId);
+    const auto provider = impl_->profile.providers.find(providerId);
     if (!impl_->started || impl_->stopped || impl_->profilePaused ||
         provider == impl_->profile.providers.end() ||
         !provider->second.enabled ||
-        !providerCanSubmit(impl_->drivers, draft.providerId)) {
-      return {.status = IrOutboxInsertStatus::Invalid,
-              .diagnostic = "IR provider is unavailable for manual submit"};
+        !std::ranges::all_of(drafts, [&](const IrOutboxDraft &draft) {
+          return draft.providerId == providerId;
+        }) ||
+        !providerCanSubmit(impl_->drivers, providerId)) {
+      IrManualBatchEnqueueOutcome unavailable{
+          .diagnostic = "IR provider is unavailable for manual submit"};
+      unavailable.items.reserve(drafts.size());
+      for (const auto &draft : drafts) {
+        unavailable.items.push_back({.attemptId = draft.attemptId,
+                                     .diagnostic = unavailable.diagnostic});
+      }
+      return unavailable;
     }
     currentGeneration = impl_->generation;
   }
-  auto result = impl_->repository.EnqueueReadyIrOutboxDraft(draft, true);
-  if (result.entry) {
+  auto result = impl_->repository.EnqueueReadyIrOutboxDrafts(
+      drafts, true, safeNow(impl_->options));
+  {
     std::lock_guard lock(impl_->mutex);
     if (impl_->generation == currentGeneration) {
-      impl_->publishLocked(*result.entry);
+      for (const auto &item : result.items) {
+        if (item.entry) {
+          impl_->publishLocked(*item.entry);
+        }
+      }
     }
   }
-  impl_->refreshCount(draft.providerId, currentGeneration);
+  impl_->refreshCount(providerId, currentGeneration);
   impl_->signal();
   return result;
 }

@@ -630,6 +630,196 @@ ReplayRepository::EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft,
           .entry = std::move(loaded.entry)};
 }
 
+ir::IrManualBatchEnqueueOutcome ReplayRepository::EnqueueReadyIrOutboxDrafts(
+    std::span<const ir::IrOutboxDraft> drafts, bool userIntent,
+    std::int64_t nowMs) {
+  ir::IrManualBatchEnqueueOutcome result;
+  result.items.resize(drafts.size());
+  struct DraftGroup {
+    const ir::IrOutboxDraft *draft = nullptr;
+    std::vector<std::size_t> indexes;
+    bool conflicting = false;
+  };
+  std::vector<DraftGroup> groups;
+  std::unordered_map<std::string, std::size_t> groupIndexes;
+  groups.reserve(drafts.size());
+
+  for (std::size_t index = 0; index < drafts.size(); ++index) {
+    result.items[index].attemptId = drafts[index].attemptId;
+    std::string diagnostic;
+    if (!ir::validateIrOutboxDraft(drafts[index], diagnostic)) {
+      result.items[index].diagnostic = ir::sanitizeDiagnostic(diagnostic);
+      continue;
+    }
+    const std::string key =
+        drafts[index].providerId + '\n' + drafts[index].attemptId;
+    const auto [found, inserted] = groupIndexes.emplace(key, groups.size());
+    if (inserted) {
+      groups.push_back(
+          {.draft = &drafts[index], .indexes = {index}, .conflicting = false});
+      continue;
+    }
+    DraftGroup &group = groups[found->second];
+    group.indexes.push_back(index);
+    group.conflicting = group.conflicting || *group.draft != drafts[index];
+  }
+
+  std::vector<DraftGroup *> ready;
+  ready.reserve(groups.size());
+  for (DraftGroup &group : groups) {
+    if (!group.conflicting) {
+      ready.push_back(&group);
+      continue;
+    }
+    for (const std::size_t index : group.indexes) {
+      result.items[index].diagnostic =
+          "manual IR batch contains conflicting drafts for one attempt";
+    }
+  }
+  if (nowMs < 0) {
+    result.diagnostic = "IR manual batch timestamp is invalid";
+    for (auto &item : result.items) {
+      item.diagnostic = result.diagnostic;
+    }
+    return result;
+  }
+  if (ready.empty()) {
+    result.storageAvailable = true;
+    return result;
+  }
+
+  auto storageFailure = [&](std::string diagnostic) {
+    result.storageAvailable = false;
+    result.diagnostic = ir::sanitizeDiagnostic(diagnostic);
+    for (auto &item : result.items) {
+      item.status = ir::IrManualBatchItemStatus::Failed;
+      item.entry.reset();
+      item.diagnostic = result.diagnostic;
+    }
+    return result;
+  };
+
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return storageFailure("replay storage is unavailable");
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return storageFailure("could not start IR manual batch enqueue");
+  }
+
+  constexpr const char *insertQuery =
+      "INSERT OR IGNORE INTO ir_outbox("
+      "provider_id,attempt_id,chart_md5,chart_sha256,payload_json,ruleset_id,"
+      "ruleset_revision,validation_fingerprint,state,"
+      "local_result_ready,next_request_user_intent,created_at_ms,updated_at_ms)"
+      " VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?)";
+  constexpr const char *retryQuery =
+      "UPDATE ir_outbox "
+      "SET state=0, consecutive_failure_count=0, next_attempt_at_ms=NULL,"
+      "next_request_user_intent=1, last_error_code=NULL,"
+      "last_error_message=NULL, updated_at_ms=? "
+      "WHERE id=? AND state=4 AND local_result_ready=1";
+  SqliteStatementHandle insert;
+  SqliteStatementHandle retry;
+  if (prepareSqliteStatement(impl_->sessionDatabase, insertQuery, insert) !=
+          SQLITE_OK ||
+      prepareSqliteStatement(impl_->sessionDatabase, retryQuery, retry) !=
+          SQLITE_OK) {
+    return storageFailure("could not prepare IR manual batch enqueue");
+  }
+
+  for (DraftGroup *group : ready) {
+    const ir::IrOutboxDraft &draft = *group->draft;
+    if (sqlite3_reset(insert.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(insert.get()) != SQLITE_OK ||
+        !bindSqliteText(insert.get(), 1, draft.providerId) ||
+        !bindSqliteText(insert.get(), 2, draft.attemptId) ||
+        (draft.chartMd5.empty()
+             ? sqlite3_bind_null(insert.get(), 3) != SQLITE_OK
+             : !bindSqliteText(insert.get(), 3, draft.chartMd5)) ||
+        !bindSqliteText(insert.get(), 4, draft.chartSha256) ||
+        !bindSqliteText(insert.get(), 5, draft.payloadJson) ||
+        !bindSqliteText(insert.get(), 6, draft.rulesetProof.rulesetId) ||
+        sqlite3_bind_int(insert.get(), 7,
+                         draft.rulesetProof.rulesetRevision) != SQLITE_OK ||
+        !bindSqliteText(insert.get(), 8,
+                        draft.rulesetProof.validationFingerprint) ||
+        sqlite3_bind_int(insert.get(), 9, userIntent ? 1 : 0) != SQLITE_OK ||
+        sqlite3_bind_int64(insert.get(), 10, draft.createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_bind_int64(insert.get(), 11, draft.createdAtUnixMillis) !=
+            SQLITE_OK ||
+        sqlite3_step(insert.get()) != SQLITE_DONE) {
+      return storageFailure("could not insert an IR manual batch row");
+    }
+    const bool inserted = sqlite3_changes(impl_->sessionDatabase) == 1;
+    RowLookup loaded =
+        loadByIdentity(impl_->sessionDatabase, draft.providerId, draft.attemptId);
+    ir::IrManualBatchItemOutcome item{.attemptId = draft.attemptId};
+    if (loaded.status == RowLookupStatus::Invalid) {
+      item.diagnostic = ir::sanitizeDiagnostic(loaded.diagnostic);
+      for (const std::size_t index : group->indexes) {
+        result.items[index] = item;
+      }
+      continue;
+    }
+    if (loaded.status == RowLookupStatus::StorageFailure ||
+        loaded.status == RowLookupStatus::NotFound || !loaded.entry) {
+      return storageFailure(loaded.diagnostic.empty()
+                                ? "could not load an IR manual batch row"
+                                : std::move(loaded.diagnostic));
+    }
+
+    if (!inserted &&
+        (loaded.entry->chartMd5 != draft.chartMd5 ||
+         loaded.entry->chartSha256 != draft.chartSha256 ||
+         loaded.entry->payloadJson != draft.payloadJson ||
+         loaded.entry->rulesetProof != draft.rulesetProof ||
+         loaded.entry->createdAtUnixMillis != draft.createdAtUnixMillis)) {
+      item.diagnostic = "IR attempt ID already names another payload";
+    } else if (inserted) {
+      item.status = ir::IrManualBatchItemStatus::Inserted;
+      item.entry = std::move(loaded.entry);
+    } else if (loaded.entry->state == ir::IrOutboxState::FailedPermanent) {
+      if (sqlite3_reset(retry.get()) != SQLITE_OK ||
+          sqlite3_clear_bindings(retry.get()) != SQLITE_OK ||
+          sqlite3_bind_int64(retry.get(), 1, nowMs) != SQLITE_OK ||
+          sqlite3_bind_int64(retry.get(), 2, loaded.entry->id) != SQLITE_OK ||
+          sqlite3_step(retry.get()) != SQLITE_DONE ||
+          sqlite3_changes(impl_->sessionDatabase) != 1) {
+        return storageFailure("could not retry an IR manual batch row");
+      }
+      loaded = loadById(impl_->sessionDatabase, loaded.entry->id);
+      if (loaded.status != RowLookupStatus::Found || !loaded.entry) {
+        return storageFailure(loaded.diagnostic.empty()
+                                  ? "could not reload an IR manual batch row"
+                                  : std::move(loaded.diagnostic));
+      }
+      item.status = ir::IrManualBatchItemStatus::RetryQueued;
+      item.entry = std::move(loaded.entry);
+    } else if (loaded.entry->state == ir::IrOutboxState::Succeeded) {
+      item.status = ir::IrManualBatchItemStatus::AlreadySubmitted;
+      item.entry = std::move(loaded.entry);
+    } else {
+      item.status = ir::IrManualBatchItemStatus::AlreadyQueued;
+      item.entry = std::move(loaded.entry);
+    }
+    for (const std::size_t index : group->indexes) {
+      result.items[index] = item;
+    }
+  }
+
+  if (!transaction.commit(transactionError)) {
+    return storageFailure("could not commit IR manual batch enqueue");
+  }
+  result.storageAvailable = true;
+  return result;
+}
+
 ir::IrOutboxReadOutcome
 ReplayRepository::LoadIrOutbox(std::string_view providerId,
                                std::string_view attemptId) {

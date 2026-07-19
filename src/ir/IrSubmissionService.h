@@ -121,6 +121,8 @@ public:
   void stop();
 
   [[nodiscard]] IrOutboxInsertOutcome enqueueManual(const IrOutboxDraft &draft);
+  [[nodiscard]] IrManualBatchEnqueueOutcome
+  enqueueManualBatch(std::span<const IrOutboxDraft> drafts);
   [[nodiscard]] IrOutboxMutationOutcome retry(std::int64_t rowId);
   [[nodiscard]] IrOutboxMutationOutcome retryAll(std::string_view providerId);
   [[nodiscard]] IrOutboxMutationOutcome discard(std::int64_t rowId);

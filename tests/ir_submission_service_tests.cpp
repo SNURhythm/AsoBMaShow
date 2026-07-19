@@ -90,7 +90,12 @@ public:
 
   std::string_view providerId() const noexcept override { return "fake"; }
   ir::IrDriverCapabilities capabilities() const noexcept override {
+    ++capabilitiesCalls_;
     return capabilities_;
+  }
+
+  [[nodiscard]] int capabilitiesCalls() const noexcept {
+    return capabilitiesCalls_.load();
   }
 
   ir::IrOutboxBatchPlan
@@ -288,6 +293,7 @@ public:
   }
 
 private:
+  mutable std::atomic_int capabilitiesCalls_{0};
   ir::DeliveryOutcome perform(bool poll,
                               std::span<const ir::IrOutboxEntry> entries,
                               bool userIntent,
@@ -537,7 +543,10 @@ public:
     expect(registry.registerDriver(driver, diagnostic),
            "service harness driver registers");
     ir::IrSubmissionServiceOptions options;
-    options.wallNowUnixMillis = [this] { return now.load(); };
+    options.wallNowUnixMillis = [this] {
+      ++wallNowCalls;
+      return now.load();
+    };
     options.monotonicNow = [this] {
       if (monotonicHook) {
         monotonicHook();
@@ -711,6 +720,7 @@ public:
   std::shared_ptr<FakeDriver> driver;
   FakeHttpClient http;
   std::atomic<std::int64_t> now{1'000'000'000'000LL};
+  std::atomic_int wallNowCalls{0};
   std::atomic<std::int64_t> steadyNow{5'000};
   std::atomic_bool useIndependentSteady{false};
   ManualWaiter waiter;
@@ -1209,6 +1219,50 @@ void testManualEnqueueRequiresFreshRulesetProof() {
   expect(harness.repository.LoadIrOutbox("fake", missingProof.attemptId)
              .status == ir::IrOutboxReadStatus::NotFound,
          "invalid manual proof creates no durable row");
+}
+
+void testManualBatchPublishesAndWakesOnceWithSingularCompatibility() {
+  Harness harness;
+  harness.service->setApplicationActive(false);
+  harness.service->start(profile(true));
+
+  std::atomic_int wakes{0};
+  harness.wakeHook = [&] { ++wakes; };
+  const int capabilityCalls = harness.driver->capabilitiesCalls();
+  const int wallNowCalls = harness.wallNowCalls.load();
+  const std::vector drafts{draft(40, harness.now.load()),
+                           draft(41, harness.now.load() + 1)};
+
+  const auto outcome = harness.service->enqueueManualBatch(drafts);
+
+  expect(outcome.storageAvailable && outcome.items.size() == 2 &&
+             outcome.items[0].status ==
+                 ir::IrManualBatchItemStatus::Inserted &&
+             outcome.items[1].status ==
+                 ir::IrManualBatchItemStatus::Inserted,
+         "manual batch persists every prepared draft in one mutation");
+  expect(harness.driver->capabilitiesCalls() == capabilityCalls + 1,
+         "manual batch checks provider availability once");
+  expect(harness.wallNowCalls.load() == wallNowCalls + 1,
+         "manual batch captures one safe mutation timestamp");
+  expect(wakes.load() == 1, "manual batch wakes the worker once");
+  const auto first = harness.service->status("fake", attemptId(40));
+  const auto second = harness.service->status("fake", attemptId(41));
+  expect(first.found && second.found && first.revision + 1 == second.revision,
+         "manual batch publishes entries under one uninterrupted generation");
+  const auto counts = harness.service->counts("fake");
+  expect(counts.storageAvailable && counts.pending == 2 && counts.total == 2,
+         "manual batch refreshes the provider count snapshot");
+
+  wakes = 0;
+  const auto singular =
+      harness.service->enqueueManual(draft(42, harness.now.load() + 2));
+  expect(singular.status == ir::IrOutboxInsertStatus::Inserted &&
+             singular.entry && singular.entry->attemptId == attemptId(42),
+         "singular manual enqueue delegates through the batch mutation");
+  expect(wakes.load() == 1 &&
+             harness.service->counts("fake").pending == 3,
+         "singular compatibility retains one publish, refresh, and wake");
 }
 
 void testAutomaticAndManualRequestsUseCurrentOrigin() {
@@ -2547,6 +2601,7 @@ int main() {
   testMissingKeyPreservesManualIntentAndReplacementWakes();
   testProviderRuntimeChangeUnblocksRows();
   testManualEnqueueRequiresFreshRulesetProof();
+  testManualBatchPublishesAndWakesOnceWithSingularCompatibility();
   testAutomaticAndManualRequestsUseCurrentOrigin();
   testDeferredPollingPinsOriginAndNeverReposts();
   testAdaptiveDeferredPollingCadence();
