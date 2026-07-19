@@ -76,6 +76,11 @@ IrSavedResultUploadResult executeIrSavedResultUpload(
                      "This score is not eligible for IR upload.");
     }
     auto inserted = dependencies.enqueue(*built.draft);
+    if (inserted.status == IrOutboxInsertStatus::AlreadySubmitted) {
+      return {.state = IrSavedResultUploadState::AlreadySubmitted,
+              .accepted = false,
+              .message = "This score has already been submitted."};
+    }
     if (inserted.status != IrOutboxInsertStatus::Inserted &&
         inserted.status != IrOutboxInsertStatus::AlreadyExists) {
       return failure(inserted.diagnostic, "IR upload could not be queued.");

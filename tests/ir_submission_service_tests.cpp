@@ -2793,6 +2793,10 @@ void testManualBatchDoesNotReenqueueReceiptSettledStaleSelection() {
                  ir::IrManualBatchItemStatus::AlreadySubmitted &&
              !outcome.items.front().entry,
          "manual enqueue checks the active-origin receipt instead of recreating work");
+  const auto singular = harness.service->enqueueManual(staleDraft);
+  expect(singular.status == ir::IrOutboxInsertStatus::AlreadySubmitted &&
+             !singular.entry,
+         "singular manual enqueue preserves receipt-only submitted state");
   const auto due = harness.repository.ListDueIrOutbox("fake",
                                                        harness.now.load());
   const auto counts = harness.service->counts("fake");

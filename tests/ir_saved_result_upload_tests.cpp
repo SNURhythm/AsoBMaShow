@@ -155,6 +155,29 @@ void testConcurrentInsertIsTreatedAsQueued() {
   assert(outcome.accepted);
 }
 
+void testReceiptOnlyEnqueueIsReportedAsAlreadySubmitted() {
+  ir::IrSavedResultUploadDependencies dependencies;
+  dependencies.loadOutbox = [](std::string_view, std::string_view) {
+    return ir::IrOutboxReadOutcome{.status =
+                                       ir::IrOutboxReadStatus::NotFound};
+  };
+  dependencies.buildDraft = [](const ir::IrSubmission &) {
+    return ir::BuildDraftOutcome{.status = ir::BuildDraftStatus::Built,
+                                 .draft = draft()};
+  };
+  dependencies.enqueue = [](const ir::IrOutboxDraft &) {
+    return ir::IrOutboxInsertOutcome{
+        .status = ir::IrOutboxInsertStatus::AlreadySubmitted};
+  };
+
+  const auto outcome = ir::executeIrSavedResultUpload(
+      kProviderId, submission(), dependencies);
+
+  assert(outcome.state == ir::IrSavedResultUploadState::AlreadySubmitted);
+  assert(!outcome.accepted);
+  assert(outcome.message == "This score has already been submitted.");
+}
+
 void testFailuresAreSanitized() {
   ir::IrSavedResultUploadDependencies dependencies;
   dependencies.loadOutbox = [](std::string_view, std::string_view) {
@@ -178,6 +201,7 @@ int main() {
   testExistingRetryableRowsAreReused();
   testActiveAndSubmittedRowsDoNotMutate();
   testConcurrentInsertIsTreatedAsQueued();
+  testReceiptOnlyEnqueueIsReportedAsAlreadySubmitted();
   testFailuresAreSanitized();
   return 0;
 }

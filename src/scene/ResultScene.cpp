@@ -1012,7 +1012,8 @@ void ResultScene::submitIrResult() {
   }
   const auto enqueued = context.irSubmissionService->enqueueManual(*draft.draft);
   if (enqueued.status == ir::IrOutboxInsertStatus::Inserted ||
-      enqueued.status == ir::IrOutboxInsertStatus::AlreadyExists) {
+      enqueued.status == ir::IrOutboxInsertStatus::AlreadyExists ||
+      enqueued.status == ir::IrOutboxInsertStatus::AlreadySubmitted) {
     local->irActionDiagnostic.clear();
   } else {
     local->irActionDiagnostic =

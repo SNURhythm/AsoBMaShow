@@ -1376,8 +1376,11 @@ IrSubmissionService::enqueueManual(const IrOutboxDraft &draft) {
             .diagnostic = item.diagnostic};
   case IrManualBatchItemStatus::RetryQueued:
   case IrManualBatchItemStatus::AlreadyQueued:
-  case IrManualBatchItemStatus::AlreadySubmitted:
     return {.status = IrOutboxInsertStatus::AlreadyExists,
+            .entry = item.entry,
+            .diagnostic = item.diagnostic};
+  case IrManualBatchItemStatus::AlreadySubmitted:
+    return {.status = IrOutboxInsertStatus::AlreadySubmitted,
             .entry = item.entry,
             .diagnostic = item.diagnostic};
   case IrManualBatchItemStatus::Failed:

@@ -89,6 +89,7 @@ struct IrOutboxDeliveryUpdate {
 enum class IrOutboxInsertStatus {
   Inserted,
   AlreadyExists,
+  AlreadySubmitted,
   Invalid,
   StorageFailure,
   IntegrityConflict,

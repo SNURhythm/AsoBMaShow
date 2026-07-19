@@ -159,3 +159,54 @@ Result: 128/128 passed, zero failures, 25.46 s real time.
 No functional concerns remain. The broader desktop build emitted only the
 repository's existing third-party bgfx GNU variadic-macro warnings and
 duplicate-library linker warnings.
+
+## Singular already-submitted follow-up
+
+The final re-review identified one compatibility loss at the singular service
+adapter: a receipt-only batch `AlreadySubmitted` result was collapsed into
+`IrOutboxInsertStatus::AlreadyExists`. The saved-result UI consequently called
+the operation accepted and displayed `IR upload queued.` even though no outbox
+row existed.
+
+This follow-up adds an explicit `IrOutboxInsertStatus::AlreadySubmitted` and
+preserves it only when the singular service adapter receives the matching batch
+status. `IrSavedResultUpload` maps that value to the existing
+`IrSavedResultUploadState::AlreadySubmitted`, `accepted=false`, and
+`This score has already been submitted.` The legacy/concurrent
+`AlreadyExists` path remains unchanged and continues to report queued. The
+direct Result scene also treats the new status as a non-error while its normal
+receipt-backed presentation refreshes.
+
+TDD RED was verified by adding the tests first and building:
+
+```sh
+cmake --build cmake-build-debug --target \
+  ir_saved_result_upload_tests ir_submission_service_tests -j 6
+```
+
+Both test targets failed to compile at the new assertions because
+`IrOutboxInsertStatus::AlreadySubmitted` did not exist. After the minimal enum
+and mapping implementation, the focused tests passed 2/2.
+
+The service regression uses the real receipt-only repository fixture: snapshot
+apply persists an exact-origin receipt and removes the outbox row, after which
+the singular adapter returns explicit `AlreadySubmitted` with no entry. The
+saved-result regression asserts the exact user-facing state, false acceptance,
+and message. The existing `AlreadyExists` regression remains in place as the
+compatibility guard.
+
+Final follow-up verification:
+
+```sh
+cmake --build cmake-build-debug --target \
+  main ir_saved_result_upload_tests ir_submission_service_tests \
+  replay_repository_tests -j 6
+ctest --test-dir cmake-build-debug --output-on-failure \
+  -R '^(ir_saved_result_upload_tests|ir_submission_service_tests|replay_repository_tests)$' \
+  -j 3
+```
+
+The desktop executable and all three test targets built successfully; CTest
+passed 3/3 with zero failures in 25.09 s. No deployment was performed. The
+only build output of note remained the existing third-party bgfx GNU
+variadic-macro warnings and duplicate-library linker warnings.
