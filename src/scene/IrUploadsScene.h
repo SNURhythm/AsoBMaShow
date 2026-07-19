@@ -60,6 +60,7 @@ private:
   IrUploadCandidateListView *candidateList = nullptr;
 
   ir_uploads::Controller controller;
+  std::shared_ptr<ir_uploads::DurableEnqueueGate> enqueueGate;
   std::shared_ptr<IrUploadsSceneMailbox> mailbox;
   std::jthread preparationThread;
   std::string loadError;

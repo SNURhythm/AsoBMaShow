@@ -358,7 +358,7 @@ void IrUploadsScene::reloadCandidates() {
     loadError = replayRead.diagnostic.empty()
                     ? "Saved results could not be loaded."
                     : ir::sanitizeDiagnostic(replayRead.diagnostic);
-    controller.replaceCandidates({});
+    controller.applyCandidateRefresh(std::nullopt);
     refreshUi();
     return;
   }
@@ -374,7 +374,7 @@ void IrUploadsScene::reloadCandidates() {
   auto chartSession = context.chartRepository.OpenSession();
   if (!chartSession.has_value()) {
     loadError = "The chart library could not be opened.";
-    controller.replaceCandidates({});
+    controller.applyCandidateRefresh(std::nullopt);
     refreshUi();
     return;
   }
@@ -383,7 +383,7 @@ void IrUploadsScene::reloadCandidates() {
     loadError = chartRead.diagnostic.empty()
                     ? "Chart details could not be loaded."
                     : ir::sanitizeDiagnostic(chartRead.diagnostic);
-    controller.replaceCandidates({});
+    controller.applyCandidateRefresh(std::nullopt);
     refreshUi();
     return;
   }
@@ -394,7 +394,7 @@ void IrUploadsScene::reloadCandidates() {
   if (loadDiagnostic.empty()) {
     loadDiagnostic = replayRead.diagnostic;
   }
-  controller.replaceCandidates(std::move(projection.candidates));
+  controller.applyCandidateRefresh(std::move(projection.candidates));
   if (candidateList != nullptr) {
     candidateList->setCandidates(controller.candidates(),
                                  controller.selectedReplayIds());
@@ -530,6 +530,7 @@ void IrUploadsScene::applyMailbox() {
     if (preparationThread.joinable()) {
       preparationThread.join();
     }
+    enqueueGate.reset();
     controller.completePreparation(*completion);
     reloadRequested = true;
   }
@@ -559,9 +560,11 @@ void IrUploadsScene::startUpload() {
     mailbox = std::make_shared<IrUploadsSceneMailbox>();
   }
   const auto workerMailbox = mailbox;
+  enqueueGate = std::make_shared<ir_uploads::DurableEnqueueGate>();
+  const auto workerEnqueueGate = enqueueGate;
   refreshUi();
 
-  preparationThread = std::jthread([this, workerMailbox,
+  preparationThread = std::jthread([this, workerMailbox, workerEnqueueGate,
                                     candidates = std::move(candidates)](
                                        const std::stop_token &stopToken) {
     ir_uploads::PreparationDependencies dependencies;
@@ -606,8 +609,8 @@ void IrUploadsScene::startUpload() {
       std::lock_guard lock(workerMailbox->mutex);
       workerMailbox->progress = {completed, total};
     };
-    auto outcome = ir_uploads::prepareSelectedCandidates(candidates, stopToken,
-                                                         dependencies);
+    auto outcome = ir_uploads::prepareSelectedCandidates(
+        candidates, stopToken, dependencies, workerEnqueueGate);
     std::lock_guard lock(workerMailbox->mutex);
     workerMailbox->completion = std::move(outcome);
   });
@@ -619,8 +622,12 @@ void IrUploadsScene::stopPreparation() {
   }
   controller.markCancellationRequested();
   refreshUi();
+  if (enqueueGate != nullptr) {
+    enqueueGate->requestCancellation();
+  }
   preparationThread.request_stop();
   preparationThread.join();
+  enqueueGate.reset();
 }
 
 void IrUploadsScene::goBack() {

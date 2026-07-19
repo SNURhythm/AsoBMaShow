@@ -6,6 +6,7 @@
 #include "UiTheme.h"
 
 #include <cmath>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -218,7 +219,7 @@ void IrUploadCandidateListItemView::setCandidate(
                                : candidate.chart.difficultyTableLabels);
   keyModeText_->setText(keyModeDescription(meta.KeyMode));
 
-  if (replay.maxScore > 0 && replay.finalScore > 0) {
+  if (replay.maxScore > 0) {
     scoreText_->setText(std::to_string(replay.finalScore));
     rankText_->setText(
         score_rank::displayLabelForScore(replay.finalScore, replay.maxScore));

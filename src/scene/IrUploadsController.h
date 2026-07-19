@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -35,14 +37,32 @@ struct PreparationOutcome {
   std::vector<int> failedReplayIds;
 };
 
-[[nodiscard]] PreparationOutcome
-prepareSelectedCandidates(std::span<const ir::IrUploadCandidate> candidates,
-                          const std::stop_token &stopToken,
-                          const PreparationDependencies &dependencies) noexcept;
+class DurableEnqueueGate {
+public:
+  void requestCancellation() noexcept;
+  [[nodiscard]] std::optional<ir::IrSavedResultBatchUploadResult>
+  enqueueUnlessCancelled(const std::stop_token &stopToken,
+                         std::span<const ir::IrSubmission> submissions,
+                         const std::function<ir::IrSavedResultBatchUploadResult(
+                             std::span<const ir::IrSubmission>)> &enqueueBatch);
+
+private:
+  std::mutex mutex_;
+  bool cancellationRequested_ = false;
+  bool enqueueStarted_ = false;
+};
+
+[[nodiscard]] PreparationOutcome prepareSelectedCandidates(
+    std::span<const ir::IrUploadCandidate> candidates,
+    const std::stop_token &stopToken,
+    const PreparationDependencies &dependencies,
+    std::shared_ptr<DurableEnqueueGate> enqueueGate = {}) noexcept;
 
 class Controller {
 public:
   void replaceCandidates(std::vector<ir::IrUploadCandidate> candidates);
+  void applyCandidateRefresh(
+      std::optional<std::vector<ir::IrUploadCandidate>> candidates);
   void toggle(int replayId);
   void selectAll();
   void clearSelection();

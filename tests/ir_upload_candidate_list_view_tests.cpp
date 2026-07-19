@@ -186,6 +186,13 @@ int main() {
             !dynamic_cast<IrUploadCandidateListItemView *>(row)->hasClearLamp(),
         "rebind clears checkbox, optional metadata, score rank, and lamp");
 
+    second.replay.maxScore = 2'000;
+    list.setCandidates({second}, {});
+    row = list.getViewByIndex(0);
+    expect(text(row, "irUploadScore")->getText() == "0" &&
+               text(row, "irUploadRank")->getText() == "F",
+           "a legitimate zero score keeps its score and rank metadata");
+
     second.chart.meta.StageFile.clear();
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);

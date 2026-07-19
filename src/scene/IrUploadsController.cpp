@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <unordered_map>
 #include <utility>
 
 namespace ir_uploads {
@@ -16,10 +17,32 @@ bool accepted(ir::IrManualBatchItemStatus status) noexcept {
 
 } // namespace
 
+void DurableEnqueueGate::requestCancellation() noexcept {
+  std::lock_guard lock(mutex_);
+  if (!enqueueStarted_) {
+    cancellationRequested_ = true;
+  }
+}
+
+std::optional<ir::IrSavedResultBatchUploadResult>
+DurableEnqueueGate::enqueueUnlessCancelled(
+    const std::stop_token &stopToken,
+    std::span<const ir::IrSubmission> submissions,
+    const std::function<ir::IrSavedResultBatchUploadResult(
+        std::span<const ir::IrSubmission>)> &enqueueBatch) {
+  std::lock_guard lock(mutex_);
+  if (cancellationRequested_ || stopToken.stop_requested() || enqueueStarted_) {
+    return std::nullopt;
+  }
+  enqueueStarted_ = true;
+  return enqueueBatch(submissions);
+}
+
 PreparationOutcome prepareSelectedCandidates(
     std::span<const ir::IrUploadCandidate> candidates,
     const std::stop_token &stopToken,
-    const PreparationDependencies &dependencies) noexcept {
+    const PreparationDependencies &dependencies,
+    std::shared_ptr<DurableEnqueueGate> enqueueGate) noexcept {
   PreparationOutcome outcome;
   outcome.failedReplayIds.reserve(candidates.size());
   for (const auto &candidate : candidates) {
@@ -27,6 +50,18 @@ PreparationOutcome prepareSelectedCandidates(
   }
 
   try {
+    if (enqueueGate == nullptr) {
+      enqueueGate = std::make_shared<DurableEnqueueGate>();
+    }
+#if !defined(__ANDROID__) || defined(__cpp_lib_jthread)
+    std::stop_callback stopCallback(
+        stopToken, [enqueueGate] { enqueueGate->requestCancellation(); });
+#else
+    if (stopToken.stop_requested()) {
+      enqueueGate->requestCancellation();
+    }
+#endif
+
     if (dependencies.progress) {
       dependencies.progress(0, candidates.size());
     }
@@ -42,8 +77,12 @@ PreparationOutcome prepareSelectedCandidates(
       }
 
       VerificationOutcome verified;
-      if (dependencies.verify) {
-        verified = dependencies.verify(candidates[index], stopToken);
+      try {
+        if (dependencies.verify) {
+          verified = dependencies.verify(candidates[index], stopToken);
+        }
+      } catch (const std::exception &) {
+      } catch (...) {
       }
       if (stopToken.stop_requested()) {
         outcome.cancelled = true;
@@ -65,12 +104,47 @@ PreparationOutcome prepareSelectedCandidates(
       return outcome;
     }
 
-    const auto batch = dependencies.enqueueBatch(submissions);
-    for (std::size_t index = 0;
-         index < submissions.size() && index < batch.items.size(); ++index) {
-      if (batch.items[index].attemptId == submissions[index].attemptId &&
-          accepted(batch.items[index].status)) {
-        outcome.queuedReplayIds.push_back(submissionReplayIds[index]);
+    std::unordered_map<std::string, std::size_t> submissionCounts;
+    submissionCounts.reserve(submissions.size());
+    for (const auto &submission : submissions) {
+      ++submissionCounts[submission.attemptId];
+    }
+
+    std::vector<ir::IrSubmission> uniqueSubmissions;
+    std::vector<int> uniqueSubmissionReplayIds;
+    uniqueSubmissions.reserve(submissions.size());
+    uniqueSubmissionReplayIds.reserve(submissionReplayIds.size());
+    for (std::size_t index = 0; index < submissions.size(); ++index) {
+      if (submissionCounts[submissions[index].attemptId] == 1) {
+        uniqueSubmissions.push_back(std::move(submissions[index]));
+        uniqueSubmissionReplayIds.push_back(submissionReplayIds[index]);
+      }
+    }
+    if (uniqueSubmissions.empty()) {
+      return outcome;
+    }
+
+    const auto batch = enqueueGate->enqueueUnlessCancelled(
+        stopToken, uniqueSubmissions, dependencies.enqueueBatch);
+    if (!batch.has_value()) {
+      outcome.cancelled = true;
+      return outcome;
+    }
+
+    std::unordered_map<std::string, std::size_t> resultCounts;
+    std::unordered_map<std::string, ir::IrManualBatchItemStatus> resultStatuses;
+    resultCounts.reserve(batch->items.size());
+    resultStatuses.reserve(batch->items.size());
+    for (const auto &item : batch->items) {
+      ++resultCounts[item.attemptId];
+      resultStatuses.try_emplace(item.attemptId, item.status);
+    }
+    for (std::size_t index = 0; index < uniqueSubmissions.size(); ++index) {
+      const std::string &attemptId = uniqueSubmissions[index].attemptId;
+      const auto status = resultStatuses.find(attemptId);
+      if (resultCounts[attemptId] == 1 && status != resultStatuses.end() &&
+          accepted(status->second)) {
+        outcome.queuedReplayIds.push_back(uniqueSubmissionReplayIds[index]);
       }
     }
     std::erase_if(outcome.failedReplayIds, [&](int replayId) {
@@ -90,6 +164,13 @@ void Controller::replaceCandidates(
   candidates_ = std::move(candidates);
   ir::detail::intersectIrUploadSelectionIndexed(selectedReplayIds_,
                                                 candidates_);
+}
+
+void Controller::applyCandidateRefresh(
+    std::optional<std::vector<ir::IrUploadCandidate>> candidates) {
+  if (candidates.has_value()) {
+    replaceCandidates(std::move(*candidates));
+  }
 }
 
 void Controller::toggle(int replayId) {
