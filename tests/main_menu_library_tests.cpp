@@ -13,8 +13,9 @@
 namespace repository_test {
 
 chart_library::FolderClearDataByLongNoteMode
-loadFolderClearDataByLongNoteMode(sqlite3 *database,
-                                  const ScoreClearRankCache &scoreRanks);
+loadFolderClearDataByLongNoteMode(
+    sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks);
 
 } // namespace repository_test
 
@@ -290,9 +291,13 @@ int main() {
 
   repository_test::StatementTrace trace;
   chart_library::FolderClearDataByLongNoteMode data;
+  ScoreClearRankCache localCourseRanks = scoreRanks;
+  localCourseRanks.importedIrRankBySha256.clear();
+  localCourseRanks.importedIrRankByMd5.clear();
   {
     repository_test::ScopedStatementTrace observation(db, trace);
-    data = repository_test::loadFolderClearDataByLongNoteMode(db, scoreRanks);
+    data = repository_test::loadFolderClearDataByLongNoteMode(
+        db, scoreRanks, localCourseRanks);
   }
   ASSERT_EQ(4, trace.count,
             "folder clear aggregation keeps four streaming SELECTs");
@@ -340,6 +345,9 @@ int main() {
                 kNoClearTypeRank),
             "ambiguous MD5 projected identities remain NO PLAY");
   ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data, "courses"),
+            "local chart clear contributes to the course root");
+  ASSERT_EQ(kClearTypeHardClearRank,
             folderRankForLn(data,
                             main_menu_library::folderKeyForCourseTable(1)),
             "course table folder uses matched chart sha");
@@ -377,5 +385,76 @@ int main() {
             "same-ID nonempty mismatching key cannot override course folder");
 
   sqlite3_close(db);
+
+  sqlite3 *remoteOnlyDb = nullptr;
+  if (sqlite3_open(":memory:", &remoteOnlyDb) != SQLITE_OK) {
+    std::cerr << "remote-only open failed" << std::endl;
+    return 1;
+  }
+  execOrAbort(remoteOnlyDb,
+              "CREATE TABLE chart_meta ("
+              "path TEXT PRIMARY KEY, md5 TEXT NOT NULL, sha256 TEXT NOT NULL,"
+              "ln_mode INTEGER NOT NULL DEFAULT 0,"
+              "total_long_notes INTEGER NOT NULL DEFAULT 0,"
+              "total_backspin_notes INTEGER NOT NULL DEFAULT 0,"
+              "source_priority INTEGER, source_archive_size INTEGER);"
+              "CREATE TABLE difficulty_table_entries ("
+              "table_id INTEGER NOT NULL, level TEXT NOT NULL,"
+              "sha256 TEXT NOT NULL, md5 TEXT NOT NULL);"
+              "CREATE TABLE difficulty_courses ("
+              "id INTEGER PRIMARY KEY, course_key TEXT NOT NULL,"
+              "name TEXT NOT NULL, table_id INTEGER NOT NULL,"
+              "group_name TEXT NOT NULL);"
+              "CREATE TABLE difficulty_course_entries ("
+              "course_id INTEGER NOT NULL, sha256 TEXT NOT NULL,"
+              "md5 TEXT NOT NULL, sort_order INTEGER NOT NULL)");
+  execOrAbort(remoteOnlyDb,
+              "INSERT INTO chart_meta(path, md5, sha256) VALUES("
+              "'charts/remote-only.bms', 'md5-remote-only', '');"
+              "INSERT INTO difficulty_table_entries(table_id, level, sha256,"
+              "md5) VALUES(7, 'REMOTE', '', 'md5-remote-only');"
+              "INSERT INTO difficulty_courses(id, course_key, name, table_id,"
+              "group_name) VALUES(70, 'course:v1:remote-only',"
+              "'Remote-only course', 7, 'Remote Group');"
+              "INSERT INTO difficulty_course_entries(course_id, sha256, md5,"
+              "sort_order) VALUES(70, '', 'md5-remote-only', 0)");
+
+  ScoreClearRankCache projectedRemoteOnlyRanks;
+  projectedRemoteOnlyRanks
+      .importedIrRankByMd5["md5-remote-only"]["remote-only-sha"]
+      .ranks[long_note_mode::kUnknownValue] = kClearTypeHardClearRank;
+  const ScoreClearRankCache noLocalCourseRanks;
+  const auto remoteOnlyData = repository_test::loadFolderClearDataByLongNoteMode(
+      remoteOnlyDb, projectedRemoteOnlyRanks, noLocalCourseRanks);
+  ASSERT_EQ(kClearTypeHardClearRank, folderRankForLn(remoteOnlyData, "all"),
+            "remote-only chart lamp contributes to All Songs");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(remoteOnlyData,
+                            main_menu_library::folderKeyForTable(7)),
+            "remote-only chart lamp contributes to difficulty table");
+  ASSERT_EQ(1,
+            folderClearCountForLn(
+                remoteOnlyData, main_menu_library::folderKeyForLevel(
+                                    7, "REMOTE"),
+                kClearTypeHardClearRank),
+            "remote-only chart lamp contributes to difficulty level count");
+  ASSERT_EQ(kNoClearTypeRank, folderRankForLn(remoteOnlyData, "courses"),
+            "remote-only chart lamp cannot clear the course root");
+  ASSERT_EQ(kNoClearTypeRank,
+            folderRankForLn(remoteOnlyData,
+                            main_menu_library::folderKeyForCourseTable(7)),
+            "remote-only chart lamp cannot clear a course table");
+  ASSERT_EQ(kNoClearTypeRank,
+            folderRankForLn(remoteOnlyData,
+                            main_menu_library::folderKeyForCourseGroup(
+                                7, "Remote Group")),
+            "remote-only chart lamp cannot clear a course group");
+  const int syntheticCourseStartRank = folderRankForLn(
+      remoteOnlyData, main_menu_library::folderKeyForCourse(70));
+  ASSERT_EQ(kNoClearTypeRank, syntheticCourseStartRank,
+            "remote-only chart lamp leaves course folder and synthetic "
+            "course-start badge NO PLAY");
+
+  sqlite3_close(remoteOnlyDb);
   return 0;
 }

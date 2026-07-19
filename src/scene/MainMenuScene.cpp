@@ -4371,7 +4371,11 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
       *chartSession, score_cache_queries::kScoreDatabaseSchema);
   ScoreClearRankCache projectedClearRanks = localClearRanks;
   ScoreBestCache projectedBestScores = localBestScores;
-  if (projectActiveIrScoreMirror(projectedClearRanks, projectedBestScores)) {
+  const bool projected =
+      projectActiveIrScoreMirror(projectedClearRanks, projectedBestScores);
+  folderClearData = chartSession->LoadFolderClearDataByLongNoteMode(
+      projected ? projectedClearRanks : localClearRanks, localClearRanks);
+  if (projected) {
     scoreClearRanks = std::move(projectedClearRanks);
     scoreBestScores = std::move(projectedBestScores);
   } else {
@@ -4379,8 +4383,6 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
     scoreBestScores = std::move(localBestScores);
   }
   scoreClearRanksRevision = context.scoreRepository.GetRevision();
-  folderClearData =
-      chartSession->LoadFolderClearDataByLongNoteMode(scoreClearRanks);
   return std::nullopt;
 }
 

@@ -506,8 +506,9 @@ void testChartQueryBehaviorMatrix() {
 
   auto prepared = scores.PrepareScoreQueryDatabase(*session);
   assert(!prepared.error().has_value());
-  auto projectedClearRanks = scores.LoadBestClearRanks(
+  auto localClearRanks = scores.LoadBestClearRanks(
       *session, score_cache_queries::kScoreDatabaseSchema);
+  auto projectedClearRanks = localClearRanks;
   auto projectedBestScores = scores.LoadBestScores(
       *session, score_cache_queries::kScoreDatabaseSchema);
   ir::IrRemoteScore remoteOnly{
@@ -527,8 +528,8 @@ void testChartQueryBehaviorMatrix() {
   };
   ir::projectIrRemoteScores(std::span{&remoteOnly, 1}, projectedClearRanks,
                             projectedBestScores);
-  const auto folderData =
-      session->LoadFolderClearDataByLongNoteMode(projectedClearRanks);
+  const auto folderData = session->LoadFolderClearDataByLongNoteMode(
+      projectedClearRanks, localClearRanks);
   ChartMetaQuery hardQuery;
   hardQuery.clearMarkFilter = true;
   hardQuery.clearMarkRank = kClearTypeHardClearRank;

@@ -225,7 +225,9 @@ public:
     std::string
     DifficultyTableLabelsForChart(const bms_parser::ChartMeta &meta);
     chart_library::FolderClearDataByLongNoteMode
-    LoadFolderClearDataByLongNoteMode(const ScoreClearRankCache &scoreRanks);
+    LoadFolderClearDataByLongNoteMode(
+        const ScoreClearRankCache &projectedChartRanks,
+        const ScoreClearRankCache &localCourseRanks);
 
   private:
     friend class ChartRepository;

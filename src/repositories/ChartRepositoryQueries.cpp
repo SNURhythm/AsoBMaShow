@@ -2054,8 +2054,9 @@ void addClearMarkCountsForAllLongNoteModes(
 } // namespace
 
 chart_library::FolderClearDataByLongNoteMode
-LoadFolderClearDataByLongNoteMode(sqlite3 *db,
-                                  const ScoreClearRankCache &scoreRanks) {
+LoadFolderClearDataByLongNoteMode(
+    sqlite3 *db, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks) {
   chart_library::FolderClearDataByLongNoteMode data;
   std::unordered_map<std::string, FolderClearAggregateByLongNoteMode>
       aggregates;
@@ -2078,13 +2079,14 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
                preferredChartPredicate("cm"),
            [&](sqlite3_stmt *row) {
              addFolderChartForAllLongNoteModes(
-                 aggregates, scoreRanks, "all", columnText(row, 0),
+                 aggregates, projectedChartRanks, "all", columnText(row, 0),
                  columnText(row, 1), sqlite3_column_int(row, 2),
                  sqlite3_column_int(row, 3), sqlite3_column_int(row, 4));
              addClearMarkCountsForAllLongNoteModes(
-                 data.clearMarkCounts, scoreRanks, "all", columnText(row, 0),
-                 columnText(row, 1), sqlite3_column_int(row, 2),
-                 sqlite3_column_int(row, 3), sqlite3_column_int(row, 4));
+                 data.clearMarkCounts, projectedChartRanks, "all",
+                 columnText(row, 0), columnText(row, 1),
+                 sqlite3_column_int(row, 2), sqlite3_column_int(row, 3),
+                 sqlite3_column_int(row, 4));
            });
 
   int currentTableId = 0;
@@ -2117,20 +2119,20 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         }
 
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentTableKey, columnText(row, 2),
-            columnText(row, 3), sqlite3_column_int(row, 4),
+            aggregates, projectedChartRanks, currentTableKey,
+            columnText(row, 2), columnText(row, 3), sqlite3_column_int(row, 4),
             sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentLevelKey, columnText(row, 2),
-            columnText(row, 3), sqlite3_column_int(row, 4),
+            aggregates, projectedChartRanks, currentLevelKey,
+            columnText(row, 2), columnText(row, 3), sqlite3_column_int(row, 4),
             sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
         addClearMarkCountsForAllLongNoteModes(
-            data.clearMarkCounts, scoreRanks, currentTableKey,
+            data.clearMarkCounts, projectedChartRanks, currentTableKey,
             columnText(row, 2), columnText(row, 3),
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6));
         addClearMarkCountsForAllLongNoteModes(
-            data.clearMarkCounts, scoreRanks, currentLevelKey,
+            data.clearMarkCounts, projectedChartRanks, currentLevelKey,
             columnText(row, 2), columnText(row, 3),
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6));
@@ -2176,19 +2178,19 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         }
 
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, "courses", columnText(row, 3),
+            aggregates, localCourseRanks, "courses", columnText(row, 3),
             columnText(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentCourseTableKey, columnText(row, 3),
-            columnText(row, 4), sqlite3_column_int(row, 5),
+            aggregates, localCourseRanks, currentCourseTableKey,
+            columnText(row, 3), columnText(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentCourseGroupKey, columnText(row, 3),
-            columnText(row, 4), sqlite3_column_int(row, 5),
+            aggregates, localCourseRanks, currentCourseGroupKey,
+            columnText(row, 3), columnText(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentCourseKey, columnText(row, 3),
+            aggregates, localCourseRanks, currentCourseKey, columnText(row, 3),
             columnText(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6), sqlite3_column_int(row, 7));
       });
@@ -2212,7 +2214,7 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         const std::string folderKey =
             chart_library::folderKeyForCourse(courseId);
         for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
-          const int clearRank = scoreRanks.bestCourseRankFor(
+          const int clearRank = localCourseRanks.bestCourseRankFor(
               courseKey, courseId, selectedLongNoteMode);
           if (clearRank >= kClearTypeAssistedEasyClearRank) {
             data.clearRanks[static_cast<std::size_t>(selectedLongNoteMode)]
@@ -2230,18 +2232,20 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
 namespace repository_test {
 
 chart_library::FolderClearDataByLongNoteMode
-loadFolderClearDataByLongNoteMode(sqlite3 *database,
-                                  const ScoreClearRankCache &scoreRanks) {
+loadFolderClearDataByLongNoteMode(
+    sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks) {
   return chart_repository_detail::LoadFolderClearDataByLongNoteMode(
-      database, scoreRanks);
+      database, projectedChartRanks, localCourseRanks);
 }
 
 } // namespace repository_test
 #else
 chart_library::FolderClearDataByLongNoteMode
 ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
-    const ScoreClearRankCache &scoreRanks) {
+    const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks) {
   return chart_repository_detail::LoadFolderClearDataByLongNoteMode(
-      impl_->database(), scoreRanks);
+      impl_->database(), projectedChartRanks, localCourseRanks);
 }
 #endif

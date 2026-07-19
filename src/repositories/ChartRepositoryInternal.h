@@ -46,7 +46,8 @@ void SelectAllChartMeta(sqlite3 *database,
                         std::vector<bms_parser::ChartMeta> &chartMetas);
 
 chart_library::FolderClearDataByLongNoteMode
-LoadFolderClearDataByLongNoteMode(sqlite3 *database,
-                                  const ScoreClearRankCache &scoreRanks);
+LoadFolderClearDataByLongNoteMode(
+    sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks);
 
 } // namespace chart_repository_detail
