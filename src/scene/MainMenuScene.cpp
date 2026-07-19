@@ -12,7 +12,7 @@
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayAutoPlay.h"
 #include "../ReplayVideoExporter.h"
-#include "../ResultImageExporter.h"
+#include "../ResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../RAII.h"
@@ -33,6 +33,7 @@
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
 #include "MusicPlayerScene.h"
+#include "ResultScene.h"
 #include "play/GamePlayScene.h"
 #include "play/GameplayGaugeRules.h"
 #include "play/Pacemaker.h"
@@ -2528,7 +2529,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayGBattleButton = nullptr;
-  replayModalPhotoButton = nullptr;
+  replayModalResultButton = nullptr;
   replayModalExportButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
@@ -2548,7 +2549,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportGhostHideButton = nullptr;
   replayWatchButtonText = nullptr;
   replayGBattleButtonText = nullptr;
-  replayModalPhotoButtonText = nullptr;
+  replayModalResultButtonText = nullptr;
   replayModalExportButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
@@ -2585,6 +2586,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
+  replayResultRecallInProgress = false;
   unzipInProgress = false;
   tasksModalOpenRequested = false;
   findBmsJobRunning = false;
@@ -8172,12 +8174,12 @@ void MainMenuScene::buildReplayModal() {
   replayWatchButton = makeModalButton("Watch", 20, &replayWatchButtonText);
   replayGBattleButton =
       makeModalButton("G-BATTLE", 18, &replayGBattleButtonText);
-  replayModalPhotoButton =
-      makeModalButton("Export Photo", 18, &replayModalPhotoButtonText);
+  replayModalResultButton =
+      makeModalButton("View Result", 18, &replayModalResultButtonText);
   replayModalExportButton =
       makeModalButton("Export Video", 18, &replayModalExportButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || replayResultRecallInProgress) {
       return;
     }
     hideReplayModal();
@@ -8229,17 +8231,12 @@ void MainMenuScene::buildReplayModal() {
     }
     startGBattlePlayback(replayModalChart, selectedReplaySummary->id);
   });
-  replayModalPhotoButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+  replayModalResultButton->setOnClickListener([this]() {
+    if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        selectedReplayIsAutoPlay() || !selectedReplaySummary.has_value()) {
       return;
     }
-    if (selectedReplayIsAutoPlay()) {
-      return;
-    }
-    if (!selectedReplaySummary.has_value()) {
-      return;
-    }
-    startReplayImageExport(replayModalChart, selectedReplaySummary->id);
+    startReplayResultRecall(replayModalChart, selectedReplaySummary->id);
   });
   replayModalExportButton->setOnClickListener([this]() {
     if (replayExportInProgress.load()) {
@@ -8284,7 +8281,7 @@ void MainMenuScene::buildReplayModal() {
   });
   footer->addView(replayWatchButton);
   footer->addView(replayGBattleButton);
-  footer->addView(replayModalPhotoButton);
+  footer->addView(replayModalResultButton);
   footer->addView(replayModalExportButton);
   panel->addView(footer);
 
@@ -8410,7 +8407,7 @@ void MainMenuScene::hideReplayModal() {
   if (replayModalRoot == nullptr) {
     return;
   }
-  if (replayExportInProgress.load()) {
+  if (replayExportInProgress.load() || replayResultRecallInProgress) {
     return;
   }
   replayModalRoot->setVisible(false);
@@ -8422,8 +8419,8 @@ void MainMenuScene::hideReplayModal() {
   if (replayGBattleButtonText != nullptr) {
     replayGBattleButtonText->setText("G-BATTLE");
   }
-  if (replayModalPhotoButtonText != nullptr) {
-    replayModalPhotoButtonText->setText("Export Photo");
+  if (replayModalResultButtonText != nullptr) {
+    replayModalResultButtonText->setText("View Result");
   }
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText("Export Video");
@@ -8443,6 +8440,9 @@ void MainMenuScene::refreshReplayModalActions() {
       optionsMode ? replayExportSelection.has_value()
                   : selectedReplaySummary.has_value();
   const bool exportInProgress = replayExportInProgress.load();
+  const bool resultRecallInProgress = replayResultRecallInProgress;
+  const bool modalOperationInProgress =
+      exportInProgress || resultRecallInProgress;
   const bool autoPlaySelection = selectedReplayIsAutoPlay();
   const bool courseReplaySelection = selectedReplayIsCourseReplay();
 
@@ -8459,11 +8459,9 @@ void MainMenuScene::refreshReplayModalActions() {
   if (replayGBattleButtonText != nullptr) {
     replayGBattleButtonText->setText("G-BATTLE");
   }
-  if (replayModalPhotoButtonText != nullptr) {
-    replayModalPhotoButtonText->setText(
-        autoPlaySelection ? "No Photo"
-                          : (courseReplaySelection ? "Export Photos"
-                                                   : "Export Photo"));
+  if (replayModalResultButtonText != nullptr) {
+    replayModalResultButtonText->setText(
+        resultRecallInProgress ? "Loading..." : "View Result");
   }
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText(exportInProgress ? "Exporting"
@@ -8491,11 +8489,11 @@ void MainMenuScene::refreshReplayModalActions() {
                                       ? 0.0f
                                       : 144.0f);
   }
-  if (replayModalPhotoButton != nullptr) {
-    replayModalPhotoButton->setVisible(!filterSortMode && !watchOptionsMode &&
-                                       !optionsMode && !progressMode);
-    replayModalPhotoButton->setWidth((filterSortMode || watchOptionsMode ||
-                                      optionsMode || progressMode)
+  if (replayModalResultButton != nullptr) {
+    replayModalResultButton->setVisible(!filterSortMode && !watchOptionsMode &&
+                                        !optionsMode && !progressMode);
+    replayModalResultButton->setWidth((filterSortMode || watchOptionsMode ||
+                                       optionsMode || progressMode)
                                          ? 0.0f
                                          : 142.0f);
   }
@@ -8511,11 +8509,11 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool gbattleEnabled = hasSelection && !filterSortMode &&
                               !watchOptionsMode && !optionsMode &&
                               !progressMode &&
-                              !exportInProgress && !autoPlaySelection &&
+                              !modalOperationInProgress && !autoPlaySelection &&
                               !courseReplaySelection;
 
   styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
-                          !exportInProgress, ui_theme::control,
+                          !modalOperationInProgress, ui_theme::control,
                           ui_theme::controlHover, ui_theme::controlPressed,
                           ui_theme::hairlineStrong);
   if (replay_record_filters::hasActiveCriteria(replayRecordFilters) ||
@@ -8523,30 +8521,30 @@ void MainMenuScene::refreshReplayModalActions() {
     styleThemedActionButton(
         replayModalFilterButton, replayModalFilterButtonText,
         !watchOptionsMode && !optionsMode && !progressMode &&
-            !exportInProgress,
+            !modalOperationInProgress,
         ui_theme::primaryAction, ui_theme::primaryActionHover,
         ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
   } else {
     styleThemedActionButton(
         replayModalFilterButton, replayModalFilterButtonText,
         !watchOptionsMode && !optionsMode && !progressMode &&
-            !exportInProgress,
+            !modalOperationInProgress,
         ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
         ui_theme::hairlineStrong);
   }
   styleThemedActionButton(replayWatchButton, replayWatchButtonText,
                           hasSelection && !filterSortMode && !optionsMode &&
-                              !progressMode && !exportInProgress,
+                              !progressMode && !modalOperationInProgress,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(replayGBattleButton, replayGBattleButtonText,
                           gbattleEnabled, ui_theme::warningAction,
                           ui_theme::warningActionHover,
                           ui_theme::warningActionPressed, ui_theme::amber);
-  styleThemedActionButton(replayModalPhotoButton, replayModalPhotoButtonText,
+  styleThemedActionButton(replayModalResultButton, replayModalResultButtonText,
                           hasSelection && !filterSortMode &&
                               !watchOptionsMode && !optionsMode &&
-                              !progressMode && !exportInProgress &&
+                              !progressMode && !modalOperationInProgress &&
                               !autoPlaySelection,
                           ui_theme::successAction,
                           ui_theme::successActionHover,
@@ -8554,7 +8552,7 @@ void MainMenuScene::refreshReplayModalActions() {
   styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
                           hasSelection && !filterSortMode &&
                               !watchOptionsMode && !progressMode &&
-                              !exportInProgress,
+                              !modalOperationInProgress,
                           ui_theme::violetAction, ui_theme::violetActionHover,
                           ui_theme::violetActionPressed,
                           ui_theme::violetActionHover);
@@ -9482,18 +9480,6 @@ void MainMenuScene::queueReplayExportResult(
   std::lock_guard<std::mutex> lock(replayExportResultMutex);
   pendingReplayExportResult = PendingReplayExportResult{
       .success = result.success,
-      .photo = false,
-      .outputPath = result.outputPath,
-      .message = result.message,
-  };
-}
-
-void MainMenuScene::queueReplayExportResult(
-    const ResultImageExportResult &result) {
-  std::lock_guard<std::mutex> lock(replayExportResultMutex);
-  pendingReplayExportResult = PendingReplayExportResult{
-      .success = result.success,
-      .photo = true,
       .outputPath = result.outputPath,
       .message = result.message,
   };
@@ -9657,73 +9643,110 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 #endif
 }
 
-void MainMenuScene::startReplayImageExport(const ChartMetaRecord &record,
-                                           int replayId) {
-  if (replay_autoplay::isAutoPlayReplayId(replayId)) {
-    return;
-  }
-  if (!beginReplayExport("Exporting Photo", "Preparing photo",
-                         "Exporting photo...")) {
+void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
+                                            int replayId) {
+  if (replayResultRecallInProgress || replayExportInProgress.load() ||
+      replay_autoplay::isAutoPlayReplayId(replayId)) {
     return;
   }
 
-  auto complete = [this](const ResultImageExportResult &result) {
-    queueReplayExportResult(result);
-  };
+  replayResultRecallInProgress = true;
+  refreshReplayModalActions();
+  context.jukebox.stop();
+  defer(
+      [this, record, replayId]() {
+        if (record.courseStart) {
+          startCourseReplayResultRecall(replayId);
+          return true;
+        }
 
-  try {
-    if (loadThread.joinable()) {
-      loadThread.join();
-    }
-    joinRetiredPreviewLoadThreads();
-    context.jukebox.stop();
+        auto stored = context.replayRepository.LoadReplayResult(
+            replayId, replayLoadMetaForRecord(record));
+        std::atomic_bool cancelled = false;
+        auto recalled = stored.has_value()
+                            ? result_recall::BuildChartResult(
+                                  std::move(*stored), cancelled)
+                            : result_recall::ChartBuildOutcome{};
+        if (!recalled.value.has_value()) {
+          finishReplayResultRecallFailure(
+              recalled.diagnostic.empty() ? "saved replay was not found"
+                                          : recalled.diagnostic);
+          return true;
+        }
 
-    if (record.courseStart) {
-      updateReplayExportProgressUi(0.20, "Loading course replay");
-      auto replay = context.replayRepository.LoadCourseReplay(replayId);
-      if (!replay.has_value()) {
-        complete({.success = false, .message = "No Replay"});
-        applyReplayExportResult();
-        return;
-      }
+        auto result = std::move(*recalled.value);
+        ResultPersistenceOptions persistence;
+        if (result.historicalIr.has_value()) {
+          persistence.attempt = result.historicalIr->attempt;
+          persistence.irSubmission = result.historicalIr->submission;
+          persistence.outcome = result.historicalIr->saveOutcome;
+        }
+        const ReplayData replay = result.replay;
+        auto chart = std::move(result.chart);
+        const bms_parser::ChartMeta meta = chart->Meta;
+        replayResultRecallInProgress = false;
+        context.sceneManager->changeScene(
+            std::make_unique<ResultScene>(
+                context, meta, result.state, replay.provenance, nullptr,
+                std::move(persistence), &replay, ResultPracticeOptions{},
+                false, ResultCourseOptions{},
+                profileSelections.pacemakerTarget, std::move(chart)),
+            true);
+        return true;
+      },
+      1, true);
+}
 
-      updateReplayExportProgressUi(0.65, "Rendering photos");
-      complete(ResultImageExporter::ExportCourseReplay(context,
-                                                       replay.value()));
-      applyReplayExportResult();
-      return;
-    }
-
-    auto replay = context.replayRepository.LoadReplay(
-        replayId, replayLoadMetaForRecord(record));
-    if (!replay.has_value()) {
-      complete({.success = false, .message = "No Replay"});
-      applyReplayExportResult();
-      return;
-    }
-
-    updateReplayExportProgressUi(0.25, "Loading chart");
-    std::atomic_bool parseCancelled = false;
-    auto chart = play_options::prepareReplayChart(record.meta.BmsPath,
-                                                  replay.value(),
-                                                  parseCancelled);
-    if (chart == nullptr || parseCancelled) {
-      complete({.success = false, .message = "No Chart"});
-      applyReplayExportResult();
-      return;
-    }
-
-    updateReplayExportProgressUi(0.75, "Rendering photo");
-    complete(ResultImageExporter::ExportReplay(
-        context, *chart, replay.value(),
-        pacemaker::normalizeTargetId(profileSelections.pacemakerTarget)));
-  } catch (const std::exception &e) {
-    complete({.success = false, .message = e.what()});
-  } catch (...) {
-    complete({.success = false,
-              .message = "Unexpected photo export failure"});
+void MainMenuScene::startCourseReplayResultRecall(int replayId) {
+  auto stored = context.replayRepository.LoadCourseReplay(replayId);
+  std::atomic_bool cancelled = false;
+  auto recalled = stored.has_value()
+                      ? result_recall::BuildCourseResult(std::move(*stored),
+                                                        cancelled)
+                      : result_recall::CourseBuildOutcome{};
+  if (!recalled.value.has_value() || recalled.value->session == nullptr ||
+      recalled.value->session->completedResults.empty() ||
+      recalled.value->session->courseReplayData == nullptr) {
+    finishReplayResultRecallFailure(
+        recalled.diagnostic.empty() ? "saved course replay was not found"
+                                    : recalled.diagnostic);
+    return;
   }
-  applyReplayExportResult();
+
+  auto session = std::move(recalled.value->session);
+  session->currentIndex = 0;
+  const auto &result = session->completedResults.front();
+  const auto &replay = session->courseReplayData->stages.front().replay;
+  session->applyReplayStagePlayOptions(replay);
+  replayResultRecallInProgress = false;
+  context.sceneManager->changeScene(
+      std::make_unique<ResultScene>(
+          context, result.meta, result.state, replay.provenance, nullptr,
+          ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
+          ResultCourseOptions{.mode = ResultCourseMode::Stage,
+                              .session = session,
+                              .savedResultBrowsing = true}),
+      true);
+}
+
+void MainMenuScene::finishReplayResultRecallFailure(std::string diagnostic) {
+  const std::string safeDiagnostic = ir::sanitizeDiagnostic(diagnostic);
+  SDL_Log("Saved result recall failed: %s",
+          safeDiagnostic.empty() ? "result unavailable"
+                                 : safeDiagnostic.c_str());
+  if (replayModalResultButtonText != nullptr) {
+    replayModalResultButtonText->setText("Result Unavailable");
+  }
+  if (replayModalRoot != nullptr) {
+    replayModalRoot->applyYogaLayoutFromRoot();
+  }
+  defer(
+      [this]() {
+        replayResultRecallInProgress = false;
+        refreshReplayModalActions();
+        return true;
+      },
+      1400, true);
 }
 
 void MainMenuScene::applyReplayExportProgress() {
@@ -9798,13 +9821,11 @@ void MainMenuScene::applyReplayExportResult() {
   }
 
   if (result->success) {
-    SDL_Log("Replay %s exported: %s (%s)",
-            result->photo ? "image" : "video",
+    SDL_Log("Replay video exported: %s (%s)",
             fspath_to_utf8(result->outputPath).c_str(),
             result->message.c_str());
   } else {
-    SDL_Log("Replay %s export failed: %s (%s)",
-            result->photo ? "image" : "video", result->message.c_str(),
+    SDL_Log("Replay video export failed: %s (%s)", result->message.c_str(),
             fspath_to_utf8(result->outputPath).c_str());
   }
 
@@ -10088,7 +10109,7 @@ void MainMenuScene::cleanupScene() {
   replayListView = nullptr;
   replayWatchButton = nullptr;
   replayGBattleButton = nullptr;
-  replayModalPhotoButton = nullptr;
+  replayModalResultButton = nullptr;
   replayModalExportButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
@@ -10108,7 +10129,7 @@ void MainMenuScene::cleanupScene() {
   replayExportGhostHideButton = nullptr;
   replayWatchButtonText = nullptr;
   replayGBattleButtonText = nullptr;
-  replayModalPhotoButtonText = nullptr;
+  replayModalResultButtonText = nullptr;
   replayModalExportButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;

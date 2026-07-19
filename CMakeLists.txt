@@ -551,6 +551,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(saved_course_result_browse_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME records_result_recall_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_records_result_recall_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(records_result_recall_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 
     add_executable(repository_boundary_tests
         tests/repository_boundary_tests.cpp
@@ -1054,6 +1061,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/bms_parser.cpp
+        src/repositories/ChartStorageIdentity.cpp
         src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(result_recall_builder_tests PRIVATE

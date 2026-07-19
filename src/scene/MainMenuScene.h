@@ -44,7 +44,6 @@ class OverlayPortal;
 class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
-struct ResultImageExportResult;
 struct StartOptions;
 class View;
 
@@ -95,6 +94,7 @@ private:
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
   std::atomic_bool replayExportInProgress = false;
+  bool replayResultRecallInProgress = false;
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool addFolderPickerInProgress = false;
   std::atomic_bool archiveImportPickerInProgress = false;
@@ -363,7 +363,7 @@ private:
   ReplaySummaryListView *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayGBattleButton = nullptr;
-  Button *replayModalPhotoButton = nullptr;
+  Button *replayModalResultButton = nullptr;
   Button *replayModalExportButton = nullptr;
   Button *replayModalFilterButton = nullptr;
   Button *replayModalCloseButton = nullptr;
@@ -383,7 +383,7 @@ private:
   Button *replayExportGhostHideButton = nullptr;
   TextView *replayWatchButtonText = nullptr;
   TextView *replayGBattleButtonText = nullptr;
-  TextView *replayModalPhotoButtonText = nullptr;
+  TextView *replayModalResultButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
   TextView *replayModalFilterButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
@@ -403,7 +403,6 @@ private:
   TextView *replayExportGhostHideButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
-    bool photo = false;
     std::filesystem::path outputPath;
     std::string message;
   };
@@ -767,7 +766,6 @@ private:
                          const std::string &progressMessage,
                          const std::string &statusMessage);
   void queueReplayExportResult(const ReplayVideoExportResult &result);
-  void queueReplayExportResult(const ResultImageExportResult &result);
   bool selectedReplayIsAutoPlay() const;
   bool selectedReplayIsCourseReplay() const;
   bms_parser::ChartMeta
@@ -784,7 +782,9 @@ private:
   void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
-  void startReplayImageExport(const ChartMetaRecord &record, int replayId);
+  void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
+  void startCourseReplayResultRecall(int replayId);
+  void finishReplayResultRecallFailure(std::string diagnostic = {});
   void applyReplayExportProgress();
   void applyReplayExportResult();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

@@ -3,6 +3,7 @@
 #include "CourseConstraintUtils.h"
 #include "PlayOptionUtils.h"
 #include "ReplayResultStateBuilder.h"
+#include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
 #include <utility>
@@ -15,8 +16,9 @@ ReplayChartLoader effectiveLoader(ReplayChartLoader loader) {
     return loader;
   }
   return [](const ReplayData &replay, std::atomic_bool &cancelled) {
-    return play_options::prepareReplayChart(replay.chartMeta.BmsPath, replay,
-                                            cancelled);
+    std::filesystem::path path = replay.chartMeta.BmsPath;
+    chart_storage_identity::ToAbsolutePath(path);
+    return play_options::prepareReplayChart(path, replay, cancelled);
   };
 }
 
