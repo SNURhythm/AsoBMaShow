@@ -584,6 +584,24 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
   }
 }
 
+template <typename Md5Bucket>
+bool hasAtMostOneNormalizedShaIdentity(const Md5Bucket &bucket) {
+  std::string identity;
+  for (const auto &[remoteSha256, unused] : bucket) {
+    (void)unused;
+    const std::string normalizedRemoteSha256 = normalizedHash(remoteSha256);
+    if (normalizedRemoteSha256.empty()) {
+      continue;
+    }
+    if (identity.empty()) {
+      identity = normalizedRemoteSha256;
+    } else if (identity != normalizedRemoteSha256) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 std::size_t
@@ -645,8 +663,14 @@ int ScoreClearRankCache::bestRankFor(const bms_parser::ChartMeta &chartMeta,
   if (md5It == importedIrRankByMd5.end()) {
     return rank;
   }
+  if (sha256.empty() &&
+      !hasAtMostOneNormalizedShaIdentity(md5It->second)) {
+    return rank;
+  }
   for (const auto &[remoteSha256, byMode] : md5It->second) {
-    if (!sha256.empty() && !remoteSha256.empty() && remoteSha256 != sha256) {
+    const std::string normalizedRemoteSha256 = normalizedHash(remoteSha256);
+    if (!sha256.empty() && !normalizedRemoteSha256.empty() &&
+        normalizedRemoteSha256 != sha256) {
       continue;
     }
     rank = std::max(rank, byMode.bestRankForMode(longNoteMode));
@@ -706,8 +730,14 @@ ScoreBestCache::bestFor(const bms_parser::ChartMeta &chartMeta,
   if (md5It == importedIrScoreByMd5.end()) {
     return best;
   }
+  if (sha256.empty() &&
+      !hasAtMostOneNormalizedShaIdentity(md5It->second)) {
+    return best;
+  }
   for (const auto &[remoteSha256, byMode] : md5It->second) {
-    if (!sha256.empty() && !remoteSha256.empty() && remoteSha256 != sha256) {
+    const std::string normalizedRemoteSha256 = normalizedHash(remoteSha256);
+    if (!sha256.empty() && !normalizedRemoteSha256.empty() &&
+        normalizedRemoteSha256 != sha256) {
       continue;
     }
     const auto candidate = byMode.bestForMode(longNoteMode);

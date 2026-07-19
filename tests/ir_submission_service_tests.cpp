@@ -1955,6 +1955,78 @@ void testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot() {
          "fresh reconciliation invokes atomic snapshot apply exactly once");
 }
 
+void testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin() {
+  Harness harness({.readOnly = false,
+                   .chartRankings = false,
+                   .scoreSubmission = true,
+                   .deferredSubmission = true,
+                   .scoreReconciliation = true});
+  harness.setCredential("record-sync-key");
+  const auto delivered =
+      harness.enqueueReady(draft(36, harness.now.load()), false);
+  expect(delivered.entry.has_value(),
+         "cross-origin fixture stores a canonical outbox row");
+  if (!delivered.entry) {
+    return;
+  }
+  expect(harness.repository
+                 .ClaimIrOutbox(delivered.entry->id,
+                                ir::IrOutboxState::Pending,
+                                harness.now.load())
+                 .status == ir::IrOutboxClaimStatus::Claimed,
+         "cross-origin fixture claims the outbox row");
+  expect(harness.repository
+                 .ApplyIrOutboxDelivery({
+                     .rowId = delivered.entry->id,
+                     .nextState = ir::IrOutboxState::Succeeded,
+                     .updatedAtUnixMillis = harness.now.load(),
+                     .completedAtUnixMillis = harness.now.load(),
+                     .successfulReceipt =
+                         ir::IrSuccessfulReceiptDraft{
+                             .serverOrigin = "https://other.example",
+                             .remoteUserId = 42,
+                             .remoteScoreId = "other-origin-score",
+                             .confirmedAtUnixMillis = harness.now.load(),
+                         },
+                 })
+                 .status == ir::IrOutboxMutationStatus::Updated,
+         "cross-origin fixture retains successful delivery evidence");
+
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{.scores = {remoteScore()}},
+  });
+  harness.driver->releaseReconciliationStage(2);
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Succeeded),
+         "origin-A reconciliation completes against matching remote proof");
+
+  const auto originAReceipt = harness.repository.LoadIrSubmissionReceipt(
+      "fake", "https://boku.tachi.ac", attemptId(36));
+  const auto originBReceipt = harness.repository.LoadIrSubmissionReceipt(
+      "fake", "https://other.example", attemptId(36));
+  const auto retainedOutbox =
+      harness.repository.LoadIrOutbox("fake", attemptId(36));
+  const auto completed = harness.service->reconciliationStatus("fake");
+  expect(originAReceipt.status == ir::IrReceiptReadStatus::Found &&
+             originAReceipt.receipt &&
+             originAReceipt.receipt->remoteScoreId == "remote-score-1",
+         "origin-A sync may create only its own snapshot receipt");
+  expect(originBReceipt.status == ir::IrReceiptReadStatus::Found &&
+             originBReceipt.receipt &&
+             originBReceipt.receipt->remoteScoreId == "other-origin-score",
+         "origin-A sync leaves the origin-B durable receipt unchanged");
+  expect(retainedOutbox.status == ir::IrOutboxReadStatus::Found &&
+             retainedOutbox.entry &&
+             retainedOutbox.entry->id == delivered.entry->id &&
+             retainedOutbox.entry->state == ir::IrOutboxState::Succeeded &&
+             completed.outboxRowsSettled == 0,
+         "origin-A sync does not purge origin-B retained success work");
+}
+
 void testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
@@ -2103,6 +2175,7 @@ int main() {
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
   testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();
+  testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin();
   testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot();
   testReconciliationRefreshesSettledOutboxSnapshots();
   testReconciliationRequestRejectsUnavailableServiceAndConfiguration();

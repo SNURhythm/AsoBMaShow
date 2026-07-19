@@ -5449,8 +5449,20 @@ void testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(
       &ir::IrLocalReceiptCandidate::replayId);
   assert(otherOriginCandidate != loaded.candidates.end());
   assert(!otherOriginCandidate->currentReceipt);
-  assert(otherOriginCandidate->outboxRowId == otherOrigin.rowId);
-  assert(otherOriginCandidate->outboxState == ir::IrOutboxState::Succeeded);
+  assert(!otherOriginCandidate->outboxRowId);
+  assert(!otherOriginCandidate->outboxState);
+  const auto retainedOtherOriginReceipt = helper.LoadIrSubmissionReceipt(
+      "tachi", "https://other.example", otherOrigin.attemptId);
+  assert(retainedOtherOriginReceipt.status == ir::IrReceiptReadStatus::Found &&
+         retainedOtherOriginReceipt.receipt &&
+         retainedOtherOriginReceipt.receipt->remoteScoreId == "Tscore");
+  const auto retainedOtherOriginOutbox =
+      helper.LoadIrOutbox("tachi", otherOrigin.attemptId);
+  assert(retainedOtherOriginOutbox.status == ir::IrOutboxReadStatus::Found &&
+         retainedOtherOriginOutbox.entry &&
+         retainedOtherOriginOutbox.entry->id == otherOrigin.rowId &&
+         retainedOtherOriginOutbox.entry->state ==
+             ir::IrOutboxState::Succeeded);
 }
 
 void testLoadIrReconciliationCandidatesSkipsCorruptionWithBoundedDiagnostic(

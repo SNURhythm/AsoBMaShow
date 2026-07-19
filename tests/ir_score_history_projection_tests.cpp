@@ -63,6 +63,61 @@ void testMd5FallbackIsLookupOnlyAndCannotOverrideConflictingSha() {
          local->source == ScoreBestSource::Local);
 }
 
+void testMd5OnlyFallbackAllowsMultipleRowsForOneRemoteSha() {
+  ScoreClearRankCache clearRanks;
+  ScoreBestCache bestScores;
+  auto strongerLamp =
+      remoteScore('d', 'e', 170, kClearTypeFullComboRank);
+  strongerLamp.remoteScoreId = "same-sha-stronger-lamp";
+  auto strongerScore =
+      remoteScore('d', 'e', 190, kClearTypeHardClearRank);
+  strongerScore.remoteScoreId = "same-sha-stronger-score";
+  ir::projectIrRemoteScores(std::vector{strongerLamp, strongerScore},
+                            clearRanks, bestScores);
+
+  bms_parser::ChartMeta md5Only;
+  md5Only.MD5 = std::string(32, 'e');
+  assert(clearRanks.bestRankFor(md5Only) == kClearTypeFullComboRank);
+  const auto best = bestScores.bestFor(md5Only);
+  assert(best.has_value() && best->score == 190 &&
+         best->clearType == kClearTypeHardClearRank &&
+         best->source == ScoreBestSource::ImportedIr);
+}
+
+void testMd5OnlyFallbackRejectsConflictingRemoteShaIdentities() {
+  ScoreClearRankCache clearRanks;
+  ScoreBestCache bestScores;
+  clearRanks.rankBySha256[""].ranks[0] = kClearTypeEasyClearRank;
+  bestScores.scoreBySha256[""].snapshots[0] =
+      ScoreBestSnapshot{.score = 120,
+                        .maxScore = 200,
+                        .clearType = kClearTypeEasyClearRank,
+                        .createdAt = "2023-01-01 00:00:00"};
+
+  auto compatible = remoteScore('a', 'f', 170, kClearTypeHardClearRank);
+  compatible.remoteScoreId = "compatible-sha";
+  auto conflicting =
+      remoteScore('c', 'f', 190, kClearTypeFullComboRank);
+  conflicting.remoteScoreId = "conflicting-sha";
+  ir::projectIrRemoteScores(std::vector{compatible, conflicting}, clearRanks,
+                            bestScores);
+
+  bms_parser::ChartMeta md5Only;
+  md5Only.MD5 = std::string(32, 'f');
+  assert(clearRanks.bestRankFor(md5Only) == kClearTypeEasyClearRank);
+  const auto localOnly = bestScores.bestFor(md5Only);
+  assert(localOnly.has_value() && localOnly->score == 120 &&
+         localOnly->source == ScoreBestSource::Local);
+
+  bms_parser::ChartMeta knownSha = md5Only;
+  knownSha.SHA256 = std::string(64, 'a');
+  assert(clearRanks.bestRankFor(knownSha) == kClearTypeHardClearRank);
+  const auto compatibleOnly = bestScores.bestFor(knownSha);
+  assert(compatibleOnly.has_value() && compatibleOnly->score == 170 &&
+         compatibleOnly->clearType == kClearTypeHardClearRank &&
+         compatibleOnly->source == ScoreBestSource::ImportedIr);
+}
+
 void testShaProjectionPopulatesEveryLnBucketWithoutInventingMetrics() {
   ScoreClearRankCache clearRanks;
   ScoreBestCache bestScores;
@@ -180,6 +235,8 @@ void testProjectionCannotLowerOrRewriteLocalEvidence() {
 int main() {
   testShaProjectionPopulatesEveryLnBucketWithoutInventingMetrics();
   testMd5FallbackIsLookupOnlyAndCannotOverrideConflictingSha();
+  testMd5OnlyFallbackAllowsMultipleRowsForOneRemoteSha();
+  testMd5OnlyFallbackRejectsConflictingRemoteShaIdentities();
   testScoreComparisonUsesScoreThenLampThenAchievedOrAddedTime();
   testProjectionCannotLowerOrRewriteLocalEvidence();
   std::cout << "IR score history projection tests passed\n";

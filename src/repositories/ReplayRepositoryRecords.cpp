@@ -2130,7 +2130,8 @@ ReplayRepository::LoadIrReconciliationCandidates(
       "LEFT JOIN ir_submission_receipts receipt ON receipt.provider_id=?1 "
       "AND receipt.server_origin=?2 AND receipt.replay_id=r.id "
       "LEFT JOIN ir_outbox outbox ON outbox.provider_id=?1 "
-      "AND outbox.attempt_id=r.attempt_id "
+      "AND outbox.attempt_id=r.attempt_id AND (outbox.state!=5 OR "
+      "(receipt.id IS NOT NULL AND receipt.attempt_id=outbox.attempt_id)) "
       "WHERE r.attempt_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM "
       "course_replay_stages stage WHERE stage.replay_id=r.id) "
       "ORDER BY r.id LIMIT ?3";
