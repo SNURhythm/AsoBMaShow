@@ -3,7 +3,6 @@
 #include "IrOutboxModels.h"
 #include "../repositories/ChartStorageIdentity.h"
 
-#include <algorithm>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -22,8 +21,7 @@ void setOmissionDiagnostic(IrUploadCandidateProjection &result) {
   }
   result.diagnostic = sanitizeDiagnostic(
       std::to_string(result.omittedRows) +
-      " replay rows were omitted because chart metadata could not be safely "
-      "hydrated.");
+      " replay rows were omitted because they could not be safely prepared.");
 }
 
 } // namespace
@@ -107,11 +105,7 @@ IrUploadCandidateProjection projectIrUploadCandidates(
 void intersectIrUploadSelection(
     std::unordered_set<int> &selectedReplayIds,
     std::span<const IrUploadCandidate> candidates) {
-  std::erase_if(selectedReplayIds, [&](int replayId) {
-    return std::ranges::none_of(candidates, [&](const auto &candidate) {
-      return candidate.replayId() == replayId;
-    });
-  });
+  detail::intersectIrUploadSelectionIndexed(selectedReplayIds, candidates);
 }
 
 } // namespace ir

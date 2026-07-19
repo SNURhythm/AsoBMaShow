@@ -29,6 +29,24 @@ struct IrUploadCandidateProjection {
     std::span<const ReplaySummary> replays,
     std::span<const ChartMetaRecord> charts) noexcept;
 
+namespace detail {
+
+template <typename CandidateRange>
+void intersectIrUploadSelectionIndexed(
+    std::unordered_set<int> &selectedReplayIds,
+    const CandidateRange &candidates) {
+  std::unordered_set<int> publishedReplayIds;
+  publishedReplayIds.reserve(candidates.size());
+  for (const auto &candidate : candidates) {
+    publishedReplayIds.insert(candidate.replayId());
+  }
+  std::erase_if(selectedReplayIds, [&](int replayId) {
+    return !publishedReplayIds.contains(replayId);
+  });
+}
+
+} // namespace detail
+
 void intersectIrUploadSelection(
     std::unordered_set<int> &selectedReplayIds,
     std::span<const IrUploadCandidate> candidates);

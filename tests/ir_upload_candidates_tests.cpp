@@ -5,6 +5,7 @@
 #include "scene/play/GameplayGaugeRules.h"
 #include "scene/play/GameplayJudgeRules.h"
 
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <limits>
@@ -12,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -71,6 +73,47 @@ ReplaySummary replay(int id, const ChartMetaRecord &chart) {
   value.chartMeta = chart.meta;
   value.provenance = verifiedLr2Provenance(chart.meta);
   return value;
+}
+
+struct CountingCandidate {
+  int id = 0;
+  std::size_t *reads = nullptr;
+
+  [[nodiscard]] int replayId() const noexcept {
+    ++*reads;
+    return id;
+  }
+};
+
+void testSelectionIndexesTheSupportedCandidateBoundOnce() {
+  constexpr std::size_t candidateCount = kMaximumIrUploadCandidateRows;
+  std::size_t candidateReads = 0;
+  std::vector<CountingCandidate> candidates;
+  candidates.reserve(candidateCount);
+  std::unordered_set<int> selected;
+  selected.reserve(candidateCount);
+
+  for (std::size_t index = 1; index <= candidateCount; ++index) {
+    const int replayId = static_cast<int>(index);
+    candidates.push_back({.id = replayId, .reads = &candidateReads});
+    selected.insert(index % 2 == 0
+                        ? replayId
+                        : static_cast<int>(candidateCount + index));
+  }
+
+  ir::detail::intersectIrUploadSelectionIndexed(selected, candidates);
+
+  expect(candidateReads == candidateCount,
+         "selection indexes each candidate replay ID exactly once");
+  expect(selected.size() == candidateCount / 2,
+         "large selection retains only published replay IDs");
+  expect(std::ranges::all_of(selected, [](int replayId) {
+           return replayId > 0 &&
+                  replayId <=
+                      static_cast<int>(kMaximumIrUploadCandidateRows) &&
+                  replayId % 2 == 0;
+         }),
+         "large selection removes every stale replay ID");
 }
 
 void testProjectsOnlyCanonicalActionableAttempts() {
@@ -137,16 +180,26 @@ void testFailsClosedForAmbiguousAndInvalidHydration() {
   prelabelledButIneligible.provenance =
       std::make_shared<const ScoreProvenance>(std::move(modified));
   prelabelledButIneligible.irRecordState = ir::IrRecordState::Eligible;
+  ReplaySummary invalidId = replay(0, ineligibleChart);
+  ReplaySummary courseReplay = replay(26, ineligibleChart);
+  courseReplay.courseReplay = true;
+  ReplaySummary autoPlay = replay(27, ineligibleChart);
+  autoPlay.autoPlay = true;
 
   const std::array replays{missingPath, ambiguousPath, mismatchedHash,
-                           invalidMaxScore, prelabelledButIneligible};
+                           invalidMaxScore, prelabelledButIneligible,
+                           invalidId, courseReplay, autoPlay};
   const std::array charts{chart, duplicatePath, invalidNotes, ineligibleChart};
   const auto projected = ir::projectIrUploadCandidates(replays, charts);
 
   expect(projected.candidates.empty(),
          "missing, ambiguous, invalid, and ineligible rows fail closed");
-  expect(projected.omittedRows == 4,
-         "hydration failures and invalid score bounds are counted once each");
+  expect(projected.omittedRows == 7,
+         "unpreparable rows are counted once each");
+  expect(projected.diagnostic ==
+             "7 replay rows were omitted because they could not be safely "
+             "prepared.",
+         "aggregate omission diagnostic covers every preparation failure");
   expect(!projected.diagnostic.empty() &&
              projected.diagnostic.size() <= ir::kMaximumDiagnosticBytes,
          "omissions produce one bounded diagnostic");
@@ -197,6 +250,7 @@ void testProjectsBulkHydratedChartsAndOmitsMissingPaths() {
 } // namespace
 
 int main() {
+  testSelectionIndexesTheSupportedCandidateBoundOnce();
   testProjectsOnlyCanonicalActionableAttempts();
   testFailsClosedForAmbiguousAndInvalidHydration();
   testProjectsBulkHydratedChartsAndOmitsMissingPaths();
