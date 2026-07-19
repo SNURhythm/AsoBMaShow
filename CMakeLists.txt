@@ -664,6 +664,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_record_filters_tests
         tests/replay_record_filters_tests.cpp
+        src/ResultRecordSummary.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
     )
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -1538,6 +1541,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(result_record_list_view_tests
+        tests/result_record_list_view_tests.cpp
+        src/ResultRecordSummary.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/bms_parser.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(result_record_list_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_record_list_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(result_record_list_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
@@ -2403,6 +2428,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         view_layout_tests
         button_enabled_tests
         replay_summary_list_view_tests
+        result_record_list_view_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()

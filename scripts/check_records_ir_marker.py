@@ -7,6 +7,7 @@ repository = (root / "src/repositories/ReplayRepositoryRecords.cpp").read_text()
 header = (root / "src/scene/MainMenuScene.h").read_text()
 menu = (root / "src/scene/MainMenuScene.cpp").read_text()
 view = (root / "src/view/ReplaySummaryListView.h").read_text()
+result_view = (root / "src/view/ResultRecordListView.h").read_text()
 observer_start = menu.index("void MainMenuScene::observeReplayIrServiceRevisions()")
 observer_end = menu.index("\nvoid MainMenuScene::startReplayIrUpload", observer_start)
 observer = menu[observer_start:observer_end]
@@ -27,6 +28,7 @@ required = {
     "header": [
         "std::unordered_map<std::string, std::uint64_t> "
         "replayIrObservedRevisions",
+        "ResultRecordListView *replayListView",
     ],
     "menu": [
         "observeReplayIrServiceRevisions()",
@@ -45,11 +47,12 @@ required = {
         "activeReplayIrServerOrigin()",
         "ListReplays(",
         "previousScrollOffset",
-        "preferredReplayId",
-        "applyReplayRecordFilters(preferredReplayId)",
+        "preferredStableKey",
+        "applyReplayRecordFilters(preferredStableKey)",
     ],
     "filter_restore": [
-        "preferredReplayId",
+        "preferredStableKey",
+        "visibleResultRecordSummaries",
         "replayListView->restoreSelection",
     ],
     "view": [
@@ -58,6 +61,15 @@ required = {
         "ui_icons::textForCodepoint",
         "irBadgeCallbackReplayId_",
         "irBadge->setOnClickListener({})",
+    ],
+    "result_view": [
+        "summary.isRemote() ? ir::IrRecordState::Uploaded",
+        "summary.isLocal() && summary.local.has_value()",
+        "summary.capabilities.irUpload",
+        "boundStableKey_ = summary.stableKey()",
+        "irBadgeCallbackStableKey_.reset()",
+        "irBadge->setOnClickListener({})",
+        "ui_icons::textForCodepoint",
     ],
 }
 texts = {
@@ -68,6 +80,7 @@ texts = {
     "refresh": refresh,
     "filter_restore": filter_restore,
     "view": view,
+    "result_view": result_view,
 }
 missing = []
 for group, tokens in required.items():

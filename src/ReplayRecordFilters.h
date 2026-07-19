@@ -2,6 +2,7 @@
 
 #include "PlayOptionUtils.h"
 #include "ReplayClearMarkUtils.h"
+#include "ResultRecordSummary.h"
 #include "repositories/ReplayRepository.h"
 #include "ScoreRankUtils.h"
 #include "scene/play/RhythmState.h"
@@ -167,6 +168,121 @@ inline bool hasActiveCriteria(const ReplayRecordFilters &filters) {
   return filters.clearMarkRank.has_value() || filters.playOption.has_value() ||
          filters.scoreRank.has_value() ||
          filters.sort != ReplayRecordSortCriterion::Newest;
+}
+
+inline bool matchesPlayOption(const ResultRecordSummary &summary,
+                              const std::string &filterOption) {
+  if (summary.local.has_value()) {
+    return matchesPlayOption(*summary.local, filterOption);
+  }
+  if (!summary.playOption.has_value()) {
+    return false;
+  }
+  return play_options::normalizePlayOption(*summary.playOption) ==
+         play_options::normalizePlayOption(filterOption);
+}
+
+inline bool matches(const ResultRecordSummary &summary,
+                    const ReplayRecordFilters &filters) {
+  if (filters.clearMarkRank.has_value() &&
+      clearMarkBucket(summary.clearRank) != *filters.clearMarkRank) {
+    return false;
+  }
+  if (filters.playOption.has_value() &&
+      !matchesPlayOption(summary, *filters.playOption)) {
+    return false;
+  }
+  if (filters.scoreRank.has_value() &&
+      (summary.maxScore <= 0 ||
+       score_rank::labelForScore(summary.score, summary.maxScore) !=
+           *filters.scoreRank)) {
+    return false;
+  }
+  return true;
+}
+
+inline bool supportsScoreRankFilter(
+    const std::vector<ResultRecordSummary> &summaries) {
+  return std::any_of(summaries.begin(), summaries.end(),
+                     [](const ResultRecordSummary &summary) {
+                       return summary.maxScore > 0;
+                     });
+}
+
+inline std::vector<ResultRecordSummary>
+apply(const std::vector<ResultRecordSummary> &summaries,
+      const ReplayRecordFilters &filters) {
+  ReplayRecordFilters effectiveFilters = filters;
+  if (effectiveFilters.scoreRank.has_value() &&
+      !supportsScoreRankFilter(summaries)) {
+    effectiveFilters.scoreRank.reset();
+  }
+
+  std::vector<ResultRecordSummary> result;
+  result.reserve(summaries.size());
+  for (const ResultRecordSummary &summary : summaries) {
+    if (matches(summary, effectiveFilters)) {
+      result.push_back(summary);
+    }
+  }
+
+  std::stable_sort(
+      result.begin(), result.end(),
+      [&](const ResultRecordSummary &a, const ResultRecordSummary &b) {
+        if (a.autoPlay != b.autoPlay) {
+          return a.autoPlay;
+        }
+        switch (effectiveFilters.sort) {
+        case ReplayRecordSortCriterion::ClearMark:
+          if (a.clearRank != b.clearRank) {
+            return a.clearRank > b.clearRank;
+          }
+          if (a.score != b.score) {
+            return a.score > b.score;
+          }
+          if (a.maxCombo != b.maxCombo) {
+            return a.maxCombo > b.maxCombo;
+          }
+          break;
+        case ReplayRecordSortCriterion::Score:
+          if (a.score != b.score) {
+            return a.score > b.score;
+          }
+          if (a.clearRank != b.clearRank) {
+            return a.clearRank > b.clearRank;
+          }
+          if (a.maxCombo != b.maxCombo) {
+            return a.maxCombo > b.maxCombo;
+          }
+          break;
+        case ReplayRecordSortCriterion::MaxCombo:
+          if (a.maxCombo != b.maxCombo) {
+            return a.maxCombo > b.maxCombo;
+          }
+          if (a.score != b.score) {
+            return a.score > b.score;
+          }
+          if (a.clearRank != b.clearRank) {
+            return a.clearRank > b.clearRank;
+          }
+          break;
+        case ReplayRecordSortCriterion::Newest:
+          if (a.displayedTimeUnixMillis != b.displayedTimeUnixMillis) {
+            return a.displayedTimeUnixMillis > b.displayedTimeUnixMillis;
+          }
+          return false;
+        }
+        if (a.displayedTimeUnixMillis != b.displayedTimeUnixMillis) {
+          return a.displayedTimeUnixMillis > b.displayedTimeUnixMillis;
+        }
+        const auto aReplayId = a.localReplayId();
+        const auto bReplayId = b.localReplayId();
+        if (aReplayId.has_value() && bReplayId.has_value()) {
+          return *aReplayId > *bReplayId;
+        }
+        return a.stableKey() < b.stableKey();
+      });
+  return result;
 }
 
 } // namespace replay_record_filters

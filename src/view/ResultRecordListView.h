@@ -1,86 +1,27 @@
 #pragma once
 
-#include "../repositories/ReplayRepository.h"
-#include "../ReplayClearMarkUtils.h"
 #include "../ReplaySummaryFormatting.h"
+#include "../ResultRecordSummary.h"
 #include "../ScoreRankUtils.h"
-#include "ClearLampColors.h"
 #include "Button.h"
+#include "ClearLampColors.h"
 #include "IconText.h"
 #include "RecyclerView.h"
+#include "ReplaySummaryListView.h"
 #include "TextView.h"
 #include "UiTheme.h"
 #include "View.h"
 
-#include <functional>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-// Shared semantic badge bindings keep Chart Viewer replay rows and Main Menu
-// tagged Records rows visually consistent without sharing their data models.
-namespace record_list_ui {
-
-inline Color blockedYellow() { return Color(255, 224, 92, 255); }
-
-struct IrBadgeBinding {
-  bool visible = false;
-  bool actionable = false;
-  std::uint32_t codepoint = 0;
-  Color (*accent)() = ui_theme::amber;
-};
-
-inline IrBadgeBinding bindingForIrRecordState(
-    ir::IrRecordState state) noexcept {
-  switch (state) {
-  case ir::IrRecordState::Hidden:
-    return {};
-  case ir::IrRecordState::Eligible:
-    return {.visible = true,
-            .actionable = true,
-            .codepoint = 0xf0ee,
-            .accent = ui_theme::amber};
-  case ir::IrRecordState::Queued:
-    return {.visible = true,
-            .actionable = false,
-            .codepoint = 0xf017,
-            .accent = ui_theme::amber};
-  case ir::IrRecordState::Uploading:
-    return {.visible = true,
-            .actionable = false,
-            .codepoint = 0xf2f1,
-            .accent = ui_theme::cyan};
-  case ir::IrRecordState::AwaitingRemote:
-    return {.visible = true,
-            .actionable = false,
-            .codepoint = 0xf252,
-            .accent = ui_theme::cyan};
-  case ir::IrRecordState::Blocked:
-    return {.visible = true,
-            .actionable = false,
-            .codepoint = 0xf084,
-            .accent = blockedYellow};
-  case ir::IrRecordState::Failed:
-    return {.visible = true,
-            .actionable = true,
-            .codepoint = 0xf071,
-            .accent = ui_theme::coral};
-  case ir::IrRecordState::Uploaded:
-    return {.visible = true,
-            .actionable = false,
-            .codepoint = 0xf00c,
-            .accent = ui_theme::lime};
-  }
-  return {};
-}
-
-} // namespace record_list_ui
-
-class ReplaySummaryListItemView : public View {
+class ResultRecordListItemView : public View {
 public:
-  ReplaySummaryListItemView() {
+  ResultRecordListItemView() {
     clearLamp = new View();
     textColumn = new View();
     irBadge = new Button();
@@ -98,8 +39,9 @@ public:
         ->setPadding(Edge::All, 8)
         ->setGap(12);
 
+    clearLamp->setName("recordClearLamp");
     clearLamp->setWidth(5)->setHeight(52)->setFlexShrink(0);
-    clearLamp->setCornerRadius(3.0f);
+    clearLamp->setCornerRadius(3.0F);
     addView(clearLamp);
 
     textColumn->setFlexDirection(FlexDirection::Column)
@@ -108,8 +50,10 @@ public:
         ->setFlexBasis(0)
         ->setMinWidth(0)
         ->setGap(4);
+    titleText->setName("recordTitle");
     titleText->setHeight(28);
     titleText->setOverflow(TextView::TextOverflow::Marquee);
+    detailText->setName("recordDetail");
     detailText->setHeight(22);
     detailText->setOverflow(TextView::TextOverflow::Hidden);
     textColumn->addView(titleText);
@@ -148,12 +92,14 @@ public:
         ->setFlexShrink(0)
         ->setGap(2);
 
+    scoreText->setName("recordScore");
     scoreText->setWidth(150)->setHeight(28);
     scoreText->setAlign(TextView::TextAlign::RIGHT);
     scoreText->setVAlign(TextView::TextVAlign::MIDDLE);
     scoreText->setOverflow(TextView::TextOverflow::Hidden);
     scoreColumn->addView(scoreText);
 
+    rankText->setName("recordRank");
     rankText->setWidth(150)->setHeight(20);
     rankText->setAlign(TextView::TextAlign::RIGHT);
     rankText->setVAlign(TextView::TextVAlign::MIDDLE);
@@ -165,12 +111,12 @@ public:
   }
 
   void setIrUploadHandler(
-      std::function<void(const ReplaySummary &)> handler) {
+      std::function<void(const ResultRecordSummary &)> handler) {
     irUploadHandler = std::move(handler);
   }
 
   void setIrStatusFeedbackHandler(
-      std::function<void(const ReplaySummary &)> handler) {
+      std::function<void(const ResultRecordSummary &)> handler) {
     irStatusFeedbackHandler = std::move(handler);
   }
 
@@ -178,33 +124,59 @@ public:
     return ui_icons::kFontAwesomeSolidPath;
   }
 
-  [[nodiscard]] std::optional<int> irBadgeCallbackReplayId() const noexcept {
-    return irBadgeCallbackReplayId_;
+  [[nodiscard]] const std::string &boundStableKey() const noexcept {
+    return boundStableKey_;
   }
 
-  void setSummary(const ReplaySummary &summary) {
-    titleText->setText(summary.autoPlay
-                           ? "AUTO PLAY"
-                           : (summary.createdAt.empty()
-                                  ? "Replay #" + std::to_string(summary.id)
-                                  : summary.createdAt));
-    detailText->setText(replay_summary_ui::detailLabel(summary));
+  [[nodiscard]] const std::optional<std::string> &
+  irBadgeCallbackStableKey() const noexcept {
+    return irBadgeCallbackStableKey_;
+  }
+
+  [[nodiscard]] Color currentIrBadgeAccent() const noexcept {
+    return currentIrBadgeAccent_;
+  }
+
+  void setSummary(const ResultRecordSummary &summary) {
+    // A bind is a complete state replacement: identity and every callback are
+    // cleared before any current-record behavior is installed.
+    boundStableKey_ = summary.stableKey();
+    irBadgeCallbackStableKey_.reset();
+    irBadge->setOnClickListener({});
+
+    titleText->setText(
+        summary.autoPlay
+            ? "AUTO PLAY"
+            : (!summary.displayedTime.empty()
+                   ? summary.displayedTime
+                   : (summary.localReplayId().has_value()
+                          ? "Replay #" +
+                                std::to_string(*summary.localReplayId())
+                          : "IR Record")));
+    if (summary.local.has_value()) {
+      detailText->setText(replay_summary_ui::detailLabel(*summary.local));
+    } else {
+      std::string detail = "IR";
+      if (summary.playOption.has_value() &&
+          !summary.playOption->empty()) {
+        detail += "  " + *summary.playOption;
+      }
+      detailText->setText(detail);
+    }
     scoreText->setText(summary.autoPlay ? "AUTO"
-                                        : std::to_string(summary.finalScore));
-    currentRank = score_rank::labelForScore(summary.finalScore,
-                                            summary.maxScore);
-    rankText->setText(score_rank::displayLabelForScore(summary.finalScore,
-                                                       summary.maxScore));
+                                        : std::to_string(summary.score));
+    currentRank = score_rank::labelForScore(summary.score, summary.maxScore);
+    rankText->setText(score_rank::displayLabel(currentRank));
 
     const record_list_ui::IrBadgeBinding badge =
         record_list_ui::bindingForIrRecordState(
-            summary.irRecordState);
-    irBadgeCallbackReplayId_.reset();
-    irBadge->setOnClickListener({});
+            summary.isRemote() ? ir::IrRecordState::Uploaded
+                               : summary.irState);
     if (badge.visible) {
-      irBadgeCallbackReplayId_ = summary.id;
-      if (badge.actionable) {
-        const ReplaySummary boundSummary = summary;
+      irBadgeCallbackStableKey_ = boundStableKey_;
+      const ResultRecordSummary boundSummary = summary;
+      if (summary.isLocal() && summary.local.has_value() &&
+          summary.capabilities.irUpload && badge.actionable) {
         const auto boundHandler = irUploadHandler;
         irBadge->setOnClickListener([boundSummary, boundHandler]() {
           if (boundHandler) {
@@ -212,7 +184,6 @@ public:
           }
         });
       } else {
-        const ReplaySummary boundSummary = summary;
         const auto boundHandler = irStatusFeedbackHandler;
         irBadge->setOnClickListener([boundSummary, boundHandler]() {
           if (boundHandler) {
@@ -223,14 +194,14 @@ public:
     }
     irBadge->setVisible(badge.visible);
     irBadge->setWidth(badge.visible ? 62.0F : 0.0F);
-    // Non-actionable badges stay enabled as pointer event sinks. The bound
-    // semantic action flag prevents queued/active/blocked/uploaded clicks from
-    // dispatching an upload or falling through to select the row.
+    // Read-only badges remain enabled as event sinks so their taps can never
+    // fall through and trigger row selection or a recycled upload action.
     irBadge->setEnabled(badge.visible);
     irBadgeLabel->setText(badge.visible ? "IR" : "");
     irBadgeIcon->setText(
         badge.visible ? ui_icons::textForCodepoint(badge.codepoint) : "");
     const auto accent = badge.accent;
+    currentIrBadgeAccent_ = accent();
     irBadge->setThemedBackgroundColors(
         accent,
         [accent] { return ui_theme::withAlpha(accent(), 226); },
@@ -239,12 +210,12 @@ public:
     irBadgeLabel->setThemedColor(foreground);
     irBadgeIcon->setThemedColor(foreground);
 
-    const int clearRank = replay_clear_mark::effectiveClearRank(summary);
-    if (hasClearLampColor(clearRank)) {
-      clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+    if (hasClearLampColor(summary.clearRank)) {
+      clearLamp->setBackgroundColor(clearLampColorForRank(summary.clearRank));
     } else {
       clearLamp->clearBackgroundColor();
     }
+    applyRankColor();
   }
 
   void onSelected() override {
@@ -292,37 +263,41 @@ private:
   TextView *scoreText = nullptr;
   TextView *rankText = nullptr;
   std::string currentRank;
-  std::optional<int> irBadgeCallbackReplayId_;
-  std::function<void(const ReplaySummary &)> irUploadHandler;
-  std::function<void(const ReplaySummary &)> irStatusFeedbackHandler;
+  std::string boundStableKey_;
+  std::optional<std::string> irBadgeCallbackStableKey_;
+  Color currentIrBadgeAccent_;
+  std::function<void(const ResultRecordSummary &)> irUploadHandler;
+  std::function<void(const ResultRecordSummary &)> irStatusFeedbackHandler;
 };
 
-class ReplaySummaryListView : public RecyclerView<ReplaySummary> {
+class ResultRecordListView : public RecyclerView<ResultRecordSummary> {
 public:
-  ReplaySummaryListView()
-      : RecyclerView<ReplaySummary>(
-            [](const ReplaySummary &a, const ReplaySummary &b) {
-              return a.id == b.id;
+  ResultRecordListView()
+      : RecyclerView<ResultRecordSummary>(
+            [](const ResultRecordSummary &a,
+               const ResultRecordSummary &b) {
+              return a.identity == b.identity;
             }) {
     itemHeight = 74;
-    onCreateView = [this](const ReplaySummary &) {
-      auto *itemView = new ReplaySummaryListItemView();
-      itemView->setIrUploadHandler([this](const ReplaySummary &summary) {
-        if (onIrUploadRequested) {
-          onIrUploadRequested(summary);
-        }
-      });
+    onCreateView = [this](const ResultRecordSummary &) {
+      auto *itemView = new ResultRecordListItemView();
+      itemView->setIrUploadHandler(
+          [this](const ResultRecordSummary &summary) {
+            if (onIrUploadRequested) {
+              onIrUploadRequested(summary);
+            }
+          });
       itemView->setIrStatusFeedbackHandler(
-          [this](const ReplaySummary &summary) {
+          [this](const ResultRecordSummary &summary) {
             if (onIrStatusFeedbackRequested) {
               onIrStatusFeedbackRequested(summary);
             }
           });
       return itemView;
     };
-    onBind = [this](View *view, const ReplaySummary &item, int,
-                    bool isSelected) {
-      auto *itemView = dynamic_cast<ReplaySummaryListItemView *>(view);
+    onBind = [](View *view, const ResultRecordSummary &item, int,
+                bool isSelected) {
+      auto *itemView = dynamic_cast<ResultRecordListItemView *>(view);
       if (itemView == nullptr) {
         return;
       }
@@ -333,33 +308,33 @@ public:
         itemView->onUnselected();
       }
     };
-    onSelected = [this](const ReplaySummary &, int idx) {
+    onSelected = [this](const ResultRecordSummary &, int index) {
       if (lastSelectedIndex >= 0 && lastSelectedIndex < size()) {
         if (auto *oldView = getViewByIndex(lastSelectedIndex)) {
           oldView->onUnselected();
         }
       }
-      lastSelectedIndex = idx;
-      if (auto *newView = getViewByIndex(idx)) {
+      lastSelectedIndex = index;
+      if (auto *newView = getViewByIndex(index)) {
         newView->onSelected();
       }
-      if (onSelectionChanged != nullptr) {
-        onSelectionChanged(idx);
+      if (onSelectionChanged) {
+        onSelectionChanged(index);
       }
     };
-    onUnselected = [this](const ReplaySummary &, int idx) {
-      if (auto *view = getViewByIndex(idx)) {
+    onUnselected = [this](const ResultRecordSummary &, int index) {
+      if (auto *view = getViewByIndex(index)) {
         view->onUnselected();
       }
-      if (lastSelectedIndex == idx) {
+      if (lastSelectedIndex == index) {
         lastSelectedIndex = -1;
       }
     };
   }
 
-  void setReplaySummaries(const std::vector<ReplaySummary> &summaries) {
+  void setResultRecords(const std::vector<ResultRecordSummary> &records) {
     lastSelectedIndex = -1;
-    setItems(summaries);
+    setItems(records);
   }
 
   void restoreSelection(int index) {
@@ -372,11 +347,14 @@ public:
     }
   }
 
-  [[nodiscard]] int selectedReplayIndex() const { return selectedIndex; }
+  [[nodiscard]] int selectedResultRecordIndex() const {
+    return selectedIndex;
+  }
 
   std::function<void(int)> onSelectionChanged;
-  std::function<void(const ReplaySummary &)> onIrUploadRequested;
-  std::function<void(const ReplaySummary &)> onIrStatusFeedbackRequested;
+  std::function<void(const ResultRecordSummary &)> onIrUploadRequested;
+  std::function<void(const ResultRecordSummary &)>
+      onIrStatusFeedbackRequested;
 
 private:
   int lastSelectedIndex = -1;

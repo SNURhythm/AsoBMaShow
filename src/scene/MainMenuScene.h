@@ -15,7 +15,7 @@
 #include "../path.h"
 #include "../utils/Debouncer.h"
 #include "../view/ImageView.h"
-#include "../view/ReplaySummaryListView.h"
+#include "../view/ResultRecordListView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -369,7 +369,7 @@ private:
   Button *readyPlayOptionsButton = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
-  ReplaySummaryListView *replayListView = nullptr;
+  ResultRecordListView *replayListView = nullptr;
   Button *replayWatchButton = nullptr;
   Button *replayGBattleButton = nullptr;
   Button *replayModalResultButton = nullptr;
@@ -496,9 +496,10 @@ private:
   bool chartDifficultyMaxDropdownOpen = false;
   std::optional<int> chartDifficultyRangeTableId;
   std::vector<ReplaySummary> replaySummaries;
-  std::vector<ReplaySummary> visibleReplaySummaries;
   std::vector<ResultRecordSummary> resultRecordSummaries;
+  std::vector<ResultRecordSummary> visibleResultRecordSummaries;
   std::optional<std::string> selectedResultRecordStableKey;
+  std::optional<ResultRecordSummary> selectedResultRecordSummary;
   std::string publishedResultRecordDiagnostic;
   ReplayRecordFilters replayRecordFilters;
   ChartMetaRecord replayModalChart;
@@ -774,8 +775,8 @@ private:
                                     const std::string &message);
   void clearReplayModalSelection();
   bool selectReplayModalIndex(int index);
-  void applyReplayRecordFilters(std::optional<int> preferredReplayId =
-                                    std::nullopt);
+  void applyReplayRecordFilters(
+      std::optional<std::string> preferredStableKey = std::nullopt);
   void setReplayClearFilter(std::optional<int> rank);
   void setReplayPlayOptionFilter(std::optional<std::string> option);
   void setReplayScoreRankFilter(std::optional<std::string> rank);
