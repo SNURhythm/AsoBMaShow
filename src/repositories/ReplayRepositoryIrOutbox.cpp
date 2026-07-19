@@ -1,14 +1,16 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
 
+#include "../ir/IrProfileSettings.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../Uuid.h"
 #include "SqliteRAII.h"
 
 #include <algorithm>
+#include <limits>
 #include <mutex>
-#include <vector>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -19,6 +21,11 @@ constexpr const char *kIrOutboxColumns =
     "remote_poll_count,next_attempt_at_ms,next_request_user_intent,"
     "remote_job_id,remote_origin,last_error_code,last_error_message,"
     "created_at_ms,updated_at_ms,completed_at_ms";
+
+constexpr const char *kIrSubmissionReceiptColumns =
+    "id,provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+    "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
+    "observed_in_snapshot,confirmed_at_ms";
 
 bool validProviderId(std::string_view value) {
   if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
@@ -117,6 +124,44 @@ bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
       .completedAtUnixMillis = optionalInteger(stmt, 22),
   };
   return ir::validateIrOutboxEntry(entry, diagnostic);
+}
+
+bool decodeIrSubmissionReceiptRow(sqlite3_stmt *stmt,
+                                  ir::IrSubmissionReceipt &receipt,
+                                  std::string &diagnostic) {
+  if (!columnIs(stmt, 0, SQLITE_INTEGER) || !columnIs(stmt, 1, SQLITE_TEXT) ||
+      !columnIs(stmt, 2, SQLITE_TEXT) || !columnIs(stmt, 3, SQLITE_INTEGER) ||
+      !columnIs(stmt, 4, SQLITE_TEXT) || !nullableText(stmt, 5) ||
+      !columnIs(stmt, 6, SQLITE_TEXT) || !nullableInteger(stmt, 7) ||
+      !nullableText(stmt, 8) || !nullableText(stmt, 9) ||
+      !columnIs(stmt, 10, SQLITE_INTEGER) ||
+      !columnIs(stmt, 11, SQLITE_INTEGER) ||
+      !columnIs(stmt, 12, SQLITE_INTEGER)) {
+    diagnostic = "IR receipt row has unexpected SQLite value types";
+    return false;
+  }
+  const sqlite3_int64 replayId = sqlite3_column_int64(stmt, 3);
+  if (replayId <= 0 || replayId > std::numeric_limits<int>::max()) {
+    diagnostic = "IR receipt replay ID is out of range";
+    return false;
+  }
+  receipt = {
+      .id = sqlite3_column_int64(stmt, 0),
+      .providerId = sqliteColumnString(stmt, 1),
+      .serverOrigin = sqliteColumnString(stmt, 2),
+      .replayId = static_cast<int>(replayId),
+      .attemptId = sqliteColumnString(stmt, 4),
+      .chartMd5 = optionalText(stmt, 5),
+      .chartSha256 = sqliteColumnString(stmt, 6),
+      .remoteUserId = optionalInteger(stmt, 7),
+      .remoteChartId = optionalText(stmt, 8),
+      .remoteScoreId = optionalText(stmt, 9),
+      .source = static_cast<ir::IrReceiptConfirmationSource>(
+          sqlite3_column_int(stmt, 10)),
+      .observedInSnapshot = sqlite3_column_int(stmt, 11) != 0,
+      .confirmedAtUnixMillis = sqlite3_column_int64(stmt, 12),
+  };
+  return ir::validateIrSubmissionReceipt(receipt, diagnostic);
 }
 
 enum class RowLookupStatus { Found, NotFound, StorageFailure, Invalid };
@@ -768,6 +813,7 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
       update.nextState == ir::IrOutboxState::BlockedConfiguration ||
       update.nextState == ir::IrOutboxState::FailedPermanent ||
       update.nextState == ir::IrOutboxState::Succeeded;
+  const bool succeeds = update.nextState == ir::IrOutboxState::Succeeded;
   if (update.rowId <= 0 || update.updatedAtUnixMillis < 0 ||
       update.consecutiveFailureCount < 0 || update.remotePollCount < 0 ||
       (update.nextAttemptAtUnixMillis && *update.nextAttemptAtUnixMillis < 0) ||
@@ -777,10 +823,18 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
        !hasJob) ||
       (update.nextState != ir::IrOutboxState::AwaitingRemoteResult &&
        update.nextState != ir::IrOutboxState::BlockedConfiguration && hasJob) ||
-      ((update.nextState == ir::IrOutboxState::Succeeded) !=
-       update.completedAtUnixMillis.has_value())) {
+      (succeeds != update.completedAtUnixMillis.has_value()) ||
+      (succeeds != update.successfulReceipt.has_value())) {
     return {.status = ir::IrOutboxMutationStatus::Invalid,
             .diagnostic = "IR delivery update is invalid"};
+  }
+  if (update.successfulReceipt) {
+    std::string diagnostic;
+    if (!ir::validateIrSuccessfulReceiptDraft(*update.successfulReceipt,
+                                              diagnostic)) {
+      return {.status = ir::IrOutboxMutationStatus::Invalid,
+              .diagnostic = std::move(diagnostic)};
+    }
   }
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
@@ -809,6 +863,26 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
   const std::optional<std::string> storedErrorMessage =
       errorMessage.empty() ? std::nullopt
                            : std::optional<std::string>(errorMessage);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(
+      impl_->sessionDatabase, "BEGIN IMMEDIATE TRANSACTION", transactionError);
+  if (!transaction.active()) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not start IR delivery update"};
+  }
+  RowLookup claimed = loadById(impl_->sessionDatabase, update.rowId);
+  if (claimed.status == RowLookupStatus::NotFound) {
+    return {.status = ir::IrOutboxMutationStatus::NotFound};
+  }
+  if (claimed.status != RowLookupStatus::Found || !claimed.entry) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = claimed.diagnostic.empty()
+                              ? "could not load claimed IR outbox row"
+                              : std::move(claimed.diagnostic)};
+  }
+  if (claimed.entry->state != ir::IrOutboxState::Uploading) {
+    return {.status = ir::IrOutboxMutationStatus::StateMismatch};
+  }
   if (prepareSqliteStatement(impl_->sessionDatabase, query, stmt) !=
           SQLITE_OK ||
       sqlite3_bind_int(stmt.get(), 1, static_cast<int>(update.nextState)) !=
@@ -829,14 +903,148 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = "could not apply IR outbox delivery"};
   }
-  const auto outcome = mutationFromChanges(impl_->sessionDatabase);
-  if (outcome.status == ir::IrOutboxMutationStatus::Updated) {
-    return outcome;
+  if (sqlite3_changes(impl_->sessionDatabase) != 1) {
+    RowLookup current = loadById(impl_->sessionDatabase, update.rowId);
+    return {.status = current.status == RowLookupStatus::NotFound
+                          ? ir::IrOutboxMutationStatus::NotFound
+                          : ir::IrOutboxMutationStatus::StateMismatch};
   }
-  RowLookup current = loadById(impl_->sessionDatabase, update.rowId);
-  return {.status = current.status == RowLookupStatus::NotFound
-                        ? ir::IrOutboxMutationStatus::NotFound
-                        : ir::IrOutboxMutationStatus::StateMismatch};
+  if (succeeds) {
+    SqliteStatementHandle replay;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "SELECT id FROM replays WHERE attempt_id=?", replay) != SQLITE_OK ||
+        !bindSqliteText(replay.get(), 1, claimed.entry->attemptId)) {
+      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+              .diagnostic = "could not prepare IR receipt replay lookup"};
+    }
+    const int replayStep = sqlite3_step(replay.get());
+    if (replayStep != SQLITE_ROW ||
+        sqlite3_column_type(replay.get(), 0) != SQLITE_INTEGER) {
+      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+              .diagnostic = replayStep == SQLITE_DONE
+                                ? "IR receipt replay attempt is missing"
+                                : "IR receipt replay lookup did not complete"};
+    }
+    const sqlite3_int64 replayId = sqlite3_column_int64(replay.get(), 0);
+    if (replayId <= 0 || replayId > std::numeric_limits<int>::max() ||
+        sqlite3_step(replay.get()) != SQLITE_DONE) {
+      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+              .diagnostic = "IR receipt replay lookup is invalid"};
+    }
+
+    const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
+    constexpr const char *receiptQuery =
+        "INSERT INTO ir_submission_receipts("
+        "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+        "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
+        "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(provider_id,server_origin,replay_id) DO UPDATE SET "
+        "attempt_id=excluded.attempt_id,"
+        "chart_md5=excluded.chart_md5,"
+        "chart_sha256=excluded.chart_sha256,"
+        "remote_user_id=COALESCE(excluded.remote_user_id,remote_user_id),"
+        "remote_chart_id=CASE WHEN excluded.remote_chart_id<>'' THEN "
+        "excluded.remote_chart_id ELSE remote_chart_id END,"
+        "remote_score_id=CASE WHEN excluded.remote_score_id<>'' THEN "
+        "excluded.remote_score_id ELSE remote_score_id END,"
+        "confirmation_source=excluded.confirmation_source,"
+        "observed_in_snapshot=MAX(observed_in_snapshot,"
+        "excluded.observed_in_snapshot),"
+        "confirmed_at_ms=MAX(confirmed_at_ms,excluded.confirmed_at_ms)";
+    SqliteStatementHandle receiptStatement;
+    if (prepareSqliteStatement(impl_->sessionDatabase, receiptQuery,
+                               receiptStatement) != SQLITE_OK ||
+        !bindSqliteText(receiptStatement.get(), 1,
+                        claimed.entry->providerId) ||
+        !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
+        sqlite3_bind_int64(receiptStatement.get(), 3, replayId) != SQLITE_OK ||
+        !bindSqliteText(receiptStatement.get(), 4, claimed.entry->attemptId) ||
+        (claimed.entry->chartMd5.empty()
+             ? sqlite3_bind_null(receiptStatement.get(), 5) != SQLITE_OK
+             : !bindSqliteText(receiptStatement.get(), 5,
+                               claimed.entry->chartMd5)) ||
+        !bindSqliteText(receiptStatement.get(), 6,
+                        claimed.entry->chartSha256) ||
+        (receipt.remoteUserId
+             ? sqlite3_bind_int64(receiptStatement.get(), 7,
+                                  *receipt.remoteUserId) != SQLITE_OK
+             : sqlite3_bind_null(receiptStatement.get(), 7) != SQLITE_OK) ||
+        !bindSqliteText(receiptStatement.get(), 8, receipt.remoteChartId) ||
+        !bindSqliteText(receiptStatement.get(), 9, receipt.remoteScoreId) ||
+        sqlite3_bind_int(receiptStatement.get(), 10,
+                         static_cast<int>(receipt.source)) != SQLITE_OK ||
+        sqlite3_bind_int(receiptStatement.get(), 11,
+                         receipt.observedInSnapshot ? 1 : 0) != SQLITE_OK ||
+        sqlite3_bind_int64(receiptStatement.get(), 12,
+                           receipt.confirmedAtUnixMillis) != SQLITE_OK ||
+        sqlite3_step(receiptStatement.get()) != SQLITE_DONE) {
+      return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+              .diagnostic = "could not persist IR submission receipt"};
+    }
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ir::IrOutboxMutationStatus::StorageFailure,
+            .diagnostic = "could not commit IR delivery update"};
+  }
+  return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
+}
+
+ir::IrReceiptReadOutcome ReplayRepository::LoadIrSubmissionReceipt(
+    std::string_view providerId, std::string_view serverOrigin,
+    std::string_view attemptId) {
+  const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
+  if (!validProviderId(providerId) ||
+      !uuid::isCanonicalLowerV4(attemptId) || !normalizedOrigin ||
+      *normalizedOrigin != serverOrigin) {
+    return {.status = ir::IrReceiptReadStatus::Invalid,
+            .diagnostic = "IR receipt identity is invalid"};
+  }
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrReceiptReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  const std::string query =
+      std::string("SELECT ") + kIrSubmissionReceiptColumns +
+      " FROM ir_submission_receipts WHERE provider_id=? AND "
+      "server_origin=? AND attempt_id=?";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 1, providerId.data(),
+                        static_cast<int>(providerId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 2, serverOrigin.data(),
+                        static_cast<int>(serverOrigin.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK ||
+      sqlite3_bind_text(statement.get(), 3, attemptId.data(),
+                        static_cast<int>(attemptId.size()),
+                        SQLITE_TRANSIENT) != SQLITE_OK) {
+    return {.status = ir::IrReceiptReadStatus::StorageFailure,
+            .diagnostic = "could not prepare IR receipt lookup"};
+  }
+  const int firstStep = sqlite3_step(statement.get());
+  if (firstStep == SQLITE_DONE) {
+    return {.status = ir::IrReceiptReadStatus::NotFound};
+  }
+  if (firstStep != SQLITE_ROW) {
+    return {.status = ir::IrReceiptReadStatus::StorageFailure,
+            .diagnostic = "IR receipt lookup did not complete"};
+  }
+  ir::IrSubmissionReceipt receipt;
+  std::string diagnostic;
+  if (!decodeIrSubmissionReceiptRow(statement.get(), receipt, diagnostic)) {
+    return {.status = ir::IrReceiptReadStatus::Invalid,
+            .diagnostic = std::move(diagnostic)};
+  }
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return {.status = ir::IrReceiptReadStatus::StorageFailure,
+            .diagnostic = "IR receipt lookup returned duplicate rows"};
+  }
+  return {.status = ir::IrReceiptReadStatus::Found,
+          .receipt = std::move(receipt)};
 }
 
 ir::IrOutboxMutationOutcome

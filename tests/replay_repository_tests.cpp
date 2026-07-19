@@ -4880,8 +4880,11 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   ReplayRepository helper(path);
   assert(helper.EnsureSchema());
 
-  const auto draft =
-      sampleIrDraft("123e4567-e89b-42d3-a456-426614174001", 1'000);
+  const auto replayAttempt =
+      sampleChartAttempt(root, "ir-outbox-transitions", 101);
+  assert(helper.StageChartResult(replayAttempt, {}).status ==
+         result_persistence::StageStatus::Staged);
+  const auto draft = automaticIrDraft(replayAttempt, "tachi", 1'000);
   auto missingProof = draft;
   missingProof.rulesetProof = {};
   assert(helper.EnqueueReadyIrOutboxDraft(missingProof, true).status ==
@@ -5076,6 +5079,13 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
                  .remotePollCount = 0,
                  .updatedAtUnixMillis = 4'001,
                  .completedAtUnixMillis = 4'001,
+                 .successfulReceipt =
+                     ir::IrSuccessfulReceiptDraft{
+                         .serverOrigin = "https://boku.tachi.ac",
+                         .remoteUserId = 42,
+                         .remoteScoreId = "Tscore",
+                         .confirmedAtUnixMillis = 4'001,
+                     },
              })
              .status == ir::IrOutboxMutationStatus::Updated);
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
@@ -5086,6 +5096,178 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   assert(helper.PurgeSucceededIrOutbox(4'002).affectedRows == 1);
   assert(helper.LoadIrOutbox(draft.providerId, draft.attemptId).status ==
          ir::IrOutboxReadStatus::NotFound);
+}
+
+struct ClaimedCanonicalIrAttempt {
+  std::string attemptId;
+  std::string chartMd5;
+  std::string chartSha256;
+  int replayId = 0;
+  std::int64_t rowId = 0;
+};
+
+ClaimedCanonicalIrAttempt stageActivateAndClaimIrAttempt(
+    ReplayRepository &helper, const std::filesystem::path &root,
+    std::string_view fixtureName, int suffix) {
+  const auto attempt =
+      sampleChartAttempt(root, std::string(fixtureName), suffix);
+  const auto draft = automaticIrDraft(attempt, "tachi", 1'000);
+  const auto staged = helper.StageChartResult(attempt, {&draft, 1});
+  assert(staged.status == result_persistence::StageStatus::Staged &&
+         staged.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(attempt.attemptId,
+                                                       staged.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  const auto outbox = helper.LoadIrOutbox("tachi", attempt.attemptId);
+  assert(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry);
+  assert(helper
+             .ClaimIrOutbox(outbox.entry->id, ir::IrOutboxState::Pending,
+                            1'500)
+             .status == ir::IrOutboxClaimStatus::Claimed);
+  return {.attemptId = attempt.attemptId,
+          .chartMd5 = outbox.entry->chartMd5,
+          .chartSha256 = outbox.entry->chartSha256,
+          .replayId = staged.receipt->replayId,
+          .rowId = outbox.entry->id};
+}
+
+ir::IrOutboxDeliveryUpdate successfulDelivery(std::int64_t rowId) {
+  return {
+      .rowId = rowId,
+      .nextState = ir::IrOutboxState::Succeeded,
+      .consecutiveFailureCount = 0,
+      .remotePollCount = 0,
+      .lastErrorCode = {},
+      .lastErrorMessage = {},
+      .updatedAtUnixMillis = 2'000,
+      .completedAtUnixMillis = 2'000,
+      .successfulReceipt =
+          ir::IrSuccessfulReceiptDraft{
+              .serverOrigin = "https://boku.tachi.ac",
+              .remoteUserId = 42,
+              .remoteScoreId = "Tscore",
+              .confirmedAtUnixMillis = 2'000,
+          },
+  };
+}
+
+void assertClaimedWithoutReceipt(ReplayRepository &helper,
+                                 const ClaimedCanonicalIrAttempt &fixture) {
+  const auto outbox = helper.LoadIrOutbox("tachi", fixture.attemptId);
+  assert(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry &&
+         outbox.entry->state == ir::IrOutboxState::Uploading);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                      fixture.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+}
+
+void testIrOutboxSuccessCommitsReceiptAtomically(
+    const std::filesystem::path &root) {
+  {
+    const auto path = root / "ir-receipt-success" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    const auto fixture = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-receipt-success", 102);
+
+    const auto applied =
+        helper.ApplyIrOutboxDelivery(successfulDelivery(fixture.rowId));
+    assert(applied.status == ir::IrOutboxMutationStatus::Updated);
+    const auto outbox = helper.LoadIrOutbox("tachi", fixture.attemptId);
+    assert(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry &&
+           outbox.entry->state == ir::IrOutboxState::Succeeded);
+    const auto receipt = helper.LoadIrSubmissionReceipt(
+        "tachi", "https://boku.tachi.ac", fixture.attemptId);
+    assert(receipt.status == ir::IrReceiptReadStatus::Found &&
+           receipt.receipt && receipt.receipt->providerId == "tachi" &&
+           receipt.receipt->serverOrigin == "https://boku.tachi.ac" &&
+           receipt.receipt->replayId == fixture.replayId &&
+           receipt.receipt->attemptId == fixture.attemptId &&
+           receipt.receipt->chartMd5 == fixture.chartMd5 &&
+           receipt.receipt->chartSha256 == fixture.chartSha256 &&
+           receipt.receipt->remoteUserId == 42 &&
+           receipt.receipt->remoteScoreId == "Tscore" &&
+           receipt.receipt->source ==
+               ir::IrReceiptConfirmationSource::Submission &&
+           !receipt.receipt->observedInSnapshot &&
+           receipt.receipt->confirmedAtUnixMillis == 2'000);
+
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "PRAGMA foreign_keys=ON");
+    execOrAbort(db.get(), "DELETE FROM replays WHERE id=" +
+                              std::to_string(fixture.replayId));
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM ir_submission_receipts") ==
+           0);
+  }
+
+  {
+    ReplayRepository helper(root / "ir-receipt-missing" / "replay.db");
+    assert(helper.EnsureSchema());
+    const auto fixture = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-receipt-missing", 103);
+    auto update = successfulDelivery(fixture.rowId);
+    update.successfulReceipt.reset();
+    assert(helper.ApplyIrOutboxDelivery(update).status ==
+           ir::IrOutboxMutationStatus::Invalid);
+    assertClaimedWithoutReceipt(helper, fixture);
+  }
+
+  {
+    ReplayRepository helper(root / "ir-receipt-missing-replay" / "replay.db");
+    assert(helper.EnsureSchema());
+    const auto draft =
+        sampleIrDraft("123e4567-e89b-42d3-a456-426614174104", 1'000);
+    const auto inserted = helper.EnqueueReadyIrOutboxDraft(draft, false);
+    assert(inserted.status == ir::IrOutboxInsertStatus::Inserted &&
+           inserted.entry);
+    assert(helper
+               .ClaimIrOutbox(inserted.entry->id, ir::IrOutboxState::Pending,
+                              1'500)
+               .status == ir::IrOutboxClaimStatus::Claimed);
+    assert(helper
+               .ApplyIrOutboxDelivery(successfulDelivery(inserted.entry->id))
+               .status == ir::IrOutboxMutationStatus::StorageFailure);
+    const ClaimedCanonicalIrAttempt fixture{
+        .attemptId = draft.attemptId, .rowId = inserted.entry->id};
+    assertClaimedWithoutReceipt(helper, fixture);
+  }
+
+  {
+    ReplayRepository helper(root / "ir-receipt-invalid-origin" / "replay.db");
+    assert(helper.EnsureSchema());
+    const auto fixture = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-receipt-invalid-origin", 105);
+    auto update = successfulDelivery(fixture.rowId);
+    update.successfulReceipt->serverOrigin =
+        "HTTPS://BOKU.TACHI.AC:443/";
+    assert(helper.ApplyIrOutboxDelivery(update).status ==
+           ir::IrOutboxMutationStatus::Invalid);
+    assertClaimedWithoutReceipt(helper, fixture);
+  }
+
+  {
+    const auto path = root / "ir-receipt-trigger-rollback" / "replay.db";
+    ReplayRepository helper(path);
+    assert(helper.EnsureSchema());
+    const auto fixture = stageActivateAndClaimIrAttempt(
+        helper, root, "ir-receipt-trigger-rollback", 106);
+    helper.Shutdown();
+    auto db = openDatabase(path);
+    execOrAbort(
+        db.get(),
+        "CREATE TRIGGER fail_ir_receipt BEFORE INSERT ON "
+        "ir_submission_receipts BEGIN SELECT RAISE(ABORT, "
+        "'forced receipt failure'); END");
+    db.reset();
+
+    assert(helper
+               .ApplyIrOutboxDelivery(successfulDelivery(fixture.rowId))
+               .status == ir::IrOutboxMutationStatus::StorageFailure);
+    assertClaimedWithoutReceipt(helper, fixture);
+  }
 }
 
 void testIrOutboxRecoveryCountsRetryAndValidation(
@@ -5276,6 +5458,7 @@ int main() {
   testVersion8MigrationRejectsMalformedExistingOutbox(root);
   testCurrentVersionRejectsMalformedIrSubmissionReceiptSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
+  testIrOutboxSuccessCommitsReceiptAtomically(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);
   testVersion4MigrationAddsResultOutbox(root);
   testVersion4MarkerAcceptsExactVersion5ResultOutbox(root);

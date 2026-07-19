@@ -1,5 +1,6 @@
 #include "ir/IrSubmissionService.h"
 
+#include "Utils.h"
 #include "ir/IrHttpClient.h"
 #include "repositories/ReplayRepository.h"
 
@@ -235,6 +236,94 @@ profile(bool enabled = true, bool autoSubmit = true,
   return result;
 }
 
+result_persistence::ChartResultAttempt
+canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
+                 const std::filesystem::path &root) {
+  ReplayData replay;
+  replay.chartMeta.BmsPath =
+      root / "BMS" / (outboxDraft.attemptId + ".bms");
+  replay.chartMeta.MD5 = outboxDraft.chartMd5;
+  replay.chartMeta.SHA256 = outboxDraft.chartSha256;
+  replay.chartMeta.Title = "IR service fixture";
+  replay.chartMeta.Artist = "Test";
+  replay.chartMeta.Rank = 2;
+  replay.chartMeta.TotalNotes = 50;
+  replay.chartMeta.TotalLongNotes = 1;
+  replay.chartMeta.LnMode = 2;
+  replay.initialGaugeType = GaugeType::Hard;
+  replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  replay.finalScore = 91;
+  replay.maxCombo = 45;
+  replay.finalGauge = 82.5f;
+  replay.clearType = kClearTypeHardClearRank;
+  replay.playOption = "RANDOM";
+  replay.playOptionSeed = 1234;
+  replay.events.push_back({.action = ReplayEventAction::Press,
+                           .lane = 3,
+                           .noteTimeMicros = 100'000,
+                           .songTimeMicros = 100'100,
+                           .judgeTimeMicros = 100'050,
+                           .judgement = PGreat,
+                           .diffMicros = -50,
+                           .gauge = 82.5f,
+                           .gaugeType = GaugeType::Hard,
+                           .combo = 1,
+                           .score = 2});
+
+  ScoreProvenanceBuildInput provenanceInput;
+  provenanceInput.chartMeta = replay.chartMeta;
+  provenanceInput.longNoteMode = replay.chartMeta.LnMode;
+  provenanceInput.judgeRankSource = JudgeRankSource::Chart;
+  provenanceInput.sourceJudgeRank = replay.chartMeta.Rank;
+  provenanceInput.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  provenanceInput.totalNotes = replay.chartMeta.TotalNotes;
+  provenanceInput.effectiveGaugeTotal = 176.0;
+  provenanceInput.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  provenanceInput.gaugeType = replay.initialGaugeType;
+  provenanceInput.gaugeAutoShift = replay.gaugeAutoShift;
+  provenanceInput.player1 = {.option = "RANDOM", .seed = 1234};
+  provenanceInput.inputDevices = {InputDeviceCategory::Keyboard};
+  provenanceInput.ruleset = RulesetDescriptor::Current();
+  replay.provenance = makeScoreProvenance(provenanceInput);
+  replay.provenance.eligibility = ScoreEligibility::Verified;
+
+  result_persistence::ChartScoreWrite score{
+      .chartPath = Utils::GetStoragePathUtf8RelativeToDocuments(
+          replay.chartMeta.BmsPath, "BMS/"),
+      .chartMd5 = outboxDraft.chartMd5,
+      .chartSha256 = outboxDraft.chartSha256,
+      .chartTitle = replay.chartMeta.Title,
+      .chartArtist = replay.chartMeta.Artist,
+      .longNoteMode = replay.chartMeta.LnMode,
+      .score = replay.finalScore,
+      .maxScore = replay.chartMeta.TotalNotes * 2,
+      .maxCombo = replay.maxCombo,
+      .comboBreak = 5,
+      .pGreat = 40,
+      .great = 11,
+      .good = 2,
+      .bad = 1,
+      .poor = 3,
+      .kPoor = 4,
+      .fast = 7,
+      .slow = 8,
+      .finalGauge = replay.finalGauge,
+      .clearType = replay.clearType,
+      .provenance = replay.provenance,
+  };
+  return {
+      .attemptId = outboxDraft.attemptId,
+      .replay = replay,
+      .score = score,
+      .payloadFingerprint =
+          result_persistence::payloadFingerprint(replay, score),
+  };
+}
+
 class Harness {
 public:
   explicit Harness(
@@ -311,6 +400,22 @@ public:
     } else {
       credentials["fake"] = std::move(value);
     }
+  }
+
+  ir::IrOutboxInsertOutcome enqueueReady(const ir::IrOutboxDraft &value,
+                                         bool userIntent) {
+    const auto attempt = canonicalAttempt(value, temp.path());
+    const auto staged = repository.StageChartResult(attempt, {});
+    if (staged.status != result_persistence::StageStatus::Staged &&
+        staged.status != result_persistence::StageStatus::AlreadyStaged) {
+      std::cerr << "FAIL: canonical replay staging: " << staged.diagnostic
+                << '\n';
+    }
+    expect(staged.status == result_persistence::StageStatus::Staged ||
+               staged.status ==
+                   result_persistence::StageStatus::AlreadyStaged,
+           "service fixture stores a canonical replay attempt");
+    return repository.EnqueueReadyIrOutboxDraft(value, userIntent);
   }
 
   void blockNextCredentialLookup() {
@@ -393,8 +498,8 @@ ir::IrOutboxEntry load(Harness &harness, int suffix) {
 }
 
 void makeFailed(Harness &harness, int suffix) {
-  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(suffix, harness.now.load()), false);
+  const auto inserted =
+      harness.enqueueReady(draft(suffix, harness.now.load()), false);
   expect(inserted.entry.has_value(), "failed fixture inserts");
   if (!inserted.entry) {
     return;
@@ -418,8 +523,8 @@ void makeFailed(Harness &harness, int suffix) {
 
 std::int64_t makeAwaiting(Harness &harness, int suffix,
                           std::string origin = "https://old.example.test") {
-  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(suffix, harness.now.load()), false);
+  const auto inserted =
+      harness.enqueueReady(draft(suffix, harness.now.load()), false);
   expect(inserted.entry.has_value(), "deferred fixture inserts");
   if (!inserted.entry) {
     return 0;
@@ -446,8 +551,7 @@ std::int64_t makeAwaiting(Harness &harness, int suffix,
 void testActiveRequestSnapshotsDistinguishSubmitAndPoll() {
   Harness submit;
   submit.setCredential("key");
-  submit.repository.EnqueueReadyIrOutboxDraft(draft(20, submit.now.load()),
-                                              false);
+  submit.enqueueReady(draft(20, submit.now.load()), false);
   submit.driver->blockRequestsUntilCancelled();
   submit.service->start(profile(true));
   expect(submit.driver->waitForCalls(1), "blocked submit starts");
@@ -479,8 +583,8 @@ void testActiveRequestSnapshotsDistinguishSubmitAndPoll() {
 
 void testStartupRecovery() {
   Harness harness;
-  const auto pending = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(1, harness.now.load()), false);
+  const auto pending =
+      harness.enqueueReady(draft(1, harness.now.load()), false);
   expect(pending.entry.has_value(), "stale pending fixture inserts");
   if (pending.entry) {
     harness.repository.ClaimIrOutbox(
@@ -503,8 +607,7 @@ void testStartupRecovery() {
 void testDisabledAndReadOnlyProvidersStayPaused() {
   Harness disabled;
   disabled.setCredential("key");
-  disabled.repository.EnqueueReadyIrOutboxDraft(draft(3, disabled.now.load()),
-                                                false);
+  disabled.enqueueReady(draft(3, disabled.now.load()), false);
   disabled.service->start(profile(false, true));
   disabled.waiter.waitForEntries(2);
   expect(disabled.driver->calls().empty(),
@@ -521,8 +624,7 @@ void testDisabledAndReadOnlyProvidersStayPaused() {
                     .scoreSubmission = false,
                     .deferredSubmission = false});
   readOnly.setCredential("key");
-  readOnly.repository.EnqueueReadyIrOutboxDraft(draft(4, readOnly.now.load()),
-                                                false);
+  readOnly.enqueueReady(draft(4, readOnly.now.load()), false);
   readOnly.service->start(profile(true));
   readOnly.waiter.waitForEntries(2);
   expect(readOnly.driver->calls().empty() &&
@@ -538,8 +640,7 @@ void testFutureWakeIgnoresBoundedSkippedProviderRows() {
     auto skipped = draft(suffix, harness.now.load());
     skipped.providerId = "skipped";
     skippedRowsInserted =
-        harness.repository.EnqueueReadyIrOutboxDraft(skipped, false).entry
-            .has_value() &&
+        harness.enqueueReady(skipped, false).entry.has_value() &&
         skippedRowsInserted;
   }
   expect(skippedRowsInserted, "skipped-provider starvation fixtures insert");
@@ -563,8 +664,7 @@ void testFutureWakeIgnoresBoundedSkippedProviderRows() {
 
 void testMissingKeyPreservesManualIntentAndReplacementWakes() {
   Harness harness;
-  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(5, harness.now.load()), true);
+  const auto inserted = harness.enqueueReady(draft(5, harness.now.load()), true);
   expect(inserted.entry.has_value(), "manual missing-key fixture inserts");
   harness.service->start(profile(true));
   expect(harness.waitForState(attemptId(5),
@@ -592,8 +692,7 @@ void testMissingKeyPreservesManualIntentAndReplacementWakes() {
 void testProviderRuntimeChangeUnblocksRows() {
   Harness harness;
   harness.setCredential("key");
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(23, harness.now.load()),
-                                               false);
+  harness.enqueueReady(draft(23, harness.now.load()), false);
   harness.driver->pushSubmit({
       .status = ir::DeliveryStatus::BlockedConfiguration,
       .code = "authentication_required",
@@ -632,12 +731,9 @@ void testManualEnqueueRequiresFreshRulesetProof() {
 void testAutomaticAndManualRequestsUseCurrentOrigin() {
   Harness harness;
   harness.setCredential("current-key");
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(6, harness.now.load()),
-                                               false);
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(7, harness.now.load() + 1),
-                                               true);
-  harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(18, harness.now.load() + 2), false);
+  harness.enqueueReady(draft(6, harness.now.load()), false);
+  harness.enqueueReady(draft(7, harness.now.load() + 1), true);
+  harness.enqueueReady(draft(18, harness.now.load() + 2), false);
   harness.service->start(profile(true, true, "https://new.example.test"));
   expect(harness.driver->waitForCalls(3),
          "the worker drains every due automatic and manual row");
@@ -655,8 +751,8 @@ void testAutomaticAndManualRequestsUseCurrentOrigin() {
 void testDeferredPollingPinsOriginAndNeverReposts() {
   Harness harness;
   harness.setCredential("key");
-  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(8, harness.now.load()), false);
+  const auto inserted =
+      harness.enqueueReady(draft(8, harness.now.load()), false);
   expect(inserted.entry.has_value(), "deferred flow fixture inserts");
   harness.driver->pushSubmit({
       .status = ir::DeliveryStatus::Deferred,
@@ -721,8 +817,8 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
 void testAdaptiveDeferredPollingCadence() {
   Harness harness;
   harness.setCredential("key");
-  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(24, harness.now.load()), false);
+  const auto inserted =
+      harness.enqueueReady(draft(24, harness.now.load()), false);
   expect(inserted.entry.has_value(), "adaptive polling fixture inserts");
   harness.driver->pushSubmit({
       .status = ir::DeliveryStatus::Deferred,
@@ -772,8 +868,7 @@ void testAdaptiveDeferredPollingCadence() {
 void testDeferredInitialPollIgnoresEarlierPostFailures() {
   Harness harness;
   harness.setCredential("key");
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(25, harness.now.load()),
-                                               false);
+  harness.enqueueReady(draft(25, harness.now.load()), false);
   harness.driver->pushSubmit({.status = ir::DeliveryStatus::TransientFailure});
   harness.driver->pushSubmit({.status = ir::DeliveryStatus::TransientFailure});
   harness.driver->pushSubmit({
@@ -815,8 +910,7 @@ void testDeferredInitialPollIgnoresEarlierPostFailures() {
 void testPersistedBackoffAndRetryAfter() {
   Harness harness;
   harness.setCredential("key");
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(9, harness.now.load()),
-                                               false);
+  harness.enqueueReady(draft(9, harness.now.load()), false);
   for (int index = 0; index < 5; ++index) {
     harness.driver->pushSubmit({.status = ir::DeliveryStatus::TransientFailure,
                                 .code = "offline",
@@ -848,8 +942,7 @@ void testPersistedBackoffAndRetryAfter() {
 
   Harness retryAfter;
   retryAfter.setCredential("key");
-  retryAfter.repository.EnqueueReadyIrOutboxDraft(
-      draft(10, retryAfter.now.load()), false);
+  retryAfter.enqueueReady(draft(10, retryAfter.now.load()), false);
   retryAfter.driver->pushSubmit({
       .status = ir::DeliveryStatus::TransientFailure,
       .retryAfterDelay = std::chrono::seconds(120),
@@ -875,8 +968,8 @@ void testPermanentFailureRetryAllAndDeferredPreservation() {
   makeFailed(harness, 11);
   makeFailed(harness, 12);
   const auto deferredId = makeAwaiting(harness, 13);
-  const auto pending = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(22, harness.now.load() + 60'000), false);
+  const auto pending =
+      harness.enqueueReady(draft(22, harness.now.load() + 60'000), false);
   expect(pending.entry.has_value(), "delayed pending fixture inserts");
   harness.service->start(profile(false));
   const auto retried = harness.service->retryAll("fake");
@@ -902,8 +995,7 @@ void testPermanentFailureRetryAllAndDeferredPreservation() {
 
   Harness permanent;
   permanent.setCredential("secret-token");
-  permanent.repository.EnqueueReadyIrOutboxDraft(
-      draft(14, permanent.now.load()), false);
+  permanent.enqueueReady(draft(14, permanent.now.load()), false);
   permanent.driver->pushSubmit({
       .status = ir::DeliveryStatus::PermanentFailure,
       .code = "rejected",
@@ -927,11 +1019,60 @@ void testPermanentFailureRetryAllAndDeferredPreservation() {
          "manual permanent retry carries user intent");
 }
 
+void testSuccessfulDeliveryPersistsRemoteReceiptBeforeStatus() {
+  Harness submitted;
+  submitted.setCredential("key");
+  submitted.enqueueReady(draft(26, submitted.now.load()), false);
+  submitted.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Succeeded,
+      .remoteUserId = 42,
+      .remoteScoreId = "Tscore",
+  });
+  submitted.service->start(
+      profile(true, true, "HTTPS://BOKU.TACHI.AC:443/"));
+  expect(submitted.waitForState(attemptId(26),
+                                ir::IrOutboxState::Succeeded),
+         "successful delivery publishes succeeded status");
+  const auto submittedReceipt = submitted.repository.LoadIrSubmissionReceipt(
+      "fake", "https://boku.tachi.ac", attemptId(26));
+  const auto submittedStatus = submitted.service->status("fake", attemptId(26));
+  expect(submittedReceipt.status == ir::IrReceiptReadStatus::Found &&
+             submittedReceipt.receipt &&
+             submittedReceipt.receipt->remoteUserId == 42 &&
+             submittedReceipt.receipt->remoteScoreId == "Tscore" &&
+             submittedReceipt.receipt->source ==
+                 ir::IrReceiptConfirmationSource::Submission &&
+             !submittedReceipt.receipt->observedInSnapshot &&
+             submittedStatus.found &&
+             submittedStatus.state == ir::IrOutboxState::Succeeded,
+         "published success has a durable normalized-origin receipt");
+
+  Harness duplicate;
+  duplicate.setCredential("key");
+  duplicate.enqueueReady(draft(27, duplicate.now.load()), false);
+  duplicate.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Succeeded,
+      .remoteUserId = 84,
+      .code = "duplicate_score",
+  });
+  duplicate.service->start(profile(true, true, "https://boku.tachi.ac"));
+  expect(duplicate.waitForState(attemptId(27),
+                                ir::IrOutboxState::Succeeded),
+         "idempotent duplicate publishes succeeded status");
+  const auto duplicateReceipt = duplicate.repository.LoadIrSubmissionReceipt(
+      "fake", "https://boku.tachi.ac", attemptId(27));
+  expect(duplicateReceipt.status == ir::IrReceiptReadStatus::Found &&
+             duplicateReceipt.receipt &&
+             duplicateReceipt.receipt->remoteUserId == 84 &&
+             duplicateReceipt.receipt->remoteScoreId.empty(),
+         "idempotent duplicate without score ID still creates a receipt");
+}
+
 void testSucceededPurgeAndSnapshotReads() {
   Harness harness;
-  const auto old = harness.repository.EnqueueReadyIrOutboxDraft(
+  const auto old = harness.enqueueReady(
       draft(15, harness.now.load() - 9LL * 24 * 60 * 60 * 1000), false);
-  const auto recent = harness.repository.EnqueueReadyIrOutboxDraft(
+  const auto recent = harness.enqueueReady(
       draft(16, harness.now.load() - 2LL * 24 * 60 * 60 * 1000), false);
   for (const auto *inserted : {&old, &recent}) {
     expect(inserted->entry.has_value(), "purge fixture inserts");
@@ -946,6 +1087,11 @@ void testSucceededPurgeAndSnapshotReads() {
         .nextState = ir::IrOutboxState::Succeeded,
         .updatedAtUnixMillis = inserted->entry->createdAtUnixMillis,
         .completedAtUnixMillis = inserted->entry->createdAtUnixMillis,
+        .successfulReceipt =
+            ir::IrSuccessfulReceiptDraft{
+                .serverOrigin = "https://old.example.test",
+                .confirmedAtUnixMillis = inserted->entry->createdAtUnixMillis,
+            },
     });
   }
   harness.service->start(profile(false));
@@ -964,8 +1110,7 @@ void testSucceededPurgeAndSnapshotReads() {
 void testPauseCancelsInflightAndRecoversClaim() {
   Harness harness;
   harness.setCredential("key");
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(17, harness.now.load()),
-                                               false);
+  harness.enqueueReady(draft(17, harness.now.load()), false);
   harness.driver->blockRequestsUntilCancelled();
   harness.service->start(profile(true));
   expect(harness.driver->waitForCalls(1), "in-flight fixture starts request");
@@ -980,8 +1125,8 @@ void testPauseCancelsInflightAndRecoversClaim() {
 
 void testForegroundRecoversAbandonedClaim() {
   Harness harness;
-  const auto inserted = harness.repository.EnqueueReadyIrOutboxDraft(
-      draft(18, harness.now.load()), false);
+  const auto inserted =
+      harness.enqueueReady(draft(18, harness.now.load()), false);
   expect(inserted.entry.has_value(), "foreground recovery fixture inserts");
   harness.service->start(profile(false));
   harness.service->setApplicationActive(false);
@@ -1007,8 +1152,7 @@ void testForegroundRecoversAbandonedClaim() {
 
 void testForegroundPreservesPendingCredentialChange() {
   Harness harness;
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(19, harness.now.load()),
-                                                false);
+  harness.enqueueReady(draft(19, harness.now.load()), false);
   harness.service->start(profile(true));
   expect(harness.waitForState(attemptId(19),
                               ir::IrOutboxState::BlockedConfiguration),
@@ -1033,8 +1177,7 @@ void testLifecycleCancellationWinsBeforeRequestStarts() {
          "pre-request race worker reaches its idle wait");
   harness.driver->blockRequestsUntilCancelled();
   harness.blockNextCredentialLookup();
-  harness.repository.EnqueueReadyIrOutboxDraft(draft(22, harness.now.load()),
-                                                false);
+  harness.enqueueReady(draft(22, harness.now.load()), false);
   harness.service->notifyOutboxChanged();
   expect(harness.waitForCredentialLookup(),
          "pre-request race pauses after capturing the credential");
@@ -1090,6 +1233,7 @@ int main() {
   testDeferredInitialPollIgnoresEarlierPostFailures();
   testPersistedBackoffAndRetryAfter();
   testPermanentFailureRetryAllAndDeferredPreservation();
+  testSuccessfulDeliveryPersistsRemoteReceiptBeforeStatus();
   testSucceededPurgeAndSnapshotReads();
   testPauseCancelsInflightAndRecoversClaim();
   testForegroundRecoversAbandonedClaim();

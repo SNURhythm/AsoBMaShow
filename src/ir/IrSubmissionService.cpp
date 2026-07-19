@@ -599,17 +599,30 @@ struct IrSubmissionService::Impl {
           return std::nullopt;
         }
       }
-      const auto update =
-          deliveryUpdate(claimed, entry.state, outcome, completedAt);
+      auto update = deliveryUpdate(claimed, entry.state, outcome, completedAt);
+      std::optional<std::string> successfulOrigin;
+      if (outcome.status == DeliveryStatus::Succeeded) {
+        successfulOrigin = requestOrigin(entry, provider->second);
+        if (successfulOrigin) {
+          update.successfulReceipt = IrSuccessfulReceiptDraft{
+              .serverOrigin = *successfulOrigin,
+              .remoteUserId = outcome.remoteUserId,
+              .remoteScoreId =
+                  outcome.remoteScoreId.value_or(std::string{}),
+              .source = IrReceiptConfirmationSource::Submission,
+              .observedInSnapshot = false,
+              .confirmedAtUnixMillis = completedAt,
+          };
+        }
+      }
       const auto applied = repository.ApplyIrOutboxDelivery(update);
       const StatusKey key{entry.providerId, entry.attemptId};
       if (applied.status == IrOutboxMutationStatus::Updated &&
           outcome.status == DeliveryStatus::Succeeded &&
-          options.submissionSucceeded) {
-        const auto origin = requestOrigin(entry, provider->second);
+          successfulOrigin && options.submissionSucceeded) {
         try {
           options.submissionSucceeded(config.profileId, entry.providerId,
-                                      origin ? *origin : std::string_view{},
+                                      *successfulOrigin,
                                       entry.chartMd5, entry.chartSha256);
         } catch (...) {
         }
