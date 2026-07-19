@@ -5,6 +5,7 @@
 #include "ChartSqlExpressions.h"
 #include "../LongNoteModeUtils.h"
 #include "../ProfileDatabaseActivity.h"
+#include "../ir/IrProfileSettings.h"
 #include "SqliteRAII.h"
 #include "../Uuid.h"
 #include "../Utils.h"
@@ -2077,19 +2078,20 @@ std::optional<int> replay_repository_detail::SaveCourseReplayOnConnection(
 
 std::vector<ReplaySummary>
 ReplayRepository::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit,
-                              std::string_view irProviderId) {
+                              std::string_view irProviderId,
+                              std::string_view irServerOrigin) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
     return {};
   }
   return replay_repository_detail::ListReplaysOnConnection(
-      impl_->sessionDatabase, chartMeta, limit, irProviderId);
+      impl_->sessionDatabase, chartMeta, limit, irProviderId, irServerOrigin);
 }
 
 std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta, int limit,
-    std::string_view irProviderId) {
+    std::string_view irProviderId, std::string_view irServerOrigin) {
   std::vector<ReplaySummary> replays;
 
   std::string snapshotError;
@@ -2178,7 +2180,12 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
     return replays;
   }
 
-  const char *detailQuery =
+  std::optional<std::string> normalizedIrServerOrigin;
+  if (!irProviderId.empty() && !irServerOrigin.empty()) {
+    normalizedIrServerOrigin = ir::normalizeServerOrigin(irServerOrigin);
+  }
+
+  std::string detailQuery =
       "SELECT r.id, r.chart_path, r.chart_md5, r.chart_sha256,"
       "r.chart_title, r.chart_artist, r.gauge_type, r.gauge_auto_shift,"
       "r.final_score, r.final_gauge, r.clear_type, r.created_at,"
@@ -2189,8 +2196,17 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
       "r.ruleset_version, r.eligibility, r.provenance_json,"
       "r.attempt_id, r.attempt_fingerprint,"
       "(SELECT o.state FROM ir_outbox o "
-      "WHERE o.provider_id = ? AND o.attempt_id = r.attempt_id LIMIT 1) "
-      "FROM replays r WHERE r.id = ?";
+      "WHERE o.provider_id = ? AND o.attempt_id = r.attempt_id LIMIT 1)";
+  if (normalizedIrServerOrigin) {
+    detailQuery +=
+        ",EXISTS(SELECT 1 FROM ir_submission_receipts receipt "
+        "WHERE receipt.provider_id = ? AND receipt.server_origin = ? "
+        "AND receipt.replay_id = r.id),"
+        "(SELECT receipt.remote_score_id FROM ir_submission_receipts receipt "
+        "WHERE receipt.provider_id = ? AND receipt.server_origin = ? "
+        "AND receipt.replay_id = r.id LIMIT 1)";
+  }
+  detailQuery += " FROM replays r WHERE r.id = ?";
   SqliteStatementHandle detailStmt;
   if (!prepareSqliteStatementLogged(db, detailQuery, detailStmt,
                                     "preparing replay list", logSqlErrorText)) {
@@ -2201,8 +2217,15 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
   for (const int replayId : validIds) {
     sqlite3_reset(detailStmt.get());
     sqlite3_clear_bindings(detailStmt.get());
-    bindTextView(detailStmt.get(), 1, irProviderId);
-    sqlite3_bind_int(detailStmt.get(), 2, replayId);
+    int bindIndex = 1;
+    bindTextView(detailStmt.get(), bindIndex++, irProviderId);
+    if (normalizedIrServerOrigin) {
+      bindTextView(detailStmt.get(), bindIndex++, irProviderId);
+      bindTextView(detailStmt.get(), bindIndex++, *normalizedIrServerOrigin);
+      bindTextView(detailStmt.get(), bindIndex++, irProviderId);
+      bindTextView(detailStmt.get(), bindIndex++, *normalizedIrServerOrigin);
+    }
+    sqlite3_bind_int(detailStmt.get(), bindIndex, replayId);
     const int rc = sqlite3_step(detailStmt.get());
     if (rc == SQLITE_DONE) {
       continue;
@@ -2236,6 +2259,12 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
       if (ir::isKnownIrOutboxState(state)) {
         summary.requestedIrOutboxState =
             static_cast<ir::IrOutboxState>(state);
+      }
+    }
+    if (normalizedIrServerOrigin) {
+      summary.hasIrReceipt = sqlite3_column_int(detailStmt.get(), 26) != 0;
+      if (sqlite3_column_type(detailStmt.get(), 27) == SQLITE_TEXT) {
+        summary.receiptRemoteScoreId = readText(detailStmt.get(), 27);
       }
     }
     summary.maxScore = maxScore;

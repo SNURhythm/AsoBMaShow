@@ -129,7 +129,10 @@ struct ReplaySummary {
   std::optional<std::string> attemptId;
   bool hasCanonicalAttemptFingerprint = false;
   std::optional<ir::IrOutboxState> requestedIrOutboxState;
-  bool irUploadPending = false;
+  bool irSubmissionEligible = false;
+  bool hasIrReceipt = false;
+  std::string receiptRemoteScoreId;
+  ir::IrRecordState irRecordState = ir::IrRecordState::Hidden;
 };
 
 struct ReplayResultRecord {
@@ -224,7 +227,8 @@ public:
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary>
   ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100,
-              std::string_view irProviderId = {});
+              std::string_view irProviderId = {},
+              std::string_view irServerOrigin = {});
   std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
                                                int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,

@@ -266,13 +266,21 @@ void testCanonicalLr2EligibilityMatrix() {
   }
 }
 
-void testReplayUploadMarkerPolicy() {
+void testReplayEligibilityAndMarkerCompatibility() {
   const ir::IrSubmission submission = validSubmission();
   bms_parser::ChartMeta meta;
   meta.KeyMode = submission.keyMode;
   meta.MD5 = submission.chartMd5;
   meta.SHA256 = submission.chartSha256;
   meta.TotalNotes = submission.maxScore / 2;
+
+  const auto eligible = [&](const ScoreProvenance &provenance,
+                            std::string_view attemptId =
+                                "123e4567-e89b-42d3-a456-426614174000",
+                            bool hasFingerprint = true) {
+    return ir::tachi::isReplayEligibleForBokutachi(
+        attemptId, hasFingerprint, meta, provenance);
+  };
 
   const auto show = [&](std::optional<ir::IrOutboxState> state,
                         const ScoreProvenance &provenance,
@@ -283,8 +291,30 @@ void testReplayUploadMarkerPolicy() {
         attemptId, hasFingerprint, meta, provenance, state);
   };
 
+  expect(eligible(submission.provenance),
+         "canonical replay proof is Bokutachi eligible");
+  expect(!eligible(submission.provenance, "", true),
+         "missing attempt identity is ineligible");
+  expect(!eligible(submission.provenance,
+                   "123e4567-e89b-42d3-a456-426614174000", false),
+         "missing canonical fingerprint is ineligible");
+
+  ScoreProvenance modified = submission.provenance;
+  modified.assistOption = assist_options::kDrag;
+  modified.eligibility = ScoreEligibility::Modified;
+  expect(!eligible(modified), "modified result is ineligible");
+  ScoreProvenance beatoraja = submission.provenance;
+  beatoraja.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  expect(!eligible(beatoraja), "Beatoraja result is ineligible");
+
+  const int totalNotes = meta.TotalNotes;
+  meta.TotalNotes = 0;
+  expect(!eligible(submission.provenance),
+         "replay without a positive note count is ineligible");
+  meta.TotalNotes = totalNotes;
+
   expect(show(std::nullopt, submission.provenance),
-         "eligible result without an outbox row shows the marker");
+         "compatibility marker shows eligible result without outbox row");
   for (const auto state : {ir::IrOutboxState::Pending,
                            ir::IrOutboxState::Uploading,
                            ir::IrOutboxState::AwaitingRemoteResult,
@@ -294,22 +324,7 @@ void testReplayUploadMarkerPolicy() {
            "unfinished outbox result shows the marker");
   }
   expect(!show(ir::IrOutboxState::Succeeded, submission.provenance),
-         "successful outbox result hides the marker");
-  expect(!show(std::nullopt, submission.provenance, "", true),
-         "missing attempt identity hides the marker");
-  expect(!show(std::nullopt, submission.provenance,
-               "123e4567-e89b-42d3-a456-426614174000", false),
-         "missing canonical fingerprint hides the marker");
-
-  ScoreProvenance modified = submission.provenance;
-  modified.assistOption = assist_options::kDrag;
-  modified.eligibility = ScoreEligibility::Modified;
-  expect(!show(std::nullopt, modified),
-         "modified result hides the marker");
-  ScoreProvenance beatoraja = submission.provenance;
-  beatoraja.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
-  expect(!show(std::nullopt, beatoraja),
-         "Beatoraja result hides the marker");
+         "compatibility marker hides a successful outbox result");
 }
 
 void testRejectsNonCanonicalLr2Proof() {
@@ -569,7 +584,7 @@ void testPayloadNeverContainsCredentialMaterial() {
 int main() {
   testBuildsOneScoreBatchManual();
   testCanonicalLr2EligibilityMatrix();
-  testReplayUploadMarkerPolicy();
+  testReplayEligibilityAndMarkerCompatibility();
   testRejectsNonCanonicalLr2Proof();
   testMapsPlaytypesAndHashFallback();
   testMapsEveryLamp();

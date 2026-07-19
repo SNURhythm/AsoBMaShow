@@ -2388,6 +2388,10 @@ void testReplayResultRecordMetadata(const std::filesystem::path &root) {
   assert(summaries.front().hasCanonicalAttemptFingerprint);
   assert(summaries.front().provenance != nullptr);
   assert(!summaries.front().requestedIrOutboxState.has_value());
+  assert(!summaries.front().irSubmissionEligible);
+  assert(!summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptRemoteScoreId.empty());
+  assert(summaries.front().irRecordState == ir::IrRecordState::Hidden);
 
   db = openDatabase(path);
   execOrAbort(
@@ -2402,12 +2406,45 @@ void testReplayResultRecordMetadata(const std::filesystem::path &root) {
       "0123456789abcdef0123456789abcdef','{}','lr2',3,"
       "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',5,1,1,1,1)");
+  execOrAbort(
+      db.get(),
+      "INSERT INTO ir_submission_receipts("
+      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+      "remote_score_id,confirmation_source,observed_in_snapshot,"
+      "confirmed_at_ms) VALUES("
+      "'tachi','https://boku.tachi.ac'," +
+          std::to_string(*replayId) +
+          ",'123e4567-e89b-42d3-a456-426614174000',"
+          "'0123456789abcdef0123456789abcdef',"
+          "'0123456789abcdef0123456789abcdef"
+          "0123456789abcdef0123456789abcdef',"
+          "'Tscore',0,0,2)");
   db.reset();
 
   summaries = repository.ListReplays(replay.chartMeta, 0, "tachi");
   assert(summaries.size() == 1);
   assert(summaries.front().requestedIrOutboxState ==
          ir::IrOutboxState::Succeeded);
+  assert(!summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptRemoteScoreId.empty());
+
+  summaries = repository.ListReplays(
+      replay.chartMeta, 0, "tachi", "HTTPS://BOKU.TACHI.AC:443/");
+  assert(summaries.size() == 1);
+  assert(summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptRemoteScoreId == "Tscore");
+
+  summaries = repository.ListReplays(replay.chartMeta, 0, "tachi",
+                                     "https://other.example");
+  assert(summaries.size() == 1);
+  assert(!summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptRemoteScoreId.empty());
+
+  summaries = repository.ListReplays(replay.chartMeta, 0, {},
+                                     "https://boku.tachi.ac");
+  assert(summaries.size() == 1);
+  assert(!summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptRemoteScoreId.empty());
 
   db = openDatabase(path);
   execOrAbort(db.get(),

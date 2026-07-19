@@ -71,6 +71,35 @@ bool validateDraft(const IrSuccessfulReceiptDraft &draft,
 
 } // namespace
 
+IrRecordState resolveIrRecordState(IrRecordStateInput input) noexcept {
+  if (input.hasReceipt || input.outboxState == IrOutboxState::Succeeded) {
+    return IrRecordState::Uploaded;
+  }
+  if (input.activity == IrRecordActivity::Submitting) {
+    return IrRecordState::Uploading;
+  }
+  if (input.activity == IrRecordActivity::Polling) {
+    return IrRecordState::AwaitingRemote;
+  }
+  if (input.outboxState) {
+    switch (*input.outboxState) {
+    case IrOutboxState::Pending:
+      return IrRecordState::Queued;
+    case IrOutboxState::Uploading:
+      return IrRecordState::Uploading;
+    case IrOutboxState::AwaitingRemoteResult:
+      return IrRecordState::AwaitingRemote;
+    case IrOutboxState::BlockedConfiguration:
+      return IrRecordState::Blocked;
+    case IrOutboxState::FailedPermanent:
+      return IrRecordState::Failed;
+    case IrOutboxState::Succeeded:
+      return IrRecordState::Uploaded;
+    }
+  }
+  return input.eligible ? IrRecordState::Eligible : IrRecordState::Hidden;
+}
+
 bool validateIrSuccessfulReceiptDraft(const IrSuccessfulReceiptDraft &draft,
                                       std::string &diagnostic) noexcept {
   try {

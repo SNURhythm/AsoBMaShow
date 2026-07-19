@@ -23,6 +23,11 @@ struct SubmissionEligibilityOutcome {
 [[nodiscard]] SubmissionEligibilityOutcome
 validateBokutachiEligibility(const IrSubmission &submission) noexcept;
 
+[[nodiscard]] bool isReplayEligibleForBokutachi(
+    std::string_view attemptId, bool hasCanonicalAttemptFingerprint,
+    const bms_parser::ChartMeta &meta,
+    const ScoreProvenance &provenance) noexcept;
+
 [[nodiscard]] bool shouldShowReplayUploadMarker(
     std::string_view attemptId, bool hasCanonicalAttemptFingerprint,
     const bms_parser::ChartMeta &meta, const ScoreProvenance &provenance,

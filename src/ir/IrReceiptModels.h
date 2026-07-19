@@ -6,6 +6,35 @@
 
 namespace ir {
 
+enum class IrOutboxState : int;
+
+enum class IrRecordState {
+  Hidden,
+  Eligible,
+  Queued,
+  Uploading,
+  AwaitingRemote,
+  Blocked,
+  Failed,
+  Uploaded,
+};
+
+enum class IrRecordActivity {
+  None,
+  Submitting,
+  Polling,
+};
+
+struct IrRecordStateInput {
+  bool eligible = false;
+  bool hasReceipt = false;
+  std::optional<IrOutboxState> outboxState;
+  IrRecordActivity activity = IrRecordActivity::None;
+};
+
+[[nodiscard]] IrRecordState
+resolveIrRecordState(IrRecordStateInput input) noexcept;
+
 enum class IrReceiptConfirmationSource : int {
   Submission = 0,
   Snapshot = 1,

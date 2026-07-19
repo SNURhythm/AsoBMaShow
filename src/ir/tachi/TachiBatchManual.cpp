@@ -280,13 +280,12 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
   }
 }
 
-bool shouldShowReplayUploadMarker(
+bool isReplayEligibleForBokutachi(
     std::string_view attemptId, bool hasCanonicalAttemptFingerprint,
-    const bms_parser::ChartMeta &meta, const ScoreProvenance &provenance,
-    std::optional<IrOutboxState> outboxState) noexcept {
+    const bms_parser::ChartMeta &meta,
+    const ScoreProvenance &provenance) noexcept {
   if (!uuid::isCanonicalLowerV4(attemptId) ||
-      !hasCanonicalAttemptFingerprint ||
-      outboxState == IrOutboxState::Succeeded || meta.TotalNotes <= 0 ||
+      !hasCanonicalAttemptFingerprint || meta.TotalNotes <= 0 ||
       meta.TotalNotes > std::numeric_limits<int>::max() / 2) {
     return false;
   }
@@ -300,6 +299,16 @@ bool shouldShowReplayUploadMarker(
   probe.provenance = provenance;
   return validateBokutachiEligibility(probe).reason ==
          SubmissionEligibilityReason::Eligible;
+}
+
+bool shouldShowReplayUploadMarker(
+    std::string_view attemptId, bool hasCanonicalAttemptFingerprint,
+    const bms_parser::ChartMeta &meta, const ScoreProvenance &provenance,
+    std::optional<IrOutboxState> outboxState) noexcept {
+  return outboxState != IrOutboxState::Succeeded &&
+         isReplayEligibleForBokutachi(attemptId,
+                                      hasCanonicalAttemptFingerprint, meta,
+                                      provenance);
 }
 
 BuildDraftOutcome

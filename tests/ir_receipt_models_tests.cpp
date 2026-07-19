@@ -86,6 +86,62 @@ void expectInvalidReceipt(const ir::IrSubmissionReceipt &receipt,
          "receipt diagnostic is bounded");
 }
 
+void testIrRecordStateMatrix() {
+  using ir::IrOutboxState;
+  using ir::IrRecordActivity;
+  using ir::IrRecordState;
+
+  const auto resolve = [](bool eligible, bool hasReceipt,
+                          std::optional<IrOutboxState> outboxState,
+                          IrRecordActivity activity = IrRecordActivity::None) {
+    return ir::resolveIrRecordState({
+        .eligible = eligible,
+        .hasReceipt = hasReceipt,
+        .outboxState = outboxState,
+        .activity = activity,
+    });
+  };
+
+  expect(resolve(false, false, std::nullopt) == IrRecordState::Hidden,
+         "ineligible result without IR evidence is hidden");
+  expect(resolve(true, false, std::nullopt) == IrRecordState::Eligible,
+         "eligible result without IR work is eligible");
+  expect(resolve(false, false, IrOutboxState::Pending) ==
+             IrRecordState::Queued,
+         "pending outbox row is queued regardless of eligibility");
+  expect(resolve(false, false, IrOutboxState::Uploading) ==
+             IrRecordState::Uploading,
+         "uploading outbox row is uploading");
+  expect(resolve(false, false, IrOutboxState::AwaitingRemoteResult) ==
+             IrRecordState::AwaitingRemote,
+         "awaiting outbox row is awaiting remote");
+  expect(resolve(false, false, IrOutboxState::BlockedConfiguration) ==
+             IrRecordState::Blocked,
+         "blocked outbox row remains distinct");
+  expect(resolve(false, false, IrOutboxState::FailedPermanent) ==
+             IrRecordState::Failed,
+         "failed outbox row remains distinct");
+  expect(resolve(false, false, IrOutboxState::Succeeded) ==
+             IrRecordState::Uploaded,
+         "succeeded outbox row is uploaded");
+
+  expect(resolve(false, false, IrOutboxState::FailedPermanent,
+                 IrRecordActivity::Submitting) == IrRecordState::Uploading,
+         "active submission takes precedence over a stale failed row");
+  expect(resolve(false, false, IrOutboxState::Pending,
+                 IrRecordActivity::Polling) == IrRecordState::AwaitingRemote,
+         "active polling takes precedence over a stale pending row");
+  expect(resolve(false, true, IrOutboxState::FailedPermanent,
+                 IrRecordActivity::Submitting) == IrRecordState::Uploaded,
+         "receipt takes precedence over active submission and stale failure");
+  expect(resolve(false, true, IrOutboxState::Pending,
+                 IrRecordActivity::Polling) == IrRecordState::Uploaded,
+         "receipt takes precedence over active polling and stale pending row");
+  expect(resolve(false, false, IrOutboxState::Succeeded,
+                 IrRecordActivity::Submitting) == IrRecordState::Uploaded,
+         "succeeded outbox row takes precedence over active submission");
+}
+
 void testValidReceiptModels() {
   std::string diagnostic;
   auto draft = validDraft();
@@ -196,6 +252,7 @@ void testInvalidStoredReceipts() {
 } // namespace
 
 int main() {
+  testIrRecordStateMatrix();
   testValidReceiptModels();
   testInvalidReceiptDrafts();
   testInvalidStoredReceipts();
