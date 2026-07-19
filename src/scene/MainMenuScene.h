@@ -267,6 +267,8 @@ private:
   TextView *parseLogButtonText = nullptr;
   Button *musicButton = nullptr;
   TextView *musicButtonText = nullptr;
+  Button *irUploadsButton = nullptr;
+  TextView *irUploadsButtonText = nullptr;
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;

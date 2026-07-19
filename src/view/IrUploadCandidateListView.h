@@ -45,6 +45,8 @@ public:
 
   void setCandidates(const std::vector<ir::IrUploadCandidate> &candidates,
                      const std::unordered_set<int> &selectedReplayIds);
+  void setSelectedReplayIds(
+      const std::unordered_set<int> &selectedReplayIds);
   void setSelectionLocked(bool locked);
 
   std::function<void(int replayId)> onSelectionToggle;

@@ -59,9 +59,13 @@ class Note;
 #include "../input/InputTypes.h"
 #include "SettingsSceneInputRebuild.h"
 
+enum class SettingsDestination { Profile, Ir };
+
 class SettingsScene : public Scene, public IRhythmControl {
 public:
-  explicit SettingsScene(ApplicationContext &context);
+  explicit SettingsScene(
+      ApplicationContext &context,
+      SettingsDestination destination = SettingsDestination::Profile);
   ~SettingsScene() override;
 
   void init() override;

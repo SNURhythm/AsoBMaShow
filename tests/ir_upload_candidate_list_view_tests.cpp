@@ -208,6 +208,13 @@ int main() {
     expect(row == firstRow &&
                image(row, "irUploadJacket")->imagePath() == fourthJacket,
            "recycled row receives its next jacket identity");
+    const float preservedScrollOffset = list.scrollOffset;
+    list.setSelectedReplayIds({fourth.replayId()});
+    row = list.getViewByIndex(0);
+    selection = button(row, "irUploadSelection");
+    expect(selection->isSelected() &&
+               list.scrollOffset == preservedScrollOffset,
+           "selection-only rebind preserves the current viewport");
     click(list, *selection);
     expect(toggles == 2 && toggledReplayId == fourth.replayId() &&
                rowSelections == 0,

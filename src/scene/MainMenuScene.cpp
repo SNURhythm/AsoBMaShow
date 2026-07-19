@@ -36,6 +36,7 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
+#include "IrUploadsScene.h"
 #include "MusicPlayerScene.h"
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
@@ -2471,6 +2472,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   parseLogButtonText = nullptr;
   musicButton = nullptr;
   musicButtonText = nullptr;
+  irUploadsButton = nullptr;
+  irUploadsButtonText = nullptr;
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
@@ -3030,6 +3033,23 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           ui_theme::controlHover, ui_theme::controlPressed,
                           ui_theme::hairlineStrong);
   libraryHeader->addView(musicButton);
+
+  irUploadsButton =
+      makeModalButton("IR Uploads", 20, &irUploadsButtonText);
+  irUploadsButton->setWidth(154);
+  irUploadsButton->setHeight(50);
+  irUploadsButton->setOnClickListener([this, &context]() {
+    if (context.sceneManager != nullptr) {
+      cancelPreviewLoading(true);
+      context.sceneManager->changeScene(
+          std::make_unique<IrUploadsScene>(context), true);
+    }
+  });
+  styleThemedActionButton(irUploadsButton, irUploadsButtonText, true,
+                          ui_theme::control, ui_theme::controlHover,
+                          ui_theme::controlPressed,
+                          ui_theme::hairlineStrong);
+  libraryHeader->addView(irUploadsButton);
 
   tasksButton = makeModalButton("0 Tasks", 20, &tasksButtonText);
   tasksButton->setWidth(142);
@@ -10536,6 +10556,8 @@ void MainMenuScene::cleanupScene() {
   parseLogButtonText = nullptr;
   musicButton = nullptr;
   musicButtonText = nullptr;
+  irUploadsButton = nullptr;
+  irUploadsButtonText = nullptr;
   tasksButton = nullptr;
   tasksButtonText = nullptr;
   replayButtonText = nullptr;

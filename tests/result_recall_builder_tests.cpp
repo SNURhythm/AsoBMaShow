@@ -156,6 +156,21 @@ void testParsedChartMetadataStillRejectsChangedChart() {
   assert(!outcome.value->historicalIr.has_value());
 }
 
+void testWellFormedWrongFingerprintSuppressesHistoricalIrSubmission() {
+  auto record = validRecord();
+  const std::string validFingerprint = *record.attemptFingerprint;
+  record.attemptFingerprint = std::string(64, 'f');
+  assert(record.attemptFingerprint->size() == 64);
+  assert(*record.attemptFingerprint != validFingerprint);
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(
+      std::move(record), cancelled, chartLoader());
+
+  assert(outcome.value.has_value());
+  assert(!outcome.value->historicalIr.has_value());
+}
+
 void testChartBuildRejectsMismatchedPersistedOutcome() {
   auto record = validRecord();
   auto changedMeta = record.replay.chartMeta;
@@ -175,7 +190,7 @@ void testChartBuildRejectsMismatchedPersistedOutcome() {
 }
 
 void testInvalidIntegrityMetadataSuppressesOnlyIr() {
-  for (int variant = 0; variant < 4; ++variant) {
+  for (int variant = 0; variant < 3; ++variant) {
     auto record = validRecord();
     if (variant == 0) {
       record.attemptId.reset();
@@ -184,9 +199,6 @@ void testInvalidIntegrityMetadataSuppressesOnlyIr() {
       record.attemptFingerprint.reset();
     }
     if (variant == 2) {
-      record.attemptFingerprint = std::string(64, 'f');
-    }
-    if (variant == 3) {
       record.playedAtUnixMillis = 0;
     }
     std::atomic_bool cancelled = false;
@@ -318,6 +330,7 @@ int main() {
   testMatchingAttemptEnablesHistoricalIr();
   testParsedChartMetadataRestoresHistoricalIr();
   testParsedChartMetadataStillRejectsChangedChart();
+  testWellFormedWrongFingerprintSuppressesHistoricalIrSubmission();
   testChartBuildRejectsMismatchedPersistedOutcome();
   testInvalidIntegrityMetadataSuppressesOnlyIr();
   testCourseBuildPreparesEveryStage();

@@ -530,6 +530,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(main_menu_settings_anchor_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME ir_uploads_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_ir_uploads_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(ir_uploads_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME main_menu_chart_list_lifecycle_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_main_menu_chart_list_lifecycle.py
@@ -1672,6 +1679,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE iconv)
     endif()
 
+    add_executable(ir_uploads_controller_tests
+        tests/ir_uploads_controller_tests.cpp
+        src/scene/IrUploadsController.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(ir_uploads_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_uploads_controller_tests PRIVATE cxx_std_23)
+
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
@@ -2628,6 +2648,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_summary_list_view_tests
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests
+        ir_uploads_controller_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()

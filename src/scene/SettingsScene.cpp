@@ -1,8 +1,10 @@
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
 #include "../input/InputCaptureController.h"
+#include "../input/RhythmInputHandler.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+#include "play/RhythmLaneInputController.h"
 
 #include <iomanip>
 #include <sstream>
@@ -59,6 +61,13 @@ formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
          " (" + std::to_string(result.entries) + " entries).";
 }
 } // namespace
+
+SettingsScene::SettingsScene(ApplicationContext &context,
+                             SettingsDestination destination)
+    : Scene(context),
+      activeTab(destination == SettingsDestination::Ir ? SettingsTab::Ir
+                                                       : SettingsTab::Profile),
+      lastLaidOutTab(activeTab) {}
 
 void SettingsScene::requestArchiveCacheCleanupStatus(const std::string &text,
                                                      const SDL_Color &color) {

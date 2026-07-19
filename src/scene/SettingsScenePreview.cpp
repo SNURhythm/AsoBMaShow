@@ -87,8 +87,6 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart() {
 }
 } // namespace
 
-SettingsScene::SettingsScene(ApplicationContext &context) : Scene(context) {}
-
 SettingsScene::~SettingsScene() {
   context.profileSwitchBlockers.scene = nullptr;
   stopProfileArchiveWork();

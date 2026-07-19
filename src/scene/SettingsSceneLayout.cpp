@@ -2502,7 +2502,7 @@ void SettingsScene::initView() {
         return;
       }
     }
-    context.sceneManager->changeScene("MainMenu");
+    context.sceneManager->changeScene("MainMenu", false);
   });
   header->addView(backButton);
   rootLayout->addView(header);

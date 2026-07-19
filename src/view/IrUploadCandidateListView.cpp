@@ -295,6 +295,12 @@ void IrUploadCandidateListView::setCandidates(
   setItems(candidates);
 }
 
+void IrUploadCandidateListView::setSelectedReplayIds(
+    const std::unordered_set<int> &selectedReplayIds) {
+  selectedReplayIds_ = selectedReplayIds;
+  rebindVisibleItems();
+}
+
 void IrUploadCandidateListView::setSelectionLocked(bool locked) {
   if (selectionLocked_ == locked) {
     return;

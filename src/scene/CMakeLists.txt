@@ -1,6 +1,8 @@
 target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
     ChartViewerScene.cpp
+    IrUploadsController.cpp
+    IrUploadsScene.cpp
     PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuScene.cpp
