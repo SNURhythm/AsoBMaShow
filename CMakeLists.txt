@@ -2036,6 +2036,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(result_gauge_history_tests PRIVATE cxx_std_23)
 
+    add_executable(result_presentation_model_tests
+        tests/result_presentation_model_tests.cpp
+        src/bms_parser.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/rendering/Color.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/scene/ResultGaugeHistory.cpp
+        src/scene/ResultPresentationModel.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(result_presentation_model_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_presentation_model_tests PRIVATE cxx_std_23)
+
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
