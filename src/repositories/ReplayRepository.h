@@ -199,6 +199,22 @@ struct ReplaySummary {
   ir::IrRecordState irRecordState = ir::IrRecordState::Hidden;
 };
 
+enum class IrUploadReplayReadStatus {
+  Loaded,
+  Invalid,
+  StorageFailure,
+  IntegrityConflict,
+};
+
+struct IrUploadReplayReadOutcome {
+  IrUploadReplayReadStatus status = IrUploadReplayReadStatus::StorageFailure;
+  std::vector<ReplaySummary> replays;
+  std::size_t omittedRows = 0;
+  std::string diagnostic;
+};
+
+inline constexpr std::size_t kMaximumIrUploadCandidateRows = 16384;
+
 struct ReplayResultRecord {
   ReplayData replay;
   std::optional<std::string> attemptId;
@@ -277,6 +293,9 @@ public:
   ir::IrReconciliationReadOutcome
   LoadIrReconciliationCandidates(std::string_view providerId,
                                  std::string_view serverOrigin);
+  IrUploadReplayReadOutcome
+  ListIrUploadCandidateReplays(std::string_view providerId,
+                               std::string_view serverOrigin);
   ir::IrRemoteSnapshotApplyOutcome
   ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
   ir::IrRemoteScoreReadOutcome

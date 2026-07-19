@@ -5637,6 +5637,167 @@ void testLoadIrReconciliationCandidatesKeepsUnknownOutboxKeyMode(
   assert(loaded.candidates.front().outboxRowId == outbox.entry->id);
 }
 
+std::vector<int> replayIds(const std::vector<ReplaySummary> &replays) {
+  std::vector<int> result;
+  result.reserve(replays.size());
+  for (const ReplaySummary &replay : replays) {
+    result.push_back(replay.id);
+  }
+  return result;
+}
+
+void testListIrUploadCandidateReplaysUsesBoundedScopedSnapshot(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-upload-candidate-replays" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  struct StoredAttempt {
+    result_persistence::ChartResultAttempt attempt;
+    int replayId = 0;
+  };
+  const auto stage = [&](std::string_view name, int suffix,
+                         std::optional<ir::IrOutboxState> outboxState) {
+    StoredAttempt stored{.attempt =
+                             sampleChartAttempt(root, std::string(name), suffix)};
+    const auto draft = automaticIrDraft(stored.attempt, "tachi", 1'000);
+    const auto staged = helper.StageChartResult(
+        stored.attempt,
+        outboxState.has_value() ? std::span<const ir::IrOutboxDraft>{&draft, 1}
+                                : std::span<const ir::IrOutboxDraft>{});
+    assert(staged.status == result_persistence::StageStatus::Staged &&
+           staged.receipt);
+    stored.replayId = staged.receipt->replayId;
+    assert(helper
+               .AcknowledgePendingChartScoreAndActivateIr(
+                   stored.attempt.attemptId, stored.replayId)
+               .status == result_persistence::AcknowledgeStatus::Acknowledged);
+    if (outboxState.has_value()) {
+      const auto outbox = helper.LoadIrOutbox("tachi", stored.attempt.attemptId);
+      assert(outbox.entry);
+      helper.Shutdown();
+      auto db = openDatabase(path);
+      execOrAbort(db.get(), "UPDATE ir_outbox SET state=" +
+                                std::to_string(static_cast<int>(*outboxState)) +
+                                " WHERE id=" + std::to_string(outbox.entry->id));
+    }
+    return stored;
+  };
+
+  const auto other = stage("ir-upload-other", 140,
+                           ir::IrOutboxState::FailedPermanent);
+  const auto older = stage("ir-upload-older", 141, std::nullopt);
+  const auto newest = stage("ir-upload-newest", 142, std::nullopt);
+  const auto queued = stage("ir-upload-queued", 143, ir::IrOutboxState::Pending);
+  const auto active =
+      stage("ir-upload-active", 144, ir::IrOutboxState::Uploading);
+  const auto awaiting = stage("ir-upload-awaiting", 145,
+                              ir::IrOutboxState::AwaitingRemoteResult);
+  const auto blocked = stage("ir-upload-blocked", 146,
+                             ir::IrOutboxState::BlockedConfiguration);
+  const auto succeeded =
+      stage("ir-upload-succeeded", 147, ir::IrOutboxState::Succeeded);
+  const auto received = stage("ir-upload-received", 148, std::nullopt);
+  const auto courseStage = stage("ir-upload-course-stage", 149, std::nullopt);
+  const auto malformed = stage("ir-upload-malformed", 150, std::nullopt);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  const auto insertReceipt = [&](const StoredAttempt &stored,
+                                 std::string_view origin) {
+    execOrAbort(
+        db.get(),
+        "INSERT INTO ir_submission_receipts("
+        "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+        "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
+        "observed_in_snapshot,confirmed_at_ms) VALUES ('tachi','" +
+            std::string(origin) + "'," + std::to_string(stored.replayId) +
+            ",'" + stored.attempt.attemptId + "','" +
+            stored.attempt.replay.chartMeta.MD5 + "','" +
+            stored.attempt.replay.chartMeta.SHA256 +
+            "',42,'chart','score',0,0,2000)");
+  };
+  insertReceipt(other, "https://other.example");
+  insertReceipt(received, "https://boku.tachi.ac");
+  execOrAbort(db.get(),
+              "INSERT INTO course_replays(course_id,gauge_type,gauge_auto_shift,"
+              "final_score,final_gauge,clear_type,completed_charts,total_charts) "
+              "VALUES (1,0,0,0,0,0,1,1)");
+  execOrAbort(db.get(),
+              "INSERT INTO course_replay_stages(course_replay_id,stage_index,"
+              "replay_id,rest_micros_after_stage) VALUES (1,0," +
+                  std::to_string(courseStage.replayId) + ",0)");
+  execOrAbort(db.get(), "UPDATE replays SET provenance_json='{' WHERE id=" +
+                            std::to_string(malformed.replayId));
+  db.reset();
+
+  const auto loaded = helper.ListIrUploadCandidateReplays(
+      "tachi", "https://boku.tachi.ac");
+  assert(loaded.status == IrUploadReplayReadStatus::Loaded);
+  assert((replayIds(loaded.replays) ==
+          std::vector<int>{newest.replayId, older.replayId, other.replayId}));
+  assert(loaded.replays.front().chartMeta &&
+         loaded.replays.front().chartMeta->BmsPath ==
+             newest.attempt.replay.chartMeta.BmsPath);
+  assert(loaded.replays.back().requestedIrOutboxState ==
+         ir::IrOutboxState::FailedPermanent);
+  assert(loaded.omittedRows == 1 && !loaded.diagnostic.empty());
+
+  const auto invalid = helper.ListIrUploadCandidateReplays(
+      "tachi", "HTTPS://BOKU.TACHI.AC:443/");
+  assert(invalid.status == IrUploadReplayReadStatus::Invalid &&
+         invalid.replays.empty());
+
+  helper.Shutdown();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_submission_receipts");
+  db.reset();
+  const auto unavailable = helper.ListIrUploadCandidateReplays(
+      "tachi", "https://boku.tachi.ac");
+  assert(unavailable.status == IrUploadReplayReadStatus::StorageFailure &&
+         unavailable.replays.empty());
+}
+
+void testListIrUploadCandidateReplaysRejectsOversizedSnapshot(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-upload-candidate-bound" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  const auto source =
+      sampleChartAttempt(root, "ir-upload-bound-source", 151);
+  const auto staged = helper.StageChartResult(source, {});
+  assert(staged.status == result_persistence::StageStatus::Staged &&
+         staged.receipt);
+  assert(helper
+             .AcknowledgePendingChartScoreAndActivateIr(
+                 source.attemptId, staged.receipt->replayId)
+             .status == result_persistence::AcknowledgeStatus::Acknowledged);
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(
+      db.get(),
+      "WITH RECURSIVE seq(value) AS (SELECT 1 UNION ALL SELECT value+1 "
+      "FROM seq WHERE value<" +
+          std::to_string(kMaximumIrUploadCandidateRows) +
+          ") INSERT INTO replays("
+          "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+          "gauge_type,gauge_auto_shift,final_score,max_combo,final_gauge,"
+          "clear_type,assist_option,ruleset_version,eligibility,provenance_json,"
+          "attempt_id,attempt_fingerprint) SELECT "
+          "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+          "gauge_type,gauge_auto_shift,final_score,max_combo,final_gauge,"
+          "clear_type,assist_option,ruleset_version,eligibility,provenance_json,"
+          "printf('20000000-0000-4000-8000-%012x',value),attempt_fingerprint "
+          "FROM replays,seq WHERE id=" +
+          std::to_string(staged.receipt->replayId));
+  db.reset();
+
+  const auto oversized = helper.ListIrUploadCandidateReplays(
+      "tachi", "https://boku.tachi.ac");
+  assert(oversized.status == IrUploadReplayReadStatus::Invalid &&
+         oversized.replays.empty());
+}
+
 void assertClaimedWithoutReceipt(ReplayRepository &helper,
                                  const ClaimedCanonicalIrAttempt &fixture) {
   const auto outbox = helper.LoadIrOutbox("tachi", fixture.attemptId);
@@ -7384,6 +7545,8 @@ int main() {
   testLoadIrReconciliationCandidatesStorageFailureReturnsNoPartialRows(root);
   testLoadIrReconciliationCandidatesUsesOneReadSnapshot(root);
   testLoadIrReconciliationCandidatesKeepsUnknownOutboxKeyMode(root);
+  testListIrUploadCandidateReplaysUsesBoundedScopedSnapshot(root);
+  testListIrUploadCandidateReplaysRejectsOversizedSnapshot(root);
   testClearIrSubmissionReceiptsIsOriginScoped(root);
   testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
   testApplyIrRemoteSnapshotReplacesOneOriginAtomically(root);

@@ -48,6 +48,9 @@ ListReplaysOnConnection(sqlite3 *database,
                         const bms_parser::ChartMeta &chartMeta, int limit,
                         std::string_view irProviderId = {},
                         std::string_view irServerOrigin = {});
+IrUploadReplayReadOutcome ListIrUploadCandidateReplaysOnConnection(
+    sqlite3 *database, std::string_view providerId,
+    std::string_view serverOrigin);
 std::vector<ReplaySummary>
 ListCourseReplaysOnConnection(sqlite3 *database,
                               const CourseReplayLookup &lookup, int limit);

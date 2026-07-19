@@ -66,6 +66,16 @@ bool isLowerHexDigest(std::string_view value, std::size_t expectedLength) {
          });
 }
 
+bool isValidIrProviderId(std::string_view value) {
+  return !value.empty() && value.size() <= ir::kMaximumIrProviderIdBytes &&
+         value.front() >= 'a' && value.front() <= 'z' &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= 'a' && character <= 'z') ||
+                  (character >= '0' && character <= '9') ||
+                  character == '_' || character == '-';
+         });
+}
+
 std::optional<course_identity::ChartIdentity>
 strictChartIdentity(std::string sha256, std::string md5) {
   const bool hadSha256 = !sha256.empty();
@@ -2359,6 +2369,190 @@ ReplayRepository::LoadIrReconciliationCandidates(
   }
   return {.status = ir::IrReconciliationReadOutcome::Status::Loaded,
           .candidates = std::move(candidates),
+          .diagnostic = std::move(diagnostic)};
+}
+
+IrUploadReplayReadOutcome ReplayRepository::ListIrUploadCandidateReplays(
+    std::string_view providerId, std::string_view serverOrigin) {
+  const auto normalizedOrigin = ir::normalizeServerOrigin(serverOrigin);
+  if (!isValidIrProviderId(providerId) || !normalizedOrigin ||
+      *normalizedOrigin != serverOrigin) {
+    return {.status = IrUploadReplayReadStatus::Invalid,
+            .diagnostic = "IR upload replay identity is invalid"};
+  }
+
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = IrUploadReplayReadStatus::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  return replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
+      impl_->sessionDatabase, providerId, serverOrigin);
+}
+
+IrUploadReplayReadOutcome
+replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
+    sqlite3 *database, std::string_view providerId,
+    std::string_view serverOrigin) {
+  std::string snapshotError;
+  SqliteTransactionHandle snapshot(database, "BEGIN TRANSACTION",
+                                   snapshotError);
+  if (!snapshot.active()) {
+    return {.status = IrUploadReplayReadStatus::StorageFailure,
+            .diagnostic =
+                "could not start the IR upload replay read snapshot"};
+  }
+
+  constexpr const char *query =
+      "SELECT replay.id,replay.chart_path,replay.chart_md5,"
+      "replay.chart_sha256,replay.chart_title,replay.chart_artist,"
+      "replay.gauge_type,replay.gauge_auto_shift,replay.final_score,"
+      "replay.final_gauge,replay.clear_type,replay.created_at,"
+      "replay.play_option,replay.play_option_seed,replay.play_option2,"
+      "replay.play_option2_seed,replay.assist_option,replay.max_combo,"
+      "(SELECT COUNT(*) FROM replay_events event "
+      "WHERE event.replay_id=replay.id),"
+      "(SELECT COUNT(*) FROM replay_touch_samples touch "
+      "WHERE touch.replay_id=replay.id),replay.ruleset_version,"
+      "replay.eligibility,replay.provenance_json,replay.attempt_id,"
+      "replay.attempt_fingerprint,outbox.state "
+      "FROM replays replay "
+      "LEFT JOIN ir_outbox outbox ON outbox.provider_id = ? "
+      "AND outbox.attempt_id = replay.attempt_id "
+      "WHERE NOT EXISTS ("
+      "  SELECT 1 FROM course_replay_stages stage WHERE stage.replay_id = replay.id"
+      ") "
+      "AND replay.attempt_id IS NOT NULL "
+      "AND replay.attempt_fingerprint IS NOT NULL "
+      "AND NOT EXISTS ("
+      "  SELECT 1 FROM ir_submission_receipts receipt "
+      "  WHERE receipt.provider_id = ? AND receipt.server_origin = ? "
+      "    AND receipt.replay_id = replay.id"
+      ") "
+      "AND (outbox.id IS NULL OR outbox.state = 4) "
+      "ORDER BY replay.id DESC "
+      "LIMIT 16385";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+      !bindTextView(statement.get(), 1, providerId) ||
+      !bindTextView(statement.get(), 2, providerId) ||
+      !bindTextView(statement.get(), 3, serverOrigin)) {
+    return {.status = IrUploadReplayReadStatus::StorageFailure,
+            .diagnostic = "could not prepare the IR upload replay read"};
+  }
+
+  const auto nullableText = [&](int column) {
+    const int type = sqlite3_column_type(statement.get(), column);
+    return type == SQLITE_NULL || type == SQLITE_TEXT;
+  };
+  const auto nullableInteger = [&](int column) {
+    const int type = sqlite3_column_type(statement.get(), column);
+    return type == SQLITE_NULL || type == SQLITE_INTEGER;
+  };
+
+  std::vector<ReplaySummary> replays;
+  replays.reserve(kMaximumIrUploadCandidateRows);
+  std::unordered_set<int> replayIds;
+  std::size_t omittedRows = 0;
+  std::size_t inspectedRows = 0;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    ++inspectedRows;
+    if (inspectedRows > kMaximumIrUploadCandidateRows) {
+      return {.status = IrUploadReplayReadStatus::Invalid,
+              .diagnostic = "IR upload replay candidate collection is oversized"};
+    }
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        !nullableText(1) || !nullableText(2) || !nullableText(3) ||
+        !nullableText(4) || !nullableText(5) ||
+        sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 8) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 9) != SQLITE_FLOAT ||
+        sqlite3_column_type(statement.get(), 10) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 11) != SQLITE_TEXT ||
+        !nullableText(12) || !nullableInteger(13) || !nullableText(14) ||
+        !nullableInteger(15) || !nullableText(16) ||
+        sqlite3_column_type(statement.get(), 17) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 18) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 19) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 20) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 21) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 22) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 23) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 24) != SQLITE_TEXT ||
+        !nullableInteger(25)) {
+      ++omittedRows;
+      continue;
+    }
+
+    const sqlite3_int64 storedId = sqlite3_column_int64(statement.get(), 0);
+    if (storedId <= 0 || storedId > std::numeric_limits<int>::max()) {
+      ++omittedRows;
+      continue;
+    }
+    const int replayId = static_cast<int>(storedId);
+    if (!replayIds.emplace(replayId).second) {
+      return {.status = IrUploadReplayReadStatus::IntegrityConflict,
+              .diagnostic = "IR upload replay candidate joins are not unique"};
+    }
+
+    const std::string attemptId = readText(statement.get(), 23);
+    const std::string attemptFingerprint = readText(statement.get(), 24);
+    std::string provenanceError;
+    auto provenance = decodeStoredProvenance(statement.get(), 20, 21, 22,
+                                             provenanceError);
+    if (!uuid::isCanonicalLowerV4(attemptId) ||
+        !isCanonicalLowerHex(attemptFingerprint, 64) || !provenance) {
+      ++omittedRows;
+      continue;
+    }
+
+    ReplaySummary summary = readReplaySummary(statement.get(), 17, 18, 19,
+                                              20, 21);
+    summary.chartMeta = bms_parser::ChartMeta{
+        .BmsPath = readText(statement.get(), 1),
+        .MD5 = readText(statement.get(), 2),
+        .SHA256 = readText(statement.get(), 3),
+        .Title = readText(statement.get(), 4),
+        .Artist = readText(statement.get(), 5),
+    };
+    summary.playback = provenance->playback;
+    summary.provenance =
+        std::make_shared<const ScoreProvenance>(std::move(*provenance));
+    summary.attemptId = attemptId;
+    summary.hasCanonicalAttemptFingerprint = true;
+    if (sqlite3_column_type(statement.get(), 25) == SQLITE_INTEGER) {
+      const int outboxState = sqlite3_column_int(statement.get(), 25);
+      if (!ir::isKnownIrOutboxState(outboxState)) {
+        ++omittedRows;
+        continue;
+      }
+      summary.requestedIrOutboxState =
+          static_cast<ir::IrOutboxState>(outboxState);
+    }
+    replays.push_back(std::move(summary));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = IrUploadReplayReadStatus::StorageFailure,
+            .diagnostic = "IR upload replay candidate read failed"};
+  }
+  if (!snapshot.commit(snapshotError)) {
+    return {.status = IrUploadReplayReadStatus::StorageFailure,
+            .diagnostic =
+                "could not complete the IR upload replay read snapshot"};
+  }
+
+  std::string diagnostic;
+  if (omittedRows != 0) {
+    diagnostic = ir::sanitizeDiagnostic(
+        "IR upload replay candidates: omitted=" +
+        std::to_string(omittedRows));
+  }
+  return {.status = IrUploadReplayReadStatus::Loaded,
+          .replays = std::move(replays),
+          .omittedRows = omittedRows,
           .diagnostic = std::move(diagnostic)};
 }
 
