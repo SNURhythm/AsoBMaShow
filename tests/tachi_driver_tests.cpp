@@ -1,5 +1,6 @@
 #include "ir/tachi/TachiDriver.h"
 #include "ir/tachi/TachiResponseParser.h"
+#include "ir/tachi/TachiUserScoreParser.h"
 
 #include "ir/tachi/BokutachiCacheStore.h"
 
@@ -16,6 +17,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -168,7 +170,8 @@ void testCapabilitiesAndDraftDelegation() {
              ir::IrDriverCapabilities{.readOnly = false,
                                       .chartRankings = true,
                                       .scoreSubmission = true,
-                                      .deferredSubmission = true},
+                                      .deferredSubmission = true,
+                                      .scoreReconciliation = true},
          "driver declares Bokutachi capabilities");
 
   ir::IrSubmission unsupported;
@@ -656,6 +659,324 @@ std::string rankingPageBody(const nlohmann::json &pbs,
       .dump();
 }
 
+std::string userScoreResponse(
+    std::string game, std::string scoreId, std::string chartId,
+    std::int64_t userId,
+    std::string sha256 =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef") {
+  const std::string songId = "song-" + game;
+  const nlohmann::json song{{"id", songId},
+                            {"title", "Snapshot Song"},
+                            {"artist", "Snapshot Artist"}};
+  const nlohmann::json chart{{"game", game},
+                             {"chartID", chartId},
+                             {"level", "12"},
+                             {"levelNum", 12.0},
+                             {"isPrimary", true},
+                             {"difficulty", "ANOTHER"},
+                             {"data",
+                              {{"notecount", 10},
+                               {"hashMD5", "0123456789abcdef0123456789abcdef"},
+                               {"hashSHA256", std::move(sha256)}}},
+                             {"song", song}};
+  const nlohmann::json score{{"service", "AsoBMaShow"},
+                             {"game", game},
+                             {"userID", userId},
+                             {"scoreData",
+                              {{"score", 10},
+                               {"lamp", "CLEAR"},
+                               {"judgements", nlohmann::json::object()},
+                               {"optional", nlohmann::json::object()}}},
+                             {"scoreMeta", nlohmann::json::object()},
+                             {"timeAchieved", nullptr},
+                             {"songID", songId},
+                             {"chartID", chartId},
+                             {"isPrimary", true},
+                             {"timeAdded", 1784341271999LL},
+                             {"scoreID", std::move(scoreId)}};
+  return nlohmann::json{{"success", true},
+                        {"description", "Returned scores."},
+                        {"body",
+                         {{"charts", nlohmann::json::array({chart})},
+                          {"scores", nlohmann::json::array({score})},
+                          {"songs", nlohmann::json::array({song})}}}}
+      .dump();
+}
+
+std::string emptyUserScoreResponse() {
+  return nlohmann::json{{"success", true},
+                        {"description", "Returned scores."},
+                        {"body",
+                         {{"charts", nlohmann::json::array()},
+                          {"scores", nlohmann::json::array()},
+                          {"songs", nlohmann::json::array()}}}}
+      .dump();
+}
+
+std::string unplayedResponse(std::string_view game) {
+  return nlohmann::json{
+      {"success", false},
+      {"description", "Snapshot User has not played " + std::string(game)}}
+      .dump();
+}
+
+void testUserScoreSnapshotRequestContractAndMerge() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-7k", "score-7", "chart-7", 42)});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-14k", "score-14", "chart-14", 42,
+                                 std::string(64, 'a'))});
+  std::vector<std::tuple<std::string, int, int>> progress;
+
+  const auto result = driver.fetchUserScoreSnapshot(
+      runtimeConfig(), http, {},
+      [&](std::string_view game, int completed, int total) {
+        progress.emplace_back(game, completed, total);
+      });
+
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Succeeded &&
+             result.snapshot && result.snapshot->scores.size() == 2,
+         "7K and 14K user scores merge into one complete snapshot");
+  expect(result.snapshot && result.snapshot->scores[0].game == "bms-7k" &&
+             result.snapshot->scores[1].game == "bms-14k",
+         "user score merge preserves request order");
+  expect(http.requests.size() == 2,
+         "user score snapshot performs exactly two requests");
+  if (http.requests.size() == 2) {
+    for (std::size_t index = 0; index < http.requests.size(); ++index) {
+      const auto &request = http.requests[index];
+      const std::string game = index == 0 ? "bms-7k" : "bms-14k";
+      expect(request.method == ir::IrHttpMethod::Get,
+             "user score request uses GET");
+      expect(request.url == "https://boku.tachi.ac/api/v1/users/me/games/" +
+                                game + "/scores/all",
+             "user score request uses the exact authenticated scores path");
+      expect(request.headers ==
+                 std::vector<std::pair<std::string, std::string>>{
+                     {"Authorization", "Bearer fresh-api-key"}},
+             "user score request sends only bearer authorization");
+      expect(request.body.empty(), "user score GET has no body");
+      expect(!request.followRedirects,
+             "user score request does not follow redirects");
+      expect(request.maximumResponseBytes ==
+                 ir::tachi::kMaximumTachiUserScoreResponseBytes,
+             "user score response uses the named 64 MiB limit");
+    }
+  }
+  expect(progress ==
+             std::vector<std::tuple<std::string, int, int>>{{"bms-7k", 0, 2},
+                                                            {"bms-7k", 1, 2},
+                                                            {"bms-14k", 1, 2},
+                                                            {"bms-14k", 2, 2}},
+         "user score progress reports bounded game labels before and after "
+         "each request");
+}
+
+void testUserScoreSnapshotRejectsCrossGameIdentityAndScoreIdConflicts() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-7k", "score-7", "chart-7", 42)});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-14k", "score-14", "chart-14", 43)});
+  auto result = driver.fetchUserScoreSnapshot(runtimeConfig(), http, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::MalformedResponse &&
+             !result.snapshot && http.requests.size() == 2,
+         "cross-game user identity disagreement rejects the full snapshot");
+
+  http.requests.clear();
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-7k", "duplicate", "chart-7", 42)});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-14k", "duplicate", "chart-14", 42)});
+  result = driver.fetchUserScoreSnapshot(runtimeConfig(), http, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::MalformedResponse &&
+             !result.snapshot && http.requests.size() == 2,
+         "duplicate score identities across games reject the full snapshot");
+}
+
+void testUserScoreSnapshotExpectedUnplayedResponsesMerge() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 404, .body = unplayedResponse("bms-7k")});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-14k", "score-14", "chart-14", 42)});
+  auto result = driver.fetchUserScoreSnapshot(runtimeConfig(), http, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Succeeded &&
+             result.snapshot && result.snapshot->scores.size() == 1 &&
+             result.snapshot->scores.front().game == "bms-14k" &&
+             http.requests.size() == 2,
+         "an expected 7K unplayed response merges with 14K scores");
+
+  http.requests.clear();
+  http.responses.push_back(
+      {.statusCode = 404, .body = unplayedResponse("bms-7k")});
+  http.responses.push_back(
+      {.statusCode = 404, .body = unplayedResponse("bms-14k")});
+  result = driver.fetchUserScoreSnapshot(runtimeConfig(), http, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Succeeded &&
+             result.snapshot && result.snapshot->scores.empty() &&
+             http.requests.size() == 2,
+         "expected unplayed responses for both games succeed empty");
+}
+
+void testFirstUserScoreFailureStillPerformsSecondRequest() {
+  const ir::tachi::TachiDriver driver;
+  const std::vector<ir::IrHttpResponse> firstFailures{
+      {.statusCode = 401, .body = R"({"success":false})"},
+      {.statusCode = 200, .body = "not-json"},
+      {.transportError = ir::IrTransportError::ResponseTooLarge},
+      {.transportError = ir::IrTransportError::Timeout,
+       .diagnostic = "timeout for fresh-api-key"},
+      {.statusCode = 500, .body = R"({"success":false})"},
+  };
+  for (const auto &firstFailure : firstFailures) {
+    FakeHttpClient http;
+    http.responses.push_back(firstFailure);
+    http.responses.push_back(
+        {.statusCode = 200,
+         .body = userScoreResponse("bms-14k", "score-14", "chart-14", 42)});
+    const auto result =
+        driver.fetchUserScoreSnapshot(runtimeConfig(), http, {}, {});
+    expect(result.status != ir::IrUserScoreSnapshotStatus::Succeeded &&
+               result.status != ir::IrUserScoreSnapshotStatus::Cancelled &&
+               !result.snapshot && http.requests.size() == 2,
+           "every non-cancellation first failure still performs 14K exactly "
+           "once and returns no partial snapshot");
+    expect(result.diagnostic.find("fresh-api-key") == std::string::npos,
+           "user score failure diagnostic redacts the bearer credential");
+  }
+
+  FakeHttpClient secondFailureHttp;
+  secondFailureHttp.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-7k", "score-7", "chart-7", 42)});
+  secondFailureHttp.responses.push_back(
+      {.statusCode = 500, .body = R"({"success":false})"});
+  const auto secondFailure =
+      driver.fetchUserScoreSnapshot(runtimeConfig(), secondFailureHttp, {}, {});
+  expect(secondFailure.status ==
+                 ir::IrUserScoreSnapshotStatus::TransientFailure &&
+             !secondFailure.snapshot && secondFailureHttp.requests.size() == 2,
+         "a 14K failure discards a successful 7K partial snapshot");
+}
+
+void testUserScoreSnapshotPreflightNeverSends() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  auto config = runtimeConfig();
+  config.apiKey = "invalid credential";
+  auto result = driver.fetchUserScoreSnapshot(config, http, {}, {});
+  expect(result.status ==
+                 ir::IrUserScoreSnapshotStatus::AuthenticationRequired &&
+             http.requests.empty(),
+         "invalid reconciliation credential fails before HTTP");
+
+  config = runtimeConfig();
+  config.serverOrigin = "https://example.test/path";
+  result = driver.fetchUserScoreSnapshot(config, http, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::MalformedResponse &&
+             http.requests.empty(),
+         "invalid reconciliation origin fails before HTTP");
+
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  result = driver.fetchUserScoreSnapshot(runtimeConfig(), http,
+                                         cancelled.get_token(), {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Cancelled &&
+             http.requests.empty(),
+         "pre-cancelled reconciliation performs no request");
+}
+
+void testUserScoreCancellationStopsBeforeSecondRequestAndCacheWrite() {
+  CacheTempDirectory temp;
+  auto cache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  std::string diagnostic;
+  expect(cache->activate(temp.cachePath(), diagnostic),
+         "cancelled snapshot cache fixture activates");
+  const ir::tachi::TachiDriver driver(cache);
+  FakeHttpClient http;
+  std::stop_source cancellation;
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-7k", "score-7", "chart-7", 42)});
+  http.afterResponse = [&](std::size_t requestCount) {
+    if (requestCount == 1) {
+      cancellation.request_stop();
+    }
+  };
+
+  const auto result = driver.fetchUserScoreSnapshot(
+      runtimeConfig(), http, cancellation.get_token(), {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Cancelled &&
+             !result.snapshot && http.requests.size() == 1,
+         "cancellation during 7K stops before the 14K request");
+  expect(!cache->userId("https://boku.tachi.ac") &&
+             !cache->chartId("https://boku.tachi.ac", "bms-7k",
+                             "0123456789abcdef0123456789abcdef0123456789abcdef0"
+                             "123456789abcdef"),
+         "cancelled snapshot cannot persist user or chart mappings");
+}
+
+void testSuccessfulUserScoreSnapshotPersistsBatchCacheBestEffort() {
+  CacheTempDirectory temp;
+  auto cache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  std::string diagnostic;
+  expect(cache->activate(temp.cachePath(), diagnostic),
+         "successful snapshot cache fixture activates");
+  const ir::tachi::TachiDriver driver(cache);
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-7k", "score-7", "chart-7", 42)});
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-14k", "score-14", "chart-14", 42,
+                                 std::string(64, 'a'))});
+  auto result = driver.fetchUserScoreSnapshot(runtimeConfig(), http, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Succeeded,
+         "successful snapshot remains successful with a real cache");
+
+  ir::tachi::BokutachiCacheStore reloaded;
+  expect(reloaded.activate(temp.cachePath(), diagnostic),
+         "snapshot batch cache reloads from disk");
+  expect(reloaded.userId("https://boku.tachi.ac") == 42,
+         "snapshot batch cache remembers the consistent user identity");
+  expect(
+      reloaded.chartId(
+          "https://boku.tachi.ac", "bms-7k",
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef") ==
+              "chart-7" &&
+          reloaded.chartId("https://boku.tachi.ac", "bms-14k",
+                           std::string(64, 'a')) == "chart-14",
+      "snapshot batch cache remembers bounded game/hash chart mappings");
+
+  auto unavailableCache = std::make_shared<ir::tachi::BokutachiCacheStore>();
+  const ir::tachi::TachiDriver unavailableDriver(unavailableCache);
+  FakeHttpClient unavailableHttp;
+  unavailableHttp.responses.push_back(
+      {.statusCode = 200, .body = emptyUserScoreResponse()});
+  unavailableHttp.responses.push_back(
+      {.statusCode = 200,
+       .body = userScoreResponse("bms-14k", "score-14", "chart-14", 42)});
+  result = unavailableDriver.fetchUserScoreSnapshot(runtimeConfig(),
+                                                    unavailableHttp, {}, {});
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Succeeded &&
+             result.snapshot && result.snapshot->scores.size() == 1,
+         "an unavailable optional cache cannot invalidate a complete "
+         "snapshot");
+}
+
 void testRankingRequestAndStatusClassification() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -1100,6 +1421,13 @@ int main() {
   testCancelledIdentityResponseIsNotCached();
   testAnonymousRankingAndPagination();
   testRankingPreflightNeverLeaksCredentials();
+  testUserScoreSnapshotRequestContractAndMerge();
+  testUserScoreSnapshotRejectsCrossGameIdentityAndScoreIdConflicts();
+  testUserScoreSnapshotExpectedUnplayedResponsesMerge();
+  testFirstUserScoreFailureStillPerformsSecondRequest();
+  testUserScoreSnapshotPreflightNeverSends();
+  testUserScoreCancellationStopsBeforeSecondRequestAndCacheWrite();
+  testSuccessfulUserScoreSnapshotPersistsBatchCacheBestEffort();
 
   if (failures != 0) {
     std::cerr << failures << " Tachi driver test(s) failed\n";

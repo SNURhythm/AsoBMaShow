@@ -23,6 +23,13 @@ ChartRankingOutcome unsupportedRanking(std::string_view diagnostic) {
           .diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
+IrUserScoreSnapshotOutcome
+unsupportedReconciliation(std::string_view diagnostic) {
+  return {.status = IrUserScoreSnapshotStatus::Unsupported,
+          .code = "unsupported_operation",
+          .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
 bool validProviderId(std::string_view value) {
   return !value.empty() && value.size() <= 64 &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -63,8 +70,17 @@ ChartRankingOutcome IrDriver::fetchChartRankingPage(
   return unsupportedRanking("driver does not support paged chart rankings");
 }
 
+IrUserScoreSnapshotOutcome
+IrDriver::fetchUserScoreSnapshot(const IrProviderRuntimeConfig &,
+                                 IrHttpClient &, std::stop_token,
+                                 IrUserScoreProgress) const {
+  return unsupportedReconciliation(
+      "driver does not support score reconciliation");
+}
+
 bool validateCapabilities(IrDriverCapabilities capabilities) noexcept {
-  return (capabilities.chartRankings || capabilities.scoreSubmission) &&
+  return (capabilities.chartRankings || capabilities.scoreSubmission ||
+          capabilities.scoreReconciliation) &&
          (!capabilities.readOnly || (!capabilities.scoreSubmission &&
                                      !capabilities.deferredSubmission)) &&
          (!capabilities.deferredSubmission || capabilities.scoreSubmission);
@@ -189,6 +205,25 @@ ChartRankingOutcome IrDriverRegistry::fetchChartRankingPage(
   } catch (...) {
     return {.status = ChartRankingStatus::TransientFailure,
             .diagnostic = "IR ranking page driver failed"};
+  }
+}
+
+IrUserScoreSnapshotOutcome IrDriverRegistry::fetchUserScoreSnapshot(
+    std::string_view providerId, const IrProviderRuntimeConfig &config,
+    IrHttpClient &http, std::stop_token stopToken,
+    IrUserScoreProgress progress) const {
+  const auto driver = find(providerId);
+  if (!driver || !driver->capabilities().scoreReconciliation) {
+    return unsupportedReconciliation(
+        "IR provider cannot reconcile user scores");
+  }
+  try {
+    return driver->fetchUserScoreSnapshot(config, http, stopToken,
+                                          std::move(progress));
+  } catch (...) {
+    return {.status = IrUserScoreSnapshotStatus::TransientFailure,
+            .code = "driver_exception",
+            .diagnostic = "IR reconciliation driver failed"};
   }
 }
 

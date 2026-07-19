@@ -4,10 +4,12 @@
 #include "IrOutboxModels.h"
 #include "IrProfileSettings.h"
 #include "IrRankingModels.h"
+#include "IrRemoteScoreModels.h"
 #include "IrSubmission.h"
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -24,6 +26,7 @@ struct IrDriverCapabilities {
   bool chartRankings = false;
   bool scoreSubmission = false;
   bool deferredSubmission = false;
+  bool scoreReconciliation = false;
 
   bool operator==(const IrDriverCapabilities &) const = default;
 };
@@ -93,6 +96,9 @@ struct IrProviderRuntimeConfig {
   std::string apiKey;
 };
 
+using IrUserScoreProgress =
+    std::function<void(std::string_view game, int completed, int total)>;
+
 class IrDriver {
 public:
   virtual ~IrDriver() = default;
@@ -112,6 +118,9 @@ public:
   virtual ChartRankingOutcome fetchChartRankingPage(
       const IrChartQuery &, std::string_view pageToken,
       const IrProviderRuntimeConfig &, IrHttpClient &, std::stop_token) const;
+  virtual IrUserScoreSnapshotOutcome
+  fetchUserScoreSnapshot(const IrProviderRuntimeConfig &, IrHttpClient &,
+                         std::stop_token, IrUserScoreProgress) const;
 };
 
 [[nodiscard]] bool
@@ -143,6 +152,11 @@ public:
       std::string_view providerId, const IrChartQuery &query,
       std::string_view pageToken, const IrProviderRuntimeConfig &config,
       IrHttpClient &http, std::stop_token stopToken) const;
+  [[nodiscard]] IrUserScoreSnapshotOutcome
+  fetchUserScoreSnapshot(std::string_view providerId,
+                         const IrProviderRuntimeConfig &config,
+                         IrHttpClient &http, std::stop_token stopToken,
+                         IrUserScoreProgress progress) const;
   [[nodiscard]] std::vector<IrOutboxDraft> buildAutomaticDrafts(
       const std::map<std::string, IrProviderSettings> &settings,
       const IrSubmission &submission) const;

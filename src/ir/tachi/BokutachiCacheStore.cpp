@@ -10,6 +10,7 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -333,6 +334,127 @@ bool BokutachiCacheStore::rememberChartId(std::string_view serverOrigin,
     return false;
   } catch (...) {
     diagnostic = "Bokutachi cache update failed";
+    return false;
+  }
+}
+
+bool BokutachiCacheStore::rememberSnapshot(
+    std::string_view serverOrigin, std::optional<std::int64_t> userId,
+    const std::vector<BokutachiChartMapping> &chartMappings,
+    std::string &diagnostic) noexcept {
+  try {
+    std::scoped_lock lock(mutex_);
+    diagnostic.clear();
+    if (!validNormalizedOrigin(serverOrigin) || (userId && *userId <= 0) ||
+        chartMappings.size() > kMaximumBatchMappings) {
+      diagnostic = "Bokutachi cache snapshot is invalid or oversized";
+      return false;
+    }
+
+    std::vector<BokutachiChartMapping> uniqueMappings;
+    uniqueMappings.reserve(chartMappings.size());
+    std::unordered_map<std::string, std::size_t> mappingIndexes;
+    mappingIndexes.reserve(chartMappings.size());
+    for (const auto &mapping : chartMappings) {
+      if (!validGame(mapping.game) || !validSha256(mapping.chartSha256) ||
+          !validChartId(mapping.chartId)) {
+        diagnostic = "Bokutachi cache snapshot chart mapping is invalid";
+        return false;
+      }
+      const std::string key = mapping.game + "\n" + mapping.chartSha256;
+      const auto [existing, inserted] =
+          mappingIndexes.emplace(key, uniqueMappings.size());
+      if (!inserted) {
+        if (uniqueMappings[existing->second].chartId != mapping.chartId) {
+          diagnostic =
+              "Bokutachi cache snapshot has a conflicting chart mapping";
+          return false;
+        }
+        continue;
+      }
+      uniqueMappings.push_back(mapping);
+    }
+
+    if (!userId && uniqueMappings.empty()) {
+      return true;
+    }
+    if (!activated_ || !writesEnabled_) {
+      diagnostic = "Bokutachi cache writes are unavailable";
+      return false;
+    }
+
+    std::vector<OriginEntry> originalOrigins = origins_;
+    try {
+      bool changed = false;
+      auto origin =
+          std::ranges::find(origins_, serverOrigin, &OriginEntry::serverOrigin);
+      if (origin == origins_.end()) {
+        if (origins_.size() == kMaximumOrigins) {
+          origins_.erase(origins_.begin());
+        }
+        origins_.push_back({.serverOrigin = std::string(serverOrigin)});
+        origin = std::prev(origins_.end());
+        changed = true;
+      }
+      if (userId && origin->userId != userId) {
+        origin->userId = userId;
+        changed = true;
+      }
+      std::unordered_map<std::string, std::size_t> existingChartIndexes;
+      existingChartIndexes.reserve(origin->charts.size() +
+                                   uniqueMappings.size());
+      for (std::size_t index = 0; index < origin->charts.size(); ++index) {
+        existingChartIndexes.emplace(origin->charts[index].game + "\n" +
+                                         origin->charts[index].sha256,
+                                     index);
+      }
+      for (const auto &mapping : uniqueMappings) {
+        const std::string key = mapping.game + "\n" + mapping.chartSha256;
+        const auto chart = existingChartIndexes.find(key);
+        if (chart != existingChartIndexes.end()) {
+          auto &existing = origin->charts[chart->second];
+          if (existing.chartId != mapping.chartId) {
+            existing.chartId = mapping.chartId;
+            changed = true;
+          }
+          continue;
+        }
+        origin->charts.push_back({.game = mapping.game,
+                                  .sha256 = mapping.chartSha256,
+                                  .chartId = mapping.chartId});
+        existingChartIndexes.emplace(key, origin->charts.size() - 1);
+        changed = true;
+      }
+      const std::size_t chartCount = chartCountLocked();
+      if (chartCount > kMaximumChartMappings) {
+        std::size_t excess = chartCount - kMaximumChartMappings;
+        for (auto &entry : origins_) {
+          const std::size_t eraseCount = std::min(excess, entry.charts.size());
+          entry.charts.erase(entry.charts.begin(),
+                             entry.charts.begin() +
+                                 static_cast<std::ptrdiff_t>(eraseCount));
+          excess -= eraseCount;
+          if (excess == 0) {
+            break;
+          }
+        }
+      }
+      removeEmptyOriginsLocked();
+      if (!changed || saveLocked(diagnostic)) {
+        return true;
+      }
+      origins_.swap(originalOrigins);
+      return false;
+    } catch (...) {
+      origins_.swap(originalOrigins);
+      throw;
+    }
+  } catch (const std::exception &error) {
+    diagnostic =
+        std::string("Bokutachi cache snapshot update failed: ") + error.what();
+    return false;
+  } catch (...) {
+    diagnostic = "Bokutachi cache snapshot update failed";
     return false;
   }
 }

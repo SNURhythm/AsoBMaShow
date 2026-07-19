@@ -14,12 +14,19 @@
 
 namespace ir::tachi {
 
+struct BokutachiChartMapping {
+  std::string game;
+  std::string chartSha256;
+  std::string chartId;
+};
+
 class BokutachiCacheStore final {
 public:
   static constexpr int kCurrentSchemaVersion = 1;
   static constexpr std::size_t kMaximumFileBytes = 1024 * 1024;
   static constexpr std::size_t kMaximumOrigins = 16;
   static constexpr std::size_t kMaximumChartMappings = 2048;
+  static constexpr std::size_t kMaximumBatchMappings = 50'000;
   static constexpr std::size_t kMaximumChartIdBytes = 256;
 
   BokutachiCacheStore() = default;
@@ -43,6 +50,11 @@ public:
                                      std::string_view chartSha256,
                                      std::string_view chartId,
                                      std::string &diagnostic) noexcept;
+  [[nodiscard]] bool
+  rememberSnapshot(std::string_view serverOrigin,
+                   std::optional<std::int64_t> userId,
+                   const std::vector<BokutachiChartMapping> &chartMappings,
+                   std::string &diagnostic) noexcept;
   [[nodiscard]] bool eraseChartId(std::string_view serverOrigin,
                                   std::string_view game,
                                   std::string_view chartSha256,

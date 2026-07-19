@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -327,6 +328,84 @@ void testUserInvalidationDiscardsCacheAfterAtomicWriteFailure() {
          "discarded cache cannot restore an identity under a replacement key");
 }
 
+void testSnapshotBatchValidatesDeduplicatesAndSavesOnce() {
+  TempDirectory temp("snapshot-batch");
+  const auto path = temp.path() / "bokutachi-cache.json";
+  int primaryReplacements = 0;
+  atomic_file::Operations operations = atomic_file::defaultOperations();
+  const auto realReplace = operations.replace;
+  operations.replace = [&](const auto &from, const auto &to,
+                           std::string &error) {
+    if (from == path.string() + ".tmp" && to == path) {
+      ++primaryReplacements;
+    }
+    return realReplace(from, to, error);
+  };
+  ir::tachi::BokutachiCacheStore store(std::move(operations));
+  std::string diagnostic;
+  expect(store.activate(path, diagnostic), "snapshot batch fixture activates");
+  const std::vector<ir::tachi::BokutachiChartMapping> mappings{
+      {.game = "bms-7k",
+       .chartSha256 = std::string(kSha),
+       .chartId = "chart-7"},
+      {.game = "bms-7k",
+       .chartSha256 = std::string(kSha),
+       .chartId = "chart-7"},
+      {.game = "bms-14k",
+       .chartSha256 = std::string(64, 'a'),
+       .chartId = "chart-14"},
+  };
+  expect(store.rememberSnapshot(kOrigin, 42, mappings, diagnostic),
+         "snapshot batch accepts valid duplicate mappings");
+  expect(primaryReplacements == 1,
+         "snapshot batch performs at most one atomic JSON save");
+  expect(store.userId(kOrigin) == 42 &&
+             store.chartId(kOrigin, "bms-7k", kSha) == "chart-7" &&
+             store.chartId(kOrigin, "bms-14k", std::string(64, 'a')) ==
+                 "chart-14",
+         "snapshot batch persists user and deduplicated chart mappings");
+
+  const std::vector<ir::tachi::BokutachiChartMapping> conflicting{
+      {.game = "bms-7k",
+       .chartSha256 = std::string(64, 'b'),
+       .chartId = "chart-a"},
+      {.game = "bms-7k",
+       .chartSha256 = std::string(64, 'b'),
+       .chartId = "chart-b"},
+  };
+  expect(!store.rememberSnapshot(kOrigin, 42, conflicting, diagnostic),
+         "snapshot batch rejects conflicting duplicate mappings");
+  expect(primaryReplacements == 1 &&
+             !store.chartId(kOrigin, "bms-7k", std::string(64, 'b')),
+         "invalid snapshot batch performs no write or partial mutation");
+
+  std::vector<ir::tachi::BokutachiChartMapping> bounded;
+  bounded.reserve(ir::tachi::BokutachiCacheStore::kMaximumChartMappings + 1);
+  for (std::size_t index = 0;
+       index < ir::tachi::BokutachiCacheStore::kMaximumChartMappings + 1;
+       ++index) {
+    bounded.push_back({.game = "bms-7k",
+                       .chartSha256 = indexedSha256(index),
+                       .chartId = "bounded-" + std::to_string(index)});
+  }
+  expect(store.rememberSnapshot(kOrigin, 42, bounded, diagnostic),
+         "snapshot batch accepts more mappings than the persisted cache cap");
+  const auto persisted = nlohmann::json::parse(readFile(path));
+  expect(persisted.at("origins").at(0).at("charts").size() <=
+             ir::tachi::BokutachiCacheStore::kMaximumChartMappings,
+         "snapshot batch retains only the bounded mapping set");
+  expect(primaryReplacements == 2,
+         "each changed snapshot batch performs only one atomic save");
+
+  std::vector<ir::tachi::BokutachiChartMapping> oversized(
+      ir::tachi::BokutachiCacheStore::kMaximumBatchMappings + 1,
+      mappings.front());
+  expect(!store.rememberSnapshot(kOrigin, 42, oversized, diagnostic),
+         "snapshot batch input is explicitly bounded");
+  expect(primaryReplacements == 2,
+         "oversized snapshot batch performs no atomic save");
+}
+
 } // namespace
 
 int main() {
@@ -339,6 +418,7 @@ int main() {
   testRuntimeChartCollectionEvictsOldestMapping();
   testPersistedCacheNeverExceedsItsReadLimit();
   testUserInvalidationDiscardsCacheAfterAtomicWriteFailure();
+  testSnapshotBatchValidatesDeduplicatesAndSavesOnce();
   if (failures != 0) {
     std::cerr << failures << " Bokutachi cache store test(s) failed\n";
     return 1;

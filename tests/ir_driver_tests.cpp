@@ -1,4 +1,5 @@
 #include "ir/IrDriver.h"
+#include "ir/IrHttpClient.h"
 #include "ir/IrRankingModels.h"
 #include "ir/IrSubmission.h"
 
@@ -68,7 +69,20 @@ public:
             .draft = ir::IrOutboxDraft{.providerId = id_}};
   }
 
+  ir::IrUserScoreSnapshotOutcome
+  fetchUserScoreSnapshot(const ir::IrProviderRuntimeConfig &,
+                         ir::IrHttpClient &, std::stop_token,
+                         ir::IrUserScoreProgress progress) const override {
+    ++reconciliationCalls;
+    if (progress) {
+      progress("fake-game", 1, 1);
+    }
+    return {.status = ir::IrUserScoreSnapshotStatus::Succeeded,
+            .snapshot = ir::IrUserScoreSnapshot{}};
+  }
+
   mutable int buildCalls = 0;
+  mutable int reconciliationCalls = 0;
 
 private:
   std::string id_;
@@ -446,8 +460,12 @@ void testCapabilityValidation() {
          "read-only ranking driver is valid");
   expect(ir::validateCapabilities({.chartRankings = true,
                                    .scoreSubmission = true,
-                                   .deferredSubmission = true}),
+                                   .deferredSubmission = true,
+                                   .scoreReconciliation = true}),
          "read-write deferred driver is valid");
+  expect(
+      ir::validateCapabilities({.readOnly = true, .scoreReconciliation = true}),
+      "read-only reconciliation driver is valid");
   expect(!ir::validateCapabilities({}), "driver must expose an operation");
   expect(!ir::validateCapabilities({.readOnly = true,
                                     .chartRankings = true,
@@ -456,6 +474,39 @@ void testCapabilityValidation() {
   expect(!ir::validateCapabilities({.chartRankings = true,
                                     .deferredSubmission = true}),
          "deferred capability requires submission");
+}
+
+class NoopHttpClient final : public ir::IrHttpClient {
+public:
+  ir::IrHttpResponse perform(const ir::IrHttpRequest &,
+                             std::stop_token) noexcept override {
+    return {};
+  }
+};
+
+void testRegistryForwardsScoreReconciliation() {
+  ir::IrDriverRegistry registry;
+  auto driver = std::make_shared<FakeDriver>(
+      "archive",
+      ir::IrDriverCapabilities{.readOnly = true, .scoreReconciliation = true});
+  std::string diagnostic;
+  expect(registry.registerDriver(driver, diagnostic),
+         "reconciliation-only driver registers");
+  NoopHttpClient http;
+  int progressCalls = 0;
+  const auto result = registry.fetchUserScoreSnapshot(
+      "archive", {}, http, {},
+      [&](std::string_view, int, int) { ++progressCalls; });
+  expect(result.status == ir::IrUserScoreSnapshotStatus::Succeeded &&
+             result.snapshot && driver->reconciliationCalls == 1 &&
+             progressCalls == 1,
+         "registry forwards reconciliation and progress to the driver");
+
+  const auto unsupported =
+      registry.fetchUserScoreSnapshot("missing", {}, http, {}, {});
+  expect(unsupported.status == ir::IrUserScoreSnapshotStatus::Unsupported &&
+             !unsupported.snapshot,
+         "registry rejects reconciliation for an unregistered provider");
 }
 
 void testRegistryRejectsInvalidAndDuplicateDrivers() {
@@ -533,6 +584,7 @@ int main() {
   testChartQueryNormalizesIdentity();
   testIrBadPointsIncludeKpoor();
   testCapabilityValidation();
+  testRegistryForwardsScoreReconciliation();
   testRegistryRejectsInvalidAndDuplicateDrivers();
   testReadOnlyDriverCannotBuildSubmissionDraft();
   testBaseBuildDraftIsUnsupported();

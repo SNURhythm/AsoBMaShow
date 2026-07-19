@@ -683,6 +683,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
         src/ScoreProvenance.cpp
@@ -743,6 +744,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
@@ -750,6 +752,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/tachi/TachiDriver.cpp
         src/ir/tachi/TachiRankingParser.cpp
         src/ir/tachi/TachiResponseParser.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -1151,6 +1154,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
@@ -1158,6 +1162,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/tachi/TachiDriver.cpp
         src/ir/tachi/TachiRankingParser.cpp
         src/ir/tachi/TachiResponseParser.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp

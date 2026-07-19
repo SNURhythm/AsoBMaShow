@@ -5,17 +5,22 @@
 #include "TachiBatchManual.h"
 #include "TachiRankingParser.h"
 #include "TachiResponseParser.h"
+#include "TachiUserScoreParser.h"
 #include "../IrHttpClient.h"
 #include "../IrProfileSettings.h"
 
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace ir::tachi {
 namespace {
@@ -23,6 +28,8 @@ namespace {
 constexpr std::size_t kMaximumTachiResponseBytes = 1024 * 1024;
 constexpr std::size_t kMaximumRankingPageTokenBytes = 2048;
 constexpr std::size_t kMaximumRankingChartIdBytes = 256;
+static_assert(BokutachiCacheStore::kMaximumBatchMappings >=
+              kMaximumIrRemoteScoreSnapshotEntries);
 
 DeliveryOutcome cancelled() {
   return {.status = DeliveryStatus::Cancelled,
@@ -179,6 +186,49 @@ ChartRankingOutcome rankingFailure(ChartRankingStatus status,
                                    std::string_view apiKey = {}) {
   return {.status = status,
           .diagnostic = redact(std::move(diagnostic), apiKey)};
+}
+
+IrUserScoreSnapshotOutcome userScoreFailure(IrUserScoreSnapshotStatus status,
+                                            std::string_view code,
+                                            std::string diagnostic,
+                                            std::string_view apiKey = {}) {
+  return {.status = status,
+          .code = std::string(code),
+          .diagnostic = redact(std::move(diagnostic), apiKey)};
+}
+
+IrUserScoreSnapshotOutcome cancelledUserScore() {
+  return userScoreFailure(IrUserScoreSnapshotStatus::Cancelled, "cancelled",
+                          "Tachi user score request was cancelled");
+}
+
+IrUserScoreSnapshotOutcome
+userScoreTransportFailure(const IrHttpResponse &response,
+                          std::string_view apiKey) {
+  if (response.transportError == IrTransportError::Cancelled) {
+    return cancelledUserScore();
+  }
+  if (response.transportError == IrTransportError::ResponseTooLarge) {
+    return userScoreFailure(
+        IrUserScoreSnapshotStatus::OversizedResponse, "oversized_response",
+        "Tachi user score response exceeded the size limit");
+  }
+  return userScoreFailure(
+      IrUserScoreSnapshotStatus::TransientFailure, "transport_error",
+      response.diagnostic.empty() ? "Tachi user score transport request failed"
+                                  : response.diagnostic,
+      apiKey);
+}
+
+void reportUserScoreProgress(const IrUserScoreProgress &progress,
+                             std::string_view game, int completed) noexcept {
+  if (!progress) {
+    return;
+  }
+  try {
+    progress(game, completed, 2);
+  } catch (...) {
+  }
 }
 
 std::optional<std::string> normalizedSha256(std::string_view value) {
@@ -460,7 +510,8 @@ IrDriverCapabilities TachiDriver::capabilities() const noexcept {
   return {.readOnly = false,
           .chartRankings = true,
           .scoreSubmission = true,
-          .deferredSubmission = true};
+          .deferredSubmission = true,
+          .scoreReconciliation = true};
 }
 
 BuildDraftOutcome
@@ -708,6 +759,125 @@ ChartRankingOutcome TachiDriver::fetchChartRankingPage(
       normalizedQuery, *origin, nativeBmsGame(query.keyMode), cursor->chartId,
       cursor->userId, cursor->startRanking, cursor->loadedEntries,
       cursor->outOf, config, http, stopToken);
+}
+
+IrUserScoreSnapshotOutcome TachiDriver::fetchUserScoreSnapshot(
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken, IrUserScoreProgress progress) const {
+  if (stopToken.stop_requested()) {
+    return cancelledUserScore();
+  }
+  if (!validCredential(config.apiKey)) {
+    return userScoreFailure(IrUserScoreSnapshotStatus::AuthenticationRequired,
+                            "authentication_required",
+                            "Tachi API key is missing or invalid");
+  }
+  const auto origin = normalizeServerOrigin(config.serverOrigin);
+  if (!origin) {
+    return userScoreFailure(IrUserScoreSnapshotStatus::MalformedResponse,
+                            "invalid_server_origin",
+                            "Tachi server origin is missing or invalid");
+  }
+
+  constexpr std::array games{std::string_view("bms-7k"),
+                             std::string_view("bms-14k")};
+  std::array<IrUserScoreSnapshotOutcome, games.size()> outcomes;
+  std::optional<std::size_t> firstFailure;
+  for (std::size_t index = 0; index < games.size(); ++index) {
+    if (stopToken.stop_requested()) {
+      return cancelledUserScore();
+    }
+    reportUserScoreProgress(progress, games[index], static_cast<int>(index));
+    if (stopToken.stop_requested()) {
+      return cancelledUserScore();
+    }
+    const IrHttpRequest request{
+        .method = IrHttpMethod::Get,
+        .url = *origin + "/api/v1/users/me/games/" + std::string(games[index]) +
+               "/scores/all",
+        .headers = {{"Authorization", "Bearer " + config.apiKey}},
+        .maximumResponseBytes = kMaximumTachiUserScoreResponseBytes,
+        .followRedirects = false,
+    };
+    const IrHttpResponse response = http.perform(request, stopToken);
+    reportUserScoreProgress(progress, games[index],
+                            static_cast<int>(index + 1));
+    if (response.transportError == IrTransportError::Cancelled ||
+        stopToken.stop_requested()) {
+      return cancelledUserScore();
+    }
+    outcomes[index] =
+        response.transportError == IrTransportError::None
+            ? parseUserGameScores(games[index], response.statusCode,
+                                  response.body)
+            : userScoreTransportFailure(response, config.apiKey);
+    outcomes[index].diagnostic =
+        redact(std::move(outcomes[index].diagnostic), config.apiKey);
+    if (outcomes[index].status == IrUserScoreSnapshotStatus::Succeeded &&
+        !outcomes[index].snapshot) {
+      outcomes[index] = userScoreFailure(
+          IrUserScoreSnapshotStatus::MalformedResponse, "malformed_response",
+          "Tachi user score parser returned an incomplete result");
+    }
+    if (outcomes[index].status != IrUserScoreSnapshotStatus::Succeeded) {
+      firstFailure = firstFailure.value_or(index);
+    }
+  }
+
+  if (stopToken.stop_requested()) {
+    return cancelledUserScore();
+  }
+  if (firstFailure) {
+    outcomes[*firstFailure].snapshot.reset();
+    return std::move(outcomes[*firstFailure]);
+  }
+
+  IrUserScoreSnapshot merged;
+  const std::size_t mergedSize =
+      outcomes[0].snapshot->scores.size() + outcomes[1].snapshot->scores.size();
+  if (mergedSize > kMaximumIrRemoteScoreSnapshotEntries) {
+    return userScoreFailure(IrUserScoreSnapshotStatus::MalformedResponse,
+                            "malformed_response",
+                            "Tachi combined user score snapshot is oversized");
+  }
+  merged.scores.reserve(mergedSize);
+  for (auto &outcome : outcomes) {
+    std::ranges::move(outcome.snapshot->scores,
+                      std::back_inserter(merged.scores));
+  }
+
+  std::optional<std::int64_t> userId;
+  for (const auto &score : merged.scores) {
+    if (userId && *userId != score.remoteUserId) {
+      return userScoreFailure(
+          IrUserScoreSnapshotStatus::MalformedResponse, "malformed_response",
+          "Tachi user score games disagree on user identity");
+    }
+    userId = score.remoteUserId;
+  }
+  std::string diagnostic;
+  if (!validateIrUserScoreSnapshot(merged, diagnostic)) {
+    return userScoreFailure(IrUserScoreSnapshotStatus::MalformedResponse,
+                            "malformed_response", std::move(diagnostic));
+  }
+  if (stopToken.stop_requested()) {
+    return cancelledUserScore();
+  }
+
+  if (cacheStore_ && (!merged.scores.empty() || userId)) {
+    std::vector<BokutachiChartMapping> mappings;
+    mappings.reserve(merged.scores.size());
+    for (const auto &score : merged.scores) {
+      mappings.push_back({.game = score.game,
+                          .chartSha256 = score.chartSha256,
+                          .chartId = score.remoteChartId});
+    }
+    std::string ignoredDiagnostic;
+    (void)cacheStore_->rememberSnapshot(*origin, userId, mappings,
+                                        ignoredDiagnostic);
+  }
+  return {.status = IrUserScoreSnapshotStatus::Succeeded,
+          .snapshot = std::move(merged)};
 }
 
 } // namespace ir::tachi

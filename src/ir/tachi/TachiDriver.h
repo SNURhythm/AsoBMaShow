@@ -32,6 +32,10 @@ public:
       const IrChartQuery &query, std::string_view pageToken,
       const IrProviderRuntimeConfig &config, IrHttpClient &http,
       std::stop_token stopToken) const override;
+  [[nodiscard]] IrUserScoreSnapshotOutcome
+  fetchUserScoreSnapshot(const IrProviderRuntimeConfig &config,
+                         IrHttpClient &http, std::stop_token stopToken,
+                         IrUserScoreProgress progress) const override;
 
 private:
   std::shared_ptr<BokutachiCacheStore> cacheStore_;
