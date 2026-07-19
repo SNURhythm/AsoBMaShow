@@ -95,6 +95,9 @@ private:
   std::atomic_bool chartListReloadRequested = false;
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
+  bool replayIrUploadInProgress = false;
+  std::optional<int> replayIrUploadReplayId;
+  std::uint64_t replayIrUploadFeedbackRevision = 0;
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool addFolderPickerInProgress = false;
   std::atomic_bool archiveImportPickerInProgress = false;
@@ -783,6 +786,10 @@ private:
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
   void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
+  void startReplayIrUpload(const ChartMetaRecord &record,
+                           ReplaySummary summary);
+  void finishReplayIrUpload(int replayId, std::string message);
+  void refreshReplayIrMarker(int replayId);
   void startCourseReplayResultRecall(int replayId);
   void finishReplayResultRecallFailure(std::string diagnostic = {});
   void applyReplayExportProgress();

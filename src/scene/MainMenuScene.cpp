@@ -19,6 +19,7 @@
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
 #include "../ir/tachi/TachiBatchManual.h"
+#include "../ir/IrSavedResultUpload.h"
 #include "../path.h"
 #include "../view/ChartListItemView.h"
 #include "../view/IconText.h"
@@ -2587,6 +2588,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
+  replayIrUploadInProgress = false;
+  replayIrUploadReplayId.reset();
+  replayIrUploadFeedbackRevision = 0;
   unzipInProgress = false;
   tasksModalOpenRequested = false;
   findBmsJobRunning = false;
@@ -7737,6 +7741,10 @@ void MainMenuScene::buildReplayModal() {
     }
     refreshReplayModalActions();
   };
+  replayListView->onIrUploadRequested =
+      [this](const ReplaySummary &summary) {
+        startReplayIrUpload(replayModalChart, summary);
+      };
   replayListView->setFlex(1);
   replayListView->clearBackgroundColor();
   replayListView->setThemedBorderColor(ui_theme::hairline);
@@ -8179,13 +8187,15 @@ void MainMenuScene::buildReplayModal() {
   replayModalExportButton =
       makeModalButton("Export Video", 18, &replayModalExportButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress) {
+    if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        replayIrUploadInProgress) {
       return;
     }
     hideReplayModal();
   });
   replayModalFilterButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        replayIrUploadInProgress) {
       return;
     }
     if (replayFilterSortContent != nullptr &&
@@ -8200,7 +8210,8 @@ void MainMenuScene::buildReplayModal() {
     showReplayFilterSortOptions();
   });
   replayWatchButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        replayIrUploadInProgress) {
       return;
     }
     if (!selectedReplaySummary.has_value()) {
@@ -8222,7 +8233,8 @@ void MainMenuScene::buildReplayModal() {
     replayModalRoot->applyYogaLayoutFromRoot();
   });
   replayGBattleButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        replayIrUploadInProgress) {
       return;
     }
     if (!selectedReplaySummary.has_value() || selectedReplayIsAutoPlay() ||
@@ -8233,13 +8245,15 @@ void MainMenuScene::buildReplayModal() {
   });
   replayModalResultButton->setOnClickListener([this]() {
     if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        replayIrUploadInProgress ||
         selectedReplayIsAutoPlay() || !selectedReplaySummary.has_value()) {
       return;
     }
     startReplayResultRecall(replayModalChart, selectedReplaySummary->id);
   });
   replayModalExportButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
+    if (replayExportInProgress.load() || replayResultRecallInProgress ||
+        replayIrUploadInProgress) {
       return;
     }
     if (replayWatchOptionsContent != nullptr &&
@@ -8298,6 +8312,10 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
 
   replayModalChart = record;
   replayExportSelection.reset();
+  replayIrUploadInProgress = false;
+  replayIrUploadReplayId.reset();
+  ++replayIrUploadFeedbackRevision;
+  replayListView->setIrUploadInProgress(std::nullopt);
   const bool courseReplayList =
       record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -8407,10 +8425,16 @@ void MainMenuScene::hideReplayModal() {
   if (replayModalRoot == nullptr) {
     return;
   }
-  if (replayExportInProgress.load() || replayResultRecallInProgress) {
+  if (replayExportInProgress.load() || replayResultRecallInProgress ||
+      replayIrUploadInProgress) {
     return;
   }
   replayModalRoot->setVisible(false);
+  replayIrUploadReplayId.reset();
+  ++replayIrUploadFeedbackRevision;
+  if (replayListView != nullptr) {
+    replayListView->setIrUploadInProgress(std::nullopt);
+  }
   clearReplayModalSelection();
   replayExportSelection.reset();
   if (replayWatchButtonText != nullptr) {
@@ -8441,8 +8465,9 @@ void MainMenuScene::refreshReplayModalActions() {
                   : selectedReplaySummary.has_value();
   const bool exportInProgress = replayExportInProgress.load();
   const bool resultRecallInProgress = replayResultRecallInProgress;
+  const bool irUploadInProgress = replayIrUploadInProgress;
   const bool modalOperationInProgress =
-      exportInProgress || resultRecallInProgress;
+      exportInProgress || resultRecallInProgress || irUploadInProgress;
   const bool autoPlaySelection = selectedReplayIsAutoPlay();
   const bool courseReplaySelection = selectedReplayIsCourseReplay();
 
@@ -9643,9 +9668,185 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
 #endif
 }
 
+void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
+                                        ReplaySummary summary) {
+  if (replayIrUploadInProgress || replayResultRecallInProgress ||
+      replayExportInProgress.load() || record.courseStart ||
+      summary.autoPlay || summary.courseReplay || !summary.irUploadPending) {
+    return;
+  }
+
+  const auto providerSettings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (providerSettings == context.settings.irProviders.end() ||
+      !providerSettings->second.enabled) {
+    finishReplayIrUpload(
+        summary.id, "Enable Bokutachi in Settings > IR before uploading.");
+    return;
+  }
+  const auto driver = context.irDrivers.find(ir::kTachiProviderId);
+  if (driver == nullptr) {
+    finishReplayIrUpload(summary.id, "Bokutachi IR is unavailable.");
+    return;
+  }
+  const ir::IrDriverCapabilities capabilities = driver->capabilities();
+  if (capabilities.readOnly || !capabilities.scoreSubmission) {
+    finishReplayIrUpload(summary.id,
+                         "Bokutachi score submission is unavailable.");
+    return;
+  }
+  if (context.irSubmissionService == nullptr) {
+    finishReplayIrUpload(summary.id,
+                         "The IR submission service is unavailable.");
+    return;
+  }
+
+  replayIrUploadInProgress = true;
+  replayIrUploadReplayId = summary.id;
+  ++replayIrUploadFeedbackRevision;
+  if (replayListView != nullptr) {
+    replayListView->setIrUploadInProgress(summary.id);
+  }
+  if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText("Preparing IR...");
+  }
+  refreshReplayModalActions();
+  cancelActivePreviewLoading();
+
+  defer(
+      [this, record, summary = std::move(summary)]() {
+        try {
+          if (loadThread.joinable()) {
+            loadThread.join();
+          }
+          joinRetiredPreviewLoadThreads();
+
+          auto stored = context.replayRepository.LoadReplayResult(
+              summary.id, replayLoadMetaForRecord(record));
+          std::atomic_bool cancelled = false;
+          auto recalled = stored.has_value()
+                              ? result_recall::BuildChartResult(
+                                    std::move(*stored), cancelled)
+                              : result_recall::ChartBuildOutcome{};
+          if (!recalled.value.has_value() ||
+              !recalled.value->historicalIr.has_value() ||
+              recalled.value->historicalIr->submission == nullptr) {
+            finishReplayIrUpload(
+                summary.id,
+                "This saved result could not be verified for IR.");
+            return true;
+          }
+
+          const ir::IrSavedResultUploadDependencies dependencies{
+              .loadOutbox =
+                  [this](std::string_view provider,
+                         std::string_view attempt) {
+                    return context.replayRepository.LoadIrOutbox(provider,
+                                                                 attempt);
+                  },
+              .buildDraft = [this](const ir::IrSubmission &submission) {
+                return context.irDrivers.buildDraft(ir::kTachiProviderId,
+                                                    submission);
+              },
+              .enqueue = [this](const ir::IrOutboxDraft &draft) {
+                return context.irSubmissionService->enqueueManual(draft);
+              },
+              .retry = [this](std::int64_t rowId) {
+                return context.irSubmissionService->retry(rowId);
+              },
+          };
+          const auto action = ir::executeIrSavedResultUpload(
+              ir::kTachiProviderId,
+              *recalled.value->historicalIr->submission, dependencies);
+          finishReplayIrUpload(summary.id, action.message);
+        } catch (const std::exception &) {
+          finishReplayIrUpload(summary.id,
+                               "IR upload could not be prepared.");
+        } catch (...) {
+          finishReplayIrUpload(summary.id,
+                               "IR upload could not be prepared.");
+        }
+        return true;
+      },
+      1, true);
+}
+
+void MainMenuScene::finishReplayIrUpload(int replayId, std::string message) {
+  replayIrUploadInProgress = false;
+  replayIrUploadReplayId.reset();
+  if (replayListView != nullptr) {
+    replayListView->setIrUploadInProgress(std::nullopt);
+  }
+  refreshReplayIrMarker(replayId);
+
+  std::string safeMessage = ir::sanitizeDiagnostic(message);
+  if (safeMessage.empty()) {
+    safeMessage = "IR upload could not be queued.";
+  }
+  if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText(safeMessage);
+  }
+  refreshReplayModalActions();
+
+  const std::uint64_t feedbackRevision = ++replayIrUploadFeedbackRevision;
+  defer(
+      [this, feedbackRevision]() {
+        if (feedbackRevision != replayIrUploadFeedbackRevision ||
+            replayIrUploadInProgress) {
+          return true;
+        }
+        if (replayModalRoot != nullptr && replayModalRoot->getVisible() &&
+            replayListContent != nullptr && replayListContent->getVisible() &&
+            replayModalTitleText != nullptr) {
+          replayModalTitleText->setText("Records");
+          replayModalRoot->applyYogaLayoutFromRoot();
+        }
+        return true;
+      },
+      1400, true);
+}
+
+void MainMenuScene::refreshReplayIrMarker(int replayId) {
+  auto summary = std::find_if(
+      replaySummaries.begin(), replaySummaries.end(),
+      [replayId](const ReplaySummary &candidate) {
+        return candidate.id == replayId;
+      });
+  if (summary == replaySummaries.end() || !summary->attemptId.has_value() ||
+      !summary->chartMeta.has_value() || !summary->provenance) {
+    return;
+  }
+
+  const auto loaded = context.replayRepository.LoadIrOutbox(
+      ir::kTachiProviderId, *summary->attemptId);
+  if (loaded.status == ir::IrOutboxReadStatus::Found) {
+    if (!loaded.entry.has_value()) {
+      return;
+    }
+    summary->requestedIrOutboxState = loaded.entry->state;
+  } else if (loaded.status == ir::IrOutboxReadStatus::NotFound) {
+    summary->requestedIrOutboxState.reset();
+  } else {
+    return;
+  }
+  summary->irUploadPending = ir::tachi::shouldShowReplayUploadMarker(
+      *summary->attemptId, summary->hasCanonicalAttemptFingerprint,
+      *summary->chartMeta, *summary->provenance,
+      summary->requestedIrOutboxState);
+
+  const float previousScrollOffset =
+      replayListView != nullptr ? replayListView->scrollOffset : 0.0F;
+  applyReplayRecordFilters();
+  if (replayListView != nullptr) {
+    replayListView->scrollOffset = previousScrollOffset;
+    replayListView->rebindVisibleItems();
+  }
+}
+
 void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
                                             int replayId) {
   if (replayResultRecallInProgress || replayExportInProgress.load() ||
+      replayIrUploadInProgress ||
       replay_autoplay::isAutoPlayReplayId(replayId)) {
     return;
   }
@@ -10164,6 +10365,10 @@ void MainMenuScene::cleanupScene() {
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   replayExportInProgress = false;
+  replayResultRecallInProgress = false;
+  replayIrUploadInProgress = false;
+  replayIrUploadReplayId.reset();
+  ++replayIrUploadFeedbackRevision;
   unzipInProgress = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;

@@ -13,6 +13,13 @@ required = [
     "BuildChartResult",
     "BuildCourseResult",
     ".savedResultBrowsing = true",
+    "onIrUploadRequested",
+    "startReplayIrUpload",
+    "finishReplayIrUpload",
+    "refreshReplayIrMarker",
+    "replayIrUploadInProgress",
+    "executeIrSavedResultUpload",
+    "setIrUploadInProgress",
 ]
 combined = header + source
 missing = [token for token in required if token not in combined]
@@ -25,6 +32,29 @@ missing += ["recall:" + token for token in [
     "loadThread.join()",
     "joinRetiredPreviewLoadThreads()",
 ] if token not in recall_source]
+if "void MainMenuScene::startReplayIrUpload" in source:
+    upload_start = source.index("void MainMenuScene::startReplayIrUpload")
+    upload_end = source.index("void MainMenuScene::finishReplayIrUpload",
+                              upload_start)
+    upload_source = source[upload_start:upload_end]
+    missing += ["upload:" + token for token in [
+        "LoadReplayResult",
+        "BuildChartResult",
+        "historicalIr",
+        "loadOutbox",
+        "buildDraft",
+        "enqueueManual",
+        "retry",
+    ] if token not in upload_source]
+else:
+    missing.append("upload:startReplayIrUpload definition")
+
+cleanup_tokens = [
+    "replayIrUploadInProgress = false",
+    "replayIrUploadReplayId.reset()",
+]
+missing += ["cleanup:" + token for token in cleanup_tokens
+            if token not in combined]
 forbidden = [
     "replayModalPhotoButton",
     "startReplayImageExport",
