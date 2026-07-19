@@ -1,7 +1,10 @@
 #include "../src/repositories/ChartRepository.h"
+#include "../src/LongNoteModeUtils.h"
 #include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/repositories/ScoreRepository.h"
+#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/SqliteRAII.h"
+#include "../src/ir/IrScoreHistoryProjection.h"
 #include "RepositorySqliteTestSupport.h"
 
 #include <array>
@@ -405,12 +408,15 @@ void testChartQueryBehaviorMatrix() {
   constexpr std::string_view md5A = "11111111111111111111111111111111";
   constexpr std::string_view md5B = "22222222222222222222222222222222";
   constexpr std::string_view md5C = "33333333333333333333333333333333";
+  constexpr std::string_view md5D = "44444444444444444444444444444444";
   constexpr std::string_view shaA =
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   constexpr std::string_view shaB =
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   constexpr std::string_view shaC =
       "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+  constexpr std::string_view shaD =
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
   seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 1, 100);
   seedChartScore(scorePath, "beta.bms", md5B, shaB, 1, 3, 300);
@@ -432,7 +438,10 @@ void testChartQueryBehaviorMatrix() {
             "','Beta','','','Artist B','',7,180,180,180,0,1,0,0,0),"
             "('gamma.bms','" +
             std::string(md5C) + "','" + std::string(shaC) +
-            "','Gamma','','','Artist C','',12,240,240,240,0,1,0,0,0);"
+            "','Gamma','','','Artist C','',12,240,240,240,0,1,0,0,0),"
+            "('delta.bms','" +
+            std::string(md5D) + "','" + std::string(shaD) +
+            "','Delta','','','Artist D','',9,90,90,90,0,1,0,0,0);"
             "INSERT INTO chart_favorites(chart_path,chart_md5,"
             "chart_sha256) VALUES('gamma.bms','" +
             std::string(md5C) + "','" + std::string(shaC) + "')"));
@@ -460,11 +469,13 @@ void testChartQueryBehaviorMatrix() {
   };
 
   ChartMetaQuery query;
-  checkQuery(query, {"alpha.bms", "beta.bms", "gamma.bms"}, 3, 0);
+  checkQuery(query,
+             {"alpha.bms", "beta.bms", "delta.bms", "gamma.bms"}, 4,
+             0);
 
   query.limit = 1;
   query.offset = 1;
-  checkQuery(query, {"beta.bms"}, 3, 1);
+  checkQuery(query, {"beta.bms"}, 4, 1);
 
   query = {};
   query.keyword = "Artist B";
@@ -489,7 +500,54 @@ void testChartQueryBehaviorMatrix() {
   query.sortCriterion = ChartRecordSortCriterion::Score;
   query.sortDirection = ChartRecordSortDirection::Descending;
   query.selectedLongNoteMode = 1;
-  checkQuery(query, {"beta.bms", "gamma.bms", "alpha.bms"}, 3, 0);
+  checkQuery(query,
+             {"beta.bms", "gamma.bms", "alpha.bms", "delta.bms"}, 4,
+             0);
+
+  auto prepared = scores.PrepareScoreQueryDatabase(*session);
+  assert(!prepared.error().has_value());
+  auto projectedClearRanks = scores.LoadBestClearRanks(
+      *session, score_cache_queries::kScoreDatabaseSchema);
+  auto projectedBestScores = scores.LoadBestScores(
+      *session, score_cache_queries::kScoreDatabaseSchema);
+  ir::IrRemoteScore remoteOnly{
+      .remoteUserId = 42,
+      .game = "bms-7k",
+      .remoteScoreId = "remote-only-hard",
+      .remoteChartId = "remote-delta",
+      .chartMd5 = std::string(md5D),
+      .chartSha256 = std::string(shaD),
+      .title = "Delta",
+      .artist = "Artist D",
+      .service = "Bokutachi",
+      .noteCount = 100,
+      .score = 180,
+      .lampRank = kClearTypeHardClearRank,
+      .timeAddedUnixMillis = 1'000,
+  };
+  ir::projectIrRemoteScores(std::span{&remoteOnly, 1}, projectedClearRanks,
+                            projectedBestScores);
+  const auto folderData =
+      session->LoadFolderClearDataByLongNoteMode(projectedClearRanks);
+  ChartMetaQuery hardQuery;
+  hardQuery.clearMarkFilter = true;
+  hardQuery.clearMarkRank = kClearTypeHardClearRank;
+  hardQuery.selectedLongNoteMode = 1;
+  std::vector<ChartMetaRecord> openedHardFolder;
+  session->QueryChartMeta(
+      ir::chartMetaQueryWithoutProjectedScoreCriteria(hardQuery),
+      openedHardFolder);
+  ir::applyProjectedScoreQuery(hardQuery, projectedClearRanks,
+                               projectedBestScores, openedHardFolder);
+  const auto &allCounts =
+      folderData.clearMarkCounts[long_note_mode::kLnValue].at("all");
+  const auto hardCount = allCounts.find(kClearTypeHardClearRank);
+  assert(hardCount != allCounts.end() &&
+         hardCount->second == static_cast<int>(openedHardFolder.size()));
+  assert(std::ranges::any_of(openedHardFolder, [](const auto &record) {
+    return chart_storage_identity::StoredPathText(record.meta.BmsPath) ==
+           "delta.bms";
+  }));
 }
 
 void testChartMigrationCompatibilityMatrix() {

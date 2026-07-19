@@ -356,6 +356,13 @@ void testOutboxRowsRequireReceiptResolutionBeforeRemoval() {
   plan = ir::planScoreReconciliation(kProvider, kOrigin, std::span{&local, 1},
                                      std::span{&remote, 1}, kConfirmedAt);
   assert(plan.upsertedReceipts.size() == 1);
+  assert(plan.upsertedReceipts.front().source ==
+         ir::IrReceiptConfirmationSource::Snapshot);
+  assert(plan.purgedSucceededOutboxRowIds.empty());
+
+  local.currentReceipt = receiptFor(local, "remote-succeeded");
+  plan = ir::planScoreReconciliation(kProvider, kOrigin, std::span{&local, 1},
+                                     std::span{&remote, 1}, kConfirmedAt);
   assert(plan.purgedSucceededOutboxRowIds == std::vector<std::int64_t>{415});
 
   for (const auto state : {ir::IrOutboxState::BlockedConfiguration,

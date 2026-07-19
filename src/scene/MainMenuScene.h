@@ -228,12 +228,17 @@ private:
     mutable std::deque<int> pageOrder;
     mutable ChartMetaRecord fallbackRecord;
     std::optional<ChartMetaRecord> leadingRecord;
+    std::vector<ChartMetaRecord> ownedRecords;
 
     void reset(ChartRepository::Session &chartSession,
                const ChartMetaQuery &chartQuery, int count,
                std::optional<ChartMetaRecord> leading = std::nullopt);
+    void resetOwned(std::vector<ChartMetaRecord> records,
+                    const ChartMetaQuery &chartQuery,
+                    std::optional<ChartMetaRecord> leading = std::nullopt);
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
+    [[nodiscard]] int findPath(const std::filesystem::path &path) const;
 
   private:
     void touchPage(int pageIndex) const;

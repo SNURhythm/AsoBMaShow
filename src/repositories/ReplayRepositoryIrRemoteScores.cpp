@@ -673,7 +673,10 @@ bool deleteOutboxIds(sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
           ? "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND state=5 "
             "AND EXISTS(SELECT 1 FROM ir_submission_receipts receipt WHERE "
             "receipt.provider_id=? AND receipt.server_origin=? AND "
-            "receipt.attempt_id=ir_outbox.attempt_id)"
+            "receipt.attempt_id=ir_outbox.attempt_id AND "
+            "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays "
+            "replay WHERE replay.id=receipt.replay_id AND "
+            "replay.attempt_id=ir_outbox.attempt_id))"
           : "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND state IN "
             "(0,3,4) AND EXISTS(SELECT 1 FROM ir_submission_receipts receipt "
             "WHERE receipt.provider_id=? AND receipt.server_origin=? AND "
@@ -958,7 +961,10 @@ ReplayRepository::ClearIrAccountEvidence(std::string_view providerId,
       "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
       "SELECT 1 FROM ir_submission_receipts receipt WHERE "
       "receipt.provider_id=? AND receipt.server_origin=? AND "
-      "receipt.attempt_id=ir_outbox.attempt_id)";
+      "receipt.attempt_id=ir_outbox.attempt_id AND "
+      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays replay "
+      "WHERE replay.id=receipt.replay_id AND "
+      "replay.attempt_id=ir_outbox.attempt_id))";
   if (prepareSqliteStatement(database, outboxQuery, outboxStatement) !=
           SQLITE_OK ||
       sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),

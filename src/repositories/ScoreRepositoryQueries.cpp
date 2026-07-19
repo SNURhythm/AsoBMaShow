@@ -656,21 +656,28 @@ int ScoreClearRankCache::bestRankFor(const bms_parser::ChartMeta &chartMeta,
                                      int selectedLongNoteMode) const {
   const int longNoteMode =
       scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
-  const std::string sha256 = normalizedHash(chartMeta.SHA256);
-  int rank = bestRankForStoredKey(sha256, longNoteMode);
-  const std::string md5 = normalizedHash(chartMeta.MD5);
-  const auto md5It = importedIrRankByMd5.find(md5);
+  return bestRankForStoredIdentity(chartMeta.SHA256, chartMeta.MD5,
+                                   longNoteMode);
+}
+
+int ScoreClearRankCache::bestRankForStoredIdentity(std::string_view sha256,
+                                                   std::string_view md5,
+                                                   int longNoteMode) const {
+  const std::string normalizedSha256 = normalizedHash(std::string(sha256));
+  int rank = bestRankForStoredKey(normalizedSha256, longNoteMode);
+  const std::string normalizedMd5 = normalizedHash(std::string(md5));
+  const auto md5It = importedIrRankByMd5.find(normalizedMd5);
   if (md5It == importedIrRankByMd5.end()) {
     return rank;
   }
-  if (sha256.empty() &&
+  if (normalizedSha256.empty() &&
       !hasAtMostOneNormalizedShaIdentity(md5It->second)) {
     return rank;
   }
   for (const auto &[remoteSha256, byMode] : md5It->second) {
     const std::string normalizedRemoteSha256 = normalizedHash(remoteSha256);
-    if (!sha256.empty() && !normalizedRemoteSha256.empty() &&
-        normalizedRemoteSha256 != sha256) {
+    if (!normalizedSha256.empty() && !normalizedRemoteSha256.empty() &&
+        normalizedRemoteSha256 != normalizedSha256) {
       continue;
     }
     rank = std::max(rank, byMode.bestRankForMode(longNoteMode));

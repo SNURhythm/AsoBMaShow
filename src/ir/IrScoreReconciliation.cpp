@@ -205,6 +205,7 @@ IrSubmissionReceipt snapshotReceipt(std::string_view providerId,
 }
 
 void recordRepresentedOutbox(const IrLocalReceiptCandidate &local,
+                             bool submissionOwnsDelivery,
                              IrScoreReconciliationPlan &plan) {
   if (!local.outboxRowId || !local.outboxState) {
     return;
@@ -216,7 +217,9 @@ void recordRepresentedOutbox(const IrLocalReceiptCandidate &local,
     plan.settledOutboxRowIds.push_back(*local.outboxRowId);
     break;
   case IrOutboxState::Succeeded:
-    plan.purgedSucceededOutboxRowIds.push_back(*local.outboxRowId);
+    if (submissionOwnsDelivery) {
+      plan.purgedSucceededOutboxRowIds.push_back(*local.outboxRowId);
+    }
     break;
   case IrOutboxState::Uploading:
   case IrOutboxState::AwaitingRemoteResult:
@@ -334,8 +337,10 @@ IrScoreReconciliationPlan planScoreReconciliation(
         receipt.remoteChartId = found->second->remoteChartId;
         receipt.observedInSnapshot = true;
         receipt.confirmedAtUnixMillis = confirmedAtUnixMillis;
+        const bool submissionOwnsDelivery =
+            receipt.source == IrReceiptConfirmationSource::Submission;
         plan.upsertedReceipts.push_back(std::move(receipt));
-        recordRepresentedOutbox(candidate, plan);
+        recordRepresentedOutbox(candidate, submissionOwnsDelivery, plan);
         continue;
       }
       if (candidate.currentReceipt->observedInSnapshot) {
@@ -359,8 +364,10 @@ IrScoreReconciliationPlan planScoreReconciliation(
       receipt.id = candidate.currentReceipt->id;
       receipt.source = candidate.currentReceipt->source;
     }
+    const bool submissionOwnsDelivery =
+        receipt.source == IrReceiptConfirmationSource::Submission;
     plan.upsertedReceipts.push_back(std::move(receipt));
-    recordRepresentedOutbox(candidate, plan);
+    recordRepresentedOutbox(candidate, submissionOwnsDelivery, plan);
   }
   std::ranges::sort(plan.upsertedReceipts, {}, &IrSubmissionReceipt::replayId);
   std::ranges::sort(plan.deletedReceiptIds);

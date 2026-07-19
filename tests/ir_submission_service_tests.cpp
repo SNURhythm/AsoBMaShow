@@ -2025,6 +2025,66 @@ void testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin() {
              retainedOutbox.entry->state == ir::IrOutboxState::Succeeded &&
              completed.outboxRowsSettled == 0,
          "origin-A sync does not purge origin-B retained success work");
+
+  harness.driver->pushReconciliation({
+      .status = ir::IrUserScoreSnapshotStatus::Succeeded,
+      .snapshot = ir::IrUserScoreSnapshot{.scores = {remoteScore()}},
+  });
+  harness.now.fetch_add(60'000);
+  expect(harness.service->requestUserScoreReconciliation("fake") ==
+             ir::IrReconciliationRequestStatus::Accepted &&
+             harness.driver->waitForReconciliationCalls(2) &&
+             waitForReconciliationPhase(harness,
+                                        ir::IrReconciliationPhase::Succeeded),
+         "a second origin-A reconciliation completes after the cooldown");
+
+  const auto secondOriginAReceipt =
+      harness.repository.LoadIrSubmissionReceipt(
+          "fake", "https://boku.tachi.ac", attemptId(36));
+  const auto secondOriginBReceipt =
+      harness.repository.LoadIrSubmissionReceipt(
+          "fake", "https://other.example", attemptId(36));
+  const auto secondRetainedOutbox =
+      harness.repository.LoadIrOutbox("fake", attemptId(36));
+  expect(secondOriginAReceipt.receipt &&
+             secondOriginAReceipt.receipt->source ==
+                 ir::IrReceiptConfirmationSource::Snapshot &&
+             secondOriginBReceipt.receipt &&
+             secondOriginBReceipt.receipt->source ==
+                 ir::IrReceiptConfirmationSource::Submission &&
+             secondRetainedOutbox.entry &&
+             secondRetainedOutbox.entry->state ==
+                 ir::IrOutboxState::Succeeded,
+         "a later snapshot receipt never acquires another origin's delivery "
+         "ownership");
+
+  harness.service->stop();
+  const auto clearedOriginA = harness.repository.ClearIrAccountEvidence(
+      "fake", "https://boku.tachi.ac");
+  expect(clearedOriginA.status == ir::IrOutboxMutationStatus::Updated &&
+             harness.repository
+                     .LoadIrSubmissionReceipt("fake",
+                                              "https://boku.tachi.ac",
+                                              attemptId(36))
+                     .status == ir::IrReceiptReadStatus::NotFound &&
+             harness.repository
+                     .LoadIrSubmissionReceipt("fake", "https://other.example",
+                                              attemptId(36))
+                     .status == ir::IrReceiptReadStatus::Found &&
+             harness.repository.LoadIrOutbox("fake", attemptId(36)).status ==
+                 ir::IrOutboxReadStatus::Found,
+         "clearing origin A preserves origin B's receipt and retained row");
+
+  const auto clearedOriginB = harness.repository.ClearIrAccountEvidence(
+      "fake", "https://other.example");
+  expect(clearedOriginB.status == ir::IrOutboxMutationStatus::Updated &&
+             harness.repository
+                     .LoadIrSubmissionReceipt("fake", "https://other.example",
+                                              attemptId(36))
+                     .status == ir::IrReceiptReadStatus::NotFound &&
+             harness.repository.LoadIrOutbox("fake", attemptId(36)).status ==
+                 ir::IrOutboxReadStatus::NotFound,
+         "clearing origin B purges the row owned by its submission receipt");
 }
 
 void testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot() {

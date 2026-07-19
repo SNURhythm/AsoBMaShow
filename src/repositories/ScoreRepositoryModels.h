@@ -111,6 +111,9 @@ struct ScoreClearRankCache {
                                     int longNoteMode = 0) const;
   [[nodiscard]] int bestRankForStoredKey(std::string_view sha256,
                                          int longNoteMode = 0) const;
+  [[nodiscard]] int bestRankForStoredIdentity(std::string_view sha256,
+                                              std::string_view md5,
+                                              int longNoteMode = 0) const;
   [[nodiscard]] int bestCourseRankFor(std::string_view courseKey,
                                       int legacyCourseId, int lnMode) const;
 };

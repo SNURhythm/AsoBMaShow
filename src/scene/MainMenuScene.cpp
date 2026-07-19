@@ -1187,17 +1187,38 @@ void MainMenuScene::ChartListPageCache::reset(
   query.limit = 0;
   query.offset = 0;
   leadingRecord = std::move(leading);
+  ownedRecords.clear();
   totalCount = std::max(0, count) + (leadingRecord.has_value() ? 1 : 0);
-  clear();
+  pages.clear();
+  pageOrder.clear();
+}
+
+void MainMenuScene::ChartListPageCache::resetOwned(
+    std::vector<ChartMetaRecord> records, const ChartMetaQuery &chartQuery,
+    std::optional<ChartMetaRecord> leading) {
+  session = nullptr;
+  query = chartQuery;
+  query.limit = 0;
+  query.offset = 0;
+  leadingRecord = std::move(leading);
+  ownedRecords = std::move(records);
+  totalCount = static_cast<int>(ownedRecords.size()) +
+               (leadingRecord.has_value() ? 1 : 0);
+  pages.clear();
+  pageOrder.clear();
 }
 
 void MainMenuScene::ChartListPageCache::clear() {
+  session = nullptr;
+  totalCount = 0;
+  leadingRecord.reset();
+  ownedRecords.clear();
   pages.clear();
   pageOrder.clear();
 }
 
 const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
-  if (session == nullptr || index < 0 || index >= totalCount) {
+  if (index < 0 || index >= totalCount) {
     return fallbackRecord;
   }
   if (leadingRecord.has_value()) {
@@ -1205,6 +1226,15 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
       return *leadingRecord;
     }
     index--;
+  }
+  if (!ownedRecords.empty()) {
+    if (index >= static_cast<int>(ownedRecords.size())) {
+      return fallbackRecord;
+    }
+    return ownedRecords[static_cast<std::size_t>(index)];
+  }
+  if (session == nullptr) {
+    return fallbackRecord;
   }
 
   const int pageIndex = index / pageSize;
@@ -1226,6 +1256,23 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
     return fallbackRecord;
   }
   return pageIt->second[localIndex];
+}
+
+int MainMenuScene::ChartListPageCache::findPath(
+    const std::filesystem::path &path) const {
+  if (path.empty()) {
+    return -1;
+  }
+  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
+  if (!ownedRecords.empty()) {
+    const int ownedIndex = ir::findProjectedChartPathIndex(ownedRecords, path);
+    return ownedIndex < 0 ? -1 : ownedIndex + leadingOffset;
+  }
+  if (session == nullptr) {
+    return -1;
+  }
+  const int databaseIndex = session->FindChartMetaIndex(query, path);
+  return databaseIndex < 0 ? -1 : databaseIndex + leadingOffset;
 }
 
 void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
@@ -4213,11 +4260,21 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     leadingRecord = std::move(courseRecord);
   }
 
-  const int dbCount = chartSession->CountChartMeta(query);
-  const int count = dbCount + (leadingRecord.has_value() ? 1 : 0);
-  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
-  chartListCache.reset(*chartSession, query, dbCount,
-                       std::move(leadingRecord));
+  if (ir::chartMetaQueryUsesProjectedScores(query)) {
+    const ChartMetaQuery baseQuery =
+        ir::chartMetaQueryWithoutProjectedScoreCriteria(query);
+    std::vector<ChartMetaRecord> projectedRecords;
+    chartSession->QueryChartMeta(baseQuery, projectedRecords);
+    ir::applyProjectedScoreQuery(query, scoreClearRanks, scoreBestScores,
+                                 projectedRecords);
+    chartListCache.resetOwned(std::move(projectedRecords), query,
+                              std::move(leadingRecord));
+  } else {
+    const int databaseCount = chartSession->CountChartMeta(query);
+    chartListCache.reset(*chartSession, query, databaseCount,
+                         std::move(leadingRecord));
+  }
+  const int count = chartListCache.totalCount;
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
@@ -4253,12 +4310,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     if (pathMatches(preferredIndex, path)) {
       return preferredIndex;
     }
-    const int dbIndex = chartSession->FindChartMetaIndex(
-        query, std::filesystem::path(path));
-    if (dbIndex < 0) {
-      return -1;
-    }
-    const int index = dbIndex + leadingOffset;
+    const int index =
+        chartListCache.findPath(std::filesystem::path(path));
     return index >= 0 && index < count ? index : -1;
   };
 
@@ -4550,12 +4603,7 @@ void MainMenuScene::selectChartByPathAfterReload(
     return;
   }
   const path_t target = fspath_to_path_t(path);
-  const ChartMetaQuery query = chartQueryForActiveFolder();
-  int index = chartSession->FindChartMetaIndex(query, path);
-  if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
-      activeFolder.courseId > 0) {
-    index += 1;
-  }
+  const int index = chartListCache.findPath(path);
   if (index >= 0 && index < recyclerView->size()) {
     const ChartMetaRecord &record = recyclerView->get(index);
     if (fspath_to_path_t(record.meta.BmsPath) == target) {
@@ -5202,14 +5250,8 @@ void MainMenuScene::startSelectedCourse() {
     const auto &missingRecord =
         records[static_cast<std::size_t>(firstMissingIndex)];
     if (!missingRecord.meta.BmsPath.empty()) {
-      const int dbIndex = chartSession.has_value()
-                              ? chartSession->FindChartMetaIndex(
-                                    chartQueryForActiveFolder(),
-                                    missingRecord.meta.BmsPath)
-                              : -1;
-      if (dbIndex >= 0) {
-        visibleMissingIndex = dbIndex + 1;
-      }
+      visibleMissingIndex = chartListCache.findPath(
+          missingRecord.meta.BmsPath);
     } else if (searchText.empty()) {
       visibleMissingIndex = firstMissingIndex + 1;
     }

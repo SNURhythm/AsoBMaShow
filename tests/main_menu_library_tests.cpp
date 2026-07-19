@@ -74,20 +74,69 @@ std::size_t TransparentStringHash::operator()(std::string_view value) const
 
 int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
                                               int longNoteMode) const {
-  const auto it = rankBySha256.find(sha256);
-  if (it == rankBySha256.end()) {
-    return kNoClearTypeRank;
-  }
   const int mode = long_note_mode::normalizeValue(longNoteMode);
-  const int rank = it->second.ranks[static_cast<std::size_t>(mode)];
-  if (rank != kNoClearTypeRank || mode == long_note_mode::kUnknownValue) {
+  const auto rankForMode = [mode](const ScoreRankByLongNoteMode &byMode) {
+    const int selected = byMode.ranks[static_cast<std::size_t>(mode)];
+    if (selected != kNoClearTypeRank ||
+        mode == long_note_mode::kUnknownValue) {
+      return selected;
+    }
+    const int classic = byMode.ranks[long_note_mode::kLnValue];
+    return classic != kNoClearTypeRank
+               ? classic
+               : byMode.ranks[long_note_mode::kUnknownValue];
+  };
+  int rank = kNoClearTypeRank;
+  const auto local = rankBySha256.find(sha256);
+  if (local != rankBySha256.end()) {
+    rank = rankForMode(local->second);
+  }
+  const auto imported = importedIrRankBySha256.find(sha256);
+  if (imported != importedIrRankBySha256.end()) {
+    rank = std::max(rank, rankForMode(imported->second));
+  }
+  return rank;
+}
+
+int ScoreClearRankCache::bestRankForStoredIdentity(std::string_view sha256,
+                                                   std::string_view md5,
+                                                   int longNoteMode) const {
+  int rank = bestRankForStoredKey(sha256, longNoteMode);
+  const int mode = long_note_mode::normalizeValue(longNoteMode);
+  const auto rankForMode = [mode](const ScoreRankByLongNoteMode &byMode) {
+    const int selected = byMode.ranks[static_cast<std::size_t>(mode)];
+    if (selected != kNoClearTypeRank ||
+        mode == long_note_mode::kUnknownValue) {
+      return selected;
+    }
+    const int classic = byMode.ranks[long_note_mode::kLnValue];
+    return classic != kNoClearTypeRank
+               ? classic
+               : byMode.ranks[long_note_mode::kUnknownValue];
+  };
+  const auto md5It = importedIrRankByMd5.find(md5);
+  if (md5It == importedIrRankByMd5.end()) {
     return rank;
   }
-  const int classicLongNoteRank =
-      it->second.ranks[long_note_mode::kLnValue];
-  return classicLongNoteRank != kNoClearTypeRank
-             ? classicLongNoteRank
-             : it->second.ranks[long_note_mode::kUnknownValue];
+  std::string uniqueSha;
+  for (const auto &[remoteSha, unused] : md5It->second) {
+    (void)unused;
+    if (remoteSha.empty()) {
+      continue;
+    }
+    if (uniqueSha.empty()) {
+      uniqueSha = remoteSha;
+    } else if (uniqueSha != remoteSha) {
+      return rank;
+    }
+  }
+  for (const auto &[remoteSha, byMode] : md5It->second) {
+    if (!sha256.empty() && !remoteSha.empty() && sha256 != remoteSha) {
+      continue;
+    }
+    rank = std::max(rank, rankForMode(byMode));
+  }
+  return rank;
 }
 
 int CourseScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
@@ -192,9 +241,15 @@ int main() {
               "total_long_notes) VALUES('charts/forced-cn.bms', "
               "'md5-forced-cn', 'sha-forced-cn', 2, 1)");
   execOrAbort(db,
+              "INSERT INTO chart_meta(path, md5, sha256) VALUES"
+              "('charts/remote-md5.bms', 'md5-remote', ''),"
+              "('charts/ambiguous-md5.bms', 'md5-ambiguous', '')");
+  execOrAbort(db,
               "INSERT INTO difficulty_table_entries(table_id, level, sha256, "
               "md5) VALUES(1, '12', '', 'md5-local'),"
-              "(2, '13', 'sha-forced-cn', 'md5-forced-cn')");
+              "(2, '13', 'sha-forced-cn', 'md5-forced-cn'),"
+              "(3, '14', '', 'md5-remote'),"
+              "(4, '15', '', 'md5-ambiguous')");
   execOrAbort(db,
               "INSERT INTO difficulty_courses(id, course_key, name, table_id, "
               "group_name) VALUES(10, "
@@ -213,6 +268,12 @@ int main() {
   scoreRanks.rankBySha256["sha-local"].ranks[0] = kClearTypeHardClearRank;
   scoreRanks.rankBySha256["sha-forced-cn"]
       .ranks[long_note_mode::kLnValue] = kClearTypeHardClearRank;
+  scoreRanks.importedIrRankByMd5["md5-remote"]["remote-sha"]
+      .ranks[long_note_mode::kUnknownValue] = kClearTypeHardClearRank;
+  scoreRanks.importedIrRankByMd5["md5-ambiguous"]["remote-sha-a"]
+      .ranks[long_note_mode::kUnknownValue] = kClearTypeHardClearRank;
+  scoreRanks.importedIrRankByMd5["md5-ambiguous"]["remote-sha-b"]
+      .ranks[long_note_mode::kUnknownValue] = kClearTypeFullComboRank;
   auto &courseRanks = scoreRanks.rankByCourseKey[
       "course:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       "aaaa"];
@@ -263,6 +324,21 @@ int main() {
                               main_menu_library::folderKeyForTable(2),
                               long_note_mode::kHcnValue),
             "forced-CN folder keeps its historical lamp for every selection");
+  ASSERT_EQ(1,
+            folderClearCountForLn(
+                data, main_menu_library::folderKeyForTable(3),
+                kClearTypeHardClearRank),
+            "valid MD5-only projected HARD lamp enters the folder count");
+  ASSERT_EQ(0,
+            folderClearCountForLn(
+                data, main_menu_library::folderKeyForTable(4),
+                kClearTypeHardClearRank),
+            "ambiguous MD5 projected identities stay out of HARD counts");
+  ASSERT_EQ(1,
+            folderClearCountForLn(
+                data, main_menu_library::folderKeyForTable(4),
+                kNoClearTypeRank),
+            "ambiguous MD5 projected identities remain NO PLAY");
   ASSERT_EQ(kClearTypeHardClearRank,
             folderRankForLn(data,
                             main_menu_library::folderKeyForCourseTable(1)),

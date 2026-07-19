@@ -6161,6 +6161,49 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
          "[0.0,null,100.0]");
 }
 
+void testSnapshotReceiptCannotAuthorizeSucceededOutboxPurge(
+    const std::filesystem::path &root) {
+  const auto path =
+      root / "ir-snapshot-receipt-cannot-own-delivery" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto delivered = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-snapshot-receipt-cannot-own-delivery", 141);
+  assert(helper
+             .ApplyIrOutboxDelivery(
+                 successfulDelivery(delivered.rowId,
+                                    "https://other.example"))
+             .status == ir::IrOutboxMutationStatus::Updated);
+
+  auto unrelatedOriginMutation = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 3'000, {});
+  unrelatedOriginMutation.upsertedReceipts.push_back(
+      snapshotReceipt(delivered, "snapshot-score"));
+  unrelatedOriginMutation.purgedSucceededOutboxRowIds.push_back(
+      delivered.rowId);
+  assert(helper.ApplyIrRemoteSnapshot(unrelatedOriginMutation).status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
+                                      delivered.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", "https://other.example",
+                                      delivered.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", delivered.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+
+  auto owningOriginMutation = sampleIrRemoteMutation(
+      "tachi", "https://other.example", 4'000, {});
+  owningOriginMutation.purgedSucceededOutboxRowIds.push_back(delivered.rowId);
+  assert(helper.ApplyIrRemoteSnapshot(owningOriginMutation).status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  assert(helper.LoadIrOutbox("tachi", delivered.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+}
+
 void testApplyIrRemoteSnapshotValidatesBeforeTransaction(
     const std::filesystem::path &root) {
   const auto path = root / "ir-remote-invalid" / "replay.db";
@@ -6770,6 +6813,7 @@ int main() {
   testClearIrSubmissionReceiptsIsOriginScoped(root);
   testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
   testApplyIrRemoteSnapshotReplacesOneOriginAtomically(root);
+  testSnapshotReceiptCannotAuthorizeSucceededOutboxPurge(root);
   testApplyIrRemoteSnapshotValidatesBeforeTransaction(root);
   testApplyIrRemoteSnapshotRollsBackEveryMutationStage(root);
   testIrRemoteScoreReadRejectsMalformedGaugeHistory(root);

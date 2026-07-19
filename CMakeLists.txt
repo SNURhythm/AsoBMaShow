@@ -1002,6 +1002,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
+        src/ir/IrScoreHistoryProjection.cpp
         src/repositories/ChartRepository.cpp
         src/repositories/ChartScanStore.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
