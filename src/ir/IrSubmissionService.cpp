@@ -126,7 +126,9 @@ bool responseIdentityContainsCredential(const DeliveryOutcome &outcome,
   const auto containsCredential = [&](const auto &value) {
     return value && value->find(credential) != std::string::npos;
   };
-  return containsCredential(outcome.remoteJobId) ||
+  return (outcome.remoteUserId &&
+          std::to_string(*outcome.remoteUserId) == credential) ||
+         containsCredential(outcome.remoteJobId) ||
          containsCredential(outcome.remoteOrigin) ||
          containsCredential(outcome.remoteScoreId) ||
          std::ranges::any_of(outcome.remoteScoreIds, [&](const auto &value) {
@@ -838,6 +840,14 @@ struct IrSubmissionService::Impl {
       }
       const auto plan = drivers.planBatch(firstDue.providerId, providerDue);
       if (plan.status != IrOutboxBatchPlanStatus::Planned) {
+        if (!plan.rejectedRowId) {
+          return safeAdd(now, 1'000);
+        }
+        const auto rejectedDue = std::ranges::find(
+            providerDue, *plan.rejectedRowId, &IrOutboxEntry::id);
+        if (rejectedDue == providerDue.end()) {
+          return safeAdd(now, 1'000);
+        }
         {
           std::lock_guard lock(mutex);
           if (!requestMayStartLocked(expectedGeneration)) {
@@ -845,7 +855,7 @@ struct IrSubmissionService::Impl {
           }
         }
         const IrOutboxClaimRequest request{
-            .rowId = firstDue.id, .expectedState = firstDue.state};
+            .rowId = rejectedDue->id, .expectedState = rejectedDue->state};
         auto rejected =
             repository.ClaimIrOutboxBatch(std::span(&request, 1), now);
         if (rejected.status != IrOutboxClaimStatus::Claimed ||
@@ -865,16 +875,13 @@ struct IrSubmissionService::Impl {
                         ? "unsupported_batch_plan"
                         : "invalid_batch_plan",
             .diagnostic =
-                "IR provider rejected the first due row during batch planning",
+                "IR provider rejected an identified row during batch planning",
         };
         const auto update =
-            deliveryUpdate(rejected.entries.front(), firstDue.state,
+            deliveryUpdate(rejected.entries.front(), rejectedDue->state,
                            planningFailure, now);
         const auto applied = repository.ApplyIrOutboxDelivery(update);
-        if (applied.status != IrOutboxMutationStatus::Updated) {
-          repository.RecoverStaleIrOutbox(now);
-        }
-        refreshEntry({firstDue.providerId, firstDue.attemptId},
+        refreshEntry({rejectedDue->providerId, rejectedDue->attemptId},
                      expectedGeneration);
         refreshCount(firstDue.providerId, expectedGeneration);
         return applied.status == IrOutboxMutationStatus::Updated
@@ -1077,9 +1084,9 @@ struct IrSubmissionService::Impl {
         }
         const auto recovered =
             repository.ApplyIrOutboxDeliveries(recoveryUpdates);
-        if (recovered.status != IrOutboxMutationStatus::Updated) {
-          repository.RecoverStaleIrOutbox(completedAt);
-        }
+        // If this scoped mutation also fails, lifecycle recovery owns these
+        // claims. Active delivery must not reset unrelated Uploading rows.
+        (void)recovered;
       }
       for (const auto &entry : planned) {
         refreshEntry({entry.providerId, entry.attemptId}, expectedGeneration);

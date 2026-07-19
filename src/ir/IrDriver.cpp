@@ -202,10 +202,17 @@ IrDriverRegistry::planBatch(std::string_view providerId,
     IrOutboxBatchPlan plan = driver->planBatch(due);
     if (plan.status != IrOutboxBatchPlanStatus::Planned) {
       plan.rowIds.clear();
+      if (plan.rejectedRowId &&
+          (*plan.rejectedRowId <= 0 ||
+           std::ranges::none_of(due, [&](const IrOutboxEntry &entry) {
+             return entry.id == *plan.rejectedRowId;
+           }))) {
+        plan.rejectedRowId.reset();
+      }
       plan.diagnostic = sanitizeDiagnostic(plan.diagnostic);
       return plan;
     }
-    if (plan.rowIds.empty() || plan.rowIds.size() > 64) {
+    if (plan.rejectedRowId || plan.rowIds.empty() || plan.rowIds.size() > 64) {
       return invalidBatchPlan("IR driver returned an invalid batch size");
     }
     std::unordered_set<std::int64_t> dueIds;

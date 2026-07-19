@@ -544,12 +544,14 @@ TachiDriver::planBatch(std::span<const IrOutboxEntry> due) const {
   const auto &first = due.front();
   if (const auto invalidProof = invalidStoredRulesetProof(first)) {
     return {.status = IrOutboxBatchPlanStatus::Invalid,
+            .rejectedRowId = first.id,
             .diagnostic = invalidProof->diagnostic};
   }
   if (first.state != IrOutboxState::AwaitingRemoteResult) {
     const auto built = buildBatchManualOutboxDocument(due);
     if (built.status != BuildTachiOutboxBatchStatus::Built || !built.document) {
       return {.status = IrOutboxBatchPlanStatus::Invalid,
+              .rejectedRowId = built.rejectedRowId,
               .diagnostic = built.diagnostic};
     }
     return {.status = IrOutboxBatchPlanStatus::Planned,
@@ -559,6 +561,7 @@ TachiDriver::planBatch(std::span<const IrOutboxEntry> due) const {
   const auto firstOrigin = normalizeServerOrigin(first.remoteOrigin);
   if (!firstOrigin || !isValidImportId(first.remoteJobId)) {
     return {.status = IrOutboxBatchPlanStatus::Invalid,
+            .rejectedRowId = first.id,
             .diagnostic = "Tachi deferred import state is missing or invalid"};
   }
   std::vector<std::int64_t> rowIds;
@@ -576,8 +579,12 @@ TachiDriver::planBatch(std::span<const IrOutboxEntry> due) const {
       continue;
     }
     if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
-      return {.status = IrOutboxBatchPlanStatus::Invalid,
-              .diagnostic = invalidProof->diagnostic};
+      if (rowIds.empty()) {
+        return {.status = IrOutboxBatchPlanStatus::Invalid,
+                .rejectedRowId = entry.id,
+                .diagnostic = invalidProof->diagnostic};
+      }
+      break;
     }
     rowIds.push_back(entry.id);
   }

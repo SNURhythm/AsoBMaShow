@@ -91,6 +91,7 @@ struct DeliveryOutcome {
 struct IrOutboxBatchPlan {
   IrOutboxBatchPlanStatus status = IrOutboxBatchPlanStatus::Invalid;
   std::vector<std::int64_t> rowIds;
+  std::optional<std::int64_t> rejectedRowId;
   std::string diagnostic;
 };
 

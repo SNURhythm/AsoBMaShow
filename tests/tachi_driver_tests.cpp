@@ -467,6 +467,30 @@ void testAwaitingRowsPlanAndPollAsOneBatch() {
          "shared deferred rows perform exactly one poll request");
 }
 
+void testPendingPlanReturnsValidPrefixThenIdentifiesMalformedFirstRow() {
+  const ir::tachi::TachiDriver driver;
+  auto first = pendingEntry();
+  auto malformed = pendingEntry();
+  malformed.id = 2;
+  malformed.rulesetProof.validationFingerprint = "invalid";
+  auto later = pendingEntry();
+  later.id = 3;
+  const std::vector due{first, malformed, later};
+
+  const auto prefix = driver.planBatch(due);
+  expect(prefix.status == ir::IrOutboxBatchPlanStatus::Planned &&
+             prefix.rowIds == std::vector<std::int64_t>{1},
+         "Tachi plans the valid prefix before a malformed later row");
+  const auto rejected = driver.planBatch(std::span(due).subspan(1));
+  expect(rejected.status == ir::IrOutboxBatchPlanStatus::Invalid &&
+             rejected.rejectedRowId == 2,
+         "Tachi explicitly identifies a malformed first due row");
+  const auto finalValid = driver.planBatch(std::span(due).subspan(2));
+  expect(finalValid.status == ir::IrOutboxBatchPlanStatus::Planned &&
+             finalValid.rowIds == std::vector<std::int64_t>{3},
+         "later valid Tachi work remains independently plannable");
+}
+
 void testMalformedAndBoundedDiagnostics() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
@@ -1503,6 +1527,7 @@ int main() {
   testMultipleScoreIdentitiesAreBatchSuccess();
   testBatchSubmissionUsesOneRequestAndClassifiesResponse();
   testAwaitingRowsPlanAndPollAsOneBatch();
+  testPendingPlanReturnsValidPrefixThenIdentifiesMalformedFirstRow();
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();
   testPollUsesPersistedOriginAndCurrentKey();

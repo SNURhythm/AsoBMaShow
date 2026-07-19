@@ -6,6 +6,8 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -85,6 +87,12 @@ public:
 
   ir::IrOutboxBatchPlan
   planBatch(std::span<const ir::IrOutboxEntry> due) const override {
+    if (throwDuringPlan) {
+      throw std::runtime_error("injected plan failure");
+    }
+    if (plannedOutcome) {
+      return *plannedOutcome;
+    }
     if (plannedRowIds) {
       return {.status = ir::IrOutboxBatchPlanStatus::Planned,
               .rowIds = *plannedRowIds};
@@ -109,6 +117,8 @@ public:
   mutable std::vector<ir::IrOutboxEntry> submittedEntries;
   mutable std::vector<ir::IrOutboxEntry> polledEntries;
   std::optional<std::vector<std::int64_t>> plannedRowIds;
+  std::optional<ir::IrOutboxBatchPlan> plannedOutcome;
+  bool throwDuringPlan = false;
 
 private:
   std::string id_;
@@ -568,6 +578,30 @@ void testRegistryRejectsInvalidDriverBatchPlans() {
   expect(valid.status == ir::IrOutboxBatchPlanStatus::Planned &&
              valid.rowIds == std::vector<std::int64_t>({21, 22}),
          "registry preserves a valid driver batch plan");
+
+  driver->plannedRowIds.reset();
+  driver->plannedOutcome = ir::IrOutboxBatchPlan{
+      .status = ir::IrOutboxBatchPlanStatus::Invalid,
+      .rejectedRowId = 22,
+      .diagnostic = "row 22 is malformed",
+  };
+  const auto identified = registry.planBatch("submitter", due);
+  expect(identified.status == ir::IrOutboxBatchPlanStatus::Invalid &&
+             identified.rejectedRowId == 22,
+         "registry preserves an explicitly identified due-row rejection");
+
+  driver->plannedOutcome->rejectedRowId = 99;
+  const auto unknownOffender = registry.planBatch("submitter", due);
+  expect(unknownOffender.status == ir::IrOutboxBatchPlanStatus::Invalid &&
+             !unknownOffender.rejectedRowId,
+         "registry strips an out-of-input rejected row identity");
+
+  driver->plannedOutcome.reset();
+  driver->throwDuringPlan = true;
+  const auto exception = registry.planBatch("submitter", due);
+  expect(exception.status == ir::IrOutboxBatchPlanStatus::Invalid &&
+             !exception.rejectedRowId,
+         "registry exceptions never accuse an arbitrary due row");
 }
 
 void testRegistryForwardsScoreReconciliation() {

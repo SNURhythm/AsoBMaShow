@@ -69,8 +69,11 @@ BuildDraftOutcome ineligible(const SubmissionEligibilityOutcome &eligibility) {
   };
 }
 
-BuildTachiOutboxBatchOutcome invalidOutboxBatch(std::string_view diagnostic) {
+BuildTachiOutboxBatchOutcome
+invalidOutboxBatch(std::string_view diagnostic,
+                   std::optional<std::int64_t> rejectedRowId = std::nullopt) {
   return {.status = BuildTachiOutboxBatchStatus::Invalid,
+          .rejectedRowId = rejectedRowId,
           .diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
@@ -561,57 +564,84 @@ BuildTachiOutboxBatchOutcome buildBatchManualOutboxDocument(
       if (rowIds.size() == 64) {
         break;
       }
-      if (!hasValidStoredProof(entry) || entry.payloadJson.empty() ||
-          entry.payloadJson.size() > kMaximumPayloadBytes) {
-        return invalidOutboxBatch(
-            "Tachi outbox row has an invalid ruleset proof or payload");
-      }
+      try {
+        if (!hasValidStoredProof(entry) || entry.payloadJson.empty() ||
+            entry.payloadJson.size() > kMaximumPayloadBytes) {
+          if (rowIds.empty()) {
+            return invalidOutboxBatch(
+                "Tachi outbox row has an invalid ruleset proof or payload",
+                entry.id);
+          }
+          break;
+        }
 
-      const nlohmann::json source = nlohmann::json::parse(entry.payloadJson);
-      if (!source.is_object()) {
-        return invalidOutboxBatch("Tachi outbox payload is not an object");
-      }
-      const auto meta = source.find("meta");
-      const auto scores = source.find("scores");
-      if (meta == source.end() || !meta->is_object() ||
-          scores == source.end() || !scores->is_array() ||
-          scores->size() != 1 || !scores->front().is_object()) {
-        return invalidOutboxBatch(
-            "Tachi outbox payload must contain one meta object and score");
-      }
-      const auto playtype = meta->find("playtype");
-      if (playtype == meta->end() || !playtype->is_string()) {
-        return invalidOutboxBatch(
-            "Tachi outbox payload playtype is missing or invalid");
-      }
-      const auto &playtypeText = playtype->get_ref<const std::string &>();
-      if (playtypeText != "7K" && playtypeText != "14K") {
-        return invalidOutboxBatch(
-            "Tachi outbox payload playtype is unsupported");
-      }
+        const nlohmann::json source = nlohmann::json::parse(entry.payloadJson);
+        if (!source.is_object()) {
+          if (rowIds.empty()) {
+            return invalidOutboxBatch(
+                "Tachi outbox payload is not an object", entry.id);
+          }
+          break;
+        }
+        const auto meta = source.find("meta");
+        const auto scores = source.find("scores");
+        if (meta == source.end() || !meta->is_object() ||
+            scores == source.end() || !scores->is_array() ||
+            scores->size() != 1 || !scores->front().is_object()) {
+          if (rowIds.empty()) {
+            return invalidOutboxBatch(
+                "Tachi outbox payload must contain one meta object and score",
+                entry.id);
+          }
+          break;
+        }
+        const auto playtype = meta->find("playtype");
+        if (playtype == meta->end() || !playtype->is_string()) {
+          if (rowIds.empty()) {
+            return invalidOutboxBatch(
+                "Tachi outbox payload playtype is missing or invalid",
+                entry.id);
+          }
+          break;
+        }
+        const auto &playtypeText = playtype->get_ref<const std::string &>();
+        if (playtypeText != "7K" && playtypeText != "14K") {
+          if (rowIds.empty()) {
+            return invalidOutboxBatch(
+                "Tachi outbox payload playtype is unsupported", entry.id);
+          }
+          break;
+        }
 
-      if (selectedPlaytype.empty()) {
-        selectedPlaytype = playtypeText;
-        batchMeta = *meta;
-      } else if (playtypeText != selectedPlaytype) {
-        continue;
-      }
-      nlohmann::json candidateScores = batchScores;
-      candidateScores.push_back(scores->front());
-      const std::string candidatePayload = nlohmann::json{
-          {"meta", batchMeta},
-          {"scores",
-           std::move(candidateScores)}}.dump();
-      if (candidatePayload.size() > kMaximumPayloadBytes) {
+        if (selectedPlaytype.empty()) {
+          selectedPlaytype = playtypeText;
+          batchMeta = *meta;
+        } else if (playtypeText != selectedPlaytype) {
+          continue;
+        }
+        nlohmann::json candidateScores = batchScores;
+        candidateScores.push_back(scores->front());
+        const std::string candidatePayload = nlohmann::json{
+            {"meta", batchMeta},
+            {"scores", std::move(candidateScores)}}.dump();
+        if (candidatePayload.size() > kMaximumPayloadBytes) {
+          if (rowIds.empty()) {
+            return invalidOutboxBatch(
+                "Tachi outbox score exceeds the provider size limit",
+                entry.id);
+          }
+          break;
+        }
+        batchScores.push_back(scores->front());
+        rowIds.push_back(entry.id);
+        payloadJson = candidatePayload;
+      } catch (...) {
         if (rowIds.empty()) {
           return invalidOutboxBatch(
-              "Tachi outbox score exceeds the provider size limit");
+              "Tachi outbox row could not be parsed", entry.id);
         }
         break;
       }
-      batchScores.push_back(scores->front());
-      rowIds.push_back(entry.id);
-      payloadJson = candidatePayload;
     }
 
     if (rowIds.empty()) {

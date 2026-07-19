@@ -1,8 +1,10 @@
 #include "ir/IrSubmissionService.h"
 
+#include "FileChecksum.h"
 #include "Utils.h"
 #include "ir/IrHttpClient.h"
 #include "ir/IrSettingsPresentation.h"
+#include "ir/tachi/TachiDriver.h"
 #include "repositories/ReplayRepository.h"
 
 #include <atomic>
@@ -69,6 +71,36 @@ public:
   }
 };
 
+class TachiSuccessHttpClient final : public ir::IrHttpClient {
+public:
+  ir::IrHttpResponse perform(const ir::IrHttpRequest &request,
+                             std::stop_token) noexcept override {
+    std::lock_guard lock(mutex_);
+    requests_.push_back(request);
+    changed_.notify_all();
+    return {
+        .statusCode = 200,
+        .body = R"({"success":true,"description":"Import successful.","body":{"scoreIDs":[],"errors":[]}})",
+    };
+  }
+
+  bool waitForRequests(std::size_t count) const {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, 3s,
+                             [&] { return requests_.size() >= count; });
+  }
+
+  std::vector<ir::IrHttpRequest> requests() const {
+    std::lock_guard lock(mutex_);
+    return requests_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  mutable std::condition_variable changed_;
+  std::vector<ir::IrHttpRequest> requests_;
+};
+
 struct DriverCall {
   bool poll = false;
   bool userIntent = false;
@@ -107,8 +139,16 @@ public:
     {
       std::lock_guard lock(mutex_);
       if (!rejectedPlanAttemptId_.empty() &&
-          due.front().attemptId == rejectedPlanAttemptId_) {
+          due.front().attemptId == rejectedPlanAttemptId_ &&
+          (!rejectedPlanRowId_ ||
+           std::ranges::any_of(due, [&](const auto &entry) {
+             return entry.id == *rejectedPlanRowId_;
+           }))) {
         return {.status = rejectedPlanStatus_,
+                .rejectedRowId = identifyRejectedPlan_
+                                     ? std::optional(rejectedPlanRowId_.value_or(
+                                           due.front().id))
+                                     : std::nullopt,
                 .diagnostic = "fake rejected the first due row"};
       }
     }
@@ -237,10 +277,15 @@ public:
   }
 
   void rejectPlanForAttempt(std::string attemptId,
-                            ir::IrOutboxBatchPlanStatus status) {
+                            ir::IrOutboxBatchPlanStatus status,
+                            bool identifyRejectedRow = true,
+                            std::optional<std::int64_t> rejectedRowId =
+                                std::nullopt) {
     std::lock_guard lock(mutex_);
     rejectedPlanAttemptId_ = std::move(attemptId);
     rejectedPlanStatus_ = status;
+    identifyRejectedPlan_ = identifyRejectedRow;
+    rejectedPlanRowId_ = rejectedRowId;
   }
 
   void blockRequestsUntilCancelled() {
@@ -360,6 +405,8 @@ private:
   mutable std::string rejectedPlanAttemptId_;
   mutable ir::IrOutboxBatchPlanStatus rejectedPlanStatus_ =
       ir::IrOutboxBatchPlanStatus::Invalid;
+  mutable bool identifyRejectedPlan_ = true;
+  mutable std::optional<std::int64_t> rejectedPlanRowId_;
   mutable std::optional<std::stop_token> activeReconciliationToken_;
   mutable std::size_t reconciliationCalls_ = 0;
   mutable int reconciliationStage_ = 0;
@@ -391,6 +438,11 @@ public:
   bool waitForEntries(std::size_t count) {
     std::unique_lock lock(mutex_);
     return condition_.wait_for(lock, 3s, [&] { return entered_ >= count; });
+  }
+
+  std::size_t entryCount() {
+    std::lock_guard lock(mutex_);
+    return entered_;
   }
 
   std::optional<std::chrono::steady_clock::time_point> deadline() {
@@ -428,6 +480,31 @@ ir::IrOutboxDraft draft(int suffix, std::int64_t createdAt) {
               .validationFingerprint = std::string(64, 'd'),
           },
       .createdAtUnixMillis = createdAt};
+}
+
+ir::IrOutboxDraft tachiDraft(int suffix, std::int64_t createdAt) {
+  ir::IrOutboxDraft result{
+      .providerId = "tachi",
+      .attemptId = attemptId(suffix),
+      .chartMd5 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      .chartSha256 =
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      .payloadJson =
+          R"({"meta":{"game":"bms","playtype":"7K","service":"AsoBMaShow"},"scores":[{"score":123}]})",
+      .createdAtUnixMillis = createdAt,
+  };
+  const std::string proofInput =
+      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      std::to_string(result.attemptId.size()) + ":" + result.attemptId + "\n" +
+      std::to_string(result.chartSha256.size()) + ":" + result.chartSha256 +
+      "\n" + std::to_string(result.payloadJson.size()) + ":" +
+      result.payloadJson;
+  result.rulesetProof = {
+      .rulesetId = "lr2",
+      .rulesetRevision = 3,
+      .validationFingerprint = file_checksum::sha256(proofInput),
+  };
+  return result;
 }
 
 ir::IrRemoteScore remoteScore(std::string id = "remote-score-1") {
@@ -858,7 +935,8 @@ bool irIdentityStorageContains(const std::filesystem::path &databasePath,
       "ifnull(last_error_code,'') || ifnull(last_error_message,''),?1)>0 "
       "UNION ALL SELECT 1 FROM ir_submission_receipts WHERE "
       "instr(ifnull(server_origin,'') || ifnull(remote_chart_id,'') || "
-      "ifnull(remote_score_id,''),?1)>0 LIMIT 1)";
+      "ifnull(remote_score_id,'') || ifnull(CAST(remote_user_id AS TEXT),''),"
+      "?1)>0 LIMIT 1)";
   bool contains = true;
   if (sqlite3_prepare_v2(database, query, -1, &statement, nullptr) == SQLITE_OK &&
       sqlite3_bind_text(statement, 1, value.data(),
@@ -1090,7 +1168,7 @@ void testAmbiguousPartialResultFailsWholeGroup() {
   }
 }
 
-void testInvalidAndUnsupportedPlansIsolateFirstRowWithoutStarvation() {
+void testIdentifiedInvalidAndUnsupportedPlansIsolateRejectedRow() {
   const auto run = [](ir::IrOutboxBatchPlanStatus planStatus, int firstSuffix,
                       int laterSuffix) {
     Harness harness;
@@ -1121,6 +1199,127 @@ void testInvalidAndUnsupportedPlansIsolateFirstRowWithoutStarvation() {
 
   run(ir::IrOutboxBatchPlanStatus::Invalid, 217, 218);
   run(ir::IrOutboxBatchPlanStatus::Unsupported, 219, 220);
+}
+
+void testIdentifiedLaterPlanRejectionNeverDiscardsTheFirstDueRow() {
+  Harness harness;
+  harness.setCredential("key");
+  const auto first = harness.enqueueReady(draft(237, harness.now.load()), false);
+  const auto rejected =
+      harness.enqueueReady(draft(238, harness.now.load()), false);
+  const auto later = harness.enqueueReady(draft(239, harness.now.load()), false);
+  expect(first.entry && rejected.entry && later.entry,
+         "identified later rejection fixtures insert in order");
+  harness.driver->rejectPlanForAttempt(
+      attemptId(237), ir::IrOutboxBatchPlanStatus::Invalid, true,
+      rejected.entry ? std::optional(rejected.entry->id) : std::nullopt);
+  harness.driver->pushSubmit({.status = ir::DeliveryStatus::Succeeded});
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.driver->waitForCalls(1),
+         "valid work proceeds after an identified later-row rejection");
+  expect(harness.waitForState(attemptId(237), ir::IrOutboxState::Succeeded) &&
+             harness.waitForState(attemptId(238),
+                                  ir::IrOutboxState::FailedPermanent) &&
+             harness.waitForState(attemptId(239), ir::IrOutboxState::Succeeded),
+         "only the planner-identified later row becomes terminal");
+  const auto calls = harness.driver->calls();
+  expect(calls.size() == 1 && first.entry && later.entry &&
+             calls.front().rowIds == std::vector<std::int64_t>{
+                                            first.entry->id, later.entry->id},
+         "identified later rejection preserves all valid due rows");
+}
+
+void testUnidentifiedPlanFailureDoesNotDiscardAnyDueRow() {
+  Harness harness;
+  harness.setCredential("key");
+  expect(harness.enqueueReady(draft(227, harness.now.load()), false).entry &&
+             harness.enqueueReady(draft(228, harness.now.load()), false).entry,
+         "unidentified plan failure fixtures insert");
+  harness.driver->rejectPlanForAttempt(
+      attemptId(227), ir::IrOutboxBatchPlanStatus::Invalid, false);
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.waiter.waitForEntries(1),
+         "unidentified plan failure enters a bounded wait");
+  const auto first = load(harness, 227);
+  const auto second = load(harness, 228);
+  expect(first.state == ir::IrOutboxState::Pending &&
+             second.state == ir::IrOutboxState::Pending &&
+             first.requestAttemptCount == 0 &&
+             second.requestAttemptCount == 0,
+         "unidentified plan failure leaves every due row untouched");
+  expect(harness.driver->calls().empty(),
+         "unidentified plan failure neither transports nor busy-loops");
+}
+
+void testTachiMalformedLaterRowDoesNotDiscardOrStarveValidWork() {
+  TemporaryDirectory temp;
+  ReplayRepository repository(temp.path() / "replays.db");
+  expect(repository.EnsureSchema(), "Tachi service integration schema starts");
+  ir::IrDriverRegistry registry;
+  auto driver = std::make_shared<ir::tachi::TachiDriver>();
+  std::string diagnostic;
+  expect(registry.registerDriver(driver, diagnostic),
+         "Tachi service integration driver registers");
+  TachiSuccessHttpClient http;
+  ManualWaiter waiter;
+  const std::int64_t now = 1'000'000'000'000LL;
+  ir::IrSubmissionServiceOptions options;
+  options.wallNowUnixMillis = [=] { return now; };
+  options.credentialLookup = [](std::string_view, std::string_view providerId) {
+    return providerId == "tachi" ? std::string("key") : std::string{};
+  };
+  options.waitUntil = [&](std::stop_token token,
+                          std::optional<std::chrono::steady_clock::time_point>
+                              deadline) { waiter.wait(token, deadline); };
+  options.wake = [&] { waiter.wake(); };
+  ir::IrSubmissionService service(repository, registry, http,
+                                  std::move(options));
+
+  std::vector<ir::IrOutboxDraft> drafts{
+      tachiDraft(229, now), tachiDraft(230, now), tachiDraft(231, now)};
+  drafts[1].rulesetProof.validationFingerprint = std::string(64, 'e');
+  for (const auto &value : drafts) {
+    const auto staged = repository.StageChartResult(
+        canonicalAttempt(value, temp.path()), {});
+    expect(staged.status == result_persistence::StageStatus::Staged,
+           "Tachi service integration stages a canonical attempt");
+    expect(repository.EnqueueReadyIrOutboxDraft(value, false).entry.has_value(),
+           "Tachi service integration enqueues its outbox row");
+  }
+  ir::IrActiveProfileConfig config{.profileId = "profile-a"};
+  config.providers["tachi"] = {
+      .enabled = true,
+      .autoSubmit = true,
+      .serverOrigin = "https://boku.tachi.ac",
+  };
+  service.start(std::move(config));
+
+  expect(http.waitForRequests(2),
+         "valid Tachi rows on both sides of corruption are delivered");
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  bool settled = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto first = repository.LoadIrOutbox("tachi", attemptId(229));
+    const auto malformed = repository.LoadIrOutbox("tachi", attemptId(230));
+    const auto later = repository.LoadIrOutbox("tachi", attemptId(231));
+    settled = first.entry && malformed.entry && later.entry &&
+              first.entry->state == ir::IrOutboxState::Succeeded &&
+              malformed.entry->state == ir::IrOutboxState::FailedPermanent &&
+              later.entry->state == ir::IrOutboxState::Succeeded;
+    if (settled) {
+      break;
+    }
+    std::this_thread::yield();
+  }
+  expect(settled,
+         "only the explicitly malformed Tachi row becomes terminal");
+  const auto requests = http.requests();
+  expect(requests.size() == 2,
+         "Tachi corruption causes no transport for the rejected row");
+  service.stop();
+  repository.Shutdown();
 }
 
 void testEchoedCredentialResponseIdentitiesAreNeverPersisted() {
@@ -1170,6 +1369,26 @@ void testEchoedCredentialResponseIdentitiesAreNeverPersisted() {
        .remoteUserId = 42,
        .remoteScoreId = "score-" + credential},
       "remoteScoreId");
+
+  Harness numeric;
+  numeric.setCredential("42");
+  expect(numeric.enqueueReady(draft(232, numeric.now.load()), false)
+             .entry.has_value(),
+         "numeric credential echo fixture inserts");
+  numeric.driver->pushSubmit({.status = ir::DeliveryStatus::Succeeded,
+                              .remoteUserId = 42});
+  numeric.service->start(profile(true, true, "https://boku.tachi.ac"));
+  expect(numeric.waitForState(attemptId(232),
+                              ir::IrOutboxState::FailedPermanent),
+         "canonical numeric remoteUserId credential echo is rejected");
+  const auto numericStored = load(numeric, 232);
+  const auto numericReceipt = numeric.repository.LoadIrSubmissionReceipt(
+      "fake", "https://boku.tachi.ac", attemptId(232));
+  expect(numericStored.lastErrorCode == "malformed_response" &&
+             numericReceipt.status == ir::IrReceiptReadStatus::NotFound &&
+             !irIdentityStorageContains(numeric.temp.path() / "replays.db",
+                                        "42"),
+         "numeric credential echo is absent from outbox and receipt storage");
 }
 
 void testFailedAtomicDeliveryApplyRequeuesTheWholeClaimedGroup() {
@@ -1215,6 +1434,62 @@ void testFailedAtomicDeliveryApplyRequeuesTheWholeClaimedGroup() {
   expect(harness.driver->calls().size() == 1 &&
              harness.succeededCallbacks().empty(),
          "apply failure neither busy-loops nor publishes delivery success");
+}
+
+void testFailedExactGroupRecoveryNeverResetsUnrelatedUploadingRows() {
+  Harness harness;
+  harness.setCredential("key");
+  std::vector<std::int64_t> groupRowIds;
+  for (int suffix = 233; suffix < 236; ++suffix) {
+    const auto inserted =
+        harness.enqueueReady(draft(suffix, harness.now.load()), false);
+    expect(inserted.entry.has_value(), "scoped recovery group fixture inserts");
+    if (inserted.entry) {
+      groupRowIds.push_back(inserted.entry->id);
+    }
+  }
+  harness.driver->pushSubmit({.status = ir::DeliveryStatus::Succeeded,
+                              .remoteUserId = 84});
+  harness.driver->blockRequestsUntilReleased();
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+  expect(harness.driver->waitForCalls(1),
+         "scoped recovery group reaches the provider");
+  const std::size_t waitsBeforeRecovery = harness.waiter.entryCount();
+
+  const std::int64_t unrelatedId = makeAwaiting(harness, 236);
+  harness.now += 10'000;
+  expect(harness.repository
+                 .ClaimIrOutbox(unrelatedId,
+                                ir::IrOutboxState::AwaitingRemoteResult,
+                                harness.now.load())
+                 .status == ir::IrOutboxClaimStatus::Claimed,
+         "unrelated deferred row is independently uploading");
+  expect(groupRowIds.size() == 3,
+         "scoped recovery trigger has every claimed group row");
+  if (groupRowIds.size() == 3) {
+    const std::string trigger =
+        "CREATE TRIGGER fail_exact_group_recovery BEFORE UPDATE ON ir_outbox "
+        "WHEN OLD.id IN (" +
+        std::to_string(groupRowIds[0]) + "," +
+        std::to_string(groupRowIds[1]) + "," +
+        std::to_string(groupRowIds[2]) +
+        ") AND OLD.state=1 AND (NEW.state=5 OR "
+        "NEW.last_error_code='storage_apply_failed') BEGIN SELECT "
+        "RAISE(ABORT,'injected exact recovery failure'); END";
+    expect(executeSql(harness.temp.path() / "replays.db", trigger),
+           "scoped recovery fixture installs an exact-group apply failure");
+  }
+  harness.driver->releaseBlockedRequests();
+  expect(harness.waiter.waitForEntries(waitsBeforeRecovery + 1),
+         "scoped recovery failure returns the worker to a bounded wait");
+
+  const auto unrelatedAfter = load(harness, 236);
+  expect(unrelatedAfter.state == ir::IrOutboxState::Uploading,
+         "failed exact-group recovery never resets an unrelated claim");
+  for (int suffix = 233; suffix < 236; ++suffix) {
+    expect(load(harness, suffix).state == ir::IrOutboxState::Uploading,
+           "failed exact-group recovery waits for lifecycle stale recovery");
+  }
 }
 
 void testActiveRequestSnapshotsDistinguishSubmitAndPoll() {
@@ -2770,9 +3045,13 @@ int main() {
   testGroupedCancellationRecoversEveryClaim();
   testMissingCredentialBlocksWholePlannedGroup();
   testAmbiguousPartialResultFailsWholeGroup();
-  testInvalidAndUnsupportedPlansIsolateFirstRowWithoutStarvation();
+  testIdentifiedInvalidAndUnsupportedPlansIsolateRejectedRow();
+  testIdentifiedLaterPlanRejectionNeverDiscardsTheFirstDueRow();
+  testUnidentifiedPlanFailureDoesNotDiscardAnyDueRow();
+  testTachiMalformedLaterRowDoesNotDiscardOrStarveValidWork();
   testEchoedCredentialResponseIdentitiesAreNeverPersisted();
   testFailedAtomicDeliveryApplyRequeuesTheWholeClaimedGroup();
+  testFailedExactGroupRecoveryNeverResetsUnrelatedUploadingRows();
   testActiveRequestSnapshotsDistinguishSubmitAndPoll();
   testStartupRecovery();
   testDisabledAndReadOnlyProvidersStayPaused();

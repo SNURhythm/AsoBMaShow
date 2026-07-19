@@ -216,8 +216,8 @@ void testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes() {
       std::span<const ir::IrOutboxEntry>(&invalidProof, 1));
   expect(proofResult.status ==
                  ir::tachi::BuildTachiOutboxBatchStatus::Invalid &&
-             !proofResult.document,
-         "composer rejects an invalid first-row proof");
+             !proofResult.document && proofResult.rejectedRowId == 1,
+         "composer explicitly rejects an invalid first-row proof");
 
   auto invalidPayload = outboxEntry(validSubmission(), 1);
   invalidPayload.payloadJson = R"({"meta":{},"scores":[]})";
@@ -226,8 +226,30 @@ void testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes() {
       std::span<const ir::IrOutboxEntry>(&invalidPayload, 1));
   expect(payloadResult.status ==
                  ir::tachi::BuildTachiOutboxBatchStatus::Invalid &&
-             !payloadResult.document,
-         "composer rejects a payload without exactly one score and playtype");
+             !payloadResult.document && payloadResult.rejectedRowId == 1,
+         "composer explicitly rejects an invalid first-row payload");
+
+  auto validFirst = outboxEntry(validSubmission(), 1);
+  auto malformedLater = validFirst;
+  malformedLater.id = 2;
+  malformedLater.rulesetProof.validationFingerprint = "invalid";
+  auto validAfterMalformed = validFirst;
+  validAfterMalformed.id = 3;
+  const std::vector prefixEntries{validFirst, malformedLater,
+                                  validAfterMalformed};
+  const auto validPrefix =
+      ir::tachi::buildBatchManualOutboxDocument(prefixEntries);
+  expect(validPrefix.status ==
+                 ir::tachi::BuildTachiOutboxBatchStatus::Built &&
+             validPrefix.document &&
+             validPrefix.document->rowIds == std::vector<std::int64_t>{1},
+         "composer returns the valid prefix before a malformed later row");
+  const auto rejectedLater = ir::tachi::buildBatchManualOutboxDocument(
+      std::span(prefixEntries).subspan(1));
+  expect(rejectedLater.status ==
+                 ir::tachi::BuildTachiOutboxBatchStatus::Invalid &&
+             rejectedLater.rejectedRowId == 2,
+         "composer identifies the malformed row once it becomes first");
 
   auto heavy = outboxEntry(validSubmission(), 1);
   auto heavyJson = nlohmann::json::parse(heavy.payloadJson);

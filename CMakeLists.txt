@@ -884,8 +884,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(ir_submission_service_tests
         tests/ir_submission_service_tests.cpp
+        src/AtomicFile.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
+        src/VersionedJson.cpp
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -896,6 +898,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionService.cpp
+        src/ir/tachi/BokutachiCacheStore.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ir/tachi/TachiDriver.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/ir/tachi/TachiResponseParser.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
@@ -903,6 +911,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp

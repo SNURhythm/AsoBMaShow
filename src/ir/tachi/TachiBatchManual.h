@@ -35,6 +35,7 @@ enum class BuildTachiOutboxBatchStatus { Built, Invalid };
 struct BuildTachiOutboxBatchOutcome {
   BuildTachiOutboxBatchStatus status = BuildTachiOutboxBatchStatus::Invalid;
   std::optional<TachiOutboxBatchDocument> document;
+  std::optional<std::int64_t> rejectedRowId;
   std::string diagnostic;
 };
 
