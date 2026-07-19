@@ -476,9 +476,7 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
 
   model.finalGauge = score.finalGauge;
   model.maxCombo = score.maxCombo;
-  if (score.judgements.bad.has_value() && score.judgements.poor.has_value()) {
-    model.comboBreak = *score.judgements.bad + *score.judgements.poor;
-  }
+  model.comboBreak = score.badPoints;
   model.badPoints = score.badPoints;
   if (hasComboBreakCard(model)) {
     model.comboComparison = ResultComparisonCard{

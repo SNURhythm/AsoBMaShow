@@ -248,6 +248,29 @@ std::int64_t rowCount(const std::filesystem::path &path,
   return result.value_or(-1);
 }
 
+std::int64_t matchingRowCount(const std::filesystem::path &database,
+                              std::string_view query) {
+  Database connection = openDatabase(database);
+  expect(connection != nullptr, "matching row count database opens");
+  if (!connection) {
+    return -1;
+  }
+  sqlite3_stmt *raw = nullptr;
+  const std::string sql(query);
+  if (sqlite3_prepare_v2(connection.get(), sql.c_str(), -1, &raw, nullptr) !=
+      SQLITE_OK) {
+    expect(false, "matching row count query prepares");
+    return -1;
+  }
+  std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement(
+      raw, sqlite3_finalize);
+  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+    expect(false, "matching row count query returns a row");
+    return -1;
+  }
+  return sqlite3_column_int64(statement.get(), 0);
+}
+
 void seedIrOperationalState(const std::filesystem::path &path,
                             std::string_view label) {
   ReplayRepository repository(path);
@@ -281,6 +304,51 @@ void seedIrOperationalState(const std::filesystem::path &path,
              "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
              "5,1,NULL,NULL,NULL,3000,3000,3000)"),
          std::string(label) + " pending, deferred, and succeeded IR rows seed");
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO replays(chart_sha256,gauge_type,gauge_auto_shift,"
+          "final_score,max_combo,final_gauge,clear_type,assist_option) "
+          "VALUES('"
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "0,0,1,1,0.0,0,'OFF');"
+          "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
+          "replay_id,attempt_id,chart_sha256,confirmation_source,"
+          "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac',"
+          "last_insert_rowid(),'10000000-0000-4000-8000-000000000004',"
+          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "1,4000);"
+          "INSERT INTO ir_remote_scores(provider_id,server_origin,"
+          "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
+          "chart_sha256,title,artist,note_count,score,lamp_rank,service,"
+          "time_added_ms,sync_generation) VALUES('tachi',"
+          "'https://boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
+          "'dddddddddddddddddddddddddddddddd',"
+          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)"),
+      std::string(label) + " account-scoped IR evidence and mirror seed");
+}
+
+void seedImportedIrScore(const std::filesystem::path &path,
+                         std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr,
+         std::string(label) + " imported IR score database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO scores(chart_sha256,score,max_score,max_combo,"
+          "combo_break,pgreat,great,good,bad,poor,kpoor,fast,slow,"
+          "final_gauge,clear_type,score_source,source_provider_id,"
+          "source_server_origin,source_remote_score_id,"
+          "source_sync_generation) VALUES("
+          "'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',"
+          "1,2,1,0,0,1,0,0,0,0,0,0,0.0,0,1,'tachi',"
+          "'https://boku.tachi.ac','remote-score',1)"),
+      std::string(label) + " imported IR score projection seeds");
 }
 
 std::string scalarText(const std::filesystem::path &path,
@@ -696,11 +764,18 @@ void testIrOperationalStateIsNotProfilePortable() {
   writeFile(source.bokutachiCacheJson,
             R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
   seedIrOperationalState(source.replaysDb, "archive source");
+  seedImportedIrScore(source.scoresDb, "archive source");
 
   const auto exported =
       exportFixture(fixture, "ir-operational-state.asobprofile");
   expect(rowCount(source.replaysDb, "ir_outbox") == 3,
          "export leaves source IR operational rows unchanged");
+  expect(rowCount(source.replaysDb, "ir_submission_receipts") == 1 &&
+             rowCount(source.replaysDb, "ir_remote_scores") == 1 &&
+             matchingRowCount(source.scoresDb,
+                              "SELECT COUNT(*) FROM scores WHERE "
+                              "score_source=1") == 1,
+         "export leaves source account-scoped IR data unchanged");
   expect(readFile(source.irCredentialsJson).find(credential) !=
              std::string::npos,
          "export leaves source credential bytes unchanged");
@@ -734,9 +809,26 @@ void testIrOperationalStateIsNotProfilePortable() {
   writeFile(portableDatabase, replays->contents);
   expect(rowCount(portableDatabase, "ir_outbox") == 0,
          "exported replay snapshot contains no IR operational rows");
+  expect(rowCount(portableDatabase, "ir_submission_receipts") == 0 &&
+             rowCount(portableDatabase, "ir_remote_scores") == 0,
+         "exported replay snapshot contains no account-scoped IR data");
+
+  ArchiveMember *scores = findMember(members, "scores.db");
+  expect(scores != nullptr, "IR-safe export includes score database");
+  if (scores == nullptr) {
+    return;
+  }
+  const auto portableScores = fixture.exchange.path() / "portable-scores.db";
+  writeFile(portableScores, scores->contents);
+  expect(matchingRowCount(portableScores,
+                          "SELECT COUNT(*) FROM scores WHERE score_source=1") ==
+             0,
+         "exported score snapshot contains no imported IR projections");
 
   seedIrOperationalState(portableDatabase, "crafted archive");
+  seedImportedIrScore(portableScores, "crafted archive");
   replays->contents = readFile(portableDatabase);
+  scores->contents = readFile(portableScores);
   refreshChecksums(members);
   const auto crafted = fixture.exchange.path() / "crafted-ir-state.zip";
   expect(writeArchive(crafted, members, error),
@@ -752,6 +844,12 @@ void testIrOperationalStateIsNotProfilePortable() {
       fixture.manager.pathsFor(imported.profile->id);
   expect(rowCount(installed.replaysDb, "ir_outbox") == 0,
          "import strips deliberately crafted IR operational rows");
+  expect(rowCount(installed.replaysDb, "ir_submission_receipts") == 0 &&
+             rowCount(installed.replaysDb, "ir_remote_scores") == 0 &&
+             matchingRowCount(installed.scoresDb,
+                              "SELECT COUNT(*) FROM scores WHERE "
+                              "score_source=1") == 0,
+         "import strips deliberately crafted account-scoped IR data");
   expect(!std::filesystem::exists(installed.irCredentialsJson),
          "imported profile has no credential file");
   expect(!std::filesystem::exists(installed.bokutachiCacheJson),

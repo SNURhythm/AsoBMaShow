@@ -7,6 +7,7 @@
 #include "SqliteRAII.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <mutex>
 #include <unordered_set>
@@ -1712,11 +1713,11 @@ bool ReplayRepository::ClearIrOutbox(std::string &errorMessage) {
   return true;
 }
 
-bool ReplayRepository::ClearIrOutboxSnapshot(
+bool ReplayRepository::ClearIrAccountDataSnapshot(
     const std::filesystem::path &snapshotDatabasePath,
     std::string &errorMessage) {
   if (snapshotDatabasePath.empty()) {
-    errorMessage = "IR outbox snapshot path is empty";
+    errorMessage = "IR account data snapshot path is empty";
     return false;
   }
   std::error_code filesystemError;
@@ -1724,19 +1725,19 @@ bool ReplayRepository::ClearIrOutboxSnapshot(
       std::filesystem::symlink_status(snapshotDatabasePath, filesystemError);
   if (filesystemError || !std::filesystem::is_regular_file(status) ||
       std::filesystem::is_symlink(status)) {
-    errorMessage = "IR outbox snapshot is not a regular database file";
+    errorMessage = "IR account data snapshot is not a regular database file";
     return false;
   }
   ReplayRepository snapshot(snapshotDatabasePath);
   if (!snapshot.EnsureSchema()) {
-    errorMessage = "IR outbox snapshot schema is unavailable";
+    errorMessage = "IR account data snapshot schema is unavailable";
     return false;
   }
 
   profile_database_activity::WriteGuard operation;
   std::lock_guard lock(snapshot.impl_->sessionMutex);
   if (!snapshot.EnsureSessionDatabaseLocked()) {
-    errorMessage = "IR outbox snapshot storage is unavailable";
+    errorMessage = "IR account data snapshot storage is unavailable";
     return false;
   }
   std::string transactionError;
@@ -1744,32 +1745,39 @@ bool ReplayRepository::ClearIrOutboxSnapshot(
                                       "BEGIN IMMEDIATE TRANSACTION",
                                       transactionError);
   if (!transaction.active()) {
-    errorMessage = "could not start IR outbox snapshot cleanup";
+    errorMessage = "could not start IR account data snapshot cleanup";
     return false;
   }
   SqliteStatementHandle clear;
-  if (prepareSqliteStatement(snapshot.impl_->sessionDatabase,
-                             "DELETE FROM ir_outbox", clear) != SQLITE_OK ||
-      sqlite3_step(clear.get()) != SQLITE_DONE) {
-    errorMessage = "could not clear IR outbox snapshot";
-    return false;
+  constexpr std::array<std::string_view, 3> accountScopedTables{
+      "ir_outbox", "ir_submission_receipts", "ir_remote_scores"};
+  for (const std::string_view table : accountScopedTables) {
+    const std::string query = "DELETE FROM " + std::string(table);
+    if (prepareSqliteStatement(snapshot.impl_->sessionDatabase, query.c_str(),
+                               clear) != SQLITE_OK ||
+        sqlite3_step(clear.get()) != SQLITE_DONE) {
+      errorMessage = "could not clear account-scoped IR snapshot data";
+      return false;
+    }
+    clear.reset();
   }
   SqliteStatementHandle verify;
   if (prepareSqliteStatement(snapshot.impl_->sessionDatabase,
-                             "SELECT COUNT(*) FROM ir_outbox",
+                             "SELECT (SELECT COUNT(*) FROM ir_outbox) + "
+                             "(SELECT COUNT(*) FROM ir_submission_receipts) + "
+                             "(SELECT COUNT(*) FROM ir_remote_scores)",
                              verify) != SQLITE_OK ||
       sqlite3_step(verify.get()) != SQLITE_ROW ||
       sqlite3_column_type(verify.get(), 0) != SQLITE_INTEGER ||
       sqlite3_column_int64(verify.get(), 0) != 0 ||
       sqlite3_step(verify.get()) != SQLITE_DONE) {
-    errorMessage = "IR outbox snapshot cleanup could not be verified";
+    errorMessage = "account-scoped IR snapshot cleanup could not be verified";
     return false;
   }
   if (!transaction.commit(transactionError)) {
-    errorMessage = "could not commit IR outbox snapshot cleanup";
+    errorMessage = "could not commit IR account data snapshot cleanup";
     return false;
   }
-  clear.reset();
   verify.reset();
   int walFrames = 0;
   int checkpointedFrames = 0;
@@ -1778,7 +1786,7 @@ bool ReplayRepository::ClearIrOutboxSnapshot(
       &walFrames, &checkpointedFrames);
   if (checkpointResult != SQLITE_OK ||
       (walFrames >= 0 && checkpointedFrames != walFrames)) {
-    errorMessage = "could not checkpoint the cleaned IR outbox snapshot";
+    errorMessage = "could not checkpoint the cleaned IR account data snapshot";
     return false;
   }
   errorMessage.clear();

@@ -338,8 +338,8 @@ public:
   ir::IrOutboxMutationOutcome PurgeSucceededIrOutbox(std::int64_t olderThanMs);
   bool ClearIrOutbox(std::string &errorMessage);
   static bool
-  ClearIrOutboxSnapshot(const std::filesystem::path &snapshotDatabasePath,
-                        std::string &errorMessage);
+  ClearIrAccountDataSnapshot(const std::filesystem::path &snapshotDatabasePath,
+                             std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary>
   ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100,

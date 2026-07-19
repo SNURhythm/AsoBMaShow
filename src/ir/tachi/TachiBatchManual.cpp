@@ -482,6 +482,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
       };
     };
 
+    const std::size_t minimumSamples =
+        std::min<std::size_t>(2, submission.gaugeHistory.size());
     std::vector<std::size_t> allIndices(submission.gaugeHistory.size());
     std::iota(allIndices.begin(), allIndices.end(), 0);
     std::vector<std::size_t> selected = allIndices;
@@ -495,6 +497,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
       }
 
       selected.clear();
+      // The empty document still emits gaugeHistory:[], so this baseline
+      // includes the property name and array delimiters.
       std::size_t selectedPayloadSize = emptyPayload.size();
       for (const std::size_t index :
            balancedSampleOrder(submission.gaugeHistory.size())) {
@@ -512,10 +516,13 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
       }
       std::ranges::sort(selected);
       payload = makeDocument(selected).dump();
+      while (payload.size() > kMaximumPayloadBytes &&
+             selected.size() > minimumSamples) {
+        selected.erase(selected.end() - 2);
+        payload = makeDocument(selected).dump();
+      }
     }
 
-    const std::size_t minimumSamples =
-        std::min<std::size_t>(2, submission.gaugeHistory.size());
     if (selected.size() < minimumSamples ||
         payload.size() > kMaximumPayloadBytes) {
       return invalid("submission payload exceeds the provider size limit");

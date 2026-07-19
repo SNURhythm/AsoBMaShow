@@ -91,6 +91,9 @@ public:
       std::span<const ir::IrRemoteScore> scores);
   [[nodiscard]] ImportedIrScoreProjectionOutcome
   ClearImportedIrScores(std::string_view providerId);
+  static bool ClearImportedIrScoresSnapshot(
+      const std::filesystem::path &snapshotDatabasePath,
+      std::string &errorMessage);
   [[nodiscard]] bool ImportedIrScoresAreCurrent(
       std::string_view providerId, std::string_view serverOrigin,
       std::int64_t syncGeneration, std::size_t scoreCount);

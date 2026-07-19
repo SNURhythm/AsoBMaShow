@@ -625,6 +625,26 @@ void testGaugeHistoryDownsamplesWithinPayloadLimit() {
          "downsampling is deterministic");
 }
 
+void testCompactGaugeHistoryUsesSerializedPayloadBudget() {
+  auto submission = validSubmission();
+  submission.gaugeHistory.assign(50'000, 0.0F);
+  const auto outcome = ir::tachi::buildBatchManualDraft(submission);
+  expect(outcome.draft.has_value(),
+         "compact oversized gauge history remains submittable");
+  if (!outcome.draft) {
+    return;
+  }
+  expect(outcome.draft->payloadJson.size() <= ir::tachi::kMaximumPayloadBytes,
+         "compact gauge history includes all JSON overhead in its budget");
+  auto document = nlohmann::json::parse(outcome.draft->payloadJson);
+  auto &history = document.at("scores").at(0).at("optional").at("gaugeHistory");
+  expect(history.size() >= 2 && history.size() < submission.gaugeHistory.size(),
+         "compact gauge history is downsampled without dropping endpoints");
+  history.push_back(0.0F);
+  expect(document.dump().size() > ir::tachi::kMaximumPayloadBytes,
+         "compact gauge history uses the maximum serialized sample budget");
+}
+
 void testEmptyGaugeHistoryIsOmitted() {
   auto submission = validSubmission();
   submission.gaugeHistory.clear();
@@ -735,6 +755,7 @@ int main() {
   testMapsEveryLamp();
   testClampsGauge();
   testGaugeHistoryDownsamplesWithinPayloadLimit();
+  testCompactGaugeHistoryUsesSerializedPayloadBudget();
   testEmptyGaugeHistoryIsOmitted();
   testRejectsMalformedSubmission();
   testPayloadNeverContainsCredentialMaterial();

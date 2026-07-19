@@ -1542,10 +1542,12 @@ ProfileArchiveService::Export(std::string_view profileId,
     return failure(ProfileError::IoFailure,
                    "unable to stage profile export: " + errorMessage);
   }
-  if (!ReplayRepository::ClearIrOutboxSnapshot(workspace / "replays.db",
-                                               errorMessage)) {
+  if (!ReplayRepository::ClearIrAccountDataSnapshot(workspace / "replays.db",
+                                                    errorMessage) ||
+      !ScoreRepository::ClearImportedIrScoresSnapshot(workspace / "scores.db",
+                                                      errorMessage)) {
     return failure(ProfileError::IntegrityFailure,
-                   "unable to remove device-local IR work from export: " +
+                   "unable to remove account-scoped IR data from export: " +
                        errorMessage);
   }
   if (std::filesystem::exists(source.practiceDirectory, filesystemError)) {
@@ -1930,10 +1932,13 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
                                     staging.replaysDb, errorMessage)) {
           return false;
         }
-        if (!ReplayRepository::ClearIrOutboxSnapshot(staging.replaysDb,
-                                                     errorMessage)) {
-          errorMessage = "unable to remove device-local IR work from import: " +
-                         errorMessage;
+        if (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
+                                                          errorMessage) ||
+            !ScoreRepository::ClearImportedIrScoresSnapshot(staging.scoresDb,
+                                                            errorMessage)) {
+          errorMessage =
+              "unable to remove account-scoped IR data from import: " +
+              errorMessage;
           return false;
         }
         return true;

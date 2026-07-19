@@ -1409,10 +1409,12 @@ ProfileResult buildProfile(
     return fail(ProfileError::IntegrityFailure, errorMessage);
   }
   if (mode == BuildMode::Duplicate &&
-      !ReplayRepository::ClearIrOutboxSnapshot(staging.replaysDb,
-                                               errorMessage)) {
+      (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
+                                                     errorMessage) ||
+       !ScoreRepository::ClearImportedIrScoresSnapshot(staging.scoresDb,
+                                                       errorMessage))) {
     return fail(ProfileError::IntegrityFailure,
-                "unable to clear duplicated IR work: " + errorMessage);
+                "unable to clear duplicated IR data: " + errorMessage);
   }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteMetadata)) {

@@ -664,9 +664,9 @@ void testRemoteIndependentOptionalCardsAndMetadata() {
   remote = remoteScore();
   remote.badPoints.reset();
   const auto noBp = makeRemoteResultPresentation(remote);
-  expect(!noBp.badPoints && !findInfo(noBp, "BP") && hasComboBreakCard(noBp) &&
-             hasGaugeCard(noBp),
-         "missing BP removes only its independently labeled tile");
+  expect(!noBp.badPoints && !findInfo(noBp, "BP") && !noBp.comboBreak &&
+             !hasComboBreakCard(noBp) && hasGaugeCard(noBp),
+         "missing BP removes its tile and unverifiable BREAK presentation");
 
   remote = remoteScore();
   remote.finalGauge.reset();
@@ -709,6 +709,20 @@ void testRemoteIndependentOptionalCardsAndMetadata() {
          "empty canonical service remains absent rather than a placeholder");
 }
 
+void testRemoteBreakUsesAuthoritativeBadPoints() {
+  auto remote = remoteScore();
+  remote.badPoints = 31;
+  const auto authoritative = makeRemoteResultPresentation(remote);
+  expect(authoritative.comboBreak == 31 && authoritative.comboComparison &&
+             authoritative.comboComparison->current.detail == "BREAK 31",
+         "remote BREAK uses authoritative BP instead of incomplete judgements");
+
+  remote.badPoints.reset();
+  const auto missing = makeRemoteResultPresentation(remote);
+  expect(!missing.comboBreak && !hasComboBreakCard(missing),
+         "remote BREAK is hidden when authoritative BP is unavailable");
+}
+
 void testRemoteMissingVersusExplicitZero() {
   auto remote = remoteScore();
   remote.judgements = {.pGreat = 0, .great = 0, .good = 0, .bad = 0, .poor = 0};
@@ -741,8 +755,9 @@ void testRemoteMissingVersusExplicitZero() {
 
   remote.judgements.bad.reset();
   const auto missing = makeRemoteResultPresentation(remote);
-  expect(!missing.comboBreak && !hasJudgementCard(missing),
-         "missing BAD is absent and distinct from explicit zero");
+  expect(missing.comboBreak == 0 && hasComboBreakCard(missing) &&
+             !hasJudgementCard(missing),
+         "missing BAD does not discard separately supplied zero BP");
 }
 
 void testRemoteUnknownLampDoesNotInventPresentation() {
@@ -1065,6 +1080,7 @@ int main() {
   testRemoteGradeAndPlaytypeDependencies();
   testRemoteJudgementAndTimingOmissions();
   testRemoteIndependentOptionalCardsAndMetadata();
+  testRemoteBreakUsesAuthoritativeBadPoints();
   testRemoteMissingVersusExplicitZero();
   testRemoteUnknownLampDoesNotInventPresentation();
   testRemoteGaugeLabelAndLampFallbackSemantics();
