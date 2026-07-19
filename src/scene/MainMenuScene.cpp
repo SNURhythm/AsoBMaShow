@@ -1189,6 +1189,8 @@ void MainMenuScene::ChartListPageCache::reset(
   query.offset = 0;
   leadingRecord = std::move(leading);
   ownedRecords.clear();
+  referencedRecords = nullptr;
+  referencedIndices.clear();
   totalCount = std::max(0, count) + (leadingRecord.has_value() ? 1 : 0);
   pages.clear();
   pageOrder.clear();
@@ -1203,8 +1205,33 @@ void MainMenuScene::ChartListPageCache::resetOwned(
   query.offset = 0;
   leadingRecord = std::move(leading);
   ownedRecords = std::move(records);
+  referencedRecords = nullptr;
+  referencedIndices.clear();
   totalCount = static_cast<int>(ownedRecords.size()) +
                (leadingRecord.has_value() ? 1 : 0);
+  pages.clear();
+  pageOrder.clear();
+}
+
+void MainMenuScene::ChartListPageCache::resetReferenced(
+    const std::vector<ChartMetaRecord> &records,
+    std::vector<std::size_t> indices, const ChartMetaQuery &chartQuery,
+    std::optional<ChartMetaRecord> leading) {
+  session = nullptr;
+  query = chartQuery;
+  query.limit = 0;
+  query.offset = 0;
+  leadingRecord = std::move(leading);
+  ownedRecords.clear();
+  referencedRecords = &records;
+  referencedIndices = std::move(indices);
+  totalCount = static_cast<int>(referencedIndices.size()) +
+               (leadingRecord.has_value() ? 1 : 0);
+  pages.clear();
+  pageOrder.clear();
+}
+
+void MainMenuScene::ChartListPageCache::releasePages() {
   pages.clear();
   pageOrder.clear();
 }
@@ -1214,6 +1241,8 @@ void MainMenuScene::ChartListPageCache::clear() {
   totalCount = 0;
   leadingRecord.reset();
   ownedRecords.clear();
+  referencedRecords = nullptr;
+  referencedIndices.clear();
   pages.clear();
   pageOrder.clear();
 }
@@ -1233,6 +1262,17 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
       return fallbackRecord;
     }
     return ownedRecords[static_cast<std::size_t>(index)];
+  }
+  if (referencedRecords != nullptr) {
+    if (index >= static_cast<int>(referencedIndices.size())) {
+      return fallbackRecord;
+    }
+    const std::size_t referencedIndex =
+        referencedIndices[static_cast<std::size_t>(index)];
+    if (referencedIndex >= referencedRecords->size()) {
+      return fallbackRecord;
+    }
+    return (*referencedRecords)[referencedIndex];
   }
   if (session == nullptr) {
     return fallbackRecord;
@@ -1268,6 +1308,16 @@ int MainMenuScene::ChartListPageCache::findPath(
   if (!ownedRecords.empty()) {
     const int ownedIndex = ir::findProjectedChartPathIndex(ownedRecords, path);
     return ownedIndex < 0 ? -1 : ownedIndex + leadingOffset;
+  }
+  if (referencedRecords != nullptr) {
+    for (std::size_t index = 0; index < referencedIndices.size(); ++index) {
+      const std::size_t referencedIndex = referencedIndices[index];
+      if (referencedIndex < referencedRecords->size() &&
+          (*referencedRecords)[referencedIndex].meta.BmsPath == path) {
+        return static_cast<int>(index) + leadingOffset;
+      }
+    }
+    return -1;
   }
   if (session == nullptr) {
     return -1;
@@ -1364,7 +1414,7 @@ void MainMenuScene::onPause() {
   if (rankingsModal) {
     rankingsModal->close();
   }
-  chartListCache.clear();
+  chartListCache.releasePages();
 }
 
 void MainMenuScene::onResume() {
@@ -4267,14 +4317,17 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   }
 
   if (ir::chartMetaQueryUsesProjectedScores(query)) {
-    const ChartMetaQuery baseQuery =
-        ir::chartMetaQueryWithoutProjectedScoreCriteria(query);
-    std::vector<ChartMetaRecord> projectedRecords;
-    chartSession->QueryChartMeta(baseQuery, projectedRecords);
-    ir::applyProjectedScoreQuery(query, scoreClearRanks, scoreBestScores,
-                                 projectedRecords);
-    chartListCache.resetOwned(std::move(projectedRecords), query,
-                              std::move(leadingRecord));
+    const auto &projectedRecords = projectedChartMetadataCache.recordsFor(
+        query, context.chartRepository.GetLibraryRevision(),
+        [this](const ChartMetaQuery &baseQuery,
+               std::vector<ChartMetaRecord> &records) {
+          chartSession->QueryChartMeta(baseQuery, records);
+        });
+    auto projectedIndices = ir::projectedScoreQueryIndices(
+        query, scoreClearRanks, scoreBestScores, projectedRecords);
+    chartListCache.resetReferenced(projectedRecords,
+                                   std::move(projectedIndices), query,
+                                   std::move(leadingRecord));
   } else {
     const int databaseCount = chartSession->CountChartMeta(query);
     chartListCache.reset(*chartSession, query, databaseCount,
@@ -4717,8 +4770,7 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
   if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
     reloadChartList(true);
   } else if (recyclerView != nullptr) {
-    chartListCache.clear();
-    recyclerView->rebindVisibleItems();
+    reloadChartList(true);
   }
   libraryRevision = context.chartRepository.GetLibraryRevision();
   return true;
@@ -10630,6 +10682,7 @@ void MainMenuScene::cleanupScene() {
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
   chartListCache.clear();
+  projectedChartMetadataCache.clear();
   chartListCache.session = nullptr;
   chartSession.reset();
   recyclerView = nullptr;

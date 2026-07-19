@@ -11,6 +11,7 @@
 #include "../ReplayVideoExporter.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
+#include "../ir/IrScoreHistoryProjection.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
 #include "../utils/Debouncer.h"
@@ -230,6 +231,8 @@ private:
     mutable ChartMetaRecord fallbackRecord;
     std::optional<ChartMetaRecord> leadingRecord;
     std::vector<ChartMetaRecord> ownedRecords;
+    const std::vector<ChartMetaRecord> *referencedRecords = nullptr;
+    std::vector<std::size_t> referencedIndices;
 
     void reset(ChartRepository::Session &chartSession,
                const ChartMetaQuery &chartQuery, int count,
@@ -237,6 +240,11 @@ private:
     void resetOwned(std::vector<ChartMetaRecord> records,
                     const ChartMetaQuery &chartQuery,
                     std::optional<ChartMetaRecord> leading = std::nullopt);
+    void resetReferenced(
+        const std::vector<ChartMetaRecord> &records,
+        std::vector<std::size_t> indices, const ChartMetaQuery &chartQuery,
+        std::optional<ChartMetaRecord> leading = std::nullopt);
+    void releasePages();
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
     [[nodiscard]] int findPath(const std::filesystem::path &path) const;
@@ -244,6 +252,7 @@ private:
   private:
     void touchPage(int pageIndex) const;
   };
+  ir::ProjectedChartMetadataCache projectedChartMetadataCache;
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;

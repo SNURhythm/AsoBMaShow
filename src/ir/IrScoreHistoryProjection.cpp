@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
+#include <numeric>
 #include <optional>
 #include <sstream>
 
@@ -230,6 +231,7 @@ ChartMetaQuery
 chartMetaQueryWithoutProjectedScoreCriteria(const ChartMetaQuery &query) {
   ChartMetaQuery base = query;
   base.clearMarkFilter = false;
+  base.clearMarkRank = -1;
   base.clearMarkOrAbove = false;
   base.clearMarkOrBelow = false;
   base.scoreRank.reset();
@@ -238,32 +240,59 @@ chartMetaQueryWithoutProjectedScoreCriteria(const ChartMetaQuery &query) {
   if (base.sortCriterion == ChartRecordSortCriterion::ClearMark ||
       base.sortCriterion == ChartRecordSortCriterion::Score) {
     base.sortCriterion = ChartRecordSortCriterion::Default;
+    base.sortDirection = ChartRecordSortDirection::Descending;
   }
+  base.selectedLongNoteMode = 1;
   base.limit = 0;
   base.offset = 0;
   return base;
 }
 
-void applyProjectedScoreQuery(const ChartMetaQuery &query,
-                              const ScoreClearRankCache &clearRanks,
-                              const ScoreBestCache &bestScores,
-                              std::vector<ChartMetaRecord> &records) {
-  std::erase_if(records, [&](const ChartMetaRecord &record) {
+const std::vector<ChartMetaRecord> &ProjectedChartMetadataCache::recordsFor(
+    const ChartMetaQuery &query, std::uint64_t libraryRevision,
+    const Loader &loader) {
+  const ChartMetaQuery baseQuery =
+      chartMetaQueryWithoutProjectedScoreCriteria(query);
+  if (baseQuery_ == baseQuery && libraryRevision_ == libraryRevision) {
+    return records_;
+  }
+
+  std::vector<ChartMetaRecord> loadedRecords;
+  loader(baseQuery, loadedRecords);
+  baseQuery_ = baseQuery;
+  libraryRevision_ = libraryRevision;
+  records_ = std::move(loadedRecords);
+  return records_;
+}
+
+void ProjectedChartMetadataCache::clear() noexcept {
+  baseQuery_.reset();
+  libraryRevision_ = 0;
+  records_.clear();
+}
+
+std::vector<std::size_t> projectedScoreQueryIndices(
+    const ChartMetaQuery &query, const ScoreClearRankCache &clearRanks,
+    const ScoreBestCache &bestScores,
+    std::span<const ChartMetaRecord> records) {
+  std::vector<std::size_t> indices(records.size());
+  std::iota(indices.begin(), indices.end(), std::size_t{0});
+  std::erase_if(indices, [&](std::size_t index) {
+    const auto &record = records[index];
     return !matchesClearFilter(record, query, clearRanks) ||
            !matchesScoreFilter(record, query, bestScores);
   });
 
   if (query.sortCriterion != ChartRecordSortCriterion::ClearMark &&
       query.sortCriterion != ChartRecordSortCriterion::Score) {
-    return;
+    return indices;
   }
-  std::stable_sort(records.begin(), records.end(),
-                   [&](const ChartMetaRecord &left,
-                       const ChartMetaRecord &right) {
-    const auto leftValues =
-        projectedOrderValues(left, query, clearRanks, bestScores);
-    const auto rightValues =
-        projectedOrderValues(right, query, clearRanks, bestScores);
+  std::stable_sort(indices.begin(), indices.end(),
+                   [&](std::size_t leftIndex, std::size_t rightIndex) {
+    const auto leftValues = projectedOrderValues(
+        records[leftIndex], query, clearRanks, bestScores);
+    const auto rightValues = projectedOrderValues(
+        records[rightIndex], query, clearRanks, bestScores);
     int comparison = 0;
     if (query.sortCriterion == ChartRecordSortCriterion::ClearMark) {
       comparison = compareRequired(leftValues.clearRank,
@@ -290,6 +319,21 @@ void applyProjectedScoreQuery(const ChartMetaQuery &query,
     }
     return comparison < 0;
   });
+  return indices;
+}
+
+void applyProjectedScoreQuery(const ChartMetaQuery &query,
+                              const ScoreClearRankCache &clearRanks,
+                              const ScoreBestCache &bestScores,
+                              std::vector<ChartMetaRecord> &records) {
+  const auto indices =
+      projectedScoreQueryIndices(query, clearRanks, bestScores, records);
+  std::vector<ChartMetaRecord> projected;
+  projected.reserve(indices.size());
+  for (const std::size_t index : indices) {
+    projected.push_back(std::move(records[index]));
+  }
+  records = std::move(projected);
 }
 
 int findProjectedChartPathIndex(std::span<const ChartMetaRecord> records,

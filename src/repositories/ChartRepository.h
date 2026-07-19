@@ -66,6 +66,8 @@ struct ChartMetaQuery {
   bool favoritesOnly = false;
   int limit = 0;
   int offset = 0;
+
+  bool operator==(const ChartMetaQuery &) const = default;
 };
 
 struct ChartMetaRecord {

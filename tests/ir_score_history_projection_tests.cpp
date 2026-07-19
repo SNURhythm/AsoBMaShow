@@ -57,6 +57,18 @@ pathsFor(const std::vector<ChartMetaRecord> &records) {
   return paths;
 }
 
+std::vector<std::string>
+pathsForIndices(const std::vector<ChartMetaRecord> &records,
+                const std::vector<std::size_t> &indices) {
+  std::vector<std::string> paths;
+  paths.reserve(indices.size());
+  for (const std::size_t index : indices) {
+    assert(index < records.size());
+    paths.push_back(records[index].meta.BmsPath.string());
+  }
+  return paths;
+}
+
 void testMd5FallbackIsLookupOnlyAndCannotOverrideConflictingSha() {
   ScoreClearRankCache clearRanks;
   ScoreBestCache bestScores;
@@ -402,6 +414,90 @@ void testProjectedQueryKeepsNonScoreConstraintsAndStablePathLookup() {
   assert(ir::findProjectedChartPathIndex(owned, "missing.bms") == -1);
 }
 
+void testProjectedMetadataCacheReusesSiblingLampFolderQuery() {
+  ir::ProjectedChartMetadataCache cache;
+  int loads = 0;
+  const auto loader = [&](const ChartMetaQuery &baseQuery,
+                          std::vector<ChartMetaRecord> &records) {
+    ++loads;
+    assert(!baseQuery.clearMarkFilter);
+    assert(!baseQuery.scoreRank.has_value());
+    assert(baseQuery.sortCriterion == ChartRecordSortCriterion::Default);
+    records = {
+        chartRecord("First", "first.bms", 'a', 'a'),
+        chartRecord("Second", "second.bms", 'b', 'b'),
+    };
+  };
+
+  ChartMetaQuery hard;
+  hard.tableId = 7;
+  hard.clearMarkFilter = true;
+  hard.clearMarkRank = kClearTypeHardClearRank;
+  const auto &first = cache.recordsFor(hard, 11, loader);
+  assert(loads == 1 && first.size() == 2);
+  const ChartMetaRecord *stableFirst = first.data();
+
+  ChartMetaQuery easy = hard;
+  easy.clearMarkRank = kClearTypeEasyClearRank;
+  const auto &sibling = cache.recordsFor(easy, 11, loader);
+  assert(loads == 1 && sibling.data() == stableFirst);
+
+  ChartMetaQuery score = easy;
+  score.clearMarkFilter = false;
+  score.scoreRank = "AA";
+  score.sortCriterion = ChartRecordSortCriterion::Score;
+  const auto &sameBase = cache.recordsFor(score, 11, loader);
+  assert(loads == 1 && sameBase.data() == stableFirst);
+
+  score.keyword = "different base";
+  (void)cache.recordsFor(score, 11, loader);
+  assert(loads == 2);
+  (void)cache.recordsFor(score, 12, loader);
+  assert(loads == 3);
+  cache.clear();
+  (void)cache.recordsFor(score, 12, loader);
+  assert(loads == 4);
+}
+
+void testProjectedIndexViewFiltersAndSortsWithoutCopyingRecords() {
+  ScoreClearRankCache clearRanks;
+  ScoreBestCache bestScores;
+  ir::projectIrRemoteScores(std::vector{remoteScore()}, clearRanks,
+                            bestScores);
+  const std::string localSha(64, 'c');
+  clearRanks.rankBySha256[localSha].ranks[0] = kClearTypeFullComboRank;
+  bestScores.scoreBySha256[localSha].snapshots[0] = ScoreBestSnapshot{
+      .score = 195,
+      .maxScore = 200,
+      .maxCombo = 90,
+      .clearType = kClearTypeFullComboRank,
+  };
+  const std::vector records{
+      chartRecord("No play", "no-play.bms", 'e', 'f'),
+      chartRecord("Remote", "remote.bms", 'a', 'b'),
+      chartRecord("Local", "local.bms", 'c', 'd'),
+  };
+  const ChartMetaRecord *stableRecords = records.data();
+
+  ChartMetaQuery hard;
+  hard.clearMarkFilter = true;
+  hard.clearMarkRank = kClearTypeHardClearRank;
+  auto indices = ir::projectedScoreQueryIndices(
+      hard, clearRanks, bestScores, records);
+  assert(pathsForIndices(records, indices) ==
+         std::vector<std::string>{"remote.bms"});
+  assert(records.data() == stableRecords && records.size() == 3);
+
+  ChartMetaQuery sorted;
+  sorted.sortCriterion = ChartRecordSortCriterion::Score;
+  indices = ir::projectedScoreQueryIndices(sorted, clearRanks, bestScores,
+                                           records);
+  assert(pathsForIndices(records, indices) ==
+         std::vector<std::string>({"local.bms", "remote.bms",
+                                   "no-play.bms"}));
+  assert(records.data() == stableRecords && records.size() == 3);
+}
+
 } // namespace
 
 int main() {
@@ -415,6 +511,8 @@ int main() {
   testProjectedClearAndScoreSortMatchDisplayedValues();
   testProjectedMd5FallbackMatchesConflictSafeRowLookup();
   testProjectedQueryKeepsNonScoreConstraintsAndStablePathLookup();
+  testProjectedMetadataCacheReusesSiblingLampFolderQuery();
+  testProjectedIndexViewFiltersAndSortsWithoutCopyingRecords();
   std::cout << "IR score history projection tests passed\n";
   return 0;
 }
