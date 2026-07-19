@@ -9652,9 +9652,15 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
 
   replayResultRecallInProgress = true;
   refreshReplayModalActions();
-  context.jukebox.stop();
+  cancelActivePreviewLoading();
   defer(
       [this, record, replayId]() {
+        if (loadThread.joinable()) {
+          loadThread.join();
+        }
+        joinRetiredPreviewLoadThreads();
+        context.jukebox.stop();
+
         if (record.courseStart) {
           startCourseReplayResultRecall(replayId);
           return true;

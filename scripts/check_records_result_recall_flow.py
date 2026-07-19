@@ -16,6 +16,15 @@ required = [
 ]
 combined = header + source
 missing = [token for token in required if token not in combined]
+recall_start = source.index("void MainMenuScene::startReplayResultRecall")
+recall_end = source.index("void MainMenuScene::startCourseReplayResultRecall",
+                          recall_start)
+recall_source = source[recall_start:recall_end]
+missing += ["recall:" + token for token in [
+    "cancelActivePreviewLoading();",
+    "loadThread.join()",
+    "joinRetiredPreviewLoadThreads()",
+] if token not in recall_source]
 forbidden = [
     "replayModalPhotoButton",
     "startReplayImageExport",
