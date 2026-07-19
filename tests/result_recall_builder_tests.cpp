@@ -102,10 +102,69 @@ void testInvalidIntegrityMetadataSuppressesOnlyIr() {
   }
 }
 
+void testCourseBuildPreparesEveryStage() {
+  CourseReplayData replay;
+  replay.id = 9;
+  replay.courseName = "Recall Course";
+  replay.courseGroupName = "Records";
+  replay.constraintJson = "{}";
+  replay.gaugeProfile = GaugeProfile::Standard;
+  replay.initialGaugeType = GaugeType::Normal;
+  for (int index = 0; index < 3; ++index) {
+    auto stage = validRecord().replay;
+    stage.id = 100 + index;
+    stage.chartMeta.Title = "Stage " + std::to_string(index + 1);
+    replay.stages.push_back({.replay = std::move(stage),
+                             .restMicrosAfterStage = 500000});
+  }
+  replay.completedCharts = 3;
+  replay.totalCharts = 3;
+  replay.provenance = replay.stages.back().replay.provenance;
+
+  std::atomic_bool cancelled = false;
+  auto outcome =
+      result_recall::BuildCourseResult(replay, cancelled, chartLoader());
+  assert(outcome.value.has_value());
+  const auto &session = outcome.value->session;
+  assert(session->currentIndex == 0);
+  assert(session->entries.size() == 3);
+  assert(session->completedResults.size() == 3);
+  assert(session->ownedResultBrowseCharts.size() == 3);
+  assert(session->courseReplayData != nullptr);
+  assert(!session->courseReplayPlayback);
+}
+
+void testCourseBuildDoesNotPublishPartialSession() {
+  CourseReplayData replay;
+  replay.courseName = "Broken Course";
+  replay.completedCharts = 2;
+  replay.totalCharts = 2;
+  replay.stages.push_back({.replay = validRecord().replay});
+  replay.stages.push_back({.replay = validRecord().replay});
+  int calls = 0;
+  result_recall::ReplayChartLoader failingLoader =
+      [&calls](const ReplayData &stage, std::atomic_bool &) {
+        ++calls;
+        if (calls == 2) {
+          return std::unique_ptr<bms_parser::Chart>{};
+        }
+        auto chart = std::make_unique<bms_parser::Chart>();
+        chart->Meta = stage.chartMeta;
+        return chart;
+      };
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildCourseResult(
+      replay, cancelled, std::move(failingLoader));
+  assert(!outcome.value.has_value());
+  assert(calls == 2);
+}
+
 } // namespace
 
 int main() {
   testMatchingAttemptEnablesHistoricalIr();
   testInvalidIntegrityMetadataSuppressesOnlyIr();
+  testCourseBuildPreparesEveryStage();
+  testCourseBuildDoesNotPublishPartialSession();
   return 0;
 }

@@ -283,6 +283,7 @@ struct CoursePlaySession {
   std::string constraintJson;
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
+  std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
   std::vector<CourseReplayStageData> replayStages;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();

@@ -34,8 +34,21 @@ struct ChartBuildOutcome {
   std::string diagnostic;
 };
 
+struct CourseResult {
+  std::shared_ptr<CoursePlaySession> session;
+};
+
+struct CourseBuildOutcome {
+  std::optional<CourseResult> value;
+  std::string diagnostic;
+};
+
 [[nodiscard]] ChartBuildOutcome
 BuildChartResult(ReplayResultRecord record, std::atomic_bool &cancelled,
                  ReplayChartLoader loader = {});
+
+[[nodiscard]] CourseBuildOutcome
+BuildCourseResult(CourseReplayData replay, std::atomic_bool &cancelled,
+                  ReplayChartLoader loader = {});
 
 } // namespace result_recall
