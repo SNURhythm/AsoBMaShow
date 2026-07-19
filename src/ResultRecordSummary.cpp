@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -279,5 +280,47 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
       .local = std::nullopt,
       .remote = std::move(score),
   };
+  return result;
+}
+
+std::vector<ResultRecordSummary> mergeResultRecords(
+    std::span<const ReplaySummary> local,
+    std::span<const ir::IrRemoteScore> remote,
+    std::string_view providerId, std::string_view serverOrigin) {
+  std::unordered_set<std::string> linkedRemoteScoreIds;
+  linkedRemoteScoreIds.reserve(local.size());
+  for (const ReplaySummary &summary : local) {
+    if (summary.hasIrReceipt && summary.receiptProviderId == providerId &&
+        summary.receiptServerOrigin == serverOrigin &&
+        !summary.receiptRemoteScoreId.empty()) {
+      linkedRemoteScoreIds.emplace(summary.receiptRemoteScoreId);
+    }
+  }
+
+  std::vector<ResultRecordSummary> result;
+  result.reserve(local.size() + remote.size());
+  for (const ReplaySummary &summary : local) {
+    result.push_back(makeLocalResultRecord(summary));
+  }
+  for (const ir::IrRemoteScore &score : remote) {
+    if (!linkedRemoteScoreIds.contains(score.remoteScoreId)) {
+      result.push_back(
+          makeRemoteResultRecord(providerId, serverOrigin, score));
+    }
+  }
+
+  std::sort(result.begin(), result.end(),
+            [](const ResultRecordSummary &left,
+               const ResultRecordSummary &right) {
+              if (left.autoPlay != right.autoPlay) {
+                return left.autoPlay;
+              }
+              if (left.displayedTimeUnixMillis !=
+                  right.displayedTimeUnixMillis) {
+                return left.displayedTimeUnixMillis >
+                       right.displayedTimeUnixMillis;
+              }
+              return left.stableKey() < right.stableKey();
+            });
   return result;
 }

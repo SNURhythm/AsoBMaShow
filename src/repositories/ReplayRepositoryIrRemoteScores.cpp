@@ -53,6 +53,29 @@ bool validOriginIdentity(std::string_view providerId,
          *normalizedOrigin == serverOrigin;
 }
 
+bool isLowerHexDigest(std::string_view value,
+                      std::size_t expectedBytes) noexcept {
+  return value.size() == expectedBytes &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+bool validRemoteScoreId(std::string_view value) noexcept {
+  return !value.empty() && value.size() <= ir::kMaximumIrRemoteScoreIdBytes &&
+         std::ranges::none_of(value, [](unsigned char character) {
+           return character < 0x20U || character == 0x7fU;
+         });
+}
+
+bool bindTextView(sqlite3_stmt *statement, int column,
+                  std::string_view value) noexcept {
+  return sqlite3_bind_text(statement, column, value.data(),
+                           static_cast<int>(value.size()),
+                           SQLITE_TRANSIENT) == SQLITE_OK;
+}
+
 bool columnIs(sqlite3_stmt *stmt, int column, int type) {
   return sqlite3_column_type(stmt, column) == type;
 }
@@ -886,6 +909,146 @@ ReplayRepository::ListIrRemoteScores(std::string_view providerId,
   }
   return {.status = ir::IrRemoteScoreReadOutcome::Status::Loaded,
           .scores = std::move(result)};
+}
+
+ir::IrRemoteScoreReadOutcome ReplayRepository::ListIrRemoteScoresForChart(
+    std::string_view providerId, std::string_view serverOrigin,
+    std::string_view chartMd5, std::string_view chartSha256) {
+  const bool shaAvailable = !chartSha256.empty();
+  if (!validOriginIdentity(providerId, serverOrigin) ||
+      (shaAvailable && !isLowerHexDigest(chartSha256, 64)) ||
+      (!chartMd5.empty() && !isLowerHexDigest(chartMd5, 32)) ||
+      (!shaAvailable && chartMd5.empty())) {
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+            .diagnostic = "IR remote chart score identity is invalid"};
+  }
+
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+
+  const char *hashColumn = shaAvailable ? "chart_sha256" : "chart_md5";
+  const std::string query =
+      std::string("SELECT ") + kIrRemoteScoreColumns +
+      " FROM ir_remote_scores WHERE provider_id=? AND server_origin=? AND " +
+      hashColumn +
+      "=? ORDER BY COALESCE(time_achieved_ms,time_added_ms) DESC,"
+      "time_added_ms DESC,remote_score_id ASC LIMIT ?";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      !bindTextView(statement.get(), 1, providerId) ||
+      !bindTextView(statement.get(), 2, serverOrigin) ||
+      !bindTextView(statement.get(), 3,
+                    shaAvailable ? chartSha256 : chartMd5) ||
+      sqlite3_bind_int64(
+          statement.get(), 4,
+          static_cast<sqlite3_int64>(ir::kMaximumIrRemoteScoresPerChart + 1)) !=
+          SQLITE_OK) {
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::StorageFailure,
+            .diagnostic = "could not prepare the IR remote chart score read"};
+  }
+
+  std::vector<ir::IrRemoteScore> result;
+  result.reserve(ir::kMaximumIrRemoteScoresPerChart);
+  std::optional<std::int64_t> expectedGeneration;
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (result.size() >= ir::kMaximumIrRemoteScoresPerChart) {
+      SDL_Log("IR remote chart score list exceeds its model bound");
+      return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+              .diagnostic =
+                  "IR remote chart score list exceeds its model bound"};
+    }
+    ir::IrRemoteScore score;
+    std::int64_t generation = 0;
+    std::string diagnostic;
+    if (!decodeRemoteScoreRow(statement.get(), score, generation,
+                              diagnostic)) {
+      SDL_Log("Rejecting malformed IR remote chart score row: %s",
+              diagnostic.c_str());
+      return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+              .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
+    }
+    if (expectedGeneration && *expectedGeneration != generation) {
+      SDL_Log("Rejecting IR remote chart scores with mixed generations");
+      return {.status = ir::IrRemoteScoreReadOutcome::Status::Invalid,
+              .diagnostic =
+                  "IR remote chart score list has mixed generations"};
+    }
+    expectedGeneration = generation;
+    result.push_back(std::move(score));
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ir::IrRemoteScoreReadOutcome::Status::StorageFailure,
+            .diagnostic = "could not read the IR remote chart scores"};
+  }
+  return {.status = ir::IrRemoteScoreReadOutcome::Status::Loaded,
+          .scores = std::move(result)};
+}
+
+ir::IrRemoteScoreLookupOutcome ReplayRepository::LoadIrRemoteScore(
+    std::string_view providerId, std::string_view serverOrigin,
+    std::string_view remoteScoreId) {
+  if (!validOriginIdentity(providerId, serverOrigin) ||
+      !validRemoteScoreId(remoteScoreId)) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::Invalid,
+            .diagnostic = "IR remote score lookup identity is invalid"};
+  }
+
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+
+  const std::string query =
+      std::string("SELECT ") + kIrRemoteScoreColumns +
+      " FROM ir_remote_scores WHERE provider_id=? AND server_origin=? AND "
+      "remote_score_id=? LIMIT 2";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(impl_->sessionDatabase, query, statement) !=
+          SQLITE_OK ||
+      !bindTextView(statement.get(), 1, providerId) ||
+      !bindTextView(statement.get(), 2, serverOrigin) ||
+      !bindTextView(statement.get(), 3, remoteScoreId)) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::StorageFailure,
+            .diagnostic = "could not prepare the IR remote score lookup"};
+  }
+
+  int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::NotFound};
+  }
+  if (rc != SQLITE_ROW) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::StorageFailure,
+            .diagnostic = "could not read the IR remote score"};
+  }
+
+  ir::IrRemoteScore score;
+  std::int64_t generation = 0;
+  std::string diagnostic;
+  if (!decodeRemoteScoreRow(statement.get(), score, generation, diagnostic)) {
+    SDL_Log("Rejecting malformed exact IR remote score row: %s",
+            diagnostic.c_str());
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::Invalid,
+            .diagnostic = ir::sanitizeDiagnostic(diagnostic)};
+  }
+  rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_ROW) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::Invalid,
+            .diagnostic = "IR remote score lookup identity is ambiguous"};
+  }
+  if (rc != SQLITE_DONE) {
+    return {.status = ir::IrRemoteScoreLookupOutcome::Status::StorageFailure,
+            .diagnostic = "could not finish the IR remote score lookup"};
+  }
+  return {.status = ir::IrRemoteScoreLookupOutcome::Status::Loaded,
+          .score = std::move(score)};
 }
 
 ir::IrOutboxMutationOutcome

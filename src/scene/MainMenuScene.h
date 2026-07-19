@@ -7,6 +7,7 @@
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayRecordFilters.h"
+#include "../ResultRecordSummary.h"
 #include "../ReplayVideoExporter.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
@@ -496,6 +497,9 @@ private:
   std::optional<int> chartDifficultyRangeTableId;
   std::vector<ReplaySummary> replaySummaries;
   std::vector<ReplaySummary> visibleReplaySummaries;
+  std::vector<ResultRecordSummary> resultRecordSummaries;
+  std::optional<std::string> selectedResultRecordStableKey;
+  std::string publishedResultRecordDiagnostic;
   ReplayRecordFilters replayRecordFilters;
   ChartMetaRecord replayModalChart;
   std::optional<ReplaySummary> selectedReplaySummary;
@@ -756,6 +760,7 @@ private:
   void hidePlayOptionsModal();
   void buildReplayModal();
   void showReplayListModal(const ChartMetaRecord &record);
+  void reloadReplayRecordModels(bool preserveViewState);
   void showReplayFilterSortOptions();
   void showReplayExportOptions();
   void showReplayExportProgress(const std::string &title = "Exporting Replay",

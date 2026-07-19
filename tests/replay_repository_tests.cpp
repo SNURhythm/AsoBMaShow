@@ -2393,6 +2393,8 @@ void testReplayResultRecordMetadata(const std::filesystem::path &root) {
   assert(!summaries.front().requestedIrOutboxState.has_value());
   assert(!summaries.front().irSubmissionEligible);
   assert(!summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptProviderId.empty());
+  assert(summaries.front().receiptServerOrigin.empty());
   assert(summaries.front().receiptRemoteScoreId.empty());
   assert(summaries.front().irRecordState == ir::IrRecordState::Hidden);
 
@@ -2435,12 +2437,17 @@ void testReplayResultRecordMetadata(const std::filesystem::path &root) {
       replay.chartMeta, 0, "tachi", "HTTPS://BOKU.TACHI.AC:443/");
   assert(summaries.size() == 1);
   assert(summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptProviderId == "tachi");
+  assert(summaries.front().receiptServerOrigin ==
+         "https://boku.tachi.ac");
   assert(summaries.front().receiptRemoteScoreId == "Tscore");
 
   summaries = repository.ListReplays(replay.chartMeta, 0, "tachi",
                                      "https://other.example");
   assert(summaries.size() == 1);
   assert(!summaries.front().hasIrReceipt);
+  assert(summaries.front().receiptProviderId.empty());
+  assert(summaries.front().receiptServerOrigin.empty());
   assert(summaries.front().receiptRemoteScoreId.empty());
 
   summaries = repository.ListReplays(replay.chartMeta, 0, {},
@@ -6472,6 +6479,209 @@ void testIrRemoteScoreReadDistinguishesEmptyInvalidAndStorageFailure(
              ir::kMaximumIrRemoteScoreDiagnosticBytes);
 }
 
+void testIrRemoteScoreChartReadUsesScopedHashPrecedenceAndOrdering(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-chart-read" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  auto older = sampleIrRemoteScore("target-older", 'a', 'b');
+  older.timeAchievedUnixMillis = 2'000;
+  older.timeAddedUnixMillis = 2'100;
+  auto newest = sampleIrRemoteScore("target-newest", 'a', 'b');
+  newest.timeAchievedUnixMillis.reset();
+  newest.timeAddedUnixMillis = 3'000;
+  auto conflictingSha =
+      sampleIrRemoteScore("same-md5-conflicting-sha", 'a', 'c');
+  conflictingSha.timeAchievedUnixMillis = 4'000;
+  auto titleOnly = sampleIrRemoteScore("same-title-only", 'd', 'e');
+  titleOnly.title = older.title;
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000,
+                 {older, newest, conflictingSha, titleOnly}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  auto otherOrigin = sampleIrRemoteScore("other-origin", 'a', 'b');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://other.example", 1'000, {otherOrigin}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  auto otherProvider = sampleIrRemoteScore("other-provider", 'a', 'b');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "readonly", "https://boku.tachi.ac", 1'000,
+                 {otherProvider}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  const auto bySha = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, 'a'),
+      std::string(64, 'b'));
+  assert(bySha.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         bySha.scores.size() == 2 &&
+         bySha.scores[0].remoteScoreId == "target-newest" &&
+         bySha.scores[1].remoteScoreId == "target-older");
+
+  const auto byMd5 = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, 'a'), {});
+  assert(byMd5.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         byMd5.scores.size() == 3 &&
+         byMd5.scores[0].remoteScoreId == "same-md5-conflicting-sha" &&
+         byMd5.scores[1].remoteScoreId == "target-newest" &&
+         byMd5.scores[2].remoteScoreId == "target-older");
+
+  const auto shaConflictCannotFallBack = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, 'a'),
+      std::string(64, 'f'));
+  assert(shaConflictCannotFallBack.status ==
+             ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         shaConflictCannotFallBack.scores.empty());
+
+  const auto otherScope = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://other.example", std::string(32, 'a'),
+      std::string(64, 'b'));
+  assert(otherScope.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         otherScope.scores.size() == 1 &&
+         otherScope.scores.front().remoteScoreId == "other-origin");
+  const auto otherProviderScope = helper.ListIrRemoteScoresForChart(
+      "readonly", "https://boku.tachi.ac", std::string(32, 'a'),
+      std::string(64, 'b'));
+  assert(otherProviderScope.status ==
+             ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         otherProviderScope.scores.size() == 1 &&
+         otherProviderScope.scores.front().remoteScoreId == "other-provider");
+
+  const auto titleCannotMatch = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, '9'),
+      std::string(64, '8'));
+  assert(titleCannotMatch.status ==
+             ir::IrRemoteScoreReadOutcome::Status::Loaded &&
+         titleCannotMatch.scores.empty());
+
+  const auto invalidShaCannotFallBack = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, 'a'), "UNKNOWN");
+  assert(invalidShaCannotFallBack.status ==
+             ir::IrRemoteScoreReadOutcome::Status::Invalid &&
+         invalidShaCannotFallBack.scores.empty() &&
+         !invalidShaCannotFallBack.diagnostic.empty() &&
+         invalidShaCannotFallBack.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+}
+
+void testIrRemoteScoreChartReadIsBoundedAndFailsClosed(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-chart-read-bound" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  std::vector<ir::IrRemoteScore> scores;
+  scores.reserve(ir::kMaximumIrRemoteScoresPerChart + 1);
+  for (std::size_t index = 0;
+       index < ir::kMaximumIrRemoteScoresPerChart + 1; ++index) {
+    auto score = sampleIrRemoteScore(
+        "bounded-" + std::to_string(index), 'a', 'b');
+    score.timeAchievedUnixMillis = 10'000 +
+                                   static_cast<std::int64_t>(index);
+    score.timeAddedUnixMillis = 20'000 +
+                                static_cast<std::int64_t>(index);
+    scores.push_back(std::move(score));
+  }
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000,
+                 std::move(scores)))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  const auto oversized = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, 'a'),
+      std::string(64, 'b'));
+  assert(oversized.status == ir::IrRemoteScoreReadOutcome::Status::Invalid &&
+         oversized.scores.empty() && !oversized.diagnostic.empty() &&
+         oversized.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "DELETE FROM ir_remote_scores WHERE remote_score_id='bounded-" +
+                  std::to_string(ir::kMaximumIrRemoteScoresPerChart) + "'");
+  execOrAbort(db.get(),
+              "UPDATE ir_remote_scores SET gauge_history_json='[true]' "
+              "WHERE remote_score_id='bounded-0'");
+  db.reset();
+  const auto malformed = helper.ListIrRemoteScoresForChart(
+      "tachi", "https://boku.tachi.ac", std::string(32, 'a'),
+      std::string(64, 'b'));
+  assert(malformed.status == ir::IrRemoteScoreReadOutcome::Status::Invalid &&
+         malformed.scores.empty() && !malformed.diagnostic.empty() &&
+         malformed.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+}
+
+void testIrRemoteScoreExactReadIsTypedScopedAndStrict(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-remote-exact-read" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  auto target = sampleIrRemoteScore("exact-target", 'a', 'b');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://boku.tachi.ac", 1'000, {target}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  auto otherOrigin = sampleIrRemoteScore("exact-target", 'c', 'd');
+  assert(helper
+             .ApplyIrRemoteSnapshot(sampleIrRemoteMutation(
+                 "tachi", "https://other.example", 1'000, {otherOrigin}))
+             .status == ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  const auto loaded = helper.LoadIrRemoteScore(
+      "tachi", "https://boku.tachi.ac", "exact-target");
+  assert(loaded.status == ir::IrRemoteScoreLookupOutcome::Status::Loaded &&
+         loaded.score && loaded.score->chartSha256 == std::string(64, 'b') &&
+         loaded.diagnostic.empty());
+  const auto scoped = helper.LoadIrRemoteScore(
+      "tachi", "https://other.example", "exact-target");
+  assert(scoped.status == ir::IrRemoteScoreLookupOutcome::Status::Loaded &&
+         scoped.score && scoped.score->chartSha256 == std::string(64, 'd'));
+  const auto missing = helper.LoadIrRemoteScore(
+      "tachi", "https://boku.tachi.ac", "missing");
+  assert(missing.status == ir::IrRemoteScoreLookupOutcome::Status::NotFound &&
+         !missing.score && missing.diagnostic.empty());
+  const auto invalid = helper.LoadIrRemoteScore(
+      "tachi", "HTTPS://BOKU.TACHI.AC:443/", "exact-target");
+  assert(invalid.status == ir::IrRemoteScoreLookupOutcome::Status::Invalid &&
+         !invalid.score && !invalid.diagnostic.empty() &&
+         invalid.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+
+  helper.Shutdown();
+  auto db = openDatabase(path);
+  execOrAbort(db.get(),
+              "UPDATE ir_remote_scores SET gauge_history_json='[true]' "
+              "WHERE provider_id='tachi' AND "
+              "server_origin='https://boku.tachi.ac' AND "
+              "remote_score_id='exact-target'");
+  db.reset();
+  const auto malformed = helper.LoadIrRemoteScore(
+      "tachi", "https://boku.tachi.ac", "exact-target");
+  assert(malformed.status ==
+             ir::IrRemoteScoreLookupOutcome::Status::Invalid &&
+         !malformed.score && !malformed.diagnostic.empty() &&
+         malformed.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+
+  helper.Shutdown();
+  db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_remote_scores");
+  db.reset();
+  const auto unavailable = helper.LoadIrRemoteScore(
+      "tachi", "https://boku.tachi.ac", "exact-target");
+  assert(unavailable.status ==
+             ir::IrRemoteScoreLookupOutcome::Status::StorageFailure &&
+         !unavailable.score && !unavailable.diagnostic.empty() &&
+         unavailable.diagnostic.size() <=
+             ir::kMaximumIrRemoteScoreDiagnosticBytes);
+}
+
 void testClearIrAccountEvidenceIsAtomicAndOriginScoped(
     const std::filesystem::path &root) {
   const auto path = root / "ir-account-evidence-clear" / "replay.db";
@@ -6819,6 +7029,9 @@ int main() {
   testIrRemoteScoreReadRejectsMalformedGaugeHistory(root);
   testIrRemoteScoreReadRejectsMixedGenerations(root);
   testIrRemoteScoreReadDistinguishesEmptyInvalidAndStorageFailure(root);
+  testIrRemoteScoreChartReadUsesScopedHashPrecedenceAndOrdering(root);
+  testIrRemoteScoreChartReadIsBoundedAndFailsClosed(root);
+  testIrRemoteScoreExactReadIsTypedScopedAndStrict(root);
   testClearIrAccountEvidenceIsAtomicAndOriginScoped(root);
   testClearIrAccountEvidenceRollsBackEveryDelete(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);

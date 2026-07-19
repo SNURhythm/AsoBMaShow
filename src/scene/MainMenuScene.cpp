@@ -2704,6 +2704,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartDifficultyMaxDropdownOpen = false;
   replaySummaries.clear();
   visibleReplaySummaries.clear();
+  resultRecordSummaries.clear();
+  selectedResultRecordStableKey.reset();
+  publishedResultRecordDiagnostic.clear();
   replayRecordFilters = {};
   selectedReplayIndex = -1;
   selectedReplaySummary.reset();
@@ -4517,6 +4520,9 @@ void MainMenuScene::refreshIrScoreProjectionIfNeeded() {
     if (hadVisibleScoreState) {
       refreshLongNoteModeClearRankViews();
     }
+  }
+  if (replayModalRoot != nullptr && replayModalRoot->getVisible()) {
+    reloadReplayRecordModels(true);
   }
 }
 
@@ -8482,18 +8488,24 @@ void MainMenuScene::buildReplayModal() {
   refreshReplayModalActions();
 }
 
-void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
-  if (replayModalRoot == nullptr || replayListView == nullptr) {
-    return;
+void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
+  std::optional<std::string> preferredStableKey =
+      preserveViewState ? selectedResultRecordStableKey : std::nullopt;
+  if (!preferredStableKey && preserveViewState && selectedReplaySummary) {
+    preferredStableKey =
+        makeLocalResultRecord(*selectedReplaySummary).stableKey();
   }
+  const std::optional<int> preferredReplayId =
+      preserveViewState && selectedReplaySummary
+          ? std::optional<int>(selectedReplaySummary->id)
+          : std::nullopt;
+  const float previousScrollOffset =
+      preserveViewState && replayListView != nullptr
+          ? replayListView->scrollOffset
+          : 0.0F;
 
-  replayModalChart = record;
-  replayExportSelection.reset();
-  replayIrUploadInProgress = false;
-  replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
   const bool courseReplayList =
-      record.courseStart &&
+      replayModalChart.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
       (!activeFolder.courseKey.empty() || activeFolder.courseId > 0);
   if (courseReplayList) {
@@ -8505,26 +8517,118 @@ void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
     const std::string irServerOrigin =
         activeReplayIrServerOrigin().value_or(std::string{});
     replaySummaries = context.replayRepository.ListReplays(
-        record.meta, 0, ir::kTachiProviderId, irServerOrigin);
+        replayModalChart.meta, 0, ir::kTachiProviderId, irServerOrigin);
     for (ReplaySummary &summary : replaySummaries) {
       resolveReplayIrRecordState(summary);
     }
     replaySummaries.insert(replaySummaries.begin(),
-                           autoPlayReplaySummary(record));
+                           autoPlayReplaySummary(replayModalChart));
   }
-  setReplayButtonVisible(true);
+
+  std::vector<ir::IrRemoteScore> remoteScores;
+  std::string mergeOrigin;
+  bool remoteReadSucceeded = false;
+  if (!courseReplayList) {
+    const auto providerSettings = context.settings.irProviders.find(
+        std::string(ir::kTachiProviderId));
+    if (providerSettings == context.settings.irProviders.end() ||
+        !providerSettings->second.enabled) {
+      remoteReadSucceeded = true;
+    } else if (const auto normalizedOrigin = ir::normalizeServerOrigin(
+                   providerSettings->second.serverOrigin)) {
+      mergeOrigin = *normalizedOrigin;
+      auto loaded = context.replayRepository.ListIrRemoteScoresForChart(
+          ir::kTachiProviderId, mergeOrigin, replayModalChart.meta.MD5,
+          replayModalChart.meta.SHA256);
+      if (loaded.status == ir::IrRemoteScoreReadOutcome::Status::Loaded) {
+        remoteScores = std::move(loaded.scores);
+        remoteReadSucceeded = true;
+      } else {
+        std::string diagnostic = ir::sanitizeDiagnostic(
+            std::string("IR Records unavailable: ") +
+            (loaded.diagnostic.empty()
+                 ? "remote score history could not be read"
+                 : loaded.diagnostic));
+        if (diagnostic != publishedResultRecordDiagnostic) {
+          publishedResultRecordDiagnostic = diagnostic;
+          SDL_Log("%s", diagnostic.c_str());
+          archive_file::appendDebugLogLine(diagnostic);
+        }
+      }
+    } else {
+      const std::string diagnostic =
+          "IR Records unavailable: provider origin is invalid";
+      if (diagnostic != publishedResultRecordDiagnostic) {
+        publishedResultRecordDiagnostic = diagnostic;
+        SDL_Log("%s", diagnostic.c_str());
+        archive_file::appendDebugLogLine(diagnostic);
+      }
+    }
+  } else {
+    remoteReadSucceeded = true;
+  }
+
+  try {
+    resultRecordSummaries = mergeResultRecords(
+        replaySummaries,
+        remoteReadSucceeded
+            ? std::span<const ir::IrRemoteScore>(remoteScores)
+            : std::span<const ir::IrRemoteScore>{},
+        ir::kTachiProviderId, mergeOrigin);
+    if (remoteReadSucceeded) {
+      publishedResultRecordDiagnostic.clear();
+    }
+  } catch (...) {
+    resultRecordSummaries = mergeResultRecords(
+        replaySummaries, std::span<const ir::IrRemoteScore>{},
+        ir::kTachiProviderId, std::string_view{});
+    const std::string diagnostic =
+        "IR Records unavailable: remote score projection is invalid";
+    if (diagnostic != publishedResultRecordDiagnostic) {
+      publishedResultRecordDiagnostic = diagnostic;
+      SDL_Log("%s", diagnostic.c_str());
+      archive_file::appendDebugLogLine(diagnostic);
+    }
+  }
+
+  const bool preferredRecordStillExists =
+      preferredStableKey &&
+      std::ranges::any_of(resultRecordSummaries, [&](const auto &record) {
+        return record.stableKey() == *preferredStableKey;
+      });
+  applyReplayRecordFilters(preferredReplayId);
+  if (preferredRecordStillExists) {
+    selectedResultRecordStableKey = std::move(preferredStableKey);
+  }
+  if (preserveViewState && replayListView != nullptr) {
+    replayListView->scrollOffset = previousScrollOffset;
+    replayListView->rebindVisibleItems();
+  }
+}
+
+void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
+  if (replayModalRoot == nullptr || replayListView == nullptr) {
+    return;
+  }
+
+  replayModalChart = record;
+  replayExportSelection.reset();
+  replayIrUploadInProgress = false;
+  replayIrObservedRevisions.clear();
+  ++replayIrUploadFeedbackRevision;
 
   clearReplayModalSelection();
   selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
   selectedReplayRenderGhosts = true;
   replayRecordFilters = {};
+  reloadReplayRecordModels(false);
+  setReplayButtonVisible(true);
   replayModalTitleText->setText("Records");
   replayListContent->setVisible(true);
   replayFilterSortContent->setVisible(false);
   replayWatchOptionsContent->setVisible(false);
   replayExportOptionsContent->setVisible(false);
   replayExportProgressContent->setVisible(false);
-  applyReplayRecordFilters(std::nullopt);
   replayModalRoot->setSize(rendering::window_width, rendering::window_height);
   replayModalRoot->setVisible(true);
   refreshReplayFilterSortButtons();
@@ -8881,6 +8985,7 @@ void MainMenuScene::updateReplayExportProgressUi(double fraction,
 void MainMenuScene::clearReplayModalSelection() {
   selectedReplayIndex = -1;
   selectedReplaySummary.reset();
+  selectedResultRecordStableKey.reset();
 }
 
 bool MainMenuScene::selectReplayModalIndex(int index) {
@@ -8892,6 +8997,8 @@ bool MainMenuScene::selectReplayModalIndex(int index) {
   selectedReplayIndex = index;
   selectedReplaySummary =
       visibleReplaySummaries[static_cast<std::size_t>(index)];
+  selectedResultRecordStableKey =
+      makeLocalResultRecord(*selectedReplaySummary).stableKey();
   return true;
 }
 
@@ -10084,6 +10191,13 @@ void MainMenuScene::refreshReplayIrMarker(
       replayListView != nullptr ? replayListView->scrollOffset : 0.0F;
   resolveReplayIrRecordState(*latest, activity);
   *summary = std::move(*latest);
+  auto resultRecord = std::ranges::find_if(
+      resultRecordSummaries, [replayId](const ResultRecordSummary &candidate) {
+        return candidate.localReplayId() == replayId;
+      });
+  if (resultRecord != resultRecordSummaries.end()) {
+    *resultRecord = makeLocalResultRecord(*summary);
+  }
   applyReplayRecordFilters(preferredReplayId);
   if (replayListView != nullptr) {
     replayListView->scrollOffset = previousScrollOffset;
@@ -10649,6 +10763,9 @@ void MainMenuScene::cleanupScene() {
   selectedChartReusableForStart.store(false);
   replaySummaries.clear();
   visibleReplaySummaries.clear();
+  resultRecordSummaries.clear();
+  selectedResultRecordStableKey.reset();
+  publishedResultRecordDiagnostic.clear();
   replayRecordFilters = {};
   selectedReplayIndex = -1;
   selectedReplaySummary.reset();

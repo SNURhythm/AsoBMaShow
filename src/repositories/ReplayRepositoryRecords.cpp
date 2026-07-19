@@ -2549,6 +2549,10 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
     }
     if (normalizedIrServerOrigin) {
       summary.hasIrReceipt = sqlite3_column_int(detailStmt.get(), 26) != 0;
+      if (summary.hasIrReceipt) {
+        summary.receiptProviderId = std::string(irProviderId);
+        summary.receiptServerOrigin = *normalizedIrServerOrigin;
+      }
       if (sqlite3_column_type(detailStmt.get(), 27) == SQLITE_TEXT) {
         summary.receiptRemoteScoreId = readText(detailStmt.get(), 27);
       }

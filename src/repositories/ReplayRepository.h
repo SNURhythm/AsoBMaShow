@@ -54,6 +54,19 @@ struct IrRemoteScoreReadOutcome {
   std::string diagnostic;
 };
 
+// Records reads are intentionally smaller than the complete account mirror.
+// Exceeding this per-chart bound is an invalid projection rather than a
+// silently truncated result list.
+inline constexpr std::size_t kMaximumIrRemoteScoresPerChart = 512;
+
+struct IrRemoteScoreLookupOutcome {
+  enum class Status { Loaded, NotFound, Invalid, StorageFailure };
+
+  Status status = Status::StorageFailure;
+  std::optional<IrRemoteScore> score;
+  std::string diagnostic;
+};
+
 } // namespace ir
 
 namespace result_persistence {
@@ -170,6 +183,8 @@ struct ReplaySummary {
   std::optional<ir::IrOutboxState> requestedIrOutboxState;
   bool irSubmissionEligible = false;
   bool hasIrReceipt = false;
+  std::string receiptProviderId;
+  std::string receiptServerOrigin;
   std::string receiptRemoteScoreId;
   ir::IrRecordState irRecordState = ir::IrRecordState::Hidden;
 };
@@ -257,6 +272,13 @@ public:
   ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);
+  ir::IrRemoteScoreReadOutcome ListIrRemoteScoresForChart(
+      std::string_view providerId, std::string_view serverOrigin,
+      std::string_view chartMd5, std::string_view chartSha256);
+  ir::IrRemoteScoreLookupOutcome
+  LoadIrRemoteScore(std::string_view providerId,
+                    std::string_view serverOrigin,
+                    std::string_view remoteScoreId);
   ir::IrOutboxMutationOutcome
   ClearIrRemoteScores(std::string_view providerId,
                       std::string_view serverOrigin);

@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -295,6 +296,128 @@ void testIdentityEqualityHashAndStableKeys() {
          "validated display keys have an explicit UI-safe size bound");
 }
 
+ReplaySummary localRecord(int id, std::string createdAt) {
+  ReplaySummary replay;
+  replay.id = id;
+  replay.finalScore = 1'500;
+  replay.maxScore = 2'000;
+  replay.maxCombo = 500;
+  replay.clearType = kClearTypeHardClearRank;
+  replay.createdAt = std::move(createdAt);
+  return replay;
+}
+
+void testMergeSuppressesOnlyExactCurrentOriginReceipt() {
+  constexpr std::string_view provider = "tachi";
+  constexpr std::string_view origin = "https://boku.tachi.ac";
+
+  ReplaySummary linked = localRecord(10, "2024-01-02 03:04:05");
+  linked.hasIrReceipt = true;
+  linked.receiptProviderId = provider;
+  linked.receiptServerOrigin = origin;
+  linked.receiptRemoteScoreId = "linked-score";
+
+  ReplaySummary equivalentAttempt = linked;
+  equivalentAttempt.id = 11;
+  equivalentAttempt.hasIrReceipt = false;
+  equivalentAttempt.receiptProviderId.clear();
+  equivalentAttempt.receiptServerOrigin.clear();
+  equivalentAttempt.receiptRemoteScoreId.clear();
+
+  ReplaySummary otherOrigin = localRecord(12, "2024-01-02 03:04:04");
+  otherOrigin.hasIrReceipt = true;
+  otherOrigin.receiptProviderId = provider;
+  otherOrigin.receiptServerOrigin = "https://other.example";
+  otherOrigin.receiptRemoteScoreId = "other-origin-score";
+
+  ReplaySummary receiptWithoutId = localRecord(13, "2024-01-02 03:04:03");
+  receiptWithoutId.hasIrReceipt = true;
+  receiptWithoutId.receiptProviderId = provider;
+  receiptWithoutId.receiptServerOrigin = origin;
+
+  ir::IrRemoteScore linkedRemote = validRemoteScore();
+  linkedRemote.remoteScoreId = "linked-score";
+  ir::IrRemoteScore unrelatedRemote = validRemoteScore();
+  unrelatedRemote.remoteScoreId = "unrelated-score";
+  ir::IrRemoteScore otherOriginLinkedRemote = validRemoteScore();
+  otherOriginLinkedRemote.remoteScoreId = "other-origin-score";
+  ir::IrRemoteScore receiptlessEquivalentRemote = validRemoteScore();
+  receiptlessEquivalentRemote.remoteScoreId = "receiptless-equivalent";
+  receiptlessEquivalentRemote.noteCount = 1'000;
+  receiptlessEquivalentRemote.score = receiptWithoutId.finalScore;
+  receiptlessEquivalentRemote.maxCombo = receiptWithoutId.maxCombo;
+  receiptlessEquivalentRemote.random.reset();
+
+  const std::vector<ReplaySummary> local{
+      linked, equivalentAttempt, otherOrigin, receiptWithoutId};
+  const std::vector<ir::IrRemoteScore> remote{
+      linkedRemote, unrelatedRemote, otherOriginLinkedRemote,
+      receiptlessEquivalentRemote};
+  const auto merged = mergeResultRecords(local, remote, provider, origin);
+
+  expect(merged.size() == 7,
+         "exact linked remote suppression removes only one standalone row");
+  for (int replayId : {10, 11, 12, 13}) {
+    expect(std::ranges::any_of(merged, [replayId](const auto &record) {
+             return record.localReplayId() == replayId;
+           }),
+           "merge preserves every local replay including equivalent attempts");
+  }
+  expect(!std::ranges::any_of(merged, [](const auto &record) {
+           return record.remoteScoreId() == "linked-score";
+         }),
+         "current provider and origin receipt suppresses the exact remote ID");
+  expect(std::ranges::any_of(merged, [](const auto &record) {
+           return record.remoteScoreId() == "unrelated-score";
+         }),
+         "unrelated local and remote rows coexist");
+  expect(std::ranges::any_of(merged, [](const auto &record) {
+           return record.remoteScoreId() == "other-origin-score";
+         }),
+         "receipt linked only to another origin does not suppress");
+  expect(std::ranges::any_of(merged, [](const auto &record) {
+           return record.remoteScoreId() == "receiptless-equivalent";
+         }),
+         "receipt without a remote ID does not guess an equivalent row");
+}
+
+void testMergeSortsNewestWithAutoPlayFirstAndStableTies() {
+  ReplaySummary autoPlay = localRecord(-1, {});
+  autoPlay.autoPlay = true;
+  ReplaySummary newestLocal = localRecord(20, "2024-01-02 03:05:01");
+  ReplaySummary tiedLocalB = localRecord(30, "2024-01-02 03:05:00");
+  ReplaySummary tiedLocalA = localRecord(3, "2024-01-02 03:05:00");
+  ReplaySummary oldestLocal = localRecord(40, "2024-01-02 03:04:04");
+
+  ir::IrRemoteScore achieved = validRemoteScore();
+  achieved.remoteScoreId = "achieved";
+  achieved.timeAchievedUnixMillis = 1'704'164'700'123LL;
+  achieved.timeAddedUnixMillis = 1'704'164'900'000LL;
+  ir::IrRemoteScore fallback = validRemoteScore();
+  fallback.remoteScoreId = "fallback";
+  fallback.timeAchievedUnixMillis.reset();
+  fallback.timeAddedUnixMillis = 1'704'164'645'456LL;
+
+  const std::vector<ReplaySummary> local{
+      oldestLocal, tiedLocalB, autoPlay, newestLocal, tiedLocalA};
+  const std::vector<ir::IrRemoteScore> remote{fallback, achieved};
+  const auto merged = mergeResultRecords(
+      local, remote, "tachi", "https://boku.tachi.ac");
+
+  expect(merged.size() == 7 && merged[0].autoPlay,
+         "Auto Play remains first under newest sorting");
+  expect(merged[1].localReplayId() == 20 &&
+             merged[2].remoteScoreId() == "achieved",
+         "remote achieved time sorts alongside newer local timestamps");
+  expect(merged[3].stableKey() < merged[4].stableKey() &&
+             merged[3].displayedTimeUnixMillis ==
+                 merged[4].displayedTimeUnixMillis,
+         "equal newest timestamps use deterministic stable-key ordering");
+  expect(merged[5].remoteScoreId() == "fallback" &&
+             merged[6].localReplayId() == 40,
+         "remote added-time fallback sorts alongside older local timestamps");
+}
+
 } // namespace
 
 int main() {
@@ -302,6 +425,8 @@ int main() {
   testRemoteConversionIsReadOnlyAndRetainsOptionalValues();
   testRemoteConversionFailsClosed();
   testIdentityEqualityHashAndStableKeys();
+  testMergeSuppressesOnlyExactCurrentOriginReceipt();
+  testMergeSortsNewestWithAutoPlayFirstAndStableTies();
 
   if (failures != 0) {
     std::cerr << failures << " result record summary assertion(s) failed\n";

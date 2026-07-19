@@ -8,9 +8,11 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 struct LocalReplayRecordId {
   int replayId = 0;
@@ -84,3 +86,11 @@ makeLocalResultRecord(ReplaySummary summary);
 [[nodiscard]] ResultRecordSummary makeRemoteResultRecord(
     std::string_view providerId, std::string_view serverOrigin,
     ir::IrRemoteScore score);
+
+// Produces the complete newest-first Records projection without mutating the
+// remote mirror. Only an exact receipt in the requested scope suppresses its
+// linked standalone remote row; all local attempts remain visible.
+[[nodiscard]] std::vector<ResultRecordSummary> mergeResultRecords(
+    std::span<const ReplaySummary> local,
+    std::span<const ir::IrRemoteScore> remote,
+    std::string_view providerId, std::string_view serverOrigin);
