@@ -147,6 +147,28 @@ std::optional<std::string> requestOrigin(const IrOutboxEntry &entry,
   return normalizeServerOrigin(settings.serverOrigin);
 }
 
+std::vector<std::string>
+providersWithChangedRuntime(const IrActiveProfileConfig &previous,
+                            const IrActiveProfileConfig &next) {
+  if (previous.profileId != next.profileId) {
+    return {};
+  }
+
+  std::vector<std::string> changed;
+  for (const auto &[providerId, nextSettings] : next.providers) {
+    if (!nextSettings.enabled) {
+      continue;
+    }
+    const auto previousProvider = previous.providers.find(providerId);
+    if (previousProvider == previous.providers.end() ||
+        !previousProvider->second.enabled ||
+        previousProvider->second.serverOrigin != nextSettings.serverOrigin) {
+      changed.push_back(providerId);
+    }
+  }
+  return changed;
+}
+
 } // namespace
 
 struct IrSubmissionService::Impl {
@@ -685,11 +707,24 @@ void IrSubmissionService::pauseAndCancel() {
 }
 
 void IrSubmissionService::activateProfile(IrActiveProfileConfig config) {
+  IrActiveProfileConfig previous;
+  {
+    std::lock_guard lock(impl_->mutex);
+    previous = impl_->profile;
+  }
+  const auto changedProviders = providersWithChangedRuntime(previous, config);
   pauseAndCancel();
   {
     std::lock_guard lock(impl_->mutex);
     if (impl_->stopped) {
       return;
+    }
+  }
+  const std::int64_t now = safeNow(impl_->options);
+  for (const auto &providerId : changedProviders) {
+    if (!lookupCredential(impl_->options, config.profileId, providerId)
+             .empty()) {
+      impl_->repository.UnblockIrOutbox(providerId, now);
     }
   }
   impl_->prepareProfile(std::move(config));

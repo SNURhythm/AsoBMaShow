@@ -589,6 +589,33 @@ void testMissingKeyPreservesManualIntentAndReplacementWakes() {
          "credential replacement publishes invalidation callback");
 }
 
+void testProviderRuntimeChangeUnblocksRows() {
+  Harness harness;
+  harness.setCredential("key");
+  harness.repository.EnqueueReadyIrOutboxDraft(draft(23, harness.now.load()),
+                                               false);
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::BlockedConfiguration,
+      .code = "authentication_required",
+      .diagnostic = "old origin rejected the credential",
+  });
+  harness.service->start(profile(true, true, "https://old.example.test"));
+  expect(harness.waitForState(attemptId(23),
+                              ir::IrOutboxState::BlockedConfiguration),
+         "provider runtime fixture reaches blocked configuration");
+
+  harness.service->activateProfile(
+      profile(true, true, "https://new.example.test"));
+  expect(harness.driver->waitForCalls(2),
+         "provider runtime change retries a blocked row");
+  const auto calls = harness.driver->calls();
+  expect(calls.size() >= 2 &&
+             calls.back().configuredOrigin == "https://new.example.test",
+         "retried submission uses the changed provider origin");
+  expect(harness.waitForState(attemptId(23), ir::IrOutboxState::Succeeded),
+         "provider runtime retry can complete without a credential change");
+}
+
 void testManualEnqueueRequiresFreshRulesetProof() {
   Harness harness;
   harness.service->start(profile(true));
@@ -957,6 +984,7 @@ int main() {
   testDisabledAndReadOnlyProvidersStayPaused();
   testFutureWakeIgnoresBoundedSkippedProviderRows();
   testMissingKeyPreservesManualIntentAndReplacementWakes();
+  testProviderRuntimeChangeUnblocksRows();
   testManualEnqueueRequiresFreshRulesetProof();
   testAutomaticAndManualRequestsUseCurrentOrigin();
   testDeferredPollingPinsOriginAndNeverReposts();
