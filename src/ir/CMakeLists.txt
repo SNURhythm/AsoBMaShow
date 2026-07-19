@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     IrCredentialStore.cpp
     IrOutboxModels.cpp
     IrReceiptModels.cpp
+    IrRemoteScoreModels.cpp
     IrProfileSettings.cpp
     IrRankingModal.cpp
     IrRankingModalView.cpp
