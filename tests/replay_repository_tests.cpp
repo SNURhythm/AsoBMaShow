@@ -4524,7 +4524,7 @@ void testVersion5MigrationAddsIrOutbox(const std::filesystem::path &root) {
   for (const std::string_view column :
        {"id", "provider_id", "attempt_id", "chart_md5", "chart_sha256",
         "payload_json", "state", "local_result_ready", "request_attempt_count",
-        "consecutive_failure_count", "next_attempt_at_ms",
+        "consecutive_failure_count", "remote_poll_count", "next_attempt_at_ms",
         "next_request_user_intent", "remote_job_id", "remote_origin",
         "last_error_code", "last_error_message", "created_at_ms",
         "updated_at_ms", "completed_at_ms", "ruleset_id",
@@ -4620,6 +4620,68 @@ void testVersion6MigrationBlocksRowsWithoutRulesetProof(
   assert(columnExists(db.get(), "ir_outbox", "ruleset_id"));
   assert(columnExists(db.get(), "ir_outbox", "ruleset_revision"));
   assert(columnExists(db.get(), "ir_outbox", "validation_fingerprint"));
+}
+
+void testVersion7MigrationAddsIrRemotePollCount(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-outbox-poll-count-migration" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+  helper.Shutdown();
+
+  auto db = openDatabase(path);
+  execOrAbort(db.get(), "DROP TABLE ir_outbox");
+  execOrAbort(
+      db.get(),
+      "CREATE TABLE ir_outbox ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id TEXT NOT NULL,"
+      "attempt_id TEXT NOT NULL,chart_md5 TEXT,chart_sha256 TEXT NOT NULL,"
+      "payload_json TEXT NOT NULL,ruleset_id TEXT NOT NULL,"
+      "ruleset_revision INTEGER NOT NULL,"
+      "validation_fingerprint TEXT NOT NULL,state INTEGER NOT NULL,"
+      "local_result_ready INTEGER NOT NULL DEFAULT 0,"
+      "request_attempt_count INTEGER NOT NULL DEFAULT 0,"
+      "consecutive_failure_count INTEGER NOT NULL DEFAULT 0,"
+      "next_attempt_at_ms INTEGER,"
+      "next_request_user_intent INTEGER NOT NULL DEFAULT 0,"
+      "remote_job_id TEXT,remote_origin TEXT,last_error_code TEXT,"
+      "last_error_message TEXT,created_at_ms INTEGER NOT NULL,"
+      "updated_at_ms INTEGER NOT NULL,completed_at_ms INTEGER,"
+      "UNIQUE(provider_id, attempt_id),CHECK (local_result_ready IN (0, 1)),"
+      "CHECK (next_request_user_intent IN (0, 1)),"
+      "CHECK ((remote_job_id IS NULL AND remote_origin IS NULL) OR "
+      "(remote_job_id IS NOT NULL AND remote_origin IS NOT NULL)))");
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_ir_outbox_due ON ir_outbox("
+              "local_result_ready, state, next_attempt_at_ms, id)");
+  execOrAbort(db.get(),
+              "CREATE INDEX idx_ir_outbox_attempt ON "
+              "ir_outbox(provider_id, attempt_id)");
+  execOrAbort(
+      db.get(),
+      "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,chart_sha256,"
+      "payload_json,ruleset_id,ruleset_revision,validation_fingerprint,state,"
+      "local_result_ready,next_attempt_at_ms,remote_job_id,remote_origin,"
+      "created_at_ms,updated_at_ms) VALUES('tachi',"
+      "'123e4567-e89b-42d3-a456-426614174098','" +
+          std::string(32, 'b') + "','" + std::string(64, 'a') +
+          "','{\"score\":123}','lr2',1,'" + std::string(64, 'c') +
+          "',2,1,1200,'job-migrated','https://boku.tachi.ac',1000,1000)");
+  execOrAbort(db.get(), "PRAGMA user_version=7");
+  db.reset();
+
+  assert(helper.EnsureSchema());
+  const auto loaded = helper.LoadIrOutbox(
+      "tachi", "123e4567-e89b-42d3-a456-426614174098");
+  assert(loaded.status == ir::IrOutboxReadStatus::Found && loaded.entry);
+  assert(loaded.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
+         loaded.entry->remoteJobId == "job-migrated" &&
+         loaded.entry->remotePollCount == 0);
+  helper.Shutdown();
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ReplayRepository::kCurrentSchemaVersion);
+  assert(columnExists(db.get(), "ir_outbox", "remote_poll_count"));
 }
 
 void testCurrentVersionRejectsMalformedRulesetProofSchema(
@@ -4792,6 +4854,7 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
                  .rowId = rowId,
                  .nextState = ir::IrOutboxState::AwaitingRemoteResult,
                  .consecutiveFailureCount = 0,
+                 .remotePollCount = 2,
                  .nextAttemptAtUnixMillis = 3'000,
                  .remoteJobId = "job-123",
                  .remoteOrigin = "https://boku.tachi.ac",
@@ -4801,6 +4864,7 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry &&
          loaded.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
+         loaded.entry->remotePollCount == 2 &&
          loaded.entry->remoteJobId == "job-123" &&
          loaded.entry->remoteOrigin == "https://boku.tachi.ac");
 
@@ -4812,6 +4876,7 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry &&
          loaded.entry->state == ir::IrOutboxState::BlockedConfiguration &&
+         loaded.entry->remotePollCount == 2 &&
          loaded.entry->remoteJobId == "job-123" &&
          loaded.entry->remoteOrigin == "https://boku.tachi.ac" &&
          !loaded.entry->nextRequestUserIntent);
@@ -4820,6 +4885,7 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry &&
          loaded.entry->state == ir::IrOutboxState::AwaitingRemoteResult &&
+         loaded.entry->remotePollCount == 2 &&
          loaded.entry->remoteJobId == "job-123" &&
          loaded.entry->remoteOrigin == "https://boku.tachi.ac" &&
          !loaded.entry->nextRequestUserIntent);
@@ -4834,6 +4900,7 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
                  .rowId = rowId,
                  .nextState = ir::IrOutboxState::AwaitingRemoteResult,
                  .consecutiveFailureCount = 0,
+                 .remotePollCount = 3,
                  .nextAttemptAtUnixMillis = 4'000,
                  .remoteJobId = "job-123",
                  .remoteOrigin = "https://boku.tachi.ac",
@@ -4850,12 +4917,14 @@ void testIrOutboxInsertClaimAndDeliveryTransitions(
                  .rowId = rowId,
                  .nextState = ir::IrOutboxState::Succeeded,
                  .consecutiveFailureCount = 0,
+                 .remotePollCount = 0,
                  .updatedAtUnixMillis = 4'001,
                  .completedAtUnixMillis = 4'001,
              })
              .status == ir::IrOutboxMutationStatus::Updated);
   loaded = helper.LoadIrOutbox(draft.providerId, draft.attemptId);
   assert(loaded.entry && loaded.entry->state == ir::IrOutboxState::Succeeded &&
+         loaded.entry->remotePollCount == 0 &&
          loaded.entry->completedAtUnixMillis == 4'001 &&
          loaded.entry->remoteJobId.empty());
   assert(helper.PurgeSucceededIrOutbox(4'002).affectedRows == 1);
@@ -5044,6 +5113,7 @@ int main() {
   testAcknowledgementActivatesIrAtomically(root);
   testVersion5MigrationAddsIrOutbox(root);
   testVersion6MigrationBlocksRowsWithoutRulesetProof(root);
+  testVersion7MigrationAddsIrRemotePollCount(root);
   testCurrentVersionRejectsMalformedRulesetProofSchema(root);
   testIrOutboxInsertClaimAndDeliveryTransitions(root);
   testIrOutboxRecoveryCountsRetryAndValidation(root);

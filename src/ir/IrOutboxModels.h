@@ -55,6 +55,7 @@ struct IrOutboxEntry {
   bool localResultReady = false;
   int requestAttemptCount = 0;
   int consecutiveFailureCount = 0;
+  int remotePollCount = 0;
   std::optional<std::int64_t> nextAttemptAtUnixMillis;
   bool nextRequestUserIntent = false;
   std::string remoteJobId;
@@ -72,6 +73,7 @@ struct IrOutboxDeliveryUpdate {
   std::int64_t rowId = 0;
   IrOutboxState nextState = IrOutboxState::Pending;
   int consecutiveFailureCount = 0;
+  int remotePollCount = 0;
   std::optional<std::int64_t> nextAttemptAtUnixMillis;
   std::optional<std::string> remoteJobId;
   std::optional<std::string> remoteOrigin;

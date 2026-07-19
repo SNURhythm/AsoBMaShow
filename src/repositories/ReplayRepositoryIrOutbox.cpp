@@ -16,9 +16,9 @@ constexpr const char *kIrOutboxColumns =
     "id,provider_id,attempt_id,chart_md5,chart_sha256,payload_json,"
     "ruleset_id,ruleset_revision,validation_fingerprint,state,"
     "local_result_ready,request_attempt_count,consecutive_failure_count,"
-    "next_attempt_at_ms,next_request_user_intent,remote_job_id,remote_origin,"
-    "last_error_code,last_error_message,created_at_ms,updated_at_ms,"
-    "completed_at_ms";
+    "remote_poll_count,next_attempt_at_ms,next_request_user_intent,"
+    "remote_job_id,remote_origin,last_error_code,last_error_message,"
+    "created_at_ms,updated_at_ms,completed_at_ms";
 
 bool validProviderId(std::string_view value) {
   if (value.empty() || value.size() > ir::kMaximumIrProviderIdBytes ||
@@ -70,17 +70,18 @@ bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
       !columnIs(stmt, 9, SQLITE_INTEGER) ||
       !columnIs(stmt, 10, SQLITE_INTEGER) ||
       !columnIs(stmt, 11, SQLITE_INTEGER) ||
-      !columnIs(stmt, 12, SQLITE_INTEGER) || !nullableInteger(stmt, 13) ||
-      !columnIs(stmt, 14, SQLITE_INTEGER) || !nullableText(stmt, 15) ||
-      !nullableText(stmt, 16) || !nullableText(stmt, 17) ||
-      !nullableText(stmt, 18) || !columnIs(stmt, 19, SQLITE_INTEGER) ||
-      !columnIs(stmt, 20, SQLITE_INTEGER) || !nullableInteger(stmt, 21)) {
+      !columnIs(stmt, 12, SQLITE_INTEGER) ||
+      !columnIs(stmt, 13, SQLITE_INTEGER) || !nullableInteger(stmt, 14) ||
+      !columnIs(stmt, 15, SQLITE_INTEGER) || !nullableText(stmt, 16) ||
+      !nullableText(stmt, 17) || !nullableText(stmt, 18) ||
+      !nullableText(stmt, 19) || !columnIs(stmt, 20, SQLITE_INTEGER) ||
+      !columnIs(stmt, 21, SQLITE_INTEGER) || !nullableInteger(stmt, 22)) {
     diagnostic = "IR outbox row has unexpected SQLite value types";
     return false;
   }
   const int state = sqlite3_column_int(stmt, 9);
   const int localReady = sqlite3_column_int(stmt, 10);
-  const int userIntent = sqlite3_column_int(stmt, 14);
+  const int userIntent = sqlite3_column_int(stmt, 15);
   if (!ir::isKnownIrOutboxState(state) ||
       (localReady != 0 && localReady != 1) ||
       (userIntent != 0 && userIntent != 1)) {
@@ -104,15 +105,16 @@ bool decodeIrOutboxRow(sqlite3_stmt *stmt, ir::IrOutboxEntry &entry,
       .localResultReady = localReady != 0,
       .requestAttemptCount = sqlite3_column_int(stmt, 11),
       .consecutiveFailureCount = sqlite3_column_int(stmt, 12),
-      .nextAttemptAtUnixMillis = optionalInteger(stmt, 13),
+      .remotePollCount = sqlite3_column_int(stmt, 13),
+      .nextAttemptAtUnixMillis = optionalInteger(stmt, 14),
       .nextRequestUserIntent = userIntent != 0,
-      .remoteJobId = optionalText(stmt, 15),
-      .remoteOrigin = optionalText(stmt, 16),
-      .lastErrorCode = optionalText(stmt, 17),
-      .lastErrorMessage = optionalText(stmt, 18),
-      .createdAtUnixMillis = sqlite3_column_int64(stmt, 19),
-      .updatedAtUnixMillis = sqlite3_column_int64(stmt, 20),
-      .completedAtUnixMillis = optionalInteger(stmt, 21),
+      .remoteJobId = optionalText(stmt, 16),
+      .remoteOrigin = optionalText(stmt, 17),
+      .lastErrorCode = optionalText(stmt, 18),
+      .lastErrorMessage = optionalText(stmt, 19),
+      .createdAtUnixMillis = sqlite3_column_int64(stmt, 20),
+      .updatedAtUnixMillis = sqlite3_column_int64(stmt, 21),
+      .completedAtUnixMillis = optionalInteger(stmt, 22),
   };
   return ir::validateIrOutboxEntry(entry, diagnostic);
 }
@@ -767,7 +769,7 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
       update.nextState == ir::IrOutboxState::FailedPermanent ||
       update.nextState == ir::IrOutboxState::Succeeded;
   if (update.rowId <= 0 || update.updatedAtUnixMillis < 0 ||
-      update.consecutiveFailureCount < 0 ||
+      update.consecutiveFailureCount < 0 || update.remotePollCount < 0 ||
       (update.nextAttemptAtUnixMillis && *update.nextAttemptAtUnixMillis < 0) ||
       (update.completedAtUnixMillis && *update.completedAtUnixMillis < 0) ||
       !targetValid || !remotePairValid ||
@@ -795,7 +797,7 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
   SqliteStatementHandle stmt;
   const char *query =
       "UPDATE ir_outbox SET state=?,consecutive_failure_count=?,"
-      "next_attempt_at_ms=?,remote_job_id=?,remote_origin=?,"
+      "remote_poll_count=?,next_attempt_at_ms=?,remote_job_id=?,remote_origin=?,"
       "last_error_code=?,last_error_message=?,updated_at_ms=?,"
       "completed_at_ms=? WHERE id=? AND state=1";
   const std::optional<std::string> remoteJob =
@@ -813,15 +815,16 @@ ir::IrOutboxMutationOutcome ReplayRepository::ApplyIrOutboxDelivery(
           SQLITE_OK ||
       sqlite3_bind_int(stmt.get(), 2, update.consecutiveFailureCount) !=
           SQLITE_OK ||
-      !bindOptionalInteger(stmt.get(), 3, update.nextAttemptAtUnixMillis) ||
-      !bindOptionalText(stmt.get(), 4, remoteJob) ||
-      !bindOptionalText(stmt.get(), 5, remoteOrigin) ||
-      !bindOptionalText(stmt.get(), 6, storedErrorCode) ||
-      !bindOptionalText(stmt.get(), 7, storedErrorMessage) ||
-      sqlite3_bind_int64(stmt.get(), 8, update.updatedAtUnixMillis) !=
+      sqlite3_bind_int(stmt.get(), 3, update.remotePollCount) != SQLITE_OK ||
+      !bindOptionalInteger(stmt.get(), 4, update.nextAttemptAtUnixMillis) ||
+      !bindOptionalText(stmt.get(), 5, remoteJob) ||
+      !bindOptionalText(stmt.get(), 6, remoteOrigin) ||
+      !bindOptionalText(stmt.get(), 7, storedErrorCode) ||
+      !bindOptionalText(stmt.get(), 8, storedErrorMessage) ||
+      sqlite3_bind_int64(stmt.get(), 9, update.updatedAtUnixMillis) !=
           SQLITE_OK ||
-      !bindOptionalInteger(stmt.get(), 9, update.completedAtUnixMillis) ||
-      sqlite3_bind_int64(stmt.get(), 10, update.rowId) != SQLITE_OK ||
+      !bindOptionalInteger(stmt.get(), 10, update.completedAtUnixMillis) ||
+      sqlite3_bind_int64(stmt.get(), 11, update.rowId) != SQLITE_OK ||
       sqlite3_step(stmt.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
             .diagnostic = "could not apply IR outbox delivery"};

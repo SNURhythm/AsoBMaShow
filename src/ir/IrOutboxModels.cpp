@@ -152,7 +152,7 @@ bool validateIrOutboxEntry(const IrOutboxEntry &entry,
       return false;
     }
     if (entry.requestAttemptCount < 0 || entry.consecutiveFailureCount < 0 ||
-        entry.updatedAtUnixMillis < 0 ||
+        entry.remotePollCount < 0 || entry.updatedAtUnixMillis < 0 ||
         (entry.nextAttemptAtUnixMillis && *entry.nextAttemptAtUnixMillis < 0) ||
         (entry.completedAtUnixMillis && *entry.completedAtUnixMillis < 0)) {
       diagnostic = "IR outbox counters or times are invalid";
