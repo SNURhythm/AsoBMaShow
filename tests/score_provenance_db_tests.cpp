@@ -1141,6 +1141,32 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   assert(best->badPoints == 62);
 }
 
+void testBestScoreCanFilterExactRuleset(const std::filesystem::path &root) {
+  const auto path = root / "best-score-ruleset-filter" / "score.db";
+  ScoreRepository helper(path);
+  auto lr2 = samplePendingScore(root, "best-score-ruleset-filter", 15,
+                                "2026-07-18 12:34:56", 20, 5);
+  auto beatoraja = samplePendingScore(root, "best-score-ruleset-filter", 16,
+                                     "2026-07-18 12:35:56", 40, 5);
+  beatoraja.score.provenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  beatoraja.score.provenance.stages.front().candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
+  beatoraja.score.provenance.eligibility =
+      scoreEligibilityForProvenance(beatoraja.score.provenance);
+  assert(helper.SaveProjectedScore(lr2).status ==
+         result_persistence::ProjectionStatus::Inserted);
+  assert(helper.SaveProjectedScore(beatoraja).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  const auto meta = sampleMeta(root, "best-score-ruleset-filter");
+  const auto overall = helper.LoadBestScore(meta, std::nullopt, std::nullopt, 2);
+  assert(overall.has_value() && overall->score == beatoraja.score.score);
+  const auto lr2Best = helper.LoadBestScoreForRuleset(
+      meta, RulesetDescriptor::For(GameplayRuleset::LR2), 2);
+  assert(lr2Best.has_value() && lr2Best->score == lr2.score.score);
+}
+
 void testPreviousBestExcludesExactAttemptAtSameTimestamp(
     const std::filesystem::path &root) {
   const auto path = root / "previous-best-exact-attempt" / "score.db";
@@ -2662,6 +2688,7 @@ int main() {
   testProjectedScoreUsesReplayTimestamp(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
   testBestScoreLoadsKpoorInclusiveBadPoints(root);
+  testBestScoreCanFilterExactRuleset(root);
   testPreviousBestExcludesExactAttemptAtSameTimestamp(root);
   testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(root);
   testUnrelatedScoreConstraintIsStorageFailure(root);

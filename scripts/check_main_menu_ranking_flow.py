@@ -17,6 +17,24 @@ if not source_path.is_file():
     raise SystemExit(1)
 
 source = source_path.read_text(encoding="utf-8")
+ranking_open_start = source.find("void MainMenuScene::openRankingsForSelection()")
+ranking_open_end = source.find(
+    "MainMenuScene::EffectivePlayOptionSelection", ranking_open_start
+)
+if ranking_open_start < 0 or ranking_open_end < 0:
+    print("FAIL: unable to locate the Rankings open flow", file=sys.stderr)
+    raise SystemExit(1)
+
+ranking_open = source[ranking_open_start:ranking_open_end]
+if "LoadBestScoreForRuleset(" not in ranking_open or (
+    "RulesetDescriptor::For(GameplayRuleset::LR2)" not in ranking_open
+):
+    print(
+        "FAIL: Bokutachi local comparison must select an LR2-specific PB",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
 selection_start = source.find("recyclerView->onSelected =")
 selection_end = source.find("recyclerView->onUnselected =", selection_start)
 if selection_start < 0 or selection_end < 0:

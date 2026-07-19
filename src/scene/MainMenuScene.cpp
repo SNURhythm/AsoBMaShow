@@ -4612,8 +4612,9 @@ void MainMenuScene::openRankingsForSelection() {
   std::optional<ir::IrLocalComparison> comparison;
   const int selectedLongNoteMode =
       long_note_mode::valueFromId(profileSelections.longNoteMode);
-  const auto best = context.scoreRepository.LoadBestScore(
-      record->meta, std::nullopt, std::nullopt, selectedLongNoteMode);
+  const auto best = context.scoreRepository.LoadBestScoreForRuleset(
+      record->meta, RulesetDescriptor::For(GameplayRuleset::LR2),
+      selectedLongNoteMode);
   if (best) {
     comparison = ir::IrLocalComparison{
         .label = "Local PB",
