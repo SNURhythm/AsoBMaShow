@@ -276,6 +276,8 @@ void testImmediateWarningsAndRejection() {
   auto result = driver.submit(pendingEntry(), runtimeConfig(), http, {});
   expect(result.status == ir::DeliveryStatus::Succeeded,
          "accepted score with warning still succeeds");
+  expect(result.importHadErrors && result.code == "accepted_with_warnings",
+         "one-score warning records import errors without rejecting");
   expect(result.diagnostic.find("gauge was adjusted") != std::string::npos,
          "accepted warning is retained as a diagnostic");
 
@@ -300,6 +302,8 @@ void testImmediateImportPreservesIdentity() {
          "identity import succeeds");
   expect(outcome.remoteUserId == 42, "user identity is retained");
   expect(outcome.remoteScoreId == "Tscore", "score identity is retained");
+  expect(outcome.remoteScoreIds == std::vector<std::string>{"Tscore"},
+         "single score identity is also retained in the batch vector");
 }
 
 void testDuplicateImportIsIdempotentSuccess() {
@@ -309,6 +313,8 @@ void testDuplicateImportIsIdempotentSuccess() {
          "duplicate import is successful");
   expect(outcome.code == "already_exists", "duplicate has stable code");
   expect(!outcome.remoteScoreId, "duplicate has no fabricated score ID");
+  expect(outcome.remoteScoreIds.empty(),
+         "duplicate has no fabricated batch score IDs");
 }
 
 void testEmptyRejectedImportRemainsPermanentFailure() {
@@ -322,7 +328,8 @@ void testEmptyRejectedImportRemainsPermanentFailure() {
 
 void testInvalidImportUserIdentityIsIgnored() {
   for (const std::string_view userId : {
-           std::string_view{"-1"}, std::string_view{"0"},
+           std::string_view{"-1"},
+           std::string_view{"0"},
            std::string_view{"\"invalid\""},
            std::string_view{"9223372036854775808"},
        }) {
@@ -363,13 +370,101 @@ void testControlCharacterScoreIdentityIsMalformedForImmediateAndPoll() {
          "completed poll score identity with a control character is malformed");
 }
 
-void testMultipleScoreIdentitiesAreMalformed() {
+void testMultipleScoreIdentitiesAreBatchSuccess() {
   const auto outcome = ir::tachi::parseImmediateImportResponse(
       R"({"success":true,"body":{"userID":42,"scoreIDs":["score-1","score-2"],"errors":[]}})");
-  expect(outcome.status == ir::DeliveryStatus::PermanentFailure,
-         "multiple score identities violate the single-score contract");
-  expect(outcome.code == "malformed_response",
-         "multiple score identities are malformed");
+  expect(outcome.status == ir::DeliveryStatus::Succeeded,
+         "multiple bounded score identities satisfy the batch contract");
+  expect(outcome.remoteScoreIds ==
+             std::vector<std::string>({"score-1", "score-2"}),
+         "batch response retains every score identity in order");
+  expect(!outcome.remoteScoreId,
+         "multiple score identities do not populate the singular field");
+  expect(!outcome.importHadErrors,
+         "empty error arrays are recorded as error-free imports");
+}
+
+void testBatchSubmissionUsesOneRequestAndClassifiesResponse() {
+  const ir::tachi::TachiDriver driver;
+  auto first = pendingEntry();
+  auto second = pendingEntry();
+  second.id = 2;
+  second.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+  const std::string proofInput =
+      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      std::to_string(second.attemptId.size()) + ":" + second.attemptId + "\n" +
+      std::to_string(second.chartSha256.size()) + ":" + second.chartSha256 +
+      "\n" + std::to_string(second.payloadJson.size()) + ":" +
+      second.payloadJson;
+  second.rulesetProof.validationFingerprint = file_checksum::sha256(proofInput);
+  std::vector entries{first, second};
+
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200, .body = immediate(R"(["score-1","score-2"])")});
+  auto result = driver.submitBatch(entries, true, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::Succeeded &&
+             result.remoteScoreIds.size() == 2,
+         "two accepted scores succeed as one batch");
+  expect(http.requests.size() == 1,
+         "compatible batch performs exactly one HTTP request");
+  if (!http.requests.empty()) {
+    const auto body = nlohmann::json::parse(http.requests.front().body);
+    expect(http.requests.front().method == ir::IrHttpMethod::Post &&
+               body.at("scores").size() == 2,
+           "batch request sends one composed POST body");
+    expect(hasHeader(http.requests.front(), "X-User-Intent", "true"),
+           "batch request sends one aggregate user-intent header");
+  }
+
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = immediate(
+           R"(["score-1"])",
+           R"([{"type":"InvalidDatapoint","message":"one row warned"}])")});
+  result = driver.submitBatch(entries, false, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::PermanentFailure &&
+             result.code == "ambiguous_partial_import",
+         "multi-row response with errors is an ambiguous permanent failure");
+
+  http.responses.push_back(
+      {.statusCode = 200,
+       .body = immediate(R"(["score-1","score-2","score-3"])")});
+  result = driver.submitBatch(entries, false, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::PermanentFailure &&
+             result.code == "malformed_response",
+         "response cannot contain more score IDs than submitted rows");
+}
+
+void testAwaitingRowsPlanAndPollAsOneBatch() {
+  const ir::tachi::TachiDriver driver;
+  auto first = awaitingEntry();
+  auto second = awaitingEntry();
+  second.id = 2;
+  second.remoteOrigin = "HTTPS://ORIGINAL.EXAMPLE.TEST:443/";
+  auto unrelated = awaitingEntry();
+  unrelated.id = 3;
+  unrelated.remoteJobId = "another-import-job";
+  std::vector due{first, second, unrelated};
+
+  const auto plan = driver.planBatch(due);
+  expect(plan.status == ir::IrOutboxBatchPlanStatus::Planned &&
+             plan.rowIds == std::vector<std::int64_t>({1, 2}),
+         "awaiting plan groups a shared job and normalized origin");
+
+  FakeHttpClient http;
+  http.responses.push_back(
+      {.statusCode = 200, .body = pollCompleted(R"(["score-1","score-2"])")});
+  std::vector claimed{first, second};
+  claimed[0].state = ir::IrOutboxState::Uploading;
+  claimed[1].state = ir::IrOutboxState::Uploading;
+  const auto result = driver.pollBatch(claimed, runtimeConfig(), http, {});
+  expect(result.status == ir::DeliveryStatus::Succeeded &&
+             result.remoteScoreIds.size() == 2,
+         "shared completed poll returns the batch score identities");
+  expect(http.requests.size() == 1 &&
+             http.requests.front().method == ir::IrHttpMethod::Get,
+         "shared deferred rows perform exactly one poll request");
 }
 
 void testMalformedAndBoundedDiagnostics() {
@@ -1092,8 +1187,7 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
   http.responses.push_back(
       {.statusCode = 200,
        .body = rankingPageBody(
-           nlohmann::json::array(
-               {rankingPb(1, 3, 1), rankingPb(1, 3, 2)}),
+           nlohmann::json::array({rankingPb(1, 3, 1), rankingPb(1, 3, 2)}),
            nlohmann::json::array({{{"id", 1}, {"username", "Alice"}},
                                   {{"id", 2}, {"username", "Bob"}}}))});
 
@@ -1118,8 +1212,8 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
        .body = rankingPageBody(
            nlohmann::json::array({rankingPb(3, 3, 3)}),
            nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
-  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
-                                        runtimeConfig(), http, {});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor, runtimeConfig(),
+                                        http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
              result.ranking->entries.size() == 1 &&
              !result.ranking->nextPageToken.has_value(),
@@ -1140,16 +1234,16 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
        .body = rankingPageBody(
            nlohmann::json::array({rankingPb(1, 3, 3)}),
            nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
-  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
-                                        runtimeConfig(), http, {});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor, runtimeConfig(),
+                                        http, {});
   expect(result.status == ir::ChartRankingStatus::MalformedResponse,
          "a regressing native page is rejected");
 
   http.responses.push_back({.statusCode = 200,
                             .body = rankingPageBody(nlohmann::json::array(),
                                                     nlohmann::json::array())});
-  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
-                                        runtimeConfig(), http, {});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor, runtimeConfig(),
+                                        http, {});
   expect(result.status == ir::ChartRankingStatus::MalformedResponse,
          "a rank-only cursor that cannot advance through a tie fails safely");
 
@@ -1158,8 +1252,8 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
        .body = rankingPageBody(
            nlohmann::json::array({rankingPb(3, 4, 3)}),
            nlohmann::json::array({{{"id", 3}, {"username", "Carol"}}}))});
-  result = driver.fetchChartRankingPage(rankingQuery(), cursor,
-                                        runtimeConfig(), http, {});
+  result = driver.fetchChartRankingPage(rankingQuery(), cursor, runtimeConfig(),
+                                        http, {});
   expect(result.status == ir::ChartRankingStatus::MalformedResponse,
          "a changed remote outOf cannot be appended to the loaded prefix");
 }
@@ -1300,8 +1394,8 @@ void testCancelledIdentityResponseIsNotCached() {
       cancellation.request_stop();
     }
   };
-  const auto result = driver.fetchChartRanking(
-      rankingQuery(), runtimeConfig(), http, cancellation.get_token());
+  const auto result = driver.fetchChartRanking(rankingQuery(), runtimeConfig(),
+                                               http, cancellation.get_token());
   expect(result.status == ir::ChartRankingStatus::Cancelled,
          "identity response cancelled by credential invalidation is discarded");
   expect(!cache->userId("https://boku.tachi.ac"),
@@ -1406,7 +1500,9 @@ int main() {
   testInvalidImportUserIdentityIsIgnored();
   testOversizedScoreIdentityIsMalformed();
   testControlCharacterScoreIdentityIsMalformedForImmediateAndPoll();
-  testMultipleScoreIdentitiesAreMalformed();
+  testMultipleScoreIdentitiesAreBatchSuccess();
+  testBatchSubmissionUsesOneRequestAndClassifiesResponse();
+  testAwaitingRowsPlanAndPollAsOneBatch();
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();
   testPollUsesPersistedOriginAndCurrentKey();

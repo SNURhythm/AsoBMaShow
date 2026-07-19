@@ -88,10 +88,8 @@ DeliveryOutcome parseImportDocument(const Json &document) {
   if (userId != document.end()) {
     if (userId->is_number_unsigned()) {
       const auto value = userId->get<std::uint64_t>();
-      if (value > 0 &&
-          value <=
-              static_cast<std::uint64_t>(
-                  std::numeric_limits<std::int64_t>::max())) {
+      if (value > 0 && value <= static_cast<std::uint64_t>(
+                                    std::numeric_limits<std::int64_t>::max())) {
         parsedUserId = static_cast<std::int64_t>(value);
       }
     } else if (userId->is_number_integer()) {
@@ -101,6 +99,8 @@ DeliveryOutcome parseImportDocument(const Json &document) {
       }
     }
   }
+  std::vector<std::string> parsedScoreIds;
+  parsedScoreIds.reserve(scoreIds->size());
   for (const auto &scoreId : *scoreIds) {
     if (!scoreId.is_string()) {
       return malformed("Tachi Import Document score ID is invalid");
@@ -112,11 +112,17 @@ DeliveryOutcome parseImportDocument(const Json &document) {
         })) {
       return malformed("Tachi Import Document score ID is invalid");
     }
+    parsedScoreIds.push_back(value);
   }
-  if (scoreIds->size() == 1) {
+  const bool importHadErrors = !errors->empty();
+  if (!parsedScoreIds.empty()) {
     return {.status = DeliveryStatus::Succeeded,
             .remoteUserId = parsedUserId,
-            .remoteScoreId = scoreIds->front().get<std::string>(),
+            .remoteScoreId = parsedScoreIds.size() == 1
+                                 ? std::optional(parsedScoreIds.front())
+                                 : std::nullopt,
+            .remoteScoreIds = std::move(parsedScoreIds),
+            .importHadErrors = importHadErrors,
             .code =
                 diagnostic->empty() ? std::string{} : "accepted_with_warnings",
             .diagnostic = *diagnostic};
@@ -127,10 +133,12 @@ DeliveryOutcome parseImportDocument(const Json &document) {
             .code = "already_exists"};
   }
   if (scoreIds->empty()) {
-    return rejected(diagnostic->empty() ? "Tachi rejected the score"
-                                        : *diagnostic);
+    DeliveryOutcome outcome = rejected(
+        diagnostic->empty() ? "Tachi rejected the score" : *diagnostic);
+    outcome.importHadErrors = importHadErrors;
+    return outcome;
   }
-  return malformed("Tachi accepted an unexpected number of scores");
+  return malformed("Tachi Import Document could not be classified");
 }
 
 std::optional<Json> parseObject(std::string_view body,

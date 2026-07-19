@@ -164,21 +164,35 @@ bool validCredential(std::string_view apiKey) {
   return true;
 }
 
-IrHttpRequest submitRequest(std::string_view origin, const IrOutboxEntry &entry,
+IrHttpRequest submitRequest(std::string_view origin, std::string body,
+                            bool userIntent,
                             const IrProviderRuntimeConfig &config) {
   IrHttpRequest request{
       .method = IrHttpMethod::Post,
       .url = std::string(origin) + "/ir/direct-manual/import",
       .headers = {{"Authorization", "Bearer " + config.apiKey},
                   {"Content-Type", "application/json"}},
-      .body = entry.payloadJson,
+      .body = std::move(body),
       .maximumResponseBytes = kMaximumTachiResponseBytes,
       .followRedirects = false,
   };
-  if (entry.nextRequestUserIntent) {
+  if (userIntent) {
     request.headers.emplace_back("X-User-Intent", "true");
   }
   return request;
+}
+
+DeliveryOutcome classifyBatchImport(std::span<const IrOutboxEntry> entries,
+                                    DeliveryOutcome outcome) {
+  if (entries.size() > 1 && outcome.importHadErrors) {
+    return permanent("ambiguous_partial_import",
+                     "Tachi returned an ambiguous partial batch result.");
+  }
+  if (outcome.remoteScoreIds.size() > entries.size()) {
+    return permanent("malformed_response",
+                     "Tachi returned more score IDs than submitted scores.");
+  }
+  return outcome;
 }
 
 ChartRankingOutcome rankingFailure(ChartRankingStatus status,
@@ -391,8 +405,8 @@ parseRankingPageCursor(std::string_view token,
         !outOf || *outOf <= *loadedEntries ||
         *outOf > static_cast<std::int64_t>(kMaximumRankingEntries) ||
         *startRanking != *lastRank + 1 || *startRanking > *outOf ||
-        *lastRank >= *outOf ||
-        chartSha == document.end() || !chartSha->is_string() ||
+        *lastRank >= *outOf || chartSha == document.end() ||
+        !chartSha->is_string() ||
         chartSha->get_ref<const std::string &>() !=
             normalizedQuery.chartSha256 ||
         chartId == document.end() || !chartId->is_string() ||
@@ -418,24 +432,25 @@ std::string makeRankingPageCursor(const IrChartQuery &query,
                                   std::optional<std::int64_t> userId,
                                   int startRanking, int loadedEntries,
                                   int lastRank, int outOf) {
-  return nlohmann::json{{"v", 1},
-                        {"chartSHA256", query.chartSha256},
-                        {"chartID", chartId},
-                        {"userID", userId ? nlohmann::json(*userId)
-                                           : nlohmann::json(nullptr)},
-                        {"startRanking", startRanking},
-                        {"loadedEntries", loadedEntries},
-                        {"lastRank", lastRank},
-                        {"outOf", outOf}}
+  return nlohmann::json{
+      {"v", 1},
+      {"chartSHA256", query.chartSha256},
+      {"chartID", chartId},
+      {"userID", userId ? nlohmann::json(*userId) : nlohmann::json(nullptr)},
+      {"startRanking", startRanking},
+      {"loadedEntries", loadedEntries},
+      {"lastRank", lastRank},
+      {"outOf", outOf}}
       .dump();
 }
 
-ChartRankingOutcome fetchNativeRankingPage(
-    const IrChartQuery &query, std::string_view origin, std::string_view game,
-    std::string_view chartId, std::optional<std::int64_t> userId,
-    int startRanking, int loadedEntries, std::optional<int> expectedOutOf,
-    const IrProviderRuntimeConfig &config, IrHttpClient &http,
-    std::stop_token stopToken) {
+ChartRankingOutcome
+fetchNativeRankingPage(const IrChartQuery &query, std::string_view origin,
+                       std::string_view game, std::string_view chartId,
+                       std::optional<std::int64_t> userId, int startRanking,
+                       int loadedEntries, std::optional<int> expectedOutOf,
+                       const IrProviderRuntimeConfig &config,
+                       IrHttpClient &http, std::stop_token stopToken) {
   if (stopToken.stop_requested()) {
     return rankingFailure(ChartRankingStatus::Cancelled,
                           "Tachi ranking request was cancelled");
@@ -454,8 +469,8 @@ ChartRankingOutcome fetchNativeRankingPage(
           rankingHttpFailure(pageResponse, config.apiKey, true)) {
     return *failure;
   }
-  auto page = parseRankingPageResponse(pageResponse.body, query, chartId,
-                                       userId);
+  auto page =
+      parseRankingPageResponse(pageResponse.body, query, chartId, userId);
   if (page.status != ChartRankingStatus::Succeeded || !page.page) {
     return rankingParseFailure(page.status, page.diagnostic, config.apiKey);
   }
@@ -499,7 +514,8 @@ ChartRankingOutcome fetchNativeRankingPage(
 
 } // namespace
 
-TachiDriver::TachiDriver(std::shared_ptr<BokutachiCacheStore> cacheStore) noexcept
+TachiDriver::TachiDriver(
+    std::shared_ptr<BokutachiCacheStore> cacheStore) noexcept
     : cacheStore_(std::move(cacheStore)) {}
 
 std::string_view TachiDriver::providerId() const noexcept {
@@ -519,18 +535,82 @@ TachiDriver::buildDraft(const IrSubmission &submission) const {
   return buildBatchManualDraft(submission);
 }
 
+IrOutboxBatchPlan
+TachiDriver::planBatch(std::span<const IrOutboxEntry> due) const {
+  if (due.empty()) {
+    return {.status = IrOutboxBatchPlanStatus::Invalid,
+            .diagnostic = "Tachi batch has no due rows"};
+  }
+  const auto &first = due.front();
+  if (const auto invalidProof = invalidStoredRulesetProof(first)) {
+    return {.status = IrOutboxBatchPlanStatus::Invalid,
+            .diagnostic = invalidProof->diagnostic};
+  }
+  if (first.state != IrOutboxState::AwaitingRemoteResult) {
+    const auto built = buildBatchManualOutboxDocument(due);
+    if (built.status != BuildTachiOutboxBatchStatus::Built || !built.document) {
+      return {.status = IrOutboxBatchPlanStatus::Invalid,
+              .diagnostic = built.diagnostic};
+    }
+    return {.status = IrOutboxBatchPlanStatus::Planned,
+            .rowIds = built.document->rowIds};
+  }
+
+  const auto firstOrigin = normalizeServerOrigin(first.remoteOrigin);
+  if (!firstOrigin || !isValidImportId(first.remoteJobId)) {
+    return {.status = IrOutboxBatchPlanStatus::Invalid,
+            .diagnostic = "Tachi deferred import state is missing or invalid"};
+  }
+  std::vector<std::int64_t> rowIds;
+  rowIds.reserve(std::min<std::size_t>(due.size(), 64));
+  for (const auto &entry : due) {
+    if (rowIds.size() == 64) {
+      break;
+    }
+    if (entry.state != IrOutboxState::AwaitingRemoteResult ||
+        entry.remoteJobId != first.remoteJobId) {
+      continue;
+    }
+    const auto origin = normalizeServerOrigin(entry.remoteOrigin);
+    if (!origin || *origin != *firstOrigin) {
+      continue;
+    }
+    if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
+      return {.status = IrOutboxBatchPlanStatus::Invalid,
+              .diagnostic = invalidProof->diagnostic};
+    }
+    rowIds.push_back(entry.id);
+  }
+  return {.status = IrOutboxBatchPlanStatus::Planned,
+          .rowIds = std::move(rowIds)};
+}
+
 DeliveryOutcome TachiDriver::submit(const IrOutboxEntry &entry,
                                     const IrProviderRuntimeConfig &config,
                                     IrHttpClient &http,
                                     std::stop_token stopToken) const {
+  return submitBatch(std::span<const IrOutboxEntry>(&entry, 1),
+                     entry.nextRequestUserIntent, config, http, stopToken);
+}
+
+DeliveryOutcome TachiDriver::submitBatch(std::span<const IrOutboxEntry> entries,
+                                         bool userIntent,
+                                         const IrProviderRuntimeConfig &config,
+                                         IrHttpClient &http,
+                                         std::stop_token stopToken) const {
   if (stopToken.stop_requested()) {
     return cancelled();
   }
-  if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
-    return *invalidProof;
+  if (entries.empty() || entries.size() > 64) {
+    return permanent("invalid_batch", "Tachi submission batch is invalid");
   }
-  if (entry.state == IrOutboxState::AwaitingRemoteResult) {
-    return poll(entry, config, http, stopToken);
+  for (const auto &entry : entries) {
+    if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
+      return *invalidProof;
+    }
+  }
+  if (entries.front().state == IrOutboxState::AwaitingRemoteResult) {
+    return pollBatch(entries, config, http, stopToken);
   }
   if (!validCredential(config.apiKey)) {
     return blocked("missing_api_key", "Tachi API key is missing or invalid");
@@ -540,14 +620,18 @@ DeliveryOutcome TachiDriver::submit(const IrOutboxEntry &entry,
     return blocked("invalid_server_origin",
                    "Tachi server origin is missing or invalid");
   }
-  if (entry.providerId != kProviderId || entry.payloadJson.empty() ||
-      entry.payloadJson.size() > kMaximumIrPayloadBytes) {
+  const auto built = buildBatchManualOutboxDocument(entries);
+  if (built.status != BuildTachiOutboxBatchStatus::Built || !built.document ||
+      built.document->rowIds.size() != entries.size()) {
     return permanent("invalid_outbox_entry",
-                     "Tachi outbox payload is missing or invalid");
+                     built.diagnostic.empty()
+                         ? "Tachi outbox batch is incompatible or invalid"
+                         : built.diagnostic);
   }
 
-  const IrHttpResponse response =
-      http.perform(submitRequest(*origin, entry, config), stopToken);
+  const IrHttpResponse response = http.perform(
+      submitRequest(*origin, built.document->payloadJson, userIntent, config),
+      stopToken);
   if (response.transportError != IrTransportError::None ||
       !isHttpSuccess(response.statusCode)) {
     return classifyFailure(response, config.apiKey);
@@ -556,31 +640,54 @@ DeliveryOutcome TachiDriver::submit(const IrOutboxEntry &entry,
       response.statusCode == 202
           ? parseDeferredImportResponse(response.body, *origin)
           : parseImmediateImportResponse(response.body);
-  return redactOutcome(std::move(outcome), config.apiKey);
+  return redactOutcome(classifyBatchImport(entries, std::move(outcome)),
+                       config.apiKey);
 }
 
 DeliveryOutcome TachiDriver::poll(const IrOutboxEntry &entry,
                                   const IrProviderRuntimeConfig &config,
                                   IrHttpClient &http,
                                   std::stop_token stopToken) const {
+  return pollBatch(std::span<const IrOutboxEntry>(&entry, 1), config, http,
+                   stopToken);
+}
+
+DeliveryOutcome TachiDriver::pollBatch(std::span<const IrOutboxEntry> entries,
+                                       const IrProviderRuntimeConfig &config,
+                                       IrHttpClient &http,
+                                       std::stop_token stopToken) const {
   if (stopToken.stop_requested()) {
     return cancelled();
   }
-  if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
-    return *invalidProof;
+  if (entries.empty() || entries.size() > 64) {
+    return permanent("invalid_batch", "Tachi polling batch is invalid");
+  }
+  for (const auto &entry : entries) {
+    if (const auto invalidProof = invalidStoredRulesetProof(entry)) {
+      return *invalidProof;
+    }
   }
   if (!validCredential(config.apiKey)) {
     return blocked("missing_api_key", "Tachi API key is missing or invalid");
   }
-  const auto origin = normalizeServerOrigin(entry.remoteOrigin);
-  if (!origin || !isValidImportId(entry.remoteJobId)) {
+  const auto &first = entries.front();
+  const auto origin = normalizeServerOrigin(first.remoteOrigin);
+  if (!origin || !isValidImportId(first.remoteJobId)) {
     return permanent("invalid_remote_job",
                      "Tachi deferred import state is missing or invalid");
+  }
+  for (const auto &entry : entries.subspan(1)) {
+    const auto entryOrigin = normalizeServerOrigin(entry.remoteOrigin);
+    if (entry.remoteJobId != first.remoteJobId || !entryOrigin ||
+        *entryOrigin != *origin) {
+      return permanent("invalid_remote_job",
+                       "Tachi deferred batch state does not match");
+    }
   }
 
   const IrHttpRequest request{
       .method = IrHttpMethod::Get,
-      .url = *origin + "/api/v1/imports/" + entry.remoteJobId + "/poll-status",
+      .url = *origin + "/api/v1/imports/" + first.remoteJobId + "/poll-status",
       .headers = {{"Authorization", "Bearer " + config.apiKey}},
       .maximumResponseBytes = kMaximumTachiResponseBytes,
       .followRedirects = false,
@@ -590,7 +697,9 @@ DeliveryOutcome TachiDriver::poll(const IrOutboxEntry &entry,
       !isHttpSuccess(response.statusCode)) {
     return classifyFailure(response, config.apiKey);
   }
-  return redactOutcome(parsePollStatusResponse(response.body), config.apiKey);
+  return redactOutcome(
+      classifyBatchImport(entries, parsePollStatusResponse(response.body)),
+      config.apiKey);
 }
 
 ChartRankingOutcome TachiDriver::fetchChartRanking(

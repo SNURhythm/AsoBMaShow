@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 
 namespace ir {
 namespace {
@@ -15,6 +16,22 @@ BuildDraftOutcome unsupportedBuild(std::string_view diagnostic) {
 DeliveryOutcome unsupportedDelivery(std::string_view diagnostic) {
   return {.status = DeliveryStatus::Unsupported,
           .code = "unsupported_operation",
+          .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
+DeliveryOutcome invalidBatchDelivery(std::string_view diagnostic) {
+  return {.status = DeliveryStatus::PermanentFailure,
+          .code = "invalid_batch",
+          .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
+IrOutboxBatchPlan invalidBatchPlan(std::string_view diagnostic) {
+  return {.status = IrOutboxBatchPlanStatus::Invalid,
+          .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
+IrOutboxBatchPlan unsupportedBatchPlan(std::string_view diagnostic) {
+  return {.status = IrOutboxBatchPlanStatus::Unsupported,
           .diagnostic = sanitizeDiagnostic(diagnostic)};
 }
 
@@ -45,16 +62,52 @@ BuildDraftOutcome IrDriver::buildDraft(const IrSubmission &) const {
   return unsupportedBuild("driver does not support score submission");
 }
 
+IrOutboxBatchPlan
+IrDriver::planBatch(std::span<const IrOutboxEntry> due) const {
+  const auto first = std::ranges::find_if(
+      due, [](const IrOutboxEntry &entry) { return entry.id > 0; });
+  if (first == due.end()) {
+    return invalidBatchPlan("IR batch has no valid due row");
+  }
+  return {.status = IrOutboxBatchPlanStatus::Planned,
+          .rowIds = {first->id}};
+}
+
 DeliveryOutcome IrDriver::submit(const IrOutboxEntry &,
                                  const IrProviderRuntimeConfig &,
                                  IrHttpClient &, std::stop_token) const {
   return unsupportedDelivery("driver does not support score submission");
 }
 
+DeliveryOutcome IrDriver::submitBatch(std::span<const IrOutboxEntry> entries,
+                                      bool userIntent,
+                                      const IrProviderRuntimeConfig &config,
+                                      IrHttpClient &http,
+                                      std::stop_token stopToken) const {
+  if (entries.size() != 1) {
+    return invalidBatchDelivery(
+        "IR driver singular submission fallback requires exactly one row");
+  }
+  IrOutboxEntry entry = entries.front();
+  entry.nextRequestUserIntent = userIntent;
+  return submit(entry, config, http, stopToken);
+}
+
 DeliveryOutcome IrDriver::poll(const IrOutboxEntry &,
                                const IrProviderRuntimeConfig &, IrHttpClient &,
                                std::stop_token) const {
   return unsupportedDelivery("driver does not support deferred submission");
+}
+
+DeliveryOutcome IrDriver::pollBatch(std::span<const IrOutboxEntry> entries,
+                                    const IrProviderRuntimeConfig &config,
+                                    IrHttpClient &http,
+                                    std::stop_token stopToken) const {
+  if (entries.size() != 1) {
+    return invalidBatchDelivery(
+        "IR driver singular polling fallback requires exactly one row");
+  }
+  return poll(entries.front(), config, http, stopToken);
 }
 
 ChartRankingOutcome IrDriver::fetchChartRanking(const IrChartQuery &,
@@ -64,9 +117,10 @@ ChartRankingOutcome IrDriver::fetchChartRanking(const IrChartQuery &,
   return unsupportedRanking("driver does not support chart rankings");
 }
 
-ChartRankingOutcome IrDriver::fetchChartRankingPage(
-    const IrChartQuery &, std::string_view, const IrProviderRuntimeConfig &,
-    IrHttpClient &, std::stop_token) const {
+ChartRankingOutcome
+IrDriver::fetchChartRankingPage(const IrChartQuery &, std::string_view,
+                                const IrProviderRuntimeConfig &, IrHttpClient &,
+                                std::stop_token) const {
   return unsupportedRanking("driver does not support paged chart rankings");
 }
 
@@ -136,6 +190,45 @@ IrDriverRegistry::buildDraft(std::string_view providerId,
   }
 }
 
+IrOutboxBatchPlan
+IrDriverRegistry::planBatch(std::string_view providerId,
+                            std::span<const IrOutboxEntry> due) const {
+  const auto driver = find(providerId);
+  if (!driver || driver->capabilities().readOnly ||
+      !driver->capabilities().scoreSubmission) {
+    return unsupportedBatchPlan("IR provider cannot submit scores");
+  }
+  try {
+    IrOutboxBatchPlan plan = driver->planBatch(due);
+    if (plan.status != IrOutboxBatchPlanStatus::Planned) {
+      plan.rowIds.clear();
+      plan.diagnostic = sanitizeDiagnostic(plan.diagnostic);
+      return plan;
+    }
+    if (plan.rowIds.empty() || plan.rowIds.size() > 64) {
+      return invalidBatchPlan("IR driver returned an invalid batch size");
+    }
+    std::unordered_set<std::int64_t> dueIds;
+    dueIds.reserve(due.size());
+    for (const auto &entry : due) {
+      dueIds.insert(entry.id);
+    }
+    std::unordered_set<std::int64_t> plannedIds;
+    plannedIds.reserve(plan.rowIds.size());
+    for (const std::int64_t rowId : plan.rowIds) {
+      if (rowId <= 0 || !dueIds.contains(rowId) ||
+          !plannedIds.insert(rowId).second) {
+        return invalidBatchPlan(
+            "IR driver returned duplicate or unknown batch row IDs");
+      }
+    }
+    plan.diagnostic = sanitizeDiagnostic(plan.diagnostic);
+    return plan;
+  } catch (...) {
+    return invalidBatchPlan("IR batch planning driver failed");
+  }
+}
+
 DeliveryOutcome IrDriverRegistry::submit(std::string_view providerId,
                                          const IrOutboxEntry &entry,
                                          const IrProviderRuntimeConfig &config,
@@ -152,6 +245,24 @@ DeliveryOutcome IrDriverRegistry::submit(std::string_view providerId,
     return {.status = DeliveryStatus::TransientFailure,
             .code = "driver_exception",
             .diagnostic = "IR submission driver failed"};
+  }
+}
+
+DeliveryOutcome IrDriverRegistry::submitBatch(
+    std::string_view providerId, std::span<const IrOutboxEntry> entries,
+    bool userIntent, const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  const auto driver = find(providerId);
+  if (!driver || driver->capabilities().readOnly ||
+      !driver->capabilities().scoreSubmission) {
+    return unsupportedDelivery("IR provider cannot submit scores");
+  }
+  try {
+    return driver->submitBatch(entries, userIntent, config, http, stopToken);
+  } catch (...) {
+    return {.status = DeliveryStatus::TransientFailure,
+            .code = "driver_exception",
+            .diagnostic = "IR batch submission driver failed"};
   }
 }
 
@@ -172,6 +283,25 @@ DeliveryOutcome IrDriverRegistry::poll(std::string_view providerId,
     return {.status = DeliveryStatus::TransientFailure,
             .code = "driver_exception",
             .diagnostic = "IR polling driver failed"};
+  }
+}
+
+DeliveryOutcome IrDriverRegistry::pollBatch(
+    std::string_view providerId, std::span<const IrOutboxEntry> entries,
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  const auto driver = find(providerId);
+  if (!driver || driver->capabilities().readOnly ||
+      !driver->capabilities().scoreSubmission ||
+      !driver->capabilities().deferredSubmission) {
+    return unsupportedDelivery("IR provider cannot poll submissions");
+  }
+  try {
+    return driver->pollBatch(entries, config, http, stopToken);
+  } catch (...) {
+    return {.status = DeliveryStatus::TransientFailure,
+            .code = "driver_exception",
+            .diagnostic = "IR batch polling driver failed"};
   }
 }
 

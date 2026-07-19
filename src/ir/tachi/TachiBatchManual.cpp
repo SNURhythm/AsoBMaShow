@@ -60,13 +60,41 @@ BuildDraftOutcome invalid(std::string_view diagnostic) {
 
 BuildDraftOutcome ineligible(const SubmissionEligibilityOutcome &eligibility) {
   return {
-      .status = eligibility.reason ==
-                        SubmissionEligibilityReason::InvalidSubmission
-                    ? BuildDraftStatus::Invalid
-                    : BuildDraftStatus::Unsupported,
+      .status =
+          eligibility.reason == SubmissionEligibilityReason::InvalidSubmission
+              ? BuildDraftStatus::Invalid
+              : BuildDraftStatus::Unsupported,
       .reason = eligibility.reason,
       .diagnostic = sanitizeDiagnostic(eligibility.diagnostic),
   };
+}
+
+BuildTachiOutboxBatchOutcome invalidOutboxBatch(std::string_view diagnostic) {
+  return {.status = BuildTachiOutboxBatchStatus::Invalid,
+          .diagnostic = sanitizeDiagnostic(diagnostic)};
+}
+
+std::string proofFingerprintInput(const IrOutboxEntry &entry) {
+  const auto &proof = entry.rulesetProof;
+  std::string input = "tachi-lr2-proof-v1\n";
+  input +=
+      std::to_string(proof.rulesetId.size()) + ":" + proof.rulesetId + "\n";
+  input += std::to_string(proof.rulesetRevision) + "\n";
+  input +=
+      std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n";
+  input +=
+      std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 + "\n";
+  input += std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
+  return input;
+}
+
+bool hasValidStoredProof(const IrOutboxEntry &entry) {
+  const auto &proof = entry.rulesetProof;
+  return entry.id > 0 && entry.providerId == kProviderId &&
+         proof.rulesetId == "lr2" &&
+         proof.rulesetRevision == RulesetDescriptor::kCurrentVersion &&
+         proof.validationFingerprint ==
+             file_checksum::sha256(proofFingerprintInput(entry));
 }
 
 SubmissionEligibilityOutcome eligible() {
@@ -107,8 +135,7 @@ std::vector<std::size_t> balancedSampleOrder(std::size_t sourceSize) {
     }
     return left.left > right.left;
   };
-  std::priority_queue<Interval, std::vector<Interval>,
-                      decltype(lowerPriority)>
+  std::priority_queue<Interval, std::vector<Interval>, decltype(lowerPriority)>
       intervals(lowerPriority);
   intervals.push({.left = 0, .right = sourceSize - 1});
 
@@ -215,11 +242,9 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
       return rejected(SubmissionEligibilityReason::RulesetMismatch,
                       "Only LR2 ruleset scores can be submitted.");
     }
-    if (provenance.ruleset !=
-        RulesetDescriptor::For(GameplayRuleset::LR2)) {
-      return rejected(
-          SubmissionEligibilityReason::UnsupportedRulesetRevision,
-          "This ruleset revision is not supported by Bokutachi.");
+    if (provenance.ruleset != RulesetDescriptor::For(GameplayRuleset::LR2)) {
+      return rejected(SubmissionEligibilityReason::UnsupportedRulesetRevision,
+                      "This ruleset revision is not supported by Bokutachi.");
     }
 
     const auto &stage = provenance.stages.front();
@@ -280,12 +305,12 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
   }
 }
 
-bool isReplayEligibleForBokutachi(
-    std::string_view attemptId, bool hasCanonicalAttemptFingerprint,
-    const bms_parser::ChartMeta &meta,
-    const ScoreProvenance &provenance) noexcept {
-  if (!uuid::isCanonicalLowerV4(attemptId) ||
-      !hasCanonicalAttemptFingerprint || meta.TotalNotes <= 0 ||
+bool isReplayEligibleForBokutachi(std::string_view attemptId,
+                                  bool hasCanonicalAttemptFingerprint,
+                                  const bms_parser::ChartMeta &meta,
+                                  const ScoreProvenance &provenance) noexcept {
+  if (!uuid::isCanonicalLowerV4(attemptId) || !hasCanonicalAttemptFingerprint ||
+      meta.TotalNotes <= 0 ||
       meta.TotalNotes > std::numeric_limits<int>::max() / 2) {
     return false;
   }
@@ -306,9 +331,8 @@ bool shouldShowReplayUploadMarker(
     const bms_parser::ChartMeta &meta, const ScoreProvenance &provenance,
     std::optional<IrOutboxState> outboxState) noexcept {
   return outboxState != IrOutboxState::Succeeded &&
-         isReplayEligibleForBokutachi(attemptId,
-                                      hasCanonicalAttemptFingerprint, meta,
-                                      provenance);
+         isReplayEligibleForBokutachi(attemptId, hasCanonicalAttemptFingerprint,
+                                      meta, provenance);
 }
 
 BuildDraftOutcome
@@ -322,8 +346,7 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     }
     const bool hasSha256 = !submission.chartSha256.empty();
     const bool hasMd5 = !submission.chartMd5.empty();
-    if ((hasSha256 &&
-         !isLowerHexDigest(submission.chartSha256, 64)) ||
+    if ((hasSha256 && !isLowerHexDigest(submission.chartSha256, 64)) ||
         (hasMd5 && !isLowerHexDigest(submission.chartMd5, 32)) ||
         (!hasSha256 && !hasMd5)) {
       return invalid("submission chart hash is malformed");
@@ -352,8 +375,7 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
          static_cast<long long>(submission.earlyPGreat) +
                  submission.latePGreat !=
              submission.pGreat ||
-         static_cast<long long>(submission.earlyGreat) +
-                 submission.lateGreat !=
+         static_cast<long long>(submission.earlyGreat) + submission.lateGreat !=
              submission.great ||
          static_cast<long long>(submission.earlyGood) + submission.lateGood !=
              submission.good ||
@@ -365,8 +387,9 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
          submission.pGreatSlow > submission.latePGreat)) {
       return invalid("submission LR2 judgement timing breakdown is invalid");
     }
-    if (std::ranges::any_of(submission.gaugeHistory,
-                            [](float value) { return !std::isfinite(value); })) {
+    if (std::ranges::any_of(submission.gaugeHistory, [](float value) {
+          return !std::isfinite(value);
+        })) {
       return invalid("submission gauge history is not finite");
     }
     if (submission.maxScore <= 0 || submission.score < 0 ||
@@ -381,9 +404,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     if (expectedEx != submission.score) {
       return invalid("submission EX score disagrees with judgements");
     }
-    const long long badPoints =
-        static_cast<long long>(submission.bad) + submission.poor +
-        submission.kPoor;
+    const long long badPoints = static_cast<long long>(submission.bad) +
+                                submission.poor + submission.kPoor;
     if (badPoints > std::numeric_limits<int>::max()) {
       return invalid("submission BP exceeds the supported range");
     }
@@ -499,25 +521,114 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     const IrRulesetProof proof{
         .rulesetId = submission.provenance.ruleset.id,
         .rulesetRevision = submission.provenance.ruleset.version,
-        .validationFingerprint =
-            validationFingerprint(submission, payload),
+        .validationFingerprint = validationFingerprint(submission, payload),
     };
 
     return {
         .status = BuildDraftStatus::Built,
         .reason = SubmissionEligibilityReason::Eligible,
-        .draft = IrOutboxDraft{
-            .providerId = std::string(kProviderId),
-            .attemptId = submission.attemptId,
-            .chartMd5 = submission.chartMd5,
-            .chartSha256 = submission.chartSha256,
-            .payloadJson = std::move(payload),
-            .rulesetProof = proof,
-            .createdAtUnixMillis = submission.playedAtUnixMillis,
-        },
+        .draft =
+            IrOutboxDraft{
+                .providerId = std::string(kProviderId),
+                .attemptId = submission.attemptId,
+                .chartMd5 = submission.chartMd5,
+                .chartSha256 = submission.chartSha256,
+                .payloadJson = std::move(payload),
+                .rulesetProof = proof,
+                .createdAtUnixMillis = submission.playedAtUnixMillis,
+            },
     };
   } catch (...) {
     return invalid("Tachi payload construction failed");
+  }
+}
+
+BuildTachiOutboxBatchOutcome buildBatchManualOutboxDocument(
+    std::span<const IrOutboxEntry> entries) noexcept {
+  try {
+    if (entries.empty()) {
+      return invalidOutboxBatch("Tachi outbox batch is empty");
+    }
+
+    nlohmann::json batchMeta;
+    nlohmann::json batchScores = nlohmann::json::array();
+    std::string selectedPlaytype;
+    std::vector<std::int64_t> rowIds;
+    rowIds.reserve(std::min<std::size_t>(entries.size(), 64));
+    std::string payloadJson;
+
+    for (const auto &entry : entries) {
+      if (!hasValidStoredProof(entry) || entry.payloadJson.empty() ||
+          entry.payloadJson.size() > kMaximumPayloadBytes) {
+        return invalidOutboxBatch(
+            "Tachi outbox row has an invalid ruleset proof or payload");
+      }
+
+      const nlohmann::json source = nlohmann::json::parse(entry.payloadJson);
+      if (!source.is_object()) {
+        return invalidOutboxBatch("Tachi outbox payload is not an object");
+      }
+      const auto meta = source.find("meta");
+      const auto scores = source.find("scores");
+      if (meta == source.end() || !meta->is_object() ||
+          scores == source.end() || !scores->is_array() ||
+          scores->size() != 1 || !scores->front().is_object()) {
+        return invalidOutboxBatch(
+            "Tachi outbox payload must contain one meta object and score");
+      }
+      const auto playtype = meta->find("playtype");
+      if (playtype == meta->end() || !playtype->is_string()) {
+        return invalidOutboxBatch(
+            "Tachi outbox payload playtype is missing or invalid");
+      }
+      const auto &playtypeText = playtype->get_ref<const std::string &>();
+      if (playtypeText != "7K" && playtypeText != "14K") {
+        return invalidOutboxBatch(
+            "Tachi outbox payload playtype is unsupported");
+      }
+
+      if (selectedPlaytype.empty()) {
+        selectedPlaytype = playtypeText;
+        batchMeta = *meta;
+      } else if (playtypeText != selectedPlaytype) {
+        continue;
+      }
+      if (rowIds.size() == 64) {
+        break;
+      }
+
+      nlohmann::json candidateScores = batchScores;
+      candidateScores.push_back(scores->front());
+      const std::string candidatePayload = nlohmann::json{
+          {"meta", batchMeta},
+          {"scores",
+           std::move(candidateScores)}}.dump();
+      if (candidatePayload.size() > kMaximumPayloadBytes) {
+        if (rowIds.empty()) {
+          return invalidOutboxBatch(
+              "Tachi outbox score exceeds the provider size limit");
+        }
+        break;
+      }
+      batchScores.push_back(scores->front());
+      rowIds.push_back(entry.id);
+      payloadJson = candidatePayload;
+    }
+
+    if (rowIds.empty()) {
+      return invalidOutboxBatch("Tachi outbox batch has no compatible rows");
+    }
+    return {
+        .status = BuildTachiOutboxBatchStatus::Built,
+        .document =
+            TachiOutboxBatchDocument{
+                .rowIds = std::move(rowIds),
+                .playtype = std::move(selectedPlaytype),
+                .payloadJson = std::move(payloadJson),
+            },
+    };
+  } catch (...) {
+    return invalidOutboxBatch("Tachi outbox batch construction failed");
   }
 }
 

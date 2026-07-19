@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,6 +55,7 @@ enum class DeliveryStatus {
   Unsupported,
   Cancelled,
 };
+enum class IrOutboxBatchPlanStatus { Planned, Invalid, Unsupported };
 enum class ChartRankingStatus {
   Succeeded,
   ChartNotFound,
@@ -77,10 +79,18 @@ struct DeliveryOutcome {
   DeliveryStatus status = DeliveryStatus::PermanentFailure;
   std::optional<std::int64_t> remoteUserId;
   std::optional<std::string> remoteScoreId;
+  std::vector<std::string> remoteScoreIds;
+  bool importHadErrors = false;
   std::optional<std::string> remoteJobId;
   std::optional<std::string> remoteOrigin;
   std::optional<std::chrono::milliseconds> retryAfterDelay;
   std::string code;
+  std::string diagnostic;
+};
+
+struct IrOutboxBatchPlan {
+  IrOutboxBatchPlanStatus status = IrOutboxBatchPlanStatus::Invalid;
+  std::vector<std::int64_t> rowIds;
   std::string diagnostic;
 };
 
@@ -105,19 +115,28 @@ public:
   virtual std::string_view providerId() const noexcept = 0;
   virtual IrDriverCapabilities capabilities() const noexcept = 0;
   virtual BuildDraftOutcome buildDraft(const IrSubmission &) const;
+  virtual IrOutboxBatchPlan planBatch(std::span<const IrOutboxEntry> due) const;
   virtual DeliveryOutcome submit(const IrOutboxEntry &,
                                  const IrProviderRuntimeConfig &,
                                  IrHttpClient &, std::stop_token) const;
+  virtual DeliveryOutcome submitBatch(std::span<const IrOutboxEntry> entries,
+                                      bool userIntent,
+                                      const IrProviderRuntimeConfig &,
+                                      IrHttpClient &, std::stop_token) const;
   virtual DeliveryOutcome poll(const IrOutboxEntry &,
                                const IrProviderRuntimeConfig &, IrHttpClient &,
                                std::stop_token) const;
+  virtual DeliveryOutcome pollBatch(std::span<const IrOutboxEntry> entries,
+                                    const IrProviderRuntimeConfig &,
+                                    IrHttpClient &, std::stop_token) const;
   virtual ChartRankingOutcome fetchChartRanking(const IrChartQuery &,
                                                 const IrProviderRuntimeConfig &,
                                                 IrHttpClient &,
                                                 std::stop_token) const;
-  virtual ChartRankingOutcome fetchChartRankingPage(
-      const IrChartQuery &, std::string_view pageToken,
-      const IrProviderRuntimeConfig &, IrHttpClient &, std::stop_token) const;
+  virtual ChartRankingOutcome
+  fetchChartRankingPage(const IrChartQuery &, std::string_view pageToken,
+                        const IrProviderRuntimeConfig &, IrHttpClient &,
+                        std::stop_token) const;
   virtual IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(const IrProviderRuntimeConfig &, IrHttpClient &,
                          std::stop_token, IrUserScoreProgress) const;
@@ -134,24 +153,37 @@ public:
   find(std::string_view providerId) const;
   [[nodiscard]] BuildDraftOutcome
   buildDraft(std::string_view providerId, const IrSubmission &submission) const;
+  [[nodiscard]] IrOutboxBatchPlan
+  planBatch(std::string_view providerId,
+            std::span<const IrOutboxEntry> due) const;
   [[nodiscard]] DeliveryOutcome submit(std::string_view providerId,
                                        const IrOutboxEntry &entry,
                                        const IrProviderRuntimeConfig &config,
                                        IrHttpClient &http,
                                        std::stop_token stopToken) const;
+  [[nodiscard]] DeliveryOutcome
+  submitBatch(std::string_view providerId,
+              std::span<const IrOutboxEntry> entries, bool userIntent,
+              const IrProviderRuntimeConfig &config, IrHttpClient &http,
+              std::stop_token stopToken) const;
   [[nodiscard]] DeliveryOutcome poll(std::string_view providerId,
                                      const IrOutboxEntry &entry,
                                      const IrProviderRuntimeConfig &config,
                                      IrHttpClient &http,
                                      std::stop_token stopToken) const;
+  [[nodiscard]] DeliveryOutcome
+  pollBatch(std::string_view providerId, std::span<const IrOutboxEntry> entries,
+            const IrProviderRuntimeConfig &config, IrHttpClient &http,
+            std::stop_token stopToken) const;
   [[nodiscard]] ChartRankingOutcome
   fetchChartRanking(std::string_view providerId, const IrChartQuery &query,
                     const IrProviderRuntimeConfig &config, IrHttpClient &http,
                     std::stop_token stopToken) const;
-  [[nodiscard]] ChartRankingOutcome fetchChartRankingPage(
-      std::string_view providerId, const IrChartQuery &query,
-      std::string_view pageToken, const IrProviderRuntimeConfig &config,
-      IrHttpClient &http, std::stop_token stopToken) const;
+  [[nodiscard]] ChartRankingOutcome
+  fetchChartRankingPage(std::string_view providerId, const IrChartQuery &query,
+                        std::string_view pageToken,
+                        const IrProviderRuntimeConfig &config,
+                        IrHttpClient &http, std::stop_token stopToken) const;
   [[nodiscard]] IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(std::string_view providerId,
                          const IrProviderRuntimeConfig &config,

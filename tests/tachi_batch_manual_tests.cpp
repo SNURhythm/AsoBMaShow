@@ -9,8 +9,10 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -70,8 +72,8 @@ ir::IrSubmission validSubmission() {
   meta.TotalNotes = submission.maxScore / 2;
   meta.HasTotal = true;
   meta.Total = 200.5;
-  const auto judge = gameplay::compileGameplayJudgeRules(
-      GameplayRuleset::LR2, meta.Rank);
+  const auto judge =
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, meta.Rank);
   submission.provenance = makeScoreProvenance({
       .chartMeta = meta,
       .longNoteMode = 2,
@@ -116,6 +118,139 @@ nlohmann::json builtDocument(const ir::IrSubmission &submission) {
   return nlohmann::json::parse(outcome.draft->payloadJson);
 }
 
+ir::IrOutboxEntry outboxEntry(ir::IrSubmission submission, std::int64_t id) {
+  const auto built = ir::tachi::buildBatchManualDraft(submission);
+  expect(built.draft.has_value(), "outbox batch fixture builds");
+  if (!built.draft) {
+    return {};
+  }
+  return {
+      .id = id,
+      .providerId = built.draft->providerId,
+      .attemptId = built.draft->attemptId,
+      .chartMd5 = built.draft->chartMd5,
+      .chartSha256 = built.draft->chartSha256,
+      .payloadJson = built.draft->payloadJson,
+      .rulesetProof = built.draft->rulesetProof,
+      .state = ir::IrOutboxState::Pending,
+      .localResultReady = true,
+      .createdAtUnixMillis = built.draft->createdAtUnixMillis,
+      .updatedAtUnixMillis = built.draft->createdAtUnixMillis,
+  };
+}
+
+void refreshProof(ir::IrOutboxEntry &entry) {
+  const std::string input =
+      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
+      std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
+      "\n" + std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
+  entry.rulesetProof = {.rulesetId = "lr2",
+                        .rulesetRevision = 3,
+                        .validationFingerprint = file_checksum::sha256(input)};
+}
+
+void testComposesCompatibleOutboxRows() {
+  auto second = validSubmission();
+  second.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+  second.score = 1099;
+  second.great += 1;
+  second.pGreat -= 1;
+  second.earlyPGreat -= 1;
+  second.earlyGreat += 1;
+  std::vector entries{outboxEntry(validSubmission(), 1),
+                      outboxEntry(second, 2)};
+
+  const auto batch = ir::tachi::buildBatchManualOutboxDocument(entries);
+  expect(batch.status == ir::tachi::BuildTachiOutboxBatchStatus::Built,
+         "compatible rows build a batch");
+  expect(batch.document.has_value(), "compatible batch has a document");
+  if (!batch.document) {
+    return;
+  }
+  const auto json = nlohmann::json::parse(batch.document->payloadJson);
+  expect(json.at("meta").at("playtype") == "7K", "batch keeps playtype");
+  expect(json.at("scores").size() == entries.size(),
+         "batch contains every compatible score exactly once");
+  expect(batch.document->rowIds == std::vector<std::int64_t>({1, 2}),
+         "batch retains compatible input order");
+}
+
+void testOutboxCompositionGroupsAndBoundsRows() {
+  auto fourteen = validSubmission();
+  fourteen.keyMode = 14;
+  fourteen.attemptId = "123e4567-e89b-42d3-a456-426614174014";
+  auto laterSeven = validSubmission();
+  laterSeven.attemptId = "123e4567-e89b-42d3-a456-426614174007";
+  std::vector mixed{outboxEntry(validSubmission(), 1), outboxEntry(fourteen, 2),
+                    outboxEntry(laterSeven, 3)};
+  const auto grouped = ir::tachi::buildBatchManualOutboxDocument(mixed);
+  expect(grouped.document &&
+             grouped.document->rowIds == std::vector<std::int64_t>({1, 3}) &&
+             nlohmann::json::parse(grouped.document->payloadJson)
+                     .at("scores")
+                     .size() == 2,
+         "mixed playtypes select the first compatible group in due order");
+
+  std::vector<ir::IrOutboxEntry> many;
+  many.reserve(65);
+  const auto prototype = outboxEntry(validSubmission(), 1);
+  for (std::int64_t id = 1; id <= 65; ++id) {
+    auto entry = prototype;
+    entry.id = id;
+    many.push_back(std::move(entry));
+  }
+  const auto capped = ir::tachi::buildBatchManualOutboxDocument(many);
+  expect(capped.document && capped.document->rowIds.size() == 64 &&
+             nlohmann::json::parse(capped.document->payloadJson)
+                     .at("scores")
+                     .size() == 64,
+         "outbox batches cap at 64 scores");
+}
+
+void testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes() {
+  auto invalidProof = outboxEntry(validSubmission(), 1);
+  invalidProof.rulesetProof.validationFingerprint = "invalid";
+  const auto proofResult = ir::tachi::buildBatchManualOutboxDocument(
+      std::span<const ir::IrOutboxEntry>(&invalidProof, 1));
+  expect(proofResult.status ==
+                 ir::tachi::BuildTachiOutboxBatchStatus::Invalid &&
+             !proofResult.document,
+         "composer rejects an invalid first-row proof");
+
+  auto invalidPayload = outboxEntry(validSubmission(), 1);
+  invalidPayload.payloadJson = R"({"meta":{},"scores":[]})";
+  refreshProof(invalidPayload);
+  const auto payloadResult = ir::tachi::buildBatchManualOutboxDocument(
+      std::span<const ir::IrOutboxEntry>(&invalidPayload, 1));
+  expect(payloadResult.status ==
+                 ir::tachi::BuildTachiOutboxBatchStatus::Invalid &&
+             !payloadResult.document,
+         "composer rejects a payload without exactly one score and playtype");
+
+  auto heavy = outboxEntry(validSubmission(), 1);
+  auto heavyJson = nlohmann::json::parse(heavy.payloadJson);
+  heavyJson.at("scores").at(0).at("optional")["gaugeHistory"] =
+      nlohmann::json::array();
+  auto &history =
+      heavyJson.at("scores").at(0).at("optional").at("gaugeHistory");
+  for (int index = 0; index < 9'000; ++index) {
+    history.push_back(12.5F);
+  }
+  heavy.payloadJson = heavyJson.dump();
+  refreshProof(heavy);
+  expect(heavy.payloadJson.size() < ir::tachi::kMaximumPayloadBytes,
+         "gauge-heavy fixture is a valid singular payload");
+  auto second = heavy;
+  second.id = 2;
+  std::vector heavyRows{heavy, second};
+  const auto split = ir::tachi::buildBatchManualOutboxDocument(heavyRows);
+  expect(split.document && split.document->rowIds.size() == 1 &&
+             split.document->payloadJson.size() <=
+                 ir::tachi::kMaximumPayloadBytes,
+         "composer stops before the score that exceeds 64 KiB");
+}
+
 void testBuildsOneScoreBatchManual() {
   const auto submission = validSubmission();
   const auto outcome = ir::tachi::buildBatchManualDraft(submission);
@@ -132,8 +267,7 @@ void testBuildsOneScoreBatchManual() {
   expect(outcome.draft->chartMd5 == submission.chartMd5 &&
              outcome.draft->chartSha256 == submission.chartSha256,
          "draft retains chart hashes");
-  expect(outcome.draft->createdAtUnixMillis ==
-             submission.playedAtUnixMillis,
+  expect(outcome.draft->createdAtUnixMillis == submission.playedAtUnixMillis,
          "draft retains captured play time");
   expect(outcome.reason == ir::SubmissionEligibilityReason::Eligible,
          "built draft is eligibility-normalized");
@@ -142,9 +276,8 @@ void testBuildsOneScoreBatchManual() {
          "draft contains the canonical LR2 proof identity");
   std::string fingerprintInput =
       "tachi-lr2-proof-v1\n3:lr2\n3\n" +
-      std::to_string(submission.attemptId.size()) + ":" +
-      submission.attemptId + "\n" +
-      std::to_string(submission.chartSha256.size()) + ":" +
+      std::to_string(submission.attemptId.size()) + ":" + submission.attemptId +
+      "\n" + std::to_string(submission.chartSha256.size()) + ":" +
       submission.chartSha256 + "\n" +
       std::to_string(outcome.draft->payloadJson.size()) + ":" +
       outcome.draft->payloadJson;
@@ -169,8 +302,7 @@ void testBuildsOneScoreBatchManual() {
          "payload uses captured timestamp");
   expect(score.at("judgements").size() == 5,
          "payload emits only Tachi BMS judgements");
-  expect(!score.at("judgements").contains("kpoor"),
-         "payload omits KPoor");
+  expect(!score.at("judgements").contains("kpoor"), "payload omits KPoor");
   expect(score.at("optional").at("bp") == 10,
          "BP includes bad, poor, and KPoor");
   expect(score.at("optional").at("maxCombo") == 550,
@@ -207,8 +339,7 @@ void testMapsPlaytypesAndHashFallback() {
   submission.provenance.stages.front().chartSha256.clear();
   submission.chartSha256.clear();
   const auto document = builtDocument(submission);
-  expect(document.at("meta").at("playtype") == "14K",
-         "14K playtype maps");
+  expect(document.at("meta").at("playtype") == "14K", "14K playtype maps");
   expect(document.at("scores").at(0).at("identifier") == repeated('b', 32),
          "MD5 is used when SHA-256 is absent");
 
@@ -228,20 +359,19 @@ void testCanonicalLr2EligibilityMatrix() {
     expect(built.status == ir::BuildDraftStatus::Built,
            "canonical LR2 7K and 14K submissions build");
   }
-  for (const auto gauge : {GaugeType::AssistedEasy, GaugeType::Easy,
-                           GaugeType::Normal, GaugeType::Hard,
-                           GaugeType::ExHard, GaugeType::Hazard}) {
+  for (const auto gauge :
+       {GaugeType::AssistedEasy, GaugeType::Easy, GaugeType::Normal,
+        GaugeType::Hard, GaugeType::ExHard, GaugeType::Hazard}) {
     auto submission = validSubmission();
     submission.provenance.gaugeType = gauge;
     expect(ir::tachi::buildBatchManualDraft(submission).status ==
                ir::BuildDraftStatus::Built,
            "every LR2 gauge remains submission eligible");
   }
-  for (const auto shift : {GaugeAutoShiftMode::None,
-                           GaugeAutoShiftMode::SelectToUnder,
-                           GaugeAutoShiftMode::Continue,
-                           GaugeAutoShiftMode::SurvivalToGroove,
-                           GaugeAutoShiftMode::BestClear}) {
+  for (const auto shift :
+       {GaugeAutoShiftMode::None, GaugeAutoShiftMode::SelectToUnder,
+        GaugeAutoShiftMode::Continue, GaugeAutoShiftMode::SurvivalToGroove,
+        GaugeAutoShiftMode::BestClear}) {
     auto submission = validSubmission();
     submission.provenance.gaugeAutoShift = shift;
     expect(ir::tachi::buildBatchManualDraft(submission).status ==
@@ -255,9 +385,9 @@ void testCanonicalLr2EligibilityMatrix() {
                ir::BuildDraftStatus::Built,
            "every supported long-note mode remains eligible");
   }
-  for (const char *option : {"NORMAL", "MIRROR", "RANDOM", "R-RANDOM",
-                             "S-RANDOM", "SPIRAL", "H-RANDOM", "ALL-SCR",
-                             "RANDOM-EX", "S-RANDOM-EX", "ASSIGN:S1234567"}) {
+  for (const char *option :
+       {"NORMAL", "MIRROR", "RANDOM", "R-RANDOM", "S-RANDOM", "SPIRAL",
+        "H-RANDOM", "ALL-SCR", "RANDOM-EX", "S-RANDOM-EX", "ASSIGN:S1234567"}) {
     auto submission = validSubmission();
     submission.provenance.player1.option = option;
     expect(ir::tachi::buildBatchManualDraft(submission).status ==
@@ -278,8 +408,8 @@ void testReplayEligibilityAndMarkerCompatibility() {
                             std::string_view attemptId =
                                 "123e4567-e89b-42d3-a456-426614174000",
                             bool hasFingerprint = true) {
-    return ir::tachi::isReplayEligibleForBokutachi(
-        attemptId, hasFingerprint, meta, provenance);
+    return ir::tachi::isReplayEligibleForBokutachi(attemptId, hasFingerprint,
+                                                   meta, provenance);
   };
 
   const auto show = [&](std::optional<ir::IrOutboxState> state,
@@ -287,8 +417,8 @@ void testReplayEligibilityAndMarkerCompatibility() {
                         std::string_view attemptId =
                             "123e4567-e89b-42d3-a456-426614174000",
                         bool hasFingerprint = true) {
-    return ir::tachi::shouldShowReplayUploadMarker(
-        attemptId, hasFingerprint, meta, provenance, state);
+    return ir::tachi::shouldShowReplayUploadMarker(attemptId, hasFingerprint,
+                                                   meta, provenance, state);
   };
 
   expect(eligible(submission.provenance),
@@ -315,11 +445,11 @@ void testReplayEligibilityAndMarkerCompatibility() {
 
   expect(show(std::nullopt, submission.provenance),
          "compatibility marker shows eligible result without outbox row");
-  for (const auto state : {ir::IrOutboxState::Pending,
-                           ir::IrOutboxState::Uploading,
-                           ir::IrOutboxState::AwaitingRemoteResult,
-                           ir::IrOutboxState::BlockedConfiguration,
-                           ir::IrOutboxState::FailedPermanent}) {
+  for (const auto state :
+       {ir::IrOutboxState::Pending, ir::IrOutboxState::Uploading,
+        ir::IrOutboxState::AwaitingRemoteResult,
+        ir::IrOutboxState::BlockedConfiguration,
+        ir::IrOutboxState::FailedPermanent}) {
     expect(show(state, submission.provenance),
            "unfinished outbox result shows the marker");
   }
@@ -331,9 +461,8 @@ void testRejectsNonCanonicalLr2Proof() {
   auto submission = validSubmission();
   submission.provenance.ruleset =
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
-  expectIneligible(
-      submission, ir::SubmissionEligibilityReason::RulesetMismatch,
-      "Beatoraja ruleset scores cannot be submitted.");
+  expectIneligible(submission, ir::SubmissionEligibilityReason::RulesetMismatch,
+                   "Beatoraja ruleset scores cannot be submitted.");
 
   submission = validSubmission();
   submission.provenance.ruleset = RulesetDescriptor::Legacy();
@@ -343,14 +472,12 @@ void testRejectsNonCanonicalLr2Proof() {
 
   submission = validSubmission();
   submission.provenance.ruleset.version = 4;
-  expectIneligible(
-      submission,
-      ir::SubmissionEligibilityReason::UnsupportedRulesetRevision,
-      "This ruleset revision is not supported by Bokutachi.");
+  expectIneligible(submission,
+                   ir::SubmissionEligibilityReason::UnsupportedRulesetRevision,
+                   "This ruleset revision is not supported by Bokutachi.");
 
   submission = validSubmission();
-  submission.provenance.stages.push_back(
-      submission.provenance.stages.front());
+  submission.provenance.stages.push_back(submission.provenance.stages.front());
   expectIneligible(submission, ir::SubmissionEligibilityReason::CourseResult,
                    {});
 
@@ -360,11 +487,12 @@ void testRejectsNonCanonicalLr2Proof() {
                    ir::SubmissionEligibilityReason::UnverifiedProvenance, {});
 
   submission = validSubmission();
-  submission.provenance.stages.front().effectiveJudgeWindows.front()
+  submission.provenance.stages.front()
+      .effectiveJudgeWindows.front()
       .lateMicros += 1;
-  expectIneligible(
-      submission, ir::SubmissionEligibilityReason::ModifiedJudgePolicy,
-      "Modified judge windows cannot be submitted.");
+  expectIneligible(submission,
+                   ir::SubmissionEligibilityReason::ModifiedJudgePolicy,
+                   "Modified judge windows cannot be submitted.");
 
   submission = validSubmission();
   submission.provenance.stages.front().effectiveGaugeTotal += 1.0;
@@ -390,8 +518,7 @@ void testRejectsNonCanonicalLr2Proof() {
   expectModifiedAttempt([](auto &value) { value.playback.percent = 90; });
   expectModifiedAttempt(
       [](auto &value) { value.judgeWindowScalePercent = 95; });
-  expectModifiedAttempt(
-      [](auto &value) { value.startingGaugePercent = 100; });
+  expectModifiedAttempt([](auto &value) { value.startingGaugePercent = 100; });
 
   submission = validSubmission();
   submission.keyMode = 9;
@@ -436,10 +563,8 @@ void testClampsGauge() {
   auto document = builtDocument(submission);
   expect(document.at("scores").at(0).at("optional").at("gauge") == 0.0,
          "negative gauge clamps to zero");
-  expect(document.at("scores")
-                 .at(0)
-                 .at("optional")
-                 .at("gaugeHistory") == nlohmann::json::array({0.0, 100.0}),
+  expect(document.at("scores").at(0).at("optional").at("gaugeHistory") ==
+             nlohmann::json::array({0.0, 100.0}),
          "gauge history clamps to the BMS percentage range");
 
   submission.finalGauge = 120.0F;
@@ -460,14 +585,12 @@ void testGaugeHistoryDownsamplesWithinPayloadLimit() {
   if (!outcome.draft) {
     return;
   }
-  expect(outcome.draft->payloadJson.size() <=
-             ir::tachi::kMaximumPayloadBytes,
+  expect(outcome.draft->payloadJson.size() <= ir::tachi::kMaximumPayloadBytes,
          "downsampled payload respects provider limit");
   const auto document = nlohmann::json::parse(outcome.draft->payloadJson);
   const auto &history =
       document.at("scores").at(0).at("optional").at("gaugeHistory");
-  expect(history.size() < submission.gaugeHistory.size() &&
-             history.size() >= 2,
+  expect(history.size() < submission.gaugeHistory.size() && history.size() >= 2,
          "oversized history is reduced but retained");
   expect(history.front() == submission.gaugeHistory.front() &&
              history.back() == submission.gaugeHistory.back(),
@@ -483,8 +606,7 @@ void testEmptyGaugeHistoryIsOmitted() {
   auto submission = validSubmission();
   submission.gaugeHistory.clear();
   const auto document = builtDocument(submission);
-  expect(!document.at("scores").at(0).at("optional").contains(
-             "gaugeHistory"),
+  expect(!document.at("scores").at(0).at("optional").contains("gaugeHistory"),
          "empty gauge history remains optional");
 }
 
@@ -540,16 +662,14 @@ void testRejectsMalformedSubmission() {
 
   submission = validSubmission();
   --submission.lateGood;
-  expectInvalid(submission,
-                "incomplete GOOD timing breakdown is invalid");
+  expectInvalid(submission, "incomplete GOOD timing breakdown is invalid");
 
   submission = validSubmission();
   submission.earlyPoor = -1;
   expectInvalid(submission, "negative POOR timing breakdown is invalid");
 
   submission = validSubmission();
-  submission.gaugeHistory[1] =
-      std::numeric_limits<float>::quiet_NaN();
+  submission.gaugeHistory[1] = std::numeric_limits<float>::quiet_NaN();
   expectInvalid(submission, "non-finite gauge history is invalid");
 
   submission = validSubmission();
@@ -574,14 +694,16 @@ void testPayloadNeverContainsCredentialMaterial() {
          "payload contains no API key sentinel");
   expect(outcome.draft->payloadJson.find("Authorization") == std::string::npos,
          "payload contains no authorization header");
-  expect(outcome.draft->payloadJson.size() <=
-             ir::tachi::kMaximumPayloadBytes,
+  expect(outcome.draft->payloadJson.size() <= ir::tachi::kMaximumPayloadBytes,
          "payload remains within provider cap");
 }
 
 } // namespace
 
 int main() {
+  testComposesCompatibleOutboxRows();
+  testOutboxCompositionGroupsAndBoundsRows();
+  testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes();
   testBuildsOneScoreBatchManual();
   testCanonicalLr2EligibilityMatrix();
   testReplayEligibilityAndMarkerCompatibility();

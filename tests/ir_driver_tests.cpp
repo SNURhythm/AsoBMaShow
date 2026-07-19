@@ -52,7 +52,7 @@ result_persistence::ChartResultAttempt validAttempt() {
   return attempt;
 }
 
-class FakeDriver final : public ir::IrDriver {
+class FakeDriver : public ir::IrDriver {
 public:
   FakeDriver(std::string id, ir::IrDriverCapabilities capabilities)
       : id_(std::move(id)), capabilities_(capabilities) {}
@@ -62,11 +62,34 @@ public:
     return capabilities_;
   }
 
-  ir::BuildDraftOutcome
-  buildDraft(const ir::IrSubmission &) const override {
+  ir::BuildDraftOutcome buildDraft(const ir::IrSubmission &) const override {
     ++buildCalls;
     return {.status = ir::BuildDraftStatus::Built,
             .draft = ir::IrOutboxDraft{.providerId = id_}};
+  }
+
+  ir::DeliveryOutcome submit(const ir::IrOutboxEntry &entry,
+                             const ir::IrProviderRuntimeConfig &,
+                             ir::IrHttpClient &,
+                             std::stop_token) const override {
+    submittedEntries.push_back(entry);
+    return {.status = ir::DeliveryStatus::Succeeded};
+  }
+
+  ir::DeliveryOutcome poll(const ir::IrOutboxEntry &entry,
+                           const ir::IrProviderRuntimeConfig &,
+                           ir::IrHttpClient &, std::stop_token) const override {
+    polledEntries.push_back(entry);
+    return {.status = ir::DeliveryStatus::Ongoing};
+  }
+
+  ir::IrOutboxBatchPlan
+  planBatch(std::span<const ir::IrOutboxEntry> due) const override {
+    if (plannedRowIds) {
+      return {.status = ir::IrOutboxBatchPlanStatus::Planned,
+              .rowIds = *plannedRowIds};
+    }
+    return IrDriver::planBatch(due);
   }
 
   ir::IrUserScoreSnapshotOutcome
@@ -83,6 +106,9 @@ public:
 
   mutable int buildCalls = 0;
   mutable int reconciliationCalls = 0;
+  mutable std::vector<ir::IrOutboxEntry> submittedEntries;
+  mutable std::vector<ir::IrOutboxEntry> polledEntries;
+  std::optional<std::vector<std::int64_t>> plannedRowIds;
 
 private:
   std::string id_;
@@ -96,12 +122,10 @@ void testCanonicalSubmissionBuildsFromAttempt() {
     return;
   }
   const auto &submission = *outcome.value;
-  expect(submission.attemptId ==
-             "123e4567-e89b-42d3-a456-426614174000",
+  expect(submission.attemptId == "123e4567-e89b-42d3-a456-426614174000",
          "submission retains attempt identity");
   expect(submission.keyMode == 7, "submission retains key mode");
-  expect(submission.chartMd5 == repeated('b', 32),
-         "submission normalizes md5");
+  expect(submission.chartMd5 == repeated('b', 32), "submission normalizes md5");
   expect(submission.chartSha256 == repeated('a', 64),
          "submission normalizes sha256");
   expect(submission.score == 7 && submission.maxScore == 10,
@@ -199,21 +223,16 @@ void testCanonicalSubmissionUsesCapturedResultMetrics() {
   if (outcome.value) {
     expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
            "captured adopted gauge history becomes submission history");
-    expect(outcome.value->pGreatFast == 1 &&
-               outcome.value->pGreatSlow == 1,
+    expect(outcome.value->pGreatFast == 1 && outcome.value->pGreatSlow == 1,
            "PGREAT early and late evidence is separated");
-    expect(outcome.value->judgementTimingBreakdownAvailable &&
-               outcome.value->earlyPGreat == 2 &&
-               outcome.value->latePGreat == 1 &&
-               outcome.value->earlyGreat == 1 &&
-               outcome.value->lateGreat == 0 &&
-               outcome.value->earlyGood == 1 &&
-               outcome.value->lateGood == 0 &&
-               outcome.value->earlyBad == 0 &&
-               outcome.value->lateBad == 1 &&
-               outcome.value->earlyPoor == 1 &&
-               outcome.value->latePoor == 0,
-           "captured state exposes every LR2 judgement timing");
+    expect(
+        outcome.value->judgementTimingBreakdownAvailable &&
+            outcome.value->earlyPGreat == 2 && outcome.value->latePGreat == 1 &&
+            outcome.value->earlyGreat == 1 && outcome.value->lateGreat == 0 &&
+            outcome.value->earlyGood == 1 && outcome.value->lateGood == 0 &&
+            outcome.value->earlyBad == 0 && outcome.value->lateBad == 1 &&
+            outcome.value->earlyPoor == 1 && outcome.value->latePoor == 0,
+        "captured state exposes every LR2 judgement timing");
   }
 }
 
@@ -283,19 +302,15 @@ void testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes() {
   if (outcome.value) {
     expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
            "captured adopted gauge history is authoritative");
-    expect(outcome.value->pGreatFast == 1 &&
-               outcome.value->pGreatSlow == 1,
+    expect(outcome.value->pGreatFast == 1 && outcome.value->pGreatSlow == 1,
            "captured PGREAT timing drives fast slow exclusion");
-    expect(outcome.value->judgementTimingBreakdownAvailable &&
-               outcome.value->earlyPGreat == 2 &&
-               outcome.value->latePGreat == 1 &&
-               outcome.value->earlyGreat == 0 &&
-               outcome.value->lateGreat == 1 &&
-               outcome.value->earlyGood == 1 &&
-               outcome.value->lateGood == 0 &&
-               outcome.value->earlyBad == 0 &&
-               outcome.value->lateBad == 1,
-           "captured result timing ignores informational LN head events");
+    expect(
+        outcome.value->judgementTimingBreakdownAvailable &&
+            outcome.value->earlyPGreat == 2 && outcome.value->latePGreat == 1 &&
+            outcome.value->earlyGreat == 0 && outcome.value->lateGreat == 1 &&
+            outcome.value->earlyGood == 1 && outcome.value->lateGood == 0 &&
+            outcome.value->earlyBad == 0 && outcome.value->lateBad == 1,
+        "captured result timing ignores informational LN head events");
   }
 }
 
@@ -330,8 +345,7 @@ void testCanonicalSubmissionIgnoresReplayOnlyDetailedEvidence() {
     expect(outcome.value->gaugeHistory.empty(),
            "replay gauge events cannot become submission history");
     expect(!outcome.value->judgementTimingBreakdownAvailable &&
-               outcome.value->earlyGreat == 0 &&
-               outcome.value->lateGreat == 0,
+               outcome.value->earlyGreat == 0 && outcome.value->lateGreat == 0,
            "replay judgements cannot become submission timing evidence");
   }
 }
@@ -372,15 +386,14 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
 
   attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
   outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
-  expect(outcome.value && outcome.value->gaugeHistory ==
-                              attempt.adoptedGaugeHistory,
+  expect(outcome.value &&
+             outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
          "state-derived adopted history takes priority over replay fallback");
 }
 
 void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   auto attempt = validAttempt();
-  attempt.adoptedGaugeHistory = {
-      std::numeric_limits<float>::quiet_NaN()};
+  attempt.adoptedGaugeHistory = {std::numeric_limits<float>::quiet_NaN()};
   expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
          "non-finite captured gauge history is rejected");
 
@@ -431,8 +444,7 @@ void testChartQueryNormalizesIdentity() {
            "query normalizes md5");
     expect(outcome.value->chartSha256 == repeated('a', 64),
            "query normalizes sha256");
-    expect(outcome.value->totalNotes == 1234,
-           "query retains total notes");
+    expect(outcome.value->totalNotes == 1234, "query retains total notes");
   }
 
   meta.TotalNotes = 0;
@@ -467,12 +479,12 @@ void testCapabilityValidation() {
       ir::validateCapabilities({.readOnly = true, .scoreReconciliation = true}),
       "read-only reconciliation driver is valid");
   expect(!ir::validateCapabilities({}), "driver must expose an operation");
-  expect(!ir::validateCapabilities({.readOnly = true,
-                                    .chartRankings = true,
-                                    .scoreSubmission = true}),
-         "read-only driver cannot submit");
-  expect(!ir::validateCapabilities({.chartRankings = true,
-                                    .deferredSubmission = true}),
+  expect(
+      !ir::validateCapabilities(
+          {.readOnly = true, .chartRankings = true, .scoreSubmission = true}),
+      "read-only driver cannot submit");
+  expect(!ir::validateCapabilities(
+             {.chartRankings = true, .deferredSubmission = true}),
          "deferred capability requires submission");
 }
 
@@ -483,6 +495,80 @@ public:
     return {};
   }
 };
+
+void testGenericBatchFallbacksPreserveSingularCompatibility() {
+  FakeDriver driver("submitter",
+                    {.scoreSubmission = true, .deferredSubmission = true});
+  std::vector<ir::IrOutboxEntry> due(2);
+  due[0].id = 11;
+  due[1].id = 12;
+
+  const auto plan = driver.ir::IrDriver::planBatch(due);
+  expect(plan.status == ir::IrOutboxBatchPlanStatus::Planned &&
+             plan.rowIds == std::vector<std::int64_t>{11},
+         "base batch plan selects the first due row only");
+
+  auto withInvalidFirst = due;
+  withInvalidFirst.front().id = 0;
+  const auto firstValid =
+      driver.ir::IrDriver::planBatch(withInvalidFirst);
+  expect(firstValid.status == ir::IrOutboxBatchPlanStatus::Planned &&
+             firstValid.rowIds == std::vector<std::int64_t>{12},
+         "base batch plan skips invalid rows before its singular fallback");
+
+  NoopHttpClient http;
+  const auto submitted = driver.ir::IrDriver::submitBatch(
+      std::span<const ir::IrOutboxEntry>(due).first(1), true, {}, http, {});
+  expect(submitted.status == ir::DeliveryStatus::Succeeded &&
+             driver.submittedEntries.size() == 1 &&
+             driver.submittedEntries.front().nextRequestUserIntent,
+         "base batch submission copies one row and applies user intent");
+
+  const auto polled = driver.ir::IrDriver::pollBatch(
+      std::span<const ir::IrOutboxEntry>(due).first(1), {}, http, {});
+  expect(polled.status == ir::DeliveryStatus::Ongoing &&
+             driver.polledEntries.size() == 1,
+         "base batch polling delegates exactly one row");
+
+  const auto rejected =
+      driver.ir::IrDriver::submitBatch(due, false, {}, http, {});
+  expect(rejected.status == ir::DeliveryStatus::PermanentFailure &&
+             driver.submittedEntries.size() == 1,
+         "base batch submission rejects multiple rows without delivery");
+}
+
+void testRegistryRejectsInvalidDriverBatchPlans() {
+  ir::IrDriverRegistry registry;
+  auto driver = std::make_shared<FakeDriver>(
+      "submitter", ir::IrDriverCapabilities{.scoreSubmission = true});
+  std::string diagnostic;
+  expect(registry.registerDriver(driver, diagnostic),
+         "batch plan test driver registers");
+  std::vector<ir::IrOutboxEntry> due(2);
+  due[0].id = 21;
+  due[1].id = 22;
+
+  driver->plannedRowIds = std::vector<std::int64_t>{21, 21};
+  expect(registry.planBatch("submitter", due).status ==
+             ir::IrOutboxBatchPlanStatus::Invalid,
+         "registry rejects duplicate planned row IDs");
+
+  driver->plannedRowIds = std::vector<std::int64_t>{0};
+  expect(registry.planBatch("submitter", due).status ==
+             ir::IrOutboxBatchPlanStatus::Invalid,
+         "registry rejects unknown planned row IDs");
+
+  driver->plannedRowIds = std::vector<std::int64_t>{99};
+  expect(registry.planBatch("submitter", due).status ==
+             ir::IrOutboxBatchPlanStatus::Invalid,
+         "registry rejects row IDs outside the due input");
+
+  driver->plannedRowIds = std::vector<std::int64_t>{21, 22};
+  const auto valid = registry.planBatch("submitter", due);
+  expect(valid.status == ir::IrOutboxBatchPlanStatus::Planned &&
+             valid.rowIds == std::vector<std::int64_t>({21, 22}),
+         "registry preserves a valid driver batch plan");
+}
 
 void testRegistryForwardsScoreReconciliation() {
   ir::IrDriverRegistry registry;
@@ -512,11 +598,12 @@ void testRegistryForwardsScoreReconciliation() {
 void testRegistryRejectsInvalidAndDuplicateDrivers() {
   ir::IrDriverRegistry registry;
   std::string diagnostic;
-  expect(!registry.registerDriver(
-             std::make_shared<FakeDriver>(
-                 "Bad Provider", ir::IrDriverCapabilities{.chartRankings = true}),
-             diagnostic),
-         "registry rejects invalid provider id");
+  expect(
+      !registry.registerDriver(
+          std::make_shared<FakeDriver>(
+              "Bad Provider", ir::IrDriverCapabilities{.chartRankings = true}),
+          diagnostic),
+      "registry rejects invalid provider id");
   expect(!diagnostic.empty(), "invalid provider has diagnostic");
 
   diagnostic.clear();
@@ -535,8 +622,8 @@ void testRegistryRejectsInvalidAndDuplicateDrivers() {
 void testReadOnlyDriverCannotBuildSubmissionDraft() {
   ir::IrDriverRegistry registry;
   auto driver = std::make_shared<FakeDriver>(
-      "archive", ir::IrDriverCapabilities{.readOnly = true,
-                                           .chartRankings = true});
+      "archive",
+      ir::IrDriverCapabilities{.readOnly = true, .chartRankings = true});
   std::string diagnostic;
   expect(registry.registerDriver(driver, diagnostic),
          "read-only driver registers");
@@ -562,7 +649,8 @@ void testReadOnlyDriverCannotBuildSubmissionDraft() {
 void testBaseBuildDraftIsUnsupported() {
   FakeDriver driver("ranking", {.chartRankings = true});
   const auto submission = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
-  expect(submission.value.has_value(), "test submission is valid for base call");
+  expect(submission.value.has_value(),
+         "test submission is valid for base call");
   if (!submission.value.has_value()) {
     return;
   }
@@ -584,6 +672,8 @@ int main() {
   testChartQueryNormalizesIdentity();
   testIrBadPointsIncludeKpoor();
   testCapabilityValidation();
+  testGenericBatchFallbacksPreserveSingularCompatibility();
+  testRegistryRejectsInvalidDriverBatchPlans();
   testRegistryForwardsScoreReconciliation();
   testRegistryRejectsInvalidAndDuplicateDrivers();
   testReadOnlyDriverCannotBuildSubmissionDraft();
