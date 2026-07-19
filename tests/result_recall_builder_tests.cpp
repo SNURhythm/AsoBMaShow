@@ -110,6 +110,10 @@ void testMatchingAttemptEnablesHistoricalIr() {
   assert(outcome.value->historicalIr->attempt->attemptId == kAttemptId);
   assert(outcome.value->historicalIr->submission->playedAtUnixMillis ==
          1784420645000LL);
+  assert(outcome.value->historicalIr->submission
+             ->judgementTimingBreakdownAvailable);
+  assert(outcome.value->historicalIr->submission->earlyPGreat == 1);
+  assert(outcome.value->historicalIr->submission->latePGreat == 0);
   assert(outcome.value->historicalIr->saveOutcome.saved());
 }
 

@@ -1109,13 +1109,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(result_persistence_integration_tests
         tests/result_persistence_integration_tests.cpp
+        src/AtomicFile.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
+        src/VersionedJson.cpp
         src/ir/IrDriver.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRankingModels.cpp
         src/ir/IrSubmission.cpp
+        src/ir/tachi/BokutachiCacheStore.cpp
         src/ir/tachi/TachiBatchManual.cpp
         src/ir/tachi/TachiDriver.cpp
         src/ir/tachi/TachiRankingParser.cpp
