@@ -118,6 +118,22 @@ std::string redactCredential(std::string value, std::string_view credential) {
   return sanitizeDiagnostic(value);
 }
 
+bool responseIdentityContainsCredential(const DeliveryOutcome &outcome,
+                                        std::string_view credential) {
+  if (credential.empty()) {
+    return false;
+  }
+  const auto containsCredential = [&](const auto &value) {
+    return value && value->find(credential) != std::string::npos;
+  };
+  return containsCredential(outcome.remoteJobId) ||
+         containsCredential(outcome.remoteOrigin) ||
+         containsCredential(outcome.remoteScoreId) ||
+         std::ranges::any_of(outcome.remoteScoreIds, [&](const auto &value) {
+           return value.find(credential) != std::string::npos;
+         });
+}
+
 IrAttemptStatusSnapshot snapshotFrom(const IrOutboxEntry &entry,
                                      std::uint64_t revision) {
   const IrActiveRequestKind activeRequest =
@@ -822,7 +838,48 @@ struct IrSubmissionService::Impl {
       }
       const auto plan = drivers.planBatch(firstDue.providerId, providerDue);
       if (plan.status != IrOutboxBatchPlanStatus::Planned) {
-        return safeAdd(now, 1'000);
+        {
+          std::lock_guard lock(mutex);
+          if (!requestMayStartLocked(expectedGeneration)) {
+            return std::nullopt;
+          }
+        }
+        const IrOutboxClaimRequest request{
+            .rowId = firstDue.id, .expectedState = firstDue.state};
+        auto rejected =
+            repository.ClaimIrOutboxBatch(std::span(&request, 1), now);
+        if (rejected.status != IrOutboxClaimStatus::Claimed ||
+            rejected.entries.size() != 1) {
+          return safeAdd(now, 1'000);
+        }
+        {
+          std::lock_guard lock(mutex);
+          if (generation != expectedGeneration) {
+            return std::nullopt;
+          }
+          publishLocked(rejected.entries.front());
+        }
+        const DeliveryOutcome planningFailure{
+            .status = DeliveryStatus::PermanentFailure,
+            .code = plan.status == IrOutboxBatchPlanStatus::Unsupported
+                        ? "unsupported_batch_plan"
+                        : "invalid_batch_plan",
+            .diagnostic =
+                "IR provider rejected the first due row during batch planning",
+        };
+        const auto update =
+            deliveryUpdate(rejected.entries.front(), firstDue.state,
+                           planningFailure, now);
+        const auto applied = repository.ApplyIrOutboxDelivery(update);
+        if (applied.status != IrOutboxMutationStatus::Updated) {
+          repository.RecoverStaleIrOutbox(now);
+        }
+        refreshEntry({firstDue.providerId, firstDue.attemptId},
+                     expectedGeneration);
+        refreshCount(firstDue.providerId, expectedGeneration);
+        return applied.status == IrOutboxMutationStatus::Updated
+                   ? now
+                   : safeAdd(now, 1'000);
       }
 
       std::vector<IrOutboxEntry> planned;
@@ -921,6 +978,13 @@ struct IrSubmissionService::Impl {
       outcome.code = redactCredential(std::move(outcome.code), credential);
       outcome.diagnostic =
           redactCredential(std::move(outcome.diagnostic), credential);
+      if (responseIdentityContainsCredential(outcome, credential)) {
+        outcome = {
+            .status = DeliveryStatus::PermanentFailure,
+            .code = "malformed_response",
+            .diagnostic = "IR delivery returned invalid receipt identity",
+        };
+      }
 
       const std::int64_t completedAt = safeNow(options);
       {
@@ -997,6 +1061,26 @@ struct IrSubmissionService::Impl {
         updates.push_back(std::move(update));
       }
       const auto applied = repository.ApplyIrOutboxDeliveries(updates);
+      if (applied.status != IrOutboxMutationStatus::Updated) {
+        const DeliveryOutcome recovery{
+            .status = DeliveryStatus::TransientFailure,
+            .code = "storage_apply_failed",
+            .diagnostic =
+                "IR delivery state could not be stored; retry scheduled",
+        };
+        std::vector<IrOutboxDeliveryUpdate> recoveryUpdates;
+        recoveryUpdates.reserve(planned.size());
+        for (std::size_t index = 0; index < planned.size(); ++index) {
+          recoveryUpdates.push_back(deliveryUpdate(
+              claim.entries[index], planned[index].state, recovery,
+              completedAt));
+        }
+        const auto recovered =
+            repository.ApplyIrOutboxDeliveries(recoveryUpdates);
+        if (recovered.status != IrOutboxMutationStatus::Updated) {
+          repository.RecoverStaleIrOutbox(completedAt);
+        }
+      }
       for (const auto &entry : planned) {
         refreshEntry({entry.providerId, entry.attemptId}, expectedGeneration);
       }
@@ -1014,7 +1098,9 @@ struct IrSubmissionService::Impl {
           }
         }
       }
-      return completedAt;
+      return applied.status == IrOutboxMutationStatus::Updated
+                 ? completedAt
+                 : safeAdd(completedAt, 1'000);
     }
     return nextEligibleFutureTime(expectedGeneration, config, now);
   }

@@ -104,6 +104,14 @@ public:
       return {.status = ir::IrOutboxBatchPlanStatus::Invalid,
               .diagnostic = "fake batch has no rows"};
     }
+    {
+      std::lock_guard lock(mutex_);
+      if (!rejectedPlanAttemptId_.empty() &&
+          due.front().attemptId == rejectedPlanAttemptId_) {
+        return {.status = rejectedPlanStatus_,
+                .diagnostic = "fake rejected the first due row"};
+      }
+    }
     const auto &first = due.front();
     std::vector<std::int64_t> rowIds;
     for (const auto &entry : due) {
@@ -228,6 +236,13 @@ public:
     reconciliationOutcomes_.push_back(std::move(outcome));
   }
 
+  void rejectPlanForAttempt(std::string attemptId,
+                            ir::IrOutboxBatchPlanStatus status) {
+    std::lock_guard lock(mutex_);
+    rejectedPlanAttemptId_ = std::move(attemptId);
+    rejectedPlanStatus_ = status;
+  }
+
   void blockRequestsUntilCancelled() {
     std::lock_guard lock(mutex_);
     block_ = true;
@@ -342,6 +357,9 @@ private:
   mutable std::deque<ir::DeliveryOutcome> pollOutcomes_;
   mutable std::deque<ir::IrUserScoreSnapshotOutcome> reconciliationOutcomes_;
   mutable std::vector<std::string> reconciliationApiKeys_;
+  mutable std::string rejectedPlanAttemptId_;
+  mutable ir::IrOutboxBatchPlanStatus rejectedPlanStatus_ =
+      ir::IrOutboxBatchPlanStatus::Invalid;
   mutable std::optional<std::stop_token> activeReconciliationToken_;
   mutable std::size_t reconciliationCalls_ = 0;
   mutable int reconciliationStage_ = 0;
@@ -823,6 +841,37 @@ bool executeSql(const std::filesystem::path &databasePath,
   return succeeded;
 }
 
+bool irIdentityStorageContains(const std::filesystem::path &databasePath,
+                               std::string_view value) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open_v2(databasePath.string().c_str(), &database,
+                      SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+    if (database) {
+      sqlite3_close(database);
+    }
+    return true;
+  }
+  sqlite3_stmt *statement = nullptr;
+  const char *query =
+      "SELECT EXISTS(SELECT 1 FROM ir_outbox WHERE "
+      "instr(ifnull(remote_job_id,'') || ifnull(remote_origin,'') || "
+      "ifnull(last_error_code,'') || ifnull(last_error_message,''),?1)>0 "
+      "UNION ALL SELECT 1 FROM ir_submission_receipts WHERE "
+      "instr(ifnull(server_origin,'') || ifnull(remote_chart_id,'') || "
+      "ifnull(remote_score_id,''),?1)>0 LIMIT 1)";
+  bool contains = true;
+  if (sqlite3_prepare_v2(database, query, -1, &statement, nullptr) == SQLITE_OK &&
+      sqlite3_bind_text(statement, 1, value.data(),
+                        static_cast<int>(value.size()), SQLITE_TRANSIENT) ==
+          SQLITE_OK &&
+      sqlite3_step(statement) == SQLITE_ROW) {
+    contains = sqlite3_column_int(statement, 0) != 0;
+  }
+  sqlite3_finalize(statement);
+  sqlite3_close(database);
+  return contains;
+}
+
 void makeFailed(Harness &harness, int suffix) {
   const auto inserted =
       harness.enqueueReady(draft(suffix, harness.now.load()), false);
@@ -1039,6 +1088,133 @@ void testAmbiguousPartialResultFailsWholeGroup() {
     expect(load(harness, suffix).lastErrorCode == "ambiguous_partial_import",
            "ambiguous partial failure is persisted consistently");
   }
+}
+
+void testInvalidAndUnsupportedPlansIsolateFirstRowWithoutStarvation() {
+  const auto run = [](ir::IrOutboxBatchPlanStatus planStatus, int firstSuffix,
+                      int laterSuffix) {
+    Harness harness;
+    harness.setCredential("key");
+    const auto first =
+        harness.enqueueReady(draft(firstSuffix, harness.now.load()), false);
+    const auto later =
+        harness.enqueueReady(draft(laterSuffix, harness.now.load()), false);
+    expect(first.entry && later.entry,
+           "plan isolation fixtures insert in due order");
+    harness.driver->rejectPlanForAttempt(attemptId(firstSuffix), planStatus);
+    harness.driver->pushSubmit({.status = ir::DeliveryStatus::Succeeded});
+    harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+    expect(harness.driver->waitForCalls(1),
+           "a later valid row proceeds after a rejected first plan");
+    expect(harness.waitForState(attemptId(firstSuffix),
+                                ir::IrOutboxState::FailedPermanent) &&
+               harness.waitForState(attemptId(laterSuffix),
+                                    ir::IrOutboxState::Succeeded),
+           "the rejected row is terminal while later due work succeeds");
+    const auto calls = harness.driver->calls();
+    expect(calls.size() == 1 && later.entry &&
+               calls.front().rowIds ==
+                   std::vector<std::int64_t>{later.entry->id},
+           "plan rejection performs no transport and does not busy-loop");
+  };
+
+  run(ir::IrOutboxBatchPlanStatus::Invalid, 217, 218);
+  run(ir::IrOutboxBatchPlanStatus::Unsupported, 219, 220);
+}
+
+void testEchoedCredentialResponseIdentitiesAreNeverPersisted() {
+  const std::string credential = "echoed-secret";
+  const auto run = [&](int suffix, ir::DeliveryOutcome outcome,
+                       std::string_view fieldName) {
+    Harness harness;
+    harness.setCredential(credential);
+    expect(harness.enqueueReady(draft(suffix, harness.now.load()), false)
+               .entry.has_value(),
+           "credential echo fixture inserts");
+    harness.driver->pushSubmit(std::move(outcome));
+    harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+    expect(harness.waitForState(attemptId(suffix),
+                                ir::IrOutboxState::FailedPermanent),
+           std::string(fieldName) + " credential echo is rejected");
+    const auto stored = load(harness, suffix);
+    const auto receipt = harness.repository.LoadIrSubmissionReceipt(
+        "fake", "https://boku.tachi.ac", attemptId(suffix));
+    expect(stored.remoteJobId.empty() && stored.remoteOrigin.empty() &&
+               stored.lastErrorCode == "malformed_response" &&
+               stored.lastErrorMessage.find(credential) == std::string::npos,
+           std::string(fieldName) +
+               " credential echo is absent from the persisted outbox row");
+    expect(receipt.status == ir::IrReceiptReadStatus::NotFound,
+           std::string(fieldName) +
+               " credential echo creates no submission receipt");
+    expect(!irIdentityStorageContains(harness.temp.path() / "replays.db",
+                                      credential),
+           std::string(fieldName) +
+               " credential echo is absent from identity-bearing DB columns");
+  };
+
+  run(221,
+      {.status = ir::DeliveryStatus::Deferred,
+       .remoteJobId = "job-" + credential,
+       .remoteOrigin = "https://boku.tachi.ac"},
+      "remoteJobId");
+  run(222,
+      {.status = ir::DeliveryStatus::Deferred,
+       .remoteJobId = "safe-job",
+       .remoteOrigin = "https://" + credential + ".example.test"},
+      "remoteOrigin");
+  run(223,
+      {.status = ir::DeliveryStatus::Succeeded,
+       .remoteUserId = 42,
+       .remoteScoreId = "score-" + credential},
+      "remoteScoreId");
+}
+
+void testFailedAtomicDeliveryApplyRequeuesTheWholeClaimedGroup() {
+  Harness harness;
+  harness.setCredential("key");
+  for (int suffix = 224; suffix < 227; ++suffix) {
+    expect(harness.enqueueReady(draft(suffix, harness.now.load()), false)
+               .entry.has_value(),
+           "apply recovery fixture inserts");
+  }
+  expect(executeSql(
+             harness.temp.path() / "replays.db",
+             "CREATE TRIGGER fail_service_receipt_insert BEFORE INSERT ON "
+             "ir_submission_receipts BEGIN SELECT RAISE(ABORT,'injected'); END"),
+         "apply recovery fixture installs a receipt failure");
+  harness.driver->pushSubmit({.status = ir::DeliveryStatus::Succeeded,
+                              .remoteUserId = 42});
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.driver->waitForCalls(1),
+         "apply recovery group performs one provider request");
+  bool allRequeued = true;
+  for (int suffix = 224; suffix < 227; ++suffix) {
+    allRequeued =
+        harness.waitForSnapshot(attemptId(suffix), [](const auto &snapshot) {
+          return snapshot.state == ir::IrOutboxState::Pending &&
+                 snapshot.consecutiveFailureCount == 1 &&
+                 snapshot.nextAttemptAtUnixMillis.has_value();
+        }) &&
+        allRequeued;
+  }
+  expect(allRequeued,
+         "failed atomic apply makes every claimed row processable again");
+  for (int suffix = 224; suffix < 227; ++suffix) {
+    const auto stored = load(harness, suffix);
+    const auto receipt = harness.repository.LoadIrSubmissionReceipt(
+        "fake", "https://boku.tachi.ac", attemptId(suffix));
+    expect(stored.state == ir::IrOutboxState::Pending &&
+               stored.lastErrorCode == "storage_apply_failed" &&
+               receipt.status == ir::IrReceiptReadStatus::NotFound,
+           "failed atomic apply leaves no partial receipt or terminal state");
+  }
+  expect(harness.driver->calls().size() == 1 &&
+             harness.succeededCallbacks().empty(),
+         "apply failure neither busy-loops nor publishes delivery success");
 }
 
 void testActiveRequestSnapshotsDistinguishSubmitAndPoll() {
@@ -2594,6 +2770,9 @@ int main() {
   testGroupedCancellationRecoversEveryClaim();
   testMissingCredentialBlocksWholePlannedGroup();
   testAmbiguousPartialResultFailsWholeGroup();
+  testInvalidAndUnsupportedPlansIsolateFirstRowWithoutStarvation();
+  testEchoedCredentialResponseIdentitiesAreNeverPersisted();
+  testFailedAtomicDeliveryApplyRequeuesTheWholeClaimedGroup();
   testActiveRequestSnapshotsDistinguishSubmitAndPoll();
   testStartupRecovery();
   testDisabledAndReadOnlyProvidersStayPaused();

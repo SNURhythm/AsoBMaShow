@@ -558,6 +558,9 @@ BuildTachiOutboxBatchOutcome buildBatchManualOutboxDocument(
     std::string payloadJson;
 
     for (const auto &entry : entries) {
+      if (rowIds.size() == 64) {
+        break;
+      }
       if (!hasValidStoredProof(entry) || entry.payloadJson.empty() ||
           entry.payloadJson.size() > kMaximumPayloadBytes) {
         return invalidOutboxBatch(
@@ -593,10 +596,6 @@ BuildTachiOutboxBatchOutcome buildBatchManualOutboxDocument(
       } else if (playtypeText != selectedPlaytype) {
         continue;
       }
-      if (rowIds.size() == 64) {
-        break;
-      }
-
       nlohmann::json candidateScores = batchScores;
       candidateScores.push_back(scores->front());
       const std::string candidatePayload = nlohmann::json{

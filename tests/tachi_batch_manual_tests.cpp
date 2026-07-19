@@ -200,12 +200,13 @@ void testOutboxCompositionGroupsAndBoundsRows() {
     entry.id = id;
     many.push_back(std::move(entry));
   }
+  many.back().rulesetProof.validationFingerprint = "invalid-out-of-batch-proof";
   const auto capped = ir::tachi::buildBatchManualOutboxDocument(many);
   expect(capped.document && capped.document->rowIds.size() == 64 &&
              nlohmann::json::parse(capped.document->payloadJson)
                      .at("scores")
                      .size() == 64,
-         "outbox batches cap at 64 scores");
+         "64 valid rows ignore a malformed out-of-batch row 65");
 }
 
 void testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes() {
