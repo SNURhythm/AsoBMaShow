@@ -2,9 +2,11 @@
 #include "../src/ResultPersistenceModel.h"
 #include "../src/ReplayResultStateBuilder.h"
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <memory>
+#include <string_view>
 
 namespace {
 
@@ -115,6 +117,7 @@ void testMatchingAttemptEnablesHistoricalIr() {
   assert(outcome.value->historicalIr->submission->earlyPGreat == 1);
   assert(outcome.value->historicalIr->submission->latePGreat == 0);
   assert(outcome.value->historicalIr->saveOutcome.saved());
+  assert(outcome.value->historicalIrDiagnostic.empty());
 }
 
 void testParsedChartMetadataRestoresHistoricalIr() {
@@ -154,6 +157,10 @@ void testParsedChartMetadataStillRejectsChangedChart() {
       std::move(record), cancelled, std::move(changedChartLoader));
   assert(outcome.value.has_value());
   assert(!outcome.value->historicalIr.has_value());
+  assert(outcome.value->historicalIrDiagnostic ==
+         "IR verification failed because the stored fingerprint differs from "
+         "the reconstructed score. The chart or replay metadata may have "
+         "changed since the score was saved, so it cannot be uploaded safely.");
 }
 
 void testWellFormedWrongFingerprintSuppressesHistoricalIrSubmission() {
@@ -169,6 +176,50 @@ void testWellFormedWrongFingerprintSuppressesHistoricalIrSubmission() {
 
   assert(outcome.value.has_value());
   assert(!outcome.value->historicalIr.has_value());
+  assert(outcome.value->historicalIrDiagnostic ==
+         "IR verification failed because the stored fingerprint differs from "
+         "the reconstructed score. The chart or replay metadata may have "
+         "changed since the score was saved, so it cannot be uploaded safely.");
+}
+
+void testAttemptReconstructionExplainsInvariantFailure() {
+  auto record = validRecord();
+  record.replay.finalGauge = 99.0F;
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(std::move(record), cancelled,
+                                                 chartLoader());
+
+  assert(outcome.value.has_value());
+  assert(!outcome.value->historicalIr.has_value());
+  assert(outcome.value->historicalIrDiagnostic ==
+         "IR verification failed: final gauge mismatch. The saved replay no "
+         "longer reproduces the original score, so it cannot be uploaded "
+         "safely.");
+}
+
+void testSubmissionValidationExplainsInvariantFailure() {
+  auto record = validRecord();
+  record.replay.chartMeta.KeyMode = 0;
+  bms_parser::Chart chart;
+  chart.Meta = record.replay.chartMeta;
+  RhythmState state = replay_result::BuildResultState(chart, record.replay);
+  std::string diagnostic;
+  auto attempt = result_persistence::makeChartResultAttempt(
+      *record.attemptId, chart.Meta, state, record.replay.provenance,
+      record.replay.chartMeta.LnMode, record.replay, diagnostic);
+  assert(attempt.has_value());
+  record.attemptFingerprint = attempt->payloadFingerprint;
+
+  std::atomic_bool cancelled = false;
+  auto outcome = result_recall::BuildChartResult(std::move(record), cancelled,
+                                                 chartLoader());
+
+  assert(outcome.value.has_value());
+  assert(!outcome.value->historicalIr.has_value());
+  assert(outcome.value->historicalIrDiagnostic ==
+         "IR submission validation failed: chart key mode must be positive. "
+         "This score cannot be uploaded safely.");
 }
 
 void testChartBuildRejectsMismatchedPersistedOutcome() {
@@ -190,7 +241,17 @@ void testChartBuildRejectsMismatchedPersistedOutcome() {
 }
 
 void testInvalidIntegrityMetadataSuppressesOnlyIr() {
-  for (int variant = 0; variant < 3; ++variant) {
+  constexpr std::array<std::string_view, 4> expected{
+      "IR verification failed because the saved result has no attempt "
+      "identity. This score cannot be uploaded safely.",
+      "IR verification failed because the saved result has no integrity "
+      "fingerprint. This score cannot be uploaded safely.",
+      "IR verification failed because the saved result has no integrity "
+      "fingerprint. This score cannot be uploaded safely.",
+      "IR verification failed because the saved result has no play completion "
+      "time. This score cannot be uploaded safely.",
+  };
+  for (int variant = 0; variant < 4; ++variant) {
     auto record = validRecord();
     if (variant == 0) {
       record.attemptId.reset();
@@ -199,6 +260,9 @@ void testInvalidIntegrityMetadataSuppressesOnlyIr() {
       record.attemptFingerprint.reset();
     }
     if (variant == 2) {
+      record.attemptFingerprint = "";
+    }
+    if (variant == 3) {
       record.playedAtUnixMillis = 0;
     }
     std::atomic_bool cancelled = false;
@@ -206,6 +270,7 @@ void testInvalidIntegrityMetadataSuppressesOnlyIr() {
         std::move(record), cancelled, chartLoader());
     assert(outcome.value.has_value());
     assert(!outcome.value->historicalIr.has_value());
+    assert(outcome.value->historicalIrDiagnostic == expected[variant]);
   }
 }
 
@@ -331,6 +396,8 @@ int main() {
   testParsedChartMetadataRestoresHistoricalIr();
   testParsedChartMetadataStillRejectsChangedChart();
   testWellFormedWrongFingerprintSuppressesHistoricalIrSubmission();
+  testAttemptReconstructionExplainsInvariantFailure();
+  testSubmissionValidationExplainsInvariantFailure();
   testChartBuildRejectsMismatchedPersistedOutcome();
   testInvalidIntegrityMetadataSuppressesOnlyIr();
   testCourseBuildPreparesEveryStage();

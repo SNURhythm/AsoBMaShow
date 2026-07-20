@@ -27,6 +27,7 @@ struct ChartResult {
   ReplayData replay;
   RhythmState state;
   std::optional<HistoricalIrContext> historicalIr;
+  std::string historicalIrDiagnostic;
 };
 
 struct ChartBuildOutcome {

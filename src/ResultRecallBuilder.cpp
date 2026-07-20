@@ -34,27 +34,62 @@ bool replayOutcomeMatches(const bms_parser::ChartMeta &meta,
          reconstructedClear == replay.clearType;
 }
 
-std::optional<HistoricalIrContext>
-historicalIrFor(const ReplayResultRecord &record,
-                const bms_parser::ChartMeta &meta, const RhythmState &state) {
-  if (!record.attemptId.has_value() ||
-      !record.attemptFingerprint.has_value() ||
-      record.attemptFingerprint->empty() || record.playedAtUnixMillis <= 0) {
-    return std::nullopt;
+struct HistoricalIrBuildOutcome {
+  std::optional<HistoricalIrContext> value;
+  std::string diagnostic;
+};
+
+HistoricalIrBuildOutcome historicalIrFor(const ReplayResultRecord &record,
+                                         const bms_parser::ChartMeta &meta,
+                                         const RhythmState &state) {
+  if (!record.attemptId.has_value()) {
+    return {.diagnostic =
+                "IR verification failed because the saved result has no "
+                "attempt identity. This score cannot be uploaded safely."};
+  }
+  if (!record.attemptFingerprint.has_value() ||
+      record.attemptFingerprint->empty()) {
+    return {.diagnostic =
+                "IR verification failed because the saved result has no "
+                "integrity fingerprint. This score cannot be uploaded "
+                "safely."};
+  }
+  if (record.playedAtUnixMillis <= 0) {
+    return {.diagnostic =
+                "IR verification failed because the saved result has no play "
+                "completion time. This score cannot be uploaded safely."};
   }
 
   std::string diagnostic;
   auto attempt = result_persistence::makeChartResultAttempt(
       *record.attemptId, meta, state, record.replay.provenance,
       record.replay.chartMeta.LnMode, record.replay, diagnostic);
-  if (!attempt.has_value() ||
-      attempt->payloadFingerprint != *record.attemptFingerprint) {
-    return std::nullopt;
+  if (!attempt.has_value()) {
+    const std::string invariant =
+        diagnostic.empty()
+            ? "canonical score attempt could not be reconstructed"
+            : diagnostic;
+    return {.diagnostic =
+                "IR verification failed: " + invariant +
+                ". The saved replay no longer reproduces the original score, "
+                "so it cannot be uploaded safely."};
+  }
+  if (attempt->payloadFingerprint != *record.attemptFingerprint) {
+    return {.diagnostic =
+                "IR verification failed because the stored fingerprint "
+                "differs from the reconstructed score. The chart or replay "
+                "metadata may have changed since the score was saved, so it "
+                "cannot be uploaded safely."};
   }
   auto submission =
       ir::makeIrSubmission(*attempt, record.playedAtUnixMillis);
   if (!submission.value.has_value()) {
-    return std::nullopt;
+    const std::string invariant =
+        submission.diagnostic.empty()
+            ? "canonical submission construction failed"
+            : submission.diagnostic;
+    return {.diagnostic = "IR submission validation failed: " + invariant +
+                          ". This score cannot be uploaded safely."};
   }
 
   auto attemptPtr =
@@ -69,9 +104,9 @@ historicalIrFor(const ReplayResultRecord &record,
           .replayId = record.replay.id,
           .createdAt = record.replay.createdAt,
           .scorePending = false}};
-  return HistoricalIrContext{.attempt = std::move(attemptPtr),
-                             .submission = std::move(submissionPtr),
-                             .saveOutcome = std::move(saved)};
+  return {.value = HistoricalIrContext{.attempt = std::move(attemptPtr),
+                                       .submission = std::move(submissionPtr),
+                                       .saveOutcome = std::move(saved)}};
 }
 
 } // namespace
@@ -96,7 +131,9 @@ ChartBuildOutcome BuildChartResult(ReplayResultRecord record,
     return {.value = ChartResult{.chart = std::move(chart),
                                  .replay = std::move(record.replay),
                                  .state = std::move(state),
-                                 .historicalIr = std::move(historicalIr)}};
+                                 .historicalIr = std::move(historicalIr.value),
+                                 .historicalIrDiagnostic =
+                                     std::move(historicalIr.diagnostic)}};
   } catch (const std::exception &) {
     return {.diagnostic = "saved chart result could not be reconstructed"};
   } catch (...) {
