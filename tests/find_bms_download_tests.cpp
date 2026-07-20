@@ -619,6 +619,50 @@ void testWorkflowStagesFallbackExtractionMismatch() {
   assert(!std::filesystem::exists(attempt->archivePath));
 }
 
+void testWorkflowKeepsMismatchDecisionWhenArchiveCleanupFails() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath / "locked", "archive");
+  asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [](const std::filesystem::path &, const std::string &, bool,
+             archive_file::PauseCallback) {
+            return asobmshow::bms_search::DirectArchiveDecision{};
+          },
+      .extractArchive =
+          [](const std::filesystem::path &,
+             const std::filesystem::path &destination, std::string &,
+             BmsSearchDownloadProgressCallback) {
+            writeText(destination / "wrong.bms", "wrong");
+            return true;
+          },
+      .decideExtracted =
+          [](const std::filesystem::path &, const std::string &) {
+            return asobmshow::bms_search::ExtractedArchiveDecision{
+                .disposition = asobmshow::bms_search::
+                    ExtractedArchiveDisposition::HashMismatch,
+                .foundBmsFile = true};
+          },
+      .commitArtifact =
+          [](const BmsSearchPendingArtifact &, std::string &) { return true; }};
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(asobmshow::bms_search::processDownloadedArchive(
+      workflowRequest(*attempt, downloadRoot), cancelled, nullptr, result,
+      dependencies));
+  assert(result.status == BmsSearchResult::Status::HashMismatch);
+  assert(result.pendingArtifact);
+  assert(result.pendingArtifact->kind ==
+         BmsSearchPendingArtifactKind::ExtractedDirectory);
+  assert(std::filesystem::exists(attempt->archivePath));
+}
+
 void testWorkflowRejectsInconclusiveExtractedValidation() {
   CleanupPaths cleanup;
   std::string error;
@@ -795,6 +839,7 @@ int main() {
   testWorkflowStagesDirectArchiveMismatch();
   testWorkflowCommitsFallbackExtractionMatch();
   testWorkflowStagesFallbackExtractionMismatch();
+  testWorkflowKeepsMismatchDecisionWhenArchiveCleanupFails();
   testWorkflowRejectsInconclusiveExtractedValidation();
   testExtractedDecisionMatchesSha256AndMd5();
   testExtractedDecisionDistinguishesMismatchAndInconclusive();
