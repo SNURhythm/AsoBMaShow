@@ -8,3 +8,8 @@ FindBmsDialogPolicy findBmsDialogPolicy(bool running,
           .showPendingActions = pending && !running,
           .showNormalResultActions = !pending};
 }
+
+std::string findBmsDownloadFailureDetail(const BmsSearchResult &result) {
+  return result.message.empty() ? "Open the source or try again."
+                                : result.message;
+}

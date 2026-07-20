@@ -456,6 +456,8 @@ void testWorkflowKeepsDirectArchiveWithoutExtraction() {
                    "Inspecting downloaded archive") != progress.end());
   assert(std::find(progress.begin(), progress.end(),
                    "Validating archive contents") != progress.end());
+  assert(std::find(progress.begin(), progress.end(),
+                   "Saving downloaded archive") != progress.end());
 }
 
 void testWorkflowStagesDirectArchiveMismatch() {
@@ -734,6 +736,17 @@ void testPendingMismatchCannotDismiss() {
   assert(!resolved.showPendingActions);
 }
 
+void testDownloadFailureDetailPreservesCause() {
+  BmsSearchResult result;
+  result.status = BmsSearchResult::Status::DownloadFailed;
+  result.message = "Could not install downloaded files: permission denied.";
+  assert(findBmsDownloadFailureDetail(result) == result.message);
+
+  result.message.clear();
+  assert(findBmsDownloadFailureDetail(result) ==
+         "Open the source or try again.");
+}
+
 } // namespace
 
 int main() {
@@ -760,5 +773,6 @@ int main() {
   testExtractedDecisionDistinguishesMismatchAndInconclusive();
   testPublicDownloadApiAcceptsOptions();
   testPendingMismatchCannotDismiss();
+  testDownloadFailureDetailPreservesCause();
   return 0;
 }

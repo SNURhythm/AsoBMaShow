@@ -7525,7 +7525,7 @@ void MainMenuScene::refreshFindBmsModal() {
                   : findBmsResult.message;
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
-    detail += "Open the source or try again.";
+    detail += findBmsDownloadFailureDetail(findBmsResult);
   } else {
     detail += "Searching available sources...";
   }

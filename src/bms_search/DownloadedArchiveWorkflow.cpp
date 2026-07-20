@@ -194,6 +194,7 @@ bool processDownloadedArchive(
   }
 
   if (directDecision.disposition == DirectArchiveDisposition::KeepArchive) {
+    reportProgress(progressCallback, "Saving downloaded archive");
     const auto artifact = archiveArtifact(request);
     std::string commitError;
     if (!dependencies.commitArtifact(artifact, commitError)) {
