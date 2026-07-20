@@ -1905,6 +1905,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(find_bms_download_tests
         tests/find_bms_download_tests.cpp
         src/bms_search/ArchiveDecision.cpp
+        src/bms_search/DownloadedArchiveWorkflow.cpp
         src/bms_search/DownloadStaging.cpp
         src/bms_search/PendingArtifact.cpp
         src/ArchiveFile.cpp

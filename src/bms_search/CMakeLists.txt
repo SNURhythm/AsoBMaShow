@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     BmsSearchDriver.cpp
     Common.cpp
     DirectArchiveDriver.cpp
+    DownloadedArchiveWorkflow.cpp
     DownloadStaging.cpp
     DownloadSupport.cpp
     DropboxDriver.cpp

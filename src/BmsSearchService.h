@@ -79,13 +79,15 @@ public:
       const std::string &sha256, const std::string &md5,
       const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
       BmsSearchDownloadProgressCallback progressCallback = nullptr,
-      const std::string &title = "", const std::string &artist = "") const;
+      const std::string &title = "", const std::string &artist = "",
+      BmsSearchDownloadOptions options = {}) const;
 
   BmsSearchResult downloadCandidate(
       const BmsSearchCandidate &candidate, const std::string &sha256,
       const std::string &md5, const std::filesystem::path &libraryRoot,
       std::atomic_bool &cancelled,
-      BmsSearchDownloadProgressCallback progressCallback = nullptr) const;
+      BmsSearchDownloadProgressCallback progressCallback = nullptr,
+      BmsSearchDownloadOptions options = {}) const;
 
   BmsSearchResult resolvePendingArtifact(
       BmsSearchResult result,

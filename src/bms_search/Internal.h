@@ -219,6 +219,7 @@ bool downloadAndExtractArchive(
     const std::string &archiveKey, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
     BmsSearchResult &result, const std::string &suggestedArchiveName = "",
     bool *downloadedArchive = nullptr);
 DownloadCandidate packageDownloadCandidate(const std::string &downloadUrl,

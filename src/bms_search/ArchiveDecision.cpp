@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace asobmshow::bms_search {

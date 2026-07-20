@@ -135,6 +135,7 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     const std::string &md5, const std::string &archiveKey,
     const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
     BmsSearchResult &result) {
   const std::string md5Hash = normalizedHash(md5);
   if (!isHexStringOfLength(md5Hash, 32)) {
@@ -187,7 +188,7 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     const bool finished = downloadAndExtractArchive(
         lookup.candidate->downloadUrl, lookup.candidate->originalUrl,
         archiveKey.empty() ? md5Hash : archiveKey, libraryRoot, cancelled,
-        progressCallback, attempt, lookup.candidate->archiveName,
+        progressCallback, options, attempt, lookup.candidate->archiveName,
         &downloadedArchive);
     if (finished || downloadedArchive || cancelled.load()) {
       result = std::move(attempt);

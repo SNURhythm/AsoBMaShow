@@ -1,12 +1,15 @@
 #include "bms_search/ArchiveDecision.h"
+#include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
 
 #include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -387,6 +390,327 @@ void testDirectArchiveMd5AndNoHashBehavior() {
   assert(!noBmsNoHash.foundBmsFile);
 }
 
+asobmshow::bms_search::DownloadedArchiveWorkflowRequest workflowRequest(
+    const FindBmsDownloadAttempt &attempt,
+    const std::filesystem::path &downloadRoot) {
+  return {.attempt = attempt,
+          .downloadRoot = downloadRoot,
+          .archiveName = "package.zip",
+          .storageKey = "package",
+          .archiveKey = std::string(64, 'a'),
+          .options = {.skipUnarchivingForNonSolidArchives = true}};
+}
+
+void testWorkflowKeepsDirectArchiveWithoutExtraction() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive");
+  bool extracted = false;
+  std::optional<BmsSearchPendingArtifactKind> committedKind;
+  asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [](const std::filesystem::path &, const std::string &, bool,
+             archive_file::PauseCallback) {
+            return asobmshow::bms_search::DirectArchiveDecision{
+                .disposition = asobmshow::bms_search::
+                    DirectArchiveDisposition::KeepArchive,
+                .foundBmsFile = true,
+                .message = "Downloaded BMS archive."};
+          },
+      .extractArchive =
+          [&extracted](const std::filesystem::path &,
+                       const std::filesystem::path &, std::string &,
+                       BmsSearchDownloadProgressCallback) {
+            extracted = true;
+            return false;
+          },
+      .decideExtracted = {},
+      .commitArtifact =
+          [&committedKind](const BmsSearchPendingArtifact &artifact,
+                           std::string &) {
+            committedKind = artifact.kind;
+            return true;
+          }};
+  std::atomic_bool cancelled = false;
+  std::vector<std::string> progress;
+  BmsSearchResult result;
+  assert(asobmshow::bms_search::processDownloadedArchive(
+      workflowRequest(*attempt, downloadRoot), cancelled,
+      [&progress](const BmsSearchDownloadProgress &update) {
+        progress.push_back(update.message);
+      },
+      result, dependencies));
+  assert(!extracted);
+  assert(committedKind == BmsSearchPendingArtifactKind::Archive);
+  assert(result.status == BmsSearchResult::Status::Downloaded);
+  assert(result.outputPath == downloadRoot / "_archives/package.zip");
+  assert(result.message == "Downloaded BMS archive.");
+  assert(std::find(progress.begin(), progress.end(),
+                   "Inspecting downloaded archive") != progress.end());
+  assert(std::find(progress.begin(), progress.end(),
+                   "Validating archive contents") != progress.end());
+}
+
+void testWorkflowStagesDirectArchiveMismatch() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive");
+  bool committed = false;
+  asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [](const std::filesystem::path &, const std::string &, bool,
+             archive_file::PauseCallback) {
+            return asobmshow::bms_search::DirectArchiveDecision{
+                .disposition = asobmshow::bms_search::
+                    DirectArchiveDisposition::HashMismatch,
+                .foundBmsFile = true};
+          },
+      .extractArchive = {},
+      .decideExtracted = {},
+      .commitArtifact =
+          [&committed](const BmsSearchPendingArtifact &, std::string &) {
+            committed = true;
+            return true;
+          }};
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(asobmshow::bms_search::processDownloadedArchive(
+      workflowRequest(*attempt, downloadRoot), cancelled, nullptr, result,
+      dependencies));
+  assert(!committed);
+  assert(result.status == BmsSearchResult::Status::HashMismatch);
+  assert(result.outputPath.empty());
+  assert(result.pendingArtifact);
+  assert(result.pendingArtifact->kind == BmsSearchPendingArtifactKind::Archive);
+  assert(result.message.find("Keep Files or Delete Files") !=
+         std::string::npos);
+}
+
+void testWorkflowCommitsFallbackExtractionMatch() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive");
+  std::optional<BmsSearchPendingArtifactKind> committedKind;
+  asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [](const std::filesystem::path &, const std::string &, bool,
+             archive_file::PauseCallback) {
+            return asobmshow::bms_search::DirectArchiveDecision{};
+          },
+      .extractArchive =
+          [](const std::filesystem::path &,
+             const std::filesystem::path &destination, std::string &,
+             BmsSearchDownloadProgressCallback) {
+            writeText(destination / "chart.bms", "chart");
+            return true;
+          },
+      .decideExtracted =
+          [](const std::filesystem::path &, const std::string &) {
+            return asobmshow::bms_search::ExtractedArchiveDecision{
+                .disposition = asobmshow::bms_search::
+                    ExtractedArchiveDisposition::Match,
+                .foundBmsFile = true};
+          },
+      .commitArtifact =
+          [&committedKind](const BmsSearchPendingArtifact &artifact,
+                           std::string &) {
+            committedKind = artifact.kind;
+            return true;
+          }};
+  std::atomic_bool cancelled = false;
+  std::vector<std::string> progress;
+  BmsSearchResult result;
+  assert(asobmshow::bms_search::processDownloadedArchive(
+      workflowRequest(*attempt, downloadRoot), cancelled,
+      [&progress](const BmsSearchDownloadProgress &update) {
+        progress.push_back(update.message);
+      },
+      result, dependencies));
+  assert(committedKind == BmsSearchPendingArtifactKind::ExtractedDirectory);
+  assert(result.status == BmsSearchResult::Status::Downloaded);
+  assert(result.outputPath == downloadRoot / "package");
+  assert(result.message == "Downloaded and unarchived BMS archive.");
+  assert(std::find(progress.begin(), progress.end(), "Unarchiving archive") !=
+         progress.end());
+}
+
+void testWorkflowStagesFallbackExtractionMismatch() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive");
+  bool committed = false;
+  asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [](const std::filesystem::path &, const std::string &, bool,
+             archive_file::PauseCallback) {
+            return asobmshow::bms_search::DirectArchiveDecision{};
+          },
+      .extractArchive =
+          [](const std::filesystem::path &,
+             const std::filesystem::path &destination, std::string &,
+             BmsSearchDownloadProgressCallback) {
+            writeText(destination / "wrong.bms", "wrong");
+            return true;
+          },
+      .decideExtracted =
+          [](const std::filesystem::path &, const std::string &) {
+            return asobmshow::bms_search::ExtractedArchiveDecision{
+                .disposition = asobmshow::bms_search::
+                    ExtractedArchiveDisposition::HashMismatch,
+                .foundBmsFile = true};
+          },
+      .commitArtifact =
+          [&committed](const BmsSearchPendingArtifact &, std::string &) {
+            committed = true;
+            return true;
+          }};
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(asobmshow::bms_search::processDownloadedArchive(
+      workflowRequest(*attempt, downloadRoot), cancelled, nullptr, result,
+      dependencies));
+  assert(!committed);
+  assert(result.status == BmsSearchResult::Status::HashMismatch);
+  assert(result.pendingArtifact);
+  assert(result.pendingArtifact->kind ==
+         BmsSearchPendingArtifactKind::ExtractedDirectory);
+  assert(result.pendingArtifact->sourcePath == attempt->extractedPath);
+  assert(!std::filesystem::exists(attempt->archivePath));
+}
+
+void testWorkflowRejectsInconclusiveExtractedValidation() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive");
+  bool committed = false;
+  asobmshow::bms_search::DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [](const std::filesystem::path &, const std::string &, bool,
+             archive_file::PauseCallback) {
+            return asobmshow::bms_search::DirectArchiveDecision{};
+          },
+      .extractArchive =
+          [](const std::filesystem::path &,
+             const std::filesystem::path &destination, std::string &,
+             BmsSearchDownloadProgressCallback) {
+            writeText(destination / "chart.bms", "chart");
+            return true;
+          },
+      .decideExtracted =
+          [](const std::filesystem::path &, const std::string &) {
+            return asobmshow::bms_search::ExtractedArchiveDecision{
+                .disposition = asobmshow::bms_search::
+                    ExtractedArchiveDisposition::Inconclusive,
+                .foundBmsFile = true,
+                .message = "Could not read extracted chart."};
+          },
+      .commitArtifact =
+          [&committed](const BmsSearchPendingArtifact &, std::string &) {
+            committed = true;
+            return true;
+          }};
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(!asobmshow::bms_search::processDownloadedArchive(
+      workflowRequest(*attempt, downloadRoot), cancelled, nullptr, result,
+      dependencies));
+  assert(!committed);
+  assert(result.status == BmsSearchResult::Status::DownloadFailed);
+  assert(!result.pendingArtifact);
+  assert(result.message == "Could not read extracted chart.");
+}
+
+void testExtractedDecisionMatchesSha256AndMd5() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const std::string chart = "#TITLE EXTRACTED\n#00111:01\n";
+  const std::vector<unsigned char> bytes(chart.begin(), chart.end());
+  writeText(attempt->extractedPath / "chart.bms", chart);
+
+  const auto sha = asobmshow::bms_search::decideExtractedArchive(
+      attempt->extractedPath, bms_parser::sha256(bytes));
+  assert(sha.disposition ==
+         asobmshow::bms_search::ExtractedArchiveDisposition::Match);
+  assert(sha.foundBmsFile);
+  const auto md5 = asobmshow::bms_search::decideExtractedArchive(
+      attempt->extractedPath, bms_parser::md5(chart));
+  assert(md5.disposition ==
+         asobmshow::bms_search::ExtractedArchiveDisposition::Match);
+}
+
+void testExtractedDecisionDistinguishesMismatchAndInconclusive() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  writeText(attempt->extractedPath / "chart.bms", "chart");
+
+  const auto mismatch = asobmshow::bms_search::decideExtractedArchive(
+      attempt->extractedPath, std::string(64, '0'));
+  assert(mismatch.disposition ==
+         asobmshow::bms_search::ExtractedArchiveDisposition::HashMismatch);
+  const auto noHash = asobmshow::bms_search::decideExtractedArchive(
+      attempt->extractedPath, "not-a-hash");
+  assert(noHash.disposition ==
+         asobmshow::bms_search::ExtractedArchiveDisposition::Match);
+  assert(noHash.foundBmsFile);
+  const auto missing = asobmshow::bms_search::decideExtractedArchive(
+      attempt->root / "missing", std::string(64, '0'));
+  assert(missing.disposition ==
+         asobmshow::bms_search::ExtractedArchiveDisposition::Inconclusive);
+}
+
+void testPublicDownloadApiAcceptsOptions() {
+  using FindMethod = BmsSearchResult (BmsSearchService::*)(
+      const std::string &, const std::string &, const std::filesystem::path &,
+      std::atomic_bool &, BmsSearchDownloadProgressCallback,
+      const std::string &, const std::string &, BmsSearchDownloadOptions) const;
+  using CandidateMethod = BmsSearchResult (BmsSearchService::*)(
+      const BmsSearchCandidate &, const std::string &, const std::string &,
+      const std::filesystem::path &, std::atomic_bool &,
+      BmsSearchDownloadProgressCallback, BmsSearchDownloadOptions) const;
+  static_assert(
+      std::is_same_v<decltype(&BmsSearchService::findAndDownload), FindMethod>);
+  static_assert(std::is_same_v<decltype(&BmsSearchService::downloadCandidate),
+                               CandidateMethod>);
+}
+
 } // namespace
 
 int main() {
@@ -404,5 +728,13 @@ int main() {
   testDirectArchiveIncompleteReadFallsBack();
   testSolidEmptyAndFailedListingsFallBack();
   testDirectArchiveMd5AndNoHashBehavior();
+  testWorkflowKeepsDirectArchiveWithoutExtraction();
+  testWorkflowStagesDirectArchiveMismatch();
+  testWorkflowCommitsFallbackExtractionMatch();
+  testWorkflowStagesFallbackExtractionMismatch();
+  testWorkflowRejectsInconclusiveExtractedValidation();
+  testExtractedDecisionMatchesSha256AndMd5();
+  testExtractedDecisionDistinguishesMismatchAndInconclusive();
+  testPublicDownloadApiAcceptsOptions();
   return 0;
 }
