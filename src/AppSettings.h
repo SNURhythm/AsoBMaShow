@@ -1,5 +1,6 @@
 #pragma once
 
+#include "JudgementIndicatorRange.h"
 #include "audio/PlaybackRate.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
@@ -97,6 +98,12 @@ public:
   static constexpr float kMinJudgementIndicatorWidthScale = 0.5f;
   static constexpr float kMaxJudgementIndicatorWidthScale = 2.0f;
   static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
+  static constexpr int kMinJudgementIndicatorRangeMilliseconds =
+      judgement_indicator::kMinRangeMilliseconds;
+  static constexpr int kMaxJudgementIndicatorRangeMilliseconds =
+      judgement_indicator::kMaxRangeMilliseconds;
+  static constexpr int kDefaultJudgementIndicatorRangeMilliseconds =
+      judgement_indicator::kDefaultRangeMilliseconds;
   static constexpr float kMinJudgementTextY = 0.0f;
   static constexpr float kMaxJudgementTextY = 1.0f;
   static constexpr float kDefaultJudgementTextY = 0.55f;
@@ -139,6 +146,8 @@ public:
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+  int judgementIndicatorRangeMilliseconds =
+      kDefaultJudgementIndicatorRangeMilliseconds;
   float judgementTextY = kDefaultJudgementTextY;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;

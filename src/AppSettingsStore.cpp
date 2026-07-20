@@ -145,6 +145,8 @@ json settingsToJson(const AppSettings &settings) {
       {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
       {"judgementIndicatorY", settings.judgementIndicatorY},
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorRangeMilliseconds",
+       settings.judgementIndicatorRangeMilliseconds},
       {"judgementTextY", settings.judgementTextY},
       {"judgementIndicatorRenderMode",
        static_cast<int>(settings.judgementIndicatorRenderMode)},
@@ -264,6 +266,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "judgementIndicatorWidthScale",
             settings.judgementIndicatorWidthScale, diagnostics);
+  readValue(document, "judgementIndicatorRangeMilliseconds",
+            settings.judgementIndicatorRangeMilliseconds, diagnostics);
   readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
   readEnum(document, "judgementIndicatorRenderMode",
            settings.judgementIndicatorRenderMode, diagnostics);

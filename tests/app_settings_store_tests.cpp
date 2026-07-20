@@ -166,6 +166,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
   expected.gameplayClubModeEnabled = true;
   expected.musicPlayerClubModeEnabled = true;
+  expected.judgementIndicatorRangeMilliseconds = 333;
   expected.selectedGameplayRuleset = "beatoraja";
   expected.irProviders["tachi"] = {
       .enabled = true,
@@ -187,6 +188,10 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
+  expect(readFile(path).find(
+             "\"judgementIndicatorRangeMilliseconds\": 333") !=
+             std::string::npos,
+         "saved JSON includes the judgement indicator range");
   expect(readFile(path).find("\"selectedPlaybackRatePercent\": 75") !=
              std::string::npos,
          "saved JSON includes the selected normal-play rate");
@@ -211,6 +216,47 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON includes non-secret IR provider settings");
   expect(readFile(path).find("sentinel-api-key") == std::string::npos,
          "serialized settings contain no API key material");
+}
+
+void testJudgementIndicatorRangeDefaultsAndSanitization() {
+  AppSettings defaults;
+  defaults.sanitize();
+  expect(defaults.judgementIndicatorRangeMilliseconds == 180,
+         "judgement indicator range defaults to 180 ms");
+
+  AppSettings invalid;
+  invalid.judgementIndicatorRangeMilliseconds = 0;
+  invalid.sanitize();
+  expect(invalid.judgementIndicatorRangeMilliseconds == 180,
+         "non-positive stored range uses the default");
+
+  AppSettings excessive;
+  excessive.judgementIndicatorRangeMilliseconds = 1001;
+  excessive.sanitize();
+  expect(excessive.judgementIndicatorRangeMilliseconds == 1000,
+         "stored range clamps to the 1000 ms hard cap");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "legacy-range-settings.json";
+  writeFile(path, R"({"schemaVersion":3,"audioOffsetMs":12})");
+  const auto legacy = AppSettingsStore::Load(path);
+  expect(legacy.status == AppSettingsLoadStatus::Loaded,
+         "settings written before range configuration still load");
+  expect(legacy.settings.judgementIndicatorRangeMilliseconds == 180,
+         "settings without the range field use 180 ms");
+
+  const auto malformedPath = temp.path() / "malformed-range-settings.json";
+  writeFile(malformedPath,
+            R"({"schemaVersion":3,"judgementIndicatorRangeMilliseconds":"wide"})");
+  const auto malformed = AppSettingsStore::Load(malformedPath);
+  expect(malformed.status == AppSettingsLoadStatus::Loaded,
+         "malformed range does not invalidate the settings document");
+  expect(malformed.settings.judgementIndicatorRangeMilliseconds == 180,
+         "malformed range falls back to 180 ms");
+  expect(hasDiagnostic(malformed.diagnostics,
+                       "judgementIndicatorRangeMilliseconds",
+                       "expected integer"),
+         "malformed range emits a setting diagnostic");
 }
 
 void testGameplayRulesetDefaultsMigrationAndValidation() {
@@ -703,6 +749,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testJudgementIndicatorRangeDefaultsAndSanitization();
   testGameplayRulesetDefaultsMigrationAndValidation();
   testIrDefaultsMigrationAndOriginSanitization();
   testPlaybackSelectionSanitizationAndLegacyDefaults();

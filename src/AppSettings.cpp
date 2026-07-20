@@ -461,6 +461,9 @@ void AppSettings::sanitize() {
   judgementIndicatorWidthScale = sanitizeFloat(
       judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
       kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
+  judgementIndicatorRangeMilliseconds =
+      judgement_indicator::sanitizeStoredRangeMilliseconds(
+          judgementIndicatorRangeMilliseconds);
   judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
   switch (notePriorityMode) {
