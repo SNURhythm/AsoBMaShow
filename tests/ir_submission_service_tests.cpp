@@ -1645,6 +1645,25 @@ void testMissingKeyPreservesManualIntentAndReplacementWakes() {
          "credential replacement publishes invalidation callback");
 }
 
+void testProfileReactivationPreservesCredentialReplacementUnblock() {
+  Harness harness;
+  harness.enqueueReady(draft(36, harness.now.load()), true);
+  harness.service->start(profile(true));
+  expect(harness.waitForState(attemptId(36),
+                              ir::IrOutboxState::BlockedConfiguration),
+         "missing credential blocks the reactivation fixture");
+
+  harness.service->pauseAndCancel();
+  harness.setCredential("replacement-key");
+  harness.service->notifyConfigurationChanged();
+  harness.service->activateProfile(profile(true));
+
+  expect(harness.driver->waitForCalls(1),
+         "profile reactivation unblocks a newly credentialed row");
+  expect(harness.waitForState(attemptId(36), ir::IrOutboxState::Succeeded),
+         "new credential completes the row after profile reactivation");
+}
+
 void testProviderRuntimeChangeUnblocksRows() {
   Harness harness;
   harness.setCredential("key");
@@ -2218,7 +2237,7 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
         removeCredential
             ? std::vector<std::string>{"quiesce", "invalidate", "remove",
                                        "committed", "reactivate"}
-            : std::vector<std::string>{"quiesce", "invalidate", "replace",
+            : std::vector<std::string>{"quiesce", "replace", "invalidate",
                                        "committed", "reactivate"};
     expect(order == expectedOrder,
            "credential mutation stays quiesced through evidence and key changes");
@@ -3138,6 +3157,7 @@ int main() {
   testDisabledAndReadOnlyProvidersStayPaused();
   testFutureWakeIgnoresBoundedSkippedProviderRows();
   testMissingKeyPreservesManualIntentAndReplacementWakes();
+  testProfileReactivationPreservesCredentialReplacementUnblock();
   testProviderRuntimeChangeUnblocksRows();
   testManualEnqueueRequiresFreshRulesetProof();
   testManualBatchPublishesAndWakesOnceWithSingularCompatibility();

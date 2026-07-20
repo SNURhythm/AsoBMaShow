@@ -261,8 +261,7 @@ IrScoreReconciliationPlan planScoreReconciliation(
          !outboxIds.emplace(*candidate.outboxRowId).second)) {
       return invalidPlan("IR reconciliation local identities are duplicated");
     }
-    if (candidate.outboxState == IrOutboxState::Uploading ||
-        candidate.outboxState == IrOutboxState::AwaitingRemoteResult) {
+    if (candidate.outboxState == IrOutboxState::Uploading) {
       return invalidPlan(
           "IR reconciliation cannot run with active outbox work");
     }

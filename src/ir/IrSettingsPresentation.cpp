@@ -282,17 +282,6 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
             .diagnostic = "IR account work could not be paused."};
   }
   try {
-    if (!dependencies_.invalidateProviderIdentity(providerId_,
-                                                   ignoredDiagnostic)) {
-      return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic =
-                  "IR account evidence could not be invalidated."};
-    }
-  } catch (...) {
-    return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account evidence could not be invalidated."};
-  }
-  try {
     if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
               .diagnostic = "API key could not be saved."};
@@ -302,6 +291,16 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
             .diagnostic = "API key could not be saved."};
   }
   hasCredential_ = true;
+  try {
+    if (!dependencies_.invalidateProviderIdentity(providerId_,
+                                                  ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "IR account evidence could not be invalidated."};
+    }
+  } catch (...) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account evidence could not be invalidated."};
+  }
   if (dependencies_.credentialCommitted) {
     try {
       dependencies_.credentialCommitted();

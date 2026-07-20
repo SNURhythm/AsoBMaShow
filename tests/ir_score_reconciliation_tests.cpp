@@ -174,7 +174,7 @@ void testMatchedPendingOutboxIsSettled() {
   assert(plan.purgedSucceededOutboxRowIds.empty());
 }
 
-void testActiveOutboxFailsPlannerValidation() {
+void testUploadingOutboxFailsPlannerValidation() {
   auto local = localCandidate(7);
   local.outboxRowId = 207;
   local.outboxState = ir::IrOutboxState::Uploading;
@@ -187,6 +187,26 @@ void testActiveOutboxFailsPlannerValidation() {
   assert(!plan.diagnostic.empty());
   assert(plan.upsertedReceipts.empty());
   assert(plan.deletedReceiptIds.empty());
+  assert(plan.settledOutboxRowIds.empty());
+  assert(plan.purgedSucceededOutboxRowIds.empty());
+}
+
+void testAwaitingRemoteResultDoesNotBlockUnrelatedReconciliation() {
+  auto deferred = localCandidate(7);
+  deferred.outboxRowId = 207;
+  deferred.outboxState = ir::IrOutboxState::AwaitingRemoteResult;
+  auto unrelated = localCandidate(8);
+  unrelated.chartMd5 = std::string(32, 'd');
+  unrelated.chartSha256 = std::string(64, 'c');
+  const std::vector local{deferred, unrelated};
+  const std::vector remote{remoteScore("remote-unrelated", 'd', 'c')};
+
+  const auto plan = ir::planScoreReconciliation(kProvider, kOrigin, local,
+                                                remote, kConfirmedAt);
+
+  assert(plan.status == ir::IrScoreReconciliationPlan::Status::Planned);
+  assert(plan.upsertedReceipts.size() == 1);
+  assert(plan.upsertedReceipts.front().replayId == unrelated.replayId);
   assert(plan.settledOutboxRowIds.empty());
   assert(plan.purgedSucceededOutboxRowIds.empty());
 }
@@ -384,7 +404,8 @@ int main() {
   testDisappearedSnapshotReceiptIsDeleted();
   testUnobservedSubmissionReceiptIsPreservedWhenProofIsAbsent();
   testMatchedPendingOutboxIsSettled();
-  testActiveOutboxFailsPlannerValidation();
+  testUploadingOutboxFailsPlannerValidation();
+  testAwaitingRemoteResultDoesNotBlockUnrelatedReconciliation();
   testPlanMutationsHaveDeterministicIdentityOrder();
   testPlannerRejectsInvalidIdentityTimeAndSnapshotRows();
   testProofMatchingEnforcesHashAndGameBoundaries();

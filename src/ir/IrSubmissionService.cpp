@@ -1246,9 +1246,11 @@ void IrSubmissionService::pauseAndCancel() {
 
 void IrSubmissionService::activateProfile(IrActiveProfileConfig config) {
   IrActiveProfileConfig previous;
+  std::map<std::string, CredentialFingerprint, std::less<>> previousCredentials;
   {
     std::lock_guard lock(impl_->mutex);
     previous = impl_->profile;
+    previousCredentials = impl_->credentials;
   }
   const auto changedProviders = providersWithChangedRuntime(previous, config);
   pauseAndCancel();
@@ -1259,9 +1261,24 @@ void IrSubmissionService::activateProfile(IrActiveProfileConfig config) {
     }
   }
   const std::int64_t now = safeNow(impl_->options);
-  for (const auto &providerId : changedProviders) {
-    if (!lookupCredential(impl_->options, config.profileId, providerId)
-             .empty()) {
+  for (const auto &[providerId, settings] : config.providers) {
+    if (!settings.enabled) {
+      continue;
+    }
+    const std::string credential =
+        lookupCredential(impl_->options, config.profileId, providerId);
+    if (credential.empty()) {
+      continue;
+    }
+    const auto previousCredential = previousCredentials.find(providerId);
+    const bool credentialChanged =
+        previous.profileId == config.profileId &&
+        (previousCredential == previousCredentials.end() ||
+         previousCredential->second != fingerprint(credential));
+    const bool runtimeChanged =
+        std::ranges::find(changedProviders, providerId) !=
+        changedProviders.end();
+    if (credentialChanged || runtimeChanged) {
       impl_->repository.UnblockIrOutbox(providerId, now);
     }
   }

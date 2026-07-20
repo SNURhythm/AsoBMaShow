@@ -403,16 +403,15 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   fake.invalidationSucceeds = false;
   const auto failedInvalidation = model.replaceCredential(secret);
   REQUIRE(!failedInvalidation.succeeded());
-  REQUIRE(!model.hasCredential());
-  REQUIRE(!fake.credentialPresent);
+  REQUIRE(model.hasCredential());
+  REQUIRE(fake.credentialPresent);
   REQUIRE(fake.invalidationCalls == 1);
-  REQUIRE(fake.replaceCredentialCalls == 0);
+  REQUIRE(fake.replaceCredentialCalls == 1);
   REQUIRE(fake.credentialPublishes == 0);
   REQUIRE(fake.reactivationCalls == 2);
   REQUIRE((fake.credentialActionOrder ==
-           std::vector<std::string>{
-               "quiesce", "invalidate:tachi",
-               "reactivate"}));
+           std::vector<std::string>{"quiesce", "replace", "invalidate:tachi",
+                                    "reactivate"}));
   REQUIRE(failedInvalidation.diagnostic.find(secret) == std::string::npos);
 
   fake.invalidationSucceeds = true;
@@ -420,16 +419,14 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   fake.credentialStoreSucceeds = false;
   const auto failedReplace = model.replaceCredential(secret);
   REQUIRE(!failedReplace.succeeded());
-  REQUIRE(!model.hasCredential());
-  REQUIRE(!fake.credentialPresent);
-  REQUIRE(fake.invalidationCalls == 2);
-  REQUIRE(fake.replaceCredentialCalls == 1);
+  REQUIRE(model.hasCredential());
+  REQUIRE(fake.credentialPresent);
+  REQUIRE(fake.invalidationCalls == 1);
+  REQUIRE(fake.replaceCredentialCalls == 2);
   REQUIRE(fake.credentialPublishes == 0);
   REQUIRE(fake.reactivationCalls == 3);
   REQUIRE((fake.credentialActionOrder ==
-           std::vector<std::string>{
-               "quiesce", "invalidate:tachi", "replace",
-               "reactivate"}));
+           std::vector<std::string>{"quiesce", "replace", "reactivate"}));
   REQUIRE(failedReplace.diagnostic.find(secret) == std::string::npos);
 
   fake.credentialActionOrder.clear();
@@ -440,9 +437,8 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.credentialPublishes == 1);
   REQUIRE(fake.reactivationCalls == 4);
   REQUIRE((fake.credentialActionOrder ==
-           std::vector<std::string>{
-               "quiesce", "invalidate:tachi", "replace",
-               "committed", "reactivate"}));
+           std::vector<std::string>{"quiesce", "replace", "invalidate:tachi",
+                                    "committed", "reactivate"}));
 
   fake.credentialActionOrder.clear();
   fake.invalidationSucceeds = false;
@@ -492,9 +488,31 @@ void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
   REQUIRE(fake.credentialPublishes == 3);
   REQUIRE(fake.reactivationCalls == 8);
   REQUIRE((fake.credentialActionOrder ==
-           std::vector<std::string>{
-               "quiesce", "invalidate:tachi", "replace",
-               "committed", "reactivate"}));
+           std::vector<std::string>{"quiesce", "replace", "invalidate:tachi",
+                                    "committed", "reactivate"}));
+}
+
+void testFailedCredentialReplacementPreservesExistingAccountEvidence() {
+  FakeActions fake;
+  fake.credentialPresent = true;
+  fake.credentialStoreSucceeds = false;
+  ir::IrSettingsActionModel model("tachi",
+                                  {.chartRankings = true,
+                                   .scoreSubmission = true,
+                                   .deferredSubmission = true},
+                                  initialSettings(), true, fake.dependencies());
+
+  const auto result = model.replaceCredential("replacement-api-key");
+
+  REQUIRE(!result.succeeded());
+  REQUIRE(model.hasCredential());
+  REQUIRE(fake.credentialPresent);
+  REQUIRE(fake.replaceCredentialCalls == 1);
+  REQUIRE(fake.invalidationCalls == 0);
+  REQUIRE(fake.credentialPublishes == 0);
+  REQUIRE(fake.reactivationCalls == 1);
+  REQUIRE((fake.credentialActionOrder ==
+           std::vector<std::string>{"quiesce", "replace", "reactivate"}));
 }
 
 void testStoreInvalidCredentialFormatsHaveNoSideEffects() {
@@ -587,6 +605,7 @@ int main() {
   testRecordSyncProjectsEveryPhaseAndBoundedMutationSummary();
   testSettingsActionsPublishOnlyAfterDurableStore();
   testCredentialActionsNeverRetainKeyAndPublishAfterStore();
+  testFailedCredentialReplacementPreservesExistingAccountEvidence();
   testStoreInvalidCredentialFormatsHaveNoSideEffects();
   testQueueActionsAreCapabilityGatedAndFailureSafe();
   testActionModelObservesReconciliationRevisionAndCooldownChanges();
