@@ -1902,6 +1902,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
 
+    add_executable(find_bms_download_tests
+        tests/find_bms_download_tests.cpp
+        src/bms_search/DownloadStaging.cpp
+        src/bms_search/PendingArtifact.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(find_bms_download_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(find_bms_download_tests PRIVATE cxx_std_23)
+
     add_executable(ir_credential_store_tests
         tests/ir_credential_store_tests.cpp
         src/ir/IrCredentialStore.cpp
@@ -2578,6 +2589,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endfunction()
 
     asobmashow_register_test(repository_boundary_tests)
+    asobmashow_register_test(find_bms_download_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)
