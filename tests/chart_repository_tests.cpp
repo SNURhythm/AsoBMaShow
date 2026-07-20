@@ -860,6 +860,44 @@ void testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates() {
                   "WHERE primary_storage_folder = 1") == 1);
 }
 
+void testEntryMutationsPreserveOriginalDatabasePathKey() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  const auto storedSecond = temporary.path() / "alias" / ".." / "second";
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE entries (path TEXT PRIMARY KEY, "
+                   "ios_bookmark TEXT DEFAULT '', "
+                   "primary_storage_folder INTEGER NOT NULL DEFAULT 0)"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       first.generic_string() + "')"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       storedSecond.generic_string() + "')"));
+  }
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  assert(session->SetPrimaryStorageEntry(second));
+  selected = session->SelectPrimaryStorageEntry();
+  assert(selected &&
+         std::filesystem::path(selected->path).lexically_normal() == second);
+
+  assert(session->DeleteEntry(second));
+  const auto entries = session->SelectAllEntries();
+  assert(entryAtPath(entries, second) == nullptr);
+}
+
 } // namespace
 
 int main() {
@@ -875,5 +913,6 @@ int main() {
   testFindBmsDownloadEntrySelectionLifecycle();
   testFindBmsDownloadEntryRejectsIneligiblePaths();
   testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates();
+  testEntryMutationsPreserveOriginalDatabasePathKey();
   return 0;
 }

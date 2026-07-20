@@ -1410,6 +1410,25 @@ static bool isPrimaryStorageEligible(const std::filesystem::path &path) {
          !isAndroidTreeVirtualPath(path);
 }
 
+static std::optional<std::string> storedEntryPathForResolvedPath(
+    sqlite3 *db, const std::filesystem::path &path,
+    bool requirePrimaryStorageEligibility = false) {
+  const auto normalizedTarget = path.lexically_normal();
+  const auto storedEntries = readStoredEntries(db);
+  const auto target = std::find_if(
+      storedEntries.begin(), storedEntries.end(),
+      [&normalizedTarget, requirePrimaryStorageEligibility](const auto &stored) {
+        const auto resolvedPath =
+            std::filesystem::path(stored.entry.path).lexically_normal();
+        return resolvedPath == normalizedTarget &&
+               (!requirePrimaryStorageEligibility ||
+                isPrimaryStorageEligible(resolvedPath));
+      });
+  return target == storedEntries.end()
+             ? std::nullopt
+             : std::optional<std::string>(target->storedPath);
+}
+
 static bool writePrimaryStorageSelection(
     sqlite3 *db, const std::optional<std::string> &storedPath) {
   const std::string query = storedPath
@@ -1498,18 +1517,12 @@ static bool setPrimaryStorageEntry(sqlite3 *db,
   if (!transaction.active()) {
     return false;
   }
-  const auto entries = selectAllEntries(db);
-  const auto normalizedTarget = path.lexically_normal();
-  const auto target = std::find_if(
-      entries.begin(), entries.end(), [&normalizedTarget](const auto &entry) {
-        return entry.primaryStorageEligible &&
-               std::filesystem::path(entry.path).lexically_normal() ==
-                   normalizedTarget;
-      });
-  if (target == entries.end() ||
-      !writePrimaryStorageSelection(
-          db, chart_storage_identity::StoredPathText(
-                  std::filesystem::path(target->path)))) {
+  if (!normalizePrimaryStorageEntry(db, nullptr)) {
+    return false;
+  }
+  const auto storedPath =
+      storedEntryPathForResolvedPath(db, path, true);
+  if (!storedPath || !writePrimaryStorageSelection(db, storedPath)) {
     return false;
   }
   return transaction.commit(transactionError);
@@ -1566,7 +1579,9 @@ static bool deleteEntry(sqlite3 *db, const std::filesystem::path &path) {
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = chart_storage_identity::StoredPathText(path);
+  const std::string pathText =
+      storedEntryPathForResolvedPath(db, path)
+          .value_or(chart_storage_identity::StoredPathText(path));
   bindSqliteText(stmt, 1, pathText);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {
