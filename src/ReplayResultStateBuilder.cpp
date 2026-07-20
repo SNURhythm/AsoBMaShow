@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 std::string replayNoteKey(int lane, long long noteTimeMicros) {
@@ -43,9 +44,36 @@ bms_parser::Note *findReplayNote(
   return it == lookup.end() ? nullptr : it->second;
 }
 
+std::unordered_set<const bms_parser::LongNote *>
+classicLongHeadsWithRecordedTailResult(
+    bms_parser::Chart &chart,
+    const std::unordered_map<std::string, bms_parser::Note *> &lookup,
+    const ReplayData &replay) {
+  std::unordered_set<const bms_parser::LongNote *> heads;
+  for (const ReplayEvent &event : replay.events) {
+    if (event.judgement == None ||
+        (event.action != ReplayEventAction::Release &&
+         event.action != ReplayEventAction::Miss)) {
+      continue;
+    }
+    auto *note = findReplayNote(lookup, event);
+    if (note == nullptr || !note->IsLongNote()) {
+      continue;
+    }
+    auto *tail = static_cast<bms_parser::LongNote *>(note);
+    if (tail->IsTail() && tail->Head != nullptr &&
+        !effectiveLongNoteIsCharge(tail, chart)) {
+      heads.insert(tail->Head);
+    }
+  }
+  return heads;
+}
+
 bool replayEventCountsInResult(
     bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
+    const std::unordered_set<const bms_parser::LongNote *>
+        &classicHeadsWithTailResult,
     const ReplayEvent &event) {
   if (event.judgement == None) {
     return false;
@@ -62,7 +90,9 @@ bool replayEventCountsInResult(
 
   auto *longNote = static_cast<bms_parser::LongNote *>(note);
   return longNote->IsTail() || !recordedJudge.isNotePlayed() ||
-         effectiveLongNoteIsCharge(longNote, chart);
+         effectiveLongNoteIsCharge(longNote, chart) ||
+         (event.judgement == Bad &&
+          !classicHeadsWithTailResult.contains(longNote));
 }
 
 void syncReplayResultGaugeSnapshot(RhythmState &state,
@@ -83,6 +113,12 @@ void syncReplayResultGaugeSnapshot(RhythmState &state,
   } else {
     state.gaugeHistory.push_back(event.gauge);
   }
+  auto &typedHistory = state.gaugeHistoryFor(event.gaugeType);
+  if (!typedHistory.empty()) {
+    typedHistory.back() = event.gauge;
+  } else {
+    typedHistory.push_back(event.gauge);
+  }
 }
 } // namespace
 
@@ -91,7 +127,12 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
                                    const ReplayData &replay,
                                    GaugeProfile gaugeProfile,
                                    const GaugeStateSnapshot *carriedGauge) {
-  RhythmState state(&chart, false);
+  GameplayRuleset ruleset = GameplayRuleset::Beatoraja;
+  if (isSupportedRulesetDescriptor(replay.provenance.ruleset)) {
+    ruleset = gameplayRulesetFromId(replay.provenance.ruleset.id)
+                  .value_or(GameplayRuleset::Beatoraja);
+  }
+  RhythmState state(&chart, false, ruleset, gaugeProfile);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
                        gaugeProfile, replay.gaugeAutoShiftLowerBound);
   if (replay.provenance.startingGaugePercent.has_value()) {
@@ -111,10 +152,15 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
 RhythmState BuildResultState(bms_parser::Chart &chart,
                              const ReplayData &replay,
                              GaugeProfile gaugeProfile,
-                             const GaugeStateSnapshot *carriedGauge) {
+                             const GaugeStateSnapshot *carriedGauge,
+                             int carriedCombo, int carriedMaxCombo) {
   const auto lookup = buildReplayNoteLookup(chart);
+  const auto classicHeadsWithTailResult =
+      classicLongHeadsWithRecordedTailResult(chart, lookup, replay);
   RhythmState state =
       BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
+  state.combo = std::max(0, carriedCombo);
+  state.maxCombo = std::max(state.combo, carriedMaxCombo);
 
   for (const auto &event : replay.events) {
     if (event.action == ReplayEventAction::Gauge) {
@@ -136,7 +182,8 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
       continue;
     }
 
-    if (!replayEventCountsInResult(chart, lookup, event)) {
+    if (!replayEventCountsInResult(chart, lookup, classicHeadsWithTailResult,
+                                   event)) {
       continue;
     }
 

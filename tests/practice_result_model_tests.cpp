@@ -43,7 +43,12 @@ bms_parser::Chart makeChart() {
 }
 
 std::vector<JudgeWindowProvenance> windows(long long early = -10'000) {
-  return {{PGreat, early, 10'000}, {Great, -30'000, 30'000}};
+  return {{.judgement = PGreat,
+           .earlyMicros = early,
+           .lateMicros = 10'000},
+          {.judgement = Great,
+           .earlyMicros = -30'000,
+           .lateMicros = 30'000}};
 }
 
 ReplayData makeAttempt(int lane, long long noteMicros, long long diffMicros,

@@ -10,6 +10,7 @@ struct Dependencies {
   std::function<result_persistence::RecoverySummary()> recover;
   std::function<void(const result_persistence::RecoverySummary &)>
       reportWarning;
+  std::function<void()> startProfileServices;
   std::function<void()> runReadyRuntime;
 };
 

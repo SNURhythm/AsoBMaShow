@@ -1208,6 +1208,12 @@ void ChartRepository::Session::QueryChartMeta(
   queryChartMeta(impl_->database(), query, chartMetas);
 }
 
+ChartMetaPathBatchReadOutcome ChartRepository::Session::SelectChartMetaByPaths(
+    std::span<const std::filesystem::path> paths) {
+  return chart_repository_detail::SelectChartMetaByPaths(impl_->database(),
+                                                          paths);
+}
+
 int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
   std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
   if (chartMetaQueryNeedsScoreCache(query)) {
@@ -1960,6 +1966,109 @@ std::string difficultyTableLabelsForChart(
 
 } // namespace
 
+ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
+    sqlite3 *database, std::span<const std::filesystem::path> paths) {
+  constexpr std::size_t kMaximumDistinctPaths = 16'384;
+  constexpr std::size_t kPathsPerQuery = 256;
+  ChartMetaPathBatchReadOutcome outcome;
+  try {
+    std::vector<std::string> normalizedPaths;
+    normalizedPaths.reserve(paths.size());
+    std::unordered_set<std::string> seenPaths;
+    seenPaths.reserve(paths.size());
+    for (const auto &path : paths) {
+      const std::string normalized =
+          chart_storage_identity::StoredPathText(path);
+      if (normalized.empty() || !seenPaths.insert(normalized).second) {
+        continue;
+      }
+      normalizedPaths.push_back(normalized);
+      if (normalizedPaths.size() > kMaximumDistinctPaths) {
+        outcome.status = ChartMetaPathBatchReadStatus::Invalid;
+        outcome.diagnostic = "too many chart paths";
+        return outcome;
+      }
+    }
+
+    if (normalizedPaths.empty()) {
+      outcome.status = ChartMetaPathBatchReadStatus::Loaded;
+      return outcome;
+    }
+
+    std::string transactionError;
+    SqliteTransactionHandle transaction(database, "BEGIN TRANSACTION",
+                                        transactionError);
+    if (!transaction.active()) {
+      outcome.diagnostic = "could not begin chart metadata lookup: " +
+                           transactionError;
+      return outcome;
+    }
+
+    std::unordered_map<std::string, ChartMetaRecord> recordsByPath;
+    recordsByPath.reserve(normalizedPaths.size());
+    for (std::size_t first = 0; first < normalizedPaths.size();
+         first += kPathsPerQuery) {
+      const std::size_t count =
+          std::min(kPathsPerQuery, normalizedPaths.size() - first);
+      std::string query = "SELECT ";
+      query += kChartMetaSelectColumns;
+      query += " FROM chart_meta cm WHERE cm.path IN (";
+      for (std::size_t index = 0; index < count; ++index) {
+        query += index == 0 ? "?" : ",?";
+      }
+      query += ")";
+
+      SqliteStatementHandle statement;
+      if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+        outcome.diagnostic = "could not prepare chart metadata lookup";
+        return outcome;
+      }
+      for (std::size_t index = 0; index < count; ++index) {
+        if (!bindSqliteText(statement.get(), static_cast<int>(index + 1),
+                            normalizedPaths[first + index])) {
+          outcome.diagnostic = "could not bind chart metadata lookup";
+          return outcome;
+        }
+      }
+      while (true) {
+        const int stepResult = sqlite3_step(statement.get());
+        if (stepResult == SQLITE_DONE) {
+          break;
+        }
+        if (stepResult != SQLITE_ROW) {
+          outcome.diagnostic = "could not read chart metadata lookup";
+          return outcome;
+        }
+        ChartMetaRecord record = readChartMetaRecord(statement.get());
+        recordsByPath.emplace(
+            chart_storage_identity::StoredPathText(record.meta.BmsPath),
+            std::move(record));
+      }
+    }
+
+    if (!transaction.commit(transactionError)) {
+      outcome.diagnostic = "could not complete chart metadata lookup: " +
+                           transactionError;
+      return outcome;
+    }
+
+    outcome.status = ChartMetaPathBatchReadStatus::Loaded;
+    outcome.records.reserve(recordsByPath.size());
+    for (const std::string &path : normalizedPaths) {
+      auto found = recordsByPath.find(path);
+      if (found == recordsByPath.end()) {
+        ++outcome.missingPaths;
+        continue;
+      }
+      outcome.records.push_back(std::move(found->second));
+    }
+  } catch (...) {
+    outcome = {};
+    outcome.diagnostic = "chart metadata lookup failed";
+  }
+  return outcome;
+}
+
 void chart_repository_detail::SelectAllChartMeta(
     sqlite3 *database, std::vector<bms_parser::ChartMeta> &chartMetas) {
   selectAllChartMeta(database, chartMetas);
@@ -2043,7 +2152,8 @@ void addClearMarkCountsForAllLongNoteModes(
     const int longNoteMode = scoreLongNoteModeForClearLamp(
         chartLongNoteMode, totalLongNotes, totalBackSpinNotes,
         selectedLongNoteMode);
-    const int clearRank = scoreRanks.bestRankForStoredKey(sha256, longNoteMode);
+    const int clearRank =
+        scoreRanks.bestRankForStoredKey(sha256, longNoteMode);
     addClearMarkCount(
         countsByMode[static_cast<std::size_t>(selectedLongNoteMode)], folderKey,
         clearRank);
@@ -2052,8 +2162,9 @@ void addClearMarkCountsForAllLongNoteModes(
 } // namespace
 
 chart_library::FolderClearDataByLongNoteMode
-LoadFolderClearDataByLongNoteMode(sqlite3 *db,
-                                  const ScoreClearRankCache &scoreRanks) {
+LoadFolderClearDataByLongNoteMode(
+    sqlite3 *db, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks) {
   chart_library::FolderClearDataByLongNoteMode data;
   std::unordered_map<std::string, FolderClearAggregateByLongNoteMode>
       aggregates;
@@ -2076,13 +2187,13 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
                preferredChartPredicate("cm"),
            [&](sqlite3_stmt *row) {
              addFolderChartForAllLongNoteModes(
-                 aggregates, scoreRanks, "all", columnText(row, 0),
+                 aggregates, projectedChartRanks, "all", columnText(row, 0),
                  sqlite3_column_int(row, 1), sqlite3_column_int(row, 2),
                  sqlite3_column_int(row, 3));
              addClearMarkCountsForAllLongNoteModes(
-                 data.clearMarkCounts, scoreRanks, "all", columnText(row, 0),
-                 sqlite3_column_int(row, 1), sqlite3_column_int(row, 2),
-                 sqlite3_column_int(row, 3));
+                 data.clearMarkCounts, projectedChartRanks, "all",
+                 columnText(row, 0), sqlite3_column_int(row, 1),
+                 sqlite3_column_int(row, 2), sqlite3_column_int(row, 3));
            });
 
   int currentTableId = 0;
@@ -2114,19 +2225,19 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         }
 
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentTableKey, columnText(row, 2),
-            sqlite3_column_int(row, 3), sqlite3_column_int(row, 4),
-            sqlite3_column_int(row, 5));
+            aggregates, projectedChartRanks, currentTableKey,
+            columnText(row, 2), sqlite3_column_int(row, 3),
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentLevelKey, columnText(row, 2),
-            sqlite3_column_int(row, 3), sqlite3_column_int(row, 4),
-            sqlite3_column_int(row, 5));
-        addClearMarkCountsForAllLongNoteModes(
-            data.clearMarkCounts, scoreRanks, currentTableKey,
+            aggregates, projectedChartRanks, currentLevelKey,
             columnText(row, 2), sqlite3_column_int(row, 3),
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
         addClearMarkCountsForAllLongNoteModes(
-            data.clearMarkCounts, scoreRanks, currentLevelKey,
+            data.clearMarkCounts, projectedChartRanks, currentTableKey,
+            columnText(row, 2), sqlite3_column_int(row, 3),
+            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
+        addClearMarkCountsForAllLongNoteModes(
+            data.clearMarkCounts, projectedChartRanks, currentLevelKey,
             columnText(row, 2), sqlite3_column_int(row, 3),
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
       });
@@ -2170,19 +2281,19 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         }
 
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, "courses", columnText(row, 3),
+            aggregates, localCourseRanks, "courses", columnText(row, 3),
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentCourseTableKey, columnText(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6));
+            aggregates, localCourseRanks, currentCourseTableKey,
+            columnText(row, 3), sqlite3_column_int(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentCourseGroupKey, columnText(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6));
+            aggregates, localCourseRanks, currentCourseGroupKey,
+            columnText(row, 3), sqlite3_column_int(row, 4),
+            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
         addFolderChartForAllLongNoteModes(
-            aggregates, scoreRanks, currentCourseKey, columnText(row, 3),
+            aggregates, localCourseRanks, currentCourseKey, columnText(row, 3),
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
             sqlite3_column_int(row, 6));
       });
@@ -2206,7 +2317,7 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
         const std::string folderKey =
             chart_library::folderKeyForCourse(courseId);
         for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
-          const int clearRank = scoreRanks.bestCourseRankFor(
+          const int clearRank = localCourseRanks.bestCourseRankFor(
               courseKey, courseId, selectedLongNoteMode);
           if (clearRank >= kClearTypeAssistedEasyClearRank) {
             data.clearRanks[static_cast<std::size_t>(selectedLongNoteMode)]
@@ -2224,18 +2335,20 @@ LoadFolderClearDataByLongNoteMode(sqlite3 *db,
 namespace repository_test {
 
 chart_library::FolderClearDataByLongNoteMode
-loadFolderClearDataByLongNoteMode(sqlite3 *database,
-                                  const ScoreClearRankCache &scoreRanks) {
+loadFolderClearDataByLongNoteMode(
+    sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks) {
   return chart_repository_detail::LoadFolderClearDataByLongNoteMode(
-      database, scoreRanks);
+      database, projectedChartRanks, localCourseRanks);
 }
 
 } // namespace repository_test
 #else
 chart_library::FolderClearDataByLongNoteMode
 ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
-    const ScoreClearRankCache &scoreRanks) {
+    const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks) {
   return chart_repository_detail::LoadFolderClearDataByLongNoteMode(
-      impl_->database(), scoreRanks);
+      impl_->database(), projectedChartRanks, localCourseRanks);
 }
 #endif

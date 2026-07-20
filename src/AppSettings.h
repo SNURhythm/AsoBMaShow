@@ -1,10 +1,13 @@
 #pragma once
 
+#include "JudgementIndicatorRange.h"
 #include "audio/PlaybackRate.h"
+#include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
 
 #include <filesystem>
 #include <iosfwd>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -95,6 +98,12 @@ public:
   static constexpr float kMinJudgementIndicatorWidthScale = 0.5f;
   static constexpr float kMaxJudgementIndicatorWidthScale = 2.0f;
   static constexpr float kDefaultJudgementIndicatorWidthScale = 1.0f;
+  static constexpr int kMinJudgementIndicatorRangeMilliseconds =
+      judgement_indicator::kMinRangeMilliseconds;
+  static constexpr int kMaxJudgementIndicatorRangeMilliseconds =
+      judgement_indicator::kMaxRangeMilliseconds;
+  static constexpr int kDefaultJudgementIndicatorRangeMilliseconds =
+      judgement_indicator::kDefaultRangeMilliseconds;
   static constexpr float kMinJudgementTextY = 0.0f;
   static constexpr float kMaxJudgementTextY = 1.0f;
   static constexpr float kDefaultJudgementTextY = 0.55f;
@@ -137,6 +146,8 @@ public:
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = kDefaultJudgementIndicatorY;
   float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+  int judgementIndicatorRangeMilliseconds =
+      kDefaultJudgementIndicatorRangeMilliseconds;
   float judgementTextY = kDefaultJudgementTextY;
   JudgementIndicatorRenderMode judgementIndicatorRenderMode =
       JudgementIndicatorRenderMode::World3D;
@@ -157,6 +168,7 @@ public:
       audio::PlaybackMode::PitchShift;
   bool gameplayClubModeEnabled = false;
   bool musicPlayerClubModeEnabled = false;
+  std::string selectedGameplayRuleset = "lr2";
   std::string selectedGaugeType = kDefaultGaugeType;
   std::string selectedGaugeAutoShiftMode = "best_clear";
   std::string selectedGaugeAutoShiftLowerBound = "assisted_easy";
@@ -167,6 +179,9 @@ public:
   int selectedPlaybackRatePercent = 100;
   audio::PlaybackMode selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   bool defaultDifficultyTablesSeeded = false;
+  std::map<std::string, ir::IrProviderSettings> irProviders = {
+      {std::string(ir::kTachiProviderId), ir::IrProviderSettings{}},
+  };
 
   void sanitize();
   float playAreaWidthForKeyMode(int keyMode) const;

@@ -1542,6 +1542,14 @@ ProfileArchiveService::Export(std::string_view profileId,
     return failure(ProfileError::IoFailure,
                    "unable to stage profile export: " + errorMessage);
   }
+  if (!ReplayRepository::ClearIrAccountDataSnapshot(workspace / "replays.db",
+                                                    errorMessage) ||
+      !ScoreRepository::ClearImportedIrScoresSnapshot(workspace / "scores.db",
+                                                      errorMessage)) {
+    return failure(ProfileError::IntegrityFailure,
+                   "unable to remove account-scoped IR data from export: " +
+                       errorMessage);
+  }
   if (std::filesystem::exists(source.practiceDirectory, filesystemError)) {
     std::filesystem::directory_iterator iterator(source.practiceDirectory,
                                                  filesystemError);
@@ -1917,11 +1925,23 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
                                     "input.json", errorMessage)
                 : InputProfileStore::saveAtomic(
                       staging.inputJson, loadedInput.profile, errorMessage);
-        return settingsWritten && inputWritten &&
-               snapshotSqliteDatabase(extracted / "scores.db", staging.scoresDb,
-                                      errorMessage) &&
-               snapshotSqliteDatabase(extracted / "replays.db",
-                                      staging.replaysDb, errorMessage);
+        if (!settingsWritten || !inputWritten ||
+            !snapshotSqliteDatabase(extracted / "scores.db", staging.scoresDb,
+                                    errorMessage) ||
+            !snapshotSqliteDatabase(extracted / "replays.db",
+                                    staging.replaysDb, errorMessage)) {
+          return false;
+        }
+        if (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
+                                                          errorMessage) ||
+            !ScoreRepository::ClearImportedIrScoresSnapshot(staging.scoresDb,
+                                                            errorMessage)) {
+          errorMessage =
+              "unable to remove account-scoped IR data from import: " +
+              errorMessage;
+          return false;
+        }
+        return true;
       });
   if (!installed.ok() || !installed.profile) {
     return {.error = installed.error,

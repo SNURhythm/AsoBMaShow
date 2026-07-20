@@ -138,6 +138,7 @@ void appendChartMeta(CanonicalEncoder &encoder,
 void appendProvenance(CanonicalEncoder &encoder,
                       const ScoreProvenance &provenance) {
   encoder.integer(static_cast<std::int32_t>(provenance.schemaVersion));
+  encoder.string(provenance.ruleset.id);
   encoder.integer(static_cast<std::int32_t>(provenance.ruleset.version));
   encoder.string(provenance.ruleset.scoringModel);
   encoder.string(provenance.ruleset.judgementModel);
@@ -157,8 +158,14 @@ void appendProvenance(CanonicalEncoder &encoder,
     encoder.optional(stage.sourceJudgeRank, [&](int value) {
       encoder.integer(static_cast<std::int32_t>(value));
     });
+    encoder.integer(static_cast<std::int32_t>(stage.totalNotes));
+    encoder.optional(stage.authoredGaugeTotal,
+                     [&](double value) { encoder.float64(value); });
+    encoder.float64(stage.effectiveGaugeTotal);
+    encoder.enumeration(stage.candidateSelection);
     encoder.vector(
         stage.effectiveJudgeWindows, [&](const JudgeWindowProvenance &window) {
+          encoder.enumeration(window.context);
           encoder.enumeration(window.judgement);
           encoder.integer(static_cast<std::int64_t>(window.earlyMicros));
           encoder.integer(static_cast<std::int64_t>(window.lateMicros));
@@ -284,6 +291,18 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
 int judgementCount(const RhythmState &state, Judgement judgement) {
   const auto found = state.judgeCount.find(judgement);
   return found == state.judgeCount.end() ? 0 : found->second;
+}
+
+ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
+  ChartJudgementTiming timing;
+  for (int index = 0; index < JudgementCount; ++index) {
+    const auto judgement = static_cast<Judgement>(index);
+    const auto found = state.judgementFastSlowCount.find(judgement);
+    if (found != state.judgementFastSlowCount.end()) {
+      timing.byJudgement[static_cast<std::size_t>(index)] = found->second;
+    }
+  }
+  return timing;
 }
 
 bool isHexDigest(std::string_view value, std::size_t expectedSize) {
@@ -422,9 +441,17 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
   }
 
   const std::string fingerprint = payloadFingerprint(replay, score);
+  std::vector<float> adoptedGaugeHistory =
+      state.gaugeHistoryFor(state.gaugeType);
+  ChartJudgementTiming judgementTiming =
+      captureChartJudgementTiming(state);
   return ChartResultAttempt{.attemptId = std::move(attemptId),
                             .replay = std::move(replay),
                             .score = std::move(score),
+                            .adoptedGaugeHistory =
+                                std::move(adoptedGaugeHistory),
+                            .judgementTiming =
+                                std::move(judgementTiming),
                             .payloadFingerprint = fingerprint};
 }
 

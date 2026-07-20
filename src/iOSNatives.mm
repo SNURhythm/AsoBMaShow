@@ -2,6 +2,7 @@
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
 #include "audio/NativeMusicPlayer.h"
+#include "ir/IrHttpClientIOS.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -2242,6 +2243,269 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
   dispatch_semaphore_signal(semaphore);
 }
 @end
+
+@interface AsoIrHttpDelegate
+    : NSObject <NSURLSessionDataDelegate, NSURLSessionTaskDelegate> {
+ @public
+  NSMutableData *responseData;
+  NSURLResponse *urlResponse;
+  NSError *requestError;
+  dispatch_semaphore_t semaphore;
+  NSUInteger maximumResponseBytes;
+  BOOL responseTooLarge;
+}
+@end
+
+@implementation AsoIrHttpDelegate
+- (instancetype)init {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+  responseData = [[NSMutableData alloc] init];
+  urlResponse = nil;
+  requestError = nil;
+  semaphore = dispatch_semaphore_create(0);
+  maximumResponseBytes = 0;
+  responseTooLarge = NO;
+  return self;
+}
+
+- (void)URLSession:(NSURLSession *)session
+              dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveResponse:(NSURLResponse *)response
+     completionHandler:
+         (void (^)(NSURLSessionResponseDisposition disposition))
+             completionHandler {
+  (void)session;
+  (void)dataTask;
+  urlResponse = response;
+  const long long expected = response.expectedContentLength;
+  if (expected > 0 &&
+      static_cast<unsigned long long>(expected) > maximumResponseBytes) {
+    responseTooLarge = YES;
+    completionHandler(NSURLSessionResponseCancel);
+    return;
+  }
+  completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveData:(NSData *)data {
+  (void)session;
+  if (responseTooLarge) {
+    return;
+  }
+  if (responseData.length > maximumResponseBytes ||
+      data.length > maximumResponseBytes - responseData.length) {
+    responseTooLarge = YES;
+    [dataTask cancel];
+    return;
+  }
+  [responseData appendData:data];
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+                    newRequest:(NSURLRequest *)request
+             completionHandler:
+                 (void (^)(NSURLRequest *_Nullable))completionHandler {
+  (void)session;
+  (void)task;
+  (void)request;
+  urlResponse = response;
+  completionHandler(nil);
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    didCompleteWithError:(NSError *)error {
+  (void)session;
+  if (urlResponse == nil) {
+    urlResponse = task.response;
+  }
+  requestError = error;
+  dispatch_semaphore_signal(semaphore);
+}
+@end
+
+namespace {
+
+ir::IrTransportError IOSIrTransportError(NSError *error) {
+  if (error == nil) {
+    return ir::IrTransportError::None;
+  }
+  if (![error.domain isEqualToString:NSURLErrorDomain]) {
+    return ir::IrTransportError::Other;
+  }
+  switch (error.code) {
+  case NSURLErrorCancelled:
+    return ir::IrTransportError::Cancelled;
+  case NSURLErrorNotConnectedToInternet:
+  case NSURLErrorNetworkConnectionLost:
+  case NSURLErrorDataNotAllowed:
+  case NSURLErrorInternationalRoamingOff:
+    return ir::IrTransportError::Offline;
+  case NSURLErrorCannotFindHost:
+  case NSURLErrorDNSLookupFailed:
+    return ir::IrTransportError::Dns;
+  case NSURLErrorCannotConnectToHost:
+    return ir::IrTransportError::Connect;
+  case NSURLErrorSecureConnectionFailed:
+  case NSURLErrorServerCertificateHasBadDate:
+  case NSURLErrorServerCertificateUntrusted:
+  case NSURLErrorServerCertificateHasUnknownRoot:
+  case NSURLErrorServerCertificateNotYetValid:
+  case NSURLErrorClientCertificateRejected:
+  case NSURLErrorClientCertificateRequired:
+    return ir::IrTransportError::Tls;
+  case NSURLErrorTimedOut:
+    return ir::IrTransportError::Timeout;
+  default:
+    return ir::IrTransportError::Other;
+  }
+}
+
+std::optional<std::string> IOSSafeRetryAfter(NSHTTPURLResponse *response) {
+  if (response == nil) {
+    return std::nullopt;
+  }
+  NSString *value = [response valueForHTTPHeaderField:@"Retry-After"];
+  if (value == nil) {
+    return std::nullopt;
+  }
+  std::string utf8 = NSStringToString(value);
+  if (utf8.empty() || utf8.size() > 2 * 1024 ||
+      !std::ranges::all_of(utf8, [](unsigned char character) {
+        return character == '\t' ||
+               (character >= 0x20U && character < 0x7fU);
+      })) {
+    return std::nullopt;
+  }
+  const auto first = utf8.find_first_not_of(" \t");
+  if (first == std::string::npos) {
+    return std::nullopt;
+  }
+  const auto last = utf8.find_last_not_of(" \t");
+  return utf8.substr(first, last - first + 1);
+}
+
+} // namespace
+
+ir::IrHttpResponse
+ir::PerformIrHttpRequestIOS(const IrHttpRequest &request,
+                            std::stop_token stopToken) noexcept {
+  @autoreleasepool {
+    if ([NSThread isMainThread]) {
+      return {.transportError = IrTransportError::Other,
+              .diagnostic =
+                  "IR HTTP requests must run away from the main thread"};
+    }
+    if (stopToken.stop_requested()) {
+      return {.transportError = IrTransportError::Cancelled,
+              .diagnostic = "IR HTTP request was cancelled"};
+    }
+    NSString *urlText = NSStringFromUtf8(request.url);
+    NSURL *url = [NSURL URLWithString:urlText];
+    if (url == nil) {
+      return {.transportError = IrTransportError::Other,
+              .diagnostic = "IR HTTP URL is invalid"};
+    }
+    NSMutableURLRequest *nativeRequest = [NSMutableURLRequest
+         requestWithURL:url
+            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+        timeoutInterval:request.totalTimeout.count()];
+    nativeRequest.HTTPMethod = request.method == IrHttpMethod::Post ? @"POST"
+                                                                    : @"GET";
+    [nativeRequest setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
+    for (const auto &[name, value] : request.headers) {
+      [nativeRequest setValue:NSStringFromUtf8(value)
+           forHTTPHeaderField:NSStringFromUtf8(name)];
+    }
+    if (request.method == IrHttpMethod::Post) {
+      nativeRequest.HTTPBody =
+          [NSData dataWithBytes:request.body.data() length:request.body.size()];
+    }
+
+    AsoIrHttpDelegate *delegate = [[AsoIrHttpDelegate alloc] init];
+    delegate->maximumResponseBytes = request.maximumResponseBytes;
+    NSURLSessionConfiguration *configuration =
+        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    configuration.timeoutIntervalForRequest = request.connectTimeout.count();
+    configuration.timeoutIntervalForResource = request.totalTimeout.count();
+    NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
+    delegateQueue.maxConcurrentOperationCount = 1;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                          delegate:delegate
+                                                     delegateQueue:delegateQueue];
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:nativeRequest];
+    [task resume];
+
+    const auto deadline = std::chrono::steady_clock::now() +
+                          request.totalTimeout + std::chrono::seconds(2);
+    bool cancelled = false;
+    bool timedOut = false;
+    while (dispatch_semaphore_wait(
+               delegate->semaphore,
+               dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC)) != 0) {
+      if (stopToken.stop_requested()) {
+        cancelled = true;
+        [task cancel];
+      } else if (std::chrono::steady_clock::now() >= deadline) {
+        timedOut = true;
+        [task cancel];
+      }
+      if (cancelled || timedOut) {
+        (void)dispatch_semaphore_wait(
+            delegate->semaphore,
+            dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+        break;
+      }
+    }
+    [session finishTasksAndInvalidate];
+
+    if (cancelled || stopToken.stop_requested()) {
+      return {.transportError = IrTransportError::Cancelled,
+              .diagnostic = "IR HTTP request was cancelled"};
+    }
+    if (delegate->responseTooLarge) {
+      return {.transportError = IrTransportError::ResponseTooLarge,
+              .diagnostic = "IR HTTP response exceeded its size limit"};
+    }
+    if (timedOut) {
+      return {.transportError = IrTransportError::Timeout,
+              .diagnostic = "IR HTTP request timed out"};
+    }
+    const IrTransportError transport =
+        IOSIrTransportError(delegate->requestError);
+    if (transport != IrTransportError::None) {
+      return {.transportError = transport,
+              .diagnostic = transport == IrTransportError::Cancelled
+                                ? "IR HTTP request was cancelled"
+                                : "IR HTTP request failed"};
+    }
+    NSHTTPURLResponse *httpResponse =
+        [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)delegate->urlResponse
+            : nil;
+    if (httpResponse == nil || httpResponse.statusCode < 100 ||
+        httpResponse.statusCode > 599) {
+      return {.transportError = IrTransportError::Other,
+              .diagnostic = "IR HTTP response status is invalid"};
+    }
+    std::string body;
+    if (delegate->responseData.length != 0) {
+      body.assign(static_cast<const char *>(delegate->responseData.bytes),
+                  delegate->responseData.length);
+    }
+    return {.statusCode = httpResponse.statusCode,
+            .body = std::move(body),
+            .retryAfter = IOSSafeRetryAfter(httpResponse)};
+  }
+}
 
 bool PickIOSFolder(std::string &path, std::string &bookmark,
                    std::string &errorMessage) {

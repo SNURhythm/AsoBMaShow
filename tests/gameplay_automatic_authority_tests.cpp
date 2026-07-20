@@ -1,4 +1,5 @@
 #include "scene/play/GameplayDefinition.h"
+#include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
@@ -122,7 +123,11 @@ void requireSameCompleteOutcome(
                 leftState.dead == rightState.dead &&
                 leftState.holding == rightState.holding &&
                 leftState.playedTimeMicros == rightState.playedTimeMicros &&
-                leftState.releaseTimeMicros == rightState.releaseTimeMicros,
+                leftState.releaseTimeMicros == rightState.releaseTimeMicros &&
+                leftState.acceptedHeadJudge.judgement ==
+                    rightState.acceptedHeadJudge.judgement &&
+                leftState.acceptedHeadJudge.Diff ==
+                    rightState.acceptedHeadJudge.Diff,
             "one-shot and chunked note states are identical");
   }
   for (const auto &lane : definition.lanes()) {
@@ -194,6 +199,7 @@ void testDefinitionCompilesAutomaticMetadata() {
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   const auto metadata = definition.metadata();
   require(metadata.totalNotes == 2 && metadata.keyMode == 7 &&
+              metadata.hasGaugeTotal &&
               metadata.gaugeTotal == 260.0,
           "chart gauge metadata is copied");
 
@@ -232,10 +238,9 @@ void testDefinitionUsesDefaultGaugeTotalWhenChartOmitsTotal() {
   chart.Meta.HasTotal = false;
 
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
-  require(definition.metadata().gaugeTotal ==
-              beatorajaDefaultGaugeTotal(chart.Meta.KeyMode,
-                                         chart.Meta.TotalNotes),
-          "missing chart total uses the shared beatoraja gauge rule");
+  require(!definition.metadata().hasGaugeTotal &&
+              definition.metadata().gaugeTotal == chart.Meta.Total,
+          "definition preserves raw missing-TOTAL metadata for policy compile");
 }
 
 void testDefinitionCompilesChronologicalHellChargeHeads() {
@@ -296,9 +301,8 @@ void testAttemptInitializesConfiguredAndCarriedState() {
                   kClearTypeAssistedEasyClearRank,
           "attempt restores carried combo and assist-clear state");
 
-  GameplayScoreState carried({.totalNotes = 10,
-                              .keyMode = 7,
-                              .gaugeTotal = 260.0});
+  GameplayScoreState carried(
+      {.gaugeRules = configured.scoreState().gaugeRules(), .keyMode = 7});
   carried.configureGauge(GaugeType::Easy, GaugeAutoShiftMode::BestClear,
                          GaugeProfile::Standard, GaugeType::Easy);
   carried.setStartingGaugePercent(64);
@@ -2038,6 +2042,54 @@ void testCompleteOutcomeMatchesForLargeAndChunkedScheduling() {
           "large and chunked schedules both reach chart completion");
   requireSameCompleteOutcome(definition, oneShot, chunked);
 }
+
+void testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails() {
+  const auto lr2Judge = gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+  {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1,
+                bms_parser::LongNoteType::LongNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition,
+                                            {.judge = lr2Judge});
+    const auto press =
+        simulation.pressLane(1, {.songTimeMicros = 1'050'000});
+    const auto tail = simulation.advanceTo(2'000'000, 2'000'000);
+    require(press.judge.judgement == Good && !press.hasJudge &&
+                tail.transactions.size() == 1 &&
+                tail.transactions.front().judge.judgement == Good &&
+                simulation.snapshot().judgeCounts[Good] == 1,
+            "LR2 automatic classic tail commits the stored head judgement");
+  }
+
+  for (const auto type : {bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1, type);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation oneShot(
+        definition, {.judge = lr2Judge, .attempt = {.autoPlay = true}});
+    gameplay::GameplaySimulation chunked(
+        definition, {.judge = lr2Judge, .attempt = {.autoPlay = true}});
+    oneShot.advanceTo(2'000'000, 2'000'000);
+    for (const auto time :
+         std::array<std::int64_t, 4>{1'000'000, 1'400'000, 1'800'000,
+                                    2'000'000}) {
+      chunked.advanceTo(time, time);
+    }
+    require(oneShot.snapshot().judgeCounts[PGreat] == 2 &&
+                chunked.snapshot().judgeCounts[PGreat] == 2,
+            "LR2 autoplay CN/HCN commits head and tail separately");
+    requireSameHellChargeOutcome(oneShot, chunked);
+  }
+}
 } // namespace
 
 int main() {
@@ -2068,5 +2120,6 @@ int main() {
   testOpenEndedStartRangeStillCompletesChart();
   testSurvivalFailureFinishesTransactionThenFreezesEveryEntryPoint();
   testCompleteOutcomeMatchesForLargeAndChunkedScheduling();
+  testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails();
   return 0;
 }

@@ -360,12 +360,45 @@ bool ensureContainedPath(const std::filesystem::path &applicationRoot,
   return true;
 }
 
+bool validateOptionalOperationalFile(
+    const std::filesystem::path &applicationRoot,
+    const std::filesystem::path &path, std::string &errorMessage) {
+  if (!ensureContainedPath(applicationRoot, path, errorMessage)) {
+    return false;
+  }
+
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error) {
+    if (error == std::make_error_code(std::errc::no_such_file_or_directory)) {
+      return true;
+    }
+    errorMessage = "unable to inspect optional profile component '" +
+                   path.string() + "': " + error.message();
+    return false;
+  }
+  if (status.type() == std::filesystem::file_type::not_found) {
+    return true;
+  }
+  if (hasUnsafeLink(path, status, errorMessage) ||
+      !std::filesystem::is_regular_file(status)) {
+    if (errorMessage.empty()) {
+      errorMessage = "optional profile component is not a safe regular file: " +
+                     path.filename().string();
+    }
+    return false;
+  }
+  return true;
+}
+
 PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   PlayerProfilePaths paths;
   paths.root = root;
   paths.profileJson = paths.root / "profile.json";
   paths.settingsJson = paths.root / "settings.json";
   paths.inputJson = paths.root / "input.json";
+  paths.irCredentialsJson = paths.root / "ir-credentials.json";
+  paths.bokutachiCacheJson = paths.root / "bokutachi-cache.json";
   paths.scoresDb = paths.root / "scores.db";
   paths.replaysDb = paths.root / "replays.db";
   paths.practiceDirectory = paths.root / "practice";
@@ -697,6 +730,12 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
       return failure(ProfileError::IntegrityFailure,
                      "profile component is not a safe regular file: " +
                          file.filename().string());
+    }
+  }
+  for (const auto &file :
+       {paths.irCredentialsJson, paths.bokutachiCacheJson}) {
+    if (!validateOptionalOperationalFile(applicationRoot, file, safetyError)) {
+      return failure(ProfileError::IntegrityFailure, safetyError);
     }
   }
   if (!validatePracticeDirectory(applicationRoot, paths, nullptr,
@@ -1369,6 +1408,14 @@ ProfileResult buildProfile(
        !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
     return fail(ProfileError::IntegrityFailure, errorMessage);
   }
+  if (mode == BuildMode::Duplicate &&
+      (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
+                                                     errorMessage) ||
+       !ScoreRepository::ClearImportedIrScoresSnapshot(staging.scoresDb,
+                                                       errorMessage))) {
+    return fail(ProfileError::IntegrityFailure,
+                "unable to clear duplicated IR data: " + errorMessage);
+  }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteMetadata)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
@@ -1945,6 +1992,13 @@ PlayerProfileManager::validateProfile(std::string_view id,
       return failure(ProfileError::IntegrityFailure,
                      "profile component is missing: " +
                          file.filename().string());
+    }
+  }
+  for (const auto &file :
+       {paths.irCredentialsJson, paths.bokutachiCacheJson}) {
+    if (!validateOptionalOperationalFile(applicationDataRoot_, file,
+                                         safetyError)) {
+      return failure(ProfileError::IntegrityFailure, safetyError);
     }
   }
 

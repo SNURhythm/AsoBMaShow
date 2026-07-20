@@ -4,7 +4,10 @@
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -37,8 +40,89 @@ void canonicalizeDevices(std::vector<InputDeviceCategory> &devices) {
 void canonicalizeWindows(std::vector<JudgeWindowProvenance> &windows) {
   std::stable_sort(windows.begin(), windows.end(),
                    [](const auto &lhs, const auto &rhs) {
-                     return enumValue(lhs.judgement) < enumValue(rhs.judgement);
+                     if (lhs.context != rhs.context) {
+                       return enumValue(lhs.context) < enumValue(rhs.context);
+                     }
+                     return enumValue(lhs.judgement) <
+                            enumValue(rhs.judgement);
                    });
+}
+
+constexpr std::array<gameplay::JudgeWindowContext, 4> kJudgeContexts{
+    gameplay::JudgeWindowContext::Normal,
+    gameplay::JudgeWindowContext::Scratch,
+    gameplay::JudgeWindowContext::LongNoteTail,
+    gameplay::JudgeWindowContext::LongScratchTail,
+};
+constexpr std::array<Judgement, 5> kPolicyJudgements{
+    PGreat, Great, Good, Bad, Kpoor};
+constexpr std::int64_t kMaximumJudgeWindowMagnitude = 2'000'000;
+
+const char *judgeContextName(gameplay::JudgeWindowContext value) {
+  switch (value) {
+  case gameplay::JudgeWindowContext::Normal:
+    return "normal";
+  case gameplay::JudgeWindowContext::Scratch:
+    return "scratch";
+  case gameplay::JudgeWindowContext::LongNoteTail:
+    return "long-note-tail";
+  case gameplay::JudgeWindowContext::LongScratchTail:
+    return "long-scratch-tail";
+  }
+  throw std::invalid_argument("Unknown judge-window context value.");
+}
+
+std::optional<gameplay::JudgeWindowContext>
+judgeContextFromName(std::string_view value) {
+  if (value == "normal") {
+    return gameplay::JudgeWindowContext::Normal;
+  }
+  if (value == "scratch") {
+    return gameplay::JudgeWindowContext::Scratch;
+  }
+  if (value == "long-note-tail") {
+    return gameplay::JudgeWindowContext::LongNoteTail;
+  }
+  if (value == "long-scratch-tail") {
+    return gameplay::JudgeWindowContext::LongScratchTail;
+  }
+  return std::nullopt;
+}
+
+const char *candidateSelectionName(gameplay::CandidateSelectionMode value) {
+  switch (value) {
+  case gameplay::CandidateSelectionMode::LR2:
+    return "lr2";
+  case gameplay::CandidateSelectionMode::Lowest:
+    return "lowest";
+  case gameplay::CandidateSelectionMode::Combo:
+    return "combo";
+  case gameplay::CandidateSelectionMode::Duration:
+    return "duration";
+  case gameplay::CandidateSelectionMode::Score:
+    return "score";
+  }
+  throw std::invalid_argument("Unknown candidate-selection value.");
+}
+
+std::optional<gameplay::CandidateSelectionMode>
+candidateSelectionFromName(std::string_view value) {
+  if (value == "lr2") {
+    return gameplay::CandidateSelectionMode::LR2;
+  }
+  if (value == "lowest") {
+    return gameplay::CandidateSelectionMode::Lowest;
+  }
+  if (value == "combo") {
+    return gameplay::CandidateSelectionMode::Combo;
+  }
+  if (value == "duration") {
+    return gameplay::CandidateSelectionMode::Duration;
+  }
+  if (value == "score") {
+    return gameplay::CandidateSelectionMode::Score;
+  }
+  return std::nullopt;
 }
 
 ScoreEligibility mergeEligibility(ScoreEligibility lhs,
@@ -404,6 +488,7 @@ Value enumOrThrow(std::optional<Value> value, const char *message) {
 
 Json rulesetToJson(const RulesetDescriptor &ruleset) {
   Json value = Json::object();
+  value["id"] = ruleset.id;
   value["version"] = ruleset.version;
   value["scoringModel"] = ruleset.scoringModel;
   value["judgementModel"] = ruleset.judgementModel;
@@ -411,26 +496,55 @@ Json rulesetToJson(const RulesetDescriptor &ruleset) {
   return value;
 }
 
-RulesetDescriptor rulesetFromJson(const Json &value) {
+RulesetDescriptor rulesetFromJson(const Json &value, int schemaVersion) {
   if (!value.is_object()) {
     throw std::runtime_error("Score provenance ruleset must be an object.");
   }
 
   const int version = value.value("version", 0);
-  if (version > RulesetDescriptor::kCurrentVersion) {
-    throw std::runtime_error("Cannot read future ruleset version " +
-                             std::to_string(version) + ".");
-  }
   if (version < 0) {
     throw std::runtime_error("Ruleset version cannot be negative.");
   }
 
-  RulesetDescriptor result =
-      version == 0 ? RulesetDescriptor::Legacy() : RulesetDescriptor::Current();
+  const auto id = value.find("id");
+  if (id != value.end() && !id->is_string()) {
+    throw std::runtime_error("Score provenance ruleset id must be a string.");
+  }
+  const bool hasId = id != value.end();
+  const std::string idValue = hasId ? id->get<std::string>() : std::string();
+  if (schemaVersion >= 4 && (!hasId || idValue.empty())) {
+    throw std::runtime_error(
+        "Score provenance ruleset id is required by this schema.");
+  }
+  RulesetDescriptor result;
+  if (version == 0 && !hasId) {
+    result = RulesetDescriptor::Legacy();
+  } else if (hasId) {
+    const auto known = gameplayRulesetFromId(idValue);
+    result = known.has_value()
+                 ? RulesetDescriptor::For(*known)
+                 : RulesetDescriptor{.id = idValue,
+                                     .version = version,
+                                     .scoringModel = {},
+                                     .judgementModel = {},
+                                     .gaugeModel = {}};
+  } else {
+    result = {.id = {},
+              .version = version,
+              .scoringModel = {},
+              .judgementModel = {},
+              .gaugeModel = {}};
+  }
   result.version = version;
   result.scoringModel = value.value("scoringModel", result.scoringModel);
   result.judgementModel = value.value("judgementModel", result.judgementModel);
   result.gaugeModel = value.value("gaugeModel", result.gaugeModel);
+  if (!hasId && version == 2 &&
+      result.scoringModel == "asobmashow-v1" &&
+      result.judgementModel == "bms-rank-v1" &&
+      result.gaugeModel == "beatoraja-profile-gauge-v2") {
+    result = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  }
   return result;
 }
 
@@ -451,7 +565,88 @@ PlayerOptionProvenance playerOptionFromJson(const Json &value) {
   return result;
 }
 
+void validateStageWindows(const ScoreStageProvenance &stage,
+                          bool requireCompleteContexts) {
+  std::array<bool, kJudgeContexts.size() * kPolicyJudgements.size()> found{};
+  for (const auto &window : stage.effectiveJudgeWindows) {
+    const auto context = std::ranges::find(kJudgeContexts, window.context);
+    const auto judgement =
+        std::ranges::find(kPolicyJudgements, window.judgement);
+    if (context == kJudgeContexts.end() ||
+        judgement == kPolicyJudgements.end()) {
+      throw std::runtime_error(
+          "Score provenance contains an unknown policy window.");
+    }
+    if (window.earlyMicros > 0 || window.lateMicros < 0 ||
+        window.earlyMicros > window.lateMicros ||
+        window.earlyMicros < -kMaximumJudgeWindowMagnitude ||
+        window.lateMicros > kMaximumJudgeWindowMagnitude) {
+      throw std::runtime_error(
+          "Score provenance judge window is outside safe bounds.");
+    }
+    const std::size_t contextIndex = static_cast<std::size_t>(
+        std::distance(kJudgeContexts.begin(), context));
+    const std::size_t judgementIndex = static_cast<std::size_t>(
+        std::distance(kPolicyJudgements.begin(), judgement));
+    const std::size_t index =
+        contextIndex * kPolicyJudgements.size() + judgementIndex;
+    if (found[index]) {
+      throw std::runtime_error(
+          "Score provenance contains a duplicate policy window.");
+    }
+    found[index] = true;
+  }
+  if (requireCompleteContexts &&
+      !std::ranges::all_of(found, [](bool value) { return value; })) {
+    throw std::runtime_error(
+        "Score provenance policy windows are incomplete.");
+  }
+}
+
+void validateStageProof(const ScoreStageProvenance &stage) {
+  if (stage.longNoteMode < 0 || stage.longNoteMode > 3) {
+    throw std::runtime_error(
+        "Score provenance long-note mode is not recognized.");
+  }
+  if (stage.totalNotes <= 0) {
+    throw std::runtime_error(
+        "Score provenance total note count must be positive.");
+  }
+  if (stage.authoredGaugeTotal.has_value() &&
+      !std::isfinite(*stage.authoredGaugeTotal)) {
+    throw std::runtime_error(
+        "Score provenance authored gauge TOTAL is not finite.");
+  }
+  if (!std::isfinite(stage.effectiveGaugeTotal) ||
+      stage.effectiveGaugeTotal <= 0.0) {
+    throw std::runtime_error(
+        "Score provenance effective gauge TOTAL must be finite and positive.");
+  }
+  (void)candidateSelectionName(stage.candidateSelection);
+  validateStageWindows(stage, true);
+}
+
+void migrateLegacyBeatorajaWindows(ScoreStageProvenance &stage) {
+  if (stage.effectiveJudgeWindows.size() != kPolicyJudgements.size() ||
+      std::ranges::any_of(stage.effectiveJudgeWindows, [](const auto &window) {
+        return window.context != gameplay::JudgeWindowContext::Normal;
+      })) {
+    return;
+  }
+  const auto normal = stage.effectiveJudgeWindows;
+  for (const auto context : kJudgeContexts) {
+    if (context == gameplay::JudgeWindowContext::Normal) {
+      continue;
+    }
+    for (auto window : normal) {
+      window.context = context;
+      stage.effectiveJudgeWindows.push_back(window);
+    }
+  }
+}
+
 Json stageToJson(ScoreStageProvenance stage) {
+  validateStageProof(stage);
   canonicalizeWindows(stage.effectiveJudgeWindows);
 
   Json value = Json::object();
@@ -463,10 +658,16 @@ Json stageToJson(ScoreStageProvenance stage) {
   value["chartRandomValues"] = stage.chartRandomValues;
   value["judgeRankSource"] = judgeRankSourceName(stage.judgeRankSource);
   writeOptional(value, "sourceJudgeRank", stage.sourceJudgeRank);
+  value["totalNotes"] = stage.totalNotes;
+  writeOptional(value, "authoredGaugeTotal", stage.authoredGaugeTotal);
+  value["effectiveGaugeTotal"] = stage.effectiveGaugeTotal;
+  value["candidateSelection"] =
+      candidateSelectionName(stage.candidateSelection);
 
   Json windows = Json::array();
   for (const auto &window : stage.effectiveJudgeWindows) {
     Json serializedWindow = Json::object();
+    serializedWindow["context"] = judgeContextName(window.context);
     serializedWindow["judgement"] = judgementName(window.judgement);
     serializedWindow["earlyMicros"] = window.earlyMicros;
     serializedWindow["lateMicros"] = window.lateMicros;
@@ -476,7 +677,8 @@ Json stageToJson(ScoreStageProvenance stage) {
   return value;
 }
 
-ScoreStageProvenance stageFromJson(const Json &value) {
+ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
+                                   const RulesetDescriptor &ruleset) {
   if (!value.is_object()) {
     throw std::runtime_error("Score provenance stage must be an object.");
   }
@@ -494,6 +696,21 @@ ScoreStageProvenance stageFromJson(const Json &value) {
       judgeRankSourceFromName(value.value("judgeRankSource", "unknown")),
       "Unknown judge-rank source in score provenance.");
   result.sourceJudgeRank = readOptional<int>(value, "sourceJudgeRank");
+  result.totalNotes = value.value("totalNotes", result.totalNotes);
+  result.authoredGaugeTotal =
+      readOptional<double>(value, "authoredGaugeTotal");
+  const auto effectiveTotal = value.find("effectiveGaugeTotal");
+  if (effectiveTotal != value.end()) {
+    if (!effectiveTotal->is_number()) {
+      throw std::runtime_error(
+          "Score provenance effective gauge TOTAL must be numeric.");
+    }
+    result.effectiveGaugeTotal = effectiveTotal->get<double>();
+  }
+  result.candidateSelection = enumOrThrow(
+      candidateSelectionFromName(
+          value.value("candidateSelection", "lowest")),
+      "Unknown candidate-selection mode in score provenance.");
 
   const auto windows = value.find("effectiveJudgeWindows");
   if (windows != value.end()) {
@@ -507,6 +724,9 @@ ScoreStageProvenance stageFromJson(const Json &value) {
             "Score provenance judge window must be an object.");
       }
       result.effectiveJudgeWindows.push_back({
+          .context = enumOrThrow(
+              judgeContextFromName(window.value("context", "normal")),
+              "Unknown judge-window context in score provenance."),
           .judgement =
               enumOrThrow(judgementFromName(window.value("judgement", "")),
                           "Unknown judgement in score provenance."),
@@ -515,7 +735,16 @@ ScoreStageProvenance stageFromJson(const Json &value) {
       });
     }
   }
+  if (schemaVersion < 4 &&
+      ruleset == RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
+    migrateLegacyBeatorajaWindows(result);
+  }
   canonicalizeWindows(result.effectiveJudgeWindows);
+  if (schemaVersion >= 4) {
+    validateStageProof(result);
+  } else {
+    validateStageWindows(result, false);
+  }
   return result;
 }
 
@@ -531,11 +760,11 @@ scoreEligibilityForProvenance(const ScoreProvenance &provenance) {
         return stage.judgeRankSource == JudgeRankSource::Unknown;
       });
   const bool modified =
-      provenance.ruleset != RulesetDescriptor::Current() ||
+      !isSupportedRulesetDescriptor(provenance.ruleset) ||
       provenance.autoPlay || provenance.practice ||
       assist_options::isEnabled(provenance.assistOption) ||
       unknownJudgeSource || !provenance.playback.neutral() ||
-      provenance.judgeWindowScalePercent > 100 ||
+      provenance.judgeWindowScalePercent != 100 ||
       provenance.startingGaugePercent.has_value();
   return modified ? ScoreEligibility::Modified : ScoreEligibility::Verified;
 }
@@ -571,17 +800,6 @@ uniqueStageForChart(const ScoreProvenance &provenance,
 }
 
 } // namespace score_provenance
-
-RulesetDescriptor RulesetDescriptor::Current() { return {}; }
-
-RulesetDescriptor RulesetDescriptor::Legacy() {
-  return {
-      .version = 0,
-      .scoringModel = "legacy-unknown",
-      .judgementModel = "legacy-unknown",
-      .gaugeModel = "legacy-unknown",
-  };
-}
 
 ScoreProvenance ScoreProvenance::Legacy() {
   ScoreProvenance result;
@@ -649,7 +867,7 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
     ScoreProvenance result = ScoreProvenance::Legacy();
     result.schemaVersion = ScoreProvenance::kSchemaVersion;
     if (const auto ruleset = root.find("ruleset"); ruleset != root.end()) {
-      result.ruleset = rulesetFromJson(*ruleset);
+      result.ruleset = rulesetFromJson(*ruleset, schemaVersion);
     }
 
     if (const auto stages = root.find("stages"); stages != root.end()) {
@@ -657,7 +875,8 @@ deserializeScoreProvenance(std::string_view serialized, std::string &error) {
         throw std::runtime_error("Score provenance stages must be an array.");
       }
       for (const auto &stage : *stages) {
-        result.stages.push_back(stageFromJson(stage));
+        result.stages.push_back(
+            stageFromJson(stage, schemaVersion, result.ruleset));
       }
     }
 
@@ -760,12 +979,46 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
       stage.judgeRankSource == JudgeRankSource::Chart) {
     stage.sourceJudgeRank = input.chartMeta.Rank;
   }
-  for (const auto &[judgement, window] : input.effectiveJudgeWindows) {
-    stage.effectiveJudgeWindows.push_back({
-        .judgement = judgement,
-        .earlyMicros = static_cast<std::int64_t>(window.first),
-        .lateMicros = static_cast<std::int64_t>(window.second),
-    });
+  stage.totalNotes =
+      input.totalNotes > 0 ? input.totalNotes : input.chartMeta.TotalNotes;
+  stage.authoredGaugeTotal =
+      input.authoredGaugeTotal.has_value()
+          ? input.authoredGaugeTotal
+          : (input.chartMeta.HasTotal
+                 ? std::optional<double>(input.chartMeta.Total)
+                 : std::nullopt);
+  stage.effectiveGaugeTotal = input.effectiveGaugeTotal;
+  stage.candidateSelection = input.candidateSelection;
+
+  const bool hasContextWindows = std::ranges::any_of(
+      input.effectiveJudgeContexts, [](const gameplay::JudgeWindowSet &set) {
+        return std::ranges::any_of(set.windows, [](const auto &window) {
+          return window.judgement != None;
+        });
+      });
+  if (hasContextWindows) {
+    for (const auto context : kJudgeContexts) {
+      const auto &set = input.effectiveJudgeContexts[enumValue(context)];
+      for (const auto &window : set.windows) {
+        stage.effectiveJudgeWindows.push_back({
+            .context = context,
+            .judgement = window.judgement,
+            .earlyMicros = window.earlyMicros,
+            .lateMicros = window.lateMicros,
+        });
+      }
+    }
+  } else {
+    for (const auto context : kJudgeContexts) {
+      for (const auto &[judgement, window] : input.effectiveJudgeWindows) {
+        stage.effectiveJudgeWindows.push_back({
+            .context = context,
+            .judgement = judgement,
+            .earlyMicros = static_cast<std::int64_t>(window.first),
+            .lateMicros = static_cast<std::int64_t>(window.second),
+        });
+      }
+    }
   }
   canonicalizeWindows(stage.effectiveJudgeWindows);
 
@@ -788,6 +1041,10 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   result.judgeWindowScalePercent = input.judgeWindowScalePercent;
   result.startingGaugePercent = input.startingGaugePercent;
   result.eligibility = scoreEligibilityForProvenance(result);
+  if (!input.policyCanonical &&
+      result.eligibility == ScoreEligibility::Verified) {
+    result.eligibility = ScoreEligibility::Modified;
+  }
   return result;
 }
 

@@ -2,6 +2,7 @@
 #include "../src/view/OverlayPortal.h"
 #include "../src/view/View.h"
 #include "scene/ResultLayoutGeometry.h"
+#include "ir/IrRankingModal.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
@@ -141,6 +142,50 @@ void testOverlayPortalDispatchesPresentedViewsAboveContent() {
   assert(root.handleEvents(event));
   assert(overlay.eventCount == 1);
   assert(background->eventCount == 1);
+}
+
+void testRankingModalPanelStaysCenteredInsideSafeArea() {
+  const auto geometry = ir::layoutIrRankingPanel(
+      {.viewportWidth = 1000,
+       .viewportHeight = 700,
+       .safeTop = 20,
+       .safeLeft = 40,
+       .safeBottom = 30,
+       .safeRight = 10,
+       .margin = 24,
+       .maximumWidth = 1180,
+       .maximumHeight = 840});
+  assert(geometry.x == 64);
+  assert(geometry.y == 44);
+  assert(geometry.width == 902);
+  assert(geometry.height == 602);
+  assert(geometry.compact);
+
+  const auto wide = ir::layoutIrRankingPanel(
+      {.viewportWidth = 1280,
+       .viewportHeight = 800,
+       .safeTop = 0,
+       .safeLeft = 0,
+       .safeBottom = 0,
+       .safeRight = 0,
+       .margin = 24,
+       .maximumWidth = 1180,
+       .maximumHeight = 840});
+  assert(wide.width == 1180);
+  assert(wide.compact == false);
+
+  const auto compact = ir::layoutIrRankingPanel(
+      {.viewportWidth = 640,
+       .viewportHeight = 480,
+       .safeTop = 0,
+       .safeLeft = 0,
+       .safeBottom = 0,
+       .safeRight = 0});
+  assert(compact.x >= 0);
+  assert(compact.y >= 0);
+  assert(compact.x + compact.width <= 640);
+  assert(compact.y + compact.height <= 480);
+  assert(compact.compact);
 }
 
 void testBlockingOverlayStopsAllInteractiveEvents() {
@@ -492,6 +537,72 @@ void testCompactResultVisualRowFitsActions() {
   assert(actions->getY() + actions->getHeight() <= root.getHeight());
 }
 
+void testCompactIrFailureStatusPreservesResultActions() {
+  const auto metrics = result_layout::metricsFor(885.0f, true);
+  View root(0, 0, 1920, 885);
+  root.setFlexDirection(FlexDirection::Column);
+  root.setAlignItems(YGAlignStretch);
+  root.setJustifyContent(YGJustifyCenter);
+  root.setPadding(Edge::All, metrics.rootPadding);
+  root.setGap(metrics.rootGap);
+
+  const auto addFixedSection = [&](float height) {
+    auto *section = new View();
+    section->setHeight(height);
+    section->setFlexShrink(0.0f);
+    root.addView(section);
+  };
+  addFixedSection(result_layout::kHeaderHeight);
+  addFixedSection(metrics.summaryHeight);
+  addFixedSection(metrics.infoHeight);
+  addFixedSection(metrics.detailsHeight);
+
+  auto *visuals = new View();
+  visuals->setName("resultVisuals");
+  visuals->setHeight(metrics.visualHeight);
+  visuals->setMinHeight(176.0f);
+  visuals->setFlexShrink(1.0f);
+  root.addView(visuals);
+
+  auto *irFailure = new View();
+  irFailure->setName("irResultStatus");
+  irFailure->setHeight(72.0f);
+  irFailure->setMinHeight(72.0f);
+  irFailure->setFlexShrink(0.0f);
+  root.addView(irFailure);
+
+  auto *actions = new View();
+  actions->setName("resultActions");
+  actions->setHeight(result_layout::kActionHeight);
+  actions->setMinHeight(result_layout::kActionHeight);
+  actions->setFlexShrink(0.0f);
+  actions->setFlexDirection(FlexDirection::Row);
+  actions->setJustifyContent(YGJustifyCenter);
+  actions->setGap(14.0f);
+  auto *back = new View();
+  back->setName("backButton");
+  back->setSize(232, 64);
+  auto *retry = new View();
+  retry->setName("retryButton");
+  retry->setSize(232, 64);
+  auto *exportAction = new View();
+  exportAction->setName("exportPhotoButton");
+  exportAction->setSize(232, 64);
+  actions->addView(back);
+  actions->addView(retry);
+  actions->addView(exportAction);
+  root.addView(actions);
+
+  root.applyYogaLayout();
+  assert(irFailure->getVisible());
+  assert(actions->getVisible());
+  assert(back->getVisible() && retry->getVisible() &&
+         exportAction->getVisible());
+  assert(back->getWidth() > 0 && retry->getWidth() > 0 &&
+         exportAction->getWidth() > 0);
+  assert(actions->getY() + actions->getHeight() <= root.getHeight());
+}
+
 void testInputSettingsLayoutPolicy() {
   const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
   assert(!wide.stackSelectors);
@@ -637,6 +748,7 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 int main() {
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
+  testRankingModalPanelStaysCenteredInsideSafeArea();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testGyroscopeSettingsLayoutAndPresentation();
@@ -682,6 +794,7 @@ int main() {
   testWrappedGridRowsKeepColumnMeasurements();
   testSiblingInsertionPreservesLayoutAndZOrders();
   testCompactResultVisualRowFitsActions();
+  testCompactIrFailureStatusPreservesResultActions();
 
   return 0;
 }

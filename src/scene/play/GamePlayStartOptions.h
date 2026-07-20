@@ -2,12 +2,15 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../ReplayData.h"
+#include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
 #include "Pacemaker.h"
+#include "GameplayRulesetPolicy.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
@@ -93,17 +96,61 @@ struct StartOptions {
   std::optional<bool> replayGhostRenderingEnabled;
   std::function<void(const ReplayData &)> practiceGhostCallback;
   std::vector<InputDeviceCategory> inputDeviceCategories;
-  std::optional<RulesetDescriptor> rulesetDescriptor;
-  std::optional<ScoreStageProvenance> replayJudgeOverride;
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
+  std::optional<RulesetDescriptor> requiredRulesetDescriptor;
+  std::optional<ScoreStageProvenance> replayRulesetOverride;
 };
 
 namespace play_start_detail {
+[[nodiscard]] inline std::optional<
+    std::array<gameplay::JudgeWindowSet, 4>>
+validatedJudgeContexts(const ScoreStageProvenance &stage) {
+  constexpr std::array contexts{
+      gameplay::JudgeWindowContext::Normal,
+      gameplay::JudgeWindowContext::Scratch,
+      gameplay::JudgeWindowContext::LongNoteTail,
+      gameplay::JudgeWindowContext::LongScratchTail,
+  };
+  constexpr std::array judgements{PGreat, Great, Good, Bad, Kpoor};
+  std::array<gameplay::JudgeWindowSet, 4> result{};
+  std::array<bool, contexts.size() * judgements.size()> found{};
+  for (const auto &window : stage.effectiveJudgeWindows) {
+    const auto context = std::ranges::find(contexts, window.context);
+    const auto judgement = std::ranges::find(judgements, window.judgement);
+    if (context == contexts.end() || judgement == judgements.end() ||
+        window.earlyMicros > 0 || window.lateMicros < 0 ||
+        window.earlyMicros > window.lateMicros ||
+        window.earlyMicros < -2'000'000 || window.lateMicros > 2'000'000) {
+      return std::nullopt;
+    }
+    const std::size_t contextIndex = static_cast<std::size_t>(
+        std::distance(contexts.begin(), context));
+    const std::size_t judgementIndex = static_cast<std::size_t>(
+        std::distance(judgements.begin(), judgement));
+    const std::size_t index =
+        contextIndex * judgements.size() + judgementIndex;
+    if (found[index]) {
+      return std::nullopt;
+    }
+    found[index] = true;
+    result[contextIndex].windows[judgementIndex] = {
+        window.judgement, window.earlyMicros, window.lateMicros};
+  }
+  if (!std::ranges::all_of(found, [](bool value) { return value; })) {
+    return std::nullopt;
+  }
+  return result;
+}
+
 [[nodiscard]] inline std::optional<
     std::map<Judgement, std::pair<long long, long long>>>
 validatedJudgeWindows(const ScoreStageProvenance &stage) {
   constexpr std::array expected = {PGreat, Great, Good, Bad, Kpoor};
   std::map<Judgement, std::pair<long long, long long>> result;
   for (const auto &window : stage.effectiveJudgeWindows) {
+    if (window.context != gameplay::JudgeWindowContext::Normal) {
+      continue;
+    }
     if (std::ranges::find(expected, window.judgement) == expected.end() ||
         window.earlyMicros > 0 || window.lateMicros < 0 ||
         window.earlyMicros > window.lateMicros ||
@@ -126,10 +173,30 @@ replayJudgeOverrideForChart(const ScoreProvenance &provenance,
                             const bms_parser::ChartMeta &chartMeta) {
   const ScoreStageProvenance *matching =
       score_provenance::uniqueStageForChart(provenance, chartMeta);
-  if (matching == nullptr || !validatedJudgeWindows(*matching).has_value()) {
+  if (matching == nullptr) {
     return std::nullopt;
   }
-  return *matching;
+  ScoreStageProvenance result = *matching;
+  const bool missingLegacyGaugeProof =
+      result.totalNotes == 0 && result.effectiveGaugeTotal == 0.0;
+  if (missingLegacyGaugeProof &&
+      provenance.ruleset ==
+          RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
+    result.totalNotes = chartMeta.TotalNotes;
+    result.authoredGaugeTotal =
+        chartMeta.HasTotal ? std::optional<double>(chartMeta.Total)
+                           : std::nullopt;
+    result.effectiveGaugeTotal =
+        resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja, chartMeta);
+    result.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
+  }
+  if (result.totalNotes <= 0 ||
+      !std::isfinite(result.effectiveGaugeTotal) ||
+      result.effectiveGaugeTotal <= 0.0 ||
+      !validatedJudgeContexts(result).has_value()) {
+    return std::nullopt;
+  }
+  return result;
 }
 } // namespace play_start_detail
 
@@ -166,11 +233,11 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
 makeEffectiveJudgeAtPlayStart(const StartOptions &options,
                               const bms_parser::ChartMeta &chartMeta) {
   Judge judge = makeEffectiveJudgeAtPlayStart(options, chartMeta.Rank);
-  if (options.replayJudgeOverride.has_value() &&
-      score_provenance::stageMatchesChart(*options.replayJudgeOverride,
+  if (options.replayRulesetOverride.has_value() &&
+      score_provenance::stageMatchesChart(*options.replayRulesetOverride,
                                           chartMeta)) {
     if (const auto windows = play_start_detail::validatedJudgeWindows(
-            *options.replayJudgeOverride)) {
+            *options.replayRulesetOverride)) {
       judge.timingWindows = *windows;
     }
   }
@@ -183,9 +250,91 @@ inline void applyReplayProvenanceToStartOptions(StartOptions &options,
   options.clubMode = replay.provenance.clubMode;
   options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
   options.startingGaugePercent = replay.provenance.startingGaugePercent;
+  options.gaugeType = replay.provenance.gaugeType;
+  options.gaugeProfile = replay.provenance.gaugeProfile;
+  options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
   options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
-  options.replayJudgeOverride = play_start_detail::replayJudgeOverrideForChart(
-      replay.provenance, replay.chartMeta);
+  if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+    options.ruleset = GameplayRuleset::Beatoraja;
+    options.requiredRulesetDescriptor =
+        RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    options.replayRulesetOverride.reset();
+  } else {
+    options.requiredRulesetDescriptor = replay.provenance.ruleset;
+    if (const auto recordedRuleset =
+            gameplayRulesetFromId(replay.provenance.ruleset.id)) {
+      options.ruleset = *recordedRuleset;
+    }
+    options.replayRulesetOverride =
+        play_start_detail::replayJudgeOverrideForChart(replay.provenance,
+                                                       replay.chartMeta);
+  }
+}
+
+[[nodiscard]] inline gameplay::CandidateSelectionMode
+candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
+  switch (mode) {
+  case AppSettings::NotePriorityMode::Combo:
+    return gameplay::CandidateSelectionMode::Combo;
+  case AppSettings::NotePriorityMode::Duration:
+    return gameplay::CandidateSelectionMode::Duration;
+  case AppSettings::NotePriorityMode::Score:
+    return gameplay::CandidateSelectionMode::Score;
+  case AppSettings::NotePriorityMode::Lowest:
+  default:
+    return gameplay::CandidateSelectionMode::Lowest;
+  }
+}
+
+[[nodiscard]] inline gameplay::GameplayPolicyBuildOutcome
+buildGameplayRulesetPolicyAtPlayStart(
+    const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
+    AppSettings::NotePriorityMode notePriorityMode) {
+  const GameplayRuleset selectedRuleset =
+      options.courseSession != nullptr ? options.courseSession->ruleset
+                                       : options.ruleset;
+  std::optional<RulesetDescriptor> requiredDescriptor =
+      options.requiredRulesetDescriptor;
+  if (!requiredDescriptor.has_value() && options.courseSession != nullptr) {
+    requiredDescriptor = options.courseSession->rulesetDescriptor;
+  }
+  const int sourceRank =
+      options.replayRulesetOverride.has_value() &&
+              options.replayRulesetOverride->sourceJudgeRank.has_value()
+          ? *options.replayRulesetOverride->sourceJudgeRank
+          : chartMeta.Rank;
+  auto outcome = gameplay::buildGameplayRulesetPolicy(
+      chartMeta,
+      {.ruleset = selectedRuleset,
+       .gaugeProfile = options.gaugeProfile,
+       .sourceRank = sourceRank,
+       .playbackRatePercent = options.playback.percent,
+       .judgeScalePercent = options.judgeWindowScalePercent,
+       .courseJudgement = options.courseConstraints.judgement,
+       .beatorajaCandidateSelection =
+           candidateSelectionForNotePriority(notePriorityMode),
+       .requiredDescriptor = std::move(requiredDescriptor),
+       .replaySnapshot = options.replayRulesetOverride});
+  const bool legacyReplayFallback =
+      options.replayData != nullptr &&
+      options.replayData->provenance.ruleset == RulesetDescriptor::Legacy();
+  if (outcome.built() && options.replayData != nullptr &&
+      !options.replayRulesetOverride.has_value() && !legacyReplayFallback) {
+    outcome.status =
+        gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot;
+    outcome.policy.reset();
+    outcome.diagnostic =
+        "The replay does not contain a complete gameplay policy snapshot.";
+  }
+  if (outcome.policy.has_value() && options.courseSession != nullptr &&
+      !gameplay::courseSessionAcceptsPolicy(*options.courseSession,
+                                            *outcome.policy)) {
+    outcome.status = gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset;
+    outcome.policy.reset();
+    outcome.diagnostic =
+        "This course stage uses a different gameplay ruleset.";
+  }
+  return outcome;
 }
 
 [[nodiscard]] inline StartOptions
@@ -214,6 +363,15 @@ enforceCoursePlaybackRules(StartOptions options) {
           : JudgeRankSource::CourseConstraint;
   input.sourceJudgeRank = chartMeta.Rank;
   input.effectiveJudgeWindows = effectiveJudgeWindows;
+  input.totalNotes = chartMeta.TotalNotes;
+  input.authoredGaugeTotal = chartMeta.HasTotal
+                                 ? std::optional<double>(chartMeta.Total)
+                                 : std::nullopt;
+  input.effectiveGaugeTotal = resolveEffectiveGaugeTotal(
+      options.courseSession != nullptr ? options.courseSession->ruleset
+                                       : options.ruleset,
+      chartMeta);
+  input.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
   input.gaugeType = options.gaugeType;
   input.gaugeProfile =
       options.gaugeProfile == GaugeProfile::CourseDefault
@@ -233,10 +391,54 @@ enforceCoursePlaybackRules(StartOptions options) {
   input.playback = options.playback;
   input.judgeWindowScalePercent = options.judgeWindowScalePercent;
   input.startingGaugePercent = options.startingGaugePercent;
-  input.ruleset =
-      options.courseSession != nullptr
-          ? options.courseSession->rulesetDescriptor
-          : options.rulesetDescriptor.value_or(RulesetDescriptor::Current());
+  input.ruleset = options.courseSession != nullptr
+                      ? options.courseSession->rulesetDescriptor
+                      : RulesetDescriptor::For(options.ruleset);
+  return makeScoreProvenance(input);
+}
+
+[[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
+    const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
+    const gameplay::GameplayRulesetPolicy &policy,
+    bool policyCanonical = true) {
+  const int chartLongNoteMode =
+      normalizeChartLongNoteModeValue(chartMeta.LnMode);
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = chartMeta;
+  input.longNoteMode =
+      chartLongNoteMode > 0
+          ? chartLongNoteMode
+          : normalizeChartLongNoteModeValue(options.longNoteMode);
+  input.judgeRankSource =
+      options.courseConstraints.judgement == CourseJudgementConstraint::None
+          ? JudgeRankSource::Chart
+          : JudgeRankSource::CourseConstraint;
+  input.sourceJudgeRank = chartMeta.Rank;
+  input.effectiveJudgeContexts = policy.judge.rules().contexts;
+  input.totalNotes = policy.gauge.totalNotes;
+  input.authoredGaugeTotal = chartMeta.HasTotal
+                                 ? std::optional<double>(chartMeta.Total)
+                                 : std::nullopt;
+  input.effectiveGaugeTotal = policy.gauge.effectiveTotal;
+  input.candidateSelection = policy.judge.rules().candidateSelection;
+  input.policyCanonical = policy.canonical && policyCanonical;
+  input.gaugeType = options.gaugeType;
+  input.gaugeProfile = policy.gauge.resolvedProfile;
+  input.gaugeAutoShift = options.gaugeAutoShift;
+  input.gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound;
+  input.player1 = {.option = options.playOption.value_or("NORMAL"),
+                   .seed = options.playOptionSeed};
+  input.player2 = {.option = options.playOption2.value_or("NORMAL"),
+                   .seed = options.playOption2Seed};
+  input.assistOption = options.assistOption;
+  input.inputDevices = options.inputDeviceCategories;
+  input.autoPlay = options.autoPlay;
+  input.practice = options.practiceMode;
+  input.clubMode = options.clubMode;
+  input.playback = options.playback;
+  input.judgeWindowScalePercent = options.judgeWindowScalePercent;
+  input.startingGaugePercent = options.startingGaugePercent;
+  input.ruleset = policy.descriptor;
   return makeScoreProvenance(input);
 }
 
@@ -255,6 +457,8 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
     options.courseSession = session;
     options.courseConstraints = session->constraints;
+    options.ruleset = session->ruleset;
+    options.requiredRulesetDescriptor = session->rulesetDescriptor;
     options.touchVisualizationEnabled =
         session->replayTouchVisualizationEnabled;
     options.replayGhostRenderingEnabled = session->replayGhostRenderingEnabled;

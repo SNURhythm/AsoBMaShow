@@ -85,17 +85,6 @@ bool serializeProvenanceForWrite(const ScoreProvenance &provenance,
   return true;
 }
 
-enum class ScoreWriteStatus {
-  Inserted,
-  AttemptIdentityCollision,
-  StorageFailure,
-};
-
-struct ScoreWriteOutcome {
-  ScoreWriteStatus status = ScoreWriteStatus::StorageFailure;
-  std::string diagnostic;
-};
-
 bool bindSqliteTextView(sqlite3_stmt *stmt, int index, std::string_view value) {
   if (value.size() >
       static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -112,12 +101,13 @@ bool isAttemptIdentityUniqueConstraint(int extendedError,
          diagnostic == "UNIQUE constraint failed: scores.attempt_id";
 }
 
-ScoreWriteOutcome
-insertScoreWriteOnConnection(sqlite3 *db,
-                             const result_persistence::ChartScoreWrite &score,
-                             std::optional<std::string_view> attemptId,
-                             std::optional<std::string_view> createdAt,
-                             const std::string &provenanceJson) {
+score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
+    sqlite3 *db, const result_persistence::ChartScoreWrite &score,
+    std::optional<std::string_view> attemptId,
+    std::optional<std::string_view> createdAt,
+    const std::string &provenanceJson,
+    const score_repository_detail::ScoreStorageMetadata &storage) {
+  using score_repository_detail::ScoreWriteStatus;
   if (!result_persistence::hasProjectableChartIdentity(score)) {
     SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION,
                     "Refusing to save score without a projectable chart "
@@ -131,12 +121,14 @@ insertScoreWriteOnConnection(sqlite3 *db,
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
       "chart_artist, score, max_score, max_combo, combo_break, pgreat, great, "
       "good, bad, poor, kpoor, fast, slow, final_gauge, clear_type, "
-      "ruleset_version, eligibility, provenance_json, attempt_id";
+      "ruleset_version, eligibility, provenance_json, attempt_id, "
+      "score_source, source_provider_id, source_server_origin, "
+      "source_remote_score_id, source_sync_generation";
   if (createdAt.has_value()) {
     query += ", created_at";
   }
   query += ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-           "?, ?, ?, ?, ?, ?";
+           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   if (createdAt.has_value()) {
     query += ", ?";
   }
@@ -189,10 +181,28 @@ insertScoreWriteOnConnection(sqlite3 *db,
   } else {
     bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
   }
+  bindInt(static_cast<int>(storage.source));
+  const auto bindOptionalText = [&](std::optional<std::string_view> value) {
+    if (value.has_value()) {
+      bindText(*value);
+    } else {
+      bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
+    }
+  };
+  bindOptionalText(storage.providerId);
+  bindOptionalText(storage.serverOrigin);
+  bindOptionalText(storage.remoteScoreId);
+  if (storage.syncGeneration.has_value()) {
+    bound = bound &&
+            sqlite3_bind_int64(stmt.get(), bindIndex++,
+                               *storage.syncGeneration) == SQLITE_OK;
+  } else {
+    bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
+  }
   if (createdAt.has_value()) {
     bindText(*createdAt);
   }
-  const int expectedBindIndex = createdAt.has_value() ? 26 : 25;
+  const int expectedBindIndex = createdAt.has_value() ? 31 : 30;
   if (!bound || bindIndex != expectedBindIndex) {
     logSqlError("binding score insert", db);
     return {.diagnostic = "could not bind the score insert"};
@@ -207,7 +217,9 @@ insertScoreWriteOnConnection(sqlite3 *db,
   }
 
   logSqlErrorText("saving score", error);
-  if (!attemptId.has_value() && extendedError == SQLITE_CONSTRAINT_NOTNULL) {
+  if (!attemptId.has_value() &&
+      storage.source == ScoreStorageSource::LocalGameplay &&
+      extendedError == SQLITE_CONSTRAINT_NOTNULL) {
     std::abort();
   }
   if (attemptId.has_value() &&
@@ -477,16 +489,7 @@ void storeBestCourseRank(CourseScoreRankByLongNoteMode &ranks, int lnMode,
 
 bool isBetterScoreSnapshot(const ScoreBestSnapshot &candidate,
                            const std::optional<ScoreBestSnapshot> &current) {
-  if (!current.has_value()) {
-    return true;
-  }
-  if (candidate.score != current->score) {
-    return candidate.score > current->score;
-  }
-  if (candidate.clearType != current->clearType) {
-    return candidate.clearType > current->clearType;
-  }
-  return candidate.createdAt > current->createdAt;
+  return scoreBestSnapshotIsBetter(candidate, current);
 }
 
 void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
@@ -532,6 +535,30 @@ void loadBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
     const int lnMode = sqlite3_column_int(stmt.get(), 1);
     const int rank = sqlite3_column_int(stmt.get(), 2);
     storeBestRank(cache.rankBySha256, sha256, lnMode, rank);
+  }
+}
+
+void loadLocalBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
+                             std::string_view schema = {}) {
+  const std::string query =
+      "SELECT c.chart_sha256, c.ln_mode, " + bestClearMarkRankExpr("c") +
+      " FROM " + qualifiedScoreTable(schema, "scores") +
+      " c WHERE " +
+      score_cache_queries::detail::scoreParticipatesInBestExpr("c") +
+      " AND c.score_source=" +
+      std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
+      " GROUP BY c.chart_sha256, c.ln_mode";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(db, query, statement,
+                                    "loading local score clear ranks",
+                                    logSqlErrorText)) {
+    return;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    storeBestRank(cache.rankBySha256,
+                  sqliteColumnString(statement.get(), 0),
+                  sqlite3_column_int(statement.get(), 1),
+                  sqlite3_column_int(statement.get(), 2));
   }
 }
 
@@ -595,6 +622,16 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
 
 } // namespace
 
+score_repository_detail::ScoreWriteOutcome
+score_repository_detail::InsertScoreWriteOnConnection(
+    sqlite3 *database, const result_persistence::ChartScoreWrite &score,
+    std::optional<std::string_view> attemptId,
+    std::optional<std::string_view> createdAt,
+    const std::string &provenanceJson, const ScoreStorageMetadata &storage) {
+  return insertScoreWriteOnConnectionImpl(database, score, attemptId,
+                                          createdAt, provenanceJson, storage);
+}
+
 std::size_t
 TransparentStringHash::operator()(std::string_view value) const noexcept {
   return std::hash<std::string_view>{}(value);
@@ -645,9 +682,9 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 
 int ScoreClearRankCache::bestRankFor(const bms_parser::ChartMeta &chartMeta,
                                      int selectedLongNoteMode) const {
-  return bestRankForHash(
-      chartMeta.SHA256,
-      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode));
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
+  return bestRankForStoredKey(normalizedHash(chartMeta.SHA256), longNoteMode);
 }
 
 int ScoreClearRankCache::bestRankForHash(const std::string &sha256,
@@ -659,11 +696,9 @@ int ScoreClearRankCache::bestRankForHash(const std::string &sha256,
 int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
                                               int longNoteMode) const {
   const auto shaIt = rankBySha256.find(sha256);
-  if (shaIt != rankBySha256.end()) {
-    return shaIt->second.bestRankForMode(longNoteMode);
-  }
-
-  return kNoClearTypeRank;
+  return shaIt == rankBySha256.end()
+             ? kNoClearTypeRank
+             : shaIt->second.bestRankForMode(longNoteMode);
 }
 
 int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
@@ -688,8 +723,9 @@ int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
 std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestFor(const bms_parser::ChartMeta &chartMeta,
                         int selectedLongNoteMode) const {
-  return bestForHash(chartMeta.SHA256, scoreLongNoteModeForClearLamp(
-                                           chartMeta, selectedLongNoteMode));
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
+  return bestForStoredKey(normalizedHash(chartMeta.SHA256), longNoteMode);
 }
 
 std::optional<ScoreBestSnapshot>
@@ -702,14 +738,9 @@ std::optional<ScoreBestSnapshot>
 ScoreBestCache::bestForStoredKey(std::string_view sha256,
                                  int longNoteMode) const {
   const auto shaIt = scoreBySha256.find(sha256);
-  if (shaIt != scoreBySha256.end()) {
-    const auto snapshot = shaIt->second.bestForMode(longNoteMode);
-    if (snapshot.has_value()) {
-      return snapshot;
-    }
-  }
-
-  return std::nullopt;
+  return shaIt == scoreBySha256.end()
+             ? std::nullopt
+             : shaIt->second.bestForMode(longNoteMode);
 }
 bool score_repository_detail::InsertCourseScoreOnConnection(
     sqlite3 *db, const CoursePlaySession &session, const RhythmState &state,
@@ -820,9 +851,10 @@ bool ScoreRepository::SaveScore(const bms_parser::ChartMeta &chartMeta,
   }
   sqlite3 *db = impl_->sessionDatabase;
 
-  const bool result = insertScoreWriteOnConnection(db, score, std::nullopt,
-                                                   std::nullopt, provenanceJson)
-                          .status == ScoreWriteStatus::Inserted;
+  const bool result =
+      score_repository_detail::InsertScoreWriteOnConnection(
+          db, score, std::nullopt, std::nullopt, provenanceJson)
+          .status == score_repository_detail::ScoreWriteStatus::Inserted;
   if (result) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
@@ -866,13 +898,16 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   }
   sqlite3 *db = impl_->sessionDatabase;
 
-  const ScoreWriteOutcome inserted = insertScoreWriteOnConnection(
-      db, pending.score, pending.attemptId, pending.createdAt, *provenanceJson);
-  if (inserted.status == ScoreWriteStatus::Inserted) {
+  const score_repository_detail::ScoreWriteOutcome inserted =
+      score_repository_detail::InsertScoreWriteOnConnection(
+          db, pending.score, pending.attemptId, pending.createdAt,
+          *provenanceJson);
+  if (inserted.status == score_repository_detail::ScoreWriteStatus::Inserted) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
     return {.status = ProjectionStatus::Inserted};
   }
-  if (inserted.status == ScoreWriteStatus::AttemptIdentityCollision) {
+  if (inserted.status ==
+      score_repository_detail::ScoreWriteStatus::AttemptIdentityCollision) {
     return classifyProjectedScoreCollision(db, pending, *provenanceJson);
   }
   return {.status = ProjectionStatus::StorageFailure,
@@ -912,44 +947,66 @@ bool ScoreRepository::SaveCourseScore(const CoursePlaySession &session,
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
-    const std::optional<std::string> &excludeAttemptId) {
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
   return score_repository_detail::LoadBestScoreOnConnection(
-      impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId);
+      impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId,
+      selectedLongNoteMode);
+}
+
+std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScoreForRuleset(
+    const bms_parser::ChartMeta &chartMeta,
+    const RulesetDescriptor &requiredRuleset, int selectedLongNoteMode) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+  return score_repository_detail::LoadBestScoreOnConnection(
+      impl_->sessionDatabase, chartMeta, std::nullopt, std::nullopt,
+      selectedLongNoteMode, &requiredRuleset);
 }
 
 std::optional<ScoreBestSnapshot>
 score_repository_detail::LoadBestScoreOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
-    const std::optional<std::string> &excludeAttemptId) {
+    const std::optional<std::string> &excludeAttemptId,
+    int selectedLongNoteMode, const RulesetDescriptor *requiredRuleset) {
   const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
-  const int longNoteMode = scoreLongNoteModeForClearLamp(chartMeta);
+  const int longNoteMode =
+      scoreLongNoteModeForClearLamp(chartMeta, selectedLongNoteMode);
   const bool legacyLongNoteModeFallback = longNoteMode == 1;
   const std::string effectiveClearRank =
-      score_cache_queries::detail::fullComboClearRankExpr("s");
+      score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
   const auto bestOrder = score_cache_queries::detail::bestScoreOrderKey(
       "s", effectiveClearRank, "id");
 
   std::string query =
-      "SELECT score, max_score, max_combo, combo_break, final_gauge, ";
-  query += effectiveClearRank + ", created_at FROM scores s WHERE ";
+      "SELECT score, max_score, max_combo, combo_break, "
+      "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
+      "CAST(kpoor AS INTEGER), final_gauge, ";
+  query += effectiveClearRank +
+           ", created_at, provenance_json, score_source FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
   query += " AND " +
            score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
-           " AND (ln_mode = ? OR (? != 0 AND ln_mode = 0)) "
+           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) "
            "AND (? = '' OR created_at < ?) ";
   if (excludeAttemptId.has_value()) {
     query += "AND (attempt_id IS NULL OR attempt_id <> ?) ";
   }
-  query += "ORDER BY CASE WHEN ln_mode = ? THEN 0 ELSE 1 END, " +
-           score_cache_queries::detail::bestScoreOrderBySql(bestOrder) +
-           " LIMIT 1";
+  if (requiredRuleset != nullptr) {
+    query += "AND ruleset_version = ? ";
+  }
+  query += "ORDER BY CASE WHEN ln_mode = ? OR ln_mode = -1 THEN 0 ELSE 1 END, " +
+           score_cache_queries::detail::bestScoreOrderBySql(bestOrder);
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt, "loading best score",
@@ -966,22 +1023,46 @@ score_repository_detail::LoadBestScoreOnConnection(
   if (excludeAttemptId.has_value()) {
     bindSqliteText(stmt.get(), bindIndex++, *excludeAttemptId);
   }
+  if (requiredRuleset != nullptr) {
+    sqlite3_bind_int(stmt.get(), bindIndex++, requiredRuleset->version);
+  }
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
 
-  if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
-    return std::nullopt;
-  }
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    if (requiredRuleset != nullptr) {
+      std::string provenanceError;
+      const auto provenance = deserializeScoreProvenance(
+          sqliteColumnString(stmt.get(), 8), provenanceError);
+      if (!provenance.has_value() ||
+          provenance->ruleset != *requiredRuleset) {
+        continue;
+      }
+    }
 
-  ScoreBestSnapshot snapshot;
-  snapshot.score = sqlite3_column_int(stmt.get(), 0);
-  snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
-  snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
-  snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
-  snapshot.finalGauge =
-      static_cast<float>(sqlite3_column_double(stmt.get(), 4));
-  snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
-  snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
-  return snapshot;
+    ScoreBestSnapshot snapshot;
+    snapshot.score = sqlite3_column_int(stmt.get(), 0);
+    snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
+    const bool imported = sqlite3_column_int(stmt.get(), 9) ==
+                          static_cast<int>(ScoreStorageSource::ImportedIr);
+    if (!imported) {
+      snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
+      snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
+      if (sqlite3_column_type(stmt.get(), 4) == SQLITE_INTEGER) {
+        const sqlite3_int64 badPoints = sqlite3_column_int64(stmt.get(), 4);
+        if (badPoints >= 0 && badPoints <= std::numeric_limits<int>::max()) {
+          snapshot.badPoints = static_cast<int>(badPoints);
+        }
+      }
+      snapshot.finalGauge =
+          static_cast<float>(sqlite3_column_double(stmt.get(), 5));
+    }
+    snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
+    snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
+    snapshot.source = imported ? ScoreBestSource::ImportedIr
+                               : ScoreBestSource::Local;
+    return snapshot;
+  }
+  return std::nullopt;
 }
 
 std::optional<ScoreBestSnapshot>
@@ -1316,6 +1397,29 @@ ScoreClearRankCache ScoreRepository::LoadBestClearRanks() {
   }
   return score_repository_detail::LoadBestClearRanksOnConnection(
       impl_->sessionDatabase);
+}
+
+ScoreClearRankCache ScoreRepository::LoadLocalBestClearRanks() {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  ScoreClearRankCache cache;
+  if (!EnsureSessionDatabaseLocked()) {
+    return cache;
+  }
+  return score_repository_detail::LoadLocalBestClearRanksOnConnection(
+      impl_->sessionDatabase);
+}
+
+ScoreClearRankCache
+score_repository_detail::LoadLocalBestClearRanksOnConnection(
+    sqlite3 *database, std::string_view schema) {
+  profile_database_activity::ReadGuard operation;
+  ScoreClearRankCache cache;
+  if (database != nullptr) {
+    loadLocalBestChartRanks(database, cache, schema);
+    loadBestCourseRanks(database, cache, schema);
+  }
+  return cache;
 }
 
 ScoreClearRankCache score_repository_detail::LoadBestClearRanksOnConnection(

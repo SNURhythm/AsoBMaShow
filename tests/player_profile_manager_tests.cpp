@@ -249,6 +249,122 @@ std::int64_t rowCount(const std::filesystem::path &database,
   return count.value_or(-1);
 }
 
+std::int64_t matchingRowCount(const std::filesystem::path &database,
+                              std::string_view query) {
+  Database connection = openDatabase(database);
+  expect(connection != nullptr, "matching row count database opens");
+  if (!connection) {
+    return -1;
+  }
+  sqlite3_stmt *raw = nullptr;
+  const std::string sql(query);
+  if (sqlite3_prepare_v2(connection.get(), sql.c_str(), -1, &raw, nullptr) !=
+      SQLITE_OK) {
+    expect(false, "matching row count query prepares");
+    return -1;
+  }
+  std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement(
+      raw, sqlite3_finalize);
+  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+    expect(false, "matching row count query returns a row");
+    return -1;
+  }
+  return sqlite3_column_int64(statement.get(), 0);
+}
+
+void seedIrOperationalState(const std::filesystem::path &path,
+                            std::string_view label) {
+  ReplayRepository repository(path);
+  expect(repository.EnsureSchema(),
+         std::string(label) + " IR outbox schema initializes");
+  repository.Shutdown();
+  Database database = openDatabase(path);
+  expect(database != nullptr,
+         std::string(label) + " IR outbox database opens");
+  if (!database) {
+    return;
+  }
+  expect(execute(
+             database.get(),
+             "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
+             "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
+             "validation_fingerprint,state,local_result_ready,"
+             "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
+             "updated_at_ms,completed_at_ms) VALUES"
+             "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
+             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+             "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
+             "0,1,NULL,NULL,NULL,1000,1000,NULL),"
+             "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
+             "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+             "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
+             "2,1,3000,'job-2','https://example.invalid',"
+             "2000,2000,NULL),"
+             "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
+             "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
+             "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
+             "5,1,NULL,NULL,NULL,3000,3000,3000)"),
+         std::string(label) + " pending, deferred, and succeeded IR rows seed");
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO replays(chart_sha256,gauge_type,gauge_auto_shift,"
+          "final_score,max_combo,final_gauge,clear_type,assist_option) "
+          "VALUES('"
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "0,0,1,1,0.0,0,'OFF');"
+          "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
+          "replay_id,attempt_id,chart_sha256,confirmation_source,"
+          "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac',"
+          "last_insert_rowid(),'10000000-0000-4000-8000-000000000004',"
+          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "1,4000);"
+          "INSERT INTO ir_remote_scores(provider_id,server_origin,"
+          "remote_score_id,remote_user_id,game,remote_chart_id,chart_md5,"
+          "chart_sha256,title,artist,note_count,score,lamp_rank,service,"
+          "time_added_ms,sync_generation) VALUES('tachi',"
+          "'https://boku.tachi.ac','remote-score',42,'bms-7k','remote-chart',"
+          "'dddddddddddddddddddddddddddddddd',"
+          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "'Remote Song','Remote Artist',1,1,0,'Bokutachi',4000,1)"),
+      std::string(label) + " account-scoped IR evidence and mirror seed");
+}
+
+void seedImportedIrScore(const std::filesystem::path &path,
+                         std::string_view label) {
+  Database database = openDatabase(path);
+  expect(database != nullptr,
+         std::string(label) + " imported IR score database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO scores(chart_sha256,score,max_score,max_combo,"
+          "combo_break,pgreat,great,good,bad,poor,kpoor,fast,slow,"
+          "final_gauge,clear_type,score_source,source_provider_id,"
+          "source_server_origin,source_remote_score_id,"
+          "source_sync_generation) VALUES("
+          "'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',"
+          "1,2,1,0,0,1,0,0,0,0,0,0,0.0,0,1,'tachi',"
+          "'https://boku.tachi.ac','remote-score',1)"),
+      std::string(label) + " imported IR score projection seeds");
+}
+
+bool directoryContains(const std::filesystem::path &root,
+                       std::string_view needle) {
+  std::error_code error;
+  for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    if (iterator->is_regular_file(error) && !error &&
+        readFile(iterator->path()).find(needle) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void setDatabaseVersion(const std::filesystem::path &path, int version,
                         std::string_view label) {
   Database database = openDatabase(path);
@@ -383,9 +499,16 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
   expect(paths.profileJson == paths.root / "profile.json" &&
              paths.settingsJson == paths.root / "settings.json" &&
              paths.inputJson == paths.root / "input.json" &&
+             paths.irCredentialsJson == paths.root / "ir-credentials.json" &&
+             paths.bokutachiCacheJson ==
+                 paths.root / "bokutachi-cache.json" &&
              paths.scoresDb == paths.root / "scores.db" &&
              paths.replaysDb == paths.root / "replays.db",
          "all profile paths follow fixed layout");
+  expect(!std::filesystem::exists(paths.irCredentialsJson),
+         "migration starts without device-local IR credentials");
+  expect(!std::filesystem::exists(paths.bokutachiCacheJson),
+         "migration starts without a Bokutachi lookup cache");
 
   const auto settings = AppSettingsStore::Load(paths.settingsJson);
   expect(settings.status == AppSettingsLoadStatus::Loaded,
@@ -2212,6 +2335,33 @@ void testProfileCrudConstraintsAndDataIsolation() {
              std::filesystem::exists(manager.pathsFor(secondId).scoresDb) &&
              std::filesystem::exists(manager.pathsFor(secondId).replaysDb),
          "created profile owns all isolated data files");
+  expect(!std::filesystem::exists(
+             manager.pathsFor(secondId).irCredentialsJson),
+         "created profile does not create a credential file");
+
+  auto sourceSettings =
+      AppSettingsStore::Load(manager.pathsFor(firstId).settingsJson).settings;
+  sourceSettings.selectedGameplayRuleset = "beatoraja";
+  std::string settingsError;
+  expect(AppSettingsStore::Save(manager.pathsFor(firstId).settingsJson,
+                                sourceSettings, settingsError),
+         "duplicate source ruleset saves: " + settingsError);
+
+  writeFile(manager.pathsFor(firstId).irCredentialsJson,
+            R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
+  seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
+                         "duplicate source");
+  seedImportedIrScore(manager.pathsFor(firstId).scoresDb, "duplicate source");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb, "ir_outbox") == 3,
+         "duplicate source starts with three IR operational rows");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb,
+                  "ir_submission_receipts") == 1 &&
+             rowCount(manager.pathsFor(firstId).replaysDb,
+                      "ir_remote_scores") == 1 &&
+             matchingRowCount(manager.pathsFor(firstId).scoresDb,
+                              "SELECT COUNT(*) FROM scores WHERE "
+                              "score_source=1") == 1,
+         "duplicate source starts with account-scoped IR data");
 
   const auto duplicate = manager.duplicateProfile(firstId, "First Copy");
   expect(duplicate.ok() && duplicate.profile.has_value(),
@@ -2220,9 +2370,41 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(readFile(manager.pathsFor(copyId).settingsJson) ==
              readFile(manager.pathsFor(firstId).settingsJson),
          "duplicate preserves settings bytes");
-  expect(rowCount(manager.pathsFor(copyId).scoresDb, "scores") ==
-             rowCount(manager.pathsFor(firstId).scoresDb, "scores"),
-         "duplicate snapshots score data");
+  expect(AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson)
+                 .settings.selectedGameplayRuleset == "beatoraja",
+         "duplicate preserves the per-profile ruleset selection");
+  expect(matchingRowCount(manager.pathsFor(copyId).scoresDb,
+                          "SELECT COUNT(*) FROM scores WHERE score_source=0") ==
+             matchingRowCount(manager.pathsFor(firstId).scoresDb,
+                              "SELECT COUNT(*) FROM scores WHERE "
+                              "score_source=0"),
+         "duplicate snapshots local score data");
+  expect(!std::filesystem::exists(
+             manager.pathsFor(copyId).irCredentialsJson),
+         "duplicate does not copy device-local IR credentials");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb, "ir_outbox") == 3,
+         "duplication leaves source IR operational rows unchanged");
+  expect(rowCount(manager.pathsFor(firstId).replaysDb,
+                  "ir_submission_receipts") == 1 &&
+             rowCount(manager.pathsFor(firstId).replaysDb,
+                      "ir_remote_scores") == 1 &&
+             matchingRowCount(manager.pathsFor(firstId).scoresDb,
+                              "SELECT COUNT(*) FROM scores WHERE "
+                              "score_source=1") == 1,
+         "duplication leaves source account-scoped IR data unchanged");
+  expect(rowCount(manager.pathsFor(copyId).replaysDb, "ir_outbox") == 0,
+         "duplicate starts with no device-local IR operational rows");
+  expect(rowCount(manager.pathsFor(copyId).replaysDb,
+                  "ir_submission_receipts") == 0 &&
+             rowCount(manager.pathsFor(copyId).replaysDb, "ir_remote_scores") ==
+                 0 &&
+             matchingRowCount(manager.pathsFor(copyId).scoresDb,
+                              "SELECT COUNT(*) FROM scores WHERE "
+                              "score_source=1") == 0,
+         "duplicate starts with no account-scoped IR data");
+  expect(!directoryContains(manager.pathsFor(copyId).root,
+                            "sentinel-api-key"),
+         "duplicate contains no credential bytes in any profile file");
 
   const auto renamed = manager.renameProfile(copyId, "Renamed Copy");
   expect(renamed.ok() && renamed.profile &&
@@ -2242,6 +2424,39 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(manager.deleteProfile(secondId).error ==
              ProfileError::LastProfileDeletion,
          "the last profile cannot be deleted");
+}
+
+void testOptionalOperationalFilesRejectLinksWithoutTouchingTargets() {
+  TempDirectory temp("profile-operational-file-safety");
+  TempDirectory external("profile-operational-file-external");
+  PlayerProfileManager manager(temp.path(), dependenciesFor());
+  expect(manager.Initialize().ok(),
+         "operational-file safety fixture initializes");
+  const std::string profileId = manager.activeProfile().id;
+  const PlayerProfilePaths paths = manager.activePaths();
+
+  const std::array<std::pair<std::filesystem::path, std::string_view>, 2>
+      operationalFiles = {{{paths.irCredentialsJson, "IR credentials"},
+                           {paths.bokutachiCacheJson, "Bokutachi cache"}}};
+  for (const auto &[profilePath, label] : operationalFiles) {
+    const auto externalTarget = external.path() / profilePath.filename();
+    const std::string sentinel = std::string(label) + " external data";
+    writeFile(externalTarget, sentinel);
+
+    std::error_code linkError;
+    std::filesystem::create_symlink(externalTarget, profilePath, linkError);
+    expect(!linkError, std::string(label) + " symlink fixture creates");
+    if (!linkError) {
+      expect(manager.validateProfile(profileId).error ==
+                 ProfileError::IntegrityFailure,
+             std::string(label) + " validation rejects a linked file");
+      expect(readFile(externalTarget) == sentinel,
+             std::string(label) +
+                 " rejection leaves its external target untouched");
+      std::filesystem::remove(profilePath, linkError);
+      expect(!linkError, std::string(label) + " symlink fixture removes");
+    }
+  }
 }
 
 void testPracticeDirectoryLifecycleAndValidation() {
@@ -2439,6 +2654,7 @@ int main() {
   testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testProfileCrudConstraintsAndDataIsolation();
+  testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();
   testFutureVersionsFailClosed();
 

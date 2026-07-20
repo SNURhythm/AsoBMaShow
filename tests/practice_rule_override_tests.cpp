@@ -157,6 +157,7 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   meta.MD5 = "practice-override-md5";
   meta.SHA256 = std::string(64, 'a');
   meta.Rank = 1;
+  meta.TotalNotes = 100;
 
   StartOptions recordedOptions;
   recordedOptions.practiceMode = true;

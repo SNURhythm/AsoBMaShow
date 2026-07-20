@@ -47,7 +47,8 @@ struct LaneDefinition {
 struct GameplayChartMetadata {
   int totalNotes = 0;
   int keyMode = 7;
-  double gaugeTotal = 100.0;
+  bool hasGaugeTotal = false;
+  double gaugeTotal = 0.0;
   std::int64_t finalNoteTimeMicros = 0;
   std::int64_t finalTimelineTimeMicros = 0;
 };

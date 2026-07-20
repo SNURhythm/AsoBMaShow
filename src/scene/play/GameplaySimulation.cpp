@@ -1,5 +1,7 @@
 #include "GameplaySimulation.h"
+#include "GameplayNoteJudgeRole.h"
 #include "ManualKeysoundSelection.h"
+#include "../../bms_parser.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,18 +24,78 @@ JudgeResult normalizeReleaseJudge(const JudgeResult &judge) {
 std::int64_t absoluteDistance(std::int64_t value) {
   return value < 0 ? -value : value;
 }
+
+int longNoteJudgeSeverity(Judgement judgement) noexcept {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Kpoor:
+  case Poor:
+    return 4;
+  case None:
+  case JudgementCount:
+    return 5;
+  }
+  return 5;
+}
+
+JudgeResult worseLongNoteJudge(const JudgeResult &head,
+                               const JudgeResult &tail) noexcept {
+  const int headSeverity = longNoteJudgeSeverity(head.judgement);
+  const int tailSeverity = longNoteJudgeSeverity(tail.judgement);
+  if (tailSeverity != headSeverity) {
+    return tailSeverity > headSeverity ? tail : head;
+  }
+  return absoluteDistance(tail.Diff) > absoluteDistance(head.Diff) ? tail
+                                                                   : head;
+}
+
+JudgeResult lr2ClassicReleaseJudge(const JudgeResult &acceptedHead,
+                                   std::int64_t tailDiffMicros,
+                                   bool heldThroughTail) noexcept {
+  const JudgeResult head = normalizeReleaseJudge(acceptedHead);
+  if (heldThroughTail || absoluteDistance(tailDiffMicros) <= 120'000) {
+    return head;
+  }
+  return worseLongNoteJudge(head, JudgeResult(Bad, tailDiffMicros));
+}
+
+GameplaySimulationConfig withCompiledGaugeRules(
+    const GameplayDefinition &definition, GameplaySimulationConfig config) {
+  if (config.gaugeRules.compiled) {
+    return config;
+  }
+  const auto metadata = definition.metadata();
+  bms_parser::ChartMeta meta;
+  meta.TotalNotes = metadata.totalNotes;
+  meta.KeyMode = metadata.keyMode;
+  meta.HasTotal = metadata.hasGaugeTotal;
+  meta.Total = metadata.gaugeTotal;
+  config.gaugeRules = compileGameplayGaugeRules(
+      config.judge.rules().ruleset, meta, config.attempt.gaugeProfile);
+  return config;
+}
 } // namespace
 
 GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                                        GameplaySimulationConfig config)
-    : definition_(definition), config_(std::move(config)),
-      scoreState_({.totalNotes = definition.metadata().totalNotes,
-                   .keyMode = definition.metadata().keyMode,
-                   .gaugeTotal = definition.metadata().gaugeTotal}),
+    : definition_(definition),
+      config_(withCompiledGaugeRules(definition, std::move(config))),
+      scoreState_({.gaugeRules = config_.gaugeRules,
+                   .keyMode = definition.metadata().keyMode}),
       noteStates_(definition.noteCount()),
       hellChargeBalanceMicros_(definition.noteCount()) {
   replayEvents_.reserve(config_.attempt.replayCapacity);
   automaticResults_.reserve(config_.attempt.automaticResultCapacity);
+  inputTransactions_.reserve(definition_.noteCount() + 1);
+  pressCandidates_.reserve(definition_.noteCount());
+  multiBadSourceIndices_.reserve(definition_.noteCount());
   scoreState_.configureBoundedGaugeHistory(
       config_.attempt.gaugeHistoryCapacity);
   scoreState_.configureGauge(
@@ -283,7 +345,7 @@ void GameplaySimulation::maybeLatchChartComplete(
   }
   const std::int64_t completionMicros =
       definition_.metadata().finalTimelineTimeMicros +
-      config_.judge.latePoorTimingMicros() + 1;
+      config_.judge.automaticPoorLateMicros() + 1;
   if (songTimeMicros >= completionMicros) {
     latchTerminal(GameplayTerminalReason::ChartComplete, songTimeMicros);
   }
@@ -366,17 +428,23 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   tailState.releaseTimeMicros = songTimeMicros;
   clearPairHolding(tailId);
 
-  const JudgeResult tailJudge =
-      config_.judge.judgeAt(tail.timingMicros, songTimeMicros);
+  const JudgeResult tailJudge = config_.judge.judgeAt(
+      judgeRoleFor(tail), tail.timingMicros, songTimeMicros);
   JudgeResult applied = normalizeReleaseJudge(tailJudge);
   if (tail.longNoteRule == LongNoteRule::Classic) {
-    const auto &head = definition_.note(tail.pairId);
-    const JudgeResult headJudge =
-        config_.judge.judgeAt(head.timingMicros, headState.playedTimeMicros);
-    applied = normalizeReleaseJudge(absoluteDistance(tailJudge.Diff) >
-                                            absoluteDistance(headJudge.Diff)
-                                        ? tailJudge
-                                        : headJudge);
+    if (config_.judge.rules().ruleset == GameplayRuleset::LR2) {
+      applied = lr2ClassicReleaseJudge(headState.acceptedHeadJudge,
+                                       songTimeMicros - tail.timingMicros,
+                                       true);
+    } else {
+      const auto &head = definition_.note(tail.pairId);
+      const JudgeResult headJudge = config_.judge.judgeAt(
+          judgeRoleFor(head), head.timingMicros, headState.playedTimeMicros);
+      applied = normalizeReleaseJudge(
+          absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
+              ? tailJudge
+              : headJudge);
+    }
   }
 
   GameplayInputResult result;
@@ -490,6 +558,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   state.played = true;
   state.playedTimeMicros = songTimeMicros;
   if (note.kind == NoteKind::LongHead) {
+    state.acceptedHeadJudge = JudgeResult(PGreat, 0);
     state.holding = true;
     if (note.pairId != kInvalidNoteId) {
       noteStates_[note.pairId].holding = true;
@@ -832,7 +901,7 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
     const std::int64_t latePoorDeadline =
         hasLatePoor
             ? definition_.note(chronological[latePoorCursor_]).timingMicros +
-                  config_.judge.latePoorTimingMicros() + 1
+                  config_.judge.automaticPoorLateMicros() + 1
             : std::numeric_limits<std::int64_t>::max();
     const bool processAtTimingPhase = atTimingDeadline <= latePoorDeadline;
     const std::int64_t nextDeadline =
@@ -911,10 +980,20 @@ const NoteRuntimeState &GameplaySimulation::noteState(NoteId id) const {
   return noteStates_.at(id);
 }
 
+GameplayInputBatch GameplaySimulation::inputBatch(
+    const GameplayInputResult &selected) const noexcept {
+  GameplayInputBatch result;
+  static_cast<GameplayInputResult &>(result) = selected;
+  result.transactions = inputTransactions_;
+  return result;
+}
+
 NoteId GameplaySimulation::selectPressCandidate(int mainLane,
                                                 int compensateLane,
                                                 std::int64_t inputTimeMicros) {
   lastSearchStats_ = {};
+  pressCandidates_.clear();
+  multiBadSourceIndices_.clear();
   struct LaneScan {
     std::span<const NoteId> ids;
     std::size_t index = 0;
@@ -922,7 +1001,7 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
   std::array<LaneScan, 2> scans{};
   std::size_t scanCount = 0;
   const std::int64_t poorCutoff =
-      inputTimeMicros - config_.judge.latePoorTimingMicros();
+      inputTimeMicros - config_.judge.automaticPoorLateMicros();
   const std::int64_t futureCutoff =
       config_.judge.latestHittableNoteTiming(inputTimeMicros);
 
@@ -1017,8 +1096,18 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
         !noteAllowed(note)) {
       continue;
     }
-    const JudgeResult judge =
-        config_.judge.judgeAt(note.timingMicros, inputTimeMicros);
+    const JudgeResult judge = config_.judge.judgeAt(
+        judgeRoleFor(note), note.timingMicros, inputTimeMicros);
+    if (config_.judge.rules().candidateSelection ==
+        CandidateSelectionMode::LR2) {
+      pressCandidates_.push_back({
+          .sourceIndex = id,
+          .timingMicros = note.timingMicros,
+          .longNoteHead = note.kind == NoteKind::LongHead,
+          .judge = judge,
+      });
+      continue;
+    }
     if (judge.judgement == None) {
       continue;
     }
@@ -1030,6 +1119,16 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
     } else if (shouldPrefer(selected, id)) {
       selected = id;
     }
+  }
+  if (config_.judge.rules().candidateSelection ==
+      CandidateSelectionMode::LR2) {
+    multiBadSourceIndices_.resize(pressCandidates_.size());
+    const Lr2CandidateResolution resolution = resolveLr2Candidates(
+        pressCandidates_, multiBadSourceIndices_);
+    multiBadSourceIndices_.resize(resolution.multiBadCount);
+    return resolution.selectedSourceIndex.has_value()
+               ? static_cast<NoteId>(*resolution.selectedSourceIndex)
+               : kInvalidNoteId;
   }
   return selected;
 }
@@ -1080,8 +1179,20 @@ GameplaySimulation::selectReleaseCandidate(int lane,
     return kInvalidNoteId;
   }
   const auto ids = definition_.laneNotes(lane);
+  if (config_.judge.rules().ruleset == GameplayRuleset::LR2) {
+    for (const NoteId id : ids) {
+      const auto &note = definition_.note(id);
+      const auto &state = noteStates_[id];
+      ++lastSearchStats_.notesExamined;
+      if (note.kind == NoteKind::LongTail && state.holding && !state.played &&
+          !state.dead && noteAllowed(id)) {
+        return id;
+      }
+    }
+    return kInvalidNoteId;
+  }
   const std::int64_t poorCutoff =
-      inputTimeMicros - config_.judge.latePoorTimingMicros();
+      inputTimeMicros - config_.judge.automaticPoorLateMicros();
   for (std::size_t index = runtime->cursor; index < ids.size(); ++index) {
     const NoteId id = ids[index];
     const auto &note = definition_.note(id);
@@ -1092,7 +1203,7 @@ GameplaySimulation::selectReleaseCandidate(int lane,
       runtime->cursor = ids.size();
       return kInvalidNoteId;
     }
-    if (state.played || state.dead || note.timingMicros < poorCutoff) {
+    if (state.played || state.dead) {
       runtime->cursor = index + 1;
       continue;
     }
@@ -1100,12 +1211,16 @@ GameplaySimulation::selectReleaseCandidate(int lane,
         !config_.allowedNoteRange->contains(note.timingMicros)) {
       continue;
     }
+    if (note.timingMicros < poorCutoff) {
+      runtime->cursor = index + 1;
+      continue;
+    }
     return id;
   }
   return kInvalidNoteId;
 }
 
-GameplayInputResult
+GameplayInputBatch
 GameplaySimulation::pressLane(int lane, const GameplayInputContext &context) {
   return pressLane(lane, lane, context);
 }
@@ -1214,9 +1329,10 @@ NoteId GameplaySimulation::previewPressSoundNote(
                                             judgedTime);
 }
 
-GameplayInputResult
+GameplayInputBatch
 GameplaySimulation::pressLane(int mainLane, int compensateLane,
                               const GameplayInputContext &context) {
+  inputTransactions_.clear();
   if (terminal()) {
     return {};
   }
@@ -1224,14 +1340,14 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) {
-    return result;
+    return inputBatch(result);
   }
   auto *mainState = findLane(mainLane);
   auto *compensateState = findLane(compensateLane);
   if ((mainState == nullptr || mainState->pressed) &&
       (compensateLane == mainLane || compensateState == nullptr ||
        compensateState->pressed)) {
-    return result;
+    return inputBatch(result);
   }
 
   const std::int64_t judgedTime = inputTime(context);
@@ -1255,15 +1371,63 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     result.laneVisual = {LaneVisualAction::Press, mainLane,
                          context.laneBeamTimeMicros, JudgeResult(None, 0)};
     finishTransaction(judgedTime);
-    return result;
+    inputTransactions_.push_back(result);
+    return inputBatch(result);
   }
 
   const auto &note = definition_.note(selected);
   if (note.kind == NoteKind::LongTail) {
-    return result;
+    return inputBatch(result);
   }
   auto &state = noteStates_[selected];
-  const JudgeResult judge = config_.judge.judgeAt(note.timingMicros, judgedTime);
+  for (const std::size_t sourceIndex : multiBadSourceIndices_) {
+    if (sourceIndex >= noteStates_.size()) {
+      continue;
+    }
+    const NoteId multiBadId = static_cast<NoteId>(sourceIndex);
+    const auto &multiBadNote = definition_.note(multiBadId);
+    auto &multiBadState = noteStates_[multiBadId];
+    if (multiBadState.played || multiBadState.dead) {
+      continue;
+    }
+    markIdentityResolved(multiBadId);
+    multiBadState.played = true;
+    multiBadState.playedTimeMicros = judgedTime;
+    if (multiBadNote.kind == NoteKind::LongHead) {
+      clearPairHolding(multiBadId);
+      if (multiBadNote.pairId != kInvalidNoteId &&
+          noteAllowed(multiBadNote.pairId) &&
+          !noteStates_[multiBadNote.pairId].played) {
+        markMissed(multiBadNote.pairId, judgedTime, false);
+      }
+    }
+    GameplayInputResult multiBad;
+    multiBad.noteId = multiBadId;
+    multiBad.hasJudge = true;
+    multiBad.judge =
+        JudgeResult(Bad, judgedTime - multiBadNote.timingMicros);
+    commitJudge(multiBad.judge);
+    multiBad.hasReplayEvent = true;
+    multiBad.replayEvent = {
+        .action = GameplayReplayAction::Press,
+        .noteId = multiBadId,
+        .lane = multiBadNote.lane,
+        .noteTimeMicros = multiBadNote.timingMicros,
+        .songTimeMicros = judgedTime,
+        .judgeTimeMicros = judgedTime,
+        .judgement = Bad,
+        .diffMicros = multiBad.judge.Diff,
+    };
+    recordReplay(multiBad.replayEvent);
+    inputTransactions_.push_back(multiBad);
+    finishTransaction(judgedTime);
+    if (terminal()) {
+      return inputBatch();
+    }
+  }
+
+  const JudgeResult judge = config_.judge.judgeAt(
+      judgeRoleFor(note), note.timingMicros, judgedTime);
   result.noteId = selected;
   result.soundNoteId = selected;
   result.judge = judge;
@@ -1280,6 +1444,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
       state.played = true;
       state.playedTimeMicros = judgedTime;
       if (note.kind == NoteKind::LongHead) {
+        state.acceptedHeadJudge = judge;
         state.holding = true;
         if (note.pairId != kInvalidNoteId) {
           noteStates_[note.pairId].holding = true;
@@ -1308,12 +1473,14 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     recordReplay(result.replayEvent);
     finishTransaction(judgedTime);
   }
-  return result;
+  inputTransactions_.push_back(result);
+  return inputBatch(result);
 }
 
-GameplayInputResult
+GameplayInputBatch
 GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
                                 bool isBackSpin) {
+  inputTransactions_.clear();
   if (terminal()) {
     return {};
   }
@@ -1321,11 +1488,11 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   GameplayInputResult result;
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) {
-    return result;
+    return inputBatch(result);
   }
   auto *laneState = findLane(lane);
   if (laneState == nullptr || !laneState->pressed) {
-    return result;
+    return inputBatch(result);
   }
   laneState->pressed = false;
   const std::int64_t judgedTime = inputTime(context);
@@ -1344,7 +1511,8 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
     };
     recordReplay(result.replayEvent);
     finishTransaction(judgedTime);
-    return result;
+    inputTransactions_.push_back(result);
+    return inputBatch(result);
   }
 
   const auto &tail = definition_.note(selected);
@@ -1361,7 +1529,8 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
     };
     recordReplay(result.replayEvent);
     finishTransaction(judgedTime);
-    return result;
+    inputTransactions_.push_back(result);
+    return inputBatch(result);
   }
 
   auto &headState = noteStates_[tail.pairId];
@@ -1372,17 +1541,22 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   tailState.holding = false;
   headState.holding = false;
 
-  const JudgeResult tailJudge =
-      config_.judge.judgeAt(tail.timingMicros, judgedTime);
+  const JudgeResult tailJudge = config_.judge.judgeAt(
+      judgeRoleFor(tail), tail.timingMicros, judgedTime);
   JudgeResult applied = tailJudge;
   if (tail.longNoteRule == LongNoteRule::Classic) {
-    const auto &head = definition_.note(tail.pairId);
-    const JudgeResult headJudge =
-        config_.judge.judgeAt(head.timingMicros, headState.playedTimeMicros);
-    applied = normalizeReleaseJudge(
-        absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
-            ? tailJudge
-            : headJudge);
+    if (config_.judge.rules().ruleset == GameplayRuleset::LR2) {
+      applied = lr2ClassicReleaseJudge(headState.acceptedHeadJudge,
+                                       judgedTime - tail.timingMicros, false);
+    } else {
+      const auto &head = definition_.note(tail.pairId);
+      const JudgeResult headJudge = config_.judge.judgeAt(
+          judgeRoleFor(head), head.timingMicros, headState.playedTimeMicros);
+      applied = normalizeReleaseJudge(
+          absoluteDistance(tailJudge.Diff) > absoluteDistance(headJudge.Diff)
+              ? tailJudge
+              : headJudge);
+    }
   } else if (tail.scratchLane && !isBackSpin) {
     applied = JudgeResult(Poor, judgedTime - tail.timingMicros);
   } else {
@@ -1405,7 +1579,8 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   };
   recordReplay(result.replayEvent);
   finishTransaction(judgedTime);
-  return result;
+  inputTransactions_.push_back(result);
+  return inputBatch(result);
 }
 
 } // namespace gameplay

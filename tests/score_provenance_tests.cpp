@@ -28,6 +28,9 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.chartMeta.MD5 = "md5-" + hashSuffix;
   input.chartMeta.SHA256 = "sha256-" + hashSuffix;
   input.chartMeta.Rank = 1;
+  input.chartMeta.TotalNotes = 1000;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 200.5;
   input.chartMeta.RandomSeed = 42U;
   input.chartMeta.RandomPrng = "mt19937";
   input.chartMeta.RandomValues = {7, 3, 11};
@@ -35,6 +38,9 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.judgeRankSource = JudgeRankSource::Chart;
   input.sourceJudgeRank = 1;
   input.effectiveJudgeWindows = sampleWindows();
+  input.totalNotes = input.chartMeta.TotalNotes;
+  input.authoredGaugeTotal = input.chartMeta.Total;
+  input.effectiveGaugeTotal = input.chartMeta.Total;
   input.gaugeType = GaugeType::Hard;
   input.gaugeProfile = GaugeProfile::Standard;
   input.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
@@ -44,7 +50,7 @@ ScoreProvenanceBuildInput sampleInput(const std::string &hashSuffix = "one") {
   input.inputDevices = {InputDeviceCategory::Touch,
                         InputDeviceCategory::Keyboard,
                         InputDeviceCategory::Touch, InputDeviceCategory::Midi};
-  input.ruleset = RulesetDescriptor::Current();
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   return input;
 }
 
@@ -55,17 +61,29 @@ sampleVerifiedProvenance(const std::string &hashSuffix = "one") {
 
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
+  assert(rules.id == "lr2");
   assert(rules.version == RulesetDescriptor::kCurrentVersion);
   assert(rules.scoringModel == "asobmashow-v1");
-  assert(rules.judgementModel == "bms-rank-v1");
-  assert(rules.gaugeModel == "beatoraja-profile-gauge-v2");
+  assert(rules.judgementModel == "lr2-v1");
+  assert(rules.gaugeModel == "lr2-gauge-v1");
+  assert(isSupportedRulesetDescriptor(rules));
+
+  const RulesetDescriptor beatoraja =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  assert(beatoraja.id == "beatoraja");
+  assert(beatoraja.version == 2);
+  assert(beatoraja.scoringModel == "asobmashow-v1");
+  assert(beatoraja.judgementModel == "bms-rank-v1");
+  assert(beatoraja.gaugeModel == "beatoraja-profile-gauge-v2");
+  assert(isSupportedRulesetDescriptor(beatoraja));
 
   const RulesetDescriptor legacy = RulesetDescriptor::Legacy();
   assert(legacy.version == 0);
+  assert(!isSupportedRulesetDescriptor(legacy));
 }
 
 void testSchemaAndInputDeviceVocabularyContract() {
-  assert(ScoreProvenance::kSchemaVersion == 3);
+  assert(ScoreProvenance::kSchemaVersion == 4);
   assert(static_cast<int>(InputDeviceCategory::Keyboard) == 0);
   assert(static_cast<int>(InputDeviceCategory::GameController) == 1);
   assert(static_cast<int>(InputDeviceCategory::Joystick) == 2);
@@ -227,7 +245,7 @@ void testEligibilityClassification() {
   auto scaledJudge = sampleInput();
   scaledJudge.judgeWindowScalePercent = 80;
   assert(makeScoreProvenance(scaledJudge).eligibility ==
-         ScoreEligibility::Verified);
+         ScoreEligibility::Modified);
 
   auto expandedJudge = sampleInput();
   expandedJudge.judgeWindowScalePercent = 120;
@@ -284,12 +302,23 @@ void testSignedWindowsAndCanonicalDevices() {
   const ScoreProvenance value = sampleVerifiedProvenance();
   assert(value.stages.size() == 1);
   const auto &windows = value.stages.front().effectiveJudgeWindows;
-  assert(windows.size() == 5);
-  assert(windows[0] == JudgeWindowProvenance(PGreat, -10000, 10000));
-  assert(windows[1] == JudgeWindowProvenance(Great, -30000, 30000));
-  assert(windows[2] == JudgeWindowProvenance(Good, -75000, 75000));
-  assert(windows[3] == JudgeWindowProvenance(Bad, -330000, 420000));
-  assert(windows[4] == JudgeWindowProvenance(Kpoor, -500000, 150000));
+  assert(windows.size() == 20);
+  assert((windows[0] == JudgeWindowProvenance{
+                           .context = gameplay::JudgeWindowContext::Normal,
+                           .judgement = PGreat,
+                           .earlyMicros = -10000,
+                           .lateMicros = 10000}));
+  assert((windows[4] == JudgeWindowProvenance{
+                           .context = gameplay::JudgeWindowContext::Normal,
+                           .judgement = Kpoor,
+                           .earlyMicros = -500000,
+                           .lateMicros = 150000}));
+  assert((windows[19] ==
+         JudgeWindowProvenance{
+             .context = gameplay::JudgeWindowContext::LongScratchTail,
+             .judgement = Kpoor,
+             .earlyMicros = -500000,
+             .lateMicros = 150000}));
 
   assert((value.inputDevices == std::vector{InputDeviceCategory::Keyboard,
                                             InputDeviceCategory::Touch,
@@ -307,7 +336,9 @@ void testFutureSchemaIsRejected() {
       std::to_string(ScoreProvenance::kSchemaVersion);
   const auto position = json.find(current);
   assert(position != std::string::npos);
-  json.replace(position, current.size(), "\"schemaVersion\":4");
+  json.replace(position, current.size(),
+               "\"schemaVersion\":" +
+                   std::to_string(ScoreProvenance::kSchemaVersion + 1));
 
   std::string error;
   assert(!deserializeScoreProvenance(json, error).has_value());
@@ -317,7 +348,9 @@ void testFutureSchemaIsRejected() {
 void testVersionOneMigratesToCurrentSchema() {
   const ScoreProvenance currentValue = sampleVerifiedProvenance();
   std::string json = serializeScoreProvenance(currentValue);
-  const std::string current = "\"schemaVersion\":3";
+  const std::string current =
+      "\"schemaVersion\":" +
+      std::to_string(ScoreProvenance::kSchemaVersion);
   const auto position = json.find(current);
   assert(position != std::string::npos);
   json.replace(position, current.size(), "\"schemaVersion\":1");
@@ -335,6 +368,186 @@ void testVersionOneMigratesToCurrentSchema() {
   assert(!deserializeScoreProvenance(json, error).has_value());
   assert(error.find("unsupported") != std::string::npos ||
          error.find("Unsupported") != std::string::npos);
+}
+
+void testVersionZeroDescriptorRemainsLegacy() {
+  auto root = nlohmann::json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance("legacy-ruleset")));
+  root["schemaVersion"] = 3;
+  root["ruleset"] = {
+      {"version", 0},
+      {"scoringModel", "legacy-unknown"},
+      {"judgementModel", "legacy-unknown"},
+      {"gaugeModel", "legacy-unknown"},
+  };
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(root.dump(), error);
+  assert(error.empty());
+  assert(decoded.has_value());
+  assert(decoded->ruleset == RulesetDescriptor::Legacy());
+  assert(!isSupportedRulesetDescriptor(decoded->ruleset));
+}
+
+void testSchemaFourPolicyProofRoundTrip() {
+  for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
+                                        GameplayRuleset::Beatoraja}) {
+    auto input = sampleInput(ruleset == GameplayRuleset::LR2 ? "lr2-proof"
+                                                              : "b-proof");
+    input.ruleset = RulesetDescriptor::For(ruleset);
+    input.chartMeta.TotalNotes = 1000;
+    input.chartMeta.HasTotal = true;
+    input.chartMeta.Total = 200.5;
+    input.totalNotes = 1000;
+    input.authoredGaugeTotal = 200.5;
+    input.effectiveGaugeTotal =
+        ruleset == GameplayRuleset::LR2 ? 200.0 : 200.5;
+    input.candidateSelection =
+        ruleset == GameplayRuleset::LR2
+            ? gameplay::CandidateSelectionMode::LR2
+            : gameplay::CandidateSelectionMode::Score;
+    const auto judgeRules = gameplay::compileGameplayJudgeRules(
+        ruleset, input.chartMeta.Rank, 100, 100,
+        CourseJudgementConstraint::None,
+        gameplay::CandidateSelectionMode::Score);
+    input.effectiveJudgeContexts = judgeRules.contexts;
+
+    const ScoreProvenance value = makeScoreProvenance(input);
+    assert(value.stages.size() == 1);
+    const auto &stage = value.stages.front();
+    assert(stage.totalNotes == 1000);
+    assert(stage.authoredGaugeTotal == 200.5);
+    assert(stage.effectiveGaugeTotal == input.effectiveGaugeTotal);
+    assert(stage.candidateSelection == input.candidateSelection);
+    assert(stage.effectiveJudgeWindows.size() == 20);
+
+    const std::string json = serializeScoreProvenance(value);
+    assert(json.find("\"id\":\"" +
+                     std::string(gameplayRulesetId(ruleset)) + "\"") !=
+           std::string::npos);
+    assert(json.find("\"context\":\"normal\"") != std::string::npos);
+    assert(json.find("\"context\":\"scratch\"") != std::string::npos);
+    assert(json.find("\"context\":\"long-note-tail\"") !=
+           std::string::npos);
+    assert(json.find("\"context\":\"long-scratch-tail\"") !=
+           std::string::npos);
+    assert(json.find("\"effectiveGaugeTotal\":") != std::string::npos);
+
+    std::string error;
+    const auto decoded = deserializeScoreProvenance(json, error);
+    assert(error.empty());
+    assert(decoded == value);
+  }
+}
+
+void testSchemaFourMalformedPolicyProofIsRejected() {
+  auto input = sampleInput("malformed-policy");
+  input.chartMeta.TotalNotes = 1000;
+  input.totalNotes = 1000;
+  input.effectiveGaugeTotal = 200.0;
+  input.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
+  input.effectiveJudgeContexts =
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 1)
+          .contexts;
+  const auto valid = nlohmann::json::parse(
+      serializeScoreProvenance(makeScoreProvenance(input)));
+
+  const auto assertMalformed = [](nlohmann::json root) {
+    std::string error;
+    assert(!deserializeScoreProvenance(root.dump(), error).has_value());
+    assert(!error.empty());
+  };
+
+  auto duplicate = valid;
+  duplicate["stages"][0]["effectiveJudgeWindows"].push_back(
+      duplicate["stages"][0]["effectiveJudgeWindows"][0]);
+  assertMalformed(std::move(duplicate));
+
+  auto unknownContext = valid;
+  unknownContext["stages"][0]["effectiveJudgeWindows"][0]["context"] =
+      "future-context";
+  assertMalformed(std::move(unknownContext));
+
+  auto unbounded = valid;
+  unbounded["stages"][0]["effectiveJudgeWindows"][0]["lateMicros"] =
+      2'000'001;
+  assertMalformed(std::move(unbounded));
+
+  auto nonFinite = valid;
+  nonFinite["stages"][0]["effectiveGaugeTotal"] = nullptr;
+  assertMalformed(std::move(nonFinite));
+
+  auto missingRulesetId = valid;
+  missingRulesetId["ruleset"].erase("id");
+  assertMalformed(std::move(missingRulesetId));
+
+  auto nonStringRulesetId = valid;
+  nonStringRulesetId["ruleset"]["id"] = 7;
+  assertMalformed(std::move(nonStringRulesetId));
+}
+
+void testUnknownFutureRulesetIsRetainedButUnsupported() {
+  auto root = nlohmann::json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance("future-ruleset")));
+  root["ruleset"]["id"] = "future-ruleset";
+  root["ruleset"]["version"] = RulesetDescriptor::kCurrentVersion + 10;
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(root.dump(), error);
+  assert(error.empty());
+  assert(decoded.has_value());
+  assert(decoded->ruleset.id == "future-ruleset");
+  assert(decoded->ruleset.version == RulesetDescriptor::kCurrentVersion + 10);
+  assert(!isSupportedRulesetDescriptor(decoded->ruleset));
+}
+
+void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {
+  auto input = sampleInput("legacy-proof");
+  input.chartMeta.MD5 = std::string(32, 'a');
+  input.chartMeta.SHA256 = std::string(64, 'b');
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  auto root = nlohmann::json::parse(
+      serializeScoreProvenance(makeScoreProvenance(input)));
+  root["schemaVersion"] = 3;
+  root["ruleset"].erase("id");
+  auto &stage = root["stages"][0];
+  stage.erase("totalNotes");
+  stage.erase("authoredGaugeTotal");
+  stage.erase("effectiveGaugeTotal");
+  stage.erase("candidateSelection");
+  auto normalWindows = nlohmann::json::array();
+  for (std::size_t index = 0; index < 5; ++index) {
+    auto window = stage["effectiveJudgeWindows"][index];
+    window.erase("context");
+    normalWindows.push_back(std::move(window));
+  }
+  stage["effectiveJudgeWindows"] = std::move(normalWindows);
+
+  std::string error;
+  const auto migrated = deserializeScoreProvenance(root.dump(), error);
+  assert(error.empty());
+  assert(migrated.has_value());
+  assert(migrated->ruleset ==
+         RulesetDescriptor::For(GameplayRuleset::Beatoraja));
+  assert(migrated->stages.front().effectiveJudgeWindows.size() == 20);
+  assert(migrated->stages.front().totalNotes == 0);
+  assert(migrated->stages.front().effectiveGaugeTotal == 0.0);
+
+  ReplayData replay;
+  replay.chartMeta = input.chartMeta;
+  replay.provenance = *migrated;
+  StartOptions options;
+  applyReplayProvenanceToStartOptions(options, replay);
+  assert(options.replayRulesetOverride.has_value());
+  assert(options.replayRulesetOverride->totalNotes ==
+         input.chartMeta.TotalNotes);
+  assert(options.replayRulesetOverride->authoredGaugeTotal ==
+         input.chartMeta.Total);
+  assert(options.replayRulesetOverride->effectiveGaugeTotal ==
+         input.chartMeta.Total);
+
+  replay.provenance.stages.front().totalNotes = 1;
+  StartOptions partialProof;
+  applyReplayProvenanceToStartOptions(partialProof, replay);
+  assert(!partialProof.replayRulesetOverride.has_value());
 }
 
 void testCourseMergePreservesStagesAndWorstEligibility() {
@@ -373,6 +586,9 @@ void testPlayStartCaptureIsImmutableAndShared() {
   meta.MD5 = "attempt-md5";
   meta.SHA256 = "attempt-sha256";
   meta.Rank = 1;
+  meta.TotalNotes = 1000;
+  meta.HasTotal = true;
+  meta.Total = 200.0;
   meta.RandomSeed = 91U;
   meta.RandomPrng = "mt19937";
   meta.RandomValues = {4, 2, 7};
@@ -390,7 +606,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
   options.startingGaugePercent = 37;
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard,
                                    InputDeviceCategory::Midi};
-  options.rulesetDescriptor = RulesetDescriptor::Current();
+  options.ruleset = GameplayRuleset::Beatoraja;
 
   Judge effectiveJudge(meta.Rank);
   const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
@@ -401,7 +617,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
   options.playOption = "NORMAL";
   options.playOptionSeed.reset();
   options.inputDeviceCategories = {InputDeviceCategory::Touch};
-  options.rulesetDescriptor = RulesetDescriptor::Legacy();
+  options.ruleset = GameplayRuleset::LR2;
   meta.MD5 = "mutated-md5";
   meta.SHA256 = "mutated-sha256";
   meta.RandomValues = {99};
@@ -462,10 +678,17 @@ void testResultRetryPlaybackAuthority() {
 std::vector<JudgeWindowProvenance> provenanceWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   std::vector<JudgeWindowProvenance> result;
-  for (const auto &[judgement, window] : windows) {
-    result.push_back({.judgement = judgement,
-                      .earlyMicros = window.first,
-                      .lateMicros = window.second});
+  for (const auto context :
+       {gameplay::JudgeWindowContext::Normal,
+        gameplay::JudgeWindowContext::Scratch,
+        gameplay::JudgeWindowContext::LongNoteTail,
+        gameplay::JudgeWindowContext::LongScratchTail}) {
+    for (const auto &[judgement, window] : windows) {
+      result.push_back({.context = context,
+                        .judgement = judgement,
+                        .earlyMicros = window.first,
+                        .lateMicros = window.second});
+    }
   }
   return result;
 }
@@ -476,6 +699,10 @@ ScoreStageProvenance replayStage(
   return {.chartMd5 = std::move(md5),
           .chartSha256 = std::move(sha256),
           .judgeRankSource = JudgeRankSource::Override,
+          .totalNotes = 1000,
+          .authoredGaugeTotal = 200.0,
+          .effectiveGaugeTotal = 200.0,
+          .candidateSelection = gameplay::CandidateSelectionMode::Lowest,
           .effectiveJudgeWindows = provenanceWindows(windows)};
 }
 
@@ -503,7 +730,7 @@ void testReplayUsesPersistedJudgeWindowsAsAuthority() {
 
   StartOptions options;
   applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.replayJudgeOverride.has_value());
+  assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta currentMeta = replay.chartMeta;
   currentMeta.Rank = 3;
@@ -524,7 +751,7 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
 
   StartOptions options;
   applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.replayJudgeOverride.has_value());
+  assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta differentChart = replay.chartMeta;
   differentChart.SHA256 = std::string(64, 'e');
@@ -536,7 +763,7 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   replay.provenance.stages.front().effectiveJudgeWindows.pop_back();
   StartOptions incompleteOptions;
   applyReplayProvenanceToStartOptions(incompleteOptions, replay);
-  assert(!incompleteOptions.replayJudgeOverride.has_value());
+  assert(!incompleteOptions.replayRulesetOverride.has_value());
   const Judge incompleteFallback =
       makeEffectiveJudgeAtPlayStart(incompleteOptions, replay.chartMeta);
   assert(incompleteFallback.timingWindows ==
@@ -545,7 +772,7 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   replay.provenance = ScoreProvenance::Legacy();
   StartOptions legacyOptions;
   applyReplayProvenanceToStartOptions(legacyOptions, replay);
-  assert(!legacyOptions.replayJudgeOverride.has_value());
+  assert(!legacyOptions.replayRulesetOverride.has_value());
 }
 
 void testCourseReplaySelectsMatchingStageJudgeWindows() {
@@ -573,7 +800,7 @@ void testCourseReplaySelectsMatchingStageJudgeWindows() {
   session->constraints.judgement = CourseJudgementConstraint::NoGood;
   const StartOptions options =
       makeCourseReplayStageStartOptions(session, stageReplay);
-  assert(options.replayJudgeOverride.has_value());
+  assert(options.replayRulesetOverride.has_value());
   const Judge restored =
       makeEffectiveJudgeAtPlayStart(options, stageReplay->chartMeta);
   assert(restored.timingWindows == secondWindows);
@@ -622,6 +849,9 @@ void testConstrainedPlayCapturesEffectiveWindowsAsVerified() {
   meta.MD5 = "constrained-md5";
   meta.SHA256 = "constrained-sha256";
   meta.Rank = 2;
+  meta.TotalNotes = 1000;
+  meta.HasTotal = true;
+  meta.Total = 200.0;
 
   StartOptions options;
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
@@ -656,7 +886,9 @@ void testConstrainedPlayCapturesEffectiveWindowsAsVerified() {
 
 void testCourseSessionAggregatesRecordedStagesByIndex() {
   CoursePlaySession session;
-  session.rulesetDescriptor = RulesetDescriptor::Current();
+  session.ruleset = GameplayRuleset::Beatoraja;
+  session.rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
 
   ScoreProvenance first = sampleVerifiedProvenance("course-first");
   ScoreProvenance second = sampleVerifiedProvenance("course-second");
@@ -683,13 +915,18 @@ void testCourseSessionAggregatesRecordedStagesByIndex() {
 
   StartOptions options;
   options.courseSession = std::make_shared<CoursePlaySession>();
-  options.courseSession->rulesetDescriptor = RulesetDescriptor::Current();
+  options.courseSession->ruleset = GameplayRuleset::Beatoraja;
+  options.courseSession->rulesetDescriptor =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   options.courseSession->rulesetDescriptor.scoringModel = "course-override";
   options.inputDeviceCategories = {InputDeviceCategory::Keyboard};
   bms_parser::ChartMeta meta;
   meta.MD5 = "course-md5";
   meta.SHA256 = "course-sha256";
   meta.Rank = 1;
+  meta.TotalNotes = 1000;
+  meta.HasTotal = true;
+  meta.Total = 200.0;
   Judge judge(meta.Rank);
   const ScoreProvenance captured =
       captureScoreProvenanceAtPlayStart(options, meta, judge.timingWindows);
@@ -709,6 +946,11 @@ int main() {
   testSignedWindowsAndCanonicalDevices();
   testFutureSchemaIsRejected();
   testVersionOneMigratesToCurrentSchema();
+  testVersionZeroDescriptorRemainsLegacy();
+  testSchemaFourPolicyProofRoundTrip();
+  testSchemaFourMalformedPolicyProofIsRejected();
+  testUnknownFutureRulesetIsRetainedButUnsupported();
+  testSchemaThreeBeatorajaReplayMigratesFromChartMetadata();
   testCourseMergePreservesStagesAndWorstEligibility();
   testPlayStartCaptureIsImmutableAndShared();
   testReplayStartRestoresPracticeProvenance();

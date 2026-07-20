@@ -203,3 +203,94 @@ bool ScoreRepository::EnsureSchema() {
   std::lock_guard lock(impl_->sessionMutex);
   return EnsureSessionDatabaseLocked();
 }
+
+bool ScoreRepository::ClearImportedIrScoresSnapshot(
+    const std::filesystem::path &snapshotDatabasePath,
+    std::string &errorMessage) {
+  if (snapshotDatabasePath.empty()) {
+    errorMessage = "imported IR score snapshot path is empty";
+    return false;
+  }
+  std::error_code filesystemError;
+  const auto status =
+      std::filesystem::symlink_status(snapshotDatabasePath, filesystemError);
+  if (filesystemError || !std::filesystem::is_regular_file(status) ||
+      std::filesystem::is_symlink(status)) {
+    errorMessage = "imported IR score snapshot is not a regular database file";
+    return false;
+  }
+
+  ScoreRepository snapshot(snapshotDatabasePath);
+  if (!snapshot.EnsureSchema()) {
+    errorMessage = "imported IR score snapshot schema is unavailable";
+    return false;
+  }
+
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(snapshot.impl_->sessionMutex);
+  if (!snapshot.EnsureSessionDatabaseLocked()) {
+    errorMessage = "imported IR score snapshot storage is unavailable";
+    return false;
+  }
+  sqlite3 *database = snapshot.impl_->sessionDatabase;
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    errorMessage = "could not start imported IR score snapshot cleanup";
+    return false;
+  }
+
+  SqliteStatementHandle deletion;
+  if (prepareSqliteStatement(database,
+                             "DELETE FROM scores WHERE score_source=?",
+                             deletion) != SQLITE_OK ||
+      sqlite3_bind_int(deletion.get(), 1,
+                       static_cast<int>(ScoreStorageSource::ImportedIr)) !=
+          SQLITE_OK ||
+      sqlite3_step(deletion.get()) != SQLITE_DONE) {
+    errorMessage = "could not clear imported IR score snapshot rows";
+    return false;
+  }
+  if (const auto error =
+          score_cache_queries::rebuildScoreSummaryTables(database)) {
+    errorMessage =
+        "could not rebuild imported IR score snapshot summaries: " + *error;
+    return false;
+  }
+
+  SqliteStatementHandle verify;
+  if (prepareSqliteStatement(database,
+                             "SELECT COUNT(*) FROM scores WHERE score_source=?",
+                             verify) != SQLITE_OK ||
+      sqlite3_bind_int(verify.get(), 1,
+                       static_cast<int>(ScoreStorageSource::ImportedIr)) !=
+          SQLITE_OK ||
+      sqlite3_step(verify.get()) != SQLITE_ROW ||
+      sqlite3_column_type(verify.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_int64(verify.get(), 0) != 0 ||
+      sqlite3_step(verify.get()) != SQLITE_DONE) {
+    errorMessage = "imported IR score snapshot cleanup could not be verified";
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    errorMessage = "could not commit imported IR score snapshot cleanup";
+    return false;
+  }
+
+  deletion.reset();
+  verify.reset();
+  int walFrames = 0;
+  int checkpointedFrames = 0;
+  const int checkpointResult =
+      sqlite3_wal_checkpoint_v2(database, "main", SQLITE_CHECKPOINT_TRUNCATE,
+                                &walFrames, &checkpointedFrames);
+  if (checkpointResult != SQLITE_OK ||
+      (walFrames >= 0 && checkpointedFrames != walFrames)) {
+    errorMessage =
+        "could not checkpoint the cleaned imported IR score snapshot";
+    return false;
+  }
+  errorMessage.clear();
+  return true;
+}

@@ -144,15 +144,17 @@ void testControllerUsesResolvedEffectiveJudge() {
   replayMeta.MD5 = "replay-window-md5";
   replayMeta.SHA256 = std::string(64, 'a');
   StartOptions replayOptions;
-  replayOptions.replayJudgeOverride = ScoreStageProvenance{
+  replayOptions.replayRulesetOverride = ScoreStageProvenance{
       .chartMd5 = replayMeta.MD5,
       .chartSha256 = replayMeta.SHA256,
       .effectiveJudgeWindows = {
-          {PGreat, -123, 123},
-          {Great, -456, 456},
-          {Good, -789, 789},
-          {Bad, -1'000, 1'000},
-          {Kpoor, -1'200, 1'200},
+          {.judgement = PGreat, .earlyMicros = -123, .lateMicros = 123},
+          {.judgement = Great, .earlyMicros = -456, .lateMicros = 456},
+          {.judgement = Good, .earlyMicros = -789, .lateMicros = 789},
+          {.judgement = Bad, .earlyMicros = -1'000, .lateMicros = 1'000},
+          {.judgement = Kpoor,
+           .earlyMicros = -1'200,
+           .lateMicros = 1'200},
       },
   };
   const Judge replayJudge =

@@ -1,6 +1,8 @@
 target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
     ChartViewerScene.cpp
+    IrUploadsController.cpp
+    IrUploadsScene.cpp
     PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuScene.cpp
@@ -10,13 +12,17 @@ target_sources(main PRIVATE
     ProfileSettingsController.cpp
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
+    RemoteResultRecallController.cpp
+    ResultPresentationModel.cpp
     SceneManager.cpp
+    ResultGaugeHistory.cpp
     ResultScene.cpp
     SettingsScene.cpp
     SettingsAudioVideoModel.cpp
     SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
     SettingsSceneInput.cpp
+    SettingsSceneIr.cpp
     SettingsSceneLayout.cpp
     SettingsScenePreview.cpp
     SettingsSceneProfiles.cpp

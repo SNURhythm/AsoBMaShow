@@ -1,6 +1,7 @@
 #include "scene/play/RealtimeGameplayWorker.h"
 
 #include "bms_parser.hpp"
+#include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/Judge.h"
 
 #include <atomic>
@@ -55,6 +56,18 @@ gameplay::GameplayDefinition makePracticeDefinition() {
   auto *measure = new bms_parser::Measure();
   addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(31));
   addTimeline(*measure, 1'100'000)->SetNote(2, new bms_parser::Note(32));
+  chart.Measures.push_back(measure);
+  return gameplay::buildGameplayDefinition(chart, 0);
+}
+
+gameplay::GameplayDefinition makeMultiBadDefinition() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 3;
+  chart.Meta.KeyMode = 5;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 800'000)->SetNote(1, new bms_parser::Note(51));
+  addTimeline(*measure, 950'000)->SetNote(2, new bms_parser::Note(52));
+  addTimeline(*measure, 1'150'000)->SetNote(1, new bms_parser::Note(53));
   chart.Measures.push_back(measure);
   return gameplay::buildGameplayDefinition(chart, 0);
 }
@@ -659,8 +672,11 @@ void testAutoplayCommitsGameplayAndKeysoundWithoutFramePump() {
 void testStoppedWorkerTransfersCompleteGaugeHistory() {
   FakeClock clock;
   FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.attempt.initialGaugeType = GaugeType::Hard;
+  config.simulation.attempt.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
-                                           makeConfig(clock, audio));
+                                           std::move(config));
   require(worker.start(), "gauge-history fixture starts");
   require(worker.enqueueInput({.epoch = 7,
                                .type = gameplay::RealtimeGameplayInputType::Press,
@@ -675,6 +691,50 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
   const auto history = worker.copyGaugeHistoryAfterStop();
   require(history.size() == 1,
           "stopped authority exposes every committed gauge sample");
+  const auto histories = worker.copyGaugeHistoriesAfterStop();
+  for (const auto &gaugeHistory : histories) {
+    require(gaugeHistory.size() == 1,
+            "stopped authority transfers every GAS candidate series");
+  }
+}
+
+void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+  gameplay::RealtimeGameplayWorker worker(makeMultiBadDefinition(),
+                                           std::move(config));
+  require(worker.start(), "LR2 multi-BAD worker starts");
+  require(worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 1,
+               .compensateLane = 2,
+               .steadyTimestampMicros = 1'000'000}),
+          "LR2 compensated press enters fixed ingress");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 2;
+          }),
+          "worker publishes multi-BAD and selected transactions");
+  const auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot && snapshot->transactionCount >= 2 &&
+              snapshot->transactions[snapshot->transactionCount - 2]
+                      .result.judge.judgement == Bad &&
+              snapshot->transactions[snapshot->transactionCount - 2]
+                      .result.soundNoteId == gameplay::kInvalidNoteId &&
+              snapshot->transactions[snapshot->transactionCount - 1]
+                      .result.judge.judgement == Good &&
+              snapshot->transactions[snapshot->transactionCount - 1]
+                      .result.soundNoteId == 1 &&
+              audio.reserveCount.load() == 1 &&
+              audio.commitCount.load() == 1 &&
+              audio.lastCommitted.load() == 1 &&
+              worker.fault() == gameplay::RealtimeGameplayFault::None,
+          "only the selected LR2 transaction owns the reserved keysound");
+  worker.stop();
 }
 
 } // namespace
@@ -696,5 +756,6 @@ int main() {
   testPracticeAutoplayCompletesWithoutFramePump();
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
+  testLr2MultiBadPublishesEveryTransactionWithOneKeysound();
   return 0;
 }

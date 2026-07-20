@@ -27,6 +27,7 @@ def require(condition: bool, message: str) -> None:
 
 
 exporter = read("src/ResultImageExporter.cpp")
+result_scene = read("src/scene/ResultScene.cpp")
 
 require(
     '#include "scene/ResultLayoutGeometry.h"' in exporter,
@@ -53,6 +54,42 @@ for name in (
 require(
     "kPhotoAnalyticsExtraHeight" not in exporter,
     "result photo exporter must not retain stacked analytics extra height",
+)
+
+require(
+    "class ResultGaugeGraphView final : public View" in result_scene,
+    "the live result gauge graph must render through the View tree",
+)
+require(
+    "graphPlaceHolder->addView(graphView);" in result_scene,
+    "the live result gauge view must be attached to the skin graph placeholder",
+)
+require(
+    "result_gauge_history::seriesFor(resultState)" in result_scene
+    and "result_gauge_history::graphFor(series, selectedIndex)" in result_scene
+    and "result_gauge_history::nextSeriesIndex(series, selectedIndex)"
+    in result_scene,
+    "the live result graph must use shared series choice, geometry, and cycling",
+)
+require(
+    "result_gauge_history::seriesFor(state)" in exporter
+    and "result_gauge_history::graphFor(series, 0)" in exporter,
+    "the result photo exporter must use the same initial series and geometry",
+)
+for source, consumer in ((result_scene, "scene"), (exporter, "exporter")):
+    require(
+        "resultGaugeLineColor" not in source
+        and "gaugeHistory[i - 1]" not in source,
+        f"the result {consumer} must not duplicate gauge segment or color math",
+    )
+
+render_scene_start = result_scene.find("void ResultScene::renderScene()")
+cleanup_start = result_scene.find("void ResultScene::cleanupScene()", render_scene_start)
+render_scene = result_scene[render_scene_start:cleanup_start]
+require(
+    "drawResultGaugeLineGraph" not in render_scene
+    and "SimpleBatchRenderer graphBatch" not in render_scene,
+    "ResultScene::renderScene must not submit the graph after modal overlays",
 )
 
 if failures:

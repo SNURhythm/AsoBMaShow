@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompiledGameplayJudge.h"
+#include "GameplayCandidateRules.h"
 #include "GameplayDefinition.h"
 #include "GameplayScoreState.h"
 #include "../../AppSettings.h"
@@ -20,6 +21,7 @@ struct NoteRuntimeState {
   bool holding = false;
   std::int64_t playedTimeMicros = 0;
   std::int64_t releaseTimeMicros = 0;
+  JudgeResult acceptedHeadJudge = JudgeResult(None, 0);
 };
 
 struct GameplayTimeRange {
@@ -80,6 +82,7 @@ struct GameplayFinalSummary {
 
 struct GameplaySimulationConfig {
   CompiledGameplayJudge judge;
+  GameplayGaugeRules gaugeRules;
   AppSettings::NotePriorityMode notePriorityMode =
       AppSettings::NotePriorityMode::Lowest;
   std::optional<GameplayTimeRange> allowedNoteRange;
@@ -131,6 +134,10 @@ struct GameplayInputResult {
   LaneVisualEvent laneVisual;
 };
 
+struct GameplayInputBatch : GameplayInputResult {
+  std::span<const GameplayInputResult> transactions;
+};
+
 struct GameplayAdvanceResult {
   std::span<const GameplayInputResult> transactions;
   std::int64_t advancedToMicros = 0;
@@ -145,11 +152,11 @@ public:
   GameplaySimulation(const GameplayDefinition &definition,
                      GameplaySimulationConfig config);
 
-  GameplayInputResult pressLane(int lane, const GameplayInputContext &context);
-  GameplayInputResult pressLane(int mainLane, int compensateLane,
-                                const GameplayInputContext &context);
-  GameplayInputResult releaseLane(int lane, const GameplayInputContext &context,
-                                  bool isBackSpin = false);
+  GameplayInputBatch pressLane(int lane, const GameplayInputContext &context);
+  GameplayInputBatch pressLane(int mainLane, int compensateLane,
+                               const GameplayInputContext &context);
+  GameplayInputBatch releaseLane(int lane, const GameplayInputContext &context,
+                                 bool isBackSpin = false);
   [[nodiscard]] NoteId previewPreparationPressSoundNote(
       int mainLane, int compensateLane,
       const GameplayInputContext &context) const;
@@ -204,6 +211,8 @@ private:
   inputTime(const GameplayInputContext &context) const noexcept;
   [[nodiscard]] NoteId selectPressCandidate(int mainLane, int compensateLane,
                                             std::int64_t inputTimeMicros);
+  [[nodiscard]] GameplayInputBatch
+  inputBatch(const GameplayInputResult &selected = {}) const noexcept;
   [[nodiscard]] NoteId
   selectFallbackPressSoundNote(int mainLane, int compensateLane,
                                std::int64_t inputTimeMicros) const;
@@ -252,6 +261,9 @@ private:
   std::vector<LaneRuntimeState> laneStates_;
   std::vector<GameplayReplayEvent> replayEvents_;
   std::vector<GameplayInputResult> automaticResults_;
+  std::vector<GameplayInputResult> inputTransactions_;
+  std::vector<JudgeCandidateDescriptor> pressCandidates_;
+  std::vector<std::size_t> multiBadSourceIndices_;
   bool replayOverflowed_ = false;
   bool automaticResultOverflowed_ = false;
   bool transactionSurvivalFailed_ = false;

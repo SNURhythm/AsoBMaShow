@@ -26,6 +26,26 @@ bms_parser::ChartMeta makeSevenKeyMeta() {
   meta.IsDP = false;
   return meta;
 }
+
+void addClassicLongNote(bms_parser::Chart &chart, long long headMicros,
+                        long long tailMicros, int lane) {
+  auto *measure = new bms_parser::Measure();
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  headTimeline->Timing = headMicros;
+  tailTimeline->Timing = tailMicros;
+  auto *head = new bms_parser::LongNote(
+      bms_parser::Parser::NoWav, bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(
+      bms_parser::Parser::NoWav, bms_parser::LongNoteType::LongNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(lane, head);
+  tailTimeline->SetNote(lane, tail);
+  measure->TimeLines.push_back(headTimeline);
+  measure->TimeLines.push_back(tailTimeline);
+  chart.Measures.push_back(measure);
+}
 } // namespace
 
 int main() {
@@ -77,6 +97,154 @@ int main() {
   if (bestClearInitial.gaugeType != GaugeType::Hazard ||
       bestClearInitial.currentGauge != 37.0f) {
     std::cerr << "export HUD must use the effective Best Clear start state"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData gasHistoryReplay = bestClearReplay;
+  gasHistoryReplay.events = {
+      {.action = ReplayEventAction::Gauge,
+       .songTimeMicros = 500,
+       .judgement = Great,
+       .gauge = 75.0f,
+       .gaugeType = GaugeType::ExHard},
+      {.action = ReplayEventAction::Gauge,
+       .songTimeMicros = 1000,
+       .judgement = Bad,
+       .gauge = 50.0f,
+       .gaugeType = GaugeType::Hard},
+  };
+  const RhythmState gasHistoryResult =
+      replay_result::BuildResultState(chart, gasHistoryReplay);
+  if (gasHistoryResult.gaugeHistoryFor(GaugeType::Hard).size() != 2 ||
+      gasHistoryResult.gaugeHistoryFor(GaugeType::Hard).back() != 50.0f ||
+      gasHistoryResult.gaugeHistoryFor(GaugeType::ExHard).size() != 2 ||
+      gasHistoryResult.gaugeHistoryFor(GaugeType::ExHard).front() != 75.0f) {
+    std::cerr << "replay result must rebuild complete per-gauge GAS histories"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData lr2RulesetReplay;
+  lr2RulesetReplay.initialGaugeType = GaugeType::Normal;
+  lr2RulesetReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  lr2RulesetReplay.provenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::LR2);
+  lr2RulesetReplay.events.push_back({.action = ReplayEventAction::Release,
+                                     .judgement = Bad,
+                                     .gauge = 40.0f,
+                                     .gaugeType = GaugeType::Hard});
+  const RhythmState lr2RulesetResult =
+      replay_result::BuildResultState(chart, lr2RulesetReplay);
+  RhythmState directlySimulatedLr2(&chart, false, GameplayRuleset::LR2);
+  directlySimulatedLr2.configureGauge(GaugeType::Normal,
+                                      GaugeAutoShiftMode::BestClear);
+  directlySimulatedLr2.applyGaugeJudgement(Bad);
+  if (lr2RulesetResult.gaugeHistoryFor(GaugeType::Easy) !=
+      directlySimulatedLr2.gaugeHistoryFor(GaugeType::Easy)) {
+    std::cerr << "replay result must rebuild non-active gauge histories with "
+                 "the recorded LR2 ruleset"
+              << std::endl;
+    return 1;
+  }
+  if (lr2RulesetResult.gaugeRules().ruleset != GameplayRuleset::LR2) {
+    std::cerr << "replay result must retain the recorded LR2 gauge ruleset"
+              << std::endl;
+    return 1;
+  }
+
+  ReplayData legacyRulesetReplay = lr2RulesetReplay;
+  legacyRulesetReplay.provenance = ScoreProvenance::Legacy();
+  const RhythmState legacyRulesetResult =
+      replay_result::BuildResultState(chart, legacyRulesetReplay);
+  if (legacyRulesetResult.gaugeRules().ruleset !=
+      GameplayRuleset::Beatoraja) {
+    std::cerr << "legacy replay result gauge reconstruction remains Beatoraja"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart terminalLongHeadChart;
+  terminalLongHeadChart.Meta = makeSevenKeyMeta();
+  terminalLongHeadChart.Meta.LnMode = 1;
+  terminalLongHeadChart.Meta.TotalNotes = 1;
+  terminalLongHeadChart.Meta.TotalLongNotes = 1;
+  addClassicLongNote(terminalLongHeadChart, 1'000'000, 2'000'000, 1);
+  ReplayData terminalLongHeadReplay;
+  terminalLongHeadReplay.provenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::LR2);
+  terminalLongHeadReplay.events.push_back({
+      .action = ReplayEventAction::Press,
+      .lane = 1,
+      .noteTimeMicros = 1'000'000,
+      .songTimeMicros = 850'000,
+      .judgeTimeMicros = 850'000,
+      .judgement = Bad,
+      .diffMicros = -150'000,
+      .gauge = 80.0f,
+      .gaugeType = GaugeType::Normal,
+      .combo = 0,
+      .score = 0,
+  });
+  const RhythmState terminalLongHeadResult = replay_result::BuildResultState(
+      terminalLongHeadChart, terminalLongHeadReplay);
+  if (terminalLongHeadResult.judgeCount.at(Bad) != 1 ||
+      terminalLongHeadResult.comboBreak != 1 ||
+      terminalLongHeadResult.fastCount != 1) {
+    std::cerr << "a terminal LR2 classic long-note head BAD must remain in the "
+                 "reconstructed result"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart deferredLongHeadChart;
+  deferredLongHeadChart.Meta = makeSevenKeyMeta();
+  deferredLongHeadChart.Meta.LnMode = 1;
+  deferredLongHeadChart.Meta.TotalNotes = 1;
+  deferredLongHeadChart.Meta.TotalLongNotes = 1;
+  addClassicLongNote(deferredLongHeadChart, 1'000'000, 2'000'000, 1);
+  ReplayData deferredLongHeadReplay = terminalLongHeadReplay;
+  deferredLongHeadReplay.events.front().judgement = Good;
+  deferredLongHeadReplay.events.front().diffMicros = -50'000;
+  const RhythmState deferredLongHeadResult = replay_result::BuildResultState(
+      deferredLongHeadChart, deferredLongHeadReplay);
+  if (deferredLongHeadResult.judgeCount.at(Good) != 0 ||
+      deferredLongHeadResult.comboBreak != 0 ||
+      deferredLongHeadResult.fastCount != 0) {
+    std::cerr << "a classic long-note head without a terminal BAD or tail "
+                 "result must remain deferred"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart releasedLongNoteChart;
+  releasedLongNoteChart.Meta = makeSevenKeyMeta();
+  releasedLongNoteChart.Meta.LnMode = 1;
+  releasedLongNoteChart.Meta.TotalNotes = 1;
+  releasedLongNoteChart.Meta.TotalLongNotes = 1;
+  addClassicLongNote(releasedLongNoteChart, 1'000'000, 2'000'000, 1);
+  ReplayData releasedLongNoteReplay = terminalLongHeadReplay;
+  releasedLongNoteReplay.events.push_back({
+      .action = ReplayEventAction::Release,
+      .lane = 1,
+      .noteTimeMicros = 2'000'000,
+      .songTimeMicros = 851'000,
+      .judgeTimeMicros = 851'000,
+      .judgement = Bad,
+      .diffMicros = -1'149'000,
+      .gauge = 80.0f,
+      .gaugeType = GaugeType::Normal,
+      .combo = 0,
+      .score = 0,
+  });
+  const RhythmState releasedLongNoteResult =
+      replay_result::BuildResultState(releasedLongNoteChart,
+                                      releasedLongNoteReplay);
+  if (releasedLongNoteResult.judgeCount.at(Bad) != 1 ||
+      releasedLongNoteResult.comboBreak != 1 ||
+      releasedLongNoteResult.fastCount != 1) {
+    std::cerr << "an LR2 classic long-note head and tail must reconstruct as "
+                 "one final BAD"
               << std::endl;
     return 1;
   }
@@ -191,6 +359,22 @@ int main() {
               << std::endl;
     return 1;
   }
+  if (autoExport.provenance.ruleset !=
+      RulesetDescriptor::For(GameplayRuleset::LR2)) {
+    std::cerr << "synthetic Auto export defaults to LR2 provenance"
+              << std::endl;
+    return 1;
+  }
+  const ReplayData beatorajaAutoExport = replay_autoplay::BuildReplayData(
+      chart, GaugeType::Normal, GaugeAutoShiftMode::None, {}, std::nullopt,
+      std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, false,
+      GaugeType::AssistedEasy, GameplayRuleset::Beatoraja);
+  if (beatorajaAutoExport.provenance.ruleset !=
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
+    std::cerr << "synthetic Auto export retains a selected Beatoraja ruleset"
+              << std::endl;
+    return 1;
+  }
 
   const ReplaySummary assistedAutoSummary = replay_autoplay::BuildSummary(
       chart.Meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
@@ -203,13 +387,40 @@ int main() {
     return 1;
   }
 
+  bms_parser::ChartMeta rulesetMeta;
+  rulesetMeta.KeyMode = 7;
+  rulesetMeta.TotalNotes = 100;
+  rulesetMeta.HasTotal = true;
+  rulesetMeta.Total = 100.5;
+  const ReplaySummary lr2AutoSummary = replay_autoplay::BuildSummary(
+      rulesetMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  bms_parser::Chart rulesetChart;
+  rulesetChart.Meta = rulesetMeta;
+  RhythmState expectedLr2Auto(&rulesetChart, false, GameplayRuleset::LR2);
+  expectedLr2Auto.configureGauge(GaugeType::Normal,
+                                 GaugeAutoShiftMode::None);
+  for (int note = 0; note < rulesetMeta.TotalNotes; ++note) {
+    expectedLr2Auto.applyGaugeJudgement(PGreat);
+  }
+  if (std::abs(lr2AutoSummary.finalGauge -
+               expectedLr2Auto.currentGauge) > 0.01f) {
+    std::cerr << "synthetic Auto summary defaults to the LR2 gauge ruleset"
+              << std::endl;
+    return 1;
+  }
+
   bms_parser::ChartMeta pmsMeta;
   pmsMeta.KeyMode = 9;
   pmsMeta.TotalNotes = 100;
   pmsMeta.HasTotal = true;
   pmsMeta.Total = 100.0;
-  const ReplaySummary pmsAutoSummary = replay_autoplay::BuildSummary(
-      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  const auto buildBeatorajaSummary = [](const bms_parser::ChartMeta &meta) {
+    return replay_autoplay::BuildSummary(
+        meta, GaugeType::Normal, GaugeAutoShiftMode::None, std::nullopt,
+        std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, {},
+        GameplayRuleset::Beatoraja);
+  };
+  const ReplaySummary pmsAutoSummary = buildBeatorajaSummary(pmsMeta);
   if (pmsAutoSummary.finalGauge != 120.0f) {
     std::cerr << "synthetic Auto summary must use the PMS gauge result"
               << std::endl;
@@ -217,8 +428,7 @@ int main() {
   }
 
   pmsMeta.Total = 10.0;
-  const ReplaySummary lowTotalAutoSummary = replay_autoplay::BuildSummary(
-      pmsMeta, GaugeType::Normal, GaugeAutoShiftMode::None);
+  const ReplaySummary lowTotalAutoSummary = buildBeatorajaSummary(pmsMeta);
   if (std::abs(lowTotalAutoSummary.finalGauge - 40.0f) > 0.01f) {
     std::cerr << "synthetic Auto summary must respect authored TOTAL"
               << std::endl;

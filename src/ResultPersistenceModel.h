@@ -2,6 +2,7 @@
 
 #include "ReplayData.h"
 
+#include <array>
 #include <optional>
 #include <string>
 
@@ -36,10 +37,18 @@ struct ChartScoreWrite {
 [[nodiscard]] bool
 hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept;
 
+struct ChartJudgementTiming {
+  std::array<JudgementFastSlowCount, JudgementCount> byJudgement{};
+
+  bool operator==(const ChartJudgementTiming &) const = default;
+};
+
 struct ChartResultAttempt {
   std::string attemptId;
   ReplayData replay;
   ChartScoreWrite score;
+  std::vector<float> adoptedGaugeHistory;
+  std::optional<ChartJudgementTiming> judgementTiming;
   std::string payloadFingerprint;
 };
 

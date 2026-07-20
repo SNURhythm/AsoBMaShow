@@ -502,6 +502,13 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME judgement_indicator_range_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_judgement_indicator_range_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(judgement_indicator_range_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME result_persistence_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py
@@ -514,6 +521,62 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${CMAKE_SOURCE_DIR}/scripts/check_result_visual_layout.py
                 ${CMAKE_SOURCE_DIR})
     set_tests_properties(result_visual_layout_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME main_menu_ranking_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_main_menu_ranking_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(main_menu_ranking_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME main_menu_settings_anchor_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_main_menu_settings_anchor.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(main_menu_settings_anchor_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME ir_uploads_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_ir_uploads_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(ir_uploads_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME main_menu_chart_list_lifecycle_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_main_menu_chart_list_lifecycle.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(main_menu_chart_list_lifecycle_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME ir_ranking_detail_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_ir_ranking_detail_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(ir_ranking_detail_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME records_ir_marker_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_records_ir_marker.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(records_ir_marker_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME saved_course_result_browse_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_saved_course_result_browse.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(saved_course_result_browse_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME records_result_recall_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_records_result_recall_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(records_result_recall_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
@@ -605,6 +668,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gbattle_tests.cpp
         src/bms_parser.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(gbattle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(gbattle_tests PRIVATE cxx_std_23)
@@ -614,16 +678,31 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ReplayResultStateBuilder.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_summary_list_tests PRIVATE cxx_std_23)
 
     add_executable(replay_record_filters_tests
         tests/replay_record_filters_tests.cpp
+        src/ResultRecordSummary.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/bms_parser.cpp
     )
     target_include_directories(replay_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_record_filters_tests PRIVATE cxx_std_23)
+
+    add_executable(result_record_summary_tests
+        tests/result_record_summary_tests.cpp
+        src/ResultRecordSummary.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+    )
+    target_include_directories(result_record_summary_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_record_summary_tests PRIVATE cxx_std_23)
 
     add_executable(course_identity_tests
         tests/course_identity_tests.cpp
@@ -634,13 +713,342 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(course_identity_tests PRIVATE cxx_std_23)
 
+    add_executable(ir_driver_tests
+        tests/ir_driver_tests.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ir_driver_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_receipt_models_tests
+        tests/ir_receipt_models_tests.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_receipt_models_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_receipt_models_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_upload_candidates_tests
+        tests/ir_upload_candidates_tests.cpp
+        src/ir/IrReplayRecordState.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+        src/ArchiveFile.cpp
+        src/bms_parser.cpp
+        src/MinizBridge.c
+        src/repositories/ChartStorageIdentity.cpp
+        src/path.cpp
+    )
+    target_include_directories(ir_upload_candidates_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_upload_candidates_tests PRIVATE cxx_std_23)
+    target_link_libraries(ir_upload_candidates_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(ir_upload_candidates_tests PRIVATE iconv)
+    endif()
+
+    add_executable(ir_remote_score_models_tests
+        tests/ir_remote_score_models_tests.cpp
+        src/ir/IrRemoteScoreModels.cpp
+    )
+    target_include_directories(ir_remote_score_models_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_remote_score_models_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_score_reconciliation_tests
+        tests/ir_score_reconciliation_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_score_reconciliation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_score_reconciliation_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_score_import_projection_tests
+        tests/ir_score_import_projection_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ResultPersistenceModel.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryIrImport.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(ir_score_import_projection_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_score_import_projection_tests PRIVATE
+        cxx_std_23
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(ir_score_import_projection_tests PRIVATE
+            SDL2::SDL2
+        )
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(ir_score_import_projection_tests PRIVATE
+            SDL2::SDL2-static
+        )
+    elseif(TARGET SDL2)
+        target_link_libraries(ir_score_import_projection_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(tachi_user_score_parser_tests
+        tests/tachi_user_score_parser_tests.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
+    )
+    target_include_directories(tachi_user_score_parser_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(tachi_user_score_parser_tests PRIVATE cxx_std_23)
+
+    add_executable(tachi_batch_manual_tests
+        tests/tachi_batch_manual_tests.cpp
+        src/FileChecksum.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(tachi_batch_manual_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(tachi_batch_manual_tests PRIVATE cxx_std_23)
+
+    add_executable(tachi_driver_tests
+        tests/tachi_driver_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/VersionedJson.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/tachi/BokutachiCacheStore.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ir/tachi/TachiDriver.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/ir/tachi/TachiResponseParser.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(tachi_driver_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(tachi_driver_tests PRIVATE cxx_std_23)
+
+    add_executable(bokutachi_cache_store_tests
+        tests/bokutachi_cache_store_tests.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/tachi/BokutachiCacheStore.cpp
+    )
+    target_include_directories(bokutachi_cache_store_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(bokutachi_cache_store_tests PRIVATE cxx_std_23)
+
+    add_executable(tachi_ranking_parser_tests
+        tests/tachi_ranking_parser_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(tachi_ranking_parser_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(tachi_ranking_parser_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_submission_service_tests
+        tests/ir_submission_service_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/VersionedJson.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionService.cpp
+        src/ir/tachi/BokutachiCacheStore.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ir/tachi/TachiDriver.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/ir/tachi/TachiResponseParser.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(ir_submission_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ir_submission_service_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(ir_submission_service_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(ir_ranking_service_tests
+        tests/ir_ranking_service_tests.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrRankingService.cpp
+        src/ir/IrSubmission.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_ranking_service_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ir_ranking_service_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_settings_presentation_tests
+        tests/ir_settings_presentation_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_settings_presentation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_settings_presentation_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_result_presentation_tests
+        tests/ir_result_presentation_tests.cpp
+        src/ir/IrResultPresentation.cpp
+        src/ScoreProvenance.cpp
+    )
+    target_include_directories(ir_result_presentation_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_result_presentation_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_saved_result_upload_tests
+        tests/ir_saved_result_upload_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrSavedResultUpload.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_saved_result_upload_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_saved_result_upload_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_saved_result_batch_upload_tests
+        tests/ir_saved_result_batch_upload_tests.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrSavedResultBatchUpload.cpp
+        src/ir/IrSubmission.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_saved_result_batch_upload_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_saved_result_batch_upload_tests PRIVATE
+        cxx_std_23
+    )
+
+    add_executable(ir_ranking_modal_tests
+        tests/ir_ranking_modal_tests.cpp
+        src/ir/IrRankingModal.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(ir_ranking_modal_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_ranking_modal_tests PRIVATE cxx_std_23)
+    target_link_libraries(ir_ranking_modal_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    if (NOT IOS)
+        add_executable(ir_http_client_tests
+            tests/ir_http_client_tests.cpp
+            src/ir/IrHttpClient.cpp
+        )
+        target_include_directories(ir_http_client_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(ir_http_client_tests PRIVATE cxx_std_23)
+        target_link_libraries(ir_http_client_tests PRIVATE CURL::libcurl)
+    endif()
+
     add_executable(replay_repository_tests
         tests/replay_repository_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrSettingsPresentation.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -688,6 +1096,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
         src/repositories/ChartRepository.cpp
         src/repositories/ChartScanStore.cpp
         src/repositories/ScoreRepositoryChartSession.cpp
@@ -695,6 +1106,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartRepositoryQueries.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
@@ -818,6 +1230,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(result_persistence_model_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -834,6 +1247,43 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(result_persistence_model_tests PRIVATE shell32 ole32)
     endif()
 
+    add_executable(result_recall_builder_tests
+        tests/result_recall_builder_tests.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/ResultRecallBuilder.cpp
+        src/ReplayResultStateBuilder.cpp
+        src/ResultPersistenceModel.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrOutboxModels.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/bms_parser.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(result_recall_builder_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_recall_builder_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(result_recall_builder_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(result_recall_builder_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(result_recall_builder_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(result_recall_builder_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(result_recall_builder_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(result_recall_builder_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(result_persistence_coordinator_tests
         tests/result_persistence_coordinator_tests.cpp
         src/ResultPersistenceCoordinator.cpp
@@ -848,9 +1298,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(result_persistence_integration_tests
         tests/result_persistence_integration_tests.cpp
+        src/AtomicFile.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
+        src/VersionedJson.cpp
+        src/ir/IrDriver.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrRankingModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/tachi/BokutachiCacheStore.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/ir/tachi/TachiDriver.cpp
+        src/ir/tachi/TachiRankingParser.cpp
+        src/ir/tachi/TachiResponseParser.cpp
+        src/ir/tachi/TachiUserScoreParser.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceCoordinator.cpp
@@ -859,6 +1325,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
         src/Uuid.cpp
         src/Utils.cpp
         src/path.cpp
@@ -894,6 +1363,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/path.cpp
         src/sqlite3.c
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
@@ -908,6 +1378,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(chart_record_filters_tests
         tests/chart_record_filters_tests.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(chart_record_filters_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_record_filters_tests PRIVATE cxx_std_23)
@@ -973,6 +1444,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(audio_video_settings_tests
         tests/audio_video_settings_tests.cpp
         src/AppSettings.cpp
+        src/ir/IrProfileSettings.cpp
         src/Utils.cpp
         src/path.cpp
         src/settings/AudioVideoSettings.cpp
@@ -1088,6 +1560,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(view_layout_tests
         tests/view_layout_tests.cpp
+        src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
         src/view/View.cpp
         src/rendering/UniformCache.cpp
@@ -1108,13 +1581,188 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
     target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(play_options_panel_view_tests
+        tests/play_options_panel_view_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/DropdownView.cpp
+        src/view/PlayOptionSectionView.cpp
+        src/view/PlayOptionsPanelView.cpp
+        src/view/ScrollView.cpp
+        src/view/SnappedSlider.cpp
+        src/view/TextInputBox.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(play_options_panel_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(play_options_panel_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(play_options_panel_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(replay_summary_list_view_tests
+        tests/replay_summary_list_view_tests.cpp
+        src/bms_parser.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(replay_summary_list_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_summary_list_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(replay_summary_list_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(result_record_list_view_tests
+        tests/result_record_list_view_tests.cpp
+        src/ResultRecordSummary.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/bms_parser.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(result_record_list_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_record_list_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(result_record_list_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(ir_upload_candidate_list_view_tests
+        tests/ir_upload_candidate_list_view_tests.cpp
+        src/view/IrUploadCandidateListView.cpp
+        src/view/ImageView.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ir/IrReplayRecordState.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/FileChecksum.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(ir_upload_candidate_list_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_upload_candidate_list_view_tests PRIVATE
+        cxx_std_23
+    )
+    target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE iconv)
+    endif()
+
+    add_executable(ir_uploads_controller_tests
+        tests/ir_uploads_controller_tests.cpp
+        src/scene/IrUploadsController.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/Uuid.cpp
+    )
+    target_include_directories(ir_uploads_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_uploads_controller_tests PRIVATE cxx_std_23)
+
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(score_provenance_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_ruleset_tests
+        tests/gameplay_ruleset_tests.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(gameplay_ruleset_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(gameplay_ruleset_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_judge_rules_tests
+        tests/gameplay_judge_rules_tests.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(gameplay_judge_rules_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_judge_rules_tests PRIVATE cxx_std_23)
+
+    add_executable(judgement_indicator_range_tests
+        tests/judgement_indicator_range_tests.cpp
+    )
+    target_include_directories(judgement_indicator_range_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(judgement_indicator_range_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_gauge_rules_tests
+        tests/gameplay_gauge_rules_tests.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(gameplay_gauge_rules_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_gauge_rules_tests PRIVATE cxx_std_23)
+
+    add_executable(gameplay_ruleset_policy_tests
+        tests/gameplay_ruleset_policy_tests.cpp
+        src/bms_parser.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(gameplay_ruleset_policy_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_ruleset_policy_tests PRIVATE cxx_std_23)
 
     add_executable(input_profile_tests
         tests/input_profile_tests.cpp
@@ -1234,6 +1882,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/AppSettings.cpp
+        src/ir/IrProfileSettings.cpp
         src/Utils.cpp
         src/path.cpp
         src/settings/AudioVideoSettings.cpp
@@ -1253,9 +1902,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
 
+    add_executable(ir_credential_store_tests
+        tests/ir_credential_store_tests.cpp
+        src/ir/IrCredentialStore.cpp
+        src/AtomicFile.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(ir_credential_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_credential_store_tests PRIVATE cxx_std_23)
+
     add_executable(practice_configuration_tests
         tests/practice_configuration_tests.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_configuration_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1267,6 +1928,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(practice_rule_override_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1276,6 +1938,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_score_state_tests
         tests/gameplay_score_state_tests.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(gameplay_score_state_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1304,6 +1967,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_playback_startup_tests.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(gameplay_playback_startup_tests PRIVATE
@@ -1317,6 +1981,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
         src/scene/play/Judge.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/RhythmLaneInputController.cpp
     )
     target_include_directories(gameplay_practice_input_boundary_tests PRIVATE
@@ -1336,6 +2005,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_simulation_tests.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
@@ -1356,6 +2029,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/gameplay_automatic_authority_tests.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
@@ -1374,6 +2051,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/realtime_gameplay_worker_tests.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplaySimulation.cpp
         src/scene/play/Judge.cpp
@@ -1441,6 +2122,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeResultModel.cpp
     )
     target_include_directories(practice_result_model_tests PRIVATE
@@ -1454,6 +2136,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeResultFlow.cpp
         src/practice/PracticeResultModel.cpp
     )
@@ -1466,6 +2149,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/practice_launch_tests.cpp
         src/ScoreProvenance.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticeLaunchRequest.cpp
     )
     target_include_directories(practice_launch_tests PRIVATE
@@ -1490,9 +2174,106 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(result_layout_geometry_tests PRIVATE cxx_std_23)
 
+    add_executable(result_gauge_history_tests
+        tests/result_gauge_history_tests.cpp
+        src/rendering/Color.cpp
+        src/scene/ResultGaugeHistory.cpp
+    )
+    target_include_directories(result_gauge_history_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_gauge_history_tests PRIVATE cxx_std_23)
+
+    add_executable(result_presentation_model_tests
+        tests/result_presentation_model_tests.cpp
+        src/bms_parser.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/scene/ResultGaugeHistory.cpp
+        src/scene/ResultPresentationModel.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/Judge.cpp
+        src/skin/DefaultSkin.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(result_presentation_model_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(result_presentation_model_tests PRIVATE cxx_std_23)
+    target_link_libraries(result_presentation_model_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(remote_result_scene_tests
+        tests/remote_result_scene_tests.cpp
+        src/bms_parser.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/rendering/Color.cpp
+        src/ResultRecordSummary.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/scene/ResultGaugeHistory.cpp
+        src/scene/ResultPresentationModel.cpp
+        src/scene/RemoteResultRecallController.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(remote_result_scene_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(remote_result_scene_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(remote_result_scene_tests PRIVATE cxx_std_23)
+    target_link_libraries(remote_result_scene_tests PRIVATE ${COMMON_LIBS})
+
+    add_executable(result_image_exporter_partial_tests
+        tests/result_image_exporter_partial_tests.cpp
+        src/bms_parser.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ScoreProvenance.cpp
+        src/practice/PracticeAnalytics.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/scene/ResultGaugeHistory.cpp
+        src/scene/ResultPresentationModel.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/Judge.cpp
+        src/ResultImageExporterPresentation.cpp
+        src/skin/DefaultSkin.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(result_image_exporter_partial_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_definitions(result_image_exporter_partial_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(result_image_exporter_partial_tests PRIVATE cxx_std_23)
+    target_link_libraries(result_image_exporter_partial_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(chart_practice_range_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1504,6 +2285,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
     )
     target_include_directories(practice_preset_store_tests PRIVATE
@@ -1525,8 +2307,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -1536,8 +2321,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1572,8 +2359,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -1592,8 +2382,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
@@ -1632,8 +2424,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/VersionedJson.cpp
         src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
         src/practice/PracticePresetStore.cpp
         src/AppSettings.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
         src/settings/AudioVideoSettings.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
@@ -1643,8 +2438,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
@@ -1705,6 +2502,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDefaults.cpp
         src/input/InputNormalizer.cpp
         src/input/RealtimePhysicalInputRouter.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(logical_gameplay_input_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -1825,13 +2623,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         gbattle_tests
         replay_summary_list_tests
         replay_record_filters_tests
+        result_record_summary_tests
         course_identity_tests
+        ir_driver_tests
+        ir_receipt_models_tests
+        ir_upload_candidates_tests
+        ir_remote_score_models_tests
+        ir_score_reconciliation_tests
+        ir_score_import_projection_tests
+        tachi_user_score_parser_tests
+        tachi_batch_manual_tests
+        tachi_driver_tests
+        bokutachi_cache_store_tests
+        tachi_ranking_parser_tests
+        ir_submission_service_tests
+        ir_ranking_service_tests
+        ir_settings_presentation_tests
+        ir_result_presentation_tests
+        ir_saved_result_upload_tests
+        ir_saved_result_batch_upload_tests
+        ir_ranking_modal_tests
         replay_repository_tests
         music_playlist_repository_tests
         chart_repository_tests
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
+        result_recall_builder_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests
         chart_record_filters_tests
@@ -1845,9 +2663,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         dropdown_view_tests
         view_layout_tests
         button_enabled_tests
+        replay_summary_list_view_tests
+        result_record_list_view_tests
+        ir_upload_candidate_list_view_tests
+        ir_uploads_controller_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    if (TARGET ir_http_client_tests)
+        asobmashow_register_test(ir_http_client_tests)
+    endif()
     set_tests_properties(application_result_recovery_tests PROPERTIES
         TIMEOUT 10
     )
@@ -1859,6 +2684,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_provenance_contract PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:score_provenance_tests>
     )
+    asobmashow_register_test(gameplay_ruleset_tests)
+    asobmashow_register_test(play_options_panel_view_tests)
+    asobmashow_register_test(gameplay_judge_rules_tests)
+    asobmashow_register_test(judgement_indicator_range_tests)
+    asobmashow_register_test(gameplay_gauge_rules_tests)
+    asobmashow_register_test(gameplay_ruleset_policy_tests)
     asobmashow_register_test(input_profile_tests foundation_input_profile)
     if (NOT IOS AND NOT PLATFORM_ANDROID)
         asobmashow_register_test(platform_document_handoff_tests foundation_platform_document_handoff)
@@ -1871,6 +2702,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
     asobmashow_register_test(practice_configuration_tests)
     asobmashow_register_test(practice_rule_override_tests)
     asobmashow_register_test(gameplay_score_state_tests)
@@ -1890,6 +2722,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(practice_launch_tests)
     asobmashow_register_test(practice_analytics_presentation_tests)
     asobmashow_register_test(result_layout_geometry_tests)
+    asobmashow_register_test(result_gauge_history_tests)
+    asobmashow_register_test(result_presentation_model_tests)
+    asobmashow_register_test(remote_result_scene_tests)
+    asobmashow_register_test(result_image_exporter_partial_tests)
     asobmashow_register_test(chart_practice_range_tests)
     asobmashow_register_test(practice_preset_store_tests)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager)

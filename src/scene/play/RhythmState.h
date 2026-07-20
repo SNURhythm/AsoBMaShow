@@ -4,24 +4,58 @@
 
 class RhythmState : public GameplayScoreState {
 public:
-  explicit RhythmState(const bms_parser::Chart *chart, bool addReadyMeasure)
-      : GameplayScoreState(configFor(chart)) {
+  explicit RhythmState(
+      const bms_parser::Chart *chart, bool addReadyMeasure,
+      GameplayRuleset ruleset = GameplayRuleset::Beatoraja,
+      GaugeProfile profile = GaugeProfile::Standard)
+      : GameplayScoreState(configFor(chart, ruleset, profile)), chart_(chart),
+        ruleset_(ruleset) {
     (void)addReadyMeasure;
   }
 
+  explicit RhythmState(const bms_parser::Chart *chart, bool addReadyMeasure,
+                       GameplayGaugeRules gaugeRules)
+      : GameplayScoreState(
+            {.gaugeRules = gaugeRules,
+             .keyMode = chart == nullptr ? 7 : chart->Meta.KeyMode}),
+        chart_(chart), ruleset_(gaugeRules.ruleset),
+        fixedGaugeRules_(std::move(gaugeRules)) {
+    (void)addReadyMeasure;
+  }
+
+  void configureGauge(GaugeType newSelectedGaugeType,
+                      GaugeAutoShiftMode autoShift,
+                      GaugeProfile selectedGaugeProfile =
+                          GaugeProfile::Standard,
+                      GaugeType autoShiftLowerBound =
+                          GaugeType::AssistedEasy) {
+    setGaugeRules(fixedGaugeRules_.has_value()
+                      ? *fixedGaugeRules_
+                      : compileGameplayGaugeRules(
+                            ruleset_, chartMeta(), selectedGaugeProfile),
+                  chart_ == nullptr ? 7 : chart_->Meta.KeyMode);
+    GameplayScoreState::configureGauge(newSelectedGaugeType, autoShift,
+                                       selectedGaugeProfile,
+                                       autoShiftLowerBound);
+  }
+
 private:
-  static GameplayScoreConfig configFor(const bms_parser::Chart *chart) {
-    if (chart == nullptr) {
-      return {};
-    }
+  [[nodiscard]] bms_parser::ChartMeta chartMeta() const {
+    return chart_ == nullptr ? bms_parser::ChartMeta{} : chart_->Meta;
+  }
+
+  static GameplayScoreConfig configFor(const bms_parser::Chart *chart,
+                                       GameplayRuleset ruleset,
+                                       GaugeProfile profile) {
+    const bms_parser::ChartMeta meta =
+        chart == nullptr ? bms_parser::ChartMeta{} : chart->Meta;
     return {
-        .totalNotes = chart->Meta.TotalNotes,
-        .keyMode = chart->Meta.KeyMode,
-        .gaugeTotal =
-            chart->Meta.HasTotal
-                ? chart->Meta.Total
-                : beatorajaDefaultGaugeTotal(chart->Meta.KeyMode,
-                                             chart->Meta.TotalNotes),
+        .gaugeRules = compileGameplayGaugeRules(ruleset, meta, profile),
+        .keyMode = meta.KeyMode,
     };
   }
+
+  const bms_parser::Chart *chart_ = nullptr;
+  GameplayRuleset ruleset_ = GameplayRuleset::Beatoraja;
+  std::optional<GameplayGaugeRules> fixedGaugeRules_;
 };

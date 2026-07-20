@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,8 @@ struct ChartMetaQuery {
   bool favoritesOnly = false;
   int limit = 0;
   int offset = 0;
+
+  bool operator==(const ChartMetaQuery &) const = default;
 };
 
 struct ChartMetaRecord {
@@ -78,6 +81,16 @@ struct ChartMetaRecord {
   std::uint64_t archiveUncompressedSize = 0;
   int archiveFileCount = 0;
   bool favorite = false;
+};
+
+enum class ChartMetaPathBatchReadStatus { Loaded, Invalid, StorageFailure };
+
+struct ChartMetaPathBatchReadOutcome {
+  ChartMetaPathBatchReadStatus status =
+      ChartMetaPathBatchReadStatus::StorageFailure;
+  std::vector<ChartMetaRecord> records;
+  std::size_t missingPaths = 0;
+  std::string diagnostic;
 };
 
 struct MusicTrackRecord {
@@ -192,6 +205,8 @@ public:
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);
     void QueryChartMeta(const ChartMetaQuery &query,
                         std::vector<ChartMetaRecord> &chartMetas);
+    ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
+        std::span<const std::filesystem::path> paths);
     int CountChartMeta(const ChartMetaQuery &query);
     int FindChartMetaIndex(const ChartMetaQuery &query,
                            const std::filesystem::path &path);
@@ -225,7 +240,9 @@ public:
     std::string
     DifficultyTableLabelsForChart(const bms_parser::ChartMeta &meta);
     chart_library::FolderClearDataByLongNoteMode
-    LoadFolderClearDataByLongNoteMode(const ScoreClearRankCache &scoreRanks);
+    LoadFolderClearDataByLongNoteMode(
+        const ScoreClearRankCache &projectedChartRanks,
+        const ScoreClearRankCache &localCourseRanks);
 
   private:
     friend class ChartRepository;

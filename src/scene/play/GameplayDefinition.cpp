@@ -2,7 +2,6 @@
 
 #include "../../CoursePlaySession.h"
 #include "../../bms_parser.hpp"
-#include "GameplayScoreState.h"
 
 #include <algorithm>
 #include <numeric>
@@ -103,11 +102,8 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
   result.metadata_ = {
       .totalNotes = chart.Meta.TotalNotes,
       .keyMode = chart.Meta.KeyMode,
-      .gaugeTotal =
-          chart.Meta.HasTotal
-              ? chart.Meta.Total
-              : beatorajaDefaultGaugeTotal(chart.Meta.KeyMode,
-                                           chart.Meta.TotalNotes),
+      .hasGaugeTotal = chart.Meta.HasTotal,
+      .gaugeTotal = chart.Meta.Total,
   };
   std::unordered_map<const bms_parser::Note *, NoteId> ids;
 

@@ -14,15 +14,22 @@
 #include <vector>
 
 namespace result_presentation {
-inline ResultPreviousBestData
+inline std::optional<ResultPreviousBestData>
 previousBestDataFromSnapshot(const ScoreBestSnapshot &snapshot) {
-  return {.score = snapshot.score,
-          .maxScore = snapshot.maxScore,
-          .maxCombo = snapshot.maxCombo,
-          .comboBreak = snapshot.comboBreak,
-          .finalGauge = snapshot.finalGauge,
-          .clearType = snapshot.clearType,
-          .createdAt = snapshot.createdAt};
+  if (snapshot.source != ScoreBestSource::Local ||
+      !snapshot.maxCombo.has_value() || !snapshot.comboBreak.has_value() ||
+      !snapshot.finalGauge.has_value() || !snapshot.createdAt.has_value()) {
+    return std::nullopt;
+  }
+  return ResultPreviousBestData{
+      .score = snapshot.score,
+      .maxScore = snapshot.maxScore,
+      .maxCombo = *snapshot.maxCombo,
+      .comboBreak = *snapshot.comboBreak,
+      .finalGauge = *snapshot.finalGauge,
+      .clearType = snapshot.clearType,
+      .createdAt = *snapshot.createdAt,
+  };
 }
 
 inline ScoreBestSnapshot

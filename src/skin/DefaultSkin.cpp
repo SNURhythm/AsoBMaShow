@@ -1,110 +1,115 @@
 #include "DefaultSkin.h"
-#include "../ScoreRankUtils.h"
-#include "../scene/PracticeAnalyticsPresentation.h"
+
 #include "../scene/ResultLayoutGeometry.h"
+#include "../scene/ResultPresentationModel.h"
 #include "../targets.h"
-#include <algorithm>
-#include <cmath>
-#include <iomanip>
-#include <sstream>
-#include "../view/TextView.h"
 #include "../view/Button.h"
-#include "../view/ClearLampColors.h"
+#include "../view/TextView.h"
 #include "../view/UiTheme.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 namespace {
-std::string formatNumber(double value, int decimals = 0) {
-  std::ostringstream output;
-  output << std::fixed << std::setprecision(decimals) << value;
-  return output.str();
-}
-
-std::string formatSignedDelta(int delta) {
-  return (delta >= 0 ? "+" : "") + std::to_string(delta);
-}
-
-std::string formatScoreRate(int score, int maxScore) {
-  if (maxScore <= 0) {
-    return "0.00%";
-  }
-  return formatNumber(static_cast<double>(score) * 100.0 /
-                          static_cast<double>(maxScore),
-                      2) +
-         "%";
-}
-
-struct BpmValueDisplay {
+struct BpmTextPart {
   std::string prefix;
   std::string value;
 };
 
-struct BpmDisplay {
-  BpmValueDisplay min;
-  BpmValueDisplay max;
-  BpmValueDisplay main;
+struct BpmTextParts {
+  BpmTextPart minimum;
+  BpmTextPart maximum;
+  BpmTextPart main;
   bool variable = false;
 };
 
-BpmValueDisplay formatBpmValue(double value) {
-  if (std::abs(value - std::round(value)) < 0.01) {
-    const long long rounded = static_cast<long long>(std::llround(value));
-    std::string text = std::to_string(rounded);
-    if (rounded >= 1000 && text.size() > 3) {
-      return {.prefix = text.substr(0, text.size() - 3),
-              .value = text.substr(text.size() - 3)};
-    }
-    return {.value = text};
+BpmTextPart splitBpmPart(std::string_view text) {
+  if (text.find('.') == std::string_view::npos && text.size() > 3) {
+    return {.prefix = std::string(text.substr(0, text.size() - 3)),
+            .value = std::string(text.substr(text.size() - 3))};
   }
-  return {.value = formatNumber(value, 2)};
+  return {.value = std::string(text)};
 }
 
-BpmDisplay formatBpm(const bms_parser::ChartMeta &meta) {
-  const double minBpm = meta.MinBpm > 0.0 ? meta.MinBpm : meta.Bpm;
-  const double maxBpm = meta.MaxBpm > 0.0 ? meta.MaxBpm : meta.Bpm;
-  const bool variable =
-      minBpm > 0.0 && maxBpm > 0.0 && std::abs(maxBpm - minBpm) > 0.01;
-  return {.min = formatBpmValue(minBpm),
-          .max = formatBpmValue(maxBpm),
-          .main = formatBpmValue(meta.Bpm),
-          .variable = variable};
-}
-
-std::string formatDuration(long long micros) {
-  if (micros <= 0) {
-    return "0:00";
+BpmTextParts splitBpmText(std::string_view text) {
+  const std::size_t separator = text.find('-');
+  const std::size_t open = text.find('(', separator);
+  const std::size_t close = text.find(')', open);
+  if (separator == std::string_view::npos || open == std::string_view::npos ||
+      close == std::string_view::npos || separator >= open) {
+    return {.main = splitBpmPart(text)};
   }
-  const long long seconds = micros / 1000000LL;
-  const long long minutes = seconds / 60LL;
-  const long long remaining = seconds % 60LL;
-  std::ostringstream output;
-  output << minutes << ":" << std::setw(2) << std::setfill('0') << remaining;
-  return output.str();
-}
-
-std::string formatGauge(float gauge) {
-  return formatNumber(static_cast<double>(gauge), 1) + "%";
-}
-
-std::pair<std::string, int> nextRankTarget(int score, int maxScore) {
-  if (maxScore <= 0) {
-    return {"-", 0};
-  }
-
-  struct Threshold {
-    const char *label;
-    int numerator;
+  return {
+      .minimum = splitBpmPart(text.substr(0, separator)),
+      .maximum = splitBpmPart(text.substr(separator + 1, open - separator - 1)),
+      .main = splitBpmPart(text.substr(open + 1, close - open - 1)),
+      .variable = true,
   };
-  constexpr Threshold thresholds[] = {{"E", 2},   {"D", 3},  {"C", 4},
-                                      {"B", 5},   {"A", 6},  {"AA", 7},
-                                      {"AAA", 8}, {"MAX", 9}};
-  for (const auto &threshold : thresholds) {
-    const int target =
-        static_cast<int>(std::ceil(maxScore * threshold.numerator / 9.0));
-    if (score < target) {
-      return {threshold.label, score - target};
+}
+
+std::string semanticId(std::string_view label) {
+  std::string result;
+  bool pendingSeparator = false;
+  for (const unsigned char character : label) {
+    if (std::isalnum(character) != 0) {
+      if (pendingSeparator && !result.empty()) {
+        result.push_back('-');
+      }
+      result.push_back(static_cast<char>(std::tolower(character)));
+      pendingSeparator = false;
+    } else {
+      pendingSeparator = true;
     }
   }
-  return {"MAX", 0};
+  return result;
+}
+
+std::string judgementId(std::string_view label) {
+  std::string result;
+  for (const unsigned char character : label) {
+    if (std::isalnum(character) != 0) {
+      result.push_back(static_cast<char>(std::tolower(character)));
+    }
+  }
+  return result;
+}
+
+Color comparisonDeltaAccent(const ResultComparisonCard &card) {
+  if (!card.delta.has_value() || card.delta->find("--") != std::string::npos) {
+    return ui_theme::textMuted();
+  }
+  if (card.title.find("COMBO") != std::string::npos) {
+    int comboDelta = 0;
+    int breakDelta = 0;
+    if (std::sscanf(card.delta->c_str(), "COMBO %d / BREAK %d", &comboDelta,
+                    &breakDelta) == 2) {
+      return comboDelta >= 0 && breakDelta <= 0 ? ui_theme::lime()
+                                                : ui_theme::amber();
+    }
+    return ui_theme::amber();
+  }
+  return card.delta->find('-') == std::string::npos ? ui_theme::lime()
+                                                    : ui_theme::coral();
+}
+
+std::optional<ResultGradeCard>
+legacyGradeCard(const ResultPresentationModel &presentation) {
+  if (auto grade = gradeCard(presentation)) {
+    return grade;
+  }
+  if (!presentation.score.has_value() || !presentation.maxScore.has_value()) {
+    return std::nullopt;
+  }
+  return ResultGradeCard{
+      .grade = {},
+      .rate = "0.00%",
+      .accent = ui_theme::scoreRankColor({}),
+  };
 }
 } // namespace
 
@@ -132,9 +137,39 @@ void DefaultSkin::buildResultSummary(View *root, ResultSkinData *data) {
 
 void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
                                     bool summaryOnly) {
-  const auto &meta = *data->meta;
-  const auto &resultState = *data->state;
-  auto &context = *data->context;
+  if (rootLayout == nullptr || data == nullptr) {
+    return;
+  }
+
+  if (data != nullptr && data->presentation != nullptr) {
+    buildPresentationResultLayout(rootLayout, data, *data->presentation,
+                                  summaryOnly, true);
+    return;
+  }
+
+  ResultLocalPresentationOptions options{
+      .playModeLabel = data->playModeLabel,
+      .laneOrderLabel = data->laneOrderLabel,
+      .difficultyLabel = data->difficultyLabel,
+      .headerDifficultyLabelOverride = data->headerDifficultyLabelOverride,
+      .currentClearLabelOverride = data->currentClearLabelOverride,
+      .currentClearRankOverride = data->currentClearRankOverride,
+      .previousBest = data->previousBest,
+      .pacemaker = data->pacemaker,
+  };
+  ResultPresentationModel localPresentation = makeLocalResultPresentation(
+      *data->meta, *data->state, std::move(options));
+  // The legacy result header did not render key mode. Keep the null-pointer
+  // compatibility path pixel-compatible until callers supply the model.
+  localPresentation.playtype.reset();
+  buildPresentationResultLayout(rootLayout, data, localPresentation,
+                                summaryOnly, false);
+}
+
+void DefaultSkin::buildPresentationResultLayout(
+    View *rootLayout, ResultSkinData *data,
+    const ResultPresentationModel &presentation, bool summaryOnly,
+    bool authoritativePresentation) {
   const bool mobileTarget =
       TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
   const auto layoutMetrics = result_layout::metricsFor(
@@ -149,7 +184,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     rootLayout->setBackgroundColor(ui_theme::resultBackdrop());
   }
 
-  auto makeLabel = [](const std::string &text, int size, Color color) {
+  const auto makeLabel = [](const std::string &text, int size, Color color) {
     auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", size);
     label->setText(text);
     label->setColor(ui_theme::sdl(color));
@@ -157,7 +192,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     return label;
   };
 
-  auto makePanel = [](Color fill, Color border) {
+  const auto makePanel = [](Color fill, Color border) {
     auto *panel = new View();
     panel->setBackgroundColor(fill);
     panel->setCornerRadius(ui_theme::panelRadius());
@@ -167,32 +202,13 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     return panel;
   };
 
-  const int totalNotes = meta.TotalNotes;
-  const int maxScore = totalNotes * 2;
-  const int currentScore = resultState.getScore();
-  const std::string gradeDisplay =
-      score_rank::displayLabelForScore(currentScore, maxScore);
-  const Color gradeAccent = ui_theme::scoreRankColor(gradeDisplay);
-  const int playLevelDecimals =
-      std::abs(meta.PlayLevel - std::round(meta.PlayLevel)) < 0.01 ? 0 : 1;
-  const std::string playLevelLabel =
-      "LV " + formatNumber(meta.PlayLevel, playLevelDecimals);
-  const std::string difficultyLabel =
-      data != nullptr && data->headerDifficultyLabelOverride.has_value()
-          ? *data->headerDifficultyLabelOverride
-          : (data != nullptr && !data->difficultyLabel.empty()
-                 ? data->difficultyLabel + " / " + playLevelLabel
-                 : playLevelLabel);
-
-  auto countFor = [&resultState](Judgement judgement) {
-    const auto it = resultState.judgeCount.find(judgement);
-    return it == resultState.judgeCount.end() ? 0 : it->second;
-  };
-  auto fastSlowFor = [&resultState](Judgement judgement) {
-    const auto it = resultState.judgementFastSlowCount.find(judgement);
-    return it == resultState.judgementFastSlowCount.end()
-               ? JudgementFastSlowCount{}
-               : it->second;
+  const auto makeDivider = []() {
+    auto *divider = new View();
+    divider->setWidth(1);
+    divider->setAlignSelf(YGAlignStretch);
+    divider->setBackgroundColor(ui_theme::hairlineSubtle());
+    divider->setFlexShrink(0);
+    return divider;
   };
 
   if (!summaryOnly) {
@@ -201,6 +217,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     header->setAlignItems(YGAlignCenter);
     header->setGap(20);
     header->setMinHeight(96);
+    header->setName("resultHeader");
 
     auto *titleStack = new View();
     titleStack->setFlexDirection(FlexDirection::Column);
@@ -213,8 +230,8 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     titleRow->setGap(14);
     titleRow->setHeight(58);
 
-    auto titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
-    titleText->setText(meta.Title);
+    auto *titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+    titleText->setText(presentation.title);
     titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
     titleText->setOverflow(TextView::TextOverflow::Marquee);
     titleText->setHeight(58);
@@ -223,109 +240,70 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     titleText->setName("title");
     titleRow->addView(titleText);
 
-    auto difficultyText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
-    difficultyText->setText(difficultyLabel);
-    difficultyText->setColor(ui_theme::sdl(ui_theme::amber()));
-    difficultyText->setOverflow(TextView::TextOverflow::Hidden);
-    difficultyText->setHeight(58);
-    difficultyText->setFlexShrink(0);
-    difficultyText->setWidth(
-        std::min(440, std::max(1, difficultyText->textureWidth() + 8)));
-    difficultyText->setName("difficulty");
-    titleRow->addView(difficultyText);
+    if (authoritativePresentation && presentation.playtype.has_value()) {
+      auto *playtypeText =
+          makeLabel(*presentation.playtype, 30, ui_theme::cyan());
+      playtypeText->setHeight(46);
+      playtypeText->setFlexShrink(0);
+      playtypeText->setWidth(
+          std::min(160, std::max(1, playtypeText->textureWidth() + 12)));
+      playtypeText->setAlign(TextView::CENTER);
+      playtypeText->setName("playtype");
+      titleRow->addView(playtypeText);
+    }
+
+    if (presentation.difficulty.has_value()) {
+      auto *difficultyText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
+      difficultyText->setText(*presentation.difficulty);
+      difficultyText->setColor(ui_theme::sdl(ui_theme::amber()));
+      difficultyText->setOverflow(TextView::TextOverflow::Hidden);
+      difficultyText->setHeight(58);
+      difficultyText->setFlexShrink(0);
+      difficultyText->setWidth(
+          std::min(440, std::max(1, difficultyText->textureWidth() + 8)));
+      difficultyText->setName("difficulty");
+      titleRow->addView(difficultyText);
+    }
     titleStack->addView(titleRow);
 
-    auto artistText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-    artistText->setText(meta.Artist);
-    artistText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
-    artistText->setHeight(36);
-    artistText->setName("artist");
-    titleStack->addView(artistText);
+    if (presentation.artist.has_value()) {
+      auto *artistText =
+          makeLabel(*presentation.artist, 26, ui_theme::textSecondary());
+      artistText->setHeight(36);
+      artistText->setName("artist");
+      titleStack->addView(artistText);
+    }
 
     header->addView(titleStack);
     rootLayout->addView(header);
   }
 
-  const auto nextRank = nextRankTarget(currentScore, maxScore);
-  const auto hasPreviousBest =
-      data != nullptr && data->previousBest.has_value();
-  const auto hasPacemaker = data != nullptr && data->pacemaker.has_value();
-  const int previousScore = hasPreviousBest ? data->previousBest->score : 0;
-  const int previousMaxScore =
-      hasPreviousBest && data->previousBest->maxScore > 0
-          ? data->previousBest->maxScore
-          : maxScore;
-  const int previousClearRank =
-      hasPreviousBest ? data->previousBest->clearType : kNoClearTypeRank;
-  const int scoreDelta =
-      hasPacemaker ? data->pacemaker->delta
-                   : (hasPreviousBest ? currentScore - previousScore : 0);
-  const int comboDelta =
-      hasPreviousBest ? resultState.maxCombo - data->previousBest->maxCombo : 0;
-  const int breakDelta =
-      hasPreviousBest ? resultState.comboBreak - data->previousBest->comboBreak
-                      : 0;
-  const int currentClearRank =
-      data != nullptr && data->currentClearRankOverride.has_value()
-          ? *data->currentClearRankOverride
-          : resultState.getClearTypeRank();
-  const Color currentClearAccent = clearLampColorForRank(currentClearRank);
-  const Color previousClearAccent =
-      hasPreviousBest ? clearLampColorForRank(previousClearRank)
-                      : ui_theme::textMuted();
-  const std::string currentClearLabel =
-      data != nullptr && data->currentClearLabelOverride.has_value()
-          ? *data->currentClearLabelOverride
-          : resultState.getClearTypeLabel();
-  const Color scoreDeltaAccent =
-      scoreDelta >= 0 ? ui_theme::lime() : ui_theme::coral();
-  const std::string longNoteSummary =
-      meta.TotalLongNotes > 0 ? std::to_string(meta.TotalLongNotes) + " LN"
-                              : "";
-  auto makeDivider = []() {
-    auto *divider = new View();
-    divider->setWidth(1);
-    divider->setAlignSelf(YGAlignStretch);
-    divider->setBackgroundColor(ui_theme::hairlineSubtle());
-    divider->setFlexShrink(0);
-    return divider;
+  const auto addPanelTitle = [&](View *panel, const std::string &title,
+                                 const std::string &semanticName) {
+    auto *titleView = makeLabel(title, 17, ui_theme::textSecondary());
+    titleView->setHeight(25);
+    titleView->setOverflow(TextView::TextOverflow::Hidden);
+    titleView->setName("resultSummaryTitle:" + semanticName);
+    panel->addView(titleView);
   };
 
-  auto makeComparisonColumn = [&](const std::string &label,
-                                  const std::string &value,
-                                  const std::string &detail, Color accent,
-                                  int valueSize = 28) {
-    auto *column = new View();
-    column->setFlexDirection(FlexDirection::Column);
-    column->setJustifyContent(YGJustifyCenter);
-    column->setFlexGrow(1);
-    column->setFlexBasis(0);
-    column->setMinWidth(0);
-    column->setGap(2);
-
-    auto *labelView = makeLabel(label, 16, ui_theme::textSecondary());
-    labelView->setHeight(22);
-    labelView->setAlign(TextView::CENTER);
-    labelView->setOverflow(TextView::TextOverflow::Hidden);
-    column->addView(labelView);
-
-    auto *valueView = makeLabel(value, valueSize, accent);
-    valueView->setHeight(valueSize + 8);
-    valueView->setAlign(TextView::CENTER);
-    valueView->setOverflow(TextView::TextOverflow::Hidden);
-    column->addView(valueView);
-
-    auto *detailView = makeLabel(detail, 18, ui_theme::textSecondary());
-    detailView->setHeight(24);
-    detailView->setAlign(TextView::CENTER);
-    detailView->setOverflow(TextView::TextOverflow::Hidden);
-    column->addView(detailView);
-    return column;
+  const auto configureSummaryCard = [&](View *panel,
+                                        const std::string &semanticName) {
+    if (authoritativePresentation) {
+      panel->setWidth(0.0f);
+    }
+    panel->setFlexGrow(1.0f);
+    panel->setFlexBasis(0.0f);
+    panel->setMinWidth(0.0f);
+    panel->setFlexDirection(FlexDirection::Column);
+    panel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
+    panel->setGap(6);
+    panel->setName("resultSummaryCard:" + semanticName);
   };
 
-  auto makeLampColumn = [&](const std::string &label,
-                            const std::string &lampLabel,
-                            const std::string &detail, Color accent) {
+  const auto makeComparisonColumn = [&](const ResultComparisonValue &value,
+                                        const std::string &semanticName,
+                                        int valueSize, bool lampStyle) {
     auto *column = new View();
     column->setFlexDirection(FlexDirection::Column);
     column->setJustifyContent(YGJustifyCenter);
@@ -333,509 +311,468 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     column->setFlexGrow(1);
     column->setFlexBasis(0);
     column->setMinWidth(0);
-    column->setGap(4);
+    column->setGap(lampStyle ? 4 : 2);
+    column->setName("resultSummaryValue:" + semanticName);
 
-    auto *labelView = makeLabel(label, 16, ui_theme::textSecondary());
+    auto *labelView = makeLabel(value.label, 16, ui_theme::textSecondary());
     labelView->setHeight(22);
     labelView->setAlign(TextView::CENTER);
     labelView->setOverflow(TextView::TextOverflow::Hidden);
+    labelView->setName("resultSummaryValueLabel:" + semanticName);
     column->addView(labelView);
 
-    auto *lampRow = new View();
-    lampRow->setFlexDirection(FlexDirection::Row);
-    lampRow->setAlignItems(YGAlignCenter);
-    lampRow->setJustifyContent(YGJustifyCenter);
-    lampRow->setGap(8);
-    lampRow->setHeight(48);
+    if (lampStyle) {
+      auto *lampRow = new View();
+      lampRow->setFlexDirection(FlexDirection::Row);
+      lampRow->setAlignItems(YGAlignCenter);
+      lampRow->setJustifyContent(YGJustifyCenter);
+      lampRow->setGap(8);
+      lampRow->setHeight(48);
 
-    auto *lampSwatch = new View();
-    lampSwatch->setWidth(10);
-    lampSwatch->setHeight(38);
-    lampSwatch->setFlexShrink(0);
-    lampSwatch->setBackgroundColor(accent);
-    lampSwatch->setCornerRadius(4.0f);
-    lampRow->addView(lampSwatch);
+      auto *lampSwatch = new View();
+      lampSwatch->setWidth(10);
+      lampSwatch->setHeight(38);
+      lampSwatch->setFlexShrink(0);
+      lampSwatch->setBackgroundColor(value.accent);
+      lampSwatch->setCornerRadius(4.0f);
+      lampSwatch->setName("resultLampSwatch:" + semanticName);
+      lampRow->addView(lampSwatch);
 
-    auto *lampText = makeLabel(lampLabel, 24, ui_theme::textPrimary());
-    lampText->setHeight(38);
-    lampText->setFlexShrink(1);
-    lampText->setMinWidth(0);
-    lampText->setOverflow(TextView::TextOverflow::Hidden);
-    lampRow->addView(lampText);
-    column->addView(lampRow);
+      auto *valueView =
+          makeLabel(value.value, valueSize, ui_theme::textPrimary());
+      valueView->setHeight(38);
+      valueView->setFlexShrink(1);
+      valueView->setMinWidth(0);
+      valueView->setOverflow(TextView::TextOverflow::Hidden);
+      valueView->setName("resultSummaryValueText:" + semanticName);
+      lampRow->addView(valueView);
+      column->addView(lampRow);
+    } else {
+      auto *valueView = makeLabel(value.value, valueSize, value.accent);
+      valueView->setHeight(valueSize + 8);
+      valueView->setAlign(TextView::CENTER);
+      valueView->setOverflow(TextView::TextOverflow::Hidden);
+      valueView->setName("resultSummaryValueText:" + semanticName);
+      column->addView(valueView);
+    }
 
-    auto *detailView = makeLabel(detail, 18, ui_theme::textSecondary());
-    detailView->setHeight(24);
-    detailView->setAlign(TextView::CENTER);
-    detailView->setOverflow(TextView::TextOverflow::Hidden);
-    column->addView(detailView);
+    if (!value.detail.empty() || !authoritativePresentation) {
+      auto *detailView = makeLabel(value.detail, 18, ui_theme::textSecondary());
+      detailView->setHeight(24);
+      detailView->setAlign(TextView::CENTER);
+      detailView->setOverflow(TextView::TextOverflow::Hidden);
+      detailView->setName("resultSummaryValueDetail:" + semanticName);
+      column->addView(detailView);
+    }
     return column;
   };
 
-  auto addPanelTitle = [&](View *panel, const std::string &title) {
-    auto *titleView = makeLabel(title, 17, ui_theme::textSecondary());
-    titleView->setHeight(25);
-    titleView->setOverflow(TextView::TextOverflow::Hidden);
-    panel->addView(titleView);
+  const auto makeComparisonCard = [&](const ResultComparisonCard &card,
+                                      const std::string &semanticName,
+                                      bool lampStyle, int valueSize) {
+    const Color border =
+        lampStyle ? ui_theme::withAlpha(card.current.accent,
+                                        card.target.has_value() &&
+                                                card.target->value != "NO PLAY"
+                                            ? 120
+                                            : 96)
+                  : ui_theme::hairlineSubtle();
+    auto *panel = makePanel(ui_theme::resultPanel(), border);
+    configureSummaryCard(panel, semanticName);
+    addPanelTitle(panel, card.title, semanticName);
+
+    auto *comparisonRow = new View();
+    comparisonRow->setFlexDirection(FlexDirection::Row);
+    comparisonRow->setAlignItems(YGAlignStretch);
+    comparisonRow->setGap(10);
+    comparisonRow->setFlexGrow(1);
+    comparisonRow->setName("resultSummaryComparison:" + semanticName);
+    if (card.target.has_value()) {
+      comparisonRow->addView(makeComparisonColumn(
+          *card.target, semanticName + ":target", valueSize, lampStyle));
+      comparisonRow->addView(makeDivider());
+    }
+    comparisonRow->addView(makeComparisonColumn(
+        card.current, semanticName + ":current", valueSize, lampStyle));
+    panel->addView(comparisonRow);
+
+    if (card.delta.has_value()) {
+      auto *deltaView =
+          makeLabel(*card.delta, semanticName == "combo" ? 20 : 22,
+                    comparisonDeltaAccent(card));
+      deltaView->setHeight(semanticName == "combo" ? 28 : 30);
+      deltaView->setAlign(TextView::CENTER);
+      deltaView->setOverflow(TextView::TextOverflow::Hidden);
+      deltaView->setName("resultSummaryDelta:" + semanticName);
+      panel->addView(deltaView);
+    }
+    return panel;
   };
 
-  auto *summaryRow = summaryOnly ? rootLayout : new View();
-  summaryRow->setFlexDirection(FlexDirection::Row);
-  summaryRow->setAlignItems(YGAlignStretch);
-  summaryRow->setGap(12);
-  summaryRow->setHeight(layoutMetrics.summaryHeight);
-  summaryRow->setName("resultSummary");
+  std::vector<View *> summaryCards;
+  const auto grade = authoritativePresentation ? gradeCard(presentation)
+                                               : legacyGradeCard(presentation);
+  if (grade.has_value()) {
+    auto *gradePanel = makePanel(
+        ui_theme::resultPanelStrong(),
+        ui_theme::withAlpha(grade->accent, static_cast<uint8_t>(138)));
+    if (authoritativePresentation) {
+      gradePanel->setWidth(0.0f);
+      gradePanel->setFlexGrow(1.0f);
+      gradePanel->setFlexBasis(0.0f);
+      gradePanel->setMinWidth(0.0f);
+    } else {
+      gradePanel->setWidth(196);
+      gradePanel->setFlexShrink(0);
+    }
+    gradePanel->setFlexDirection(FlexDirection::Column);
+    gradePanel->setAlignItems(YGAlignCenter);
+    gradePanel->setJustifyContent(YGJustifyCenter);
+    gradePanel->setPadding(Edge::All, authoritativePresentation
+                                          ? layoutMetrics.summaryPanelPadding
+                                          : layoutMetrics.gradePanelPadding);
+    gradePanel->setGap(2);
+    gradePanel->setName("resultSummaryCard:grade");
 
-  auto *gradePanel = makePanel(
-      ui_theme::resultPanelStrong(), ui_theme::withAlpha(gradeAccent, 138));
-  gradePanel->setWidth(196);
-  gradePanel->setFlexShrink(0);
-  gradePanel->setFlexDirection(FlexDirection::Column);
-  gradePanel->setAlignItems(YGAlignCenter);
-  gradePanel->setJustifyContent(YGJustifyCenter);
-  gradePanel->setPadding(Edge::All, layoutMetrics.gradePanelPadding);
-  gradePanel->setGap(2);
-  auto *gradeLabel = makeLabel("GRADE", 17, ui_theme::textSecondary());
-  gradeLabel->setHeight(23);
-  gradeLabel->setAlign(TextView::CENTER);
-  gradePanel->addView(gradeLabel);
-  auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
-  gradeText->setText(gradeDisplay);
-  gradeText->setColor(ui_theme::sdl(gradeAccent));
-  gradeText->setAlign(TextView::CENTER);
-  gradeText->setHeight(106);
-  gradeText->setName("grade");
-  gradePanel->addView(gradeText);
-  auto *rateText = makeLabel(formatScoreRate(currentScore, maxScore), 22,
-                             ui_theme::cyan());
-  rateText->setHeight(30);
-  rateText->setAlign(TextView::CENTER);
-  gradePanel->addView(rateText);
-  summaryRow->addView(gradePanel);
+    auto *gradeLabel = makeLabel("GRADE", 17, ui_theme::textSecondary());
+    gradeLabel->setHeight(23);
+    gradeLabel->setAlign(TextView::CENTER);
+    gradeLabel->setName("resultSummaryTitle:grade");
+    gradePanel->addView(gradeLabel);
 
-  auto *scorePanel =
-      makePanel(ui_theme::resultPanel(), ui_theme::hairlineSubtle());
-  scorePanel->setFlexGrow(1.0f);
-  scorePanel->setFlexBasis(0);
-  scorePanel->setMinWidth(0);
-  scorePanel->setFlexDirection(FlexDirection::Column);
-  scorePanel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
-  scorePanel->setGap(6);
-  addPanelTitle(scorePanel, hasPacemaker ? "PACEMAKER" : "SCORE COMPARISON");
-  auto *scoreCompareRow = new View();
-  scoreCompareRow->setFlexDirection(FlexDirection::Row);
-  scoreCompareRow->setAlignItems(YGAlignStretch);
-  scoreCompareRow->setGap(10);
-  scoreCompareRow->setFlexGrow(1);
-  const std::string targetLabel =
-      hasPacemaker ? data->pacemaker->label : "BEST";
-  const std::string targetValue =
-      hasPacemaker ? std::to_string(data->pacemaker->targetScore)
-                   : (hasPreviousBest ? std::to_string(previousScore)
-                                      : "NO PLAY");
-  const std::string targetDetail =
-      hasPacemaker
-          ? (data->pacemaker->usesReplayProgression ? "PACEMAKER GHOST"
-                                                    : "PACEMAKER")
-          : (hasPreviousBest
-                 ? score_rank::displayLabelForScore(previousScore,
-                                                    previousMaxScore)
-                 : "");
-  const Color targetAccent =
-      hasPacemaker ? ui_theme::cyan()
-                   : (hasPreviousBest ? ui_theme::textPrimary()
-                                      : ui_theme::textMuted());
-  scoreCompareRow->addView(makeComparisonColumn(
-      targetLabel, targetValue, targetDetail, targetAccent, 44));
-  scoreCompareRow->addView(makeDivider());
-  scoreCompareRow->addView(makeComparisonColumn(
-      "CURRENT", std::to_string(currentScore),
-      "MAX " + std::to_string(maxScore), ui_theme::textPrimary(), 44));
-  scorePanel->addView(scoreCompareRow);
-  const bool hasScoreDelta = hasPacemaker || hasPreviousBest;
-  auto *scoreDeltaText = makeLabel(
-      hasScoreDelta ? (hasPacemaker ? "PACEMAKER " : "DELTA ") +
-                          formatSignedDelta(scoreDelta)
-                    : "DELTA --",
-      22, hasScoreDelta ? scoreDeltaAccent : ui_theme::textMuted());
-  scoreDeltaText->setHeight(30);
-  scoreDeltaText->setAlign(TextView::CENTER);
-  scoreDeltaText->setOverflow(TextView::TextOverflow::Hidden);
-  scorePanel->addView(scoreDeltaText);
-  summaryRow->addView(scorePanel);
+    auto *gradeText = new TextView("assets/fonts/notosanscjkjp.ttf", 96);
+    gradeText->setText(grade->grade);
+    gradeText->setColor(ui_theme::sdl(grade->accent));
+    gradeText->setAlign(TextView::CENTER);
+    gradeText->setHeight(106);
+    gradeText->setName("grade");
+    gradePanel->addView(gradeText);
 
-  auto *lampPanel = makePanel(
-      ui_theme::resultPanel(),
-      ui_theme::withAlpha(currentClearAccent, hasPreviousBest ? 120 : 96));
-  lampPanel->setFlexGrow(1.0f);
-  lampPanel->setFlexBasis(0);
-  lampPanel->setMinWidth(0);
-  lampPanel->setFlexDirection(FlexDirection::Column);
-  lampPanel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
-  lampPanel->setGap(6);
-  addPanelTitle(lampPanel, "CLEAR LAMP COMPARISON");
-  auto *lampCompareRow = new View();
-  lampCompareRow->setFlexDirection(FlexDirection::Row);
-  lampCompareRow->setAlignItems(YGAlignStretch);
-  lampCompareRow->setGap(10);
-  lampCompareRow->setFlexGrow(1);
-  lampCompareRow->addView(makeLampColumn(
-      "BEST", clearTypeRankToLabel(previousClearRank),
-      hasPreviousBest ? "GAUGE " + formatGauge(data->previousBest->finalGauge)
-                      : "",
-      previousClearAccent));
-  lampCompareRow->addView(makeDivider());
-  lampCompareRow->addView(makeLampColumn(
-      "CURRENT", currentClearLabel,
-      "GAUGE " + formatGauge(resultState.currentGauge), currentClearAccent));
-  lampPanel->addView(lampCompareRow);
-  summaryRow->addView(lampPanel);
+    auto *rateText = makeLabel(grade->rate, 22, ui_theme::cyan());
+    rateText->setHeight(30);
+    rateText->setAlign(TextView::CENTER);
+    rateText->setName("resultGradeRate");
+    gradePanel->addView(rateText);
+    summaryCards.push_back(gradePanel);
+  }
+  if (presentation.scoreComparison.has_value()) {
+    summaryCards.push_back(
+        makeComparisonCard(*presentation.scoreComparison, "score", false, 44));
+  }
+  if (presentation.lampComparison.has_value()) {
+    summaryCards.push_back(
+        makeComparisonCard(*presentation.lampComparison, "lamp", true, 24));
+  }
+  if (presentation.comboComparison.has_value()) {
+    summaryCards.push_back(
+        makeComparisonCard(*presentation.comboComparison, "combo", false, 38));
+  }
 
-  auto *comboPanel =
-      makePanel(ui_theme::resultPanel(), ui_theme::hairlineSubtle());
-  comboPanel->setFlexGrow(1.0f);
-  comboPanel->setFlexBasis(0);
-  comboPanel->setMinWidth(0);
-  comboPanel->setFlexDirection(FlexDirection::Column);
-  comboPanel->setPadding(Edge::All, layoutMetrics.summaryPanelPadding);
-  comboPanel->setGap(6);
-  addPanelTitle(comboPanel, "COMBO / BREAK COMPARISON");
-  auto *comboCompareRow = new View();
-  comboCompareRow->setFlexDirection(FlexDirection::Row);
-  comboCompareRow->setAlignItems(YGAlignStretch);
-  comboCompareRow->setGap(10);
-  comboCompareRow->setFlexGrow(1);
-  comboCompareRow->addView(makeComparisonColumn(
-      "BEST",
-      hasPreviousBest ? std::to_string(data->previousBest->maxCombo)
-                      : "NO PLAY",
-      hasPreviousBest ? "BREAK " + std::to_string(data->previousBest->comboBreak)
-                      : "",
-      hasPreviousBest ? ui_theme::lime() : ui_theme::textMuted(), 38));
-  comboCompareRow->addView(makeDivider());
-  comboCompareRow->addView(makeComparisonColumn(
-      "CURRENT", std::to_string(resultState.maxCombo),
-      "BREAK " + std::to_string(resultState.comboBreak), ui_theme::lime(), 38));
-  comboPanel->addView(comboCompareRow);
-  auto *comboDeltaText = makeLabel(
-      hasPreviousBest ? "COMBO " + formatSignedDelta(comboDelta) +
-                            " / BREAK " + formatSignedDelta(breakDelta)
-                      : "COMBO -- / BREAK --",
-      20,
-      hasPreviousBest
-          ? (comboDelta >= 0 && breakDelta <= 0 ? ui_theme::lime()
-                                                : ui_theme::amber())
-          : ui_theme::textMuted());
-  comboDeltaText->setHeight(28);
-  comboDeltaText->setAlign(TextView::CENTER);
-  comboDeltaText->setOverflow(TextView::TextOverflow::Hidden);
-  comboPanel->addView(comboDeltaText);
-  summaryRow->addView(comboPanel);
+  if (!summaryCards.empty()) {
+    auto *summaryRow = summaryOnly ? rootLayout : new View();
+    summaryRow->setDisplay(YGDisplayFlex);
+    summaryRow->setFlexDirection(FlexDirection::Row);
+    summaryRow->setAlignItems(YGAlignStretch);
+    summaryRow->setGap(12);
+    summaryRow->setHeight(layoutMetrics.summaryHeight);
+    summaryRow->setName("resultSummary");
+    for (View *card : summaryCards) {
+      summaryRow->addView(card);
+    }
+    if (!summaryOnly) {
+      rootLayout->addView(summaryRow);
+    }
+  } else if (summaryOnly) {
+    rootLayout->setHeight(0);
+    rootLayout->setDisplay(YGDisplayNone);
+  }
 
   if (summaryOnly) {
     return;
   }
-  rootLayout->addView(summaryRow);
 
-  auto *infoGrid =
-      makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
-  infoGrid->setFlexDirection(FlexDirection::Row);
-  infoGrid->setFlexWrap(YGWrapNoWrap);
-  infoGrid->setJustifyContent(YGJustifyCenter);
-  infoGrid->setAlignItems(YGAlignStretch);
-  infoGrid->setHeight(layoutMetrics.infoHeight);
-  infoGrid->setName("resultInfoGrid");
-
-  auto addInfoTile = [&](const std::string &label, const std::string &value,
-                         const std::string &subValue, Color accent,
-                         Color valueColor = ui_theme::textPrimary()) {
-    if (!infoGrid->getChildren().empty()) {
-      infoGrid->addView(makeDivider());
+  if (!presentation.infoTiles.empty()) {
+    auto *infoGrid =
+        makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
+    infoGrid->setFlexDirection(FlexDirection::Row);
+    infoGrid->setFlexWrap(authoritativePresentation ? YGWrapWrap
+                                                    : YGWrapNoWrap);
+    infoGrid->setJustifyContent(YGJustifyCenter);
+    infoGrid->setAlignItems(YGAlignStretch);
+    if (authoritativePresentation) {
+      infoGrid->setMinHeight(layoutMetrics.infoHeight);
+    } else {
+      infoGrid->setHeight(layoutMetrics.infoHeight);
     }
-    auto *tile = new View();
-    tile->setFlexGrow(1);
-    tile->setFlexBasis(0);
-    tile->setFlexShrink(1);
-    tile->setMinWidth(0);
-    tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
-    tile->setFlexDirection(FlexDirection::Column);
-    tile->setJustifyContent(YGJustifyCenter);
+    infoGrid->setName("resultInfoGrid");
 
-    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
-    labelView->setHeight(21);
-    labelView->setAlign(TextView::CENTER);
-    labelView->setOverflow(TextView::TextOverflow::Hidden);
-    tile->addView(labelView);
+    const auto addInfoTile = [&](const ResultInfoTile &info) {
+      if (!authoritativePresentation && !infoGrid->getChildren().empty()) {
+        infoGrid->addView(makeDivider());
+      }
+      const std::string id = semanticId(info.label);
+      auto *tile = new View();
+      tile->setFlexGrow(1);
+      tile->setFlexShrink(1);
+      if (authoritativePresentation) {
+        tile->setFlexBasis(176.0f);
+        tile->setMinWidth(144.0f);
+        tile->setHeight(layoutMetrics.infoHeight);
+      } else {
+        tile->setFlexBasis(0);
+        tile->setMinWidth(0);
+      }
+      tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
+      tile->setFlexDirection(FlexDirection::Column);
+      tile->setJustifyContent(YGJustifyCenter);
+      tile->setName("resultInfoTile:" + id);
 
-    auto *valueView = makeLabel(value, 31, valueColor);
-    valueView->setHeight(38);
-    valueView->setAlign(TextView::CENTER);
-    valueView->setOverflow(TextView::TextOverflow::Hidden);
-    valueView->setName(label);
-    tile->addView(valueView);
+      auto *labelView = makeLabel(info.label, 15, ui_theme::textSecondary());
+      labelView->setHeight(21);
+      labelView->setAlign(TextView::CENTER);
+      labelView->setOverflow(TextView::TextOverflow::Hidden);
+      labelView->setName("resultInfoLabel:" + id);
+      tile->addView(labelView);
 
-    auto *subView = makeLabel(subValue, 18, accent);
-    subView->setHeight(22);
-    subView->setAlign(TextView::CENTER);
-    subView->setOverflow(TextView::TextOverflow::Hidden);
-    tile->addView(subView);
-    infoGrid->addView(tile);
-  };
+      if (!authoritativePresentation && info.label == "BPM") {
+        const BpmTextParts bpm = splitBpmText(info.value);
+        auto *valueRow = new View();
+        valueRow->setFlexDirection(FlexDirection::Row);
+        valueRow->setAlignItems(YGAlignCenter);
+        valueRow->setJustifyContent(YGJustifyCenter);
+        valueRow->setHeight(38);
+        valueRow->setMinWidth(0);
+        valueRow->setName("BPM");
 
-  auto addBpmTile = [&]() {
-    if (!infoGrid->getChildren().empty()) {
-      infoGrid->addView(makeDivider());
-    }
+        const int valueSize = bpm.variable ? 23 : 31;
+        const int prefixSize = bpm.variable ? 14 : 18;
+        const int punctuationSize = bpm.variable ? 18 : 22;
+        const auto appendText = [&](const std::string &text, int size,
+                                    Color color) {
+          if (text.empty()) {
+            return;
+          }
+          auto *textView = makeLabel(text, size, color);
+          textView->setWidth(std::max(1, textView->textureWidth() + 1));
+          textView->setHeight(38);
+          textView->setAlign(TextView::CENTER);
+          textView->setVAlign(TextView::MIDDLE);
+          textView->setOverflow(TextView::TextOverflow::Hidden);
+          textView->setFlexShrink(0);
+          valueRow->addView(textView);
+        };
+        const auto appendPart = [&](const BpmTextPart &part) {
+          appendText(part.prefix, prefixSize, ui_theme::textMuted());
+          appendText(part.value, valueSize, ui_theme::textPrimary());
+        };
+        if (bpm.variable) {
+          appendPart(bpm.minimum);
+          appendText("-", punctuationSize, ui_theme::textSecondary());
+          appendPart(bpm.maximum);
+          appendText("(", punctuationSize, ui_theme::textSecondary());
+          appendPart(bpm.main);
+          appendText(")", punctuationSize, ui_theme::textSecondary());
+        } else {
+          appendPart(bpm.main);
+        }
+        tile->addView(valueRow);
 
-    const BpmDisplay bpm = formatBpm(meta);
-    auto *tile = new View();
-    tile->setFlexGrow(1);
-    tile->setFlexBasis(0);
-    tile->setFlexShrink(1);
-    tile->setMinWidth(0);
-    tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
-    tile->setFlexDirection(FlexDirection::Column);
-    tile->setJustifyContent(YGJustifyCenter);
-
-    auto *labelView = makeLabel("BPM", 15, ui_theme::textSecondary());
-    labelView->setHeight(21);
-    labelView->setAlign(TextView::CENTER);
-    labelView->setOverflow(TextView::TextOverflow::Hidden);
-    tile->addView(labelView);
-
-    auto *valueRow = new View();
-    valueRow->setFlexDirection(FlexDirection::Row);
-    valueRow->setAlignItems(YGAlignCenter);
-    valueRow->setJustifyContent(YGJustifyCenter);
-    valueRow->setHeight(38);
-    valueRow->setMinWidth(0);
-    valueRow->setName("BPM");
-
-    const int valueSize = bpm.variable ? 23 : 31;
-    const int prefixSize = bpm.variable ? 14 : 18;
-    const int punctuationSize = bpm.variable ? 18 : 22;
-    auto appendText = [&](const std::string &text, int size, Color color) {
-      if (text.empty()) {
+        auto *detailView = makeLabel("", 18, info.accent);
+        detailView->setHeight(22);
+        detailView->setName("resultInfoDetail:" + id);
+        tile->addView(detailView);
+        infoGrid->addView(tile);
         return;
       }
-      auto *textView = makeLabel(text, size, color);
-      textView->setWidth(std::max(1, textView->textureWidth() + 1));
-      textView->setHeight(38);
-      textView->setAlign(TextView::CENTER);
-      textView->setVAlign(TextView::MIDDLE);
-      textView->setOverflow(TextView::TextOverflow::Hidden);
-      textView->setFlexShrink(0);
-      valueRow->addView(textView);
-    };
-    auto appendBpmValue = [&](const BpmValueDisplay &value) {
-      appendText(value.prefix, prefixSize, ui_theme::textMuted());
-      appendText(value.value, valueSize, ui_theme::textPrimary());
-    };
 
-    if (bpm.variable) {
-      appendBpmValue(bpm.min);
-      appendText("-", punctuationSize, ui_theme::textSecondary());
-      appendBpmValue(bpm.max);
-      appendText("(", punctuationSize, ui_theme::textSecondary());
-      appendBpmValue(bpm.main);
-      appendText(")", punctuationSize, ui_theme::textSecondary());
-    } else {
-      appendBpmValue(bpm.main);
-    }
-    tile->addView(valueRow);
-
-    auto *subView = makeLabel("", 18, ui_theme::amber());
-    subView->setHeight(22);
-    tile->addView(subView);
-    infoGrid->addView(tile);
-  };
-
-  auto addPlayModeTile = [&](const std::string &playModeLabel,
-                             const std::string &laneOrderLabel) {
-    if (!infoGrid->getChildren().empty()) {
-      infoGrid->addView(makeDivider());
-    }
-
-    const std::string modeLabel =
-        playModeLabel.empty() ? std::string("NORMAL") : playModeLabel;
-    auto *tile = new View();
-    tile->setFlexGrow(1);
-    tile->setFlexBasis(0);
-    tile->setFlexShrink(1);
-    tile->setMinWidth(0);
-    tile->setPadding(Edge::All, layoutMetrics.infoTilePadding);
-    tile->setFlexDirection(FlexDirection::Column);
-    tile->setJustifyContent(YGJustifyCenter);
-
-    auto *labelView = makeLabel("PLAY MODE", 15, ui_theme::textSecondary());
-    labelView->setHeight(21);
-    labelView->setAlign(TextView::CENTER);
-    labelView->setOverflow(TextView::TextOverflow::Hidden);
-    tile->addView(labelView);
-
-    auto *modeView =
-        makeLabel(modeLabel, laneOrderLabel.empty() ? 31 : 24,
-                  laneOrderLabel.empty() ? ui_theme::amber()
-                                         : ui_theme::textPrimary());
-    modeView->setHeight(laneOrderLabel.empty() ? 38 : 30);
-    modeView->setAlign(TextView::CENTER);
-    modeView->setOverflow(TextView::TextOverflow::Hidden);
-    modeView->setName("PLAY MODE");
-    tile->addView(modeView);
-
-    if (laneOrderLabel.empty()) {
-      auto *subView = makeLabel("", 18, ui_theme::amber());
-      subView->setHeight(22);
-      tile->addView(subView);
-    } else {
-      auto *laneRow = new View();
-      laneRow->setFlexDirection(FlexDirection::Row);
-      laneRow->setAlignItems(YGAlignCenter);
-      laneRow->setJustifyContent(YGJustifyCenter);
-      laneRow->setHeight(24);
-      for (char symbol : laneOrderLabel) {
-        auto *symbolView =
-            makeLabel(std::string(1, symbol), 18,
-                      symbol == 'S' ? ui_theme::coral() : ui_theme::amber());
-        symbolView->setWidth(std::max(10, symbolView->textureWidth() + 1));
-        symbolView->setHeight(24);
-        symbolView->setAlign(TextView::CENTER);
-        symbolView->setOverflow(TextView::TextOverflow::Hidden);
-        laneRow->addView(symbolView);
+      const bool laneOrder =
+          info.label == "PLAY MODE" && info.detail.has_value();
+      int valueSize = laneOrder ? 24 : 31;
+      if (info.label == "BPM" && info.value.size() > 9) {
+        valueSize = 23;
       }
-      tile->addView(laneRow);
+      const Color valueColor =
+          info.label == "PLAY MODE" && !info.detail.has_value()
+              ? info.accent
+              : (presentation.readOnlyIrUploaded && !info.detail.has_value()
+                     ? info.accent
+                     : ui_theme::textPrimary());
+      auto *valueView = makeLabel(info.value, valueSize, valueColor);
+      valueView->setHeight(laneOrder ? 30 : 38);
+      valueView->setAlign(TextView::CENTER);
+      valueView->setOverflow(TextView::TextOverflow::Hidden);
+      valueView->setName(info.label);
+      tile->addView(valueView);
+
+      if (laneOrder) {
+        auto *laneRow = new View();
+        laneRow->setFlexDirection(FlexDirection::Row);
+        laneRow->setAlignItems(YGAlignCenter);
+        laneRow->setJustifyContent(YGJustifyCenter);
+        laneRow->setHeight(24);
+        laneRow->setName("resultInfoDetail:" + id);
+        for (const char symbol : *info.detail) {
+          auto *symbolView =
+              makeLabel(std::string(1, symbol), 18,
+                        symbol == 'S' ? ui_theme::coral() : info.accent);
+          symbolView->setWidth(std::max(10, symbolView->textureWidth() + 1));
+          symbolView->setHeight(24);
+          symbolView->setAlign(TextView::CENTER);
+          symbolView->setOverflow(TextView::TextOverflow::Hidden);
+          laneRow->addView(symbolView);
+        }
+        tile->addView(laneRow);
+      } else if (info.detail.has_value() || !authoritativePresentation) {
+        auto *detailView =
+            makeLabel(info.detail.value_or(std::string{}), 18, info.accent);
+        detailView->setHeight(22);
+        detailView->setAlign(TextView::CENTER);
+        detailView->setOverflow(TextView::TextOverflow::Hidden);
+        detailView->setName("resultInfoDetail:" + id);
+        tile->addView(detailView);
+      }
+      infoGrid->addView(tile);
+    };
+
+    for (const ResultInfoTile &info : presentation.infoTiles) {
+      addInfoTile(info);
     }
+    rootLayout->addView(infoGrid);
+  }
 
-    infoGrid->addView(tile);
-  };
+  const bool showJudgements = hasJudgementCard(presentation);
+  const bool showBreak = presentation.comboBreak.has_value();
+  const bool showFast = presentation.fast.has_value();
+  const bool showSlow = presentation.slow.has_value();
+  if (showJudgements || showBreak || showFast || showSlow) {
+    auto *detailsGrid =
+        makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
+    detailsGrid->setFlexDirection(FlexDirection::Row);
+    detailsGrid->setFlexWrap(YGWrapNoWrap);
+    detailsGrid->setJustifyContent(YGJustifyCenter);
+    detailsGrid->setAlignItems(YGAlignStretch);
+    detailsGrid->setHeight(layoutMetrics.detailsHeight);
+    detailsGrid->setName("detailsGrid");
 
-  addInfoTile("NEXT GRADE", nextRank.first, formatSignedDelta(nextRank.second),
-              ui_theme::amber());
-  addInfoTile("TOTAL NOTES", std::to_string(totalNotes), longNoteSummary,
-              ui_theme::lime());
-  addBpmTile();
-  addInfoTile("JUDGE RANK", Judge::getRankDescription(meta.Rank), "",
-              ui_theme::cyan());
-  addInfoTile("DURATION", formatDuration(meta.PlayLength),
-              meta.TotalLength > meta.PlayLength
-                  ? "BGA " + formatDuration(meta.TotalLength)
-                  : "",
-              ui_theme::violetActionHover());
-  addPlayModeTile(data->playModeLabel, data->laneOrderLabel);
-  rootLayout->addView(infoGrid);
+    const auto addSeparator = [&]() {
+      if (!authoritativePresentation && !detailsGrid->getChildren().empty()) {
+        detailsGrid->addView(makeDivider());
+      }
+    };
 
-  auto detailsGrid =
-      makePanel(ui_theme::resultPanelSubtle(), ui_theme::hairlineSubtle());
-  detailsGrid->setFlexDirection(FlexDirection::Row);
-  detailsGrid->setFlexWrap(YGWrapNoWrap);
-  detailsGrid->setJustifyContent(YGJustifyCenter);
-  detailsGrid->setAlignItems(YGAlignStretch);
-  detailsGrid->setHeight(layoutMetrics.detailsHeight);
-  detailsGrid->setName("detailsGrid");
+    const auto makeMetricTile = [&](const std::string &label, int value,
+                                    Color accent, const std::string &id) {
+      addSeparator();
+      auto *tile = new View();
+      tile->setFlexGrow(1);
+      tile->setFlexBasis(0);
+      tile->setFlexShrink(1);
+      tile->setMinWidth(0);
+      tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
+      tile->setFlexDirection(FlexDirection::Column);
+      tile->setJustifyContent(YGJustifyCenter);
+      tile->setName("resultMetricTile:" + id);
 
-  auto addMetric = [&](const std::string &label, int count, Color accent,
-                       const std::string &id) {
-    if (!detailsGrid->getChildren().empty()) {
-      detailsGrid->addView(makeDivider());
+      auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
+      labelView->setHeight(21);
+      labelView->setAlign(TextView::CENTER);
+      labelView->setOverflow(TextView::TextOverflow::Hidden);
+      labelView->setName("resultMetricLabel:" + id);
+      tile->addView(labelView);
+
+      auto *valueView = makeLabel(std::to_string(value), 34, accent);
+      valueView->setHeight(43);
+      valueView->setAlign(TextView::CENTER);
+      valueView->setOverflow(TextView::TextOverflow::Hidden);
+      valueView->setName(id);
+      tile->addView(valueView);
+      detailsGrid->addView(tile);
+    };
+
+    if (showJudgements) {
+      for (const ResultJudgementRow &judgement : presentation.judgements) {
+        addSeparator();
+        const std::string id = judgementId(judgement.label);
+        auto *tile = new View();
+        tile->setFlexGrow(1);
+        tile->setFlexBasis(0);
+        tile->setFlexShrink(1);
+        tile->setMinWidth(0);
+        tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
+        tile->setFlexDirection(FlexDirection::Column);
+        tile->setJustifyContent(YGJustifyCenter);
+        tile->setName("resultJudgementTile:" + id);
+
+        auto *labelView =
+            makeLabel(judgement.label, 15, ui_theme::textSecondary());
+        labelView->setHeight(21);
+        labelView->setAlign(TextView::CENTER);
+        labelView->setOverflow(TextView::TextOverflow::Hidden);
+        labelView->setName("resultJudgementLabel:" + id);
+        tile->addView(labelView);
+
+        auto *valueView =
+            makeLabel(std::to_string(judgement.total), 34, judgement.color);
+        valueView->setHeight(40);
+        valueView->setAlign(TextView::CENTER);
+        valueView->setOverflow(TextView::TextOverflow::Hidden);
+        valueView->setName(id);
+        tile->addView(valueView);
+
+        if (judgement.early.has_value() && judgement.late.has_value()) {
+          auto *timingRow = new View();
+          timingRow->setFlexDirection(FlexDirection::Row);
+          timingRow->setAlignItems(YGAlignCenter);
+          timingRow->setJustifyContent(YGJustifyCenter);
+          timingRow->setHeight(24);
+          timingRow->setName("resultJudgementTiming:" + id);
+
+          auto *fastText = makeLabel(std::to_string(*judgement.early), 20,
+                                     ui_theme::fastFeedback());
+          fastText->setWidth(52);
+          fastText->setHeight(24);
+          fastText->setAlign(TextView::RIGHT);
+          fastText->setName(id + "Fast");
+          timingRow->addView(fastText);
+
+          auto *slashText = makeLabel("/", 20, ui_theme::textSecondary());
+          slashText->setWidth(14);
+          slashText->setHeight(24);
+          slashText->setAlign(TextView::CENTER);
+          timingRow->addView(slashText);
+
+          auto *slowText = makeLabel(std::to_string(*judgement.late), 20,
+                                     ui_theme::slowFeedback());
+          slowText->setWidth(52);
+          slowText->setHeight(24);
+          slowText->setAlign(TextView::LEFT);
+          slowText->setName(id + "Slow");
+          timingRow->addView(slowText);
+          tile->addView(timingRow);
+        }
+        detailsGrid->addView(tile);
+      }
     }
-    auto *tile = new View();
-    tile->setFlexGrow(1);
-    tile->setFlexBasis(0);
-    tile->setFlexShrink(1);
-    tile->setMinWidth(0);
-    tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
-    tile->setFlexDirection(FlexDirection::Column);
-    tile->setJustifyContent(YGJustifyCenter);
-    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
-    labelView->setHeight(21);
-    labelView->setAlign(TextView::CENTER);
-    labelView->setOverflow(TextView::TextOverflow::Hidden);
-    tile->addView(labelView);
-    auto *valueView = makeLabel(std::to_string(count), 34, accent);
-    valueView->setHeight(43);
-    valueView->setAlign(TextView::CENTER);
-    valueView->setOverflow(TextView::TextOverflow::Hidden);
-    valueView->setName(id);
-    tile->addView(valueView);
-    detailsGrid->addView(tile);
-  };
-
-  auto addJudgementMetric = [&](const std::string &label, Judgement judgement,
-                                Color accent, const std::string &id) {
-    if (!detailsGrid->getChildren().empty()) {
-      detailsGrid->addView(makeDivider());
+    if (showBreak) {
+      makeMetricTile("BREAK", *presentation.comboBreak, ui_theme::coral(),
+                     "break");
     }
-    auto *tile = new View();
-    tile->setFlexGrow(1);
-    tile->setFlexBasis(0);
-    tile->setFlexShrink(1);
-    tile->setMinWidth(0);
-    tile->setPadding(Edge::All, layoutMetrics.detailsTilePadding);
-    tile->setFlexDirection(FlexDirection::Column);
-    tile->setJustifyContent(YGJustifyCenter);
+    if (showFast) {
+      makeMetricTile("FAST", *presentation.fast, ui_theme::fastFeedback(),
+                     "fast");
+    }
+    if (showSlow) {
+      makeMetricTile("SLOW", *presentation.slow, ui_theme::slowFeedback(),
+                     "slow");
+    }
+    rootLayout->addView(detailsGrid);
+  }
 
-    auto *labelView = makeLabel(label, 15, ui_theme::textSecondary());
-    labelView->setHeight(21);
-    labelView->setAlign(TextView::CENTER);
-    labelView->setOverflow(TextView::TextOverflow::Hidden);
-    tile->addView(labelView);
-
-    auto *valueView = makeLabel(std::to_string(countFor(judgement)), 34,
-                                accent);
-    valueView->setHeight(40);
-    valueView->setAlign(TextView::CENTER);
-    valueView->setOverflow(TextView::TextOverflow::Hidden);
-    valueView->setName(id);
-    tile->addView(valueView);
-
-    const JudgementFastSlowCount timing = fastSlowFor(judgement);
-    auto *timingRow = new View();
-    timingRow->setFlexDirection(FlexDirection::Row);
-    timingRow->setAlignItems(YGAlignCenter);
-    timingRow->setJustifyContent(YGJustifyCenter);
-    timingRow->setHeight(24);
-
-    auto *fastText =
-        makeLabel(std::to_string(timing.fast), 20, ui_theme::fastFeedback());
-    fastText->setWidth(52);
-    fastText->setHeight(24);
-    fastText->setAlign(TextView::RIGHT);
-    fastText->setName(id + "Fast");
-    timingRow->addView(fastText);
-
-    auto *slashText = makeLabel("/", 20, ui_theme::textSecondary());
-    slashText->setWidth(14);
-    slashText->setHeight(24);
-    slashText->setAlign(TextView::CENTER);
-    timingRow->addView(slashText);
-
-    auto *slowText =
-        makeLabel(std::to_string(timing.slow), 20, ui_theme::slowFeedback());
-    slowText->setWidth(52);
-    slowText->setHeight(24);
-    slowText->setAlign(TextView::LEFT);
-    slowText->setName(id + "Slow");
-    timingRow->addView(slowText);
-
-    tile->addView(timingRow);
-    detailsGrid->addView(tile);
-  };
-
-  addJudgementMetric("PGREAT", PGreat, ui_theme::cyan(), "pgreat");
-  addJudgementMetric("GREAT", Great, ui_theme::lime(), "great");
-  addJudgementMetric("GOOD", Good, ui_theme::amber(), "good");
-  addJudgementMetric("BAD", Bad, Color(255, 132, 96, 255), "bad");
-  addJudgementMetric("POOR", Poor, ui_theme::coral(), "poor");
-  addJudgementMetric("KPOOR", Kpoor, Color(255, 78, 102, 255), "kpoor");
-  addMetric("BREAK", resultState.comboBreak, ui_theme::coral(), "break");
-  addMetric("FAST", resultState.fastCount, ui_theme::fastFeedback(), "fast");
-  addMetric("SLOW", resultState.slowCount, ui_theme::slowFeedback(), "slow");
-
-  rootLayout->addView(detailsGrid);
-
+  const bool showGraph = data->showResultGraph && (!authoritativePresentation ||
+                                                   hasGaugeCard(presentation));
   View *graphPlaceHolder = nullptr;
-  if (data == nullptr || data->showResultGraph) {
-    graphPlaceHolder = new View();
+  if (showGraph) {
+    graphPlaceHolder = new Button();
     graphPlaceHolder->setBackgroundColor(ui_theme::resultPanelSubtle());
     graphPlaceHolder->setCornerRadius(ui_theme::panelRadius());
     graphPlaceHolder->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
@@ -844,12 +781,15 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     graphPlaceHolder->setName("graph");
   }
 
-  if (data != nullptr && data->outGraphPlaceholder != nullptr) {
+  if (data->outGraphPlaceholder != nullptr) {
     *data->outGraphPlaceholder = graphPlaceHolder;
   }
 
-  if (graphPlaceHolder != nullptr && data != nullptr &&
-      data->showControls && data->showTimingAnalytics) {
+  const bool showTimingAnalytics =
+      authoritativePresentation ? presentation.timingAnalytics.has_value()
+                                : data->showTimingAnalytics;
+  if (graphPlaceHolder != nullptr && data->showControls &&
+      showTimingAnalytics) {
     auto *visualsRow = new View();
     visualsRow->setName("resultVisuals");
     visualsRow->setWidthPercent(100.0f);
@@ -880,7 +820,7 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
     rootLayout->addView(graphPlaceHolder);
   }
 
-  if (data != nullptr && !data->showControls) {
+  if (!data->showControls) {
     return;
   }
 
@@ -894,30 +834,36 @@ void DefaultSkin::buildResultLayout(View *rootLayout, ResultSkinData *data,
   actionsRow->setFlexShrink(0.0f);
   actionsRow->setName("resultActions");
 
-  auto btn = new Button(0, 0, 232, 64);
-  auto btnText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  btnText->setText("Back to Menu");
-  btnText->setAlign(TextView::CENTER);
-  btnText->setVAlign(TextView::MIDDLE);
-  btnText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
-  btn->setContentView(btnText);
-  btn->setName("backButton");
-  btn->setSize(232, 64);
-  btn->setCornerRadius(ui_theme::controlRadius());
-  btn->setBackgroundColors(
+  auto *button = new Button(0, 0, 232, 64);
+  auto *buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  buttonText->setText("Back to Menu");
+  buttonText->setAlign(TextView::CENTER);
+  buttonText->setVAlign(TextView::MIDDLE);
+  buttonText->setColor(
+      ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
+  button->setContentView(buttonText);
+  button->setName("backButton");
+  button->setSize(232, 64);
+  button->setCornerRadius(ui_theme::controlRadius());
+  button->setBackgroundColors(
       ui_theme::withAlpha(ui_theme::primaryAction(), 182),
       ui_theme::withAlpha(ui_theme::primaryActionHover(), 210),
       ui_theme::withAlpha(ui_theme::primaryActionPressed(), 226));
-  btn->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 170),
-                       ui_theme::withAlpha(ui_theme::cyan(), 210),
-                       Color(255, 255, 255, 216));
-  btn->setStyledBorderWidth(1);
-  btn->setOnClickListener(
-      [&context]() { context.sceneManager->changeScene("MainMenu"); });
-  actionsRow->addView(btn);
+  button->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 170),
+                          ui_theme::withAlpha(ui_theme::cyan(), 210),
+                          Color(255, 255, 255, 216));
+  button->setStyledBorderWidth(1);
+  ApplicationContext *context = data->context;
+  button->setOnClickListener([context]() {
+    if (context != nullptr && context->sceneManager != nullptr) {
+      context->sceneManager->changeScene("MainMenu");
+    }
+  });
+  actionsRow->addView(button);
   rootLayout->addView(actionsRow);
 }
 
 void DefaultSkin::buildGameContext(View *root, void *data) {
-  // Future implementation
+  (void)root;
+  (void)data;
 }

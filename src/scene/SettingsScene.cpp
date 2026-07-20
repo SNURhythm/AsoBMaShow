@@ -1,8 +1,10 @@
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
 #include "../input/InputCaptureController.h"
+#include "../input/RhythmInputHandler.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+#include "play/RhythmLaneInputController.h"
 
 #include <iomanip>
 #include <sstream>
@@ -59,6 +61,13 @@ formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
          " (" + std::to_string(result.entries) + " entries).";
 }
 } // namespace
+
+SettingsScene::SettingsScene(ApplicationContext &context,
+                             SettingsDestination destination)
+    : Scene(context),
+      activeTab(destination == SettingsDestination::Ir ? SettingsTab::Ir
+                                                       : SettingsTab::Profile),
+      lastLaidOutTab(activeTab) {}
 
 void SettingsScene::requestArchiveCacheCleanupStatus(const std::string &text,
                                                      const SDL_Color &color) {
@@ -278,6 +287,9 @@ void SettingsScene::update(float dt) {
   applyPendingProfileDocumentHandoff();
   refreshTablesIfLibraryChanged();
   updateInputSettingsState();
+  if (activeTab == SettingsTab::Ir) {
+    refreshIrSettingsPresentation();
+  }
   ensureLayoutUpToDate();
 }
 
@@ -316,7 +328,8 @@ void SettingsScene::renderScene() {
         context.settings.judgementIndicatorY,
         context.settings.judgementIndicatorWidthScale,
         context.settings.judgementIndicatorRenderMode ==
-            AppSettings::JudgementIndicatorRenderMode::Hud2D);
+            AppSettings::JudgementIndicatorRenderMode::Hud2D,
+        context.settings.judgementIndicatorRangeMilliseconds);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);
     previewRenderer->setJudgementTimingFastSlowCriteria(
         context.settings.judgementTimingFastSlowCriteria);
@@ -425,8 +438,10 @@ void SettingsScene::cleanupScene() {
   summaryNoteStartPositionValueText = nullptr;
   summaryPreviewPlayAreaWidthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
+  summaryJudgementIndicatorRangeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
+  judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
@@ -470,6 +485,7 @@ void SettingsScene::cleanupScene() {
   displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
   bmsLibraryTabButton = nullptr;
+  irTabButton = nullptr;
   timingTabText = nullptr;
   visualTabText = nullptr;
   laneTabText = nullptr;
@@ -479,6 +495,19 @@ void SettingsScene::cleanupScene() {
   displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
   bmsLibraryTabText = nullptr;
+  irTabText = nullptr;
+  irPendingCountText = nullptr;
+  irAwaitingCountText = nullptr;
+  irBlockedCountText = nullptr;
+  irFailedCountText = nullptr;
+  irStatusText = nullptr;
+  irServerOriginInput = nullptr;
+  irApiKeyInput = nullptr;
+  irSettingsModel.reset();
+  irPendingDiscardRowId.reset();
+  irKeyEditorActive = false;
+  irStatusIsError = false;
+  irStatusMessage.clear();
   bgaBrightnessInput = nullptr;
   bgaBlurInput = nullptr;
   laneAngleInput = nullptr;

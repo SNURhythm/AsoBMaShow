@@ -324,7 +324,13 @@ retry_body = function_body(
     result_source, "ResultScene", "retryResultPersistence"
 )
 require(
-    "context.resultPersistence.persist(*persistenceOptions.attempt)" in retry_body,
+    re.search(
+        r"context\.resultPersistence\.persist\(\s*"
+        r"\*persistenceOptions\.attempt\s*,\s*automaticDrafts\s*\)",
+        retry_body,
+        re.DOTALL,
+    )
+    is not None,
     "Retry Save must reuse the exact immutable attempt",
 )
 require(
@@ -346,6 +352,7 @@ require(
         r"defer\(\s*\[this\]\(\)\s*\{\s*"
         r"refreshResultSummary\(\);\s*"
         r"updateResultPersistencePresentation\(\);\s*"
+        r"(?:updateIrResultPresentation\(true\);\s*)?"
         r"return true;",
         retry_body,
         re.DOTALL,

@@ -14,6 +14,18 @@ void require(bool value, const char *message) {
   }
 }
 
+GameplayScoreConfig beatorajaScoreConfig(int totalNotes, int keyMode,
+                                         double total) {
+  bms_parser::ChartMeta meta;
+  meta.TotalNotes = totalNotes;
+  meta.KeyMode = keyMode;
+  meta.HasTotal = true;
+  meta.Total = total;
+  return {.gaugeRules = compileGameplayGaugeRules(
+              GameplayRuleset::Beatoraja, meta, GaugeProfile::Standard),
+          .keyMode = keyMode};
+}
+
 void requireSame(const GameplayScoreState &left,
                  const GameplayScoreState &right) {
   require(left.judgeCount == right.judgeCount, "judge counts match");
@@ -24,6 +36,7 @@ void requireSame(const GameplayScoreState &left,
           "combo state matches");
   require(left.gaugeType == right.gaugeType &&
               left.gaugeValues == right.gaugeValues &&
+              left.gaugeHistories == right.gaugeHistories &&
               left.gaugeSurvivalFailed == right.gaugeSurvivalFailed &&
               std::bit_cast<std::uint32_t>(left.currentGauge) ==
                   std::bit_cast<std::uint32_t>(right.currentGauge),
@@ -31,8 +44,7 @@ void requireSame(const GameplayScoreState &left,
 }
 
 void testConfiguredGaugeHistoryUsesLogicalLimit() {
-  GameplayScoreState state(
-      {.totalNotes = 10, .keyMode = 7, .gaugeTotal = 100.0});
+  GameplayScoreState state(beatorajaScoreConfig(10, 7, 100.0));
   state.gaugeHistory.reserve(8);
   state.configureBoundedGaugeHistory(2);
   const auto *const storage = state.gaugeHistory.data();
@@ -65,11 +77,62 @@ void testRhythmStateGaugeHistoryRemainsUnboundedByDefault() {
               !state.gaugeHistoryOverflowed(),
           "default RhythmState compatibility keeps growable gauge history");
 }
+
+void testGasRecordsEveryTrackedGaugeHistory() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  state.applyGaugeJudgement(Great);
+  state.applyGaugeJudgement(Bad);
+
+  require(state.gaugeHistory.size() == 2,
+          "GAS retains the compatibility active-gauge history");
+  for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
+    const GaugeType type = gaugeTypeAtIndex(index);
+    const auto &history = state.gaugeHistoryFor(type);
+    require(history.size() == 2,
+            "GAS records every tracked gauge for each mutation");
+    require(std::bit_cast<std::uint32_t>(history.back()) ==
+                std::bit_cast<std::uint32_t>(state.gaugeValues[index]),
+            "per-gauge history retains the post-mutation value");
+  }
+}
+
+void testBoundedGasHistoriesShareLogicalLimit() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  state.configureBoundedGaugeHistory(1);
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  state.applyGaugeDelta(-1.0F);
+  state.applyGaugeDelta(-1.0F);
+
+  require(state.gaugeHistory.size() == 1 &&
+              state.gaugeHistoryOverflowed(),
+          "GAS latches the existing logical history limit");
+  for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
+    require(state.gaugeHistoryFor(gaugeTypeAtIndex(index)).size() == 1,
+            "bounded GAS series never grow past the logical limit");
+  }
+}
+
+void testNonGasRecordsOnlyActiveGaugeHistory() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 200.0));
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  state.applyGaugeDelta(-1.0F);
+
+  for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
+    const GaugeType type = gaugeTypeAtIndex(index);
+    require(state.gaugeHistoryFor(type).size() ==
+                (type == GaugeType::Hard ? 1U : 0U),
+            "non-GAS records only the active gauge series");
+  }
+}
 } // namespace
 
 int main() {
   testConfiguredGaugeHistoryUsesLogicalLimit();
   testRhythmStateGaugeHistoryRemainsUnboundedByDefault();
+  testGasRecordsEveryTrackedGaugeHistory();
+  testBoundedGasHistoriesShareLogicalLimit();
+  testNonGasRecordsOnlyActiveGaugeHistory();
 
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 432;
@@ -78,9 +141,7 @@ int main() {
   chart.Meta.Total = 280.0;
 
   RhythmState legacy(&chart, false);
-  GameplayScoreState runtime({.totalNotes = 432,
-                              .keyMode = 7,
-                              .gaugeTotal = 280.0});
+  GameplayScoreState runtime(beatorajaScoreConfig(432, 7, 280.0));
   legacy.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
   runtime.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
   legacy.configureBoundedGaugeHistory(64);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../repositories/ChartRepository.h"
+#include "../ir/IrSettingsPresentation.h"
 #include "../PlatformDocumentHandoff.h"
 #include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
@@ -58,9 +59,13 @@ class Note;
 #include "../input/InputTypes.h"
 #include "SettingsSceneInputRebuild.h"
 
+enum class SettingsDestination { Profile, Ir };
+
 class SettingsScene : public Scene, public IRhythmControl {
 public:
-  explicit SettingsScene(ApplicationContext &context);
+  explicit SettingsScene(
+      ApplicationContext &context,
+      SettingsDestination destination = SettingsDestination::Profile);
   ~SettingsScene() override;
 
   void init() override;
@@ -86,6 +91,7 @@ private:
     Display,
     DifficultyTables,
     BmsLibrary,
+    Ir,
   };
 
   View *rootLayout = nullptr;
@@ -109,6 +115,7 @@ private:
   TextView *summaryJudgementTextYValueText = nullptr;
   TextView *summaryJudgementIndicatorYValueText = nullptr;
   TextView *summaryJudgementIndicatorWidthValueText = nullptr;
+  TextView *summaryJudgementIndicatorRangeValueText = nullptr;
   TextView *summaryJudgementCounterPositionValueText = nullptr;
   TextView *summaryJudgementTimingFastSlowValueText = nullptr;
   TextView *summaryJudgementTimingMillisecondsValueText = nullptr;
@@ -117,6 +124,7 @@ private:
   TextView *summaryUiThemeValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
+  TextInputBox *judgementIndicatorRangeInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
@@ -174,6 +182,7 @@ private:
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
   Button *bmsLibraryTabButton = nullptr;
+  Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
   TextView *visualTabText = nullptr;
   TextView *laneTabText = nullptr;
@@ -183,6 +192,14 @@ private:
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
   TextView *bmsLibraryTabText = nullptr;
+  TextView *irTabText = nullptr;
+  TextView *irPendingCountText = nullptr;
+  TextView *irAwaitingCountText = nullptr;
+  TextView *irBlockedCountText = nullptr;
+  TextView *irFailedCountText = nullptr;
+  TextView *irStatusText = nullptr;
+  TextInputBox *irServerOriginInput = nullptr;
+  TextInputBox *irApiKeyInput = nullptr;
   TextInputBox *bgaBrightnessInput = nullptr;
   TextInputBox *bgaBlurInput = nullptr;
   TextInputBox *laneAngleInput = nullptr;
@@ -337,6 +354,11 @@ private:
   bool displayResolutionDropdownOpen = false;
   bool displayVsyncDropdownOpen = false;
   bool displayFrameCapDropdownOpen = false;
+  std::unique_ptr<ir::IrSettingsActionModel> irSettingsModel;
+  std::optional<std::int64_t> irPendingDiscardRowId;
+  bool irKeyEditorActive = false;
+  bool irStatusIsError = false;
+  std::string irStatusMessage;
 
   void initView();
   void resetViewState();
@@ -357,6 +379,7 @@ private:
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildIrTab(const settings_scene::LayoutMetrics &metrics);
   void
   buildDifficultyTableImportModal(const settings_scene::LayoutMetrics &metrics);
   void buildDisplayPreviewOverlay(const settings_scene::LayoutMetrics &metrics);
@@ -407,6 +430,7 @@ private:
   void measureTemporaryArchiveCache();
   void cleanupTemporaryArchiveCache();
   void refreshSettingsText();
+  void refreshIrSettingsPresentation();
   void ensureProfileController();
   void applyPendingProfileArchiveCompletion();
   void applyPendingProfileDocumentHandoff();
@@ -445,6 +469,7 @@ private:
   void syncNoteStartPositionInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
+  void syncJudgementIndicatorRangeInputText(bool force = false);
   void commitOffsetInput();
   void commitVisualOffsetInput();
   void commitVisibleTimeInput();
@@ -456,4 +481,5 @@ private:
   void commitNoteStartPositionInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();
+  void commitJudgementIndicatorRangeInput();
 };

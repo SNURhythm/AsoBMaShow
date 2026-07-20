@@ -17,6 +17,7 @@ public:
   ~TextView() override;
 
   void setText(const std::string &newText);
+  [[nodiscard]] const std::string &getText() const { return text; }
   void setColor(SDL_Color newColor);
   void setThemedColor(ThemeColorProvider provider);
   void setAlign(TextAlign newAlign);

@@ -283,7 +283,9 @@ struct CoursePlaySession {
   std::string constraintJson;
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
+  std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
   std::vector<CourseReplayStageData> replayStages;
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
   std::vector<std::optional<ScoreProvenance>> stageProvenance;
   std::size_t currentIndex = 0;
@@ -313,6 +315,19 @@ struct CoursePlaySession {
 
   [[nodiscard]] bool validCurrentIndex() const {
     return currentIndex < entries.size();
+  }
+
+  void snapshotRulesetFromReplay(const ReplayData &replay) {
+    if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+      ruleset = GameplayRuleset::Beatoraja;
+      rulesetDescriptor =
+          RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+      return;
+    }
+    rulesetDescriptor = replay.provenance.ruleset;
+    if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
+      ruleset = *recorded;
+    }
   }
 
   [[nodiscard]] bool hasNextChart() const {

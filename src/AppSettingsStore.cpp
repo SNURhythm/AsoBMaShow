@@ -1,6 +1,7 @@
 #include "AppSettingsStore.h"
 
 #include "VersionedJson.h"
+#include "scene/play/GameplayRuleset.h"
 
 #include <array>
 #include <cmath>
@@ -110,7 +111,7 @@ void readEnum(const json &document, std::string_view key, Enum &destination,
 }
 
 json settingsToJson(const AppSettings &settings) {
-  return {
+  json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
@@ -144,6 +145,8 @@ json settingsToJson(const AppSettings &settings) {
       {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
       {"judgementIndicatorY", settings.judgementIndicatorY},
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorRangeMilliseconds",
+       settings.judgementIndicatorRangeMilliseconds},
       {"judgementTextY", settings.judgementTextY},
       {"judgementIndicatorRenderMode",
        static_cast<int>(settings.judgementIndicatorRenderMode)},
@@ -165,6 +168,7 @@ json settingsToJson(const AppSettings &settings) {
        static_cast<int>(settings.musicPlayerPlaybackMode)},
       {"gameplayClubModeEnabled", settings.gameplayClubModeEnabled},
       {"musicPlayerClubModeEnabled", settings.musicPlayerClubModeEnabled},
+      {"selectedGameplayRuleset", settings.selectedGameplayRuleset},
       {"selectedGaugeType", settings.selectedGaugeType},
       {"selectedGaugeAutoShiftMode", settings.selectedGaugeAutoShiftMode},
       {"selectedGaugeAutoShiftLowerBound",
@@ -192,6 +196,16 @@ json settingsToJson(const AppSettings &settings) {
         {"vsync", settings.audioVideo.video.vsync},
         {"frameCap", settings.audioVideo.video.frameCap}}},
   };
+  json providers = json::object();
+  for (const auto &[providerId, provider] : settings.irProviders) {
+    providers[providerId] = {
+        {"enabled", provider.enabled},
+        {"autoSubmit", provider.autoSubmit},
+        {"serverOrigin", provider.serverOrigin},
+    };
+  }
+  document["ir"] = {{"providers", std::move(providers)}};
+  return document;
 }
 
 AppSettings settingsFromJson(const json &document,
@@ -252,6 +266,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "judgementIndicatorWidthScale",
             settings.judgementIndicatorWidthScale, diagnostics);
+  readValue(document, "judgementIndicatorRangeMilliseconds",
+            settings.judgementIndicatorRangeMilliseconds, diagnostics);
   readValue(document, "judgementTextY", settings.judgementTextY, diagnostics);
   readEnum(document, "judgementIndicatorRenderMode",
            settings.judgementIndicatorRenderMode, diagnostics);
@@ -280,6 +296,16 @@ AppSettings settingsFromJson(const json &document,
             settings.gameplayClubModeEnabled, diagnostics);
   readValue(document, "musicPlayerClubModeEnabled",
             settings.musicPlayerClubModeEnabled, diagnostics);
+  std::string selectedGameplayRuleset = settings.selectedGameplayRuleset;
+  if (readValue(document, "selectedGameplayRuleset", selectedGameplayRuleset,
+                diagnostics)) {
+    if (gameplayRulesetFromId(selectedGameplayRuleset).has_value()) {
+      settings.selectedGameplayRuleset = std::move(selectedGameplayRuleset);
+    } else {
+      invalidValue("selectedGameplayRuleset", "expected lr2 or beatoraja",
+                   diagnostics);
+    }
+  }
   readValue(document, "selectedGaugeType", settings.selectedGaugeType,
             diagnostics);
   readValue(document, "selectedGaugeAutoShiftMode",
@@ -299,6 +325,43 @@ AppSettings settingsFromJson(const json &document,
            diagnostics);
   readValue(document, "defaultDifficultyTablesSeeded",
             settings.defaultDifficultyTablesSeeded, diagnostics);
+
+  const auto irObject = document.find("ir");
+  if (irObject != document.end()) {
+    if (!irObject->is_object()) {
+      invalidValue("ir", "expected object", diagnostics);
+    } else {
+      const auto providers = irObject->find("providers");
+      if (providers == irObject->end() || !providers->is_object()) {
+        invalidValue("ir.providers", "expected object", diagnostics);
+      } else {
+        for (const auto &[providerId, encoded] : providers->items()) {
+          if (!encoded.is_object()) {
+            invalidValue("ir.providers." + providerId, "expected object",
+                         diagnostics);
+            continue;
+          }
+          ir::IrProviderSettings provider;
+          readValue(encoded, "enabled", provider.enabled, diagnostics);
+          readValue(encoded, "autoSubmit", provider.autoSubmit, diagnostics);
+          readValue(encoded, "serverOrigin", provider.serverOrigin,
+                    diagnostics);
+          const auto normalized =
+              ir::normalizeServerOrigin(provider.serverOrigin);
+          if (!normalized) {
+            invalidValue("ir.providers." + providerId + ".serverOrigin",
+                         "expected absolute HTTP or HTTPS origin",
+                         diagnostics);
+            provider.serverOrigin =
+                std::string(ir::kDefaultTachiServerOrigin);
+          } else {
+            provider.serverOrigin = *normalized;
+          }
+          settings.irProviders[providerId] = std::move(provider);
+        }
+      }
+    }
+  }
 
   const auto audio = document.find("audio");
   if (audio != document.end()) {
@@ -359,9 +422,34 @@ AppSettingsLoadStatus mapFailure(versioned_json::LoadStatus status) {
 
 AppSettingsLoadResult
 AppSettingsStore::Load(const std::filesystem::path &settingsJson) {
-  const std::array<versioned_json::Migration, 1> migrations = {
+  const std::array<versioned_json::Migration, 3> migrations = {
       [](json &document, std::string &) {
         document["schemaVersion"] = 1;
+        return true;
+      },
+      [](json &document, std::string &) {
+        if (!document.contains("ir")) {
+          document["ir"] = json::object();
+        }
+        if (document["ir"].is_object() &&
+            !document["ir"].contains("providers")) {
+          document["ir"]["providers"] = json::object();
+        }
+        if (document["ir"].is_object() &&
+            document["ir"].value("providers", json{}).is_object() &&
+            !document["ir"]["providers"].contains("tachi")) {
+          document["ir"]["providers"]["tachi"] = {
+              {"enabled", false},
+              {"autoSubmit", false},
+              {"serverOrigin", ir::kDefaultTachiServerOrigin},
+          };
+        }
+        return true;
+      },
+      [](json &document, std::string &) {
+        if (!document.contains("selectedGameplayRuleset")) {
+          document["selectedGameplayRuleset"] = "lr2";
+        }
         return true;
       }};
   auto loaded = versioned_json::loadAndMigrate(

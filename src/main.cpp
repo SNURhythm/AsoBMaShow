@@ -256,8 +256,8 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
   int preferredW = 0;
   int preferredH = 0;
   if (s_iosMetalLayer != nullptr &&
-      GetIOSPreferredFullscreenDrawableSize(renderW, renderH, logicalW, logicalH,
-                                            preferredW, preferredH) &&
+      GetIOSPreferredFullscreenDrawableSize(renderW, renderH, logicalW,
+                                            logicalH, preferredW, preferredH) &&
       SetIOSMetalLayerDrawableSize(s_iosMetalLayer, preferredW, preferredH)) {
     APP_DEBUG_LOG("iOS display-mode drawable size: %d x %d (SDL: %d x %d)",
                   preferredW, preferredH, renderW, renderH);
@@ -435,9 +435,8 @@ static int runApplication(const bgfx::Init &bgfxInit) {
     selectedInit.type = rendererType;
 #if TARGET_OS_ANDROID
     selectedInit.resolution.formatColor =
-        rendererType == bgfx::RendererType::Vulkan
-            ? bgfx::TextureFormat::RGBA8
-            : bgfx::TextureFormat::BGRA8;
+        rendererType == bgfx::RendererType::Vulkan ? bgfx::TextureFormat::RGBA8
+                                                   : bgfx::TextureFormat::BGRA8;
 #endif
     SDL_Log("Trying bgfx renderer: %s",
             rendererType == bgfx::RendererType::Count
@@ -598,9 +597,8 @@ int main(int argv, char **args) {
   } else if (TARGET_PLATFORM == Android) {
     windowFlags |= SDL_WINDOW_VULKAN | SDL_WINDOW_ALLOW_HIGHDPI;
   }
-  SDL_Window *win = SDL_CreateWindow("AsoBMaShow", 100, 100,
-                                     windowCreateWidth, windowCreateHeight,
-                                     windowFlags);
+  SDL_Window *win = SDL_CreateWindow("AsoBMaShow", 100, 100, windowCreateWidth,
+                                     windowCreateHeight, windowFlags);
   if (win == nullptr) {
     cerr << "SDL_CreateWindow Error: " << SDL_GetError() << endl;
     TextInputBox::releaseCachedCursors();
@@ -713,9 +711,8 @@ int main(int argv, char **args) {
   return appExitCode;
 }
 
-static void reportStartupFailure(
-    const ApplicationContext &context,
-    const application_startup::Result &result) {
+static void reportStartupFailure(const ApplicationContext &context,
+                                 const application_startup::Result &result) {
   switch (result.failure) {
   case application_startup::Failure::ProfileInitialization:
     SDL_Log("Application profile initialization failed: %s",
@@ -728,8 +725,8 @@ static void reportStartupFailure(
       const auto &status = *result.databaseStatus;
       SDL_Log("Application database initialization failed: chart=%d score=%d "
               "replay=%d music=%d",
-              status.chart ? 1 : 0, status.score ? 1 : 0,
-              status.replay ? 1 : 0, status.music ? 1 : 0);
+              status.chart ? 1 : 0, status.score ? 1 : 0, status.replay ? 1 : 0,
+              status.music ? 1 : 0);
     }
     break;
   case application_startup::Failure::None:
@@ -737,8 +734,7 @@ static void reportStartupFailure(
     break;
   }
 
-  if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-                               "AsoBMaShow Startup Error",
+  if (SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AsoBMaShow Startup Error",
                                result.userMessage.c_str(), s_window) != 0) {
     SDL_Log("Unable to show the startup error dialog: %s", SDL_GetError());
   }
@@ -926,6 +922,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (previous == background) {
       return;
     }
+    context.setIrApplicationActive(!background);
     context.jukebox.setVisualsSuspended(background);
     if (!background) {
       lastFrameTime = std::chrono::steady_clock::now();
@@ -1003,7 +1000,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         return false;
       }
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
-                                           std::try_to_lock);
+                                            std::try_to_lock);
       if (!bgfxLock.owns_lock()) {
         return false;
       }
@@ -1020,8 +1017,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.bgfxResetFlags.store(activeBgfxResetFlags,
                                    std::memory_order_relaxed);
       APP_DEBUG_LOG("Render size: %d x %d (logical: %d x %d, scale %.2f)",
-                    rendering::render_width, rendering::render_height,
-                    logicalW, logicalH, s_renderScale);
+                    rendering::render_width, rendering::render_height, logicalW,
+                    logicalH, s_renderScale);
       s_postProcess.resize(rendering::render_width, rendering::render_height);
       context.restoreGameplayRenderViews();
       context.framePacer.reset(std::chrono::steady_clock::now());
@@ -1036,8 +1033,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       SDL_SysWMinfo wmi;
       SDL_VERSION(&wmi.version);
       if (!SDL_GetWindowWMInfo(s_window, &wmi)) {
-        SDL_Log("Failed to refresh Android window handle: %s",
-                SDL_GetError());
+        SDL_Log("Failed to refresh Android window handle: %s", SDL_GetError());
         return false;
       }
       bgfx::PlatformData pd{};
@@ -1187,14 +1183,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         continue;
       }
       if (e.type == SDL_FINGERMOTION) {
-        auto existing =
-            std::find_if(pendingFingerMotions.begin(),
-                         pendingFingerMotions.end(),
-                         [&](const SDL_Event &pending) {
-                           return pending.tfinger.touchId == e.tfinger.touchId &&
-                                  pending.tfinger.fingerId ==
-                                      e.tfinger.fingerId;
-                         });
+        auto existing = std::find_if(
+            pendingFingerMotions.begin(), pendingFingerMotions.end(),
+            [&](const SDL_Event &pending) {
+              return pending.tfinger.touchId == e.tfinger.touchId &&
+                     pending.tfinger.fingerId == e.tfinger.fingerId;
+            });
         if (existing != pendingFingerMotions.end()) {
           *existing = e;
         } else {
@@ -1283,7 +1277,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (laneTransformChanged &&
         !context.replayVideoExportActive.load(std::memory_order_acquire)) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
-                                           std::try_to_lock);
+                                            std::try_to_lock);
       if (bgfxLock.owns_lock()) {
         appliedLaneAngleDegrees = context.settings.laneAngleDegrees;
         appliedLaneLength = context.settings.laneLength;
@@ -1304,7 +1298,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             std::memory_order_acquire);
     if (!replayExportActive || replayExportUiFrameRequested) {
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
-                                           std::try_to_lock);
+                                            std::try_to_lock);
       if (bgfxLock.owns_lock() &&
           context.replayVideoExportActive.load(std::memory_order_acquire) &&
           context.replayVideoExportUiFrameRequested.load(
@@ -1318,9 +1312,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.replayVideoExportUiFrameRequested.store(
             false, std::memory_order_release);
         renderedFrame = true;
-      } else if (bgfxLock.owns_lock() &&
-                 !context.replayVideoExportActive.load(
-                     std::memory_order_acquire)) {
+      } else if (bgfxLock.owns_lock() && !context.replayVideoExportActive.load(
+                                             std::memory_order_acquire)) {
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
         bgfx::touch(rendering::clear_view);
@@ -1338,16 +1331,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           const bool ignoreBgaPostOptions =
               context.ignoreBgaPostOptions.load(std::memory_order_acquire);
           context.jukebox.render();
-          s_blurPass->setBlurStrength(ignoreBgaPostOptions
-                                           ? 0.0f
-                                           : context.settings.bgaBlurStrength);
+          s_blurPass->setBlurStrength(
+              ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength);
           s_postProcess.apply();
           rendering::renderFullscreenTextureTint(
               s_blurPass->outputTexture(), s_blurPass->finalView(),
               ignoreBgaPostOptions
                   ? 1.0f
-                  : static_cast<float>(
-                        context.settings.bgaBrightnessPercent) /
+                  : static_cast<float>(context.settings.bgaBrightnessPercent) /
                         100.0f);
         }
         bgfx::frame();
@@ -1426,9 +1417,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (waitDuration > std::chrono::steady_clock::duration::zero()) {
 #if TARGET_OS_IPHONE
         const auto waitMicros = std::max<long long>(
-            1, std::chrono::duration_cast<std::chrono::microseconds>(
-                   waitDuration)
-                   .count());
+            1,
+            std::chrono::duration_cast<std::chrono::microseconds>(waitDuration)
+                .count());
         WaitIOSMainRunLoopForMicros(waitMicros);
 #else
         std::this_thread::sleep_for(waitDuration);
@@ -1459,12 +1450,13 @@ static void runReadyApplication(ApplicationContext &context) {
   application_result_recovery::execute(
       application_result_recovery::Dependencies{
           .recover = [&context] { return context.recoverPendingResults(); },
-          .reportWarning = [](const auto &recovery) {
-            reportResultRecoveryWarning(recovery);
-          },
-          .runReadyRuntime = [&context] {
-            runReadyApplicationAfterResultRecovery(context);
-          },
+          .reportWarning =
+              [](const auto &recovery) {
+                reportResultRecoveryWarning(recovery);
+              },
+          .startProfileServices = [&context] { context.startIrServices(); },
+          .runReadyRuntime =
+              [&context] { runReadyApplicationAfterResultRecovery(context); },
       });
 }
 
@@ -1473,18 +1465,17 @@ int run() {
   return application_startup::execute(
       context.profileReady(),
       application_startup::Dependencies{
-          .initializeDatabases = [&context] {
-            return app_database_initializer::initializeApplicationDatabases(
-                context.chartRepository, context.scoreRepository,
-                context.replayRepository,
-                context.musicPlaylistRepository);
-          },
-          .reportFatal = [&context](const application_startup::Result &result) {
-            reportStartupFailure(context, result);
-          },
-          .runReadyApplication = [&context] {
-            runReadyApplication(context);
-          },
+          .initializeDatabases =
+              [&context] {
+                return app_database_initializer::initializeApplicationDatabases(
+                    context.chartRepository, context.scoreRepository,
+                    context.replayRepository, context.musicPlaylistRepository);
+              },
+          .reportFatal =
+              [&context](const application_startup::Result &result) {
+                reportStartupFailure(context, result);
+              },
+          .runReadyApplication = [&context] { runReadyApplication(context); },
       });
 }
 

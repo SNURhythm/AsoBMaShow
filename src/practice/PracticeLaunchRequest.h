@@ -30,6 +30,9 @@ struct LaunchRequest {
   LaunchSource source = LaunchSource::ChartViewer;
   std::optional<int> replayId;
   std::optional<ReplayPlayOptions> replayPlayOptions;
+  GameplayRuleset ruleset = kDefaultGameplayRuleset;
+  std::optional<RulesetDescriptor> requiredRulesetDescriptor;
+  std::optional<ScoreStageProvenance> replayRulesetSnapshot;
 };
 
 struct ParsedLaunchApplication {

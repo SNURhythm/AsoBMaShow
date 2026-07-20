@@ -3,12 +3,14 @@
 #include "../src/ProfileDatabaseActivity.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -18,7 +20,8 @@
 // implementations. These definitions satisfy the production adapter
 // constructor while every test exercises injected dependencies.
 result_persistence::StageOutcome ReplayRepository::StageChartResult(
-    const result_persistence::ChartResultAttempt &) {
+    const result_persistence::ChartResultAttempt &,
+    std::span<const ir::IrOutboxDraft>) {
   std::abort();
 }
 
@@ -33,7 +36,8 @@ ReplayRepository::ListPendingChartScores(std::size_t) {
 }
 
 result_persistence::AcknowledgeOutcome
-ReplayRepository::AcknowledgePendingChartScore(std::string_view, int) {
+ReplayRepository::AcknowledgePendingChartScoreAndActivateIr(std::string_view,
+                                                            int) {
   std::abort();
 }
 
@@ -110,7 +114,9 @@ struct Harness {
   RecoveryMarkOutcome markResult{.status = RecoveryMarkStatus::Recorded,
                                  .diagnostic = {}};
 
-  std::function<StageOutcome(const ChartResultAttempt &)> stageHandler;
+  std::function<StageOutcome(const ChartResultAttempt &,
+                             std::span<const ir::IrOutboxDraft>)>
+      stageHandler;
   std::function<PendingReadOutcome(std::string_view)> loadHandler;
   std::function<PendingBatchOutcome(std::size_t)> listHandler;
   std::function<ProjectionOutcome(const PendingChartScoreWrite &)>
@@ -121,6 +127,7 @@ struct Harness {
 
   std::vector<std::string> events;
   std::size_t stageCalls = 0;
+  std::size_t lastStageDraftCount = 0;
   std::size_t loadCalls = 0;
   std::size_t listCalls = 0;
   std::size_t projectCalls = 0;
@@ -130,11 +137,13 @@ struct Harness {
   Dependencies dependencies() {
     return {
         .stage =
-            [this](const ChartResultAttempt &value) {
+            [this](const ChartResultAttempt &value,
+                   std::span<const ir::IrOutboxDraft> drafts) {
               assert(profile_database_activity::writesActive());
               ++stageCalls;
+              lastStageDraftCount = drafts.size();
               events.push_back("stage:" + value.attemptId);
-              return stageHandler ? stageHandler(value) : stageResult;
+              return stageHandler ? stageHandler(value, drafts) : stageResult;
             },
         .loadPending =
             [this](std::string_view attemptId) {
@@ -157,7 +166,7 @@ struct Harness {
               events.push_back("project:" + value.attemptId);
               return projectHandler ? projectHandler(value) : projectResult;
             },
-        .acknowledge =
+        .acknowledgeAndActivate =
             [this](std::string_view attemptId, int replayId) {
               assert(profile_database_activity::writesActive());
               ++acknowledgeCalls;
@@ -268,6 +277,24 @@ void testPersistOrdersStageLoadProjectAcknowledge() {
   assert(harness.projectCalls == 1);
   assert(harness.acknowledgeCalls == 1);
   assert(harness.markCalls == 0);
+}
+
+void testPersistForwardsEveryDraftToAtomicStaging() {
+  Harness harness;
+  Coordinator coordinator(harness.dependencies());
+  const std::array drafts{
+      ir::IrOutboxDraft{.providerId = "tachi"},
+      ir::IrOutboxDraft{.providerId = "archive_readonly"},
+  };
+
+  const SaveOutcome outcome = coordinator.persist(attempt(), drafts);
+
+  assert(outcome.saved());
+  assert(harness.stageCalls == 1);
+  assert(harness.lastStageDraftCount == 2);
+  assert((harness.events ==
+          std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
+                                   "project:attempt-a", "ack:attempt-a:17"}));
 }
 
 void testStageStorageFailureReturnsTruthfulUnstagedMessage() {
@@ -543,7 +570,8 @@ void testRetryAfterAcknowledgementFailureResumesIdempotently() {
   std::size_t stageNumber = 0;
   std::size_t projectNumber = 0;
   std::size_t acknowledgeNumber = 0;
-  harness.stageHandler = [&](const ChartResultAttempt &) {
+  harness.stageHandler = [&](const ChartResultAttempt &,
+                             std::span<const ir::IrOutboxDraft>) {
     ++stageNumber;
     return StageOutcome{.status = stageNumber == 1 ? StageStatus::Staged
                                                    : StageStatus::AlreadyStaged,
@@ -1298,6 +1326,7 @@ void testPersistentFirstBatchDoesNotStarveNewValidRow() {
 int main() {
   testSaveOutcomePresentationSemantics();
   testPersistOrdersStageLoadProjectAcknowledge();
+  testPersistForwardsEveryDraftToAtomicStaging();
   testStageStorageFailureReturnsTruthfulUnstagedMessage();
   testStageConflictReturnsUnstagedConflictWithoutReceipt();
   testMalformedSuccessfulStageMetadataIsNotDurable();

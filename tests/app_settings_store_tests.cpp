@@ -166,6 +166,13 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;
   expected.gameplayClubModeEnabled = true;
   expected.musicPlayerClubModeEnabled = true;
+  expected.judgementIndicatorRangeMilliseconds = 333;
+  expected.selectedGameplayRuleset = "beatoraja";
+  expected.irProviders["tachi"] = {
+      .enabled = true,
+      .autoSubmit = true,
+      .serverOrigin = "https://scores.example.test:8443",
+  };
   std::string error;
   expect(AppSettingsStore::Save(path, expected, error),
          "versioned settings save succeeds: " + error);
@@ -173,11 +180,18 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(loaded.status == AppSettingsLoadStatus::Loaded, "saved settings load");
   expect(loaded.settings == expected,
          "JSON round trip preserves every setting including audio/video");
-  expect(readFile(path).find("\"schemaVersion\": 1") != std::string::npos,
-         "saved JSON declares schema version 1");
+  expect(readFile(path).find("\"schemaVersion\": 3") != std::string::npos,
+         "saved JSON declares schema version 3");
+  expect(readFile(path).find("\"selectedGameplayRuleset\": \"beatoraja\"") !=
+             std::string::npos,
+         "saved JSON includes the per-profile gameplay ruleset");
   expect(readFile(path).find("\"startLaneIndicatorsEnabled\": false") !=
              std::string::npos,
          "saved JSON includes the start lane indicator setting");
+  expect(readFile(path).find(
+             "\"judgementIndicatorRangeMilliseconds\": 333") !=
+             std::string::npos,
+         "saved JSON includes the judgement indicator range");
   expect(readFile(path).find("\"selectedPlaybackRatePercent\": 75") !=
              std::string::npos,
          "saved JSON includes the selected normal-play rate");
@@ -196,6 +210,196 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expect(readFile(path).find("\"musicPlayerClubModeEnabled\": true") !=
              std::string::npos,
          "saved JSON includes music-player Club mode");
+  expect(readFile(path).find(
+             "\"serverOrigin\": \"https://scores.example.test:8443\"") !=
+             std::string::npos,
+         "saved JSON includes non-secret IR provider settings");
+  expect(readFile(path).find("sentinel-api-key") == std::string::npos,
+         "serialized settings contain no API key material");
+}
+
+void testJudgementIndicatorRangeDefaultsAndSanitization() {
+  AppSettings defaults;
+  defaults.sanitize();
+  expect(defaults.judgementIndicatorRangeMilliseconds == 180,
+         "judgement indicator range defaults to 180 ms");
+
+  AppSettings invalid;
+  invalid.judgementIndicatorRangeMilliseconds = 0;
+  invalid.sanitize();
+  expect(invalid.judgementIndicatorRangeMilliseconds == 180,
+         "non-positive stored range uses the default");
+
+  AppSettings excessive;
+  excessive.judgementIndicatorRangeMilliseconds = 1001;
+  excessive.sanitize();
+  expect(excessive.judgementIndicatorRangeMilliseconds == 1000,
+         "stored range clamps to the 1000 ms hard cap");
+
+  TempDirectory temp;
+  const auto path = temp.path() / "legacy-range-settings.json";
+  writeFile(path, R"({"schemaVersion":3,"audioOffsetMs":12})");
+  const auto legacy = AppSettingsStore::Load(path);
+  expect(legacy.status == AppSettingsLoadStatus::Loaded,
+         "settings written before range configuration still load");
+  expect(legacy.settings.judgementIndicatorRangeMilliseconds == 180,
+         "settings without the range field use 180 ms");
+
+  const auto malformedPath = temp.path() / "malformed-range-settings.json";
+  writeFile(malformedPath,
+            R"({"schemaVersion":3,"judgementIndicatorRangeMilliseconds":"wide"})");
+  const auto malformed = AppSettingsStore::Load(malformedPath);
+  expect(malformed.status == AppSettingsLoadStatus::Loaded,
+         "malformed range does not invalidate the settings document");
+  expect(malformed.settings.judgementIndicatorRangeMilliseconds == 180,
+         "malformed range falls back to 180 ms");
+  expect(hasDiagnostic(malformed.diagnostics,
+                       "judgementIndicatorRangeMilliseconds",
+                       "expected integer"),
+         "malformed range emits a setting diagnostic");
+}
+
+void testGameplayRulesetDefaultsMigrationAndValidation() {
+  expect(AppSettings{}.selectedGameplayRuleset == "lr2",
+         "new settings default gameplay to LR2");
+
+  TempDirectory temp;
+  const auto schema2Path = temp.path() / "schema-2.json";
+  writeFile(schema2Path,
+            R"({"schemaVersion":2,"selectedPlayOption":"MIRROR"})");
+  const auto migrated = AppSettingsStore::Load(schema2Path);
+  expect(migrated.status == AppSettingsLoadStatus::Loaded,
+         "schema-2 settings migrate to schema 3");
+  expect(migrated.settings.selectedGameplayRuleset == "lr2",
+         "schema-2 migration inserts the LR2 default");
+  expect(migrated.settings.selectedPlayOption == "MIRROR",
+         "ruleset migration preserves unrelated settings");
+
+  const auto missingPath = temp.path() / "missing-ruleset.json";
+  writeFile(missingPath, R"({"schemaVersion":3})");
+  const auto missing = AppSettingsStore::Load(missingPath);
+  expect(missing.status == AppSettingsLoadStatus::Loaded &&
+             missing.settings.selectedGameplayRuleset == "lr2",
+         "a current document missing the field still defaults to LR2");
+
+  const auto validPath = temp.path() / "beatoraja.json";
+  writeFile(validPath,
+            R"({"schemaVersion":3,"selectedGameplayRuleset":"beatoraja"})");
+  const auto valid = AppSettingsStore::Load(validPath);
+  expect(valid.status == AppSettingsLoadStatus::Loaded &&
+             valid.settings.selectedGameplayRuleset == "beatoraja",
+         "a valid Beatoraja selection survives loading");
+
+  const auto invalidPath = temp.path() / "invalid-ruleset.json";
+  writeFile(
+      invalidPath,
+      R"({"schemaVersion":3,"selectedGameplayRuleset":"future-ruleset"})");
+  const auto invalid = AppSettingsStore::Load(invalidPath);
+  expect(invalid.status == AppSettingsLoadStatus::Loaded &&
+             invalid.settings.selectedGameplayRuleset == "lr2",
+         "an invalid ruleset selection falls back to LR2");
+  expect(hasDiagnostic(invalid.diagnostics, "selectedGameplayRuleset",
+                       "lr2 or beatoraja"),
+         "invalid ruleset emits a field-specific diagnostic");
+  expect(std::ranges::none_of(
+             invalid.diagnostics,
+             [](const std::string &diagnostic) {
+               return diagnostic.find("api") != std::string::npos ||
+                      diagnostic.find("secret") != std::string::npos ||
+                      diagnostic.find("selectedGaugeType") != std::string::npos;
+             }),
+         "ruleset diagnostics mention neither secrets nor unrelated fields");
+
+  std::istringstream legacyValid("selected_gameplay_ruleset=beatoraja\n");
+  const auto parsedValid =
+      AppSettingsStore::LoadLegacyCfgStreamForTesting(legacyValid);
+  expect(parsedValid.status == AppSettingsLoadStatus::Loaded &&
+             parsedValid.settings.selectedGameplayRuleset == "beatoraja",
+         "manual legacy CFG can select Beatoraja");
+  std::istringstream legacyMissing("selected_play_option=RANDOM\n");
+  const auto parsedMissing =
+      AppSettingsStore::LoadLegacyCfgStreamForTesting(legacyMissing);
+  expect(parsedMissing.settings.selectedGameplayRuleset == "lr2",
+         "legacy CFG without a ruleset remains LR2");
+}
+
+void testIrDefaultsMigrationAndOriginSanitization() {
+  AppSettings defaults;
+  const auto defaultProvider = defaults.irProviders.find("tachi");
+  expect(defaultProvider != defaults.irProviders.end(),
+         "settings include the stable Tachi provider by default");
+  if (defaultProvider != defaults.irProviders.end()) {
+    expect(!defaultProvider->second.enabled &&
+               !defaultProvider->second.autoSubmit &&
+               defaultProvider->second.serverOrigin ==
+                   "https://boku.tachi.ac",
+           "Tachi defaults are disabled with the production origin");
+  }
+
+  TempDirectory temp;
+  const auto migratedPath = temp.path() / "schema-1.json";
+  writeFile(migratedPath,
+            R"({"schemaVersion":1,"audioOffsetMs":17})");
+  const auto migrated = AppSettingsStore::Load(migratedPath);
+  expect(migrated.status == AppSettingsLoadStatus::Loaded,
+         "schema-1 settings migrate to schema 2");
+  expect(migrated.settings.audioOffsetMs == 17,
+         "schema-1 migration preserves existing settings");
+  expect(migrated.settings.irProviders.at("tachi") ==
+             ir::IrProviderSettings{},
+         "schema-1 migration inserts default Tachi settings");
+
+  const auto normalizedPath = temp.path() / "normalized.json";
+  writeFile(normalizedPath,
+            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"HTTPS://BOKU.TACHI.AC:443/"}}}})");
+  const auto normalized = AppSettingsStore::Load(normalizedPath);
+  expect(normalized.status == AppSettingsLoadStatus::Loaded,
+         "valid provider settings load");
+  expect(normalized.settings.irProviders.at("tachi").serverOrigin ==
+             "https://boku.tachi.ac",
+         "origin normalization lowercases and removes default syntax");
+
+  const auto invalidPath = temp.path() / "invalid-origin.json";
+  writeFile(invalidPath,
+            R"({"schemaVersion":2,"ir":{"providers":{"tachi":{"enabled":true,"autoSubmit":true,"serverOrigin":"https://secret@example.test/path?key=value#fragment"}}}})");
+  const auto invalid = AppSettingsStore::Load(invalidPath);
+  expect(invalid.status == AppSettingsLoadStatus::Loaded,
+         "invalid origin is an individual setting error");
+  expect(invalid.settings.irProviders.at("tachi").serverOrigin ==
+             "https://boku.tachi.ac",
+         "invalid stored origin falls back to production");
+  expect(hasDiagnostic(invalid.diagnostics, "serverOrigin", "origin"),
+         "invalid stored origin emits a non-secret diagnostic");
+  expect(std::ranges::none_of(
+             invalid.diagnostics, [](const std::string &diagnostic) {
+               return diagnostic.find("secret") != std::string::npos ||
+                      diagnostic.find("key=value") != std::string::npos;
+             }),
+         "origin diagnostics do not echo rejected URL contents");
+
+  for (const auto &[input, expected] :
+       {std::pair<std::string_view, std::string_view>{
+            "http://LOCALHOST:80/", "http://localhost"},
+        {"https://Example.Test:444", "https://example.test:444"},
+        {"https://[::1]:443/", "https://[::1]"}}) {
+    const auto origin = ir::normalizeServerOrigin(input);
+    expect(origin && *origin == expected,
+           std::string("normalizes origin: ") + std::string(input));
+  }
+  const std::vector<std::string> rejectedOrigins = {
+      "ftp://example.test",
+      "https://",
+      "https://user@example.test",
+      "https://example.test/path",
+      "https://example.test?query",
+      "https://example.test#fragment",
+      "https://example.test\\path",
+      std::string("https://example.test/") + std::string(2048, 'x'),
+  };
+  for (const std::string &input : rejectedOrigins) {
+    expect(!ir::normalizeServerOrigin(input),
+           "rejects a non-origin server URL");
+  }
 }
 
 void testPlaybackSelectionSanitizationAndLegacyDefaults() {
@@ -545,6 +749,9 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testJudgementIndicatorRangeDefaultsAndSanitization();
+  testGameplayRulesetDefaultsMigrationAndValidation();
+  testIrDefaultsMigrationAndOriginSanitization();
   testPlaybackSelectionSanitizationAndLegacyDefaults();
   testVersionFixturesAndNoRewrite();
   testMigrationRunsExactlyOnce();

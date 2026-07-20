@@ -4,6 +4,7 @@
 #include "../scene/play/RhythmState.h"
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,15 +24,63 @@ struct ScoreRankByLongNoteMode {
   [[nodiscard]] int bestRankForMode(int lnMode) const;
 };
 
+enum class ScoreBestSource {
+  Local,
+  ImportedIr,
+};
+
+enum class ScoreStorageSource : int {
+  LocalGameplay = 0,
+  ImportedIr = 1,
+};
+
+enum class ImportedIrScoreProjectionStatus {
+  Applied,
+  AlreadyCurrent,
+  Invalid,
+  StorageFailure,
+};
+
+struct ImportedIrScoreProjectionOutcome {
+  ImportedIrScoreProjectionStatus status =
+      ImportedIrScoreProjectionStatus::StorageFailure;
+  int projectedScores = 0;
+  std::string diagnostic;
+};
+
 struct ScoreBestSnapshot {
   int score = 0;
   int maxScore = 0;
-  int maxCombo = 0;
-  int comboBreak = 0;
-  float finalGauge = 0.0f;
+  std::optional<int> maxCombo;
+  std::optional<int> comboBreak;
+  std::optional<int> badPoints;
+  std::optional<float> finalGauge;
   int clearType = kClearTypeFailedRank;
-  std::string createdAt;
+  std::optional<std::string> createdAt;
+  std::optional<std::string> bestOrderTime;
+  ScoreBestSource source = ScoreBestSource::Local;
 };
+
+[[nodiscard]] inline bool scoreBestSnapshotIsBetter(
+    const ScoreBestSnapshot &candidate,
+    const std::optional<ScoreBestSnapshot> &current) {
+  if (!current.has_value()) {
+    return true;
+  }
+  if (candidate.score != current->score) {
+    return candidate.score > current->score;
+  }
+  if (candidate.clearType != current->clearType) {
+    return candidate.clearType > current->clearType;
+  }
+  const auto &candidateTime =
+      candidate.bestOrderTime.has_value() ? candidate.bestOrderTime
+                                          : candidate.createdAt;
+  const auto &currentTime =
+      current->bestOrderTime.has_value() ? current->bestOrderTime
+                                         : current->createdAt;
+  return candidateTime > currentTime;
+}
 
 struct ScoreBestByLongNoteMode {
   std::array<std::optional<ScoreBestSnapshot>, 4> snapshots{};

@@ -1,10 +1,12 @@
 #include "RhythmLaneInputController.h"
 #include "BMSRenderer.h"
+#include "GameplayNoteJudgeRole.h"
 #include "ManualKeysoundSelection.h"
 #include "../../CoursePlaySession.h"
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <limits>
 #include <span>
 #include <utility>
@@ -16,6 +18,30 @@ struct PressLaneCandidate {
   JudgeResult judge = JudgeResult(None, 0);
 };
 
+long long noteTimingMicros(const bms_parser::Note *note);
+
+std::size_t inputCandidateCapacity(const bms_parser::Chart *chart) {
+  std::size_t count = 1;
+  if (chart == nullptr) {
+    return count;
+  }
+  for (const auto *measure : chart->Measures) {
+    if (measure == nullptr) {
+      continue;
+    }
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) {
+        continue;
+      }
+      count += static_cast<std::size_t>(std::ranges::count_if(
+          timeline->Notes, [](bms_parser::Note *note) {
+            return note != nullptr && !note->IsLandmineNote();
+          }));
+    }
+  }
+  return count;
+}
+
 JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
   if (judgeResult.judgement == None || judgeResult.judgement == Kpoor ||
       judgeResult.judgement == Poor) {
@@ -24,16 +50,61 @@ JudgeResult normalizeLongNoteReleaseJudge(const JudgeResult &judgeResult) {
   return judgeResult;
 }
 
-JudgeResult judgeClassicLongNoteRelease(Judge &judge,
-                                        bms_parser::LongNote *tail,
-                                        long long releasedTime) {
+int longNoteJudgeSeverity(Judgement judgement) noexcept {
+  switch (judgement) {
+  case PGreat:
+    return 0;
+  case Great:
+    return 1;
+  case Good:
+    return 2;
+  case Bad:
+    return 3;
+  case Kpoor:
+  case Poor:
+    return 4;
+  case None:
+  case JudgementCount:
+    return 5;
+  }
+  return 5;
+}
+
+JudgeResult worseLongNoteJudge(const JudgeResult &head,
+                               const JudgeResult &tail) noexcept {
+  const int headSeverity = longNoteJudgeSeverity(head.judgement);
+  const int tailSeverity = longNoteJudgeSeverity(tail.judgement);
+  if (tailSeverity != headSeverity) {
+    return tailSeverity > headSeverity ? tail : head;
+  }
+  return std::llabs(tail.Diff) > std::llabs(head.Diff) ? tail : head;
+}
+
+JudgeResult judgeClassicLongNoteRelease(
+    const gameplay::CompiledGameplayJudge &judge,
+    const bms_parser::ChartMeta &chartMeta, int longNoteModeOverride,
+    bms_parser::LongNote *tail, long long releasedTime,
+    const JudgeResult &acceptedHeadJudge) {
   if (tail == nullptr || !tail->IsTail() || tail->Head == nullptr) {
     return JudgeResult(None, 0);
   }
 
-  const JudgeResult headJudge =
-      judge.judgeNow(tail->Head, tail->Head->PlayedTime);
-  const JudgeResult tailJudge = judge.judgeNow(tail, releasedTime);
+  if (judge.rules().ruleset == GameplayRuleset::LR2) {
+    const JudgeResult head =
+        normalizeLongNoteReleaseJudge(acceptedHeadJudge);
+    const long long tailDiff = releasedTime - noteTimingMicros(tail);
+    if (std::llabs(tailDiff) <= 120'000) {
+      return head;
+    }
+    return worseLongNoteJudge(head, JudgeResult(Bad, tailDiff));
+  }
+
+  const JudgeResult headJudge = judge.judgeAt(
+      gameplay::judgeRoleFor(tail->Head, chartMeta, longNoteModeOverride),
+      noteTimingMicros(tail->Head), tail->Head->PlayedTime);
+  const JudgeResult tailJudge = judge.judgeAt(
+      gameplay::judgeRoleFor(tail, chartMeta, longNoteModeOverride),
+      noteTimingMicros(tail), releasedTime);
   const auto absDiff = [](long long value) {
     return value < 0 ? -value : value;
   };
@@ -51,40 +122,29 @@ long long absoluteTimeDistance(long long a, long long b) {
   return a > b ? a - b : b - a;
 }
 
-long long latestHittableNoteTiming(const Judge &judge, long long inputTime) {
-  bool hasWindow = false;
-  long long earliestWindow = 0;
-  for (const auto &entry : judge.timingWindows) {
-    if (!hasWindow || entry.second.first < earliestWindow) {
-      earliestWindow = entry.second.first;
-      hasWindow = true;
-    }
-  }
-  return hasWindow ? inputTime - earliestWindow : inputTime;
-}
-
 bool preferByTimingWindow(const PressLaneCandidate &current,
                           const PressLaneCandidate &next,
-                          long long inputTime, const Judge &judge,
+                          long long inputTime,
+                          const gameplay::CompiledGameplayJudge &judge,
                           Judgement threshold) {
   if (next.note == nullptr || next.note->IsPlayed) {
     return false;
   }
-  const auto windowIt = judge.timingWindows.find(threshold);
-  if (windowIt == judge.timingWindows.end()) {
+  const auto window = judge.window(threshold);
+  if (!window.has_value()) {
     return false;
   }
 
-  const auto &window = windowIt->second;
   const long long currentTiming = noteTimingMicros(current.note);
   const long long nextTiming = noteTimingMicros(next.note);
-  return currentTiming < inputTime - window.second &&
-         nextTiming <= inputTime - window.first;
+  return currentTiming < inputTime - window->lateMicros &&
+         nextTiming <= inputTime - window->earlyMicros;
 }
 
 bool shouldPreferCandidate(const PressLaneCandidate &current,
                            const PressLaneCandidate &next,
-                           long long inputTime, const Judge &judge,
+                           long long inputTime,
+                           const gameplay::CompiledGameplayJudge &judge,
                            AppSettings::NotePriorityMode mode) {
   switch (mode) {
   case AppSettings::NotePriorityMode::Combo:
@@ -117,15 +177,27 @@ RhythmLaneInputController::RhythmLaneInputController(
     std::unordered_map<int, bool> &lanePressed, Judge effectiveJudge,
     int longNoteModeOverride,
     std::optional<NoteTimeRange> allowedNoteRange)
+    : RhythmLaneInputController(
+          chart, renderer, lanePressed,
+          gameplay::CompiledGameplayJudge::from(effectiveJudge),
+          longNoteModeOverride, std::move(allowedNoteRange)) {}
+
+RhythmLaneInputController::RhythmLaneInputController(
+    bms_parser::Chart *chart, BMSRenderer *renderer,
+    std::unordered_map<int, bool> &lanePressed,
+    gameplay::CompiledGameplayJudge effectiveJudge, int longNoteModeOverride,
+    std::optional<NoteTimeRange> allowedNoteRange)
     : chart(chart), renderer(renderer), lanePressed(lanePressed),
       longNoteModeOverride(longNoteModeOverride),
       judge(std::move(effectiveJudge)),
       allowedNoteRange(std::move(allowedNoteRange)) {
-  judge.setAllowedNoteRange(this->allowedNoteRange);
-  if (const auto it = judge.timingWindows.find(Bad);
-      it != judge.timingWindows.end()) {
-    latePoorTiming = it->second.second;
-  }
+  latePoorTiming = judge.automaticPoorLateMicros();
+  const std::size_t capacity = inputCandidateCapacity(chart);
+  inputTransactions.reserve(capacity);
+  judgeCandidateNotes.reserve(capacity);
+  judgeCandidates.reserve(capacity);
+  multiBadSourceIndices.reserve(capacity);
+  acceptedLongHeadJudges.reserve(capacity);
   indexKeysoundNotes();
   resetLaneStates();
 }
@@ -215,7 +287,7 @@ bms_parser::Note *RhythmLaneInputController::selectFallbackKeysound(
   return nullptr;
 }
 
-RhythmLaneInputController::Result
+RhythmLaneInputController::ResultBatch
 RhythmLaneInputController::pressLane(int lane, const InputContext &context) {
   return pressLane(lane, lane, context);
 }
@@ -276,13 +348,17 @@ RhythmLaneInputController::releaseLaneForPreparation(
   return result;
 }
 
-RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
+RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
     int mainLane, int compensateLane, const InputContext &context) {
+  inputTransactions.clear();
+  judgeCandidateNotes.clear();
+  judgeCandidates.clear();
+  multiBadSourceIndices.clear();
   Result result;
   if (chart == nullptr ||
       (allowedNoteRange.has_value() &&
        context.songTimeMicros >= allowedNoteRange->endMicros)) {
-    return result;
+    return resultBatch(result);
   }
 
   auto mainLaneIt = lanePressed.find(mainLane);
@@ -297,11 +373,15 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
     candidates[candidateCount++] = compensateLane;
   }
   if (candidateCount == 0) {
-    return result;
+    return resultBatch(result);
   }
 
   const long long inputTime = inputTimeMicros(context);
-  const long long futureCutoff = latestHittableNoteTiming(judge, inputTime);
+  const long long futureCutoff = judge.latestHittableNoteTiming(
+      gameplay::NoteJudgeRole::Normal, inputTime);
+  const bool lr2Selection =
+      judge.rules().candidateSelection ==
+      gameplay::CandidateSelectionMode::LR2;
   bool hasSelectedCandidate = false;
   bool stopScanning = false;
   PressLaneCandidate selectedCandidate;
@@ -331,10 +411,24 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
         const auto *longNote =
             dynamic_cast<const bms_parser::LongNote *>(note);
         if (note == nullptr || note->IsPlayed || note->IsLandmineNote() ||
-            (longNote != nullptr && longNote->IsTail())) {
+            (longNote != nullptr && longNote->IsTail()) ||
+            !noteAllowed(note)) {
           continue;
         }
-        const JudgeResult noteJudge = judge.judgeNow(note, inputTime);
+        const JudgeResult noteJudge = judge.judgeAt(
+            gameplay::judgeRoleFor(note, chart->Meta, longNoteModeOverride),
+            noteTimingMicros(note), inputTime);
+        if (lr2Selection) {
+          const std::size_t sourceIndex = judgeCandidateNotes.size();
+          judgeCandidateNotes.push_back(note);
+          judgeCandidates.push_back({
+              .sourceIndex = sourceIndex,
+              .timingMicros = noteTimingMicros(note),
+              .longNoteHead = longNote != nullptr && !longNote->IsTail(),
+              .judge = noteJudge,
+          });
+          continue;
+        }
         if (noteJudge.judgement == None) {
           continue;
         }
@@ -359,7 +453,50 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
     }
   }
 
+  if (lr2Selection) {
+    multiBadSourceIndices.resize(judgeCandidates.size());
+    const auto resolution = gameplay::resolveLr2Candidates(
+        judgeCandidates, multiBadSourceIndices);
+    multiBadSourceIndices.resize(resolution.multiBadCount);
+    if (resolution.selectedSourceIndex.has_value() &&
+        *resolution.selectedSourceIndex < judgeCandidateNotes.size()) {
+      const std::size_t selectedIndex = *resolution.selectedSourceIndex;
+      selectedCandidate = {
+          .lane = judgeCandidateNotes[selectedIndex]->Lane,
+          .note = judgeCandidateNotes[selectedIndex],
+          .judge = judgeCandidates[selectedIndex].judge,
+      };
+      hasSelectedCandidate = true;
+    }
+  }
+
   if (hasSelectedCandidate) {
+    for (const std::size_t sourceIndex : multiBadSourceIndices) {
+      if (sourceIndex >= judgeCandidateNotes.size()) {
+        continue;
+      }
+      auto *multiBadNote = judgeCandidateNotes[sourceIndex];
+      if (multiBadNote == nullptr || multiBadNote->IsPlayed) {
+        continue;
+      }
+      multiBadNote->Play(inputTime);
+      if (multiBadNote->IsLongNote()) {
+        auto *longNote = static_cast<bms_parser::LongNote *>(multiBadNote);
+        if (!longNote->IsTail() && longNote->Tail != nullptr &&
+            !longNote->Tail->IsPlayed) {
+          longNote->Tail->Play(inputTime);
+        }
+      }
+      Result multiBad;
+      multiBad.note = multiBadNote;
+      multiBad.hasJudge = true;
+      multiBad.judge =
+          JudgeResult(Bad, inputTime - noteTimingMicros(multiBadNote));
+      setReplayEvent(multiBad, ReplayEventAction::Press,
+                     multiBadNote->Lane, multiBadNote, inputTime, inputTime,
+                     multiBad.judge);
+      inputTransactions.push_back(multiBad);
+    }
     result = pressNote(selectedCandidate.note, inputTime, inputTime);
     result.note = selectedCandidate.note;
     if (auto pressedIt = lanePressed.find(selectedCandidate.lane);
@@ -370,7 +507,8 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
       renderer->onLanePressed(selectedCandidate.lane, result.judge,
                               context.laneBeamTimeMicros);
     }
-    return result;
+    inputTransactions.push_back(result);
+    return resultBatch(result);
   }
 
   result.keySoundNote =
@@ -384,22 +522,24 @@ RhythmLaneInputController::Result RhythmLaneInputController::pressLane(
   }
   setReplayEvent(result, ReplayEventAction::Press, mainLane, nullptr,
                  inputTime, inputTime, JudgeResult(None, 0));
-  return result;
+  inputTransactions.push_back(result);
+  return resultBatch(result);
 }
 
-RhythmLaneInputController::Result
+RhythmLaneInputController::ResultBatch
 RhythmLaneInputController::releaseLane(int lane,
                                        const InputContext &context,
                                        bool isBackSpin) {
+  inputTransactions.clear();
   Result result;
   if (chart == nullptr ||
       (allowedNoteRange.has_value() &&
        context.songTimeMicros >= allowedNoteRange->endMicros)) {
-    return result;
+    return resultBatch(result);
   }
   auto laneIt = lanePressed.find(lane);
   if (laneIt == lanePressed.end() || !laneIt->second) {
-    return result;
+    return resultBatch(result);
   }
   laneIt->second = false;
   if (renderer != nullptr) {
@@ -407,6 +547,8 @@ RhythmLaneInputController::releaseLane(int lane,
   }
 
   const long long inputTime = inputTimeMicros(context);
+  const bool lr2Release =
+      judge.rules().ruleset == GameplayRuleset::LR2;
   for (const auto *measure : chart->Measures) {
     if (measure == nullptr) {
       continue;
@@ -415,14 +557,22 @@ RhythmLaneInputController::releaseLane(int lane,
       if (timeline == nullptr) {
         continue;
       }
-      if (timeline->Timing < inputTime - latePoorTiming) {
-        continue;
-      }
       if (lane < 0 || static_cast<size_t>(lane) >= timeline->Notes.size()) {
         continue;
       }
       auto *note = timeline->Notes[lane];
-      if (note == nullptr || note->IsPlayed || !judge.allowsNote(note)) {
+      const auto *longNote =
+          dynamic_cast<const bms_parser::LongNote *>(note);
+      if (lr2Release &&
+          (longNote == nullptr || !longNote->IsTail() ||
+           !longNote->IsHolding)) {
+        continue;
+      }
+      if (!lr2Release &&
+          timeline->Timing < inputTime - latePoorTiming) {
+        continue;
+      }
+      if (note == nullptr || note->IsPlayed || !noteAllowed(note)) {
         continue;
       }
       result = releaseNote(note, inputTime, inputTime, isBackSpin);
@@ -431,17 +581,20 @@ RhythmLaneInputController::releaseLane(int lane,
         setReplayEvent(result, ReplayEventAction::Release, lane, nullptr,
                        inputTime, inputTime, result.judge);
       }
-      return result;
+      inputTransactions.push_back(result);
+      return resultBatch(result);
     }
   }
 
   setReplayEvent(result, ReplayEventAction::Release, lane, nullptr, inputTime,
                  inputTime, JudgeResult(None, 0));
-  return result;
+  inputTransactions.push_back(result);
+  return resultBatch(result);
 }
 
 void RhythmLaneInputController::resetLaneStates() {
   lanePressed.clear();
+  acceptedLongHeadJudges.clear();
   if (chart == nullptr) {
     return;
   }
@@ -456,6 +609,52 @@ long long RhythmLaneInputController::inputTimeMicros(
          static_cast<long long>(context.inputDelay * 1000000.0);
 }
 
+bool RhythmLaneInputController::noteAllowed(
+    const bms_parser::Note *note) const {
+  return note != nullptr &&
+         (!allowedNoteRange.has_value() ||
+          allowedNoteRange->contains(note));
+}
+
+RhythmLaneInputController::ResultBatch
+RhythmLaneInputController::resultBatch(const Result &selected) const {
+  ResultBatch result;
+  result.note = selected.note;
+  result.keySoundNote = selected.keySoundNote;
+  result.hasJudge = selected.hasJudge;
+  result.judge = selected.judge;
+  result.hasReplayEvent = selected.hasReplayEvent;
+  result.replayEvent = selected.replayEvent;
+  result.transactions = inputTransactions;
+  return result;
+}
+
+void RhythmLaneInputController::rememberAcceptedLongHeadJudge(
+    bms_parser::LongNote *head, const JudgeResult &judgeResult) {
+  const auto found = std::ranges::find(acceptedLongHeadJudges, head,
+                                       &AcceptedLongHeadJudge::head);
+  if (found != acceptedLongHeadJudges.end()) {
+    found->judge = judgeResult;
+    return;
+  }
+  acceptedLongHeadJudges.push_back({head, judgeResult});
+}
+
+JudgeResult RhythmLaneInputController::acceptedLongHeadJudge(
+    const bms_parser::LongNote *tail) const {
+  if (tail == nullptr || tail->Head == nullptr) {
+    return JudgeResult(None, 0);
+  }
+  const auto found = std::ranges::find(acceptedLongHeadJudges, tail->Head,
+                                       &AcceptedLongHeadJudge::head);
+  if (found != acceptedLongHeadJudges.end()) {
+    return found->judge;
+  }
+  return judge.judgeAt(
+      gameplay::judgeRoleFor(tail->Head, chart->Meta, longNoteModeOverride),
+      noteTimingMicros(tail->Head), tail->Head->PlayedTime);
+}
+
 RhythmLaneInputController::Result
 RhythmLaneInputController::pressNote(bms_parser::Note *note,
                                      long long pressedTime,
@@ -467,7 +666,9 @@ RhythmLaneInputController::pressNote(bms_parser::Note *note,
   }
   result.keySoundNote = note;
 
-  const JudgeResult judgeResult = judge.judgeNow(note, pressedTime);
+  const JudgeResult judgeResult = judge.judgeAt(
+      gameplay::judgeRoleFor(note, chart->Meta, longNoteModeOverride),
+      noteTimingMicros(note), pressedTime);
   result.judge = judgeResult;
   if (judgeResult.judgement == None) {
     return result;
@@ -477,6 +678,7 @@ RhythmLaneInputController::pressNote(bms_parser::Note *note,
       auto *longNote = static_cast<bms_parser::LongNote *>(note);
       if (!longNote->IsTail()) {
         longNote->Press(pressedTime);
+        rememberAcceptedLongHeadJudge(longNote, judgeResult);
         result.hasJudge =
             effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
         setReplayEvent(result, ReplayEventAction::Press, note->Lane, note,
@@ -508,7 +710,9 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
   }
 
   longNote->Release(releasedTime);
-  const auto judgeResult = judge.judgeNow(longNote, releasedTime);
+  const auto judgeResult = judge.judgeAt(
+      gameplay::judgeRoleFor(longNote, chart->Meta, longNoteModeOverride),
+      noteTimingMicros(longNote), releasedTime);
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
       effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
@@ -525,8 +729,12 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
     return result;
   }
   appliedJudge =
-      chargeLongNote ? normalizeLongNoteReleaseJudge(judgeResult)
-                     : judgeClassicLongNoteRelease(judge, longNote, releasedTime);
+      chargeLongNote
+          ? normalizeLongNoteReleaseJudge(judgeResult)
+          : judgeClassicLongNoteRelease(judge, chart->Meta,
+                                        longNoteModeOverride, longNote,
+                                        releasedTime,
+                                        acceptedLongHeadJudge(longNote));
   result.judge = appliedJudge;
   result.hasJudge = true;
   setReplayEvent(result, ReplayEventAction::Release, note->Lane, note,

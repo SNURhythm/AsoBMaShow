@@ -13,6 +13,8 @@
 #if defined(__ANDROID__) && !defined(__cpp_lib_jthread)
 namespace std {
 
+class stop_source;
+
 class stop_token {
 public:
   stop_token() noexcept = default;
@@ -28,12 +30,48 @@ public:
 
 private:
   friend class jthread;
+  friend class stop_source;
 
   explicit stop_token(std::shared_ptr<std::atomic_bool> stopRequested) noexcept
       : stopRequested_(std::move(stopRequested)) {}
 
   std::shared_ptr<std::atomic_bool> stopRequested_;
 };
+
+class stop_source {
+public:
+  stop_source()
+      : stopRequested_(std::make_shared<std::atomic_bool>(false)) {}
+
+  bool stop_possible() const noexcept {
+    return static_cast<bool>(stopRequested_);
+  }
+
+  bool stop_requested() const noexcept {
+    return stopRequested_ != nullptr &&
+           stopRequested_->load(std::memory_order_acquire);
+  }
+
+  bool request_stop() noexcept {
+    return stopRequested_ != nullptr &&
+           !stopRequested_->exchange(true, std::memory_order_acq_rel);
+  }
+
+  stop_token get_token() const noexcept {
+    return stop_token(stopRequested_);
+  }
+
+  void swap(stop_source &other) noexcept {
+    stopRequested_.swap(other.stopRequested_);
+  }
+
+private:
+  std::shared_ptr<std::atomic_bool> stopRequested_;
+};
+
+inline void swap(stop_source &lhs, stop_source &rhs) noexcept {
+  lhs.swap(rhs);
+}
 
 class jthread {
 public:

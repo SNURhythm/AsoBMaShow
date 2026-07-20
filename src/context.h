@@ -33,6 +33,12 @@
 #include "input/InputProfile.h"
 #include "input/InputProfileReplacementNotifier.h"
 #include "input/InputProfileStore.h"
+#include "ir/IrCredentialStore.h"
+#include "ir/IrHttpClient.h"
+#include "ir/IrRankingService.h"
+#include "ir/IrSubmissionService.h"
+#include "ir/tachi/BokutachiCacheStore.h"
+#include "ir/tachi/TachiDriver.h"
 #include "video/DisplaySettingsManager.h"
 #include "video/FramePacer.h"
 #include "video/RendererAccessCoordinator.h"
@@ -105,6 +111,12 @@ public:
   ReplayRepository replayRepository;
   MusicPlaylistRepository musicPlaylistRepository;
   result_persistence::Coordinator resultPersistence;
+  std::shared_ptr<ir::tachi::BokutachiCacheStore> bokutachiCacheStore;
+  ir::IrDriverRegistry irDrivers;
+  std::unique_ptr<ir::IrHttpClient> irHttpClient;
+  std::unique_ptr<ir::IrRankingService> irRankingService;
+  std::unique_ptr<ir::IrSubmissionService> irSubmissionService;
+  std::atomic<std::uint64_t> irAccountEvidenceRevision{0};
   InputProfileReplacementNotifier inputProfileReplacementNotifier;
   std::unique_ptr<ProfileSessionCoordinator> profileSessionCoordinator;
   std::atomic<bool> profileGameplayActive{false};
@@ -155,10 +167,17 @@ public:
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
         resultPersistence(scoreRepository, replayRepository),
+        bokutachiCacheStore(std::make_shared<ir::tachi::BokutachiCacheStore>()),
         jukebox(&gameStopwatch),
         audioDeviceManager(jukebox.audioRuntime(), jukebox,
                            settings.audioVideo.audio),
         musicPlayer(musicPlaylistRepository, chartRepository) {
+    std::string irDriverDiagnostic;
+    if (!irDrivers.registerDriver(
+            std::make_shared<ir::tachi::TachiDriver>(bokutachiCacheStore),
+            irDriverDiagnostic)) {
+      SDL_Log("Bokutachi IR driver registration was unavailable");
+    }
     if (!profileInitializationResult.ok()) {
       return;
     }
@@ -233,20 +252,35 @@ public:
           }
         },
         ProfileSessionDependencies{
-            .saveInput = [this](const std::filesystem::path &path,
-                                std::string &error) {
-              if (path != profileManager.activePaths().inputJson) {
-                error = "The profile switch input path is not active.";
-                return false;
-              }
-              return saveActiveInputProfile(inputProfile, error);
-            },
-            .recoverPendingResults = [this] {
-              return recoverPendingResults();
-            },
-            .beforeInputReplacement = [this]() {
-              inputProfileReplacementNotifier.notifyBeforeReplacement();
-            }});
+            .saveInput =
+                [this](const std::filesystem::path &path, std::string &error) {
+                  if (path != profileManager.activePaths().inputJson) {
+                    error = "The profile switch input path is not active.";
+                    return false;
+                  }
+                  return saveActiveInputProfile(inputProfile, error);
+                },
+            .recoverPendingResults = [this] { return recoverPendingResults(); },
+            .beforeInputReplacement =
+                [this]() {
+                  inputProfileReplacementNotifier.notifyBeforeReplacement();
+                },
+            .pauseProfileServices =
+                [this](std::string &error) {
+                  return pauseIrProfileServices(error);
+                },
+            .activateProfileServices =
+                [this](std::string_view profileId,
+                       const AppSettings &activeSettings, std::string &error) {
+                  return activateIrProfileServices(profileId, activeSettings,
+                                                   error);
+                },
+            .restoreProfileServices =
+                [this](std::string_view profileId,
+                       const AppSettings &activeSettings, std::string &error) {
+                  return activateIrProfileServices(profileId, activeSettings,
+                                                   error);
+                }});
 
     settings.sanitize();
     audioStartupApplyResult =
@@ -302,6 +336,262 @@ public:
            profileSessionCoordinator != nullptr;
   }
 
+  [[nodiscard]] ir::IrActiveProfileConfig
+  irProfileConfig(std::string_view profileId,
+                  const AppSettings &profileSettings) const {
+    ir::IrActiveProfileConfig config{.profileId = std::string(profileId)};
+    for (const auto &[providerId, stored] : profileSettings.irProviders) {
+      ir::IrProviderSettings sanitized = stored;
+      ir::sanitizeProviderSettings(sanitized);
+      config.providers.emplace(providerId, std::move(sanitized));
+    }
+    return config;
+  }
+
+  [[nodiscard]] std::string
+  lookupActiveIrCredential(std::string_view profileId,
+                           std::string_view providerId) const {
+    if (!profileInitializationResult.ok() ||
+        profileManager.activeProfile().id != profileId) {
+      return {};
+    }
+    const auto loaded = ir::IrCredentialStore::load(
+        profileManager.activePaths().irCredentialsJson);
+    if (loaded.status != ir::IrCredentialLoadStatus::Loaded) {
+      return {};
+    }
+    const auto found = loaded.credentials.apiKeys.find(std::string(providerId));
+    return found == loaded.credentials.apiKeys.end() ? std::string{}
+                                                     : found->second;
+  }
+
+  bool projectMirroredIrScores(std::string_view profileId,
+                               std::string_view providerId,
+                               std::string_view serverOrigin,
+                               std::string &diagnostic) noexcept {
+    try {
+      if (!profileReady() || profileManager.activeProfile().id != profileId) {
+        diagnostic = "The active profile changed during IR score import.";
+        return false;
+      }
+      const auto state = replayRepository.LoadIrRemoteScoreMirrorState(
+          providerId, serverOrigin);
+      if (state.status !=
+          ir::IrRemoteScoreMirrorStateOutcome::Status::Loaded) {
+        diagnostic = state.diagnostic.empty()
+                         ? "The synchronized IR score mirror is unavailable."
+                         : state.diagnostic;
+        return false;
+      }
+      if (scoreRepository.ImportedIrScoresAreCurrent(
+              providerId, serverOrigin, state.syncGeneration,
+              state.scoreCount)) {
+        return true;
+      }
+      const auto mirrored =
+          replayRepository.ListIrRemoteScores(providerId, serverOrigin);
+      if (mirrored.status != ir::IrRemoteScoreReadOutcome::Status::Loaded ||
+          mirrored.scores.size() != state.scoreCount) {
+        diagnostic = mirrored.diagnostic.empty()
+                         ? "The synchronized IR score mirror is inconsistent."
+                         : mirrored.diagnostic;
+        return false;
+      }
+      const std::int64_t generation =
+          state.syncGeneration > 0 ? state.syncGeneration : 1;
+      const auto projected = scoreRepository.ReplaceImportedIrScores(
+          providerId, serverOrigin, generation, mirrored.scores);
+      if (projected.status == ImportedIrScoreProjectionStatus::Applied ||
+          projected.status ==
+              ImportedIrScoreProjectionStatus::AlreadyCurrent) {
+        return true;
+      }
+      diagnostic = projected.diagnostic.empty()
+                       ? "Synchronized IR scores could not be imported."
+                       : projected.diagnostic;
+      return false;
+    } catch (...) {
+      diagnostic = "Synchronized IR scores could not be imported.";
+      return false;
+    }
+  }
+
+  void restoreMirroredIrScores(std::string_view profileId,
+                               const AppSettings &profileSettings) noexcept {
+    for (const auto &[providerId, stored] : profileSettings.irProviders) {
+      ir::IrProviderSettings provider = stored;
+      ir::sanitizeProviderSettings(provider);
+      std::string diagnostic;
+      if (!projectMirroredIrScores(profileId, providerId,
+                                   provider.serverOrigin, diagnostic)) {
+        SDL_Log("Synchronized IR score import could not be restored: %s",
+                diagnostic.c_str());
+      }
+    }
+  }
+
+  bool startIrServices() noexcept {
+    try {
+      if (!profileReady()) {
+        return false;
+      }
+      if (!irHttpClient) {
+        irHttpClient = ir::CreatePlatformIrHttpClient();
+      }
+      if (!irHttpClient) {
+        SDL_Log("IR HTTP transport was unavailable");
+        return false;
+      }
+      std::string cacheDiagnostic;
+      if (!bokutachiCacheStore->activate(
+              profileManager.activePaths().bokutachiCacheJson,
+              cacheDiagnostic)) {
+        SDL_Log(
+            "Bokutachi lookup cache was unavailable; using network lookups");
+      }
+      if (!irRankingService) {
+        ir::IrRankingServiceOptions options;
+        options.credentialLookup = [this](std::string_view profileId,
+                                          std::string_view providerId) {
+          return lookupActiveIrCredential(profileId, providerId);
+        };
+        irRankingService = std::make_unique<ir::IrRankingService>(
+            irDrivers, *irHttpClient, std::move(options));
+      }
+      if (!irSubmissionService) {
+        ir::IrSubmissionServiceOptions options;
+        options.credentialLookup = [this](std::string_view profileId,
+                                          std::string_view providerId) {
+          return lookupActiveIrCredential(profileId, providerId);
+        };
+        options.submissionSucceeded =
+            [this](std::string_view profileId, std::string_view providerId,
+                   std::string_view requestOrigin, std::string_view,
+                   std::string_view chartSha256) {
+              if (irRankingService) {
+                irRankingService->invalidate({
+                    .profileId = std::string(profileId),
+                    .providerId = std::string(providerId),
+                    .serverOrigin = std::string(requestOrigin),
+                    .chartSha256 = std::string(chartSha256),
+                    .clearVisible = false,
+                });
+              }
+            };
+        options.credentialChanged = [this](std::string_view profileId,
+                                           std::string_view providerId) {
+          if (providerId == "tachi") {
+            std::string cacheDiagnostic;
+            if (!bokutachiCacheStore->clearUserIds(cacheDiagnostic)) {
+              SDL_Log("Bokutachi cached identity could not be invalidated");
+            }
+          }
+          if (irRankingService) {
+            irRankingService->invalidate({
+                .profileId = std::string(profileId),
+                .providerId = std::string(providerId),
+            });
+          }
+        };
+        options.remoteSnapshotApplied =
+            [this](std::string_view profileId, std::string_view providerId,
+                   std::string_view serverOrigin,
+                   std::int64_t syncGeneration,
+                   std::span<const ir::IrRemoteScore> scores,
+                   std::string &diagnostic) {
+              if (!profileReady() ||
+                  profileManager.activeProfile().id != profileId) {
+                diagnostic =
+                    "The active profile changed during IR score import.";
+                return false;
+              }
+              const auto projected = scoreRepository.ReplaceImportedIrScores(
+                  providerId, serverOrigin, syncGeneration, scores);
+              if (projected.status ==
+                      ImportedIrScoreProjectionStatus::Applied ||
+                  projected.status ==
+                      ImportedIrScoreProjectionStatus::AlreadyCurrent) {
+                return true;
+              }
+              diagnostic = projected.diagnostic.empty()
+                               ? "Synchronized IR scores could not be imported."
+                               : projected.diagnostic;
+              return false;
+            };
+        irSubmissionService = std::make_unique<ir::IrSubmissionService>(
+            replayRepository, irDrivers, *irHttpClient, std::move(options));
+      }
+      const std::string profileId = profileManager.activeProfile().id;
+      restoreMirroredIrScores(profileId, settings);
+      irRankingService->activateProfile(profileId);
+      irSubmissionService->start(irProfileConfig(profileId, settings));
+      irSubmissionService->setApplicationActive(
+          !appInBackground.load(std::memory_order_acquire));
+      return true;
+    } catch (...) {
+      SDL_Log("IR services could not be started");
+      return false;
+    }
+  }
+
+  bool pauseIrProfileServices(std::string &error) noexcept {
+    try {
+      if (irSubmissionService) {
+        irSubmissionService->pauseAndCancel();
+      }
+      if (irRankingService) {
+        irRankingService->pauseAndCancel();
+      }
+      return true;
+    } catch (...) {
+      error = "IR profile work could not be paused.";
+      return false;
+    }
+  }
+
+  bool activateIrProfileServices(std::string_view profileId,
+                                 const AppSettings &profileSettings,
+                                 std::string &error) noexcept {
+    try {
+      std::string cacheDiagnostic;
+      if (!bokutachiCacheStore->activate(
+              profileManager.activePaths().bokutachiCacheJson,
+              cacheDiagnostic)) {
+        SDL_Log(
+            "Bokutachi lookup cache was unavailable; using network lookups");
+      }
+      if (irRankingService) {
+        irRankingService->activateProfile(profileId);
+      }
+      restoreMirroredIrScores(profileId, profileSettings);
+      if (irSubmissionService) {
+        irSubmissionService->activateProfile(
+            irProfileConfig(profileId, profileSettings));
+      }
+      return true;
+    } catch (...) {
+      error = "IR profile work could not be activated.";
+      return false;
+    }
+  }
+
+  void setIrApplicationActive(bool active) noexcept {
+    try {
+      if (irSubmissionService) {
+        irSubmissionService->setApplicationActive(active);
+        if (active) {
+          irSubmissionService->notifyOutboxChanged();
+        }
+      }
+      if (!active && irRankingService) {
+        const auto ranking = irRankingService->snapshot();
+        irRankingService->close(ranking.generation);
+      }
+    } catch (...) {
+      SDL_Log("IR application lifecycle update failed");
+    }
+  }
+
   bool saveSettings(std::string *errorMessage = nullptr) {
     std::string error;
     if (!profileReady()) {
@@ -339,6 +629,15 @@ public:
         thread.second.join();
       }
     }
+    if (irSubmissionService) {
+      irSubmissionService->stop();
+    }
+    if (irRankingService) {
+      irRankingService->stop();
+    }
+    irSubmissionService.reset();
+    irRankingService.reset();
+    irHttpClient.reset();
     scoreRepository.Shutdown();
     replayRepository.Shutdown();
     std::cout << "Main function is quitting..." << std::endl;

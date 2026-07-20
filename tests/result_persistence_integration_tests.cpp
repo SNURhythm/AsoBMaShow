@@ -2,10 +2,16 @@
 
 #include "../src/FileChecksum.h"
 #include "../src/ProfileDatabaseActivity.h"
+#include "../src/ir/IrSubmission.h"
+#include "../src/ir/IrProfileSettings.h"
+#include "../src/ir/tachi/TachiDriver.h"
 #include "../src/repositories/SqliteRAII.h"
+#include "../src/scene/play/GameplayGaugeRules.h"
+#include "../src/scene/play/GameplayJudgeRules.h"
 #include "../src/Utils.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -13,6 +19,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -67,6 +74,25 @@ int queryInt(sqlite3 *database, const std::string &sql) {
   return sqlite3_column_int(statement.get(), 0);
 }
 
+std::string queryText(sqlite3 *database, const std::string &sql) {
+  SqliteStatementHandle statement;
+  assert(prepareSqliteStatement(database, sql, statement) == SQLITE_OK);
+  assert(sqlite3_step(statement.get()) == SQLITE_ROW);
+  return sqliteColumnString(statement.get(), 0);
+}
+
+void execOrAbort(sqlite3 *database, const std::string &sql) {
+  char *message = nullptr;
+  const int result =
+      sqlite3_exec(database, sql.c_str(), nullptr, nullptr, &message);
+  if (result != SQLITE_OK) {
+    std::cerr << "SQL failed: " << (message ? message : "unknown error")
+              << " | " << sql << '\n';
+  }
+  sqlite3_free(message);
+  assert(result == SQLITE_OK);
+}
+
 std::string quoteSql(std::string_view value) {
   std::string quoted{"'"};
   for (const char character : value) {
@@ -79,18 +105,21 @@ std::string quoteSql(std::string_view value) {
   return quoted;
 }
 
-ScoreProvenance sampleProvenance(const std::string &hash) {
-  ScoreProvenance value;
-  value.ruleset = RulesetDescriptor::Current();
-  value.stages = {{
-      .chartMd5 = "md5-" + hash,
-      .chartSha256 = "sha-" + hash,
-      .longNoteMode = 2,
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = 2,
-      .effectiveJudgeWindows = {{PGreat, -10000, 10000},
-                                {Great, -30000, 30000}},
-  }};
+ScoreProvenance sampleProvenance(const bms_parser::ChartMeta &meta) {
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = meta;
+  input.longNoteMode = 2;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = meta.Rank;
+  input.effectiveJudgeContexts =
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, meta.Rank)
+          .contexts;
+  input.totalNotes = meta.TotalNotes;
+  input.effectiveGaugeTotal =
+      resolveEffectiveGaugeTotal(GameplayRuleset::LR2, meta);
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.ruleset = RulesetDescriptor::Current();
+  ScoreProvenance value = makeScoreProvenance(input);
   value.gaugeType = GaugeType::Hard;
   value.player1 = {.option = "RANDOM", .seed = 1234};
   value.inputDevices = {InputDeviceCategory::Keyboard};
@@ -103,6 +132,8 @@ ReplayData sampleReplay(const std::filesystem::path &root,
   ReplayData replay;
   replay.chartMeta.BmsPath = root / "BMS" / (hash + ".bms");
   replay.chartMeta.SHA256 = file_checksum::sha256(hash);
+  replay.chartMeta.KeyMode = 7;
+  replay.chartMeta.Rank = 2;
   replay.chartMeta.Title = "Title " + hash;
   replay.chartMeta.Artist = "Artist";
   replay.chartMeta.TotalNotes = 50;
@@ -127,7 +158,7 @@ ReplayData sampleReplay(const std::filesystem::path &root,
                            .gaugeType = GaugeType::Hard,
                            .combo = 1,
                            .score = 2});
-  replay.provenance = sampleProvenance(hash);
+  replay.provenance = sampleProvenance(replay.chartMeta);
   return replay;
 }
 
@@ -188,6 +219,24 @@ ChartResultAttempt sampleAttempt(const std::filesystem::path &root,
           .payloadFingerprint = payloadFingerprint(replay, score)};
 }
 
+ir::IrOutboxDraft automaticIrDraft(const ChartResultAttempt &attempt,
+                                   std::int64_t createdAtUnixMillis) {
+  return {
+      .providerId = "tachi",
+      .attemptId = attempt.attemptId,
+      .chartMd5 = attempt.score.chartMd5,
+      .chartSha256 = attempt.score.chartSha256,
+      .payloadJson = R"({"score":123})",
+      .rulesetProof =
+          {
+              .rulesetId = "test-rules",
+              .rulesetRevision = 1,
+              .validationFingerprint = std::string(64, 'd'),
+          },
+      .createdAtUnixMillis = createdAtUnixMillis,
+  };
+}
+
 void assertDatabaseCounts(const std::filesystem::path &replayPath,
                           const std::filesystem::path &scorePath,
                           int replayCount, int scoreCount, int pendingCount) {
@@ -244,7 +293,7 @@ void testCrashAfterStageRecoversExactlyOneScore() {
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-stage-crash", 2);
 
-  const StageOutcome staged = replay.StageChartResult(fixed);
+  const StageOutcome staged = replay.StageChartResult(fixed, {});
   assert(staged.status == StageStatus::Staged);
   assert(staged.receipt.has_value());
   assertDatabaseCounts(replayPath, scorePath, 1, 0, 1);
@@ -272,7 +321,7 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   const ChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-before-ack", 3);
 
-  const StageOutcome staged = replay.StageChartResult(fixed);
+  const StageOutcome staged = replay.StageChartResult(fixed, {});
   assert(staged.status == StageStatus::Staged);
   const PendingReadOutcome pendingScore =
       replay.LoadPendingChartScore(fixed.attemptId);
@@ -292,6 +341,121 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   assertDatabaseCounts(replayPath, scorePath, 1, 1, 0);
 }
 
+void testActivationFailureRetainsPendingAndRecoveryActivatesIr() {
+  TemporaryDirectory temporary("ir-activation-recovery");
+  const auto replayPath = temporary.path() / "replay.db";
+  const auto scorePath = temporary.path() / "score.db";
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
+  const ChartResultAttempt fixed =
+      sampleAttempt(temporary.path(), "fixed-ir-activation", 5);
+  const std::array drafts{automaticIrDraft(fixed, 50'000)};
+
+  const StageOutcome staged = replay.StageChartResult(fixed, drafts);
+  assert(staged.status == StageStatus::Staged);
+  const PendingReadOutcome pending =
+      replay.LoadPendingChartScore(fixed.attemptId);
+  assert(pending.status == PendingReadStatus::Found && pending.value);
+  assert(score.SaveProjectedScore(*pending.value).status ==
+         ProjectionStatus::Inserted);
+
+  replay.Shutdown();
+  auto database = openDatabase(replayPath);
+  execOrAbort(database.get(),
+              "CREATE TRIGGER fail_ir_activation BEFORE UPDATE OF "
+              "local_result_ready ON ir_outbox BEGIN SELECT RAISE(ABORT, "
+              "'forced IR activation failure'); END");
+  database.reset();
+
+  Coordinator coordinator(score, replay);
+  const SaveOutcome failed = coordinator.persist(fixed, drafts);
+  assert(failed.state == SaveState::PendingAcknowledgement);
+  assertDatabaseCounts(replayPath, scorePath, 1, 1, 1);
+  database = openDatabase(replayPath);
+  assert(queryInt(database.get(), "SELECT local_result_ready FROM ir_outbox") ==
+         0);
+  execOrAbort(database.get(), "DROP TRIGGER fail_ir_activation");
+  database.reset();
+  assert(replay.ListDueIrOutbox(100'000).entries.empty());
+
+  const RecoverySummary recovered = coordinator.recoverAll();
+  assert(recovered.attempted == 1);
+  assert(recovered.saved == 1);
+  assert(recovered.pending == 0);
+  assert(recovered.conflicts == 0);
+  assertDatabaseCounts(replayPath, scorePath, 1, 1, 0);
+  const auto due =
+      replay.ListDueIrOutbox(std::numeric_limits<std::int64_t>::max());
+  assert(due.status == ir::IrOutboxBatchStatus::Loaded);
+  assert(due.entries.size() == 1);
+  assert(due.entries.front().localResultReady);
+}
+
+void testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode() {
+  TemporaryDirectory temporary("automatic-ir-capture");
+  const auto replayPath = temporary.path() / "replay.db";
+  const auto scorePath = temporary.path() / "score.db";
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
+  Coordinator coordinator(score, replay);
+
+  ir::IrDriverRegistry drivers;
+  std::string registrationError;
+  assert(drivers.registerDriver(std::make_shared<ir::tachi::TachiDriver>(),
+                                registrationError));
+
+  ChartResultAttempt automatic =
+      sampleAttempt(temporary.path(), "automatic-ir", 6);
+  automatic.replay.chartMeta.KeyMode = 7;
+  automatic.payloadFingerprint =
+      payloadFingerprint(automatic.replay, automatic.score);
+  const auto submission = ir::makeIrSubmission(automatic, 1'700'000'000'123LL);
+  assert(submission.value.has_value());
+
+  std::map<std::string, ir::IrProviderSettings> providers;
+  providers["tachi"] = {.enabled = true,
+                        .autoSubmit = true,
+                        .serverOrigin = "https://boku.tachi.ac"};
+  const auto automaticDrafts =
+      drivers.buildAutomaticDrafts(providers, *submission.value);
+  assert(automaticDrafts.size() == 1);
+  assert(automaticDrafts.front().createdAtUnixMillis ==
+         submission.value->playedAtUnixMillis);
+
+  const SaveOutcome saved = coordinator.persist(automatic, automaticDrafts);
+  assert(saved.saved());
+  const auto queued = replay.LoadIrOutbox("tachi", automatic.attemptId);
+  assert(queued.status == ir::IrOutboxReadStatus::Found && queued.entry);
+  assert(queued.entry->state == ir::IrOutboxState::Pending);
+  assert(queued.entry->localResultReady);
+  assert(queued.entry->rulesetProof ==
+         automaticDrafts.front().rulesetProof);
+  assert(queued.entry->rulesetProof.rulesetId == "lr2");
+  assert(queued.entry->rulesetProof.rulesetRevision == 3);
+  assert(queued.entry->rulesetProof.validationFingerprint.size() == 64);
+  replay.Shutdown();
+  auto database = openDatabase(replayPath);
+  assert(queryText(database.get(),
+                   "SELECT validation_fingerprint FROM ir_outbox WHERE "
+                   "provider_id='tachi'") ==
+         automaticDrafts.front().rulesetProof.validationFingerprint);
+  database.reset();
+
+  ChartResultAttempt manual = sampleAttempt(temporary.path(), "manual-ir", 7);
+  manual.replay.chartMeta.KeyMode = 7;
+  manual.payloadFingerprint = payloadFingerprint(manual.replay, manual.score);
+  const auto manualSubmission =
+      ir::makeIrSubmission(manual, 1'700'000'000'456LL);
+  assert(manualSubmission.value.has_value());
+  providers["tachi"].autoSubmit = false;
+  const auto manualDrafts =
+      drivers.buildAutomaticDrafts(providers, *manualSubmission.value);
+  assert(manualDrafts.empty());
+  assert(coordinator.persist(manual, manualDrafts).saved());
+  assert(replay.LoadIrOutbox("tachi", manual.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+}
+
 void testProfileSwitchCannotAcquireGateMidPersist() {
   TemporaryDirectory temporary("profile-gate");
   ReplayRepository replay(temporary.path() / "replay.db");
@@ -307,9 +471,10 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
 
   Dependencies dependencies{
       .stage =
-          [&](const ChartResultAttempt &value) {
+          [&](const ChartResultAttempt &value,
+              std::span<const ir::IrOutboxDraft> drafts) {
             stageObservedWriteLease = profile_database_activity::writesActive();
-            return replay.StageChartResult(value);
+            return replay.StageChartResult(value, drafts);
           },
       .loadPending =
           [&](std::string_view id) { return replay.LoadPendingChartScore(id); },
@@ -330,9 +495,10 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
             }
             return score.SaveProjectedScore(value);
           },
-      .acknowledge =
+      .acknowledgeAndActivate =
           [&](std::string_view id, int replayId) {
-            return replay.AcknowledgePendingChartScore(id, replayId);
+            return replay.AcknowledgePendingChartScoreAndActivateIr(id,
+                                                                    replayId);
           },
       .recordRecoveryAttempt =
           [&](std::string_view id, RecoveryAttemptKind kind) {
@@ -388,10 +554,9 @@ void testSuccessfulBoundedRecoveryReportsRemainingBacklog() {
   assert(score.EnsureSchema());
 
   for (int suffix = 0; suffix < 3; ++suffix) {
-    const ChartResultAttempt attempt =
-        sampleAttempt(temporary.path(),
-                      "bounded-backlog-" + std::to_string(suffix), suffix);
-    assert(replay.StageChartResult(attempt).status == StageStatus::Staged);
+    const ChartResultAttempt attempt = sampleAttempt(
+        temporary.path(), "bounded-backlog-" + std::to_string(suffix), suffix);
+    assert(replay.StageChartResult(attempt, {}).status == StageStatus::Staged);
   }
   assertDatabaseCounts(replayPath, scorePath, 3, 0, 3);
 
@@ -427,7 +592,7 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
     const ChartResultAttempt conflict =
         sampleAttempt(temporary.path(),
                       "persistent-conflict-" + std::to_string(suffix), suffix);
-    const StageOutcome staged = replay.StageChartResult(conflict);
+    const StageOutcome staged = replay.StageChartResult(conflict, {});
     assert(staged.status == StageStatus::Staged);
     const PendingReadOutcome loaded =
         replay.LoadPendingChartScore(conflict.attemptId);
@@ -442,7 +607,7 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
 
   const ChartResultAttempt valid =
       sampleAttempt(temporary.path(), "never-attempted-valid", 256);
-  assert(replay.StageChartResult(valid).status == StageStatus::Staged);
+  assert(replay.StageChartResult(valid, {}).status == StageStatus::Staged);
   assertDatabaseCounts(replayPath, scorePath, 257, 256, 257);
 
   Coordinator coordinator(score, replay);
@@ -480,6 +645,8 @@ int main() {
   testPersistCreatesOneReplayOneScoreNoPending();
   testCrashAfterStageRecoversExactlyOneScore();
   testCommittedScoreBeforeAckRecoversWithoutDuplicate();
+  testActivationFailureRetainsPendingAndRecoveryActivatesIr();
+  testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode();
   testProfileSwitchCannotAcquireGateMidPersist();
   testSuccessfulBoundedRecoveryReportsRemainingBacklog();
   testRecoveryRetainsConflictAndProcessesLaterValidRow();

@@ -42,6 +42,7 @@ public:
   bool setImage(const path_t &path);
   bool setImageAsync(const path_t &path, bool prioritize = false);
   void freeImage();
+  [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
   [[nodiscard]] int imageHeight() const { return currentImageHeight; }
 

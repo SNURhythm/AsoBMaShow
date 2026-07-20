@@ -679,17 +679,24 @@ std::string courseOutcome(sqlite3 *db) {
 }
 
 ScoreProvenance sampleProvenance(const std::string &hash) {
-  ScoreProvenance value;
-  value.ruleset = RulesetDescriptor::Current();
-  value.stages = {{
-      .chartMd5 = "md5-" + hash,
-      .chartSha256 = "sha-" + hash,
-      .longNoteMode = 2,
-      .judgeRankSource = JudgeRankSource::Chart,
-      .sourceJudgeRank = 2,
-      .effectiveJudgeWindows = {{PGreat, -10000, 10000},
-                                {Great, -30000, 30000}},
-  }};
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.MD5 = "md5-" + hash;
+  input.chartMeta.SHA256 = "sha-" + hash;
+  input.chartMeta.Rank = 2;
+  input.chartMeta.TotalNotes = 100;
+  input.longNoteMode = 2;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = 2;
+  input.effectiveJudgeWindows = {
+      {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
+      {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
+      {Kpoor, {-1'000'000, 0}},
+  };
+  input.totalNotes = 100;
+  input.effectiveGaugeTotal = 176.0;
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.ruleset = RulesetDescriptor::Current();
+  ScoreProvenance value = makeScoreProvenance(input);
   value.gaugeType = GaugeType::Hard;
   value.player1 = {.option = "RANDOM", .seed = 1234};
   value.inputDevices = {InputDeviceCategory::Keyboard};
@@ -760,6 +767,22 @@ void removeAttemptIdentityFromCurrentSchema(sqlite3 *db) {
   }
 }
 
+void removeImportedIrFromCurrentSchema(sqlite3 *db) {
+  if (indexExists(db, "idx_scores_imported_ir_identity")) {
+    execOrAbort(db, "DROP INDEX idx_scores_imported_ir_identity");
+  }
+  execOrAbort(db,
+              "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert");
+  for (const std::string column : {"source_sync_generation",
+                                   "source_remote_score_id",
+                                   "source_server_origin",
+                                   "source_provider_id", "score_source"}) {
+    if (columnExists(db, "scores", column)) {
+      execOrAbort(db, "ALTER TABLE scores DROP COLUMN " + column);
+    }
+  }
+}
+
 void createVersion8ScoreFixture(const std::filesystem::path &path) {
   createVersion4ScoreFixture(path);
   {
@@ -767,6 +790,7 @@ void createVersion8ScoreFixture(const std::filesystem::path &path) {
     assert(bootstrap.EnsureSchema());
   }
   auto db = openDatabase(path);
+  removeImportedIrFromCurrentSchema(db.get());
   removeAttemptIdentityFromCurrentSchema(db.get());
   execOrAbort(db.get(), "PRAGMA user_version = 8");
   assert(!columnExists(db.get(), "scores", "attempt_id"));
@@ -785,7 +809,7 @@ ScoreProvenance readStoredProvenance(sqlite3 *db, const std::string &table,
   return *value;
 }
 
-void testVersion8MigrationAddsAttemptIdentity(
+void testVersion8MigrationAddsCurrentScoreIdentity(
     const std::filesystem::path &root) {
   const auto path = root / "migration-v9-attempt-identity" / "score.db";
   createVersion8ScoreFixture(path);
@@ -794,7 +818,8 @@ void testVersion8MigrationAddsAttemptIdentity(
   assert(helper.EnsureSchema());
 
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ScoreRepository::kCurrentSchemaVersion);
   assert(columnExists(db.get(), "scores", "attempt_id"));
   assert(indexExists(db.get(), "idx_scores_attempt_id"));
   assert(indexIsUniqueAndPartial(db.get(), "scores", "idx_scores_attempt_id"));
@@ -805,6 +830,8 @@ void testVersion8MigrationAddsAttemptIdentity(
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(db.get(),
                   "SELECT COUNT(*) FROM scores WHERE attempt_id IS NULL") == 1);
+  assert(columnExists(db.get(), "scores", "score_source"));
+  assert(indexExists(db.get(), "idx_scores_imported_ir_identity"));
   const std::string migratedSchema = schemaSnapshot(db.get());
   db.reset();
 
@@ -831,7 +858,8 @@ void testStaleVersionRecognizesAppliedAttemptIdentity(
   ScoreRepository helper(path);
   assert(helper.EnsureSchema());
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ScoreRepository::kCurrentSchemaVersion);
   assert(schemaSnapshot(db.get()) == currentSchema);
 }
 
@@ -860,7 +888,7 @@ void testStaleVersionRejectsPartialAttemptIdentity(
 
 void testCurrentVersionRejectsMissingAttemptIdentityIndexWithoutMutation(
     const std::filesystem::path &root) {
-  const auto path = root / "current-v9-missing-attempt-index" / "score.db";
+  const auto path = root / "current-v10-missing-attempt-index" / "score.db";
   {
     ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
@@ -875,7 +903,8 @@ void testCurrentVersionRejectsMissingAttemptIdentityIndexWithoutMutation(
 
   expectScoreSchemaRejectedWithoutMutation(path);
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 9);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ScoreRepository::kCurrentSchemaVersion);
   assert(!indexExists(db.get(), "idx_scores_attempt_id"));
   assert(!indexExists(db.get(), "idx_scores_chart_sha256"));
 }
@@ -899,11 +928,11 @@ void testCurrentVersionRejectsMalformedAttemptIdentityIndexes(
       };
 
   assertMalformedIndexRejected(
-      "current-v9-nonunique-attempt-index",
+      "current-v10-nonunique-attempt-index",
       "CREATE INDEX idx_scores_attempt_id ON scores(attempt_id) WHERE "
       "attempt_id IS NOT NULL");
   assertMalformedIndexRejected(
-      "current-v9-wrong-predicate-attempt-index",
+      "current-v10-wrong-predicate-attempt-index",
       "CREATE UNIQUE INDEX idx_scores_attempt_id ON scores(attempt_id) WHERE "
       "attempt_id IS NULL");
 }
@@ -911,10 +940,10 @@ void testCurrentVersionRejectsMalformedAttemptIdentityIndexes(
 void testCachedHelperRevalidatesAttemptIdentitySchema(
     const std::filesystem::path &root) {
   const auto path =
-      root / "cached-current-v9-missing-attempt-index" / "score.db";
+      root / "cached-current-v10-missing-attempt-index" / "score.db";
   ScoreRepository helper(path);
   const auto pending =
-      samplePendingScore(root, "cached-current-v9-missing-attempt-index", 12,
+      samplePendingScore(root, "cached-current-v10-missing-attempt-index", 12,
                          "2026-07-14 08:09:10");
   assert(helper.SaveProjectedScore(pending).status ==
          result_persistence::ProjectionStatus::Inserted);
@@ -939,21 +968,24 @@ void testCachedHelperRevalidatesAttemptIdentitySchema(
 
 void testFutureVersionRejectsBeforeAttemptIdentityInspection(
     const std::filesystem::path &root) {
-  const auto path = root / "future-v10-before-attempt-inspection" / "score.db";
+  const auto path = root / "future-score-before-attempt-inspection" / "score.db";
   {
     ScoreRepository bootstrap(path);
     assert(bootstrap.EnsureSchema());
   }
   auto db = openDatabase(path);
   execOrAbort(db.get(), "DROP INDEX idx_scores_attempt_id");
-  execOrAbort(db.get(), "PRAGMA user_version = 10");
+  execOrAbort(db.get(), "PRAGMA user_version = " +
+                            std::to_string(
+                                ScoreRepository::kCurrentSchemaVersion + 1));
   db.reset();
   const auto before = rawDatabaseFamilySnapshot(path);
   ScoreRepository helper(path);
   assert(!helper.EnsureSchema());
   assert(rawDatabaseFamilySnapshot(path) == before);
   db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(db.get(), "PRAGMA user_version") ==
+         ScoreRepository::kCurrentSchemaVersion + 1);
   assert(!indexExists(db.get(), "idx_scores_attempt_id"));
 }
 
@@ -1111,6 +1143,53 @@ void testProjectedRetryUpdatesSummaryCachesOnce(
   assert(
       queryInt(db.get(), "SELECT score FROM score_sha256_best_score_cache") ==
       pending.score.score);
+}
+
+void testBestScoreLoadsKpoorInclusiveBadPoints(
+    const std::filesystem::path &root) {
+  const auto path = root / "best-score-ir-bp" / "score.db";
+  ScoreRepository helper(path);
+  auto pending = samplePendingScore(root, "best-score-ir-bp", 14,
+                                    "2026-07-18 12:34:56");
+  pending.score.bad = 14;
+  pending.score.poor = 8;
+  pending.score.kPoor = 40;
+  pending.score.comboBreak = 22;
+  pending.score.longNoteMode = 2;
+  assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  const auto best = helper.LoadBestScore(sampleMeta(root, "best-score-ir-bp"),
+                                         std::nullopt, std::nullopt, 2);
+  assert(best.has_value());
+  assert(best->comboBreak == 22);
+  assert(best->badPoints == 62);
+}
+
+void testBestScoreCanFilterExactRuleset(const std::filesystem::path &root) {
+  const auto path = root / "best-score-ruleset-filter" / "score.db";
+  ScoreRepository helper(path);
+  auto lr2 = samplePendingScore(root, "best-score-ruleset-filter", 15,
+                                "2026-07-18 12:34:56", 20, 5);
+  auto beatoraja = samplePendingScore(root, "best-score-ruleset-filter", 16,
+                                     "2026-07-18 12:35:56", 40, 5);
+  beatoraja.score.provenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  beatoraja.score.provenance.stages.front().candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
+  beatoraja.score.provenance.eligibility =
+      scoreEligibilityForProvenance(beatoraja.score.provenance);
+  assert(helper.SaveProjectedScore(lr2).status ==
+         result_persistence::ProjectionStatus::Inserted);
+  assert(helper.SaveProjectedScore(beatoraja).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  const auto meta = sampleMeta(root, "best-score-ruleset-filter");
+  const auto overall = helper.LoadBestScore(meta, std::nullopt, std::nullopt, 2);
+  assert(overall.has_value() && overall->score == beatoraja.score.score);
+  const auto lr2Best = helper.LoadBestScoreForRuleset(
+      meta, RulesetDescriptor::For(GameplayRuleset::LR2), 2);
+  assert(lr2Best.has_value() && lr2Best->score == lr2.score.score);
 }
 
 void testPreviousBestExcludesExactAttemptAtSameTimestamp(
@@ -1879,12 +1958,14 @@ void testIgnoredRecoveryUpdateDoesNotAdvanceRevision(
          course_identity::makeCourseKey(md5Charts, "[]"));
 }
 
-void testFutureVersionNinePlusOneIsRejected(const std::filesystem::path &root) {
-  const auto path = root / "future-v10-recovery" / "score.db";
+void testFutureVersionIsRejected(const std::filesystem::path &root) {
+  const auto path = root / "future-score-recovery" / "score.db";
   createFutureSentinelDatabase(path);
   {
     auto db = openDatabase(path);
-    execOrAbort(db.get(), "PRAGMA user_version=10");
+    execOrAbort(db.get(), "PRAGMA user_version=" +
+                              std::to_string(
+                                  ScoreRepository::kCurrentSchemaVersion + 1));
   }
   const auto before = rawDatabaseFamilySnapshot(path);
   ScoreRepository helper(path);
@@ -1895,7 +1976,7 @@ void testFutureVersionNinePlusOneIsRejected(const std::filesystem::path &root) {
       std::vector<course_identity::ChartIdentity>{
           {.sha256 = std::string(kShaA)}},
       "[]");
-  session.entries.push_back({.meta = sampleMeta(root, "future-v10")});
+  session.entries.push_back({.meta = sampleMeta(root, "future-score")});
   assert(!helper.SaveCourseScore(session, sampleState(1, 0), 1, 1));
   const CourseScoreRecoveryResult result = helper.RecoverCourseRecords({});
   assert(!result.ok());
@@ -2003,9 +2084,12 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
   const auto state = sampleState(20, 5);
 
   ScoreProvenance chartProvenance = sampleProvenance("migration-v8-chart");
+  chartProvenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  chartProvenance.stages.front().candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
   chartProvenance.gaugeAutoShift = GaugeAutoShiftMode::SurvivalToGroove;
   chartProvenance.gaugeAutoShiftLowerBound = GaugeType::Hard;
-  chartProvenance.judgeWindowScalePercent = 80;
   chartProvenance.eligibility = ScoreEligibility::Modified;
   assert(initial.SaveScore(meta, state, chartProvenance));
 
@@ -2018,6 +2102,10 @@ void testVersion8MigrationReclassifiesBeatorajaValidScores(
   session.courseKey = course_identity::makeCourseKey(session);
 
   ScoreProvenance courseProvenance = sampleProvenance("migration-v8-course");
+  courseProvenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  courseProvenance.stages.front().candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
   courseProvenance.gaugeProfile = GaugeProfile::CourseDefault;
   courseProvenance.gaugeAutoShift = GaugeAutoShiftMode::Continue;
   courseProvenance.stages.front().judgeRankSource =
@@ -2154,13 +2242,19 @@ void testInvalidProvenanceRejectsScoreWrites(
   futureSchema.schemaVersion = ScoreProvenance::kSchemaVersion + 1;
   assertRejectedWithoutRows(futureSchema);
 
-  auto futureRuleset = sampleProvenance("future-ruleset");
-  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
-  assertRejectedWithoutRows(futureRuleset);
-
   auto invalidEnum = sampleProvenance("invalid-enum");
   invalidEnum.gaugeType = static_cast<GaugeType>(999);
   assertRejectedWithoutRows(invalidEnum);
+
+  auto futureRuleset = sampleProvenance("future-ruleset");
+  futureRuleset.ruleset.id = "future-ruleset";
+  futureRuleset.ruleset.version = RulesetDescriptor::kCurrentVersion + 1;
+  futureRuleset.eligibility = ScoreEligibility::Modified;
+  assert(helper.SaveScore(meta, state, futureRuleset));
+  auto db = openDatabase(path);
+  const auto retained = readStoredProvenance(db.get(), "scores", 1);
+  assert(retained.ruleset == futureRuleset.ruleset);
+  assert(!isSupportedRulesetDescriptor(retained.ruleset));
 }
 
 void testInvalidProvenanceDoesNotCreateScoreDatabase(
@@ -2608,7 +2702,7 @@ int main() {
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(root);
 
-  testVersion8MigrationAddsAttemptIdentity(root);
+  testVersion8MigrationAddsCurrentScoreIdentity(root);
   testStaleVersionRecognizesAppliedAttemptIdentity(root);
   testStaleVersionRejectsPartialAttemptIdentity(root);
   testCurrentVersionRejectsMissingAttemptIdentityIndexWithoutMutation(root);
@@ -2620,6 +2714,8 @@ int main() {
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
+  testBestScoreLoadsKpoorInclusiveBadPoints(root);
+  testBestScoreCanFilterExactRuleset(root);
   testPreviousBestExcludesExactAttemptAtSameTimestamp(root);
   testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(root);
   testUnrelatedScoreConstraintIsStorageFailure(root);
@@ -2635,7 +2731,7 @@ int main() {
   testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(root);
   testCourseRecoveryFailsClosedOnAmbiguityAndFailure(root);
   testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
-  testFutureVersionNinePlusOneIsRejected(root);
+  testFutureVersionIsRejected(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testModifiedPlaybackDoesNotUpdateBestScores(root);
   testVersion8MigrationReclassifiesBeatorajaValidScores(root);

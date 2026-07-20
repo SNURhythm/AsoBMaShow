@@ -65,6 +65,7 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
     return;
   }
   button->setEnabled(enabled);
+  button->setSelected(selected);
   if (selected) {
     button->setThemedBackgroundColors(ui_theme::primaryAction,
                                       ui_theme::primaryActionHover,
@@ -122,8 +123,32 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   setAlignItems(YGAlignStretch);
   setGap(12);
 
+  auto *rulesetSectionLabel = makeLabel("Ruleset");
+  rulesetSectionLabel->setName("ruleset-section-label");
+  addView(rulesetSectionLabel);
+  auto *rulesetRow = makeRow();
+  for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
+                                        GameplayRuleset::Beatoraja}) {
+    TextView *text = nullptr;
+    auto *button = makeButton(std::string(gameplayRulesetLabel(ruleset)), 18,
+                              &text);
+    button->setName("ruleset-" + std::string(gameplayRulesetId(ruleset)));
+    button->setOnClickListener([this, ruleset]() {
+      if (callbacks.onRulesetSelected) {
+        callbacks.onRulesetSelected(ruleset);
+      }
+    });
+    rulesetButtons.push_back({.button = button,
+                              .text = text,
+                              .id = std::string(gameplayRulesetId(ruleset)),
+                              .ruleset = ruleset});
+    rulesetRow->addView(button);
+  }
+  addView(rulesetRow);
+
   if (layout.showGauge) {
     gaugeSectionLabel = makeLabel("Gauge");
+    gaugeSectionLabel->setName("gauge-section-label");
     addView(gaugeSectionLabel);
     auto addGaugeButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
@@ -351,6 +376,9 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 
 void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   state = newState;
+  for (const auto &item : rulesetButtons) {
+    styleButton(item.button, item.text, item.ruleset == state.ruleset, true);
+  }
   for (const auto &item : gaugeButtons) {
     styleButton(item.button, item.text, item.gaugeType == state.gaugeType,
                 true);

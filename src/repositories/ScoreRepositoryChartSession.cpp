@@ -25,6 +25,12 @@ ScoreClearRankCache ScoreRepository::LoadBestClearRanks(
       chartSession.impl_->database(), schema);
 }
 
+ScoreClearRankCache ScoreRepository::LoadLocalBestClearRanks(
+    ChartRepository::Session &chartSession, std::string_view schema) {
+  return score_repository_detail::LoadLocalBestClearRanksOnConnection(
+      chartSession.impl_->database(), schema);
+}
+
 ScoreBestCache ScoreRepository::LoadBestScores(
     ChartRepository::Session &chartSession, std::string_view schema) {
   return score_repository_detail::LoadBestScoresOnConnection(

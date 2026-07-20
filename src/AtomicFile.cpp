@@ -12,15 +12,18 @@
 #include <Windows.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
 namespace atomic_file {
 namespace {
-bool realWriteAndSync(const std::filesystem::path &path,
-                      std::span<const std::byte> contents,
-                      std::string &errorMessage) {
+bool realWriteAndSyncWithMode(const std::filesystem::path &path,
+                              std::span<const std::byte> contents,
+                              std::string &errorMessage,
+                              bool ownerOnly) {
 #ifdef _WIN32
+  (void)ownerOnly;
   HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
@@ -51,10 +54,23 @@ bool realWriteAndSync(const std::filesystem::path &path,
     return false;
   }
 #else
-  const int descriptor =
-      ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+  int flags = O_WRONLY | O_CREAT | O_TRUNC;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  if (ownerOnly) {
+    flags |= O_NOFOLLOW;
+  }
+#endif
+  const int descriptor = ::open(path.c_str(), flags, ownerOnly ? 0600 : 0666);
   if (descriptor < 0) {
     errorMessage = "open failed: " + std::string(std::strerror(errno));
+    return false;
+  }
+  if (ownerOnly && ::fchmod(descriptor, 0600) != 0) {
+    errorMessage = "fchmod failed: " + std::string(std::strerror(errno));
+    ::close(descriptor);
     return false;
   }
   std::size_t offset = 0;
@@ -87,6 +103,18 @@ bool realWriteAndSync(const std::filesystem::path &path,
   }
 #endif
   return true;
+}
+
+bool realWriteAndSync(const std::filesystem::path &path,
+                      std::span<const std::byte> contents,
+                      std::string &errorMessage) {
+  return realWriteAndSyncWithMode(path, contents, errorMessage, false);
+}
+
+bool realPrivateWriteAndSync(const std::filesystem::path &path,
+                             std::span<const std::byte> contents,
+                             std::string &errorMessage) {
+  return realWriteAndSyncWithMode(path, contents, errorMessage, true);
 }
 
 bool realReplace(const std::filesystem::path &from,
@@ -179,6 +207,45 @@ bool syncDirectoryMetadata(const std::filesystem::path &path,
   }
   return true;
 #endif
+}
+
+bool inspectEntryWithoutFollowingLinks(const std::filesystem::path &path,
+                                       bool &exists,
+                                       std::string &errorMessage) {
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error == std::errc::no_such_file_or_directory) {
+    exists = false;
+    return true;
+  }
+  if (error) {
+    errorMessage = "unable to inspect atomic file artifact '" + path.string() +
+                   "': " + error.message();
+    return false;
+  }
+  exists = status.type() != std::filesystem::file_type::not_found;
+  return true;
+}
+
+bool removeAndVerify(const std::filesystem::path &path,
+                     const Operations &operations, bool &removed,
+                     std::string &errorMessage) {
+  bool existed = false;
+  if (!inspectEntryWithoutFollowingLinks(path, existed, errorMessage)) {
+    return false;
+  }
+  operations.remove(path);
+  bool remains = false;
+  if (!inspectEntryWithoutFollowingLinks(path, remains, errorMessage)) {
+    return false;
+  }
+  removed = existed && !remains;
+  if (remains) {
+    errorMessage =
+        "atomic file artifact remains after removal: " + path.string();
+    return false;
+  }
+  return true;
 }
 
 void appendError(std::string &errorMessage, std::string_view prefix,
@@ -279,6 +346,96 @@ Operations defaultOperations() {
   return {.writeAndSync = realWriteAndSync,
           .replace = realReplace,
           .remove = realRemove};
+}
+
+Operations privateFileOperations() {
+  return {.writeAndSync = realPrivateWriteAndSync,
+          .replace = realReplace,
+          .remove = realRemove};
+}
+
+bool restrictToOwnerOnly(const std::filesystem::path &path,
+                         std::string &errorMessage) {
+  errorMessage.clear();
+#ifdef _WIN32
+  (void)path;
+  return true;
+#else
+  int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+  flags |= O_NOFOLLOW;
+#endif
+  const int descriptor = ::open(path.c_str(), flags);
+  if (descriptor < 0) {
+    if (errno == ENOENT) {
+      return true;
+    }
+    errorMessage = "open private file failed: " +
+                   std::string(std::strerror(errno));
+    return false;
+  }
+  struct stat status {};
+  if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)) {
+    errorMessage = "private credential path is not a regular file";
+    ::close(descriptor);
+    return false;
+  }
+  if (::fchmod(descriptor, 0600) != 0) {
+    errorMessage = "fchmod private file failed: " +
+                   std::string(std::strerror(errno));
+    ::close(descriptor);
+    return false;
+  }
+  if (::close(descriptor) != 0) {
+    errorMessage = "close private file failed: " +
+                   std::string(std::strerror(errno));
+    return false;
+  }
+  return true;
+#endif
+}
+
+bool removeBackupArtifacts(const std::filesystem::path &path,
+                           std::string &errorMessage,
+                           const Operations *operations) {
+  errorMessage.clear();
+  const Operations defaults = defaultOperations();
+  const Operations &ops = operations == nullptr ? defaults : *operations;
+  if (!ops.remove) {
+    errorMessage = "atomic file operations are incomplete";
+    return false;
+  }
+
+  bool succeeded = true;
+  bool removedAny = false;
+  for (const std::string_view suffix :
+       {".bak", ".bak.pending", ".bak.previous"}) {
+    bool removed = false;
+    std::string removalError;
+    if (!removeAndVerify(path.string() + std::string(suffix), ops, removed,
+                         removalError)) {
+      appendError(errorMessage, "backup artifact cleanup failed: ",
+                  removalError);
+      succeeded = false;
+    }
+    removedAny = removedAny || removed;
+  }
+
+  if (removedAny) {
+    const auto parent = path.parent_path().empty()
+                            ? std::filesystem::path(".")
+                            : path.parent_path();
+    std::string syncError;
+    if (!syncDirectory(parent, syncError)) {
+      appendError(errorMessage, "backup cleanup metadata sync failed: ",
+                  syncError);
+      succeeded = false;
+    }
+  }
+  return succeeded;
 }
 
 bool writeWithBackup(const std::filesystem::path &path,
@@ -441,5 +598,67 @@ bool writeWithBackup(const std::filesystem::path &path,
     syncDirectoryMetadata(path, metadataSyncRoot, syncError);
   }
   return true;
+}
+
+bool writeWithoutBackup(const std::filesystem::path &path,
+                        std::span<const std::byte> contents,
+                        std::string &errorMessage,
+                        const Operations *operations) {
+  errorMessage.clear();
+  const Operations defaults = defaultOperations();
+  const Operations &ops = operations == nullptr ? defaults : *operations;
+  if (!ops.writeAndSync || !ops.replace || !ops.remove) {
+    errorMessage = "atomic file operations are incomplete";
+    return false;
+  }
+
+  std::error_code ec;
+  std::filesystem::path metadataSyncRoot = path.parent_path().empty()
+                                               ? std::filesystem::path(".")
+                                               : path.parent_path();
+  while (!std::filesystem::exists(metadataSyncRoot, ec)) {
+    if (ec) {
+      errorMessage =
+          "file ancestor existence check failed: " + ec.message();
+      return false;
+    }
+    const auto parent = metadataSyncRoot.parent_path();
+    metadataSyncRoot = parent.empty() ? std::filesystem::path(".") : parent;
+  }
+  if (ec) {
+    errorMessage = "file ancestor existence check failed: " + ec.message();
+    return false;
+  }
+  if (!path.parent_path().empty()) {
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) {
+      errorMessage = "create file directory failed: " + ec.message();
+      return false;
+    }
+  }
+
+  const std::filesystem::path temporary = path.string() + ".tmp";
+  if (!removeBackupArtifacts(path, errorMessage, &ops)) {
+    return false;
+  }
+  bool removed = false;
+  if (!removeAndVerify(temporary, ops, removed, errorMessage)) {
+    return false;
+  }
+  if (!ops.writeAndSync(temporary, contents, errorMessage)) {
+    std::string cleanupError;
+    if (!removeAndVerify(temporary, ops, removed, cleanupError)) {
+      appendError(errorMessage, "temporary cleanup failed: ", cleanupError);
+    }
+    return false;
+  }
+  if (!ops.replace(temporary, path, errorMessage)) {
+    std::string cleanupError;
+    if (!removeAndVerify(temporary, ops, removed, cleanupError)) {
+      appendError(errorMessage, "temporary cleanup failed: ", cleanupError);
+    }
+    return false;
+  }
+  return syncDirectoryMetadata(path, metadataSyncRoot, errorMessage);
 }
 } // namespace atomic_file

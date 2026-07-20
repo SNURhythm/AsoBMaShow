@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 #include "LongNoteModeUtils.h"
+#include "scene/play/GameplayRuleset.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -410,6 +411,12 @@ float sanitizePlayAreaWidth(float width) {
 } // namespace
 
 void AppSettings::sanitize() {
+  irProviders.try_emplace(std::string(ir::kTachiProviderId),
+                          ir::IrProviderSettings{});
+  for (auto &[providerId, settings] : irProviders) {
+    (void)providerId;
+    ir::sanitizeProviderSettings(settings);
+  }
   audioVideo.sanitize();
   audioOffsetMs =
       std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
@@ -454,6 +461,9 @@ void AppSettings::sanitize() {
   judgementIndicatorWidthScale = sanitizeFloat(
       judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
       kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
+  judgementIndicatorRangeMilliseconds =
+      judgement_indicator::sanitizeStoredRangeMilliseconds(
+          judgementIndicatorRangeMilliseconds);
   judgementTextY = sanitizeFloat(judgementTextY, kDefaultJudgementTextY,
                                  kMinJudgementTextY, kMaxJudgementTextY);
   switch (notePriorityMode) {
@@ -524,6 +534,8 @@ void AppSettings::sanitize() {
     uiThemeMode = UiThemeMode::Dark;
     break;
   }
+  selectedGameplayRuleset = std::string(gameplayRulesetId(
+      gameplayRulesetSelectionOrDefault(selectedGameplayRuleset)));
   selectedGaugeType = parseGaugeTypeId(selectedGaugeType, kDefaultGaugeType);
   selectedGaugeAutoShiftMode = parseGaugeAutoShiftModeId(
       selectedGaugeAutoShiftMode, "none");
@@ -779,6 +791,8 @@ bool AppSettings::parseLegacyCfg(std::istream &file, AppSettings &settings,
         if (parseBool(value, parsed)) {
           settings.systemPlaybackShowArtist = parsed;
         }
+      } else if (key == "selected_gameplay_ruleset") {
+        settings.selectedGameplayRuleset = value;
       } else if (key == "selected_gauge_type") {
         settings.selectedGaugeType =
             parseGaugeTypeId(value, settings.selectedGaugeType);

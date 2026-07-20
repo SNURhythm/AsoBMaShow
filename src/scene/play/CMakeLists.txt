@@ -1,6 +1,11 @@
 target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             RhythmLaneInputController.cpp
                             JudgementIndicatorRenderer.cpp Judge.cpp
+                            GameplayJudgeRules.cpp
+                            GameplayGaugeRules.cpp
+                            GameplayRulesetPolicy.cpp
+                            GameplayNoteJudgeRole.cpp
+                            GameplayCandidateRules.cpp
                             CompiledGameplayJudge.cpp GameplayDefinition.cpp
                             GameplaySimulation.cpp
                             RealtimeGameplayAuthorityPolicy.cpp

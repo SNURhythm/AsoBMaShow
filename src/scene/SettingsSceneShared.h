@@ -541,6 +541,14 @@ static float judgementIndicatorPercentToY(int percent) {
   return clampJudgementIndicatorY(static_cast<float>(percent) / 100.0f);
 }
 
+static int clampJudgementIndicatorRangeMilliseconds(int value) {
+  return judgement_indicator::clampEditableRangeMilliseconds(value);
+}
+
+static std::string formatJudgementIndicatorRangeLabel(int value) {
+  return judgement_indicator::formatRangeLabel(value);
+}
+
 static float clampJudgementTextY(float value) {
   if (!std::isfinite(value)) {
     return AppSettings::kDefaultJudgementTextY;

@@ -1932,6 +1932,7 @@
 					"\"$(SRCROOT)/../../../bgfx/bgfx/include\"",
 					"\"$(SRCROOT)/Pods/Headers/Public\"",
 					"\"$(SRCROOT)/../../../bgfx/bx/include\"",
+					"\"$(SRCROOT)/../../../yoga/lib\"",
 					"\"$(SRCROOT)/include\"",
 				);
 				INFOPLIST_FILE = AsoBMaShow/Info.plist;
@@ -2002,6 +2003,7 @@
 					"\"$(SRCROOT)/../../../bgfx/bgfx/include\"",
 					"\"$(SRCROOT)/Pods/Headers/Public\"",
 					"\"$(SRCROOT)/../../../bgfx/bx/include\"",
+					"\"$(SRCROOT)/../../../yoga/lib\"",
 					"\"$(SRCROOT)/include\"",
 				);
 				INFOPLIST_FILE = AsoBMaShow/Info.plist;

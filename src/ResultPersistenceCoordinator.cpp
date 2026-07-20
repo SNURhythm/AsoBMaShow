@@ -140,8 +140,9 @@ const StageReceipt *SaveOutcome::validatedReceiptFor(
 Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
     : Coordinator(Dependencies{
           .stage =
-              [&replay](const ChartResultAttempt &attempt) {
-                return replay.StageChartResult(attempt);
+              [&replay](const ChartResultAttempt &attempt,
+                        std::span<const ir::IrOutboxDraft> irDrafts) {
+                return replay.StageChartResult(attempt, irDrafts);
               },
           .loadPending =
               [&replay](std::string_view attemptId) {
@@ -155,9 +156,10 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
               [&score](const PendingChartScoreWrite &pending) {
                 return score.SaveProjectedScore(pending);
               },
-          .acknowledge =
+          .acknowledgeAndActivate =
               [&replay](std::string_view attemptId, int replayId) {
-                return replay.AcknowledgePendingChartScore(attemptId, replayId);
+                return replay.AcknowledgePendingChartScoreAndActivateIr(
+                    attemptId, replayId);
               },
           .recordRecoveryAttempt =
               [&replay](std::string_view attemptId, RecoveryAttemptKind kind) {
@@ -169,9 +171,11 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
 Coordinator::Coordinator(Dependencies dependencies)
     : dependencies_(std::move(dependencies)) {}
 
-SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
+SaveOutcome Coordinator::persist(
+    const ChartResultAttempt &attempt,
+    std::span<const ir::IrOutboxDraft> irDrafts) {
   profile_database_activity::WriteGuard bindingLease;
-  StageOutcome staged = dependencies_.stage(attempt);
+  StageOutcome staged = dependencies_.stage(attempt, irDrafts);
   switch (staged.status) {
   case StageStatus::StorageFailure:
     return unstagedOutcome(SaveState::Unstaged, std::move(staged.diagnostic));
@@ -268,7 +272,8 @@ SaveOutcome Coordinator::persist(const ChartResultAttempt &attempt) {
   }
 
   AcknowledgeOutcome acknowledged =
-      dependencies_.acknowledge(pending.attemptId, pending.replayId);
+      dependencies_.acknowledgeAndActivate(pending.attemptId,
+                                           pending.replayId);
   appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
   switch (acknowledged.status) {
   case AcknowledgeStatus::StorageFailure:
@@ -409,7 +414,8 @@ RecoverySummary Coordinator::recoverAll(std::size_t limit) {
     }
 
     AcknowledgeOutcome acknowledged =
-        dependencies_.acknowledge(pending.attemptId, pending.replayId);
+        dependencies_.acknowledgeAndActivate(pending.attemptId,
+                                             pending.replayId);
     switch (acknowledged.status) {
     case AcknowledgeStatus::StorageFailure:
       retain(entry, RecoveryAttemptKind::StorageFailure,

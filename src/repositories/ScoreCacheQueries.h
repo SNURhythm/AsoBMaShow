@@ -2,6 +2,7 @@
 
 #include "../ProfileDatabaseActivity.h"
 #include "../ScoreProvenance.h"
+#include "ScoreRepositoryModels.h"
 #include "SqliteRAII.h"
 #include "../scene/play/RhythmState.h"
 
@@ -41,12 +42,20 @@ inline std::string playbackPercentExpr(std::string_view alias) {
 
 inline std::string
 fullComboClearRankExpr(std::string_view alias,
-                       std::string playbackPercentExpression = {}) {
+                       std::string playbackPercentExpression = {},
+                       bool sourceAware = false) {
   const std::string prefix(alias);
   if (playbackPercentExpression.empty()) {
     playbackPercentExpression = playbackPercentExpr(alias);
   }
-  return "(CASE WHEN " + prefix +
+  const std::string importedBranch =
+      sourceAware
+          ? " WHEN " + prefix + ".score_source = " +
+                std::to_string(
+                    static_cast<int>(ScoreStorageSource::ImportedIr)) +
+                " THEN " + prefix + ".clear_type"
+          : std::string{};
+  return "(CASE" + importedBranch + " WHEN " + prefix +
          ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
          " AND " + playbackPercentExpression + " <> 100 THEN " +
          std::to_string(kClearTypeAssistedEasyClearRank) + " WHEN " + prefix +
@@ -54,6 +63,11 @@ fullComboClearRankExpr(std::string_view alias,
          ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
          " THEN " + std::to_string(kClearTypeFullComboRank) + " ELSE " +
          prefix + ".clear_type END)";
+}
+
+inline std::string playableLongNoteModesSql() {
+  return "(SELECT 0 AS ln_mode UNION ALL SELECT 1 UNION ALL SELECT 2 UNION "
+         "ALL SELECT 3)";
 }
 
 inline std::string scoreRankLabelExpr(std::string_view alias) {
@@ -141,17 +155,19 @@ inline std::string bestLookupForMode(const std::string &sha256Expr,
          " AND s.ln_mode = " + lnModeExpr + " LIMIT 1)";
 }
 
-inline std::string clearRankUpsertSql() {
+inline std::string clearRankUpsertSql(bool sourceAware) {
   return "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, "
-         "rank) SELECT lower(trim(NEW.chart_sha256)), NEW.ln_mode, " +
-         fullComboClearRankExpr("NEW") + " WHERE " +
+         "rank) SELECT lower(trim(NEW.chart_sha256)), modes.ln_mode, " +
+         fullComboClearRankExpr("NEW", {}, sourceAware) + " FROM " +
+         playableLongNoteModesSql() + " modes WHERE (NEW.ln_mode = -1 OR "
+         "NEW.ln_mode = modes.ln_mode) AND " +
          keyHasValueExpr("NEW.chart_sha256") + " AND " +
          scoreParticipatesInBestExpr("NEW") +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET rank = "
          "max(score_sha256_clear_rank_cache.rank, excluded.rank);";
 }
 
-inline std::string bestScoreUpsertSql() {
+inline std::string bestScoreUpsertSql(bool sourceAware) {
   const auto candidate =
       bestScoreOrderKey("excluded", "excluded.clear_rank", "score_id");
   const auto incumbent = bestScoreOrderKey(
@@ -160,11 +176,14 @@ inline std::string bestScoreUpsertSql() {
   return "INSERT INTO score_sha256_best_score_cache("
          "chart_sha256, ln_mode, score_id, score, max_score, max_combo, "
          "combo_break, final_gauge, clear_type, clear_rank, score_rank, "
-         "created_at) SELECT lower(trim(NEW.chart_sha256)), NEW.ln_mode, "
+         "created_at) SELECT lower(trim(NEW.chart_sha256)), modes.ln_mode, "
          "NEW.id, NEW.score, NEW.max_score, NEW.max_combo, NEW.combo_break, "
          "NEW.final_gauge, NEW.clear_type, " +
-         fullComboClearRankExpr("NEW") + ", " + scoreRankLabelExpr("NEW") +
-         ", NEW.created_at WHERE " + keyHasValueExpr("NEW.chart_sha256") +
+         fullComboClearRankExpr("NEW", {}, sourceAware) + ", " +
+         scoreRankLabelExpr("NEW") +
+         ", NEW.created_at FROM " + playableLongNoteModesSql() +
+         " modes WHERE (NEW.ln_mode = -1 OR NEW.ln_mode = modes.ln_mode) "
+         "AND " + keyHasValueExpr("NEW.chart_sha256") +
          " AND " + scoreParticipatesInBestExpr("NEW") +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET "
          "score_id = excluded.score_id, score = excluded.score, "
@@ -177,20 +196,26 @@ inline std::string bestScoreUpsertSql() {
 }
 
 inline std::string scoreIdentityCte(std::string_view schema,
-                                    bool hasProvenance) {
+                                    bool hasProvenance,
+                                    bool sourceAware) {
   const std::string scores = qualifiedName(schema, "scores");
   const std::string playbackPercent =
       hasProvenance ? playbackPercentExpr("s") : "100";
   const std::string eligibilityFilter =
       hasProvenance ? " AND " + scoreParticipatesInBestExpr("s") : "";
-  return "SELECT lower(trim(chart_sha256)) AS chart_sha256, ln_mode, "
+  const std::string scoreSource =
+      sourceAware ? "score_source" : "0 AS score_source";
+  return "SELECT lower(trim(chart_sha256)) AS chart_sha256, modes.ln_mode, "
          "id AS score_id, score, max_score, max_combo, combo_break, "
-         "final_gauge, clear_type, " +
+         "final_gauge, clear_type, " + scoreSource + ", " +
          playbackPercent + " AS playback_percent, created_at FROM " + scores +
-         " s WHERE " + keyHasValueExpr("chart_sha256") + eligibilityFilter;
+         " s JOIN " + playableLongNoteModesSql() +
+         " modes ON s.ln_mode = -1 OR s.ln_mode = modes.ln_mode WHERE " +
+         keyHasValueExpr("chart_sha256") + eligibilityFilter;
 }
 
-inline bool scoreTableHasProvenance(sqlite3 *db, std::string_view schema) {
+inline bool scoreTableHasColumn(sqlite3 *db, std::string_view schema,
+                                std::string_view column) {
   const std::string query =
       "PRAGMA " + std::string(schema.empty() ? "" : std::string(schema) + ".") +
       "table_info(scores)";
@@ -199,11 +224,19 @@ inline bool scoreTableHasProvenance(sqlite3 *db, std::string_view schema) {
     return false;
   }
   while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
-    if (sqliteColumnString(stmt.get(), 1) == "provenance_json") {
+    if (sqliteColumnString(stmt.get(), 1) == column) {
       return true;
     }
   }
   return false;
+}
+
+inline bool scoreTableHasProvenance(sqlite3 *db, std::string_view schema) {
+  return scoreTableHasColumn(db, schema, "provenance_json");
+}
+
+inline bool scoreTableHasSource(sqlite3 *db, std::string_view schema) {
+  return scoreTableHasColumn(db, schema, "score_source");
 }
 
 } // namespace detail
@@ -372,6 +405,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
   const std::string trigger =
       detail::qualifiedName(schema, "score_sha256_summary_after_insert");
   const std::string scores = detail::qualifiedName(schema, "scores");
+  const bool sourceAware = detail::scoreTableHasSource(db, schema);
 
   const std::string createClearTable =
       "CREATE TABLE IF NOT EXISTS " + clearTable +
@@ -401,7 +435,8 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
 
   const std::string createTrigger =
       "CREATE TRIGGER " + trigger + " AFTER INSERT ON " + scores + " BEGIN " +
-      detail::clearRankUpsertSql() + detail::bestScoreUpsertSql() + " END";
+      detail::clearRankUpsertSql(sourceAware) +
+      detail::bestScoreUpsertSql(sourceAware) + " END";
   if (const auto error = executeSqlite(db, createTrigger.c_str())) {
     return error;
   }
@@ -416,8 +451,9 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
   profile_database_activity::WriteGuard operation;
   const std::string clearTable = detail::clearRankSummaryTable(schema);
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
+  const bool sourceAware = detail::scoreTableHasSource(db, schema);
   const std::string identityCte = detail::scoreIdentityCte(
-      schema, detail::scoreTableHasProvenance(db, schema));
+      schema, detail::scoreTableHasProvenance(db, schema), sourceAware);
 
   const std::string deleteClear = "DELETE FROM " + clearTable;
   if (const auto error = executeSqlite(db, deleteClear.c_str())) {
@@ -431,14 +467,15 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
   const std::string insertClear =
       "WITH identities AS (" + identityCte + ") INSERT INTO " + clearTable +
       "(chart_sha256, ln_mode, rank) SELECT i.chart_sha256, i.ln_mode, MAX(" +
-      detail::fullComboClearRankExpr("i", "i.playback_percent") +
+      detail::fullComboClearRankExpr("i", "i.playback_percent", sourceAware) +
       ") FROM identities i GROUP BY i.chart_sha256, i.ln_mode";
   if (const auto error = executeSqlite(db, insertClear.c_str())) {
     return error;
   }
 
   const auto bestOrder = detail::bestScoreOrderKey(
-      "i", detail::fullComboClearRankExpr("i", "i.playback_percent"),
+      "i", detail::fullComboClearRankExpr("i", "i.playback_percent",
+                                           sourceAware),
       "score_id");
   const std::string insertBest =
       "WITH identities AS (" + identityCte +
@@ -453,7 +490,8 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema = {}) {
       "created_at) SELECT r.chart_sha256, r.ln_mode, r.score_id, r.score, "
       "r.max_score, r.max_combo, r.combo_break, r.final_gauge, "
       "r.clear_type, " +
-      detail::fullComboClearRankExpr("r", "r.playback_percent") + ", " +
+      detail::fullComboClearRankExpr("r", "r.playback_percent", sourceAware) +
+      ", " +
       detail::scoreRankLabelExpr("r") +
       ", r.created_at FROM ranked r WHERE r.row_number = 1";
   return executeSqlite(db, insertBest.c_str());

@@ -1,5 +1,7 @@
 #include "../src/repositories/ChartRepository.h"
+#include "../src/LongNoteModeUtils.h"
 #include "../src/repositories/ChartStorageIdentity.h"
+#include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "RepositorySqliteTestSupport.h"
@@ -356,6 +358,83 @@ void testSessionRoundTripAndReadinessCost() {
   assert(sqliteColumnString(journalMode.get(), 0) == "wal");
 }
 
+void testSelectChartMetaByPathsHydratesInInputOrder() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto first = chartMeta(temporary.path());
+  first.BmsPath = temporary.path() / "first.bms";
+  first.StageFile = "first-stage.png";
+  first.Title = "First title";
+  first.SubTitle = "First subtitle";
+  first.Artist = "First artist";
+  first.KeyMode = 7;
+  first.TotalNotes = 701;
+  first.MD5 = "11111111111111111111111111111111";
+  first.SHA256 =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  auto second = chartMeta(temporary.path());
+  second.BmsPath = temporary.path() / "second.bms";
+  second.StageFile = "second-stage.png";
+  second.Title = "Second title";
+  second.SubTitle = "Second subtitle";
+  second.Artist = "Second artist";
+  second.KeyMode = 14;
+  second.TotalNotes = 1402;
+  second.MD5 = "22222222222222222222222222222222";
+  second.SHA256 =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  assert(session->InsertChartMeta(first));
+  assert(session->InsertChartMeta(second));
+
+  const auto missing = temporary.path() / "missing.bms";
+  const std::array requestedPaths{first.BmsPath, second.BmsPath,
+                                  first.BmsPath, missing};
+  const auto loaded = session->SelectChartMetaByPaths(requestedPaths);
+  assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(loaded.records.size() == 2);
+  assert(loaded.records[0].meta.BmsPath == first.BmsPath);
+  assert(loaded.records[0].meta.StageFile == first.StageFile);
+  assert(loaded.records[0].meta.Title == first.Title);
+  assert(loaded.records[0].meta.SubTitle == first.SubTitle);
+  assert(loaded.records[0].meta.Artist == first.Artist);
+  assert(loaded.records[0].meta.KeyMode == first.KeyMode);
+  assert(loaded.records[0].meta.MD5 == first.MD5);
+  assert(loaded.records[0].meta.SHA256 == first.SHA256);
+  assert(loaded.records[0].meta.TotalNotes == first.TotalNotes);
+  assert(loaded.records[1].meta.BmsPath == second.BmsPath);
+  assert(loaded.records[1].meta.StageFile == second.StageFile);
+  assert(loaded.records[1].meta.TotalNotes == second.TotalNotes);
+  assert(loaded.missingPaths == 1);
+
+  const auto empty = session->SelectChartMetaByPaths({});
+  assert(empty.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(empty.records.empty());
+  assert(empty.missingPaths == 0);
+
+  std::vector<std::filesystem::path> oversizedPaths;
+  oversizedPaths.reserve(16'385);
+  for (int index = 0; index < 16'385; ++index) {
+    oversizedPaths.push_back(temporary.path() /
+                             ("oversized-" + std::to_string(index) + ".bms"));
+  }
+  const auto oversized = session->SelectChartMetaByPaths(oversizedPaths);
+  assert(oversized.status == ChartMetaPathBatchReadStatus::Invalid);
+  assert(oversized.records.empty());
+
+  Database database = openDatabase(databasePath);
+  assert(database);
+  assert(execute(database.get(), "DROP TABLE chart_meta"));
+  const std::array failurePath{first.BmsPath};
+  const auto storageFailure = session->SelectChartMetaByPaths(failurePath);
+  assert(storageFailure.status == ChartMetaPathBatchReadStatus::StorageFailure);
+  assert(storageFailure.records.empty());
+}
+
 void testRejectedFamiliesRemainUnchanged() {
   TempDirectory temporary;
 
@@ -405,12 +484,15 @@ void testChartQueryBehaviorMatrix() {
   constexpr std::string_view md5A = "11111111111111111111111111111111";
   constexpr std::string_view md5B = "22222222222222222222222222222222";
   constexpr std::string_view md5C = "33333333333333333333333333333333";
+  constexpr std::string_view md5D = "44444444444444444444444444444444";
   constexpr std::string_view shaA =
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   constexpr std::string_view shaB =
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
   constexpr std::string_view shaC =
       "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+  constexpr std::string_view shaD =
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
   seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 1, 100);
   seedChartScore(scorePath, "beta.bms", md5B, shaB, 1, 3, 300);
@@ -432,11 +514,34 @@ void testChartQueryBehaviorMatrix() {
             "','Beta','','','Artist B','',7,180,180,180,0,1,0,0,0),"
             "('gamma.bms','" +
             std::string(md5C) + "','" + std::string(shaC) +
-            "','Gamma','','','Artist C','',12,240,240,240,0,1,0,0,0);"
+            "','Gamma','','','Artist C','',12,240,240,240,0,1,0,0,0),"
+            "('delta.bms','" +
+            std::string(md5D) + "','" + std::string(shaD) +
+            "','Delta','','','Artist D','',9,90,90,90,0,1,0,0,0);"
             "INSERT INTO chart_favorites(chart_path,chart_md5,"
             "chart_sha256) VALUES('gamma.bms','" +
             std::string(md5C) + "','" + std::string(shaC) + "')"));
   }
+
+  const ir::IrRemoteScore remoteOnly{
+      .remoteUserId = 42,
+      .game = "bms-7k",
+      .remoteScoreId = "remote-only-hard",
+      .remoteChartId = "remote-delta",
+      .chartMd5 = std::string(md5D),
+      .chartSha256 = std::string(shaD),
+      .title = "Delta",
+      .artist = "Artist D",
+      .service = "Bokutachi",
+      .noteCount = 100,
+      .score = 180,
+      .lampRank = kClearTypeHardClearRank,
+      .timeAddedUnixMillis = 1'000,
+  };
+  assert(scores
+             .ReplaceImportedIrScores("tachi", "https://boku.tachi.ac", 1,
+                                      std::span{&remoteOnly, 1})
+             .status == ImportedIrScoreProjectionStatus::Applied);
 
   auto session = charts.OpenSession(&scores);
   assert(session.has_value());
@@ -451,6 +556,13 @@ void testChartQueryBehaviorMatrix() {
       actualPaths.push_back(
           chart_storage_identity::StoredPathText(record.meta.BmsPath));
     }
+    if (actualPaths != expectedPaths) {
+      std::cerr << "Unexpected chart query paths:";
+      for (const auto &path : actualPaths) {
+        std::cerr << ' ' << path;
+      }
+      std::cerr << std::endl;
+    }
     assert(actualPaths == expectedPaths);
     assert(session->CountChartMeta(query) == expectedCount);
     for (std::size_t i = 0; i < records.size(); ++i) {
@@ -460,11 +572,13 @@ void testChartQueryBehaviorMatrix() {
   };
 
   ChartMetaQuery query;
-  checkQuery(query, {"alpha.bms", "beta.bms", "gamma.bms"}, 3, 0);
+  checkQuery(query,
+             {"alpha.bms", "beta.bms", "delta.bms", "gamma.bms"}, 4,
+             0);
 
   query.limit = 1;
   query.offset = 1;
-  checkQuery(query, {"beta.bms"}, 3, 1);
+  checkQuery(query, {"beta.bms"}, 4, 1);
 
   query = {};
   query.keyword = "Artist B";
@@ -489,7 +603,30 @@ void testChartQueryBehaviorMatrix() {
   query.sortCriterion = ChartRecordSortCriterion::Score;
   query.sortDirection = ChartRecordSortDirection::Descending;
   query.selectedLongNoteMode = 1;
-  checkQuery(query, {"beta.bms", "gamma.bms", "alpha.bms"}, 3, 0);
+  checkQuery(query,
+             {"beta.bms", "gamma.bms", "delta.bms", "alpha.bms"}, 4,
+             0);
+
+  chart_library::FolderClearDataByLongNoteMode folderData;
+  {
+    auto prepared = scores.PrepareScoreQueryDatabase(*session);
+    assert(!prepared.error().has_value());
+    const auto projectedClearRanks = scores.LoadBestClearRanks(
+        *session, score_cache_queries::kScoreDatabaseSchema);
+    const auto localClearRanks = scores.LoadLocalBestClearRanks(
+        *session, score_cache_queries::kScoreDatabaseSchema);
+    folderData = session->LoadFolderClearDataByLongNoteMode(
+        projectedClearRanks, localClearRanks);
+  }
+  ChartMetaQuery hardQuery;
+  hardQuery.clearMarkFilter = true;
+  hardQuery.clearMarkRank = kClearTypeHardClearRank;
+  hardQuery.selectedLongNoteMode = 1;
+  checkQuery(hardQuery, {"delta.bms"}, 1, 0);
+  const auto &allCounts =
+      folderData.clearMarkCounts[long_note_mode::kLnValue].at("all");
+  const auto hardCount = allCounts.find(kClearTypeHardClearRank);
+  assert(hardCount != allCounts.end() && hardCount->second == 1);
 }
 
 void testChartMigrationCompatibilityMatrix() {
@@ -589,6 +726,7 @@ int main() {
   testScanBatchRetainsSessionStorage();
   testScanBatchReusesPreparedInsertAndTransaction();
   testSessionRoundTripAndReadinessCost();
+  testSelectChartMetaByPathsHydratesInInputOrder();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
   testChartMigrationCompatibilityMatrix();

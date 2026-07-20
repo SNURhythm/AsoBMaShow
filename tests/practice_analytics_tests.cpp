@@ -77,9 +77,15 @@ bms_parser::Chart makeChart() {
 
 std::vector<JudgeWindowProvenance> windows(long long pGreatEarly = -10'000) {
   return {
-      {PGreat, pGreatEarly, 10'000}, {Great, -30'000, 30'000},
-      {Good, -75'000, 75'000},       {Bad, -330'000, 420'000},
-      {Kpoor, -500'000, 150'000},
+      {.judgement = PGreat,
+       .earlyMicros = pGreatEarly,
+       .lateMicros = 10'000},
+      {.judgement = Great, .earlyMicros = -30'000, .lateMicros = 30'000},
+      {.judgement = Good, .earlyMicros = -75'000, .lateMicros = 75'000},
+      {.judgement = Bad, .earlyMicros = -330'000, .lateMicros = 420'000},
+      {.judgement = Kpoor,
+       .earlyMicros = -500'000,
+       .lateMicros = 150'000},
   };
 }
 

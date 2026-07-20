@@ -7,6 +7,14 @@ void execute(const Dependencies &dependencies) {
   if (!summary.userMessage.empty()) {
     dependencies.reportWarning(summary);
   }
+  if (dependencies.startProfileServices) {
+    try {
+      dependencies.startProfileServices();
+    } catch (...) {
+      // IR is optional. Local result recovery and the ready runtime remain
+      // authoritative when service startup is unavailable.
+    }
+  }
   dependencies.runReadyRuntime();
 }
 

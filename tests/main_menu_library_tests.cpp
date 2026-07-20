@@ -13,8 +13,9 @@
 namespace repository_test {
 
 chart_library::FolderClearDataByLongNoteMode
-loadFolderClearDataByLongNoteMode(sqlite3 *database,
-                                  const ScoreClearRankCache &scoreRanks);
+loadFolderClearDataByLongNoteMode(
+    sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
+    const ScoreClearRankCache &localCourseRanks);
 
 } // namespace repository_test
 
@@ -74,20 +75,21 @@ std::size_t TransparentStringHash::operator()(std::string_view value) const
 
 int ScoreClearRankCache::bestRankForStoredKey(std::string_view sha256,
                                               int longNoteMode) const {
-  const auto it = rankBySha256.find(sha256);
-  if (it == rankBySha256.end()) {
-    return kNoClearTypeRank;
-  }
   const int mode = long_note_mode::normalizeValue(longNoteMode);
-  const int rank = it->second.ranks[static_cast<std::size_t>(mode)];
-  if (rank != kNoClearTypeRank || mode == long_note_mode::kUnknownValue) {
-    return rank;
-  }
-  const int classicLongNoteRank =
-      it->second.ranks[long_note_mode::kLnValue];
-  return classicLongNoteRank != kNoClearTypeRank
-             ? classicLongNoteRank
-             : it->second.ranks[long_note_mode::kUnknownValue];
+  const auto rankForMode = [mode](const ScoreRankByLongNoteMode &byMode) {
+    const int selected = byMode.ranks[static_cast<std::size_t>(mode)];
+    if (selected != kNoClearTypeRank ||
+        mode == long_note_mode::kUnknownValue) {
+      return selected;
+    }
+    const int classic = byMode.ranks[long_note_mode::kLnValue];
+    return classic != kNoClearTypeRank
+               ? classic
+               : byMode.ranks[long_note_mode::kUnknownValue];
+  };
+  const auto local = rankBySha256.find(sha256);
+  return local == rankBySha256.end() ? kNoClearTypeRank
+                                     : rankForMode(local->second);
 }
 
 int CourseScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
@@ -229,9 +231,11 @@ int main() {
 
   repository_test::StatementTrace trace;
   chart_library::FolderClearDataByLongNoteMode data;
+  ScoreClearRankCache localCourseRanks = scoreRanks;
   {
     repository_test::ScopedStatementTrace observation(db, trace);
-    data = repository_test::loadFolderClearDataByLongNoteMode(db, scoreRanks);
+    data = repository_test::loadFolderClearDataByLongNoteMode(
+        db, scoreRanks, localCourseRanks);
   }
   ASSERT_EQ(4, trace.count,
             "folder clear aggregation keeps four streaming SELECTs");
@@ -263,6 +267,9 @@ int main() {
                               main_menu_library::folderKeyForTable(2),
                               long_note_mode::kHcnValue),
             "forced-CN folder keeps its historical lamp for every selection");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data, "courses"),
+            "local chart clear contributes to the course root");
   ASSERT_EQ(kClearTypeHardClearRank,
             folderRankForLn(data,
                             main_menu_library::folderKeyForCourseTable(1)),

@@ -36,4 +36,9 @@ LoadResult loadAndMigrate(const std::filesystem::path &path,
 bool saveAtomic(const std::filesystem::path &path,
                 const nlohmann::json &document, std::string &errorMessage,
                 const atomic_file::Operations *operations = nullptr);
+
+bool saveAtomicWithoutBackup(
+    const std::filesystem::path &path, const nlohmann::json &document,
+    std::string &errorMessage,
+    const atomic_file::Operations *operations = nullptr);
 } // namespace versioned_json

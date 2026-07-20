@@ -44,6 +44,7 @@ constexpr int kScoreCourseIdentitySchemaVersion = 6;
 constexpr int kScoreSummarySemanticsSchemaVersion = 7;
 constexpr int kScoreBestEligibilitySchemaVersion = 8;
 constexpr int kScoreAttemptIdentitySchemaVersion = 9;
+constexpr int kScoreImportedIrSchemaVersion = 10;
 constexpr int kScoreDatabaseSchemaVersion =
     ScoreRepository::kCurrentSchemaVersion;
 constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
@@ -78,7 +79,8 @@ void logSqlError(const char *context, sqlite3 *db) {
 }
 
 bool scoreAttemptIdentitySchemaIsExact(sqlite3 *db);
-bool currentScoreAttemptIdentitySchemaIsValid(sqlite3 *db);
+bool scoreImportedIrSchemaIsExact(sqlite3 *db);
+bool currentScoreSchemaIsValid(sqlite3 *db);
 
 bool ensureScoreDatabaseDirectory(const std::filesystem::path &path,
                                   std::string &errorMessage) {
@@ -686,7 +688,7 @@ bool scoreAttemptIdentitySchemaIsExact(sqlite3 *db) {
   return true;
 }
 
-bool currentScoreAttemptIdentitySchemaIsValid(sqlite3 *db) {
+bool currentScoreSchemaIsValid(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
   if (!version.has_value()) {
@@ -696,7 +698,8 @@ bool currentScoreAttemptIdentitySchemaIsValid(sqlite3 *db) {
   if (*version != kScoreDatabaseSchemaVersion) {
     return false;
   }
-  return scoreAttemptIdentitySchemaIsExact(db);
+  return scoreAttemptIdentitySchemaIsExact(db) &&
+         scoreImportedIrSchemaIsExact(db);
 }
 
 bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
@@ -770,6 +773,212 @@ bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
   return true;
 }
 
+bool ensureScoreImportedIrColumns(sqlite3 *db) {
+  return ensureSqliteTableColumnLogged(
+             db, "scores", "score_source",
+             "ALTER TABLE scores ADD COLUMN score_source INTEGER NOT NULL "
+             "DEFAULT 0",
+             "reading imported IR score schema",
+             "adding score source column", logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "source_provider_id",
+             "ALTER TABLE scores ADD COLUMN source_provider_id TEXT",
+             "reading imported IR score schema",
+             "adding imported IR provider column", logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "source_server_origin",
+             "ALTER TABLE scores ADD COLUMN source_server_origin TEXT",
+             "reading imported IR score schema",
+             "adding imported IR origin column", logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "source_remote_score_id",
+             "ALTER TABLE scores ADD COLUMN source_remote_score_id TEXT",
+             "reading imported IR score schema",
+             "adding imported IR score identity column", logSqlErrorText) &&
+         ensureSqliteTableColumnLogged(
+             db, "scores", "source_sync_generation",
+             "ALTER TABLE scores ADD COLUMN source_sync_generation INTEGER",
+             "reading imported IR score schema",
+             "adding imported IR generation column", logSqlErrorText) &&
+         execSql(db,
+                 "CREATE UNIQUE INDEX IF NOT EXISTS "
+                 "idx_scores_imported_ir_identity ON scores("
+                 "source_provider_id, source_server_origin, "
+                 "source_remote_score_id) WHERE score_source = 1",
+                 "creating imported IR score identity index");
+}
+
+enum class ScoreImportedIrSchemaState { Absent, Exact, Malformed };
+
+bool inspectScoreImportedIrSchema(sqlite3 *db,
+                                  ScoreImportedIrSchemaState &state) {
+  struct ColumnExpectation {
+    std::string_view name;
+    std::string_view type;
+    int notNull = 0;
+    std::optional<std::string_view> defaultValue;
+  };
+  constexpr std::array expectations{
+      ColumnExpectation{"score_source", "INTEGER", 1, "0"},
+      ColumnExpectation{"source_provider_id", "TEXT", 0, std::nullopt},
+      ColumnExpectation{"source_server_origin", "TEXT", 0, std::nullopt},
+      ColumnExpectation{"source_remote_score_id", "TEXT", 0, std::nullopt},
+      ColumnExpectation{"source_sync_generation", "INTEGER", 0,
+                        std::nullopt},
+  };
+  std::array<bool, expectations.size()> present{};
+  std::array<bool, expectations.size()> exact{};
+  SqliteStatementHandle columns;
+  if (!prepareSqliteStatementLogged(db, "PRAGMA table_info(scores)", columns,
+                                    "reading imported IR score columns",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(columns.get())) == SQLITE_ROW) {
+    const std::string name = sqliteColumnString(columns.get(), 1);
+    for (std::size_t index = 0; index < expectations.size(); ++index) {
+      const auto &expected = expectations[index];
+      if (name != expected.name) {
+        continue;
+      }
+      present[index] = true;
+      const bool defaultMatches = expected.defaultValue.has_value()
+                                      ? sqlite3_column_type(columns.get(), 4) ==
+                                                SQLITE_TEXT &&
+                                            sqliteColumnString(columns.get(), 4) ==
+                                                *expected.defaultValue
+                                      : sqlite3_column_type(columns.get(), 4) ==
+                                            SQLITE_NULL;
+      exact[index] = sqlite3_column_type(columns.get(), 2) == SQLITE_TEXT &&
+                     sqliteColumnString(columns.get(), 2) == expected.type &&
+                     sqlite3_column_type(columns.get(), 3) == SQLITE_INTEGER &&
+                     sqlite3_column_int(columns.get(), 3) == expected.notNull &&
+                     defaultMatches &&
+                     sqlite3_column_type(columns.get(), 5) == SQLITE_INTEGER &&
+                     sqlite3_column_int(columns.get(), 5) == 0;
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading imported IR score columns", db);
+    return false;
+  }
+
+  constexpr std::string_view expectedIndexSql =
+      "CREATE UNIQUE INDEX idx_scores_imported_ir_identity ON scores("
+      "source_provider_id, source_server_origin, source_remote_score_id) "
+      "WHERE score_source = 1";
+  bool indexPresent = false;
+  bool indexExact = false;
+  SqliteStatementHandle index;
+  if (!prepareSqliteStatementLogged(
+          db,
+          "SELECT sql FROM sqlite_master WHERE type='index' AND "
+          "name='idx_scores_imported_ir_identity'",
+          index, "reading imported IR score identity index", logSqlErrorText)) {
+    return false;
+  }
+  rc = sqlite3_step(index.get());
+  if (rc == SQLITE_ROW) {
+    indexPresent = true;
+    indexExact = sqlite3_column_type(index.get(), 0) == SQLITE_TEXT &&
+                 sqliteColumnString(index.get(), 0) == expectedIndexSql;
+    rc = sqlite3_step(index.get());
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading imported IR score identity index", db);
+    return false;
+  }
+
+  const bool anyColumn = std::ranges::any_of(present, std::identity{});
+  const bool allColumns = std::ranges::all_of(present, std::identity{});
+  const bool allExact = std::ranges::all_of(exact, std::identity{});
+  if (!anyColumn && !indexPresent) {
+    state = ScoreImportedIrSchemaState::Absent;
+  } else if (allColumns && allExact && indexPresent && indexExact) {
+    state = ScoreImportedIrSchemaState::Exact;
+  } else {
+    state = ScoreImportedIrSchemaState::Malformed;
+  }
+  return true;
+}
+
+bool scoreImportedIrSchemaIsExact(sqlite3 *db) {
+  ScoreImportedIrSchemaState state{};
+  if (!inspectScoreImportedIrSchema(db, state)) {
+    return false;
+  }
+  if (state != ScoreImportedIrSchemaState::Exact) {
+    SDL_Log("Refusing current score database with a partial or unexpected "
+            "imported IR score schema");
+    return false;
+  }
+  return true;
+}
+
+bool migrateScoreDatabaseToVersion10(sqlite3 *db) {
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  if (!version.has_value()) {
+    logSqlErrorText("reading imported IR score migration version",
+                    versionError);
+    return false;
+  }
+  if (*version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= kScoreImportedIrSchemaVersion) {
+    return scoreAttemptIdentitySchemaIsExact(db) &&
+           scoreImportedIrSchemaIsExact(db);
+  }
+  if (*version < kScoreAttemptIdentitySchemaVersion) {
+    SDL_Log("Score database must reach version %d before imported IR score "
+            "migration",
+            kScoreAttemptIdentitySchemaVersion);
+    return false;
+  }
+
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery =
+      callerOwnsTransaction ? "SAVEPOINT asobmashow_score_imported_ir_v10"
+                            : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_score_imported_ir_v10"
+                            : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_score_imported_ir_v10; RELEASE "
+            "asobmashow_score_imported_ir_v10"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting imported IR score migration", transactionError);
+    return false;
+  }
+  if (!ensureScoreImportedIrColumns(db) ||
+      !scoreImportedIrSchemaIsExact(db)) {
+    return false;
+  }
+  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("recreating imported IR score summary trigger", *error);
+    return false;
+  }
+  if (const auto error = score_cache_queries::rebuildScoreSummaryTables(db)) {
+    logSqlErrorText("rebuilding imported IR score summaries", *error);
+    return false;
+  }
+  if (!setDatabaseUserVersion(db, kScoreImportedIrSchemaVersion)) {
+    return false;
+  }
+  if (!transaction.commit(transactionError)) {
+    logSqlErrorText("committing imported IR score migration", transactionError);
+    return false;
+  }
+  return true;
+}
+
 bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
                        const char *context) {
   if (const auto error = querySqliteTableExists(db, tableName, exists)) {
@@ -803,6 +1012,11 @@ std::string createScoreTableSql(std::string_view tableName) {
          "slow INTEGER NOT NULL,"
          "final_gauge REAL NOT NULL,"
          "clear_type INTEGER NOT NULL,"
+         "score_source INTEGER NOT NULL DEFAULT 0,"
+         "source_provider_id TEXT,"
+         "source_server_origin TEXT,"
+         "source_remote_score_id TEXT,"
+         "source_sync_generation INTEGER,"
          "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
          ")";
 }
@@ -1262,7 +1476,8 @@ bool score_repository_detail::CreateScoreTableOnConnection(
   }
 
   if (!ensureScoreChartIdentityColumns(db) ||
-      !ensureScoreChartMetadataColumns(db)) {
+      !ensureScoreChartMetadataColumns(db) ||
+      !ensureScoreImportedIrColumns(db)) {
     return false;
   }
 
@@ -1423,7 +1638,8 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion6(db) ||
       !migrateScoreDatabaseToVersion7(db) ||
       !migrateScoreDatabaseToVersion8(db) ||
-      !migrateScoreDatabaseToVersion9(db)) {
+      !migrateScoreDatabaseToVersion9(db) ||
+      !migrateScoreDatabaseToVersion10(db)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {
@@ -1455,5 +1671,5 @@ bool score_repository_detail::EquivalentDatabasePaths(
 }
 
 bool score_repository_detail::CurrentSchemaIsValid(sqlite3 *database) {
-  return currentScoreAttemptIdentitySchemaIsValid(database);
+  return currentScoreSchemaIsValid(database);
 }
