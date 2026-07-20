@@ -126,12 +126,10 @@ DirectArchiveDecision decideDownloadedArchive(
   const std::string key = normalizedKey(archiveKey);
   const bool matchSha256 = isHexKey(key, 64);
   const bool matchMd5 = isHexKey(key, 32);
-  if (!matchSha256 && !matchMd5) {
+  if (!matchSha256 && !matchMd5 && bmsPaths.empty()) {
     return {.disposition = DirectArchiveDisposition::KeepArchive,
-            .foundBmsFile = !bmsPaths.empty(),
-            .message = bmsPaths.empty()
-                           ? "Archive kept, but no BMS file was found."
-                           : "Downloaded BMS archive."};
+            .foundBmsFile = false,
+            .message = "Archive kept, but no BMS file was found."};
   }
   if (bmsPaths.empty()) {
     return {.disposition = DirectArchiveDisposition::HashMismatch,
@@ -147,6 +145,12 @@ DirectArchiveDecision decideDownloadedArchive(
             .message = readError.empty()
                            ? "Could not read every BMS entry; unarchiving."
                            : readError};
+  }
+
+  if (!matchSha256 && !matchMd5) {
+    return {.disposition = DirectArchiveDisposition::KeepArchive,
+            .foundBmsFile = true,
+            .message = "Downloaded BMS archive."};
   }
 
   for (const auto &file : files) {

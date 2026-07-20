@@ -370,7 +370,7 @@ void testDirectArchiveMd5AndNoHashBehavior() {
 
   auto noHash = asobmshow::bms_search::decideDownloadedArchive(
       "package.zip", "not-a-hash", true, nullptr,
-      fakeArchiveReader({entry}, {}));
+      fakeArchiveReader({entry}, {file}));
   assert(noHash.disposition ==
          asobmshow::bms_search::DirectArchiveDisposition::KeepArchive);
   assert(noHash.foundBmsFile);
@@ -390,6 +390,19 @@ void testDirectArchiveMd5AndNoHashBehavior() {
   assert(noBmsNoHash.disposition ==
          asobmshow::bms_search::DirectArchiveDisposition::KeepArchive);
   assert(!noBmsNoHash.foundBmsFile);
+}
+
+void testDirectArchiveNoHashUnreadableBmsFallsBack() {
+  const archive_file::Entry entry{.path = "chart.bms",
+                                  .directory = false,
+                                  .size = 10,
+                                  .solid = false};
+  const auto decision = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", "not-a-hash", true, nullptr,
+      fakeArchiveReader({entry}, {}, true, false));
+  assert(decision.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::Unarchive);
+  assert(decision.foundBmsFile);
 }
 
 asobmshow::bms_search::DownloadedArchiveWorkflowRequest workflowRequest(
@@ -777,6 +790,7 @@ int main() {
   testDirectArchiveIncompleteReadFallsBack();
   testSolidEmptyAndFailedListingsFallBack();
   testDirectArchiveMd5AndNoHashBehavior();
+  testDirectArchiveNoHashUnreadableBmsFallsBack();
   testWorkflowKeepsDirectArchiveWithoutExtraction();
   testWorkflowStagesDirectArchiveMismatch();
   testWorkflowCommitsFallbackExtractionMatch();
