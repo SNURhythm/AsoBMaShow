@@ -719,6 +719,25 @@ void testChartMigrationCompatibilityMatrix() {
   }
 }
 
+void testLegacyIosContainerPathRebasesToCurrentDocuments() {
+  const std::filesystem::path currentDocuments =
+      "/private/var/mobile/Containers/Data/Application/"
+      "b5702f7e-8d09-4559-b7c1-a9131a684b8a/Documents";
+  const std::filesystem::path legacyPath =
+      "/var/mobile/Containers/Data/Application/"
+      "FEA6861E-8321-4800-8A2B-F79AC5C8E564/Documents/BMS";
+  const auto rebased =
+      chart_storage_identity::RebaseLegacyIOSDocumentsPath(legacyPath,
+                                                            currentDocuments);
+  assert(rebased == currentDocuments / "BMS");
+
+  const std::filesystem::path externalPath =
+      "/private/var/mobile/Containers/Shared/AppGroup/"
+      "2887ECDB-CE93-49A5-97F6-A75107EDD35D/File Provider Storage/BMSFILES";
+  assert(!chart_storage_identity::RebaseLegacyIOSDocumentsPath(
+      externalPath, currentDocuments));
+}
+
 } // namespace
 
 int main() {
@@ -730,5 +749,6 @@ int main() {
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
   testChartMigrationCompatibilityMatrix();
+  testLegacyIosContainerPathRebasesToCurrentDocuments();
   return 0;
 }
