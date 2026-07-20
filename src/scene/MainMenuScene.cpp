@@ -7154,11 +7154,13 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() {
-    if (!findBmsDialogPolicy(findBmsJobRunning.load(), findBmsResult)
-             .showCloseOrCancel) {
+    const bool wasRunning = findBmsJobRunning.load();
+    applyFindBmsUpdates();
+    const bool running = wasRunning || findBmsJobRunning.load();
+    if (!findBmsDialogPolicy(running, findBmsResult).showCloseOrCancel) {
       return;
     }
-    if (findBmsJobRunning.load()) {
+    if (running) {
       findBmsCancelled = true;
       if (findBmsThread.joinable()) {
         findBmsThread.request_stop();
@@ -7361,9 +7363,11 @@ void MainMenuScene::startFindBmsPendingArtifactResolution(
 }
 
 void MainMenuScene::hideFindBmsModal() {
+  const bool wasRunning = findBmsJobRunning.load();
+  applyFindBmsUpdates();
+  const bool running = wasRunning || findBmsJobRunning.load();
   if (findBmsModalRoot == nullptr ||
-      !findBmsDialogPolicy(findBmsJobRunning.load(), findBmsResult)
-           .canDismiss) {
+      !findBmsDialogPolicy(running, findBmsResult).canDismiss) {
     return;
   }
   findBmsModalRoot->setVisible(false);

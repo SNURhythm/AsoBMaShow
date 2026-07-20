@@ -58,6 +58,36 @@ require(
     in main_menu_source,
     "Find BMS dismissal must use the tested dialog policy",
 )
+close_handler_start = main_menu_source.find(
+    "findBmsCloseButton->setOnClickListener([this]()"
+)
+close_handler_end = main_menu_source.find(
+    "findBmsKeepFilesButton->setOnClickListener", close_handler_start
+)
+close_handler = main_menu_source[close_handler_start:close_handler_end]
+close_apply_index = close_handler.find("applyFindBmsUpdates();")
+close_policy_index = close_handler.find("findBmsDialogPolicy(")
+require(
+    close_apply_index >= 0
+    and close_policy_index >= 0
+    and close_apply_index < close_policy_index,
+    "Find BMS close action must apply queued results before dismissal policy",
+)
+hide_handler_start = main_menu_source.find(
+    "void MainMenuScene::hideFindBmsModal()"
+)
+hide_handler_end = main_menu_source.find(
+    "void MainMenuScene::refreshFindBmsModal()", hide_handler_start
+)
+hide_handler = main_menu_source[hide_handler_start:hide_handler_end]
+hide_apply_index = hide_handler.find("applyFindBmsUpdates();")
+hide_policy_index = hide_handler.find("findBmsDialogPolicy(")
+require(
+    hide_apply_index >= 0
+    and hide_policy_index >= 0
+    and hide_apply_index < hide_policy_index,
+    "Find BMS hide path must apply queued results before dismissal policy",
+)
 require(
     'makeText("Use for Downloads"' in settings_source
     and '"Download folder"' in settings_source,
