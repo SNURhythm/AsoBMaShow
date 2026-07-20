@@ -134,6 +134,7 @@ private:
   TextView *touchVisualizationModeText = nullptr;
   TextView *floatingLaneCoverModeText = nullptr;
   TextView *archiveChartPreviewModeText = nullptr;
+  TextView *findBmsSkipUnarchivingModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
   TextView *judgementIndicatorModeText = nullptr;
   TextView *judgementIndicatorRenderModeText = nullptr;
@@ -160,6 +161,7 @@ private:
   Button *touchVisualizationModeButton = nullptr;
   Button *floatingLaneCoverModeButton = nullptr;
   Button *archiveChartPreviewModeButton = nullptr;
+  Button *findBmsSkipUnarchivingModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
   Button *judgementIndicatorModeButton = nullptr;
   Button *judgementIndicatorRenderModeButton = nullptr;

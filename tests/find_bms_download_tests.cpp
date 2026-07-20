@@ -1,6 +1,7 @@
 #include "bms_search/ArchiveDecision.h"
 #include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
+#include "scene/FindBmsDialogPolicy.h"
 
 #include <cassert>
 #include <filesystem>
@@ -711,6 +712,28 @@ void testPublicDownloadApiAcceptsOptions() {
                                CandidateMethod>);
 }
 
+void testPendingMismatchCannotDismiss() {
+  BmsSearchResult result;
+  result.status = BmsSearchResult::Status::HashMismatch;
+  result.pendingArtifact = BmsSearchPendingArtifact{};
+  const auto pending = findBmsDialogPolicy(false, result);
+  assert(!pending.canDismiss);
+  assert(!pending.showCloseOrCancel);
+  assert(pending.showPendingActions);
+  assert(!pending.showNormalResultActions);
+
+  const auto resolving = findBmsDialogPolicy(true, result);
+  assert(!resolving.canDismiss);
+  assert(!resolving.showCloseOrCancel);
+  assert(!resolving.showPendingActions);
+
+  result.pendingArtifact.reset();
+  const auto resolved = findBmsDialogPolicy(false, result);
+  assert(resolved.canDismiss);
+  assert(resolved.showCloseOrCancel);
+  assert(!resolved.showPendingActions);
+}
+
 } // namespace
 
 int main() {
@@ -736,5 +759,6 @@ int main() {
   testExtractedDecisionMatchesSha256AndMd5();
   testExtractedDecisionDistinguishesMismatchAndInconclusive();
   testPublicDownloadApiAcceptsOptions();
+  testPendingMismatchCannotDismiss();
   return 0;
 }

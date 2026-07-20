@@ -502,6 +502,13 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME find_bms_archive_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_find_bms_archive_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(find_bms_archive_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME judgement_indicator_range_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_judgement_indicator_range_flow.py
@@ -1908,6 +1915,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/DownloadedArchiveWorkflow.cpp
         src/bms_search/DownloadStaging.cpp
         src/bms_search/PendingArtifact.cpp
+        src/scene/FindBmsDialogPolicy.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp

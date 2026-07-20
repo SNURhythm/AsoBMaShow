@@ -348,11 +348,15 @@ private:
   TextView *findBmsStatusText = nullptr;
   TextView *findBmsDetailText = nullptr;
   Button *findBmsCloseButton = nullptr;
+  Button *findBmsKeepFilesButton = nullptr;
+  Button *findBmsDeleteFilesButton = nullptr;
   Button *findBmsOpenButton = nullptr;
   Button *findBmsGoogleButton = nullptr;
   Button *findBmsRefreshButton = nullptr;
   RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
   TextView *findBmsCloseButtonText = nullptr;
+  TextView *findBmsKeepFilesButtonText = nullptr;
+  TextView *findBmsDeleteFilesButtonText = nullptr;
   TextView *findBmsOpenButtonText = nullptr;
   TextView *findBmsGoogleButtonText = nullptr;
   TextView *findBmsRefreshButtonText = nullptr;
@@ -452,6 +456,7 @@ private:
   std::atomic_bool findBmsCancelled = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
+  std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
   std::string findBmsProgressMessage;
   std::uint64_t findBmsProgressCurrent = 0;
   std::uint64_t findBmsProgressTotal = 0;
@@ -742,6 +747,8 @@ private:
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
   void startFindBmsCandidateDownload(size_t candidateIndex);
+  void startFindBmsPendingArtifactResolution(
+      BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
   void refreshFindBmsModal();
   void applyFindBmsUpdates();

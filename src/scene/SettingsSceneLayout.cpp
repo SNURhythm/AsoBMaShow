@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../BmsSearchService.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/OverlayPortal.h"
@@ -89,6 +90,7 @@ void SettingsScene::resetViewState() {
   touchVisualizationModeText = nullptr;
   floatingLaneCoverModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
+  findBmsSkipUnarchivingModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -115,6 +117,7 @@ void SettingsScene::resetViewState() {
   touchVisualizationModeButton = nullptr;
   floatingLaneCoverModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
+  findBmsSkipUnarchivingModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
@@ -2092,6 +2095,28 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, "Archive Preview", "Preview charts inside archives.",
       archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+  auto *findBmsArchiveControls = new View();
+  findBmsArchiveControls->setFlexDirection(FlexDirection::Column);
+  findBmsArchiveControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  findBmsArchiveControls->setAlignItems(YGAlignFlexStart);
+  findBmsSkipUnarchivingModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  findBmsSkipUnarchivingModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       findBmsSkipUnarchivingModeText, ui_theme::lime());
+  findBmsSkipUnarchivingModeButton->setOnClickListener([this]() {
+    context.settings.findBmsSkipUnarchivingForNonSolidArchives =
+        !context.settings.findBmsSkipUnarchivingForNonSolidArchives;
+    persistSettings();
+  });
+  findBmsArchiveControls->addView(findBmsSkipUnarchivingModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, BmsSearchService::kSkipUnarchivingSettingLabel,
+      "Keep readable non-solid Find BMS downloads as archives. Solid archives "
+      "are still unarchived.",
+      findBmsArchiveControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *cacheCleanupControls = new View();
   cacheCleanupControls->setFlexDirection(FlexDirection::Column);
