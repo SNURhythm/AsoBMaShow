@@ -118,6 +118,11 @@ public:
     return succeeded_;
   }
 
+  void leavePaused() noexcept {
+    attempted_ = true;
+    succeeded_ = false;
+  }
+
 private:
   std::function<bool(std::string &)> callback_;
   bool attempted_ = false;
@@ -263,8 +268,9 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
-  if (!dependencies_.quiesceRemoteWork ||
+  if (!dependencies_.quiesceRemoteWork || !dependencies_.loadCredential ||
       !dependencies_.invalidateProviderIdentity ||
+      !dependencies_.removeCredential ||
       !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account mutation isolation is unavailable."};
@@ -281,6 +287,19 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account work could not be paused."};
   }
+  std::optional<std::string> previousCredential;
+  try {
+    if (!dependencies_.loadCredential(previousCredential,
+                                      ignoredDiagnostic) ||
+        (previousCredential && !IrCredentialStore::isApiKeyFormatValid(
+                                   *previousCredential))) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "The existing API key could not be read."};
+    }
+  } catch (...) {
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "The existing API key could not be read."};
+  }
   try {
     if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
@@ -290,23 +309,45 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key could not be saved."};
   }
-  hasCredential_ = true;
+  bool identityInvalidated = false;
   try {
-    if (!dependencies_.invalidateProviderIdentity(providerId_,
-                                                  ignoredDiagnostic)) {
-      return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "IR account evidence could not be invalidated."};
-    }
+    identityInvalidated = dependencies_.invalidateProviderIdentity(
+        providerId_, ignoredDiagnostic);
   } catch (...) {
+    identityInvalidated = false;
+  }
+  if (!identityInvalidated) {
+    bool rolledBack = false;
+    try {
+      rolledBack = previousCredential
+                       ? dependencies_.replaceCredential(*previousCredential,
+                                                         ignoredDiagnostic)
+                       : dependencies_.removeCredential(ignoredDiagnostic);
+    } catch (...) {
+      rolledBack = false;
+    }
+    if (!rolledBack) {
+      hasCredential_ = true;
+      reactivation.leavePaused();
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic =
+                  "IR account evidence could not be invalidated and the "
+                  "previous API key could not be restored; IR work remains "
+                  "paused."};
+    }
+    hasCredential_ = previousCredential.has_value();
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account evidence could not be invalidated."};
   }
+  hasCredential_ = true;
   if (dependencies_.credentialCommitted) {
     try {
       dependencies_.credentialCommitted();
     } catch (...) {
+      reactivation.leavePaused();
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The saved API key could not be activated."};
+              .diagnostic = "The saved API key could not be activated; IR "
+                            "work remains paused."};
     }
   }
   if (!reactivation.reactivate(ignoredDiagnostic)) {
@@ -321,8 +362,9 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key storage is unavailable."};
   }
-  if (!dependencies_.quiesceRemoteWork ||
+  if (!dependencies_.quiesceRemoteWork || !dependencies_.loadCredential ||
       !dependencies_.invalidateProviderIdentity ||
+      !dependencies_.replaceCredential ||
       !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account mutation isolation is unavailable."};
@@ -339,16 +381,18 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "IR account work could not be paused."};
   }
+  std::optional<std::string> previousCredential;
   try {
-    if (!dependencies_.invalidateProviderIdentity(providerId_,
-                                                   ignoredDiagnostic)) {
+    if (!dependencies_.loadCredential(previousCredential,
+                                      ignoredDiagnostic) ||
+        (previousCredential && !IrCredentialStore::isApiKeyFormatValid(
+                                   *previousCredential))) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic =
-                  "IR account evidence could not be invalidated."};
+              .diagnostic = "The existing API key could not be read."};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account evidence could not be invalidated."};
+            .diagnostic = "The existing API key could not be read."};
   }
   try {
     if (!dependencies_.removeCredential(ignoredDiagnostic)) {
@@ -359,13 +403,44 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "API key could not be removed."};
   }
+  bool identityInvalidated = false;
+  try {
+    identityInvalidated = dependencies_.invalidateProviderIdentity(
+        providerId_, ignoredDiagnostic);
+  } catch (...) {
+    identityInvalidated = false;
+  }
+  if (!identityInvalidated) {
+    bool rolledBack = !previousCredential;
+    if (previousCredential) {
+      try {
+        rolledBack = dependencies_.replaceCredential(*previousCredential,
+                                                       ignoredDiagnostic);
+      } catch (...) {
+        rolledBack = false;
+      }
+    }
+    if (!rolledBack) {
+      hasCredential_ = false;
+      reactivation.leavePaused();
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic =
+                  "IR account evidence could not be invalidated and the API "
+                  "key could not be restored; IR work remains paused."};
+    }
+    hasCredential_ = previousCredential.has_value();
+    return {.status = IrSettingsActionResult::Status::StorageFailure,
+            .diagnostic = "IR account evidence could not be invalidated."};
+  }
   hasCredential_ = false;
   if (dependencies_.credentialCommitted) {
     try {
       dependencies_.credentialCommitted();
     } catch (...) {
+      reactivation.leavePaused();
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The removed API key could not be activated."};
+              .diagnostic = "The removed API key could not be activated; IR "
+                            "work remains paused."};
     }
   }
   if (!reactivation.reactivate(ignoredDiagnostic)) {

@@ -7630,6 +7630,7 @@ void testCredentialChangesCannotReExposeAnotherOriginsEvidence(
 
     int invalidationCalls = 0;
     int credentialWrites = 0;
+    std::optional<std::string> currentCredential = "old-key";
     ir::IrSettingsActionModel model(
         "tachi", {.scoreSubmission = true, .deferredSubmission = true},
         {.enabled = true,
@@ -7637,6 +7638,11 @@ void testCredentialChangesCannotReExposeAnotherOriginsEvidence(
          .serverOrigin = "https://origin-b.example"},
         true,
         {.quiesceRemoteWork = [](std::string &) { return true; },
+         .loadCredential =
+             [&](std::optional<std::string> &key, std::string &) {
+               key = currentCredential;
+               return true;
+             },
          .invalidateProviderIdentity =
              [&](std::string_view providerId, std::string &diagnostic) {
                ++invalidationCalls;
@@ -7647,13 +7653,15 @@ void testCredentialChangesCannotReExposeAnotherOriginsEvidence(
                       cleared.status == ir::IrOutboxMutationStatus::NotFound;
              },
          .replaceCredential =
-             [&](std::string_view, std::string &) {
+             [&](std::string_view key, std::string &) {
                ++credentialWrites;
+               currentCredential = std::string(key);
                return true;
              },
          .removeCredential =
              [&](std::string &) {
                ++credentialWrites;
+               currentCredential.reset();
                return true;
              },
          .reactivateRemoteWork = [](std::string &) { return true; }});

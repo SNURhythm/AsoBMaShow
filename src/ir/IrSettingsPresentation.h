@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -71,6 +72,9 @@ struct IrSettingsActionDependencies {
       storeSettings;
   std::function<void(const IrProviderSettings &candidate)> settingsCommitted;
   std::function<bool(std::string &diagnostic)> quiesceRemoteWork;
+  std::function<bool(std::optional<std::string> &apiKey,
+                     std::string &diagnostic)>
+      loadCredential;
   std::function<bool(std::string_view providerId, std::string &diagnostic)>
       invalidateProviderIdentity;
   std::function<bool(std::string_view apiKey, std::string &diagnostic)>

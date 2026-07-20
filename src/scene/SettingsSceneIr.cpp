@@ -144,6 +144,30 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           [this](std::string &diagnostic) {
             return context.pauseIrProfileServices(diagnostic);
           },
+      .loadCredential =
+          [this](std::optional<std::string> &apiKey,
+                 std::string &diagnostic) {
+            apiKey.reset();
+            if (!context.profileReady()) {
+              diagnostic = "The active profile is unavailable.";
+              return false;
+            }
+            auto loaded = ir::IrCredentialStore::load(
+                context.profileManager.activePaths().irCredentialsJson);
+            if (loaded.status == ir::IrCredentialLoadStatus::Missing) {
+              return true;
+            }
+            if (loaded.status != ir::IrCredentialLoadStatus::Loaded) {
+              diagnostic = "The credential file could not be read.";
+              return false;
+            }
+            const auto found =
+                loaded.credentials.apiKeys.find(std::string(kProviderId));
+            if (found != loaded.credentials.apiKeys.end()) {
+              apiKey = std::move(found->second);
+            }
+            return true;
+          },
       .invalidateProviderIdentity =
           [this](std::string_view providerId, std::string &diagnostic) {
             if (!context.profileReady()) {

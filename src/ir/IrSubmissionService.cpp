@@ -1001,18 +1001,23 @@ struct IrSubmissionService::Impl {
         }
       }
 
-      std::string singularRemoteScoreId;
+      std::vector<std::string> remoteScoreIds(planned.size());
       if (outcome.status == DeliveryStatus::Succeeded) {
         bool scoreIdentityValid = true;
-        if (planned.size() == 1) {
-          if (outcome.remoteScoreIds.size() > 1 ||
-              (outcome.remoteScoreId && !outcome.remoteScoreIds.empty() &&
-               *outcome.remoteScoreId != outcome.remoteScoreIds.front())) {
+        if (outcome.remoteScoreIds.size() > planned.size()) {
+          scoreIdentityValid = false;
+        } else if (outcome.remoteScoreIds.size() == planned.size()) {
+          // Tachi omits duplicate and already-imported inputs, compacting the
+          // returned scoreIDs array. Only a full-length response proves that
+          // its sequential output still aligns with every submitted row.
+          remoteScoreIds = outcome.remoteScoreIds;
+        }
+        if (planned.size() == 1 && outcome.remoteScoreId) {
+          if (!remoteScoreIds.front().empty() &&
+              *outcome.remoteScoreId != remoteScoreIds.front()) {
             scoreIdentityValid = false;
-          } else if (outcome.remoteScoreIds.size() == 1) {
-            singularRemoteScoreId = outcome.remoteScoreIds.front();
-          } else if (outcome.remoteScoreId) {
-            singularRemoteScoreId = *outcome.remoteScoreId;
+          } else if (remoteScoreIds.front().empty()) {
+            remoteScoreIds.front() = *outcome.remoteScoreId;
           }
         }
         if (!scoreIdentityValid) {
@@ -1035,7 +1040,7 @@ struct IrSubmissionService::Impl {
           const IrSuccessfulReceiptDraft receipt{
               .serverOrigin = successfulOrigins[index].value_or(std::string{}),
               .remoteUserId = outcome.remoteUserId,
-              .remoteScoreId = singularRemoteScoreId,
+              .remoteScoreId = remoteScoreIds[index],
               .source = IrReceiptConfirmationSource::Submission,
               .observedInSnapshot = false,
               .confirmedAtUnixMillis = completedAt,
@@ -1059,7 +1064,7 @@ struct IrSubmissionService::Impl {
           update.successfulReceipt = IrSuccessfulReceiptDraft{
               .serverOrigin = *successfulOrigins[index],
               .remoteUserId = outcome.remoteUserId,
-              .remoteScoreId = singularRemoteScoreId,
+              .remoteScoreId = remoteScoreIds[index],
               .source = IrReceiptConfirmationSource::Submission,
               .observedInSnapshot = false,
               .confirmedAtUnixMillis = completedAt,

@@ -1041,12 +1041,43 @@ void testDueAttemptsSubmitAsOneAtomicGroup() {
     const auto receipt = harness.repository.LoadIrSubmissionReceipt(
         "fake", "https://boku.tachi.ac", attemptId(suffix));
     expect(receipt.status == ir::IrReceiptReadStatus::Found &&
-               receipt.receipt && receipt.receipt->remoteScoreId.empty(),
-           "multi-entry success stores no guessed remote score identity");
+               receipt.receipt &&
+               receipt.receipt->remoteScoreId ==
+                   "score-" + std::to_string(suffix - 199),
+           "complete multi-entry identities preserve response order");
   }
   expect(harness.waitForSucceededCallbacks(3) &&
              harness.succeededCallbacks().size() == 3,
          "each committed grouped chart publishes its success callback");
+}
+
+void testCompactedSuccessfulScoreIdentitiesRemainUnbound() {
+  Harness harness;
+  harness.setCredential("key");
+  for (int suffix = 221; suffix < 224; ++suffix) {
+    expect(harness.enqueueReady(draft(suffix, harness.now.load()), false)
+               .entry.has_value(),
+           "compacted identity fixture inserts");
+  }
+  harness.driver->pushSubmit({
+      .status = ir::DeliveryStatus::Succeeded,
+      .remoteUserId = 42,
+      .remoteScoreIds = {"score-1", "score-2"},
+  });
+  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+
+  expect(harness.driver->waitForCalls(1),
+         "compacted identity grouped request starts");
+  for (int suffix = 221; suffix < 224; ++suffix) {
+    expect(harness.waitForState(attemptId(suffix),
+                                ir::IrOutboxState::Succeeded),
+           "compacted identities retain idempotent batch success");
+    const auto receipt = harness.repository.LoadIrSubmissionReceipt(
+        "fake", "https://boku.tachi.ac", attemptId(suffix));
+    expect(receipt.status == ir::IrReceiptReadStatus::Found &&
+               receipt.receipt && receipt.receipt->remoteScoreId.empty(),
+           "compacted identities are not guessed onto request rows");
+  }
 }
 
 void testMixedRequestKindsUseTwoPlannedCalls() {
@@ -2136,6 +2167,7 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
     std::condition_variable orderChanged;
     bool quiesceEntered = false;
     bool invalidationEntered = false;
+    std::string actionCredential = "old-key";
     std::vector<std::string> order;
     ir::IrSettingsActionDependencies dependencies{
         .quiesceRemoteWork =
@@ -2147,6 +2179,15 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
                 orderChanged.notify_all();
               }
               harness.service->pauseAndCancel();
+              return true;
+            },
+        .loadCredential =
+            [&](std::optional<std::string> &key, std::string &) {
+              std::lock_guard lock(orderMutex);
+              order.emplace_back("load");
+              key = actionCredential.empty()
+                        ? std::nullopt
+                        : std::optional<std::string>(actionCredential);
               return true;
             },
         .invalidateProviderIdentity =
@@ -2169,6 +2210,7 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
                 std::lock_guard lock(orderMutex);
                 order.emplace_back("replace");
               }
+              actionCredential = std::string(key);
               harness.setCredential(std::string(key));
               return true;
             },
@@ -2178,6 +2220,7 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
                 std::lock_guard lock(orderMutex);
                 order.emplace_back("remove");
               }
+              actionCredential.clear();
               harness.setCredential({});
               return true;
             },
@@ -2235,10 +2278,12 @@ void testCredentialMutationWaitsForOldAccountWorkBeforeClearingEvidence() {
            "reactivation does not replay cleared success with the new account");
     const std::vector<std::string> expectedOrder =
         removeCredential
-            ? std::vector<std::string>{"quiesce", "invalidate", "remove",
-                                       "committed", "reactivate"}
-            : std::vector<std::string>{"quiesce", "replace", "invalidate",
-                                       "committed", "reactivate"};
+            ? std::vector<std::string>{"quiesce", "load", "remove",
+                                       "invalidate", "committed",
+                                       "reactivate"}
+            : std::vector<std::string>{"quiesce", "load", "replace",
+                                       "invalidate", "committed",
+                                       "reactivate"};
     expect(order == expectedOrder,
            "credential mutation stays quiesced through evidence and key changes");
   };
@@ -3140,6 +3185,7 @@ void testReconciliationRequestRejectsUnavailableServiceAndConfiguration() {
 int main() {
   static_assert(ir::kMaximumAttemptStatusSnapshots > 0);
   testDueAttemptsSubmitAsOneAtomicGroup();
+  testCompactedSuccessfulScoreIdentitiesRemainUnbound();
   testMixedRequestKindsUseTwoPlannedCalls();
   testSharedDeferredGroupPollsOnce();
   testGroupedCancellationRecoversEveryClaim();
