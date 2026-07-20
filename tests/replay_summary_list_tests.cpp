@@ -26,6 +26,26 @@ bms_parser::ChartMeta makeSevenKeyMeta() {
   meta.IsDP = false;
   return meta;
 }
+
+void addClassicLongNote(bms_parser::Chart &chart, long long headMicros,
+                        long long tailMicros, int lane) {
+  auto *measure = new bms_parser::Measure();
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  headTimeline->Timing = headMicros;
+  tailTimeline->Timing = tailMicros;
+  auto *head = new bms_parser::LongNote(
+      bms_parser::Parser::NoWav, bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(
+      bms_parser::Parser::NoWav, bms_parser::LongNoteType::LongNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(lane, head);
+  tailTimeline->SetNote(lane, tail);
+  measure->TimeLines.push_back(headTimeline);
+  measure->TimeLines.push_back(tailTimeline);
+  chart.Measures.push_back(measure);
+}
 } // namespace
 
 int main() {
@@ -140,6 +160,91 @@ int main() {
   if (legacyRulesetResult.gaugeRules().ruleset !=
       GameplayRuleset::Beatoraja) {
     std::cerr << "legacy replay result gauge reconstruction remains Beatoraja"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart terminalLongHeadChart;
+  terminalLongHeadChart.Meta = makeSevenKeyMeta();
+  terminalLongHeadChart.Meta.LnMode = 1;
+  terminalLongHeadChart.Meta.TotalNotes = 1;
+  terminalLongHeadChart.Meta.TotalLongNotes = 1;
+  addClassicLongNote(terminalLongHeadChart, 1'000'000, 2'000'000, 1);
+  ReplayData terminalLongHeadReplay;
+  terminalLongHeadReplay.provenance.ruleset =
+      RulesetDescriptor::For(GameplayRuleset::LR2);
+  terminalLongHeadReplay.events.push_back({
+      .action = ReplayEventAction::Press,
+      .lane = 1,
+      .noteTimeMicros = 1'000'000,
+      .songTimeMicros = 850'000,
+      .judgeTimeMicros = 850'000,
+      .judgement = Bad,
+      .diffMicros = -150'000,
+      .gauge = 80.0f,
+      .gaugeType = GaugeType::Normal,
+      .combo = 0,
+      .score = 0,
+  });
+  const RhythmState terminalLongHeadResult = replay_result::BuildResultState(
+      terminalLongHeadChart, terminalLongHeadReplay);
+  if (terminalLongHeadResult.judgeCount.at(Bad) != 1 ||
+      terminalLongHeadResult.comboBreak != 1 ||
+      terminalLongHeadResult.fastCount != 1) {
+    std::cerr << "a terminal LR2 classic long-note head BAD must remain in the "
+                 "reconstructed result"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart deferredLongHeadChart;
+  deferredLongHeadChart.Meta = makeSevenKeyMeta();
+  deferredLongHeadChart.Meta.LnMode = 1;
+  deferredLongHeadChart.Meta.TotalNotes = 1;
+  deferredLongHeadChart.Meta.TotalLongNotes = 1;
+  addClassicLongNote(deferredLongHeadChart, 1'000'000, 2'000'000, 1);
+  ReplayData deferredLongHeadReplay = terminalLongHeadReplay;
+  deferredLongHeadReplay.events.front().judgement = Good;
+  deferredLongHeadReplay.events.front().diffMicros = -50'000;
+  const RhythmState deferredLongHeadResult = replay_result::BuildResultState(
+      deferredLongHeadChart, deferredLongHeadReplay);
+  if (deferredLongHeadResult.judgeCount.at(Good) != 0 ||
+      deferredLongHeadResult.comboBreak != 0 ||
+      deferredLongHeadResult.fastCount != 0) {
+    std::cerr << "a classic long-note head without a terminal BAD or tail "
+                 "result must remain deferred"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart releasedLongNoteChart;
+  releasedLongNoteChart.Meta = makeSevenKeyMeta();
+  releasedLongNoteChart.Meta.LnMode = 1;
+  releasedLongNoteChart.Meta.TotalNotes = 1;
+  releasedLongNoteChart.Meta.TotalLongNotes = 1;
+  addClassicLongNote(releasedLongNoteChart, 1'000'000, 2'000'000, 1);
+  ReplayData releasedLongNoteReplay = terminalLongHeadReplay;
+  releasedLongNoteReplay.events.push_back({
+      .action = ReplayEventAction::Release,
+      .lane = 1,
+      .noteTimeMicros = 2'000'000,
+      .songTimeMicros = 851'000,
+      .judgeTimeMicros = 851'000,
+      .judgement = Bad,
+      .diffMicros = -1'149'000,
+      .gauge = 80.0f,
+      .gaugeType = GaugeType::Normal,
+      .combo = 0,
+      .score = 0,
+  });
+  const RhythmState releasedLongNoteResult =
+      replay_result::BuildResultState(releasedLongNoteChart,
+                                      releasedLongNoteReplay);
+  if (releasedLongNoteResult.judgeCount.at(Bad) != 1 ||
+      releasedLongNoteResult.comboBreak != 1 ||
+      releasedLongNoteResult.fastCount != 1) {
+    std::cerr << "an LR2 classic long-note head and tail must reconstruct as "
+                 "one final BAD"
               << std::endl;
     return 1;
   }
