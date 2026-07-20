@@ -1,3 +1,4 @@
+#include "bms_search/ArchiveDecision.h"
 #include "bms_search/DownloadStaging.h"
 
 #include <cassert>
@@ -12,6 +13,30 @@
 namespace {
 
 using asobmshow::bms_search::FindBmsDownloadAttempt;
+
+asobmshow::bms_search::ArchiveReaderDependencies fakeArchiveReader(
+    std::vector<archive_file::Entry> entries,
+    std::vector<archive_file::FileData> files, bool listSucceeds = true,
+    bool readSucceeds = true) {
+  return {
+      .listEntries =
+          [entries = std::move(entries), listSucceeds](
+              const std::filesystem::path &,
+              std::vector<archive_file::Entry> &output, std::string *,
+              archive_file::PauseCallback) {
+            output = entries;
+            return listSucceeds;
+          },
+      .readEntries =
+          [files = std::move(files), readSucceeds](
+              const std::filesystem::path &,
+              const std::vector<std::filesystem::path> &,
+              std::vector<archive_file::FileData> &output, std::string *,
+              archive_file::PauseCallback) {
+            output = files;
+            return readSucceeds;
+          }};
+}
 
 class CleanupPaths {
 public:
@@ -240,6 +265,128 @@ void testUnsafeArchiveNameAndDownloadRootAreRefused() {
   assert(!error.empty());
 }
 
+void testDirectArchiveSha256MatchStaysPacked() {
+  const std::string chart = "#TITLE TEST\n#00111:01\n";
+  const std::vector<unsigned char> bytes(chart.begin(), chart.end());
+  const std::string sha256 = bms_parser::sha256(bytes);
+  const archive_file::Entry entry{.path = "song/chart.bms",
+                                  .directory = false,
+                                  .size = bytes.size(),
+                                  .solid = false};
+  const archive_file::FileData file{.path = entry.path, .bytes = bytes};
+  const auto decision = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", sha256, true, nullptr,
+      fakeArchiveReader({entry}, {file}));
+  assert(decision.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::KeepArchive);
+  assert(decision.foundBmsFile);
+}
+
+void testDirectArchiveDisabledDoesNotInspect() {
+  bool listed = false;
+  asobmshow::bms_search::ArchiveReaderDependencies reader;
+  reader.listEntries =
+      [&listed](const std::filesystem::path &,
+                std::vector<archive_file::Entry> &, std::string *,
+                archive_file::PauseCallback) {
+        listed = true;
+        return true;
+      };
+  const auto decision = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", "", false, nullptr, reader);
+  assert(decision.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::Unarchive);
+  assert(!listed);
+}
+
+void testDirectArchiveMismatchIsConfirmed() {
+  const std::string chart = "#TITLE TEST\n";
+  const std::vector<unsigned char> bytes(chart.begin(), chart.end());
+  const archive_file::Entry entry{.path = "chart.bms",
+                                  .directory = false,
+                                  .size = bytes.size(),
+                                  .solid = false};
+  const archive_file::FileData file{.path = entry.path, .bytes = bytes};
+  const auto decision = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", std::string(64, '0'), true, nullptr,
+      fakeArchiveReader({entry}, {file}));
+  assert(decision.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::HashMismatch);
+}
+
+void testDirectArchiveIncompleteReadFallsBack() {
+  const archive_file::Entry entry{.path = "chart.bms",
+                                  .directory = false,
+                                  .size = 10,
+                                  .solid = false};
+  const auto decision = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", std::string(64, '0'), true, nullptr,
+      fakeArchiveReader({entry}, {}));
+  assert(decision.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::Unarchive);
+}
+
+void testSolidEmptyAndFailedListingsFallBack() {
+  const archive_file::Entry solidEntry{.path = "chart.bms",
+                                       .directory = false,
+                                       .size = 10,
+                                       .solid = true};
+  auto solid = asobmshow::bms_search::decideDownloadedArchive(
+      "package.7z", std::string(64, '0'), true, nullptr,
+      fakeArchiveReader({solidEntry}, {}));
+  assert(solid.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::Unarchive);
+
+  auto empty = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", "", true, nullptr, fakeArchiveReader({}, {}));
+  assert(empty.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::Unarchive);
+
+  auto failed = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", "", true, nullptr,
+      fakeArchiveReader({}, {}, false, true));
+  assert(failed.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::Unarchive);
+}
+
+void testDirectArchiveMd5AndNoHashBehavior() {
+  const std::string chart = "#TITLE MD5\n";
+  const std::vector<unsigned char> bytes(chart.begin(), chart.end());
+  const archive_file::Entry entry{.path = "chart.bme",
+                                  .directory = false,
+                                  .size = bytes.size(),
+                                  .solid = false};
+  const archive_file::FileData file{.path = entry.path, .bytes = bytes};
+  auto md5 = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", bms_parser::md5(chart), true, nullptr,
+      fakeArchiveReader({entry}, {file}));
+  assert(md5.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::KeepArchive);
+
+  auto noHash = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", "not-a-hash", true, nullptr,
+      fakeArchiveReader({entry}, {}));
+  assert(noHash.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::KeepArchive);
+  assert(noHash.foundBmsFile);
+
+  const archive_file::Entry asset{.path = "readme.txt",
+                                  .directory = false,
+                                  .size = 1,
+                                  .solid = false};
+  auto noBmsWithHash = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", std::string(32, '0'), true, nullptr,
+      fakeArchiveReader({asset}, {}));
+  assert(noBmsWithHash.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::HashMismatch);
+
+  auto noBmsNoHash = asobmshow::bms_search::decideDownloadedArchive(
+      "package.zip", "", true, nullptr, fakeArchiveReader({asset}, {}));
+  assert(noBmsNoHash.disposition ==
+         asobmshow::bms_search::DirectArchiveDisposition::KeepArchive);
+  assert(!noBmsNoHash.foundBmsFile);
+}
+
 } // namespace
 
 int main() {
@@ -251,5 +398,11 @@ int main() {
   testFailedResolutionRetainsPendingArtifact();
   testAlreadyMissingAttemptCanBeDeleted();
   testUnsafeArchiveNameAndDownloadRootAreRefused();
+  testDirectArchiveSha256MatchStaysPacked();
+  testDirectArchiveDisabledDoesNotInspect();
+  testDirectArchiveMismatchIsConfirmed();
+  testDirectArchiveIncompleteReadFallsBack();
+  testSolidEmptyAndFailedListingsFallBack();
+  testDirectArchiveMd5AndNoHashBehavior();
   return 0;
 }

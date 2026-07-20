@@ -1904,14 +1904,34 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(find_bms_download_tests
         tests/find_bms_download_tests.cpp
+        src/bms_search/ArchiveDecision.cpp
         src/bms_search/DownloadStaging.cpp
         src/bms_search/PendingArtifact.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
         src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
     )
     target_include_directories(find_bms_download_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(find_bms_download_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(find_bms_download_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(find_bms_download_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(ir_credential_store_tests
         tests/ir_credential_store_tests.cpp

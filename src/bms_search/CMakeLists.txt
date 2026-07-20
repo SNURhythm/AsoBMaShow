@@ -1,4 +1,5 @@
 target_sources(main PRIVATE
+    ArchiveDecision.cpp
     ArchiveSupport.cpp
     BmsSearchDriver.cpp
     Common.cpp
