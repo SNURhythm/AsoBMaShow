@@ -135,6 +135,8 @@ void testForeignReceiptBoundaryIsNeverMutatedOrReused() {
 void testDisappearedSnapshotReceiptIsDeleted() {
   auto local = localCandidate(4);
   local.currentReceipt = receiptFor(local, "remote-disappeared", true);
+  local.outboxRowId = 204;
+  local.outboxState = ir::IrOutboxState::Succeeded;
 
   const auto plan = ir::planScoreReconciliation(
       kProvider, kOrigin, std::span{&local, 1}, {}, kConfirmedAt);
@@ -143,6 +145,8 @@ void testDisappearedSnapshotReceiptIsDeleted() {
   assert(plan.upsertedReceipts.empty());
   assert(plan.deletedReceiptIds ==
          std::vector<std::int64_t>{local.currentReceipt->id});
+  assert(plan.purgedSucceededOutboxRowIds ==
+         std::vector<std::int64_t>{204});
   assert(plan.ambiguousReceiptsPreserved == 0);
 }
 

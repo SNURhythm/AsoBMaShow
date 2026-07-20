@@ -838,16 +838,20 @@ ir::IrRemoteSnapshotApplyOutcome ReplayRepository::ApplyIrRemoteSnapshot(
     return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
             .diagnostic = "could not upsert IR snapshot receipts"};
   }
+  int outboxRowsSettled = 0;
+  if (!deleteOutboxIds(database, mutation,
+                       mutation.purgedSucceededOutboxRowIds, true,
+                       outboxRowsSettled)) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "could not purge represented IR outbox work"};
+  }
   int receiptsDeleted = 0;
   if (!deleteReceiptIds(database, mutation, receiptsDeleted)) {
     return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
             .diagnostic = "could not delete stale IR snapshot receipts"};
   }
-  int outboxRowsSettled = 0;
   if (!deleteOutboxIds(database, mutation, mutation.settledOutboxRowIds, false,
                        outboxRowsSettled) ||
-      !deleteOutboxIds(database, mutation, mutation.purgedSucceededOutboxRowIds,
-                       true, outboxRowsSettled) ||
       !deleteNewlyRepresentedOutbox(database, mutation,
                                     outboxRowsSettled)) {
     return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,

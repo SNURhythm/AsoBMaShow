@@ -5892,6 +5892,30 @@ void testLoadIrReconciliationCandidatesKeepsUnknownOutboxKeyMode(
   assert(loaded.candidates.front().outboxRowId == outbox.entry->id);
 }
 
+void testLoadIrReconciliationCandidatesSkipsInactiveAutomaticDrafts(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-reconciliation-inactive-draft" / "replay.db";
+  ReplayRepository helper(path);
+  const auto attempt =
+      sampleChartAttempt(root, "ir-reconciliation-inactive-draft", 216);
+  const auto draft = automaticIrDraft(attempt, "tachi", 1'000);
+  const auto staged = helper.StageChartResult(attempt, {&draft, 1});
+  assert(staged.status == result_persistence::StageStatus::Staged &&
+         staged.receipt && staged.receipt->scorePending);
+  const auto outbox = helper.LoadIrOutbox("tachi", attempt.attemptId);
+  assert(outbox.status == ir::IrOutboxReadStatus::Found && outbox.entry &&
+         !outbox.entry->localResultReady);
+
+  const auto loaded = helper.LoadIrReconciliationCandidates(
+      "tachi", "https://boku.tachi.ac");
+
+  assert(loaded.status == ir::IrReconciliationReadOutcome::Status::Loaded);
+  assert(loaded.candidates.empty());
+  const auto retained = helper.LoadIrOutbox("tachi", attempt.attemptId);
+  assert(retained.status == ir::IrOutboxReadStatus::Found && retained.entry &&
+         !retained.entry->localResultReady);
+}
+
 std::vector<int> replayIds(const std::vector<ReplaySummary> &replays) {
   std::vector<int> result;
   result.reserve(replays.size());
@@ -6604,13 +6628,14 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
   mutation.deletedReceiptIds.push_back(staleReceipt.receipt->id);
   mutation.settledOutboxRowIds.push_back(settled.rowId);
   mutation.purgedSucceededOutboxRowIds.push_back(purged.rowId);
+  mutation.purgedSucceededOutboxRowIds.push_back(stale.rowId);
 
   const auto applied = helper.ApplyIrRemoteSnapshot(mutation);
   assert(applied.status ==
              ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
          applied.remoteScoreCount == 2 && applied.remoteScoresAdded == 1 &&
          applied.remoteScoresRemoved == 1 && applied.receiptsUpserted == 1 &&
-         applied.receiptsDeleted == 1 && applied.outboxRowsSettled == 2 &&
+         applied.receiptsDeleted == 1 && applied.outboxRowsSettled == 3 &&
          applied.ambiguousReceiptsPreserved == 1 &&
          applied.syncGeneration > initialOutcome.syncGeneration);
 
@@ -6661,7 +6686,7 @@ void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
   assert(helper.LoadIrOutbox("tachi", purged.attemptId).status ==
          ir::IrOutboxReadStatus::NotFound);
   assert(helper.LoadIrOutbox("tachi", stale.attemptId).status ==
-         ir::IrOutboxReadStatus::Found);
+         ir::IrOutboxReadStatus::NotFound);
   assert(helper
              .LoadIrSubmissionReceipt("tachi", "https://boku.tachi.ac",
                                       settled.attemptId)
@@ -7899,6 +7924,7 @@ int main() {
   testLoadIrReconciliationCandidatesStorageFailureReturnsNoPartialRows(root);
   testLoadIrReconciliationCandidatesUsesOneReadSnapshot(root);
   testLoadIrReconciliationCandidatesKeepsUnknownOutboxKeyMode(root);
+  testLoadIrReconciliationCandidatesSkipsInactiveAutomaticDrafts(root);
   testListIrUploadCandidateReplaysUsesBoundedScopedSnapshot(root);
   testListIrUploadCandidateReplaysRejectsOversizedSnapshot(root);
   testClearIrSubmissionReceiptsIsOriginScoped(root);

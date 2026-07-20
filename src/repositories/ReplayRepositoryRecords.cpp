@@ -2145,6 +2145,10 @@ ReplayRepository::LoadIrReconciliationCandidates(
       "AND receipt.confirmation_source=0)) "
       "WHERE r.attempt_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM "
       "course_replay_stages stage WHERE stage.replay_id=r.id) "
+      "AND NOT EXISTS(SELECT 1 FROM ir_outbox inactive_outbox WHERE "
+      "inactive_outbox.provider_id=?1 AND "
+      "inactive_outbox.attempt_id=r.attempt_id AND "
+      "inactive_outbox.local_result_ready=0) "
       "ORDER BY r.id LIMIT ?3";
   constexpr std::size_t scanLimit =
       ir::kMaximumIrRemoteScoreSnapshotEntries +

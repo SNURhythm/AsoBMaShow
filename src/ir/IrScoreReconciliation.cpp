@@ -344,6 +344,12 @@ IrScoreReconciliationPlan planScoreReconciliation(
       }
       if (candidate.currentReceipt->observedInSnapshot) {
         plan.deletedReceiptIds.push_back(candidate.currentReceipt->id);
+        if (candidate.currentReceipt->source ==
+                IrReceiptConfirmationSource::Submission &&
+            candidate.outboxRowId &&
+            candidate.outboxState == IrOutboxState::Succeeded) {
+          plan.purgedSucceededOutboxRowIds.push_back(*candidate.outboxRowId);
+        }
         continue;
       }
     }
