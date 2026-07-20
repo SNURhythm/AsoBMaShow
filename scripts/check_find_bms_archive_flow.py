@@ -11,14 +11,16 @@ root = (
     else pathlib.Path(__file__).parent.parent
 ).resolve()
 settings_path = root / "src/scene/SettingsSceneLayout.cpp"
+settings_tables_path = root / "src/scene/SettingsSceneTables.cpp"
 main_menu_path = root / "src/scene/MainMenuScene.cpp"
 
-for path in (settings_path, main_menu_path):
+for path in (settings_path, settings_tables_path, main_menu_path):
     if not path.is_file():
         print(f"FAIL: missing {path.relative_to(root)}", file=sys.stderr)
         raise SystemExit(1)
 
 settings_source = settings_path.read_text(encoding="utf-8")
+settings_tables_source = settings_tables_path.read_text(encoding="utf-8")
 main_menu_source = main_menu_path.read_text(encoding="utf-8")
 failures: list[str] = []
 
@@ -55,6 +57,19 @@ require(
     "findBmsDialogPolicy(findBmsJobRunning.load(), findBmsResult)"
     in main_menu_source,
     "Find BMS dismissal must use the tested dialog policy",
+)
+require(
+    'makeText("Use for Downloads"' in settings_source
+    and '"Download folder"' in settings_source,
+    "BMS Library rows must expose download-folder selection",
+)
+require(
+    '"Not writable by Find BMS"' in settings_source,
+    "ineligible Android tree rows must explain why selection is disabled",
+)
+require(
+    "SetFindBmsDownloadEntry" in settings_tables_source,
+    "Settings must persist the selected Find BMS download folder",
 )
 
 if failures:

@@ -425,6 +425,7 @@ private:
   void addDifficultyTableFromUrl();
   void updateDifficultyTableFromSource(int tableId);
   void deleteDifficultyTable(int tableId);
+  void setFindBmsDownloadEntry(const std::string &entryPathText);
   void deleteChartEntry(const std::string &entryPathText);
   void refreshChartLibrary();
   void refreshChartEntryBackupStatuses();

@@ -2391,6 +2391,10 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
     folderList->addView(makeWrappedText("No chart folders are installed.",
                                         metrics.bodyTextSize,
                                         ui_theme::textSecondary()));
+    folderList->addView(makeWrappedText(
+        "Find BMS downloads use Documents/BMS until a writable library "
+        "folder is added.",
+        metrics.smallTextSize, ui_theme::textMuted()));
   } else {
     for (const auto &entry : chartEntries) {
       const std::string entryPathText = formatChartEntryPath(entry);
@@ -2417,6 +2421,32 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
 
       const int folderActionWidth = metrics.compact ? 136 : 156;
+      if (entry.findBmsDownloadFolder) {
+        actions->addView(makeWrappedText("Download folder",
+                                         metrics.smallTextSize,
+                                         ui_theme::lime()));
+      } else if (entry.findBmsDownloadEligible) {
+        auto *downloadButton = makeAccentButton(
+            metrics.compact ? 180 : 210, metrics.actionButtonHeight,
+            makeText("Use for Downloads", metrics.smallTextSize,
+                     ui_theme::textPrimary(), TextView::CENTER,
+                     TextView::MIDDLE),
+            ui_theme::cyan());
+        downloadButton->setOnClickListener([this, entryPathText]() {
+          setFindBmsDownloadEntry(entryPathText);
+        });
+        actions->addView(downloadButton);
+      } else if (ChartRepository::IsDefaultBmsFolderPath(
+                     std::filesystem::path(entry.path))) {
+        actions->addView(makeWrappedText("Fallback download folder",
+                                         metrics.smallTextSize,
+                                         ui_theme::textMuted()));
+      } else {
+        actions->addView(makeWrappedText("Not writable by Find BMS",
+                                         metrics.smallTextSize,
+                                         ui_theme::textMuted()));
+      }
+
       if (entry.removable) {
         const bool confirmingDelete =
             pendingDeleteChartEntryPath == entryPathText;
