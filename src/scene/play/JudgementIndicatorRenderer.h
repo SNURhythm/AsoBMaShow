@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../JudgementIndicatorRange.h"
 #include "../../rendering/Color.h"
 #include "Judge.h"
 #include <array>
@@ -28,7 +29,8 @@ public:
       const std::map<Judgement, std::pair<long long, long long>>
           &timingWindows);
 
-  void configure(bool enabled, float y, float widthScale, bool hudMode);
+  void configure(bool enabled, float y, float widthScale, bool hudMode,
+                 int rangeMilliseconds);
   void record(const JudgeResult &judgeResult, long long displayTimeMicros);
   void clear();
   void render(rendering::SimpleBatchRenderer &batch, long long currentTimeMicros,
@@ -65,16 +67,18 @@ private:
 
   [[nodiscard]] Layout layout(const Geometry &geometry, bool hudMode) const;
   [[nodiscard]] float offsetToX(long long diffMicros,
+                                long long displayRangeMicros,
                                 const Layout &layout) const;
   [[nodiscard]] long long timingWindowEarly(Judgement judgement) const;
   [[nodiscard]] long long timingWindowLate(Judgement judgement) const;
   bool readSample(uint64_t sequence, Sample &sample) const;
   void drawSegment(rendering::SimpleBatchRenderer &batch, long long startMicros,
-                   long long endMicros, const Layout &layout, float barY,
-                   Color color) const;
+                   long long endMicros, long long displayRangeMicros,
+                   const Layout &layout, float barY, Color color) const;
 
   std::map<Judgement, std::pair<long long, long long>> timingWindows;
-  long long rangeMicros = 500000;
+  std::atomic<long long> rangeMicros{judgement_indicator::rangeMicros(
+      judgement_indicator::kDefaultRangeMilliseconds)};
   std::array<AtomicSample, kMaxVisibleSamples> samples;
   std::atomic<uint64_t> writeSequence{0};
   std::atomic_bool enabled{true};

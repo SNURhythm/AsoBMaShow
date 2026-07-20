@@ -3424,7 +3424,9 @@ void BMSRenderer::setShowInvisibleNotes(bool enabled) {
 
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
                                               float widthScale, bool hudMode) {
-  judgementIndicator.configure(enabled, y, widthScale, hudMode);
+  judgementIndicator.configure(
+      enabled, y, widthScale, hudMode,
+      judgement_indicator::kDefaultRangeMilliseconds);
 }
 
 void BMSRenderer::setJudgementTextY(float y) {

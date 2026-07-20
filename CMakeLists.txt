@@ -1724,6 +1724,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_judge_rules_tests PRIVATE cxx_std_23)
 
+    add_executable(judgement_indicator_range_tests
+        tests/judgement_indicator_range_tests.cpp
+    )
+    target_include_directories(judgement_indicator_range_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(judgement_indicator_range_tests PRIVATE cxx_std_23)
+
     add_executable(gameplay_gauge_rules_tests
         tests/gameplay_gauge_rules_tests.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -2672,6 +2680,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_ruleset_tests)
     asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
+    asobmashow_register_test(judgement_indicator_range_tests)
     asobmashow_register_test(gameplay_gauge_rules_tests)
     asobmashow_register_test(gameplay_ruleset_policy_tests)
     asobmashow_register_test(input_profile_tests foundation_input_profile)
