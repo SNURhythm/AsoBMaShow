@@ -300,6 +300,14 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
             .diagnostic = "The existing API key could not be read."};
   }
+  if (previousCredential && *previousCredential == apiKey) {
+    hasCredential_ = true;
+    if (!reactivation.reactivate(ignoredDiagnostic)) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "IR account work could not be reactivated."};
+    }
+    return {.status = IrSettingsActionResult::Status::Succeeded};
+  }
   try {
     if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,

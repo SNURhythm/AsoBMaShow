@@ -551,6 +551,32 @@ void testFailedCredentialReplacementPreservesExistingAccountEvidence() {
                                     "reactivate"}));
 }
 
+void testUnchangedCredentialPreservesExistingAccountEvidence() {
+  FakeActions fake;
+  fake.credentialPresent = true;
+  fake.credentialValue = "existing-api-key";
+  ir::IrSettingsActionModel model("tachi",
+                                  {.chartRankings = true,
+                                   .scoreSubmission = true,
+                                   .deferredSubmission = true},
+                                  initialSettings(), true,
+                                  fake.dependencies());
+
+  const auto result = model.replaceCredential("existing-api-key");
+
+  REQUIRE(result.succeeded());
+  REQUIRE(model.hasCredential());
+  REQUIRE(fake.credentialPresent);
+  REQUIRE(fake.credentialValue == "existing-api-key");
+  REQUIRE(fake.replaceCredentialCalls == 0);
+  REQUIRE(fake.removeCredentialCalls == 0);
+  REQUIRE(fake.invalidationCalls == 0);
+  REQUIRE(fake.credentialPublishes == 0);
+  REQUIRE(fake.reactivationCalls == 1);
+  REQUIRE((fake.credentialActionOrder ==
+           std::vector<std::string>{"quiesce", "load", "reactivate"}));
+}
+
 void testCredentialRollbackFailureLeavesRemoteWorkPaused() {
   FakeActions fake;
   fake.credentialPresent = true;
@@ -697,6 +723,7 @@ int main() {
   testSettingsActionsPublishOnlyAfterDurableStore();
   testCredentialActionsNeverRetainKeyAndPublishAfterStore();
   testFailedCredentialReplacementPreservesExistingAccountEvidence();
+  testUnchangedCredentialPreservesExistingAccountEvidence();
   testCredentialRollbackFailureLeavesRemoteWorkPaused();
   testCredentialRemovalRollbackFailureLeavesRemoteWorkPaused();
   testStoreInvalidCredentialFormatsHaveNoSideEffects();
