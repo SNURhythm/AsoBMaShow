@@ -592,7 +592,13 @@ void IrUploadsScene::startUpload() {
       if (!recalled.value->historicalIr ||
           !recalled.value->historicalIr->submission) {
         return ir_uploads::VerificationOutcome{
-            .diagnostic = "This saved result has no verifiable IR proof."};
+            .diagnostic =
+                recalled.value->historicalIrDiagnostic.empty()
+                    ? "IR verification failed because historical proof "
+                      "reconstruction returned no analysis. This score cannot "
+                      "be uploaded safely."
+                    : ir::sanitizeDiagnostic(
+                          recalled.value->historicalIrDiagnostic)};
       }
       return ir_uploads::VerificationOutcome{
           .submission = *recalled.value->historicalIr->submission};

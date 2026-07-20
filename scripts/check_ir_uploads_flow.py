@@ -55,6 +55,14 @@ reject(
     "enqueueManual(" in uploads_scene,
     "the page must not queue selections one by one",
 )
+require(
+    "historicalIrDiagnostic" in uploads_scene,
+    "IR Uploads forwards historical proof rejection analysis",
+)
+reject(
+    "This saved result has no verifiable IR proof." in uploads_scene,
+    "IR Uploads must not replace proof analysis with a generic rejection",
+)
 
 load_position = uploads_scene.find("LoadReplayResult")
 rebuild_position = uploads_scene.find("result_recall::BuildChartResult", load_position)
