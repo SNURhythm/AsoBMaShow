@@ -6546,6 +6546,84 @@ void testSnapshotApplySettlesOutboxEnqueuedAfterReconciliationPlanning(
          due.entries.empty());
 }
 
+void testTwoPhaseSnapshotDefersBookkeepingUntilFinalization(
+    const std::filesystem::path &root) {
+  constexpr std::string_view origin = "https://boku.tachi.ac";
+  const auto path = root / "ir-snapshot-two-phase-finalization" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  const auto fixture = stageActivateAndClaimIrAttempt(
+      helper, root, "ir-snapshot-two-phase-finalization", 216);
+  const auto claimed = helper.LoadIrOutbox("tachi", fixture.attemptId);
+  assert(claimed.status == ir::IrOutboxReadStatus::Found && claimed.entry);
+  const auto pendingDraft = draftFromEntry(*claimed.entry);
+  assert(helper.DiscardIrOutbox(fixture.rowId).status ==
+         ir::IrOutboxMutationStatus::Updated);
+  const auto enqueued = helper.EnqueueReadyIrOutboxDrafts(
+      std::span{&pendingDraft, 1}, origin, true, 3'001);
+  assert(enqueued.storageAvailable && enqueued.items.size() == 1 &&
+         enqueued.items.front().entry);
+
+  auto remote = remoteScoreFor(fixture, "remote-two-phase");
+  auto mutation = sampleIrRemoteMutation(
+      "tachi", std::string(origin), 3'000, {remote});
+  mutation.upsertedReceipts.push_back(
+      snapshotReceipt(fixture, remote.remoteScoreId));
+  mutation.settledOutboxRowIds.push_back(
+      enqueued.items.front().entry->id);
+
+  const auto mirrored = helper.ReplaceIrRemoteScoreMirror(mutation);
+  assert(mirrored.status ==
+             ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
+         mirrored.remoteScoreCount == 1 && mirrored.syncGeneration > 0);
+  assert(remoteScoreIds(helper) ==
+         std::vector<std::string>({"remote-two-phase"}));
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", origin, fixture.attemptId)
+             .status == ir::IrReceiptReadStatus::NotFound);
+  assert(helper.LoadIrOutbox("tachi", fixture.attemptId).status ==
+         ir::IrOutboxReadStatus::Found);
+
+  const auto finalized =
+      helper.FinalizeIrRemoteSnapshot(mutation, mirrored.syncGeneration);
+  assert(finalized.status ==
+             ir::IrRemoteSnapshotApplyOutcome::Status::Applied &&
+         finalized.receiptsUpserted == 1 &&
+         finalized.outboxRowsSettled == 1 &&
+         finalized.syncGeneration == mirrored.syncGeneration);
+  assert(helper
+             .LoadIrSubmissionReceipt("tachi", origin, fixture.attemptId)
+             .status == ir::IrReceiptReadStatus::Found);
+  assert(helper.LoadIrOutbox("tachi", fixture.attemptId).status ==
+         ir::IrOutboxReadStatus::NotFound);
+}
+
+void testTwoPhaseSnapshotRejectsStaleFinalization(
+    const std::filesystem::path &root) {
+  const auto path = root / "ir-snapshot-stale-finalization" / "replay.db";
+  ReplayRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  auto stale = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 3'000,
+      {sampleIrRemoteScore("stale", 'a', 'b')});
+  const auto staleMirror = helper.ReplaceIrRemoteScoreMirror(stale);
+  assert(staleMirror.status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+  auto current = sampleIrRemoteMutation(
+      "tachi", "https://boku.tachi.ac", 4'000,
+      {sampleIrRemoteScore("current", 'c', 'd')});
+  assert(helper.ReplaceIrRemoteScoreMirror(current).status ==
+         ir::IrRemoteSnapshotApplyOutcome::Status::Applied);
+
+  const auto rejected =
+      helper.FinalizeIrRemoteSnapshot(stale, staleMirror.syncGeneration);
+  assert(rejected.status ==
+             ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure &&
+         remoteScoreIds(helper) == std::vector<std::string>({"current"}));
+}
+
 void testApplyIrRemoteSnapshotReplacesOneOriginAtomically(
     const std::filesystem::path &root) {
   const auto path = root / "ir-remote-atomic-replace" / "replay.db";
@@ -7930,6 +8008,8 @@ int main() {
   testClearIrSubmissionReceiptsIsOriginScoped(root);
   testClearIrSubmissionReceiptsRollsBackBothDeletes(root);
   testSnapshotApplySettlesOutboxEnqueuedAfterReconciliationPlanning(root);
+  testTwoPhaseSnapshotDefersBookkeepingUntilFinalization(root);
+  testTwoPhaseSnapshotRejectsStaleFinalization(root);
   testApplyIrRemoteSnapshotReplacesOneOriginAtomically(root);
   testSnapshotReceiptCannotAuthorizeSucceededOutboxPurge(root);
   testApplyIrRemoteSnapshotValidatesBeforeTransaction(root);

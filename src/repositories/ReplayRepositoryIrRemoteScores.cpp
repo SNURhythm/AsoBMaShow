@@ -773,6 +773,122 @@ countAmbiguousReceipts(sqlite3 *db,
   return static_cast<int>(count);
 }
 
+bool replaceRemoteScoreMirror(
+    sqlite3 *database, const ir::IrRemoteSnapshotMutation &mutation,
+    const ValidatedMutation &validated,
+    ir::IrRemoteSnapshotApplyOutcome &outcome) {
+  std::unordered_set<std::string> previousIds;
+  if (!loadRemoteIdentitySet(database, mutation.providerId,
+                             mutation.serverOrigin, previousIds)) {
+    outcome.diagnostic = "could not inspect the previous IR remote mirror";
+    return false;
+  }
+  const auto generation = nextGeneration(database, mutation);
+  if (!generation) {
+    outcome.diagnostic = "could not select an IR remote mirror generation";
+    return false;
+  }
+
+  std::unordered_set<std::string_view> currentIds;
+  currentIds.reserve(mutation.scores.size());
+  int added = 0;
+  for (const auto &score : mutation.scores) {
+    currentIds.emplace(score.remoteScoreId);
+    if (!previousIds.contains(score.remoteScoreId)) {
+      ++added;
+    }
+  }
+  const int removed = static_cast<int>(
+      std::ranges::count_if(previousIds, [&](const std::string &id) {
+        return !currentIds.contains(id);
+      }));
+
+  if (!insertRemoteScores(database, mutation, validated, *generation) ||
+      !deleteOlderRemoteGeneration(database, mutation, *generation)) {
+    outcome.diagnostic = "could not replace the IR remote score mirror";
+    return false;
+  }
+  outcome.remoteScoreCount = static_cast<int>(mutation.scores.size());
+  outcome.remoteScoresAdded = added;
+  outcome.remoteScoresRemoved = removed;
+  outcome.syncGeneration = *generation;
+  return true;
+}
+
+bool remoteScoreMirrorMatches(
+    sqlite3 *database, const ir::IrRemoteSnapshotMutation &mutation,
+    std::int64_t expectedSyncGeneration) {
+  std::unordered_set<std::string> storedIds;
+  if (!loadRemoteIdentitySet(database, mutation.providerId,
+                             mutation.serverOrigin, storedIds) ||
+      storedIds.size() != mutation.scores.size() ||
+      std::ranges::any_of(mutation.scores, [&](const auto &score) {
+        return !storedIds.contains(score.remoteScoreId);
+      })) {
+    return false;
+  }
+  if (storedIds.empty()) {
+    return true;
+  }
+
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT MIN(sync_generation),MAX(sync_generation) FROM "
+          "ir_remote_scores WHERE provider_id=? AND server_origin=?",
+          statement) != SQLITE_OK ||
+      !bindSqliteText(statement.get(), 1, mutation.providerId) ||
+      !bindSqliteText(statement.get(), 2, mutation.serverOrigin) ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      !columnIs(statement.get(), 0, SQLITE_INTEGER) ||
+      !columnIs(statement.get(), 1, SQLITE_INTEGER) ||
+      sqlite3_column_int64(statement.get(), 0) != expectedSyncGeneration ||
+      sqlite3_column_int64(statement.get(), 1) != expectedSyncGeneration ||
+      sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return false;
+  }
+  return true;
+}
+
+bool applyRemoteSnapshotBookkeeping(
+    sqlite3 *database, const ir::IrRemoteSnapshotMutation &mutation,
+    ir::IrRemoteSnapshotApplyOutcome &outcome) {
+  if (!applyReceiptUpserts(database, mutation)) {
+    outcome.diagnostic = "could not upsert IR snapshot receipts";
+    return false;
+  }
+  int outboxRowsSettled = 0;
+  if (!deleteOutboxIds(database, mutation,
+                       mutation.purgedSucceededOutboxRowIds, true,
+                       outboxRowsSettled)) {
+    outcome.diagnostic = "could not purge represented IR outbox work";
+    return false;
+  }
+  int receiptsDeleted = 0;
+  if (!deleteReceiptIds(database, mutation, receiptsDeleted)) {
+    outcome.diagnostic = "could not delete stale IR snapshot receipts";
+    return false;
+  }
+  if (!deleteOutboxIds(database, mutation, mutation.settledOutboxRowIds, false,
+                       outboxRowsSettled) ||
+      !deleteNewlyRepresentedOutbox(database, mutation,
+                                    outboxRowsSettled)) {
+    outcome.diagnostic = "could not settle represented IR outbox work";
+    return false;
+  }
+  const auto ambiguous = countAmbiguousReceipts(database, mutation);
+  if (!ambiguous) {
+    outcome.diagnostic = "could not count ambiguous IR receipts";
+    return false;
+  }
+  outcome.receiptsUpserted =
+      static_cast<int>(mutation.upsertedReceipts.size());
+  outcome.receiptsDeleted = receiptsDeleted;
+  outcome.outboxRowsSettled = outboxRowsSettled;
+  outcome.ambiguousReceiptsPreserved = *ambiguous;
+  return true;
+}
+
 ir::IrOutboxMutationOutcome invalidClearIdentity() {
   return {.status = ir::IrOutboxMutationStatus::Invalid,
           .diagnostic = "IR account evidence identity is invalid"};
@@ -802,81 +918,100 @@ ir::IrRemoteSnapshotApplyOutcome ReplayRepository::ApplyIrRemoteSnapshot(
     return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
             .diagnostic = "could not start IR remote snapshot transaction"};
   }
-
-  std::unordered_set<std::string> previousIds;
-  if (!loadRemoteIdentitySet(database, mutation.providerId,
-                             mutation.serverOrigin, previousIds)) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not inspect the previous IR remote mirror"};
-  }
-  const auto generation = nextGeneration(database, mutation);
-  if (!generation) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not select an IR remote mirror generation"};
-  }
-
-  std::unordered_set<std::string_view> currentIds;
-  currentIds.reserve(mutation.scores.size());
-  int added = 0;
-  for (const auto &score : mutation.scores) {
-    currentIds.emplace(score.remoteScoreId);
-    if (!previousIds.contains(score.remoteScoreId)) {
-      ++added;
-    }
-  }
-  const int removed = static_cast<int>(
-      std::ranges::count_if(previousIds, [&](const std::string &id) {
-        return !currentIds.contains(id);
-      }));
-
-  if (!insertRemoteScores(database, mutation, validated, *generation) ||
-      !deleteOlderRemoteGeneration(database, mutation, *generation)) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not replace the IR remote score mirror"};
-  }
-  if (!applyReceiptUpserts(database, mutation)) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not upsert IR snapshot receipts"};
-  }
-  int outboxRowsSettled = 0;
-  if (!deleteOutboxIds(database, mutation,
-                       mutation.purgedSucceededOutboxRowIds, true,
-                       outboxRowsSettled)) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not purge represented IR outbox work"};
-  }
-  int receiptsDeleted = 0;
-  if (!deleteReceiptIds(database, mutation, receiptsDeleted)) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not delete stale IR snapshot receipts"};
-  }
-  if (!deleteOutboxIds(database, mutation, mutation.settledOutboxRowIds, false,
-                       outboxRowsSettled) ||
-      !deleteNewlyRepresentedOutbox(database, mutation,
-                                    outboxRowsSettled)) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not settle represented IR outbox work"};
-  }
-  const auto ambiguous = countAmbiguousReceipts(database, mutation);
-  if (!ambiguous) {
-    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
-            .diagnostic = "could not count ambiguous IR receipts"};
+  ir::IrRemoteSnapshotApplyOutcome outcome;
+  if (!replaceRemoteScoreMirror(database, mutation, validated, outcome) ||
+      !applyRemoteSnapshotBookkeeping(database, mutation, outcome)) {
+    return outcome;
   }
   if (!transaction.commit(transactionError)) {
     return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
             .diagnostic = "could not commit the IR remote snapshot"};
   }
-  return {
-      .status = ir::IrRemoteSnapshotApplyOutcome::Status::Applied,
+  outcome.status = ir::IrRemoteSnapshotApplyOutcome::Status::Applied;
+  return outcome;
+}
+
+ir::IrRemoteSnapshotApplyOutcome ReplayRepository::ReplaceIrRemoteScoreMirror(
+    const ir::IrRemoteSnapshotMutation &mutation) {
+  const ValidatedMutation validated = validateMutation(mutation);
+  if (!validated.valid) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::Invalid,
+            .diagnostic = ir::sanitizeDiagnostic(validated.diagnostic)};
+  }
+
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  sqlite3 *database = impl_->sessionDatabase;
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "could not start IR remote mirror transaction"};
+  }
+
+  ir::IrRemoteSnapshotApplyOutcome outcome;
+  if (!replaceRemoteScoreMirror(database, mutation, validated, outcome)) {
+    return outcome;
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "could not commit the IR remote score mirror"};
+  }
+  outcome.status = ir::IrRemoteSnapshotApplyOutcome::Status::Applied;
+  return outcome;
+}
+
+ir::IrRemoteSnapshotApplyOutcome ReplayRepository::FinalizeIrRemoteSnapshot(
+    const ir::IrRemoteSnapshotMutation &mutation,
+    std::int64_t expectedSyncGeneration) {
+  const ValidatedMutation validated = validateMutation(mutation);
+  if (!validated.valid || expectedSyncGeneration <= 0) {
+    return {
+        .status = ir::IrRemoteSnapshotApplyOutcome::Status::Invalid,
+        .diagnostic = ir::sanitizeDiagnostic(
+            validated.valid ? "IR remote snapshot generation is invalid"
+                            : validated.diagnostic),
+    };
+  }
+
+  profile_database_activity::WriteGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "replay storage is unavailable"};
+  }
+  sqlite3 *database = impl_->sessionDatabase;
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "could not start IR snapshot finalization"};
+  }
+  if (!remoteScoreMirrorMatches(database, mutation, expectedSyncGeneration)) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic =
+                "IR remote score mirror changed before finalization"};
+  }
+
+  ir::IrRemoteSnapshotApplyOutcome outcome{
       .remoteScoreCount = static_cast<int>(mutation.scores.size()),
-      .remoteScoresAdded = added,
-      .remoteScoresRemoved = removed,
-      .receiptsUpserted = static_cast<int>(mutation.upsertedReceipts.size()),
-      .receiptsDeleted = receiptsDeleted,
-      .outboxRowsSettled = outboxRowsSettled,
-      .ambiguousReceiptsPreserved = *ambiguous,
-      .syncGeneration = *generation,
+      .syncGeneration = expectedSyncGeneration,
   };
+  if (!applyRemoteSnapshotBookkeeping(database, mutation, outcome)) {
+    return outcome;
+  }
+  if (!transaction.commit(transactionError)) {
+    return {.status = ir::IrRemoteSnapshotApplyOutcome::Status::StorageFailure,
+            .diagnostic = "could not commit IR snapshot finalization"};
+  }
+  outcome.status = ir::IrRemoteSnapshotApplyOutcome::Status::Applied;
+  return outcome;
 }
 
 ir::IrRemoteScoreMirrorStateOutcome

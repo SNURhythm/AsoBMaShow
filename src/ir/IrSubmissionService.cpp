@@ -637,7 +637,7 @@ struct IrSubmissionService::Impl {
       std::lock_guard lock(mutex);
       if (reconciliationIsCurrentLocked(command)) {
         applyAttempted = true;
-        applied = repository.ApplyIrRemoteSnapshot(mutation);
+        applied = repository.ReplaceIrRemoteScoreMirror(mutation);
       }
     }
     if (!applyAttempted) {
@@ -672,6 +672,33 @@ struct IrSubmissionService::Impl {
         return;
       }
     }
+
+    IrRemoteSnapshotApplyOutcome finalized;
+    bool finalizeAttempted = false;
+    {
+      std::lock_guard lock(mutex);
+      if (reconciliationIsCurrentLocked(command)) {
+        finalizeAttempted = true;
+        finalized = repository.FinalizeIrRemoteSnapshot(
+            mutation, applied.syncGeneration);
+      }
+    }
+    if (!finalizeAttempted) {
+      failReconciliation(command, "IR reconciliation was cancelled");
+      return;
+    }
+    if (finalized.status != IrRemoteSnapshotApplyOutcome::Status::Applied) {
+      failReconciliation(command,
+                         finalized.diagnostic.empty()
+                             ? "Could not finalize IR reconciliation"
+                             : std::move(finalized.diagnostic));
+      return;
+    }
+    applied.receiptsUpserted = finalized.receiptsUpserted;
+    applied.receiptsDeleted = finalized.receiptsDeleted;
+    applied.outboxRowsSettled = finalized.outboxRowsSettled;
+    applied.ambiguousReceiptsPreserved =
+        finalized.ambiguousReceiptsPreserved;
 
     IrActiveProfileConfig refreshedProfile;
     {

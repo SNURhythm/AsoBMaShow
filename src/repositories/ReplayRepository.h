@@ -307,6 +307,13 @@ public:
                                std::string_view serverOrigin);
   ir::IrRemoteSnapshotApplyOutcome
   ApplyIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation);
+  // Record sync uses these two phases so score projection can complete after
+  // the mirror is durable but before receipts and outbox work are settled.
+  ir::IrRemoteSnapshotApplyOutcome
+  ReplaceIrRemoteScoreMirror(const ir::IrRemoteSnapshotMutation &mutation);
+  ir::IrRemoteSnapshotApplyOutcome FinalizeIrRemoteSnapshot(
+      const ir::IrRemoteSnapshotMutation &mutation,
+      std::int64_t expectedSyncGeneration);
   ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);

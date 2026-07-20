@@ -2870,13 +2870,19 @@ void testManualBatchDoesNotReenqueueReceiptSettledStaleSelection() {
          "receipt-settled stale selection leaves no processable outbox row");
 }
 
-void testProjectionFailurePublishesFailedButKeepsCommittedMirror() {
+void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
                    .scoreSubmission = true,
                    .deferredSubmission = true,
                    .scoreReconciliation = true});
   harness.setCredential("record-sync-key");
+  const auto local = harness.enqueueReady(draft(38, harness.now.load()), false);
+  expect(local.entry.has_value(),
+         "projection-failure fixture stores pending upload work");
+  if (!local.entry) {
+    return;
+  }
   harness.projectionShouldSucceed = false;
   harness.driver->pushReconciliation({
       .status = ir::IrUserScoreSnapshotStatus::Succeeded,
@@ -2884,7 +2890,7 @@ void testProjectionFailurePublishesFailedButKeepsCommittedMirror() {
           .scores = {remoteScore("projection-failure-score")}},
   });
   harness.driver->releaseReconciliationStage(2);
-  harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+  harness.service->start(profile(true, false, "https://boku.tachi.ac"));
 
   expect(harness.service->requestUserScoreReconciliation("fake") ==
              ir::IrReconciliationRequestStatus::Accepted &&
@@ -2894,12 +2900,20 @@ void testProjectionFailurePublishesFailedButKeepsCommittedMirror() {
   const auto failed = harness.service->reconciliationStatus("fake");
   const auto mirror = harness.repository.ListIrRemoteScores(
       "fake", "https://boku.tachi.ac");
+  const auto receipt = harness.repository.LoadIrSubmissionReceipt(
+      "fake", "https://boku.tachi.ac", attemptId(38));
+  const auto outbox =
+      harness.repository.LoadIrOutbox("fake", attemptId(38));
   expect(failed.diagnostic == "could not project synchronized scores" &&
              mirror.status == ir::IrRemoteScoreReadOutcome::Status::Loaded &&
              mirror.scores.size() == 1 &&
              mirror.scores.front().remoteScoreId ==
                  "projection-failure-score",
          "projection failure leaves the durable mirror available for retry");
+  expect(receipt.status == ir::IrReceiptReadStatus::NotFound &&
+             outbox.status == ir::IrOutboxReadStatus::Found &&
+             outbox.entry && outbox.entry->id == local.entry->id,
+         "projection failure leaves receipts absent and upload work retryable");
   std::lock_guard lock(harness.projectionMutex);
   expect(harness.projectionCalls == 1 &&
              harness.projectionSawCommittedMirror,
@@ -3229,7 +3243,7 @@ int main() {
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
   testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();
   testManualBatchDoesNotReenqueueReceiptSettledStaleSelection();
-  testProjectionFailurePublishesFailedButKeepsCommittedMirror();
+  testProjectionFailureKeepsReceiptsAndOutboxRetryable();
   testEmptyReconciliationStillProjectsDeletionSnapshot();
   testReconciliationPreservesSucceededWorkDeliveredToAnotherOrigin();
   testRepositoryFailurePublishesFailedAndPreservesPriorSnapshot();
