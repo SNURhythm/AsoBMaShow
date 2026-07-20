@@ -2,6 +2,7 @@
 #include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
 #include "scene/FindBmsDialogPolicy.h"
+#include "scene/FindBmsProgressPresentation.h"
 
 #include <cassert>
 #include <filesystem>
@@ -747,6 +748,18 @@ void testDownloadFailureDetailPreservesCause() {
          "Open the source or try again.");
 }
 
+void testFindBmsDownloadProgressDisplaysSizes() {
+  assert(findBmsProgressDisplayText("Downloading archive", 19503513,
+                                    46451917, true) ==
+         "Downloading archive - 42% (18.6 MB / 44.3 MB)");
+  assert(findBmsProgressDisplayText("Downloading archive", 12345678, 0,
+                                    true) ==
+         "Downloading archive (11.8 MB)");
+  assert(findBmsProgressDisplayText("Extracting archive", 12345678,
+                                    46451917, true) ==
+         "Extracting archive");
+}
+
 } // namespace
 
 int main() {
@@ -774,5 +787,6 @@ int main() {
   testPublicDownloadApiAcceptsOptions();
   testPendingMismatchCannotDismiss();
   testDownloadFailureDetailPreservesCause();
+  testFindBmsDownloadProgressDisplaysSizes();
   return 0;
 }

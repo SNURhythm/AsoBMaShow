@@ -1916,6 +1916,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/DownloadStaging.cpp
         src/bms_search/PendingArtifact.cpp
         src/scene/FindBmsDialogPolicy.cpp
+        src/scene/FindBmsProgressPresentation.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/bms_parser.cpp

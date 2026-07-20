@@ -37,6 +37,7 @@
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
 #include "FindBmsDialogPolicy.h"
+#include "FindBmsProgressPresentation.h"
 #include "IrUploadsScene.h"
 #include "MusicPlayerScene.h"
 #include "RemoteResultRecallController.h"
@@ -529,26 +530,6 @@ bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
 }
 
-std::string formatFindBmsBytes(std::uint64_t bytes) {
-  constexpr double kKib = 1024.0;
-  constexpr double kMib = kKib * 1024.0;
-  constexpr double kGib = kMib * 1024.0;
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(bytes >= 10 * 1024 ? 1 : 0);
-  if (bytes >= static_cast<std::uint64_t>(kGib)) {
-    stream << static_cast<double>(bytes) / kGib << " GB";
-  } else if (bytes >= static_cast<std::uint64_t>(kMib)) {
-    stream << static_cast<double>(bytes) / kMib << " MB";
-  } else if (bytes >= static_cast<std::uint64_t>(kKib)) {
-    stream << static_cast<double>(bytes) / kKib << " KB";
-  } else {
-    stream.str("");
-    stream.clear();
-    stream << bytes << " B";
-  }
-  return stream.str();
-}
-
 bool pathIsInsideDirectoryForMenu(const std::filesystem::path &path,
                                   const std::filesystem::path &directory) {
   if (path.empty() || directory.empty()) {
@@ -579,42 +560,9 @@ double progressRatio(const BmsSearchDownloadProgress &progress) {
                     0.0, 1.0);
 }
 
-std::string progressPercentText(double ratio) {
-  const int percent =
-      static_cast<int>(std::lround(std::clamp(ratio, 0.0, 1.0) * 100.0));
-  return std::to_string(percent) + "%";
-}
-
-std::string findBmsProgressDisplayText(const std::string &message,
-                                       std::uint64_t downloadedBytes,
-                                       std::uint64_t totalBytes,
-                                       bool includeBytes) {
-  if (message == "Downloading archive" && totalBytes > 0) {
-    const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
-                                        static_cast<double>(totalBytes),
-                                    0.0, 1.0);
-    std::string text = "Downloading archive - " + progressPercentText(ratio);
-    if (includeBytes) {
-      text += " (" + formatFindBmsBytes(downloadedBytes) + " / " +
-              formatFindBmsBytes(totalBytes) + ")";
-    }
-    return text;
-  }
-  if (message == "Downloading archive" && downloadedBytes > 0) {
-    return "Downloading archive (" + formatFindBmsBytes(downloadedBytes) + ")";
-  }
-  if (message == "Download complete" && totalBytes > 0) {
-    const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
-                                        static_cast<double>(totalBytes),
-                                    0.0, 1.0);
-    return "Download complete - " + progressPercentText(ratio);
-  }
-  return message;
-}
-
 std::string
-findBmsProgressDisplayText(const BmsSearchDownloadProgress &progress,
-                           bool includeBytes) {
+findBmsProgressEventDisplayText(const BmsSearchDownloadProgress &progress,
+                                bool includeBytes) {
   return findBmsProgressDisplayText(progress.message, progress.downloadedBytes,
                                     progress.totalBytes, includeBytes);
 }
@@ -7443,7 +7391,7 @@ void MainMenuScene::refreshFindBmsModal() {
     } else {
       statusText = findBmsProgressDisplayText(findBmsProgressMessage,
                                               findBmsProgressCurrent,
-                                              findBmsProgressTotal, false);
+                                              findBmsProgressTotal, true);
     }
   } else {
     switch (findBmsResult.status) {
@@ -7669,7 +7617,7 @@ void MainMenuScene::applyFindBmsUpdates() {
     findBmsProgressTotal = progress.totalBytes;
     findBmsProgressFraction =
         findBmsProgressFractionFor(progress, findBmsProgressFraction);
-    appendLogLine(findBmsProgressDisplayText(progress, true));
+    appendLogLine(findBmsProgressEventDisplayText(progress, true));
     shouldRefresh = true;
   }
   if (result) {
