@@ -577,14 +577,22 @@ void IrUploadsScene::startUpload() {
       std::stop_callback stopCallback(stopToken,
                                       [&cancelled] { cancelled = true; });
 #endif
+      if (!stored) {
+        return ir_uploads::VerificationOutcome{
+            .diagnostic = "Saved replay data could not be loaded."};
+      }
       auto recalled =
-          stored
-              ? result_recall::BuildChartResult(std::move(*stored), cancelled)
-              : result_recall::ChartBuildOutcome{};
-      if (!recalled.value || !recalled.value->historicalIr ||
+          result_recall::BuildChartResult(std::move(*stored), cancelled);
+      if (!recalled.value) {
+        return ir_uploads::VerificationOutcome{
+            .diagnostic = recalled.diagnostic.empty()
+                              ? "This saved result could not be reconstructed."
+                              : ir::sanitizeDiagnostic(recalled.diagnostic)};
+      }
+      if (!recalled.value->historicalIr ||
           !recalled.value->historicalIr->submission) {
         return ir_uploads::VerificationOutcome{
-            .diagnostic = "This saved result could not be verified for IR."};
+            .diagnostic = "This saved result has no verifiable IR proof."};
       }
       return ir_uploads::VerificationOutcome{
           .submission = *recalled.value->historicalIr->submission};

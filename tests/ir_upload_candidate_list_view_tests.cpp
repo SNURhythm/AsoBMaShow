@@ -107,6 +107,7 @@ int main() {
                            ir::IrRecordState::Eligible);
     auto second = candidate(42, "Second Song", "Second Artist", "second.png",
                             ir::IrRecordState::Failed);
+    second.failureReason = "provider rejected this score";
     second.replay.id = first.replayId();
     second.chart.meta.Folder = "/charts/second";
     second.replay.createdAt = "2026-07-20 20:00:00";
@@ -173,6 +174,10 @@ int main() {
            "rebind replaces jacket identity");
     expect(text(row, "irUploadStatus")->getText() == "Retry",
            "rebind replaces status");
+    expect(text(row, "irUploadFailure") != nullptr &&
+               text(row, "irUploadFailure")->getText() ==
+                   "Failed: provider rejected this score",
+           "failed attempt row shows its upload reason");
     expect(
         !selection->isSelected() &&
             text(row, "irUploadAttempt")->getText().find("NORMAL") !=
@@ -201,9 +206,13 @@ int main() {
 
     auto third = first;
     third.replay.id = 99;
+    third.failureReason.clear();
     third.chart.meta.Folder = "/charts/third";
     third.chart.meta.StageFile = "third.png";
     list.setCandidates({third}, {});
+    row = list.getViewByIndex(0);
+    expect(text(row, "irUploadFailure")->getText().empty(),
+           "recycled eligible row clears another attempt's failure reason");
 
     auto fourth = second;
     fourth.replay.id = 100;
