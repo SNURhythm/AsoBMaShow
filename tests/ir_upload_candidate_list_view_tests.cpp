@@ -174,10 +174,11 @@ int main() {
            "rebind replaces jacket identity");
     expect(text(row, "irUploadStatus")->getText() == "Retry",
            "rebind replaces status");
-    expect(text(row, "irUploadFailure") != nullptr &&
-               text(row, "irUploadFailure")->getText() ==
-                   "Failed: provider rejected this score",
-           "failed attempt row shows its upload reason");
+    expect(text(row, "irUploadAttempt")
+                   ->getText()
+                   .find("Failed: provider rejected this score") !=
+               std::string::npos,
+           "failed attempt appends its upload reason to the detail line");
     expect(
         !selection->isSelected() &&
             text(row, "irUploadAttempt")->getText().find("NORMAL") !=
@@ -211,8 +212,9 @@ int main() {
     third.chart.meta.StageFile = "third.png";
     list.setCandidates({third}, {});
     row = list.getViewByIndex(0);
-    expect(text(row, "irUploadFailure")->getText().empty(),
-           "recycled eligible row clears another attempt's failure reason");
+    expect(text(row, "irUploadAttempt")->getText().find("Failed:") ==
+               std::string::npos,
+           "recycled eligible row clears another attempt's failure suffix");
 
     auto fourth = second;
     fourth.replay.id = 100;

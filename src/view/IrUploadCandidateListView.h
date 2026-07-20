@@ -29,7 +29,6 @@ private:
   TextView *titleText_ = nullptr;
   TextView *artistText_ = nullptr;
   TextView *attemptText_ = nullptr;
-  TextView *failureText_ = nullptr;
   View *difficultyColumn_ = nullptr;
   TextView *difficultyText_ = nullptr;
   TextView *keyModeText_ = nullptr;

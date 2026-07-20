@@ -65,7 +65,6 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   titleText_ = new TextView(kUiFont, 22);
   artistText_ = new TextView(kUiFont, 15);
   attemptText_ = new TextView(kUiFont, 14);
-  failureText_ = new TextView(kUiFont, 13);
   difficultyColumn_ = new View();
   difficultyText_ = new TextView(kUiFont, 18);
   keyModeText_ = new TextView(kUiFont, 14);
@@ -129,14 +128,9 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   attemptText_->setName("irUploadAttempt");
   attemptText_->setHeight(18);
   attemptText_->setOverflow(TextView::TextOverflow::Hidden);
-  failureText_->setName("irUploadFailure");
-  failureText_->setHeight(18);
-  failureText_->setOverflow(TextView::TextOverflow::Hidden);
-  failureText_->setThemedColor(ui_theme::coral);
   textColumn_->addView(titleText_);
   textColumn_->addView(artistText_);
   textColumn_->addView(attemptText_);
-  textColumn_->addView(failureText_);
   addView(textColumn_);
 
   difficultyColumn_->setFlexDirection(FlexDirection::Column)
@@ -219,10 +213,11 @@ void IrUploadCandidateListItemView::setCandidate(
   titleText_->setText(meta.Title +
                       (meta.SubTitle.empty() ? "" : " " + meta.SubTitle));
   artistText_->setText(meta.Artist);
-  attemptText_->setText(attemptDetail(replay));
-  failureText_->setText(candidate.failureReason.empty()
-                            ? std::string{}
-                            : "Failed: " + candidate.failureReason);
+  std::string attempt = attemptDetail(replay);
+  if (!candidate.failureReason.empty()) {
+    attempt += "  Failed: " + candidate.failureReason;
+  }
+  attemptText_->setText(attempt);
   difficultyText_->setText(candidate.chart.difficultyTableLabels.empty()
                                ? formatPlayLevel(meta.PlayLevel)
                                : candidate.chart.difficultyTableLabels);
