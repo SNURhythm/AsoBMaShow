@@ -88,9 +88,15 @@ IrUploadCandidateProjection projectIrUploadCandidates(
         continue;
       }
       const IrRecordState state = hydrated.irRecordState;
+      std::string failureReason;
+      if (state == IrRecordState::Failed) {
+        failureReason =
+            sanitizeDiagnostic(hydrated.requestedIrOutboxDiagnostic);
+      }
       result.candidates.push_back({.replay = std::move(hydrated),
                                    .chart = chart,
-                                   .state = state});
+                                   .state = state,
+                                   .failureReason = std::move(failureReason)});
     }
     setOmissionDiagnostic(result);
   } catch (...) {

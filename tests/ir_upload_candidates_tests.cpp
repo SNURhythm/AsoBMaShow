@@ -121,6 +121,8 @@ void testProjectsOnlyCanonicalActionableAttempts() {
   ReplaySummary eligible = replay(11, chart);
   ReplaySummary failed = replay(12, chart);
   failed.requestedIrOutboxState = ir::IrOutboxState::FailedPermanent;
+  failed.requestedIrOutboxDiagnostic =
+      std::string("invalid chart") + static_cast<char>(0x01) + " payload";
   ReplaySummary queued = replay(13, chart);
   queued.requestedIrOutboxState = ir::IrOutboxState::Pending;
   ReplaySummary uploaded = replay(14, chart);
@@ -153,6 +155,12 @@ void testProjectsOnlyCanonicalActionableAttempts() {
          "projection reruns the canonical resolver after hydration");
   expect(projected.candidates[1].state == ir::IrRecordState::Failed,
          "permanently failed rows remain retry candidates");
+  expect(projected.candidates[0].failureReason.empty() &&
+             projected.candidates[1].failureReason ==
+                 "invalid chart  payload" &&
+             projected.candidates[2].failureReason.empty(),
+         "projection carries a sanitized durable reason only on its failed "
+         "row");
 
   std::unordered_set<int> selected{eligible.id, queued.id, 99999};
   ir::intersectIrUploadSelection(selected, projected.candidates);

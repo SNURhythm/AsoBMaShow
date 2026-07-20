@@ -15,6 +15,7 @@ struct IrUploadCandidate {
   ReplaySummary replay;
   ChartMetaRecord chart;
   IrRecordState state = IrRecordState::Hidden;
+  std::string failureReason;
 
   [[nodiscard]] int replayId() const noexcept { return replay.id; }
 };

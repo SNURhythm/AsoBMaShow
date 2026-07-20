@@ -191,6 +191,7 @@ struct ReplaySummary {
   std::optional<std::string> attemptId;
   bool hasCanonicalAttemptFingerprint = false;
   std::optional<ir::IrOutboxState> requestedIrOutboxState;
+  std::string requestedIrOutboxDiagnostic;
   bool irSubmissionEligible = false;
   bool hasIrReceipt = false;
   std::string receiptProviderId;

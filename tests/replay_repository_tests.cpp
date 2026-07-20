@@ -5958,6 +5958,12 @@ void testListIrUploadCandidateReplaysUsesBoundedScopedSnapshot(
 
   helper.Shutdown();
   auto db = openDatabase(path);
+  const std::string storedFailure =
+      std::string("provider rejected score") + static_cast<char>(0x01) +
+      std::string(ir::kMaximumDiagnosticBytes, 'x');
+  execOrAbort(db.get(), "UPDATE ir_outbox SET last_error_message='" +
+                            storedFailure + "' WHERE attempt_id='" +
+                            other.attempt.attemptId + "'");
   const auto insertReceipt = [&](const StoredAttempt &stored,
                                  std::string_view origin) {
     execOrAbort(
@@ -5994,8 +6000,14 @@ void testListIrUploadCandidateReplaysUsesBoundedScopedSnapshot(
   assert(loaded.replays.front().chartMeta &&
          loaded.replays.front().chartMeta->BmsPath ==
              newest.attempt.replay.chartMeta.BmsPath);
-  assert(loaded.replays.back().requestedIrOutboxState ==
-         ir::IrOutboxState::FailedPermanent);
+  const ReplaySummary &failed = loaded.replays.back();
+  assert(failed.requestedIrOutboxState == ir::IrOutboxState::FailedPermanent);
+  assert(!failed.requestedIrOutboxDiagnostic.empty());
+  assert(failed.requestedIrOutboxDiagnostic.size() <=
+         ir::kMaximumDiagnosticBytes);
+  assert(failed.requestedIrOutboxDiagnostic.find(static_cast<char>(0x01)) ==
+         std::string::npos);
+  assert(loaded.replays.front().requestedIrOutboxDiagnostic.empty());
   assert(loaded.omittedRows == 1 && !loaded.diagnostic.empty());
 
   const auto invalid = helper.ListIrUploadCandidateReplays(

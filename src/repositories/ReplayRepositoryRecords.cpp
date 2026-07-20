@@ -2416,12 +2416,13 @@ replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
       "(SELECT COUNT(*) FROM replay_touch_samples touch "
       "WHERE touch.replay_id=replay.id),replay.ruleset_version,"
       "replay.eligibility,replay.provenance_json,replay.attempt_id,"
-      "replay.attempt_fingerprint,outbox.state "
+      "replay.attempt_fingerprint,outbox.state,outbox.last_error_message "
       "FROM replays replay "
       "LEFT JOIN ir_outbox outbox ON outbox.provider_id = ? "
       "AND outbox.attempt_id = replay.attempt_id "
       "WHERE NOT EXISTS ("
-      "  SELECT 1 FROM course_replay_stages stage WHERE stage.replay_id = replay.id"
+      "  SELECT 1 FROM course_replay_stages stage WHERE stage.replay_id = "
+      "replay.id"
       ") "
       "AND replay.attempt_id IS NOT NULL "
       "AND replay.attempt_fingerprint IS NOT NULL "
@@ -2482,7 +2483,7 @@ replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
         sqlite3_column_type(statement.get(), 22) != SQLITE_TEXT ||
         sqlite3_column_type(statement.get(), 23) != SQLITE_TEXT ||
         sqlite3_column_type(statement.get(), 24) != SQLITE_TEXT ||
-        !nullableInteger(25)) {
+        !nullableInteger(25) || !nullableText(26)) {
       ++omittedRows;
       continue;
     }
@@ -2531,6 +2532,10 @@ replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
       }
       summary.requestedIrOutboxState =
           static_cast<ir::IrOutboxState>(outboxState);
+    }
+    if (sqlite3_column_type(statement.get(), 26) == SQLITE_TEXT) {
+      summary.requestedIrOutboxDiagnostic =
+          ir::sanitizeDiagnostic(readText(statement.get(), 26));
     }
     replays.push_back(std::move(summary));
   }
