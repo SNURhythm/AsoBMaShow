@@ -2781,10 +2781,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const bool judgementIndicatorHudMode =
       settings.judgementIndicatorRenderMode ==
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
-  renderer.setJudgementIndicatorConfig(settings.judgementIndicatorEnabled,
-                                       settings.judgementIndicatorY,
-                                       settings.judgementIndicatorWidthScale,
-                                       judgementIndicatorHudMode);
+  renderer.setJudgementIndicatorConfig(
+      settings.judgementIndicatorEnabled, settings.judgementIndicatorY,
+      settings.judgementIndicatorWidthScale, judgementIndicatorHudMode,
+      settings.judgementIndicatorRangeMilliseconds);
   renderer.setJudgementTextY(settings.judgementTextY);
   renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
   renderer.setJudgementCounterPosition(settings.judgementCounterPosition);
@@ -3664,10 +3664,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const bool judgementIndicatorHudMode =
         settings.judgementIndicatorRenderMode ==
         AppSettings::JudgementIndicatorRenderMode::Hud2D;
-    renderer.setJudgementIndicatorConfig(settings.judgementIndicatorEnabled,
-                                         settings.judgementIndicatorY,
-                                         settings.judgementIndicatorWidthScale,
-                                         judgementIndicatorHudMode);
+    renderer.setJudgementIndicatorConfig(
+        settings.judgementIndicatorEnabled, settings.judgementIndicatorY,
+        settings.judgementIndicatorWidthScale, judgementIndicatorHudMode,
+        settings.judgementIndicatorRangeMilliseconds);
     renderer.setJudgementTextY(settings.judgementTextY);
     renderer.setJudgementCounterEnabled(settings.judgementCounterEnabled);
     renderer.setJudgementCounterPosition(settings.judgementCounterPosition);

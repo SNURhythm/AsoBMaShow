@@ -502,6 +502,13 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME judgement_indicator_range_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_judgement_indicator_range_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(judgement_indicator_range_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME result_persistence_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py

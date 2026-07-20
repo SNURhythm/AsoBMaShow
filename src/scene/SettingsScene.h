@@ -115,6 +115,7 @@ private:
   TextView *summaryJudgementTextYValueText = nullptr;
   TextView *summaryJudgementIndicatorYValueText = nullptr;
   TextView *summaryJudgementIndicatorWidthValueText = nullptr;
+  TextView *summaryJudgementIndicatorRangeValueText = nullptr;
   TextView *summaryJudgementCounterPositionValueText = nullptr;
   TextView *summaryJudgementTimingFastSlowValueText = nullptr;
   TextView *summaryJudgementTimingMillisecondsValueText = nullptr;
@@ -123,6 +124,7 @@ private:
   TextView *summaryUiThemeValueText = nullptr;
   TextInputBox *judgementIndicatorYInput = nullptr;
   TextInputBox *judgementIndicatorWidthInput = nullptr;
+  TextInputBox *judgementIndicatorRangeInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *visibleTimeBpmStrategyText = nullptr;
   TextView *keysoundModeText = nullptr;
@@ -467,6 +469,7 @@ private:
   void syncNoteStartPositionInputText(bool force = false);
   void syncJudgementIndicatorYInputText(bool force = false);
   void syncJudgementIndicatorWidthInputText(bool force = false);
+  void syncJudgementIndicatorRangeInputText(bool force = false);
   void commitOffsetInput();
   void commitVisualOffsetInput();
   void commitVisibleTimeInput();
@@ -478,4 +481,5 @@ private:
   void commitNoteStartPositionInput();
   void commitJudgementIndicatorYInput();
   void commitJudgementIndicatorWidthInput();
+  void commitJudgementIndicatorRangeInput();
 };

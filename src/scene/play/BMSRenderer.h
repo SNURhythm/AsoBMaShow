@@ -426,7 +426,7 @@ public:
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
-                                   bool hudMode);
+                                   bool hudMode, int rangeMilliseconds);
   void setJudgementTextY(float y);
   void setJudgementCounterEnabled(bool enabled);
   void setJudgementCounterPosition(

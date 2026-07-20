@@ -70,6 +70,7 @@ void SettingsScene::resetViewState() {
   summaryJudgementTextYValueText = nullptr;
   summaryJudgementIndicatorYValueText = nullptr;
   summaryJudgementIndicatorWidthValueText = nullptr;
+  summaryJudgementIndicatorRangeValueText = nullptr;
   summaryJudgementCounterPositionValueText = nullptr;
   summaryJudgementTimingFastSlowValueText = nullptr;
   summaryJudgementTimingMillisecondsValueText = nullptr;
@@ -78,6 +79,7 @@ void SettingsScene::resetViewState() {
   summaryUiThemeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
+  judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;
@@ -840,6 +842,33 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         minusIndicatorWidth, plusIndicatorWidth, resetIndicatorWidth));
 
     previewControls->addView(makeSummaryRow(
+        metrics, "Indicator Range",
+        &summaryJudgementIndicatorRangeValueText));
+    auto updateIndicatorRange = [this](int deltaMilliseconds) {
+      context.settings.judgementIndicatorRangeMilliseconds =
+          clampJudgementIndicatorRangeMilliseconds(
+              context.settings.judgementIndicatorRangeMilliseconds +
+              deltaMilliseconds);
+      persistSettings();
+    };
+    auto *minusIndicatorRange =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-10 ms");
+    minusIndicatorRange->setOnClickListener(
+        [updateIndicatorRange]() { updateIndicatorRange(-10); });
+    auto *plusIndicatorRange =
+        makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+10 ms");
+    plusIndicatorRange->setOnClickListener(
+        [updateIndicatorRange]() { updateIndicatorRange(10); });
+    auto *resetIndicatorRange = makeResetButton(metrics);
+    resetIndicatorRange->setOnClickListener([this]() {
+      context.settings.judgementIndicatorRangeMilliseconds =
+          AppSettings::kDefaultJudgementIndicatorRangeMilliseconds;
+      persistSettings();
+    });
+    previewControls->addView(makePreviewStepRow(
+        minusIndicatorRange, plusIndicatorRange, resetIndicatorRange));
+
+    previewControls->addView(makeSummaryRow(
         metrics, "Counter", &summaryJudgementCounterPositionValueText));
     auto *counterControls = new View();
     counterControls->setFlexDirection(FlexDirection::Row);
@@ -1316,8 +1345,68 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   judgementIndicatorWidthControls->addView(resetIndicatorWidth);
   judgementIndicatorControls->addView(judgementIndicatorWidthControls);
 
+  judgementIndicatorControls->addView(makeText(
+      "Range (ms)", metrics.bodyTextSize, ui_theme::textSecondary()));
+  auto *judgementIndicatorRangeControls = new View();
+  judgementIndicatorRangeControls->setFlexDirection(FlexDirection::Row);
+  judgementIndicatorRangeControls->setFlexWrap(YGWrapWrap);
+  judgementIndicatorRangeControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  judgementIndicatorRangeControls->setAlignItems(YGAlignFlexStart);
+  auto updateJudgementIndicatorRange = [this](int deltaMilliseconds) {
+    context.settings.judgementIndicatorRangeMilliseconds =
+        clampJudgementIndicatorRangeMilliseconds(
+            context.settings.judgementIndicatorRangeMilliseconds +
+            deltaMilliseconds);
+    persistSettings();
+    syncJudgementIndicatorRangeInputText(true);
+  };
+
+  auto *minusIndicatorRangeLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
+  minusIndicatorRangeLarge->setOnClickListener(
+      [updateJudgementIndicatorRange]() {
+        updateJudgementIndicatorRange(-10);
+      });
+  judgementIndicatorRangeControls->addView(minusIndicatorRangeLarge);
+  auto *minusIndicatorRangeSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
+  minusIndicatorRangeSmall->setOnClickListener(
+      [updateJudgementIndicatorRange]() {
+        updateJudgementIndicatorRange(-1);
+      });
+  judgementIndicatorRangeControls->addView(minusIndicatorRangeSmall);
+  judgementIndicatorRangeInput = makeNumericInput(metrics);
+  judgementIndicatorRangeInput->onEditingFinished(
+      [this](const std::string &) { commitJudgementIndicatorRangeInput(); });
+  judgementIndicatorRangeControls->addView(
+      makeInputFrame(metrics, judgementIndicatorRangeInput));
+  auto *plusIndicatorRangeSmall =
+      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
+  plusIndicatorRangeSmall->setOnClickListener(
+      [updateJudgementIndicatorRange]() {
+        updateJudgementIndicatorRange(1);
+      });
+  judgementIndicatorRangeControls->addView(plusIndicatorRangeSmall);
+  auto *plusIndicatorRangeLarge =
+      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
+  plusIndicatorRangeLarge->setOnClickListener(
+      [updateJudgementIndicatorRange]() {
+        updateJudgementIndicatorRange(10);
+      });
+  judgementIndicatorRangeControls->addView(plusIndicatorRangeLarge);
+  auto *resetIndicatorRange = makeResetButton(metrics);
+  resetIndicatorRange->setOnClickListener([this]() {
+    context.settings.judgementIndicatorRangeMilliseconds =
+        AppSettings::kDefaultJudgementIndicatorRangeMilliseconds;
+    persistSettings();
+    syncJudgementIndicatorRangeInputText(true);
+  });
+  judgementIndicatorRangeControls->addView(resetIndicatorRange);
+  judgementIndicatorControls->addView(judgementIndicatorRangeControls);
+
   cardsColumn->addView(makeCard(
-      metrics, "Judgement Indicator", "Set position, size, and render mode.",
+      metrics, "Judgement Indicator",
+      "Set position, size, timing range, and render mode.",
       judgementIndicatorControls, metrics.visibleTimeCardHeight,
       metrics.cardsWidth));
 

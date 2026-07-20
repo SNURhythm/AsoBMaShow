@@ -1588,7 +1588,8 @@ void GamePlayScene::init() {
       context.settings.judgementIndicatorY,
       context.settings.judgementIndicatorWidthScale,
       context.settings.judgementIndicatorRenderMode ==
-          AppSettings::JudgementIndicatorRenderMode::Hud2D);
+          AppSettings::JudgementIndicatorRenderMode::Hud2D,
+      context.settings.judgementIndicatorRangeMilliseconds);
   renderer->setJudgementTextY(context.settings.judgementTextY);
   renderer->setJudgementTimingFastSlowCriteria(
       context.settings.judgementTimingFastSlowCriteria);

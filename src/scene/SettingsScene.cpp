@@ -328,7 +328,8 @@ void SettingsScene::renderScene() {
         context.settings.judgementIndicatorY,
         context.settings.judgementIndicatorWidthScale,
         context.settings.judgementIndicatorRenderMode ==
-            AppSettings::JudgementIndicatorRenderMode::Hud2D);
+            AppSettings::JudgementIndicatorRenderMode::Hud2D,
+        context.settings.judgementIndicatorRangeMilliseconds);
     previewRenderer->setJudgementTextY(context.settings.judgementTextY);
     previewRenderer->setJudgementTimingFastSlowCriteria(
         context.settings.judgementTimingFastSlowCriteria);
@@ -437,8 +438,10 @@ void SettingsScene::cleanupScene() {
   summaryNoteStartPositionValueText = nullptr;
   summaryPreviewPlayAreaWidthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
+  summaryJudgementIndicatorRangeValueText = nullptr;
   judgementIndicatorYInput = nullptr;
   judgementIndicatorWidthInput = nullptr;
+  judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
   visibleTimeBpmStrategyText = nullptr;
   keysoundModeText = nullptr;

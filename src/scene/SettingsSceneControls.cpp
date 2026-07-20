@@ -188,6 +188,9 @@ void SettingsScene::refreshSettingsText() {
       std::to_string(judgementIndicatorWidthScaleToPercent(
           context.settings.judgementIndicatorWidthScale)) +
       "%";
+  const std::string judgementIndicatorRangeLabel =
+      formatJudgementIndicatorRangeLabel(
+          context.settings.judgementIndicatorRangeMilliseconds);
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
@@ -283,6 +286,10 @@ void SettingsScene::refreshSettingsText() {
     summaryJudgementIndicatorWidthValueText->setText(
         judgementIndicatorWidthLabel);
   }
+  if (summaryJudgementIndicatorRangeValueText != nullptr) {
+    summaryJudgementIndicatorRangeValueText->setText(
+        judgementIndicatorRangeLabel);
+  }
   if (summaryJudgementCounterPositionValueText != nullptr) {
     summaryJudgementCounterPositionValueText->setText(
         judgementCounterSummaryLabel);
@@ -306,6 +313,7 @@ void SettingsScene::refreshSettingsText() {
   }
   syncJudgementIndicatorYInputText();
   syncJudgementIndicatorWidthInputText();
+  syncJudgementIndicatorRangeInputText();
   if (keysoundModeText != nullptr) {
     keysoundModeText->setText(keysoundLabel);
   }
@@ -657,6 +665,17 @@ void SettingsScene::syncJudgementIndicatorWidthInputText(bool force) {
           context.settings.judgementIndicatorWidthScale)));
 }
 
+void SettingsScene::syncJudgementIndicatorRangeInputText(bool force) {
+  if (judgementIndicatorRangeInput == nullptr) {
+    return;
+  }
+  if (!force && judgementIndicatorRangeInput->getSelected()) {
+    return;
+  }
+  judgementIndicatorRangeInput->setEditingText(
+      std::to_string(context.settings.judgementIndicatorRangeMilliseconds));
+}
+
 void SettingsScene::commitOffsetInput() {
   if (offsetInput == nullptr) {
     return;
@@ -895,5 +914,26 @@ void SettingsScene::commitJudgementIndicatorWidthInput() {
     syncJudgementIndicatorWidthInputText(true);
   } catch (const std::exception &) {
     syncJudgementIndicatorWidthInputText(true);
+  }
+}
+
+void SettingsScene::commitJudgementIndicatorRangeInput() {
+  if (judgementIndicatorRangeInput == nullptr) {
+    return;
+  }
+
+  const std::string rawText = judgementIndicatorRangeInput->getText();
+  if (rawText.empty()) {
+    syncJudgementIndicatorRangeInputText(true);
+    return;
+  }
+
+  try {
+    context.settings.judgementIndicatorRangeMilliseconds =
+        clampJudgementIndicatorRangeMilliseconds(std::stoi(rawText));
+    persistSettings();
+    syncJudgementIndicatorRangeInputText(true);
+  } catch (const std::exception &) {
+    syncJudgementIndicatorRangeInputText(true);
   }
 }
