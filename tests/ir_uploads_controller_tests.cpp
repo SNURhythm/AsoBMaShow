@@ -43,6 +43,17 @@ ir::IrSubmission submissionFor(const ir::IrUploadCandidate &candidate) {
   return value;
 }
 
+std::string failureReason(const ir_uploads::PreparationOutcome &outcome,
+                          int replayId) {
+  const auto found = std::ranges::find_if(
+      outcome.failureReasons,
+      [replayId](const ir_uploads::PreparationFailureReason &failure) {
+        return failure.replayId == replayId;
+      });
+  return found == outcome.failureReasons.end() ? std::string{}
+                                               : found->diagnostic;
+}
+
 void testSelectionSnapshotLockAndFinalSummary() {
   ir_uploads::Controller controller;
   controller.replaceCandidates({candidate(1), candidate(2), candidate(3)});
@@ -138,6 +149,11 @@ void testPreparationContinuesAfterFailureAndBatchesOnce() {
   expect(outcome.queuedReplayIds == std::vector<int>({10, 12}) &&
              outcome.failedReplayIds == std::vector<int>({11}),
          "preparation isolates verification failure and maps batch results");
+  expect(outcome.failureReasons.size() == 1 &&
+             outcome.failureReasons.front().replayId == 11 &&
+             outcome.failureReasons.front().diagnostic ==
+                 "This saved result could not be verified for IR.",
+         "preparation preserves the failed verifier reason by replay ID");
   expect(progress == std::vector<std::pair<std::size_t, std::size_t>>(
                          {{0, 3}, {1, 3}, {2, 3}, {3, 3}}),
          "preparation reports deterministic per-result progress");
@@ -248,6 +264,11 @@ void testThrowingVerifierDoesNotAbortOtherCandidates() {
   expect(outcome.queuedReplayIds == std::vector<int>({30, 32}) &&
              outcome.failedReplayIds == std::vector<int>({31}),
          "throw isolation preserves earlier and later verified submissions");
+  expect(outcome.failureReasons.size() == 1 &&
+             outcome.failureReasons.front().replayId == 31 &&
+             outcome.failureReasons.front().diagnostic ==
+                 "This saved result could not be verified for IR.",
+         "throw isolation publishes a safe verification fallback");
 }
 
 void testBatchOutcomesMapByAttemptId() {
@@ -265,7 +286,8 @@ void testBatchOutcomesMapByAttemptId() {
         {.attemptId = attemptId(40),
          .status = ir::IrManualBatchItemStatus::Inserted},
         {.attemptId = attemptId(41),
-         .status = ir::IrManualBatchItemStatus::Failed},
+         .status = ir::IrManualBatchItemStatus::Failed,
+         .diagnostic = "provider rejected this score"},
     };
     return result;
   };
@@ -276,6 +298,11 @@ void testBatchOutcomesMapByAttemptId() {
   expect(outcome.queuedReplayIds == std::vector<int>({40, 42}) &&
              outcome.failedReplayIds == std::vector<int>({41}),
          "reordered batch outcomes map to candidates by attempt ID");
+  expect(outcome.failureReasons.size() == 1 &&
+             outcome.failureReasons.front().replayId == 41 &&
+             outcome.failureReasons.front().diagnostic ==
+                 "provider rejected this score",
+         "reordered batch diagnostics map through attempt identity");
 }
 
 void testCompactedBatchOutcomesFailClosed() {
@@ -301,6 +328,10 @@ void testCompactedBatchOutcomesFailClosed() {
              outcome.failedReplayIds == std::vector<int>({50, 51}),
          "missing compacted outcomes remain failed while returned IDs map "
          "accurately");
+  expect(
+      failureReason(outcome, 50) == "IR batch enqueue returned no outcome." &&
+          failureReason(outcome, 51) == "IR batch enqueue returned no outcome.",
+      "missing compacted outcomes receive a fail-closed reason");
 
   ir_uploads::Controller controller;
   controller.replaceCandidates(candidates);
@@ -338,6 +369,64 @@ void testDuplicateBatchOutcomesFailClosed() {
   expect(outcome.queuedReplayIds == std::vector<int>({61}) &&
              outcome.failedReplayIds == std::vector<int>({60}),
          "duplicate outcomes fail closed for the ambiguous attempt ID");
+  expect(failureReason(outcome, 60) ==
+             "IR batch enqueue returned ambiguous outcomes.",
+         "duplicate outcomes receive an ambiguity reason");
+}
+
+void testSessionFailureReasonsOverrideRefreshAndClearAfterQueue() {
+  ir_uploads::Controller controller;
+  auto failed = candidate(70);
+  failed.failureReason = "older server failure";
+  controller.replaceCandidates({failed});
+  controller.toggle(70);
+  (void)controller.beginPreparation();
+  controller.completePreparation({
+      .failedReplayIds = {70},
+      .failureReasons = {{.replayId = 70,
+                          .diagnostic = "new verification failure"}},
+  });
+  expect(controller.candidates().front().failureReason ==
+             "new verification failure",
+         "latest session reason overrides durable state");
+
+  controller.replaceCandidates({failed});
+  expect(controller.candidates().front().failureReason ==
+             "new verification failure",
+         "candidate refresh preserves the page-session reason");
+
+  (void)controller.beginPreparation();
+  controller.completePreparation({.queuedReplayIds = {70}});
+  controller.replaceCandidates({failed});
+  expect(controller.candidates().front().failureReason ==
+             "older server failure",
+         "successful queueing clears only the session override");
+}
+
+void testCancellationPreservesExistingSessionFailureReason() {
+  ir_uploads::Controller controller;
+  auto failed = candidate(71);
+  controller.replaceCandidates({failed});
+  controller.toggle(71);
+  (void)controller.beginPreparation();
+  controller.completePreparation({
+      .failedReplayIds = {71},
+      .failureReasons = {{.replayId = 71,
+                          .diagnostic = "existing verification failure"}},
+  });
+
+  (void)controller.beginPreparation();
+  controller.completePreparation({
+      .cancelled = true,
+      .failedReplayIds = {71},
+      .failureReasons = {{.replayId = 71,
+                          .diagnostic = "cancelled replacement"}},
+  });
+  controller.replaceCandidates({failed});
+
+  expect(controller.candidates().front().failureReason ==
+             "existing verification failure",
+         "cancellation keeps the previously visible session reason");
 }
 
 void testMaximumQueuedReplayFilterHasLinearOperationCount() {
@@ -378,6 +467,8 @@ int main() {
   testBatchOutcomesMapByAttemptId();
   testCompactedBatchOutcomesFailClosed();
   testDuplicateBatchOutcomesFailClosed();
+  testSessionFailureReasonsOverrideRefreshAndClearAfterQueue();
+  testCancellationPreservesExistingSessionFailureReason();
   testMaximumQueuedReplayFilterHasLinearOperationCount();
   if (failures != 0) {
     std::cerr << failures << " IR uploads controller test(s) failed\n";

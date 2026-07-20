@@ -1683,10 +1683,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ir_uploads_controller_tests
         tests/ir_uploads_controller_tests.cpp
         src/scene/IrUploadsController.cpp
+        src/ir/IrOutboxModels.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
+        src/Uuid.cpp
     )
     target_include_directories(ir_uploads_controller_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

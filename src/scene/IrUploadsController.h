@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -39,10 +40,16 @@ struct PreparationDependencies {
   std::function<void(std::size_t completed, std::size_t total)> progress;
 };
 
+struct PreparationFailureReason {
+  int replayId = 0;
+  std::string diagnostic;
+};
+
 struct PreparationOutcome {
   bool cancelled = false;
   std::vector<int> queuedReplayIds;
   std::vector<int> failedReplayIds;
+  std::vector<PreparationFailureReason> failureReasons;
 };
 
 class DurableEnqueueGate {
@@ -98,8 +105,11 @@ public:
   }
 
 private:
+  void applySessionFailureReasons();
+
   std::vector<ir::IrUploadCandidate> candidates_;
   std::unordered_set<int> selectedReplayIds_;
+  std::unordered_map<int, std::string> sessionFailureReasons_;
   bool preparing_ = false;
   std::string statusText_;
 };
