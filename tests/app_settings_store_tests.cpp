@@ -98,6 +98,7 @@ AppSettings makeDistinctSettings() {
   value.showInvisibleNotes = true;
   value.touchVisualizationEnabled = false;
   value.archiveChartPreviewEnabled = false;
+  value.findBmsSkipUnarchivingForNonSolidArchives = true;
   value.bgaEnabled = false;
   value.bgaBrightnessPercent = 37;
   value.bgaBlurStrength = 4.5f;
@@ -148,6 +149,7 @@ void testLegacyFixtureLoadsEverySetting() {
       AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg"));
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
+  expected.findBmsSkipUnarchivingForNonSolidArchives = false;
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "complete legacy fixture loads");
   expect(result.settings == expected,
@@ -216,6 +218,35 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON includes non-secret IR provider settings");
   expect(readFile(path).find("sentinel-api-key") == std::string::npos,
          "serialized settings contain no API key material");
+}
+
+void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
+  AppSettings defaults;
+  expect(!defaults.findBmsSkipUnarchivingForNonSolidArchives,
+         "Find BMS archive preservation defaults off");
+
+  TempDirectory temp;
+  const auto missingPath = temp.path() / "missing-find-bms-option.json";
+  writeFile(missingPath, R"({"schemaVersion":3})");
+  const auto missing = AppSettingsStore::Load(missingPath);
+  expect(missing.status == AppSettingsLoadStatus::Loaded &&
+             !missing.settings.findBmsSkipUnarchivingForNonSolidArchives,
+         "old settings without the field retain the false default");
+
+  const auto enabledPath = temp.path() / "enabled-find-bms-option.json";
+  AppSettings enabled;
+  enabled.findBmsSkipUnarchivingForNonSolidArchives = true;
+  std::string error;
+  expect(AppSettingsStore::Save(enabledPath, enabled, error),
+         "Find BMS preference saves: " + error);
+  const auto loaded = AppSettingsStore::Load(enabledPath);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.findBmsSkipUnarchivingForNonSolidArchives,
+         "Find BMS preference survives a JSON round trip");
+  expect(readFile(enabledPath).find(
+             "\"findBmsSkipUnarchivingForNonSolidArchives\": true") !=
+             std::string::npos,
+         "saved JSON contains the Find BMS preference");
 }
 
 void testJudgementIndicatorRangeDefaultsAndSanitization() {
@@ -465,7 +496,9 @@ void testVersionFixturesAndNoRewrite() {
   const auto v0 = AppSettingsStore::Load(fixture("settings-v0.json"));
   expect(v0.status == AppSettingsLoadStatus::Loaded,
          "missing schema version migrates from v0");
-  expect(v0.settings == makeDistinctSettings(), "v0 migration is lossless");
+  AppSettings expectedV0 = makeDistinctSettings();
+  expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expect(v0.settings == expectedV0, "v0 migration is lossless");
 
   const auto v1 = AppSettingsStore::Load(fixture("settings-v1.json"));
   expect(v1.status == AppSettingsLoadStatus::Loaded,
@@ -749,6 +782,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testGameplayRulesetDefaultsMigrationAndValidation();
   testIrDefaultsMigrationAndOriginSanitization();
