@@ -71,6 +71,14 @@ require(
     "SetFindBmsDownloadEntry" in settings_tables_source,
     "Settings must persist the selected Find BMS download folder",
 )
+require(
+    "SelectFindBmsDownloadEntry()" in main_menu_source,
+    "Find BMS must resolve the repository-selected download folder",
+)
+require(
+    main_menu_source.count("preferredBmsDownloadRoot()") >= 3,
+    "automatic and candidate downloads must share destination resolution",
+)
 
 if failures:
     for failure in failures:

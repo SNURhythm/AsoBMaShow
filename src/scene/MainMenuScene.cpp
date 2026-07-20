@@ -6204,30 +6204,22 @@ void MainMenuScene::openFindBmsForSelection() {
 }
 
 std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
+  const auto fallback = ChartRepository::DefaultBmsFolderPath();
   if (!chartSession.has_value()) {
-    return ChartRepository::DefaultBmsFolderPath();
+    ensureDirectoryExistsLogged(fallback, "BMS download root");
+    return fallback;
   }
-  auto entries = chartSession->SelectEffectiveEntries();
-  if (entries.empty()) {
-    const auto path = ChartRepository::DefaultBmsFolderPath();
-    const bool pathReady =
-        ensureDirectoryExistsLogged(path, "BMS download root");
-#if !(TARGET_OS_ANDROID)
-    if (pathReady) {
-      chartSession->InsertEntry(path);
-    }
-#endif
-    return path;
+
+  const auto selected = chartSession->SelectFindBmsDownloadEntry();
+  if (!selected.has_value()) {
+    ensureDirectoryExistsLogged(fallback, "BMS download root");
+    return fallback;
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return ResolveIOSFolderEntryPath(entries.front());
-#elif TARGET_OS_ANDROID
-  const auto path = ChartRepository::DefaultBmsFolderPath();
-  ensureDirectoryExistsLogged(path, "BMS download root");
-  return path;
+  return ResolveIOSFolderEntryPath(*selected);
 #else
-  return std::filesystem::path(entries.front().path);
+  return std::filesystem::path(selected->path);
 #endif
 }
 
