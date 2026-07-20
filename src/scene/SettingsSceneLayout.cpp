@@ -2421,11 +2421,11 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
 
       const int folderActionWidth = metrics.compact ? 136 : 156;
-      if (entry.findBmsDownloadFolder) {
+      if (entry.primaryStorageFolder) {
         actions->addView(makeWrappedText("Download folder",
                                          metrics.smallTextSize,
                                          ui_theme::lime()));
-      } else if (entry.findBmsDownloadEligible) {
+      } else if (entry.primaryStorageEligible) {
         auto *downloadButton = makeAccentButton(
             metrics.compact ? 180 : 210, metrics.actionButtonHeight,
             makeText("Use for Downloads", metrics.smallTextSize,

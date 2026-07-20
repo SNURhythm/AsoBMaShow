@@ -68,11 +68,11 @@ require(
     "ineligible Android tree rows must explain why selection is disabled",
 )
 require(
-    "SetFindBmsDownloadEntry" in settings_tables_source,
+    "SetPrimaryStorageEntry" in settings_tables_source,
     "Settings must persist the selected Find BMS download folder",
 )
 require(
-    "SelectFindBmsDownloadEntry()" in main_menu_source,
+    "SelectPrimaryStorageEntry()" in main_menu_source,
     "Find BMS must resolve the repository-selected download folder",
 )
 require(

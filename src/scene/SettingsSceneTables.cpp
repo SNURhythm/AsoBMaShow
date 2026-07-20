@@ -664,7 +664,7 @@ void SettingsScene::setFindBmsDownloadEntry(
   if (!session.has_value()) {
     chartFolderStatusMessage = "Could not open chart database.";
     chartFolderStatusColor = {255, 177, 170, 255};
-  } else if (!session->SetFindBmsDownloadEntry(
+  } else if (!session->SetPrimaryStorageEntry(
                  std::filesystem::path(utf8_to_path_t(entryPathText)))) {
     chartFolderStatusMessage =
         "Could not use this folder for Find BMS downloads.";

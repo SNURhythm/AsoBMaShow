@@ -759,38 +759,38 @@ void testFindBmsDownloadEntrySelectionLifecycle() {
   const auto first = temporary.path() / "first";
   const auto second = temporary.path() / "second";
   assert(session->InsertEntry(fallback));
-  assert(!session->SelectFindBmsDownloadEntry());
+  assert(!session->SelectPrimaryStorageEntry());
 
   assert(session->InsertEntry(first, "first-bookmark"));
-  auto selected = session->SelectFindBmsDownloadEntry();
+  auto selected = session->SelectPrimaryStorageEntry();
   assert(selected && std::filesystem::path(selected->path) == first);
-  assert(selected->findBmsDownloadFolder);
-  assert(selected->findBmsDownloadEligible);
+  assert(selected->primaryStorageFolder);
+  assert(selected->primaryStorageEligible);
 
   assert(session->InsertEntry(first, "updated-bookmark"));
   assert(session->InsertEntry(second, "second-bookmark"));
-  selected = session->SelectFindBmsDownloadEntry();
+  selected = session->SelectPrimaryStorageEntry();
   assert(selected && std::filesystem::path(selected->path) == first);
   assert(selected->iosBookmark == "updated-bookmark");
 
-  assert(session->SetFindBmsDownloadEntry(second));
-  selected = session->SelectFindBmsDownloadEntry();
+  assert(session->SetPrimaryStorageEntry(second));
+  selected = session->SelectPrimaryStorageEntry();
   assert(selected && std::filesystem::path(selected->path) == second);
 
   int removedChartCount = -1;
   assert(session->DeleteEntryAndChartMetaInDirectory(second,
                                                      removedChartCount));
-  selected = session->SelectFindBmsDownloadEntry();
+  selected = session->SelectPrimaryStorageEntry();
   assert(selected && std::filesystem::path(selected->path) == first);
 
   assert(session->DeleteEntryAndChartMetaInDirectory(first,
                                                      removedChartCount));
-  assert(!session->SelectFindBmsDownloadEntry());
+  assert(!session->SelectPrimaryStorageEntry());
   const auto entries = session->SelectEffectiveEntries();
   const auto *fallbackEntry = entryAtPath(entries, fallback);
   if (fallbackEntry != nullptr) {
-    assert(!fallbackEntry->findBmsDownloadFolder);
-    assert(!fallbackEntry->findBmsDownloadEligible);
+    assert(!fallbackEntry->primaryStorageFolder);
+    assert(!fallbackEntry->primaryStorageEligible);
   }
 }
 
@@ -805,17 +805,17 @@ void testFindBmsDownloadEntryRejectsIneligiblePaths() {
       std::filesystem::path("@androidtree@") / "tree-id" / "Charts";
   const auto normal = temporary.path() / "normal";
   assert(session->InsertEntry(virtualTree, "content://tree/example"));
-  assert(!session->SelectFindBmsDownloadEntry());
-  assert(!session->SetFindBmsDownloadEntry(virtualTree));
-  assert(!session->SetFindBmsDownloadEntry(temporary.path() / "missing"));
+  assert(!session->SelectPrimaryStorageEntry());
+  assert(!session->SetPrimaryStorageEntry(virtualTree));
+  assert(!session->SetPrimaryStorageEntry(temporary.path() / "missing"));
 
   assert(session->InsertEntry(normal));
   const auto entries = session->SelectAllEntries();
   const auto *virtualEntry = entryAtPath(entries, virtualTree);
   assert(virtualEntry != nullptr);
-  assert(!virtualEntry->findBmsDownloadEligible);
-  assert(!virtualEntry->findBmsDownloadFolder);
-  assert(session->SelectFindBmsDownloadEntry());
+  assert(!virtualEntry->primaryStorageEligible);
+  assert(!virtualEntry->primaryStorageFolder);
+  assert(session->SelectPrimaryStorageEntry());
 }
 
 void testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates() {
@@ -841,23 +841,23 @@ void testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates() {
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session);
-  auto selected = session->SelectFindBmsDownloadEntry();
+  auto selected = session->SelectPrimaryStorageEntry();
   assert(selected && std::filesystem::path(selected->path) == first);
 
   {
     Database database = openDatabase(databasePath);
     assert(database);
     assert(execute(database.get(),
-                   "UPDATE entries SET find_bms_download_folder = 1"));
+                   "UPDATE entries SET primary_storage_folder = 1"));
   }
-  selected = session->SelectFindBmsDownloadEntry();
+  selected = session->SelectPrimaryStorageEntry();
   assert(selected && std::filesystem::path(selected->path) == first);
 
   Database verification = openDatabase(databasePath);
   assert(verification);
   assert(queryInt(verification.get(),
                   "SELECT COUNT(*) FROM entries "
-                  "WHERE find_bms_download_folder = 1") == 1);
+                  "WHERE primary_storage_folder = 1") == 1);
 }
 
 } // namespace

@@ -773,11 +773,11 @@ static bool insertEntry(sqlite3 *database, const std::filesystem::path &path,
                         const std::string &iosBookmark);
 static std::vector<ChartEntry> selectAllEntries(sqlite3 *database);
 static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *database);
-static bool setFindBmsDownloadEntry(sqlite3 *database,
+static bool setPrimaryStorageEntry(sqlite3 *database,
                                     const std::filesystem::path &path);
 static std::optional<ChartEntry>
-selectFindBmsDownloadEntry(sqlite3 *database);
-static bool normalizeFindBmsDownloadEntry(sqlite3 *database,
+selectPrimaryStorageEntry(sqlite3 *database);
+static bool normalizePrimaryStorageEntry(sqlite3 *database,
                                           std::vector<ChartEntry> *entries);
 static bool deleteEntry(sqlite3 *database,
                         const std::filesystem::path &path);
@@ -843,7 +843,7 @@ bool ChartRepository::Session::InsertEntry(
                                       transactionError);
   if (!transaction.active() ||
       !insertEntry(impl_->database(), path, iosBookmark) ||
-      !normalizeFindBmsDownloadEntry(impl_->database(), nullptr)) {
+      !normalizePrimaryStorageEntry(impl_->database(), nullptr)) {
     return false;
   }
   return transaction.commit(transactionError);
@@ -857,14 +857,14 @@ std::vector<ChartEntry> ChartRepository::Session::SelectEffectiveEntries() {
   return selectEffectiveEntries(impl_->database());
 }
 
-bool ChartRepository::Session::SetFindBmsDownloadEntry(
+bool ChartRepository::Session::SetPrimaryStorageEntry(
     const std::filesystem::path &path) {
-  return setFindBmsDownloadEntry(impl_->database(), path);
+  return setPrimaryStorageEntry(impl_->database(), path);
 }
 
 std::optional<ChartEntry>
-ChartRepository::Session::SelectFindBmsDownloadEntry() {
-  return selectFindBmsDownloadEntry(impl_->database());
+ChartRepository::Session::SelectPrimaryStorageEntry() {
+  return selectPrimaryStorageEntry(impl_->database());
 }
 
 bool ChartRepository::Session::DeleteEntry(
@@ -873,7 +873,7 @@ bool ChartRepository::Session::DeleteEntry(
   SqliteTransactionHandle transaction(impl_->database(), "BEGIN",
                                       transactionError);
   if (!transaction.active() || !deleteEntry(impl_->database(), path) ||
-      !normalizeFindBmsDownloadEntry(impl_->database(), nullptr)) {
+      !normalizePrimaryStorageEntry(impl_->database(), nullptr)) {
     return false;
   }
   return transaction.commit(transactionError);
@@ -890,7 +890,7 @@ bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
   }
   removedChartCount = deleteChartMetaInDirectory(impl_->database(), path);
   if (removedChartCount < 0 || !deleteEntry(impl_->database(), path) ||
-      !normalizeFindBmsDownloadEntry(impl_->database(), nullptr)) {
+      !normalizePrimaryStorageEntry(impl_->database(), nullptr)) {
     return false;
   }
   return transaction.commit(transactionError);
@@ -1288,7 +1288,7 @@ static bool createEntriesTable(sqlite3 *db) {
                "CREATE TABLE IF NOT EXISTS entries ("
                "path       TEXT primary key,"
                "ios_bookmark TEXT DEFAULT '',"
-               "find_bms_download_folder INTEGER NOT NULL DEFAULT 0"
+               "primary_storage_folder INTEGER NOT NULL DEFAULT 0"
                ")",
                "creating entries table")) {
     return false;
@@ -1301,9 +1301,9 @@ static bool createEntriesTable(sqlite3 *db) {
   }
   if (!execSqlAllowDuplicateColumn(
           db,
-          "ALTER TABLE entries ADD COLUMN find_bms_download_folder "
+          "ALTER TABLE entries ADD COLUMN primary_storage_folder "
           "INTEGER NOT NULL DEFAULT 0",
-          "migrating Find BMS download folder selection")) {
+          "migrating primary chart storage selection")) {
     return false;
   }
   return true;
@@ -1360,7 +1360,7 @@ static std::vector<StoredChartEntry> readStoredEntries(sqlite3 *db) {
                "rowid,"
                "path,"
                "COALESCE(ios_bookmark, ''),"
-               "COALESCE(find_bms_download_folder, 0)"
+               "COALESCE(primary_storage_folder, 0)"
                " FROM entries ORDER BY rowid";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt, "getting all entries",
@@ -1404,23 +1404,23 @@ static bool isAndroidTreeVirtualPath(const std::filesystem::path &path) {
          first->generic_string() == "@androidtree@";
 }
 
-static bool isFindBmsDownloadEligible(const std::filesystem::path &path) {
+static bool isPrimaryStorageEligible(const std::filesystem::path &path) {
   return !path.empty() &&
          !ChartRepository::IsDefaultBmsFolderPath(path) &&
          !isAndroidTreeVirtualPath(path);
 }
 
-static bool writeFindBmsDownloadSelection(
+static bool writePrimaryStorageSelection(
     sqlite3 *db, const std::optional<std::string> &storedPath) {
   const std::string query = storedPath
                                 ? "UPDATE entries SET "
-                                  "find_bms_download_folder = CASE WHEN "
+                                  "primary_storage_folder = CASE WHEN "
                                   "path = @selected_path THEN 1 ELSE 0 END"
                                 : "UPDATE entries SET "
-                                  "find_bms_download_folder = 0";
+                                  "primary_storage_folder = 0";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
-          db, query, stmt, "updating Find BMS download folder",
+          db, query, stmt, "updating primary chart storage folder",
           logSqlErrorText)) {
     return false;
   }
@@ -1428,22 +1428,22 @@ static bool writeFindBmsDownloadSelection(
     bindSqliteText(stmt, 1, *storedPath);
   }
   if (sqlite3_step(stmt) != SQLITE_DONE) {
-    logSqlError("updating Find BMS download folder", db);
+    logSqlError("updating primary chart storage folder", db);
     return false;
   }
   return true;
 }
 
-static bool normalizeFindBmsDownloadEntry(sqlite3 *db,
+static bool normalizePrimaryStorageEntry(sqlite3 *db,
                                           std::vector<ChartEntry> *entries) {
   auto storedEntries = readStoredEntries(db);
   std::optional<std::size_t> selectedIndex;
   std::optional<std::size_t> firstEligibleIndex;
   for (std::size_t index = 0; index < storedEntries.size(); ++index) {
     auto &stored = storedEntries[index];
-    stored.entry.findBmsDownloadEligible = isFindBmsDownloadEligible(
+    stored.entry.primaryStorageEligible = isPrimaryStorageEligible(
         std::filesystem::path(stored.entry.path));
-    if (!stored.entry.findBmsDownloadEligible) {
+    if (!stored.entry.primaryStorageEligible) {
       continue;
     }
     if (!firstEligibleIndex) {
@@ -1460,13 +1460,13 @@ static bool normalizeFindBmsDownloadEntry(sqlite3 *db,
   bool selectionNeedsUpdate = false;
   for (std::size_t index = 0; index < storedEntries.size(); ++index) {
     const bool shouldBeSelected = selectedIndex && *selectedIndex == index;
-    storedEntries[index].entry.findBmsDownloadFolder = shouldBeSelected;
+    storedEntries[index].entry.primaryStorageFolder = shouldBeSelected;
     selectionNeedsUpdate =
         selectionNeedsUpdate ||
         storedEntries[index].storedSelected != shouldBeSelected;
   }
   if (selectionNeedsUpdate &&
-      !writeFindBmsDownloadSelection(
+      !writePrimaryStorageSelection(
           db, selectedIndex ? std::optional<std::string>(
                                   storedEntries[*selectedIndex].storedPath)
                             : std::nullopt)) {
@@ -1485,13 +1485,13 @@ static bool normalizeFindBmsDownloadEntry(sqlite3 *db,
 
 static std::vector<ChartEntry> selectAllEntries(sqlite3 *db) {
   std::vector<ChartEntry> entries;
-  if (!normalizeFindBmsDownloadEntry(db, &entries)) {
+  if (!normalizePrimaryStorageEntry(db, &entries)) {
     return {};
   }
   return entries;
 }
 
-static bool setFindBmsDownloadEntry(sqlite3 *db,
+static bool setPrimaryStorageEntry(sqlite3 *db,
                                     const std::filesystem::path &path) {
   std::string transactionError;
   SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
@@ -1502,12 +1502,12 @@ static bool setFindBmsDownloadEntry(sqlite3 *db,
   const auto normalizedTarget = path.lexically_normal();
   const auto target = std::find_if(
       entries.begin(), entries.end(), [&normalizedTarget](const auto &entry) {
-        return entry.findBmsDownloadEligible &&
+        return entry.primaryStorageEligible &&
                std::filesystem::path(entry.path).lexically_normal() ==
                    normalizedTarget;
       });
   if (target == entries.end() ||
-      !writeFindBmsDownloadSelection(
+      !writePrimaryStorageSelection(
           db, chart_storage_identity::StoredPathText(
                   std::filesystem::path(target->path)))) {
     return false;
@@ -1515,11 +1515,11 @@ static bool setFindBmsDownloadEntry(sqlite3 *db,
   return transaction.commit(transactionError);
 }
 
-static std::optional<ChartEntry> selectFindBmsDownloadEntry(sqlite3 *db) {
+static std::optional<ChartEntry> selectPrimaryStorageEntry(sqlite3 *db) {
   const auto entries = selectAllEntries(db);
   const auto selected = std::find_if(
       entries.begin(), entries.end(), [](const ChartEntry &entry) {
-        return entry.findBmsDownloadEligible && entry.findBmsDownloadFolder;
+        return entry.primaryStorageEligible && entry.primaryStorageFolder;
       });
   return selected == entries.end() ? std::nullopt
                                    : std::optional<ChartEntry>(*selected);

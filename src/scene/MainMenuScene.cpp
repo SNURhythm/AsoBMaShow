@@ -6158,7 +6158,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
     return fallback;
   }
 
-  const auto selected = chartSession->SelectFindBmsDownloadEntry();
+  const auto selected = chartSession->SelectPrimaryStorageEntry();
   if (!selected.has_value()) {
     ensureDirectoryExistsLogged(fallback, "BMS download root");
     return fallback;
