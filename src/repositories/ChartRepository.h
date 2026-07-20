@@ -104,6 +104,8 @@ struct ChartEntry {
   path_t path;
   std::string iosBookmark;
   bool removable = true;
+  bool findBmsDownloadFolder = false;
+  bool findBmsDownloadEligible = false;
 };
 
 struct DifficultyTableInfo {
@@ -218,6 +220,8 @@ public:
                      const std::string &iosBookmark = "");
     std::vector<ChartEntry> SelectAllEntries();
     std::vector<ChartEntry> SelectEffectiveEntries();
+    bool SetFindBmsDownloadEntry(const std::filesystem::path &path);
+    std::optional<ChartEntry> SelectFindBmsDownloadEntry();
     bool DeleteEntry(const std::filesystem::path &path);
     bool DeleteEntryAndChartMetaInDirectory(
         const std::filesystem::path &path, int &removedChartCount);

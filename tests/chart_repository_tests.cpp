@@ -738,6 +738,128 @@ void testLegacyIosContainerPathRebasesToCurrentDocuments() {
       externalPath, currentDocuments));
 }
 
+const ChartEntry *entryAtPath(const std::vector<ChartEntry> &entries,
+                              const std::filesystem::path &path) {
+  const auto it = std::find_if(
+      entries.begin(), entries.end(), [&path](const ChartEntry &entry) {
+        return std::filesystem::path(entry.path).lexically_normal() ==
+               path.lexically_normal();
+      });
+  return it == entries.end() ? nullptr : &*it;
+}
+
+void testFindBmsDownloadEntrySelectionLifecycle() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+
+  const auto fallback = ChartRepository::DefaultBmsFolderPath();
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  assert(session->InsertEntry(fallback));
+  assert(!session->SelectFindBmsDownloadEntry());
+
+  assert(session->InsertEntry(first, "first-bookmark"));
+  auto selected = session->SelectFindBmsDownloadEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+  assert(selected->findBmsDownloadFolder);
+  assert(selected->findBmsDownloadEligible);
+
+  assert(session->InsertEntry(first, "updated-bookmark"));
+  assert(session->InsertEntry(second, "second-bookmark"));
+  selected = session->SelectFindBmsDownloadEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+  assert(selected->iosBookmark == "updated-bookmark");
+
+  assert(session->SetFindBmsDownloadEntry(second));
+  selected = session->SelectFindBmsDownloadEntry();
+  assert(selected && std::filesystem::path(selected->path) == second);
+
+  int removedChartCount = -1;
+  assert(session->DeleteEntryAndChartMetaInDirectory(second,
+                                                     removedChartCount));
+  selected = session->SelectFindBmsDownloadEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  assert(session->DeleteEntryAndChartMetaInDirectory(first,
+                                                     removedChartCount));
+  assert(!session->SelectFindBmsDownloadEntry());
+  const auto entries = session->SelectEffectiveEntries();
+  const auto *fallbackEntry = entryAtPath(entries, fallback);
+  if (fallbackEntry != nullptr) {
+    assert(!fallbackEntry->findBmsDownloadFolder);
+    assert(!fallbackEntry->findBmsDownloadEligible);
+  }
+}
+
+void testFindBmsDownloadEntryRejectsIneligiblePaths() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+
+  const std::filesystem::path virtualTree =
+      std::filesystem::path("@androidtree@") / "tree-id" / "Charts";
+  const auto normal = temporary.path() / "normal";
+  assert(session->InsertEntry(virtualTree, "content://tree/example"));
+  assert(!session->SelectFindBmsDownloadEntry());
+  assert(!session->SetFindBmsDownloadEntry(virtualTree));
+  assert(!session->SetFindBmsDownloadEntry(temporary.path() / "missing"));
+
+  assert(session->InsertEntry(normal));
+  const auto entries = session->SelectAllEntries();
+  const auto *virtualEntry = entryAtPath(entries, virtualTree);
+  assert(virtualEntry != nullptr);
+  assert(!virtualEntry->findBmsDownloadEligible);
+  assert(!virtualEntry->findBmsDownloadFolder);
+  assert(session->SelectFindBmsDownloadEntry());
+}
+
+void testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  const auto first = temporary.path() / "legacy-first";
+  const auto second = temporary.path() / "legacy-second";
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE entries (path TEXT PRIMARY KEY, "
+                   "ios_bookmark TEXT DEFAULT '')"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       first.generic_string() + "')"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       second.generic_string() + "')"));
+  }
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto selected = session->SelectFindBmsDownloadEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "UPDATE entries SET find_bms_download_folder = 1"));
+  }
+  selected = session->SelectFindBmsDownloadEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  Database verification = openDatabase(databasePath);
+  assert(verification);
+  assert(queryInt(verification.get(),
+                  "SELECT COUNT(*) FROM entries "
+                  "WHERE find_bms_download_folder = 1") == 1);
+}
+
 } // namespace
 
 int main() {
@@ -750,5 +872,8 @@ int main() {
   testChartQueryBehaviorMatrix();
   testChartMigrationCompatibilityMatrix();
   testLegacyIosContainerPathRebasesToCurrentDocuments();
+  testFindBmsDownloadEntrySelectionLifecycle();
+  testFindBmsDownloadEntryRejectsIneligiblePaths();
+  testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates();
   return 0;
 }
