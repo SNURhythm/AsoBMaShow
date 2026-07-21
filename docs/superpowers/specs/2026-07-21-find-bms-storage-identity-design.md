@@ -33,6 +33,10 @@ removable.
 - Treat `.zip`, `.7z`, and other supported archive variants with the same
   storage identity as alternate representations and remove stale variants on
   a successful commit.
+- Treat the stable ID suffix, rather than the readable base, as the cleanup
+  identity so provider-side filename changes do not leave duplicate downloads.
+- Never promote a package-source candidate to automatic download unless the
+  chosen package archive extension is supported by the current build.
 - Keep stale-alternate removal best effort after the destination commit.
 - Keep desktop folders explicitly added at `Documents/BMS` removable while
   retaining Android's synthesized built-in fallback behavior.
@@ -89,6 +93,11 @@ display archive names are identical. Repeating a download with the same name
 and ID targets the same storage path and retains the current overwrite/merge
 semantics.
 
+The readable base is not part of identity. If the provider later renames the
+same package, the new destination may use the new base, but post-commit cleanup
+matches the unchanged `--<16-hex identity>` suffix and removes the old named
+representation.
+
 ## Filename construction
 
 Determine the archive extension from the preferred display name when it still
@@ -118,14 +127,31 @@ The extracted destination remains `BMSSEARCH/<storage key>`. The retained
 destination becomes `BMSSEARCH/_archives/<storage key><extension>`.
 
 After a successful destination swap, remove the opposite extracted/archive
-form and enumerate `_archives` for other supported archive files whose
-extension-free filename equals the same storage key. Exclude the newly
-installed destination. This removes a previous `.7z` when the current result
-is `.zip`, and the reverse.
+form and enumerate both the download root and `_archives`. Extract the stable
+ID only from storage keys ending in `--` plus exactly 16 lowercase hexadecimal
+characters. Remove other extracted directories and supported archive files
+whose extension-free filename has the same stable ID. Exclude `_archives` and
+the newly installed destination. This removes a previous `.7z` when the
+current result is `.zip`, the reverse, and an older provider filename for the
+same package.
 
 All candidate paths are derived from the already validated `downloadRoot` and
 `storageKey`. Directory enumeration and removal errors remain best effort and
 must not turn an installed download into a failure or pending decision.
+
+## Package archive support
+
+Package APIs can provide a filename even when their download URL has no
+extension. Finalize the candidate using the extension on that chosen package
+filename. An unsupported candidate is promoted to automatic download only
+when `isSupportedArchiveExtension()` accepts that extension for the current
+build. A recognized but unsupported package extension remains unsupported,
+keeps `knownUnsupportedArchive`, and reports the existing manual-source reason
+instead of reaching extraction and failing there.
+
+Put the finalization policy behind a focused function that accepts the support
+decision as an input. Production supplies the real build capability; tests can
+exercise the ZIP-only result on a development machine that has libarchive.
 
 ## Desktop fallback removability
 
@@ -144,8 +170,8 @@ the synthesized fallback when the row is absent.
 - Existing downloads are not migrated. A first download after upgrade may
   coexist with a legacy unsuffixed path; subsequent same-ID downloads converge
   on the new path.
-- Stale-variant cleanup accepts only supported archive extensions and only
-  exact extension-free storage-key matches.
+- Stale-variant cleanup accepts only supported archive extensions and matches
+  either the exact legacy storage key or a validated `--<16-hex-id>` suffix.
 - A cleanup failure leaves the committed result successful and allows the
   automatic library refresh to run.
 
@@ -161,6 +187,11 @@ Automated coverage will verify:
   fit the 128-byte limit;
 - unsafe names cannot escape the Find BMS destination;
 - extracting a `.zip` removes an older `.7z` with the same storage key;
+- downloading the same stable ID under a renamed archive removes the older
+  extracted folder and retained archive without touching a different ID;
+- package candidates with a recognized but build-unsupported extension remain
+  unsupported, while a build-supported extension can still override an
+  extensionless package URL;
 - current-extension and extracted alternates still clean up;
 - cleanup failures remain successful commits;
 - a desktop stored `Documents/BMS` entry remains removable, while the Android

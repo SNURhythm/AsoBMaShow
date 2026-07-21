@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prevent unrelated same-named Find BMS packages from sharing storage, preserve retained archive extensions, remove stale same-ID archive variants, and keep explicit desktop fallback folders removable.
+**Goal:** Prevent unrelated same-named Find BMS packages from sharing storage, preserve retained archive extensions, remove stale same-ID representations across provider renames, reject package formats unsupported by the current build, and keep explicit desktop fallback folders removable.
 
-**Architecture:** Introduce a focused pure naming component that turns a display archive name and stable identity seed into a readable, bounded storage key and extension-preserving archive filename. Feed provider IDs or chart hashes into that component at the download boundary, then make the validated commit layer remove every supported archive variant with the same storage key. Restrict built-in fallback-row treatment to Android, the only platform that synthesizes the row.
+**Architecture:** Introduce a focused pure naming component that turns a display archive name and stable identity seed into a readable, bounded storage key and extension-preserving archive filename. Feed provider IDs or chart hashes into that component at the download boundary, then make the validated commit layer remove every representation with the same validated ID suffix even if the readable filename changes. Finalize package candidates through a focused capability policy so extensionless package URLs are promoted only when the provider filename names an archive supported by the current build. Restrict built-in fallback-row treatment to Android, the only platform that synthesizes the row.
 
 **Tech Stack:** C++23, `std::filesystem`, existing `ArchiveFile` extension helpers, existing `bms_parser` SHA-256, SQLite repository tests, CMake/CTest, Python source-flow audit.
 
@@ -17,7 +17,9 @@
 - Identity suffixes and archive extensions are never truncated.
 - Horie uses its stable candidate file ID; other sources use the chart hash, then a URL fallback.
 - Same-name downloads with different identity seeds must never share destinations.
-- Cleanup removes only supported archive files with an exact extension-free storage-key match.
+- The stable `--<16-hex-id>` suffix, not the readable base, controls renamed-representation cleanup.
+- Unsupported package extensions must not be promoted to automatic downloads.
+- Cleanup removes only validated same-ID extracted folders and supported archive files.
 - Cleanup remains best effort after a successful destination commit.
 - Existing unsuffixed downloads are not migrated.
 - Android keeps its built-in fallback; explicit desktop and iOS entries remain removable.
@@ -27,8 +29,9 @@
 ## File Structure
 
 - `src/bms_search/DownloadStorageIdentity.h/.cpp`: pure safe storage-key and archive-filename construction.
+- `src/bms_search/PackageDownloadCandidate.h/.cpp`: testable package archive capability policy.
 - `src/bms_search/DownloadSupport.cpp`, `Internal.h`, and provider call sites: choose and propagate the identity seed.
-- `src/bms_search/DownloadStaging.cpp`: best-effort cleanup of every same-key supported archive variant.
+- `src/bms_search/DownloadStaging.cpp`: best-effort cleanup of every same-ID representation.
 - `src/repositories/ChartRepository.cpp`: Android-only built-in fallback presentation.
 - `tests/find_bms_download_tests.cpp`: naming, extension, collision, and cleanup regressions.
 - `tests/chart_repository_tests.cpp`: explicit default-path row removability regression.
@@ -281,7 +284,118 @@ git add src/bms_search/DownloadStaging.cpp tests/find_bms_download_tests.cpp
 git commit -m "fix: clear same-ID archive variants"
 ```
 
-### Task 4: Full verification and publication
+### Task 4: Keep unsupported package archives manual
+
+**Files:**
+- Create: `src/bms_search/PackageDownloadCandidate.h`
+- Create: `src/bms_search/PackageDownloadCandidate.cpp`
+- Modify: `src/bms_search/PackageSourceDrivers.cpp`
+- Modify: `src/bms_search/CMakeLists.txt`
+- Modify: `CMakeLists.txt`
+- Modify: `tests/find_bms_download_tests.cpp`
+
+**Interfaces:**
+- Produces: `DownloadCandidate configurePackageDownloadCandidate(DownloadCandidate candidate, const std::string &downloadUrl, const std::string &archiveName, const std::string &md5, PackageArchiveSupportCheck supportCheck)`.
+- Consumes: production `isSupportedArchiveExtension()` through `PackageArchiveSupportCheck`.
+
+- [ ] **Step 1: Write the failing policy test**
+
+Construct an unsupported candidate and configure it with `package.7z` plus a
+support function returning `false`. Require `supported == false`,
+`knownUnsupportedArchive == true`, and a non-empty reason. Add a second case
+with an extensionless URL, `package.zip`, and a support function returning
+`true`; require it to become supported.
+
+- [ ] **Step 2: Run RED**
+
+```bash
+cmake --build cmake-build-debug --target find_bms_download_tests -j 6
+```
+
+Expected: compile failure because `PackageDownloadCandidate.h` does not exist.
+
+- [ ] **Step 3: Implement and use the policy**
+
+The new focused implementation must choose the recognized provider filename,
+fall back to the classified filename or `<md5>.7z`, and then evaluate its
+extension through `supportCheck`. Promote and clear the unsupported reason only
+when that result is true. If the chosen extension is recognized but rejected,
+keep the candidate unsupported, set `knownUnsupportedArchive`, and report that
+the build cannot extract the extension automatically. Make
+`packageDownloadCandidate()` call this function with
+`isSupportedArchiveExtension`.
+
+- [ ] **Step 4: Run GREEN**
+
+```bash
+cmake --build cmake-build-debug --target find_bms_download_tests -j 6
+./cmake-build-debug/find_bms_download_tests
+```
+
+Expected: pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add CMakeLists.txt src/bms_search/CMakeLists.txt \
+  src/bms_search/PackageDownloadCandidate.h \
+  src/bms_search/PackageDownloadCandidate.cpp \
+  src/bms_search/PackageSourceDrivers.cpp tests/find_bms_download_tests.cpp
+git commit -m "fix: respect package archive support"
+```
+
+### Task 5: Remove renamed representations by stable ID
+
+**Files:**
+- Modify: `tests/find_bms_download_tests.cpp`
+- Modify: `src/bms_search/DownloadStaging.cpp`
+
+**Interfaces:**
+- Consumes: storage keys ending in `--<16 lowercase hex characters>`.
+- Produces: best-effort post-commit removal of other extracted directories and supported archives with the same suffix.
+
+- [ ] **Step 1: Write the failing renamed-download test**
+
+Commit an extracted artifact named `new-name--0123456789abcdef`, after creating
+`old-name--0123456789abcdef` as both an extracted directory and retained `.7z`
+archive. Also create equivalent entries ending in `fedcba9876543210`. Require
+the same-ID old entries to be removed and the different-ID entries to remain.
+
+- [ ] **Step 2: Run RED**
+
+```bash
+cmake --build cmake-build-debug --target find_bms_download_tests -j 6
+./cmake-build-debug/find_bms_download_tests
+```
+
+Expected: assertion failure because cleanup compares the complete storage key.
+
+- [ ] **Step 3: Implement validated suffix cleanup**
+
+Extract an ID only when the storage key ends in `--` followed by exactly 16
+lowercase hexadecimal characters. After a successful commit, enumerate the
+download root for extracted directories and `_archives` for recognized archive
+files. Remove entries with the same parsed ID, excluding `_archives` and the
+new destination. Retain exact-key cleanup for legacy keys without an ID and
+ignore all enumeration/removal errors.
+
+- [ ] **Step 4: Run GREEN**
+
+```bash
+cmake --build cmake-build-debug --target find_bms_download_tests -j 6
+./cmake-build-debug/find_bms_download_tests
+```
+
+Expected: pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/bms_search/DownloadStaging.cpp tests/find_bms_download_tests.cpp
+git commit -m "fix: clean renamed downloads by storage ID"
+```
+
+### Task 6: Full verification and publication
 
 **Files:**
 - Verify only.
