@@ -2,6 +2,7 @@
 #include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
 #include "bms_search/DownloadStorageIdentity.h"
+#include "bms_search/PackageDownloadCandidate.h"
 #include "scene/FindBmsDialogPolicy.h"
 #include "scene/FindBmsProgressPresentation.h"
 
@@ -115,6 +116,34 @@ void testStorageNamesPreserveLongAndCompoundExtensions() {
       std::string(180, 'b') + ".tar.gz", ".zip", "tar-id");
   assert(tar.archiveName.ends_with(".tar.gz"));
   assert(tar.archiveName.size() <= 128);
+}
+
+bool rejectPackageArchiveExtension(const std::string &) { return false; }
+
+bool acceptPackageArchiveExtension(const std::string &) { return true; }
+
+void testPackageCandidateRespectsBuildArchiveSupport() {
+  asobmshow::bms_search::DownloadCandidate classified;
+  classified.downloadUrl = "https://packages.example/download/123";
+  classified.reason = "This link is not a direct archive.";
+
+  const auto unsupported =
+      asobmshow::bms_search::configurePackageDownloadCandidate(
+          classified, classified.downloadUrl, "package.7z", "abc123",
+          rejectPackageArchiveExtension);
+  assert(!unsupported.supported);
+  assert(unsupported.knownUnsupportedArchive);
+  assert(!unsupported.reason.empty());
+  assert(unsupported.archiveName == "package.7z");
+
+  const auto supported =
+      asobmshow::bms_search::configurePackageDownloadCandidate(
+          classified, classified.downloadUrl, "package.zip", "abc123",
+          acceptPackageArchiveExtension);
+  assert(supported.supported);
+  assert(!supported.knownUnsupportedArchive);
+  assert(supported.reason.empty());
+  assert(supported.archiveName == "package.zip");
 }
 
 BmsSearchPendingArtifact extractedArtifact(
@@ -1016,6 +1045,7 @@ void testFindBmsDownloadProgressDisplaysSizes() {
 int main() {
   testStorageNamesDistinguishSameNamedPackages();
   testStorageNamesPreserveLongAndCompoundExtensions();
+  testPackageCandidateRespectsBuildArchiveSupport();
   testExtractedCommitMergesTransactionally();
   testDeleteRemovesOnlyAttempt();
   testUnsafeStagingRootIsRefused();

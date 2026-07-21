@@ -1,27 +1,14 @@
 #include "PackageSourceDrivers.h"
+#include "PackageDownloadCandidate.h"
 
 namespace asobmshow::bms_search {
 
 DownloadCandidate packageDownloadCandidate(const std::string &downloadUrl,
                                            const std::string &archiveName,
                                            const std::string &md5) {
-  DownloadCandidate candidate = classifyLink(downloadUrl);
-  candidate.originalUrl = downloadUrl;
-  if (!candidate.supported) {
-    candidate.downloadUrl = downloadUrl;
-    candidate.supported = true;
-    candidate.knownUnsupportedArchive = false;
-    candidate.reason.clear();
-  }
-
-  const std::string suggestedArchiveName = trimCopy(archiveName);
-  if (!suggestedArchiveName.empty() &&
-      !archiveExtensionFromName(suggestedArchiveName).empty()) {
-    candidate.archiveName = suggestedArchiveName;
-  } else if (candidate.archiveName.empty()) {
-    candidate.archiveName = md5 + ".7z";
-  }
-  return candidate;
+  return configurePackageDownloadCandidate(
+      classifyLink(downloadUrl), downloadUrl, archiveName, md5,
+      isSupportedArchiveExtension);
 }
 
 PackageSourceLookupResult

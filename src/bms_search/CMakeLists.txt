@@ -12,6 +12,7 @@ target_sources(main PRIVATE
     GoogleDriveDriver.cpp
     HorieYuukaDriver.cpp
     IpfsDriver.cpp
+    PackageDownloadCandidate.cpp
     PackageSourceDrivers.cpp
     PendingArtifact.cpp
 )
