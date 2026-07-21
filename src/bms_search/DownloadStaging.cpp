@@ -313,15 +313,9 @@ bool commitFindBmsPendingArtifact(
     removePath(backupPath);
   }
   if (!artifact.alternateDestinationPath.empty()) {
-    error.clear();
-    std::filesystem::remove_all(artifact.alternateDestinationPath, error);
-    if (error) {
-      errorMessage =
-          "Downloaded files were installed, but the stale alternate copy "
-          "could not be removed: " +
-          error.message();
-      return false;
-    }
+    std::error_code ignoredCleanupError;
+    std::filesystem::remove_all(artifact.alternateDestinationPath,
+                                ignoredCleanupError);
   }
   removePath(artifact.stagingRoot);
   errorMessage.clear();

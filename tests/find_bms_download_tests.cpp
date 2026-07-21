@@ -257,6 +257,53 @@ void testExtractedCommitRemovesArchiveAlternate() {
   assert(!std::filesystem::exists(archiveAlternate));
 }
 
+#if !defined(_WIN32)
+void testAlternateCleanupFailureDoesNotFailCommit() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive bytes");
+  const auto extractedAlternate = downloadRoot / "package";
+  writeText(extractedAlternate / "stale.bms", "stale chart");
+  const BmsSearchPendingArtifact artifact{
+      .kind = BmsSearchPendingArtifactKind::Archive,
+      .stagingRoot = attempt->root,
+      .sourcePath = attempt->archivePath,
+      .downloadRoot = downloadRoot,
+      .destinationPath = downloadRoot / "_archives/package.zip",
+      .archiveName = "package.zip",
+      .storageKey = "package",
+      .alternateDestinationPath = extractedAlternate};
+  std::error_code permissionError;
+  std::filesystem::permissions(
+      extractedAlternate,
+      std::filesystem::perms::owner_read |
+          std::filesystem::perms::owner_exec,
+      std::filesystem::perm_options::replace, permissionError);
+  assert(!permissionError);
+
+  const bool committed =
+      asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error);
+  std::error_code restoreError;
+  std::filesystem::permissions(extractedAlternate,
+                               std::filesystem::perms::owner_all,
+                               std::filesystem::perm_options::replace,
+                               restoreError);
+
+  assert(!restoreError);
+  assert(committed);
+  assert(error.empty());
+  assert(readText(artifact.destinationPath) == "archive bytes");
+  assert(std::filesystem::exists(extractedAlternate / "stale.bms"));
+  assert(!std::filesystem::exists(attempt->root));
+}
+#endif
+
 void testFailedResolutionRetainsPendingArtifact() {
   CleanupPaths cleanup;
   std::string error;
@@ -912,6 +959,9 @@ int main() {
   testArchiveCommitAndResolution();
   testArchiveCommitRemovesExtractedAlternate();
   testExtractedCommitRemovesArchiveAlternate();
+#if !defined(_WIN32)
+  testAlternateCleanupFailureDoesNotFailCommit();
+#endif
   testFailedResolutionRetainsPendingArtifact();
   testAlreadyMissingAttemptCanBeDeleted();
   testUnsafeArchiveNameAndDownloadRootAreRefused();
