@@ -4,6 +4,7 @@
 #include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/repositories/SqliteRAII.h"
+#include "../src/targets.h"
 #include "RepositorySqliteTestSupport.h"
 
 #include <array>
@@ -788,6 +789,10 @@ void testFindBmsDownloadEntrySelectionLifecycle() {
   assert(!session->SelectPrimaryStorageEntry());
   const auto entries = session->SelectEffectiveEntries();
   const auto *fallbackEntry = entryAtPath(entries, fallback);
+#if !TARGET_OS_ANDROID
+  assert(fallbackEntry != nullptr);
+  assert(fallbackEntry->removable);
+#endif
   if (fallbackEntry != nullptr) {
     assert(!fallbackEntry->primaryStorageFolder);
     assert(!fallbackEntry->primaryStorageEligible);

@@ -1546,6 +1546,7 @@ static std::optional<ChartEntry> selectPrimaryStorageEntry(sqlite3 *db) {
 static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *db) {
   auto entries = selectAllEntries(db);
 
+#if TARGET_OS_ANDROID
   bool hasDefaultEntry = false;
   for (auto &entry : entries) {
     if (ChartRepository::IsDefaultBmsFolderPath(
@@ -1555,7 +1556,6 @@ static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *db) {
     }
   }
 
-#if TARGET_OS_ANDROID
   const auto defaultPath = ChartRepository::DefaultBmsFolderPath();
   std::error_code errorCode;
   if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
