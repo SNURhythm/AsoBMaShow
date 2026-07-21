@@ -15,11 +15,13 @@ public:
       const std::string &archiveKey, const std::filesystem::path &libraryRoot,
       std::atomic_bool &cancelled,
       BmsSearchDownloadProgressCallback progressCallback,
+      const BmsSearchDownloadOptions &options,
       BmsSearchResult &result);
   static bool downloadCandidateById(
       const BmsSearchCandidate &candidate, const std::string &archiveKey,
       const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
       BmsSearchDownloadProgressCallback progressCallback,
+      const BmsSearchDownloadOptions &options,
       BmsSearchResult &result);
 
 private:

@@ -1,27 +1,14 @@
 #include "PackageSourceDrivers.h"
+#include "PackageDownloadCandidate.h"
 
 namespace asobmshow::bms_search {
 
 DownloadCandidate packageDownloadCandidate(const std::string &downloadUrl,
                                            const std::string &archiveName,
                                            const std::string &md5) {
-  DownloadCandidate candidate = classifyLink(downloadUrl);
-  candidate.originalUrl = downloadUrl;
-  if (!candidate.supported) {
-    candidate.downloadUrl = downloadUrl;
-    candidate.supported = true;
-    candidate.knownUnsupportedArchive = false;
-    candidate.reason.clear();
-  }
-
-  const std::string suggestedArchiveName = trimCopy(archiveName);
-  if (!suggestedArchiveName.empty() &&
-      !archiveExtensionFromName(suggestedArchiveName).empty()) {
-    candidate.archiveName = suggestedArchiveName;
-  } else if (candidate.archiveName.empty()) {
-    candidate.archiveName = md5 + ".7z";
-  }
-  return candidate;
+  return configurePackageDownloadCandidate(
+      classifyLink(downloadUrl), downloadUrl, archiveName, md5,
+      isSupportedArchiveExtension);
 }
 
 PackageSourceLookupResult
@@ -135,6 +122,7 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     const std::string &md5, const std::string &archiveKey,
     const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
     BmsSearchResult &result) {
   const std::string md5Hash = normalizedHash(md5);
   if (!isHexStringOfLength(md5Hash, 32)) {
@@ -184,10 +172,12 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
       attempt.fallbackUrl = lookup.sourceUrl;
     }
     bool downloadedArchive = false;
+    const std::string effectiveArchiveKey =
+        archiveKey.empty() ? md5Hash : archiveKey;
     const bool finished = downloadAndExtractArchive(
         lookup.candidate->downloadUrl, lookup.candidate->originalUrl,
-        archiveKey.empty() ? md5Hash : archiveKey, libraryRoot, cancelled,
-        progressCallback, attempt, lookup.candidate->archiveName,
+        effectiveArchiveKey, libraryRoot, cancelled, progressCallback, options,
+        attempt, lookup.candidate->archiveName, effectiveArchiveKey,
         &downloadedArchive);
     if (finished || downloadedArchive || cancelled.load()) {
       result = std::move(attempt);

@@ -121,6 +121,7 @@ private:
     std::string title;
     std::filesystem::path folderToAdd;
     std::string iosBookmark;
+    std::filesystem::path additionalFolderToScan;
     std::filesystem::path androidImportPath;
     bool androidImportFolder = false;
     bool rebuildLibraryMetadata = false;
@@ -348,11 +349,15 @@ private:
   TextView *findBmsStatusText = nullptr;
   TextView *findBmsDetailText = nullptr;
   Button *findBmsCloseButton = nullptr;
+  Button *findBmsKeepFilesButton = nullptr;
+  Button *findBmsDeleteFilesButton = nullptr;
   Button *findBmsOpenButton = nullptr;
   Button *findBmsGoogleButton = nullptr;
   Button *findBmsRefreshButton = nullptr;
   RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
   TextView *findBmsCloseButtonText = nullptr;
+  TextView *findBmsKeepFilesButtonText = nullptr;
+  TextView *findBmsDeleteFilesButtonText = nullptr;
   TextView *findBmsOpenButtonText = nullptr;
   TextView *findBmsGoogleButtonText = nullptr;
   TextView *findBmsRefreshButtonText = nullptr;
@@ -452,6 +457,7 @@ private:
   std::atomic_bool findBmsCancelled = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
+  std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
   std::string findBmsProgressMessage;
   std::uint64_t findBmsProgressCurrent = 0;
   std::uint64_t findBmsProgressTotal = 0;
@@ -460,6 +466,7 @@ private:
   std::mutex findBmsUpdateMutex;
   std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
   std::optional<BmsSearchResult> pendingFindBmsResult;
+  std::filesystem::path findBmsDownloadRoot;
 
   LibraryFolderItem activeFolder;
   LibraryFolderMetadataCache folderMetadataCache;
@@ -585,7 +592,8 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshIrRecordListIfNeeded();
   void refreshLibraryIfNeeded();
-  void startLibraryRefresh();
+  void startLibraryRefresh(
+      const std::filesystem::path &additionalFolderToScan = {});
   void startLibraryRebuild();
   void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
@@ -598,7 +606,8 @@ private:
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
       const std::string &iosBookmark = "",
-      bool rebuildLibraryMetadata = false);
+      bool rebuildLibraryMetadata = false,
+      const std::filesystem::path &additionalFolderToScan = {});
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,
@@ -742,6 +751,8 @@ private:
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
   void startFindBmsCandidateDownload(size_t candidateIndex);
+  void startFindBmsPendingArtifactResolution(
+      BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
   void refreshFindBmsModal();
   void applyFindBmsUpdates();

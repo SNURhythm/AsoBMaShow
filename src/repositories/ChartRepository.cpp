@@ -771,8 +771,17 @@ deleteArchiveRecords(sqlite3 *database,
 static bool clearChartMeta(sqlite3 *database);
 static bool insertEntry(sqlite3 *database, const std::filesystem::path &path,
                         const std::string &iosBookmark);
+static std::optional<std::string> storedEntryPathForResolvedPath(
+    sqlite3 *database, const std::filesystem::path &path,
+    bool requirePrimaryStorageEligibility);
 static std::vector<ChartEntry> selectAllEntries(sqlite3 *database);
 static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *database);
+static bool setPrimaryStorageEntry(sqlite3 *database,
+                                    const std::filesystem::path &path);
+static std::optional<ChartEntry>
+selectPrimaryStorageEntry(sqlite3 *database);
+static bool normalizePrimaryStorageEntry(sqlite3 *database,
+                                          std::vector<ChartEntry> *entries);
 static bool deleteEntry(sqlite3 *database,
                         const std::filesystem::path &path);
 static bool clearEntries(sqlite3 *database);
@@ -832,7 +841,15 @@ bool ChartRepository::Session::ClearChartMeta() {
 
 bool ChartRepository::Session::InsertEntry(
     const std::filesystem::path &path, const std::string &iosBookmark) {
-  return insertEntry(impl_->database(), path, iosBookmark);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->database(), "BEGIN",
+                                      transactionError);
+  if (!transaction.active() ||
+      !insertEntry(impl_->database(), path, iosBookmark) ||
+      !normalizePrimaryStorageEntry(impl_->database(), nullptr)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
 }
 
 std::vector<ChartEntry> ChartRepository::Session::SelectAllEntries() {
@@ -843,9 +860,26 @@ std::vector<ChartEntry> ChartRepository::Session::SelectEffectiveEntries() {
   return selectEffectiveEntries(impl_->database());
 }
 
+bool ChartRepository::Session::SetPrimaryStorageEntry(
+    const std::filesystem::path &path) {
+  return setPrimaryStorageEntry(impl_->database(), path);
+}
+
+std::optional<ChartEntry>
+ChartRepository::Session::SelectPrimaryStorageEntry() {
+  return selectPrimaryStorageEntry(impl_->database());
+}
+
 bool ChartRepository::Session::DeleteEntry(
     const std::filesystem::path &path) {
-  return deleteEntry(impl_->database(), path);
+  std::string transactionError;
+  SqliteTransactionHandle transaction(impl_->database(), "BEGIN",
+                                      transactionError);
+  if (!transaction.active() || !deleteEntry(impl_->database(), path) ||
+      !normalizePrimaryStorageEntry(impl_->database(), nullptr)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
 }
 
 bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
@@ -858,7 +892,8 @@ bool ChartRepository::Session::DeleteEntryAndChartMetaInDirectory(
     return false;
   }
   removedChartCount = deleteChartMetaInDirectory(impl_->database(), path);
-  if (removedChartCount < 0 || !deleteEntry(impl_->database(), path)) {
+  if (removedChartCount < 0 || !deleteEntry(impl_->database(), path) ||
+      !normalizePrimaryStorageEntry(impl_->database(), nullptr)) {
     return false;
   }
   return transaction.commit(transactionError);
@@ -1255,7 +1290,8 @@ static bool createEntriesTable(sqlite3 *db) {
   if (!execSql(db,
                "CREATE TABLE IF NOT EXISTS entries ("
                "path       TEXT primary key,"
-               "ios_bookmark TEXT DEFAULT ''"
+               "ios_bookmark TEXT DEFAULT '',"
+               "primary_storage_folder INTEGER NOT NULL DEFAULT 0"
                ")",
                "creating entries table")) {
     return false;
@@ -1264,6 +1300,13 @@ static bool createEntriesTable(sqlite3 *db) {
   if (!execSqlAllowDuplicateColumn(
           db, "ALTER TABLE entries ADD COLUMN ios_bookmark TEXT DEFAULT ''",
           "migrating entries table")) {
+    return false;
+  }
+  if (!execSqlAllowDuplicateColumn(
+          db,
+          "ALTER TABLE entries ADD COLUMN primary_storage_folder "
+          "INTEGER NOT NULL DEFAULT 0",
+          "migrating primary chart storage selection")) {
     return false;
   }
   return true;
@@ -1282,20 +1325,23 @@ bool chart_repository_detail::EnsureCoreSchema(sqlite3 *database) {
 static bool insertEntry(sqlite3 *db, const std::filesystem::path &path,
                         const std::string &iosBookmark) {
   createChartScanCheckpointTable(db);
-  auto query = "REPLACE INTO entries ("
+  auto query = "INSERT INTO entries ("
                "path,"
                "ios_bookmark"
                ") VALUES("
                "@path,"
                "@ios_bookmark"
-               ")";
+               ") ON CONFLICT(path) DO UPDATE SET "
+               "ios_bookmark = excluded.ios_bookmark";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt,
                                     "preparing statement to insert an entry",
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = chart_storage_identity::StoredPathText(path);
+  const std::string pathText =
+      storedEntryPathForResolvedPath(db, path, false)
+          .value_or(chart_storage_identity::StoredPathText(path));
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
   int rc = sqlite3_step(stmt);
@@ -1308,29 +1354,39 @@ static bool insertEntry(sqlite3 *db, const std::filesystem::path &path,
   return true;
 }
 
-static std::vector<ChartEntry> selectAllEntries(sqlite3 *db) {
+struct StoredChartEntry {
+  ChartEntry entry;
+  std::string storedPath;
+  bool storedSelected = false;
+};
+
+static std::vector<StoredChartEntry> readStoredEntries(sqlite3 *db) {
   auto query = "SELECT "
+               "rowid,"
                "path,"
-               "COALESCE(ios_bookmark, '')"
-               " FROM entries";
+               "COALESCE(ios_bookmark, ''),"
+               "COALESCE(primary_storage_folder, 0)"
+               " FROM entries ORDER BY rowid";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(db, query, stmt, "getting all entries",
                                     logSqlErrorText)) {
-    return std::vector<ChartEntry>();
+    return {};
   }
-  std::vector<ChartEntry> entries;
+  std::vector<StoredChartEntry> entries;
   while (sqlite3_step(stmt) == SQLITE_ROW) {
-    ChartEntry entry;
-    std::filesystem::path path(readStoredPath(stmt, 0));
+    StoredChartEntry stored;
+    stored.storedPath = sqliteColumnString(stmt, 1);
+    std::filesystem::path path(utf8_to_path_t(stored.storedPath));
     if (!path.empty()) {
       chart_storage_identity::ToAbsolutePath(path);
     }
-    entry.path = fspath_to_path_t(path);
-    entry.iosBookmark = sqliteColumnString(stmt, 1);
+    stored.entry.path = fspath_to_path_t(path);
+    stored.entry.iosBookmark = sqliteColumnString(stmt, 2);
+    stored.storedSelected = sqlite3_column_int(stmt, 3) != 0;
 #if TARGET_OS_ANDROID
-    RegisterAndroidChartFolder(path, entry.iosBookmark);
+    RegisterAndroidChartFolder(path, stored.entry.iosBookmark);
 #endif
-    entries.push_back(std::move(entry));
+    entries.push_back(std::move(stored));
   }
   return entries;
 }
@@ -1341,28 +1397,156 @@ std::filesystem::path ChartRepository::DefaultBmsFolderPath() {
 
 bool ChartRepository::IsDefaultBmsFolderPath(
     const std::filesystem::path &path) {
-#if TARGET_OS_ANDROID
-  if (path.empty()) {
+  return !path.empty() &&
+         path.lexically_normal() ==
+             DefaultBmsFolderPath().lexically_normal();
+}
+
+static bool isAndroidTreeVirtualPath(const std::filesystem::path &path) {
+  const auto normalized = path.lexically_normal();
+  const auto first = normalized.begin();
+  return first != normalized.end() &&
+         first->generic_string() == "@androidtree@";
+}
+
+static bool isPrimaryStorageEligible(const std::filesystem::path &path) {
+  return !path.empty() &&
+         !ChartRepository::IsDefaultBmsFolderPath(path) &&
+         !isAndroidTreeVirtualPath(path);
+}
+
+static std::optional<std::string> storedEntryPathForResolvedPath(
+    sqlite3 *db, const std::filesystem::path &path,
+    bool requirePrimaryStorageEligibility) {
+  const auto normalizedTarget = path.lexically_normal();
+  const auto storedEntries = readStoredEntries(db);
+  const auto target = std::find_if(
+      storedEntries.begin(), storedEntries.end(),
+      [&normalizedTarget, requirePrimaryStorageEligibility](const auto &stored) {
+        const auto resolvedPath =
+            std::filesystem::path(stored.entry.path).lexically_normal();
+        return resolvedPath == normalizedTarget &&
+               (!requirePrimaryStorageEligibility ||
+                isPrimaryStorageEligible(resolvedPath));
+      });
+  return target == storedEntries.end()
+             ? std::nullopt
+             : std::optional<std::string>(target->storedPath);
+}
+
+static bool writePrimaryStorageSelection(
+    sqlite3 *db, const std::optional<std::string> &storedPath) {
+  const std::string query = storedPath
+                                ? "UPDATE entries SET "
+                                  "primary_storage_folder = CASE WHEN "
+                                  "path = @selected_path THEN 1 ELSE 0 END"
+                                : "UPDATE entries SET "
+                                  "primary_storage_folder = 0";
+  SqliteStatementHandle stmt;
+  if (!prepareSqliteStatementLogged(
+          db, query, stmt, "updating primary chart storage folder",
+          logSqlErrorText)) {
     return false;
   }
-  return path.lexically_normal() == DefaultBmsFolderPath().lexically_normal();
-#else
-  (void)path;
-  return false;
-#endif
+  if (storedPath) {
+    bindSqliteText(stmt, 1, *storedPath);
+  }
+  if (sqlite3_step(stmt) != SQLITE_DONE) {
+    logSqlError("updating primary chart storage folder", db);
+    return false;
+  }
+  return true;
+}
+
+static bool normalizePrimaryStorageEntry(sqlite3 *db,
+                                          std::vector<ChartEntry> *entries) {
+  auto storedEntries = readStoredEntries(db);
+  std::optional<std::size_t> selectedIndex;
+  std::optional<std::size_t> firstEligibleIndex;
+  for (std::size_t index = 0; index < storedEntries.size(); ++index) {
+    auto &stored = storedEntries[index];
+    stored.entry.primaryStorageEligible = isPrimaryStorageEligible(
+        std::filesystem::path(stored.entry.path));
+    if (!stored.entry.primaryStorageEligible) {
+      continue;
+    }
+    if (!firstEligibleIndex) {
+      firstEligibleIndex = index;
+    }
+    if (!selectedIndex && stored.storedSelected) {
+      selectedIndex = index;
+    }
+  }
+  if (!selectedIndex) {
+    selectedIndex = firstEligibleIndex;
+  }
+
+  bool selectionNeedsUpdate = false;
+  for (std::size_t index = 0; index < storedEntries.size(); ++index) {
+    const bool shouldBeSelected = selectedIndex && *selectedIndex == index;
+    storedEntries[index].entry.primaryStorageFolder = shouldBeSelected;
+    selectionNeedsUpdate =
+        selectionNeedsUpdate ||
+        storedEntries[index].storedSelected != shouldBeSelected;
+  }
+  if (selectionNeedsUpdate &&
+      !writePrimaryStorageSelection(
+          db, selectedIndex ? std::optional<std::string>(
+                                  storedEntries[*selectedIndex].storedPath)
+                            : std::nullopt)) {
+    return false;
+  }
+
+  if (entries != nullptr) {
+    entries->clear();
+    entries->reserve(storedEntries.size());
+    for (auto &stored : storedEntries) {
+      entries->push_back(std::move(stored.entry));
+    }
+  }
+  return true;
+}
+
+static std::vector<ChartEntry> selectAllEntries(sqlite3 *db) {
+  std::vector<ChartEntry> entries;
+  if (!normalizePrimaryStorageEntry(db, &entries)) {
+    return {};
+  }
+  return entries;
+}
+
+static bool setPrimaryStorageEntry(sqlite3 *db,
+                                    const std::filesystem::path &path) {
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN", transactionError);
+  if (!transaction.active()) {
+    return false;
+  }
+  if (!normalizePrimaryStorageEntry(db, nullptr)) {
+    return false;
+  }
+  const auto storedPath =
+      storedEntryPathForResolvedPath(db, path, true);
+  if (!storedPath || !writePrimaryStorageSelection(db, storedPath)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
+}
+
+static std::optional<ChartEntry> selectPrimaryStorageEntry(sqlite3 *db) {
+  const auto entries = selectAllEntries(db);
+  const auto selected = std::find_if(
+      entries.begin(), entries.end(), [](const ChartEntry &entry) {
+        return entry.primaryStorageEligible && entry.primaryStorageFolder;
+      });
+  return selected == entries.end() ? std::nullopt
+                                   : std::optional<ChartEntry>(*selected);
 }
 
 static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *db) {
   auto entries = selectAllEntries(db);
 
 #if TARGET_OS_ANDROID
-  const auto defaultPath = ChartRepository::DefaultBmsFolderPath();
-  std::error_code errorCode;
-  if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
-    SDL_Log("Failed to create default BMS folder %s: %s",
-            fspath_to_utf8(defaultPath).c_str(), errorCode.message().c_str());
-  }
-
   bool hasDefaultEntry = false;
   for (auto &entry : entries) {
     if (ChartRepository::IsDefaultBmsFolderPath(
@@ -1370,6 +1554,13 @@ static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *db) {
       entry.removable = false;
       hasDefaultEntry = true;
     }
+  }
+
+  const auto defaultPath = ChartRepository::DefaultBmsFolderPath();
+  std::error_code errorCode;
+  if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
+    SDL_Log("Failed to create default BMS folder %s: %s",
+            fspath_to_utf8(defaultPath).c_str(), errorCode.message().c_str());
   }
 
   if (!hasDefaultEntry) {
@@ -1393,7 +1584,9 @@ static bool deleteEntry(sqlite3 *db, const std::filesystem::path &path) {
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = chart_storage_identity::StoredPathText(path);
+  const std::string pathText =
+      storedEntryPathForResolvedPath(db, path, false)
+          .value_or(chart_storage_identity::StoredPathText(path));
   bindSqliteText(stmt, 1, pathText);
   int rc = sqlite3_step(stmt);
   if (rc != SQLITE_DONE) {

@@ -34,7 +34,8 @@ BmsSearchResult BmsSearchService::findAndDownload(
     const std::string &sha256, const std::string &md5,
     const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
-    const std::string &title, const std::string &artist) const {
+    const std::string &title, const std::string &artist,
+    BmsSearchDownloadOptions options) const {
   BmsSearchResult result;
   const std::string hash = normalizedHash(sha256);
   const std::string md5Hash = normalizedHash(md5);
@@ -85,7 +86,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
     preserveLookupContext(packageResult, result);
     if (EndlessDreamSourcesDriver::tryDownloadByMd5(
             md5Hash, archiveKey, libraryRoot, cancelled, progressCallback,
-            packageResult)) {
+            options, packageResult)) {
       return packageResult;
     }
     if (!packageResult.message.empty()) {
@@ -102,7 +103,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
     if (HorieYuukaDriver::tryDownload(
             horieQueries, horieTerms.title, horieTerms.artist,
             !horieTerms.title.empty(), archiveKey, libraryRoot, cancelled,
-            progressCallback, horieResult)) {
+            progressCallback, options, horieResult)) {
       return horieResult;
     }
     preserveLookupContext(horieResult, automaticFailure);
@@ -226,7 +227,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
   const std::string effectiveDownloadUrl = supportedIt->downloadUrl;
   if (!downloadAndExtractArchive(effectiveDownloadUrl, supportedIt->originalUrl,
                                  hash, libraryRoot, cancelled,
-                                 progressCallback, result,
+                                 progressCallback, options, result,
                                  supportedIt->archiveName)) {
     if (result.fallbackUrl.empty()) {
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
@@ -243,7 +244,8 @@ BmsSearchResult BmsSearchService::downloadCandidate(
     const BmsSearchCandidate &candidate, const std::string &sha256,
     const std::string &md5, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
-    BmsSearchDownloadProgressCallback progressCallback) const {
+    BmsSearchDownloadProgressCallback progressCallback,
+    BmsSearchDownloadOptions options) const {
   BmsSearchResult result;
   const std::string hash = normalizedHash(sha256);
   const std::string md5Hash = normalizedHash(md5);
@@ -252,6 +254,7 @@ BmsSearchResult BmsSearchService::downloadCandidate(
     progressCallback({.message = "Preparing Horie archive download"});
   }
   HorieYuukaDriver::downloadCandidateById(candidate, archiveKey, libraryRoot,
-                                          cancelled, progressCallback, result);
+                                          cancelled, progressCallback, options,
+                                          result);
   return result;
 }

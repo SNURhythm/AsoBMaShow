@@ -658,6 +658,31 @@ void SettingsScene::refreshChartLibrary() {
       });
 }
 
+void SettingsScene::setFindBmsDownloadEntry(
+    const std::string &entryPathText) {
+  auto session = context.chartRepository.OpenSession();
+  if (!session.has_value()) {
+    chartFolderStatusMessage = "Could not open chart database.";
+    chartFolderStatusColor = {255, 177, 170, 255};
+  } else if (!session->SetPrimaryStorageEntry(
+                 std::filesystem::path(utf8_to_path_t(entryPathText)))) {
+    chartFolderStatusMessage =
+        "Could not use this folder for Find BMS downloads.";
+    chartFolderStatusColor = {255, 177, 170, 255};
+  } else {
+    chartFolderStatusMessage = "Find BMS download folder updated.";
+    chartFolderStatusColor = {181, 228, 165, 255};
+    loadChartEntries();
+    refreshChartEntryBackupStatuses();
+  }
+
+  if (chartFolderStatusText != nullptr) {
+    chartFolderStatusText->setText(chartFolderStatusMessage);
+    chartFolderStatusText->setColor(chartFolderStatusColor);
+  }
+  lastLayoutWidth = -1;
+}
+
 void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   if (difficultyTableJobRunning || entryPathText.empty()) {
     return;

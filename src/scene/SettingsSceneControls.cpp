@@ -204,6 +204,9 @@ void SettingsScene::refreshSettingsText() {
                                                 : "Floating Off";
   const std::string archiveChartPreviewLabel =
       context.settings.archiveChartPreviewEnabled ? "Enabled" : "Disabled";
+  const std::string findBmsSkipUnarchivingLabel =
+      context.settings.findBmsSkipUnarchivingForNonSolidArchives ? "On"
+                                                                 : "Off";
   const std::string judgementIndicatorLabel =
       context.settings.judgementIndicatorEnabled ? "Enabled" : "Disabled";
   const std::string judgementIndicatorRenderModeLabel =
@@ -338,6 +341,9 @@ void SettingsScene::refreshSettingsText() {
   if (archiveChartPreviewModeText != nullptr) {
     archiveChartPreviewModeText->setText(archiveChartPreviewLabel);
   }
+  if (findBmsSkipUnarchivingModeText != nullptr) {
+    findBmsSkipUnarchivingModeText->setText(findBmsSkipUnarchivingLabel);
+  }
   if (judgementIndicatorModeText != nullptr) {
     judgementIndicatorModeText->setText(judgementIndicatorLabel);
   }
@@ -422,6 +428,11 @@ void SettingsScene::refreshSettingsText() {
       archiveChartPreviewModeButton, archiveChartPreviewModeText,
       context.settings.archiveChartPreviewEnabled ? SettingsButtonTone::Success
                                                   : SettingsButtonTone::Danger);
+  applySemanticButtonStyle(
+      findBmsSkipUnarchivingModeButton, findBmsSkipUnarchivingModeText,
+      context.settings.findBmsSkipUnarchivingForNonSolidArchives
+          ? SettingsButtonTone::Success
+          : SettingsButtonTone::Info);
   applySemanticButtonStyle(
       judgementIndicatorModeButton, judgementIndicatorModeText,
       context.settings.judgementIndicatorEnabled ? SettingsButtonTone::Success

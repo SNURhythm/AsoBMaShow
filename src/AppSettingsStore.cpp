@@ -125,6 +125,8 @@ json settingsToJson(const AppSettings &settings) {
       {"showInvisibleNotes", settings.showInvisibleNotes},
       {"touchVisualizationEnabled", settings.touchVisualizationEnabled},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
+      {"findBmsSkipUnarchivingForNonSolidArchives",
+       settings.findBmsSkipUnarchivingForNonSolidArchives},
       {"bgaEnabled", settings.bgaEnabled},
       {"bgaBrightnessPercent", settings.bgaBrightnessPercent},
       {"bgaBlurStrength", settings.bgaBlurStrength},
@@ -235,6 +237,8 @@ AppSettings settingsFromJson(const json &document,
             settings.touchVisualizationEnabled, diagnostics);
   readValue(document, "archiveChartPreviewEnabled",
             settings.archiveChartPreviewEnabled, diagnostics);
+  readValue(document, "findBmsSkipUnarchivingForNonSolidArchives",
+            settings.findBmsSkipUnarchivingForNonSolidArchives, diagnostics);
   readValue(document, "bgaEnabled", settings.bgaEnabled, diagnostics);
   readValue(document, "bgaBrightnessPercent", settings.bgaBrightnessPercent,
             diagnostics);

@@ -4,6 +4,7 @@
 #include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/repositories/SqliteRAII.h"
+#include "../src/targets.h"
 #include "RepositorySqliteTestSupport.h"
 
 #include <array>
@@ -719,6 +720,224 @@ void testChartMigrationCompatibilityMatrix() {
   }
 }
 
+void testLegacyIosContainerPathRebasesToCurrentDocuments() {
+  const std::filesystem::path currentDocuments =
+      "/private/var/mobile/Containers/Data/Application/"
+      "b5702f7e-8d09-4559-b7c1-a9131a684b8a/Documents";
+  const std::filesystem::path legacyPath =
+      "/var/mobile/Containers/Data/Application/"
+      "FEA6861E-8321-4800-8A2B-F79AC5C8E564/Documents/BMS";
+  const auto rebased =
+      chart_storage_identity::RebaseLegacyIOSDocumentsPath(legacyPath,
+                                                            currentDocuments);
+  assert(rebased == currentDocuments / "BMS");
+
+  const std::filesystem::path externalPath =
+      "/private/var/mobile/Containers/Shared/AppGroup/"
+      "2887ECDB-CE93-49A5-97F6-A75107EDD35D/File Provider Storage/BMSFILES";
+  assert(!chart_storage_identity::RebaseLegacyIOSDocumentsPath(
+      externalPath, currentDocuments));
+}
+
+const ChartEntry *entryAtPath(const std::vector<ChartEntry> &entries,
+                              const std::filesystem::path &path) {
+  const auto it = std::find_if(
+      entries.begin(), entries.end(), [&path](const ChartEntry &entry) {
+        return std::filesystem::path(entry.path).lexically_normal() ==
+               path.lexically_normal();
+      });
+  return it == entries.end() ? nullptr : &*it;
+}
+
+void testFindBmsDownloadEntrySelectionLifecycle() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+
+  const auto fallback = ChartRepository::DefaultBmsFolderPath();
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  assert(session->InsertEntry(fallback));
+  assert(!session->SelectPrimaryStorageEntry());
+
+  assert(session->InsertEntry(first, "first-bookmark"));
+  auto selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+  assert(selected->primaryStorageFolder);
+  assert(selected->primaryStorageEligible);
+
+  assert(session->InsertEntry(first, "updated-bookmark"));
+  assert(session->InsertEntry(second, "second-bookmark"));
+  selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+  assert(selected->iosBookmark == "updated-bookmark");
+
+  assert(session->SetPrimaryStorageEntry(second));
+  selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == second);
+
+  int removedChartCount = -1;
+  assert(session->DeleteEntryAndChartMetaInDirectory(second,
+                                                     removedChartCount));
+  selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  assert(session->DeleteEntryAndChartMetaInDirectory(first,
+                                                     removedChartCount));
+  assert(!session->SelectPrimaryStorageEntry());
+  const auto entries = session->SelectEffectiveEntries();
+  const auto *fallbackEntry = entryAtPath(entries, fallback);
+#if !TARGET_OS_ANDROID
+  assert(fallbackEntry != nullptr);
+  assert(fallbackEntry->removable);
+#endif
+  if (fallbackEntry != nullptr) {
+    assert(!fallbackEntry->primaryStorageFolder);
+    assert(!fallbackEntry->primaryStorageEligible);
+  }
+}
+
+void testFindBmsDownloadEntryRejectsIneligiblePaths() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+
+  const std::filesystem::path virtualTree =
+      std::filesystem::path("@androidtree@") / "tree-id" / "Charts";
+  const auto normal = temporary.path() / "normal";
+  assert(session->InsertEntry(virtualTree, "content://tree/example"));
+  assert(!session->SelectPrimaryStorageEntry());
+  assert(!session->SetPrimaryStorageEntry(virtualTree));
+  assert(!session->SetPrimaryStorageEntry(temporary.path() / "missing"));
+
+  assert(session->InsertEntry(normal));
+  const auto entries = session->SelectAllEntries();
+  const auto *virtualEntry = entryAtPath(entries, virtualTree);
+  assert(virtualEntry != nullptr);
+  assert(!virtualEntry->primaryStorageEligible);
+  assert(!virtualEntry->primaryStorageFolder);
+  assert(session->SelectPrimaryStorageEntry());
+}
+
+void testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  const auto first = temporary.path() / "legacy-first";
+  const auto second = temporary.path() / "legacy-second";
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE entries (path TEXT PRIMARY KEY, "
+                   "ios_bookmark TEXT DEFAULT '')"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       first.generic_string() + "')"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       second.generic_string() + "')"));
+  }
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "UPDATE entries SET primary_storage_folder = 1"));
+  }
+  selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  Database verification = openDatabase(databasePath);
+  assert(verification);
+  assert(queryInt(verification.get(),
+                  "SELECT COUNT(*) FROM entries "
+                  "WHERE primary_storage_folder = 1") == 1);
+}
+
+void testEntryMutationsPreserveOriginalDatabasePathKey() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  const auto storedSecond = temporary.path() / "alias" / ".." / "second";
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE entries (path TEXT PRIMARY KEY, "
+                   "ios_bookmark TEXT DEFAULT '', "
+                   "primary_storage_folder INTEGER NOT NULL DEFAULT 0)"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       first.generic_string() + "')"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path) VALUES ('" +
+                       storedSecond.generic_string() + "')"));
+  }
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto selected = session->SelectPrimaryStorageEntry();
+  assert(selected && std::filesystem::path(selected->path) == first);
+
+  assert(session->SetPrimaryStorageEntry(second));
+  selected = session->SelectPrimaryStorageEntry();
+  assert(selected &&
+         std::filesystem::path(selected->path).lexically_normal() == second);
+
+  assert(session->DeleteEntry(second));
+  const auto entries = session->SelectAllEntries();
+  assert(entryAtPath(entries, second) == nullptr);
+}
+
+void testEntryUpsertPreservesOriginalDatabasePathKey() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  const auto resolvedPath = temporary.path() / "charts";
+  const auto storedPath = temporary.path() / "alias" / ".." / "charts";
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE entries (path TEXT PRIMARY KEY, "
+                   "ios_bookmark TEXT DEFAULT '', "
+                   "primary_storage_folder INTEGER NOT NULL DEFAULT 0)"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path, ios_bookmark) VALUES ('" +
+                       storedPath.generic_string() + "', 'old-bookmark')"));
+  }
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  assert(session->InsertEntry(resolvedPath, "updated-bookmark"));
+
+  const auto entries = session->SelectAllEntries();
+  assert(entries.size() == 1);
+  assert(entryAtPath(entries, resolvedPath) != nullptr);
+  assert(entries.front().iosBookmark == "updated-bookmark");
+
+  Database verification = openDatabase(databasePath);
+  assert(verification);
+  assert(queryInt(verification.get(), "SELECT COUNT(*) FROM entries") == 1);
+  assert(queryString(verification.get(), "SELECT path FROM entries") ==
+         storedPath.generic_string());
+}
+
 } // namespace
 
 int main() {
@@ -730,5 +949,11 @@ int main() {
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
   testChartMigrationCompatibilityMatrix();
+  testLegacyIosContainerPathRebasesToCurrentDocuments();
+  testFindBmsDownloadEntrySelectionLifecycle();
+  testFindBmsDownloadEntryRejectsIneligiblePaths();
+  testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates();
+  testEntryMutationsPreserveOriginalDatabasePathKey();
+  testEntryUpsertPreservesOriginalDatabasePathKey();
   return 0;
 }

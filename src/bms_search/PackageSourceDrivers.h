@@ -25,6 +25,7 @@ public:
       const std::string &md5, const std::string &archiveKey,
       const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
       BmsSearchDownloadProgressCallback progressCallback,
+      const BmsSearchDownloadOptions &options,
       BmsSearchResult &result);
 };
 

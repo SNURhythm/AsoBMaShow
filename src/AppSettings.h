@@ -126,6 +126,7 @@ public:
   bool showInvisibleNotes = false;
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;
+  bool findBmsSkipUnarchivingForNonSolidArchives = false;
   bool bgaEnabled = true;
   int bgaBrightnessPercent = kDefaultBgaBrightnessPercent;
   float bgaBlurStrength = kDefaultBgaBlurStrength;

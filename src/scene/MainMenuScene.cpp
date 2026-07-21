@@ -36,6 +36,8 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
+#include "FindBmsDialogPolicy.h"
+#include "FindBmsProgressPresentation.h"
 #include "IrUploadsScene.h"
 #include "MusicPlayerScene.h"
 #include "RemoteResultRecallController.h"
@@ -528,26 +530,6 @@ bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
 }
 
-std::string formatFindBmsBytes(std::uint64_t bytes) {
-  constexpr double kKib = 1024.0;
-  constexpr double kMib = kKib * 1024.0;
-  constexpr double kGib = kMib * 1024.0;
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(bytes >= 10 * 1024 ? 1 : 0);
-  if (bytes >= static_cast<std::uint64_t>(kGib)) {
-    stream << static_cast<double>(bytes) / kGib << " GB";
-  } else if (bytes >= static_cast<std::uint64_t>(kMib)) {
-    stream << static_cast<double>(bytes) / kMib << " MB";
-  } else if (bytes >= static_cast<std::uint64_t>(kKib)) {
-    stream << static_cast<double>(bytes) / kKib << " KB";
-  } else {
-    stream.str("");
-    stream.clear();
-    stream << bytes << " B";
-  }
-  return stream.str();
-}
-
 bool pathIsInsideDirectoryForMenu(const std::filesystem::path &path,
                                   const std::filesystem::path &directory) {
   if (path.empty() || directory.empty()) {
@@ -578,42 +560,9 @@ double progressRatio(const BmsSearchDownloadProgress &progress) {
                     0.0, 1.0);
 }
 
-std::string progressPercentText(double ratio) {
-  const int percent =
-      static_cast<int>(std::lround(std::clamp(ratio, 0.0, 1.0) * 100.0));
-  return std::to_string(percent) + "%";
-}
-
-std::string findBmsProgressDisplayText(const std::string &message,
-                                       std::uint64_t downloadedBytes,
-                                       std::uint64_t totalBytes,
-                                       bool includeBytes) {
-  if (message == "Downloading archive" && totalBytes > 0) {
-    const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
-                                        static_cast<double>(totalBytes),
-                                    0.0, 1.0);
-    std::string text = "Downloading archive - " + progressPercentText(ratio);
-    if (includeBytes) {
-      text += " (" + formatFindBmsBytes(downloadedBytes) + " / " +
-              formatFindBmsBytes(totalBytes) + ")";
-    }
-    return text;
-  }
-  if (message == "Downloading archive" && downloadedBytes > 0) {
-    return "Downloading archive (" + formatFindBmsBytes(downloadedBytes) + ")";
-  }
-  if (message == "Download complete" && totalBytes > 0) {
-    const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
-                                        static_cast<double>(totalBytes),
-                                    0.0, 1.0);
-    return "Download complete - " + progressPercentText(ratio);
-  }
-  return message;
-}
-
 std::string
-findBmsProgressDisplayText(const BmsSearchDownloadProgress &progress,
-                           bool includeBytes) {
+findBmsProgressEventDisplayText(const BmsSearchDownloadProgress &progress,
+                                bool includeBytes) {
   return findBmsProgressDisplayText(progress.message, progress.downloadedBytes,
                                     progress.totalBytes, includeBytes);
 }
@@ -1530,7 +1479,8 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
-    const std::string &iosBookmark, bool rebuildLibraryMetadata) {
+    const std::string &iosBookmark, bool rebuildLibraryMetadata,
+    const std::filesystem::path &additionalFolderToScan) {
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
@@ -1540,6 +1490,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
         .title = title,
         .folderToAdd = folderToAdd,
         .iosBookmark = iosBookmark,
+        .additionalFolderToScan = additionalFolderToScan,
         .rebuildLibraryMetadata = rebuildLibraryMetadata,
     });
     libraryTasks.push_back(LibraryTaskInfo{
@@ -1983,6 +1934,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (entries.empty()) {
     entries = taskSession->SelectEffectiveEntries();
   }
+  main_menu_library::appendUniqueScanFolder(entries, task.additionalFolderToScan);
 
   if (stopToken.stop_requested()) {
     return;
@@ -2553,10 +2505,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsStatusText = nullptr;
   findBmsDetailText = nullptr;
   findBmsCloseButton = nullptr;
+  findBmsKeepFilesButton = nullptr;
+  findBmsDeleteFilesButton = nullptr;
   findBmsOpenButton = nullptr;
   findBmsGoogleButton = nullptr;
   findBmsRefreshButton = nullptr;
   findBmsCloseButtonText = nullptr;
+  findBmsKeepFilesButtonText = nullptr;
+  findBmsDeleteFilesButtonText = nullptr;
   findBmsOpenButtonText = nullptr;
   findBmsGoogleButtonText = nullptr;
   findBmsRefreshButtonText = nullptr;
@@ -2639,6 +2595,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsJobRunning = false;
   findBmsCancelled = false;
   findBmsResult = {};
+  findBmsPendingDecision.reset();
+  findBmsDownloadRoot.clear();
   findBmsProgressMessage.clear();
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
@@ -6149,11 +6107,13 @@ void MainMenuScene::applyUnzipResult() {
       result->success ? 900 : 1800, true);
 }
 
-void MainMenuScene::startLibraryRefresh() {
+void MainMenuScene::startLibraryRefresh(
+    const std::filesystem::path &additionalFolderToScan) {
   if (willStart.load() || replayExportInProgress.load()) {
     return;
   }
-  enqueueLibraryRefreshTask("Refresh Library");
+  enqueueLibraryRefreshTask("Refresh Library", {}, "", false,
+                            additionalFolderToScan);
 }
 
 void MainMenuScene::startLibraryRebuild() {
@@ -6198,30 +6158,22 @@ void MainMenuScene::openFindBmsForSelection() {
 }
 
 std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
+  const auto fallback = ChartRepository::DefaultBmsFolderPath();
   if (!chartSession.has_value()) {
-    return ChartRepository::DefaultBmsFolderPath();
+    ensureDirectoryExistsLogged(fallback, "BMS download root");
+    return fallback;
   }
-  auto entries = chartSession->SelectEffectiveEntries();
-  if (entries.empty()) {
-    const auto path = ChartRepository::DefaultBmsFolderPath();
-    const bool pathReady =
-        ensureDirectoryExistsLogged(path, "BMS download root");
-#if !(TARGET_OS_ANDROID)
-    if (pathReady) {
-      chartSession->InsertEntry(path);
-    }
-#endif
-    return path;
+
+  const auto selected = chartSession->SelectPrimaryStorageEntry();
+  if (!selected.has_value()) {
+    ensureDirectoryExistsLogged(fallback, "BMS download root");
+    return fallback;
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return ResolveIOSFolderEntryPath(entries.front());
-#elif TARGET_OS_ANDROID
-  const auto path = ChartRepository::DefaultBmsFolderPath();
-  ensureDirectoryExistsLogged(path, "BMS download root");
-  return path;
+  return ResolveIOSFolderEntryPath(*selected);
 #else
-  return std::filesystem::path(entries.front().path);
+  return std::filesystem::path(selected->path);
 #endif
 }
 
@@ -7192,17 +7144,29 @@ void MainMenuScene::buildFindBmsModal() {
   footer->setHeight(58);
 
   findBmsCloseButton = makeModalButton("Cancel", 20, &findBmsCloseButtonText);
+  findBmsKeepFilesButton =
+      makeModalButton("Keep Files", 18, &findBmsKeepFilesButtonText);
+  findBmsDeleteFilesButton =
+      makeModalButton("Delete Files", 18, &findBmsDeleteFilesButtonText);
   findBmsOpenButton = makeModalButton("Source", 18, &findBmsOpenButtonText);
   findBmsGoogleButton = makeModalButton("Search", 18, &findBmsGoogleButtonText);
   findBmsRefreshButton =
       makeModalButton("Refresh", 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
+  findBmsKeepFilesButton->setWidth(150);
+  findBmsDeleteFilesButton->setWidth(150);
   findBmsOpenButton->setWidth(180);
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() {
-    if (findBmsJobRunning.load()) {
+    const bool wasRunning = findBmsJobRunning.load();
+    applyFindBmsUpdates();
+    const bool running = wasRunning || findBmsJobRunning.load();
+    if (!findBmsDialogPolicy(running, findBmsResult).showCloseOrCancel) {
+      return;
+    }
+    if (running) {
       findBmsCancelled = true;
       if (findBmsThread.joinable()) {
         findBmsThread.request_stop();
@@ -7211,6 +7175,14 @@ void MainMenuScene::buildFindBmsModal() {
       return;
     }
     hideFindBmsModal();
+  });
+  findBmsKeepFilesButton->setOnClickListener([this]() {
+    startFindBmsPendingArtifactResolution(
+        BmsSearchPendingArtifactDecision::Keep);
+  });
+  findBmsDeleteFilesButton->setOnClickListener([this]() {
+    startFindBmsPendingArtifactResolution(
+        BmsSearchPendingArtifactDecision::Delete);
   });
   findBmsOpenButton->setOnClickListener([this]() {
     const std::string url = findBmsManualSourceUrl(findBmsResult);
@@ -7226,6 +7198,8 @@ void MainMenuScene::buildFindBmsModal() {
   });
 
   footer->addView(findBmsCloseButton);
+  footer->addView(findBmsKeepFilesButton);
+  footer->addView(findBmsDeleteFilesButton);
   footer->addView(findBmsOpenButton);
   footer->addView(findBmsGoogleButton);
   footer->addView(findBmsRefreshButton);
@@ -7248,6 +7222,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
 
   findBmsModalChart = record;
   findBmsResult = {};
+  findBmsPendingDecision.reset();
   if (!record.meta.SHA256.empty()) {
     findBmsResult.patternUrl =
         BmsSearchService::patternUrlForSha256(record.meta.SHA256);
@@ -7267,12 +7242,16 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   pendingFindBmsResult.reset();
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
+  findBmsDownloadRoot = downloadRoot;
+  const BmsSearchDownloadOptions downloadOptions{
+      .skipUnarchivingForNonSolidArchives =
+          context.settings.findBmsSkipUnarchivingForNonSolidArchives};
   findBmsJobRunning = true;
   findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->setVisible(true);
   refreshFindBmsModal();
 
-  findBmsThread = std::jthread([this, record, downloadRoot](
+  findBmsThread = std::jthread([this, record, downloadRoot, downloadOptions](
                                    const std::stop_token &stopToken) {
     BmsSearchService service;
     auto progressCallback = [this](const BmsSearchDownloadProgress &progress) {
@@ -7288,7 +7267,8 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
     }
     auto result = service.findAndDownload(
         record.meta.SHA256, record.meta.MD5, downloadRoot, findBmsCancelled,
-        progressCallback, record.meta.Title, record.meta.Artist);
+        progressCallback, record.meta.Title, record.meta.Artist,
+        downloadOptions);
     {
       std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
       pendingFindBmsResult = std::move(result);
@@ -7309,8 +7289,13 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   const BmsSearchCandidate candidate = findBmsResult.candidates[candidateIndex];
   const ChartMetaRecord record = findBmsModalChart;
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
+  findBmsDownloadRoot = downloadRoot;
+  const BmsSearchDownloadOptions downloadOptions{
+      .skipUnarchivingForNonSolidArchives =
+          context.settings.findBmsSkipUnarchivingForNonSolidArchives};
   findBmsResult = {};
   findBmsResult.candidates = {candidate};
+  findBmsPendingDecision.reset();
   findBmsProgressMessage = "Preparing Horie archive download";
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
@@ -7323,33 +7308,74 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsJobRunning = true;
   refreshFindBmsModal();
 
-  findBmsThread = std::jthread([this, candidate, record, downloadRoot](
-                                   const std::stop_token &stopToken) {
-    BmsSearchService service;
-    auto progressCallback = [this](const BmsSearchDownloadProgress &progress) {
-      std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsProgressEvents.push_back(progress);
-      while (pendingFindBmsProgressEvents.size() >
-             kFindBmsMaxPendingProgressEvents) {
-        pendingFindBmsProgressEvents.pop_front();
-      }
-    };
-    if (stopToken.stop_requested()) {
-      findBmsCancelled = true;
-    }
-    auto result = service.downloadCandidate(candidate, record.meta.SHA256,
-                                            record.meta.MD5, downloadRoot,
-                                            findBmsCancelled, progressCallback);
-    {
-      std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsResult = std::move(result);
-      findBmsJobRunning = false;
-    }
-  });
+  findBmsThread = std::jthread(
+      [this, candidate, record, downloadRoot, downloadOptions](
+          const std::stop_token &stopToken) {
+        BmsSearchService service;
+        auto progressCallback =
+            [this](const BmsSearchDownloadProgress &progress) {
+              std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
+              pendingFindBmsProgressEvents.push_back(progress);
+              while (pendingFindBmsProgressEvents.size() >
+                     kFindBmsMaxPendingProgressEvents) {
+                pendingFindBmsProgressEvents.pop_front();
+              }
+            };
+        if (stopToken.stop_requested()) {
+          findBmsCancelled = true;
+        }
+        auto result = service.downloadCandidate(
+            candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
+            findBmsCancelled, progressCallback, downloadOptions);
+        {
+          std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
+          pendingFindBmsResult = std::move(result);
+          findBmsJobRunning = false;
+        }
+      });
+}
+
+void MainMenuScene::startFindBmsPendingArtifactResolution(
+    BmsSearchPendingArtifactDecision decision) {
+  if (findBmsJobRunning.load() || !findBmsResult.pendingArtifact) {
+    return;
+  }
+  if (findBmsThread.joinable()) {
+    findBmsThread.join();
+  }
+
+  BmsSearchResult result = findBmsResult;
+  findBmsPendingDecision = decision;
+  findBmsProgressMessage =
+      decision == BmsSearchPendingArtifactDecision::Keep ? "Keeping files"
+                                                        : "Deleting files";
+  findBmsProgressCurrent = 0;
+  findBmsProgressTotal = 0;
+  findBmsProgressFraction = 0.95;
+  findBmsProgressLog.push_back(findBmsProgressMessage);
+  pendingFindBmsProgressEvents.clear();
+  pendingFindBmsResult.reset();
+  findBmsJobRunning = true;
+  refreshFindBmsModal();
+
+  findBmsThread = std::jthread(
+      [this, result = std::move(result), decision](
+          const std::stop_token &) mutable {
+        BmsSearchService service;
+        auto resolved =
+            service.resolvePendingArtifact(std::move(result), decision);
+        std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
+        pendingFindBmsResult = std::move(resolved);
+        findBmsJobRunning = false;
+      });
 }
 
 void MainMenuScene::hideFindBmsModal() {
-  if (findBmsModalRoot == nullptr || findBmsJobRunning.load()) {
+  const bool wasRunning = findBmsJobRunning.load();
+  applyFindBmsUpdates();
+  const bool running = wasRunning || findBmsJobRunning.load();
+  if (findBmsModalRoot == nullptr ||
+      !findBmsDialogPolicy(running, findBmsResult).canDismiss) {
     return;
   }
   findBmsModalRoot->setVisible(false);
@@ -7361,15 +7387,24 @@ void MainMenuScene::refreshFindBmsModal() {
   }
 
   const bool running = findBmsJobRunning.load();
+  const auto policy =
+      findBmsDialogPolicy(findBmsJobRunning.load(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
     findBmsModalTitleText->setText("Find BMS");
   }
 
   std::string statusText;
   if (running) {
-    statusText = findBmsProgressDisplayText(findBmsProgressMessage,
-                                            findBmsProgressCurrent,
-                                            findBmsProgressTotal, false);
+    if (findBmsPendingDecision) {
+      statusText = *findBmsPendingDecision ==
+                           BmsSearchPendingArtifactDecision::Keep
+                       ? "Keeping files"
+                       : "Deleting files";
+    } else {
+      statusText = findBmsProgressDisplayText(findBmsProgressMessage,
+                                              findBmsProgressCurrent,
+                                              findBmsProgressTotal, true);
+    }
   } else {
     switch (findBmsResult.status) {
     case BmsSearchResult::Status::Downloaded:
@@ -7386,7 +7421,8 @@ void MainMenuScene::refreshFindBmsModal() {
       statusText = "Choose a match";
       break;
     case BmsSearchResult::Status::HashMismatch:
-      statusText = "Chart mismatch";
+      statusText = findBmsResult.pendingArtifact ? "Chart mismatch"
+                                                 : "Decision complete";
       break;
     case BmsSearchResult::Status::DownloadFailed:
       statusText = "Download failed";
@@ -7405,7 +7441,7 @@ void MainMenuScene::refreshFindBmsModal() {
   }
 
   const bool showCandidateList =
-      !running &&
+      !running && policy.showNormalResultActions &&
       findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
       !findBmsResult.candidates.empty();
 
@@ -7413,7 +7449,14 @@ void MainMenuScene::refreshFindBmsModal() {
   if (!findBmsModalChart.meta.Title.empty()) {
     detail += findBmsModalChart.meta.Title + "\n";
   }
-  if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded) {
+  if (running && findBmsPendingDecision) {
+    detail += "Resolving the downloaded files. This dialog cannot close yet.";
+  } else if (!running && findBmsResult.pendingArtifact) {
+    detail += findBmsResult.message.empty()
+                  ? "Choose Keep Files or Delete Files to continue."
+                  : findBmsResult.message;
+  } else if (!running &&
+             findBmsResult.status == BmsSearchResult::Status::Downloaded) {
     detail += "Refresh the library to use it.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
@@ -7429,10 +7472,12 @@ void MainMenuScene::refreshFindBmsModal() {
     detail += "Choose an archive below.";
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::HashMismatch) {
-    detail += "The downloaded archive does not match this chart.";
+    detail += findBmsResult.message.empty()
+                  ? "The downloaded archive does not match this chart."
+                  : findBmsResult.message;
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
-    detail += "Open the source or try again.";
+    detail += findBmsDownloadFailureDetail(findBmsResult);
   } else {
     detail += "Searching available sources...";
   }
@@ -7469,17 +7514,33 @@ void MainMenuScene::refreshFindBmsModal() {
   const bool downloaded =
       !running && findBmsResult.status == BmsSearchResult::Status::Downloaded;
   const bool hasSource =
-      !manualSourceUrl.empty() &&
+      policy.showNormalResultActions && !manualSourceUrl.empty() &&
       findBmsResult.status != BmsSearchResult::Status::Downloaded &&
       findBmsResult.status != BmsSearchResult::Status::NotFound;
   const bool hasSearchAction =
-      !downloaded && (!findBmsModalChart.meta.SHA256.empty() ||
-                      !findBmsModalChart.meta.MD5.empty() ||
-                      !findBmsModalChart.meta.Title.empty() ||
-                      !findBmsModalChart.meta.Artist.empty());
-  const bool hasRefreshAction = !running && !downloaded;
+      policy.showNormalResultActions && !downloaded &&
+      (!findBmsModalChart.meta.SHA256.empty() ||
+       !findBmsModalChart.meta.MD5.empty() ||
+       !findBmsModalChart.meta.Title.empty() ||
+       !findBmsModalChart.meta.Artist.empty());
+  const bool hasRefreshAction =
+      policy.showNormalResultActions && !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
     findBmsCloseButtonText->setText(running ? "Cancel" : "Close");
+  }
+  if (findBmsCloseButton != nullptr) {
+    findBmsCloseButton->setVisible(policy.showCloseOrCancel);
+    findBmsCloseButton->setWidth(policy.showCloseOrCancel ? 130.0f : 0.0f);
+  }
+  if (findBmsKeepFilesButton != nullptr) {
+    findBmsKeepFilesButton->setVisible(policy.showPendingActions);
+    findBmsKeepFilesButton->setWidth(policy.showPendingActions ? 150.0f
+                                                              : 0.0f);
+  }
+  if (findBmsDeleteFilesButton != nullptr) {
+    findBmsDeleteFilesButton->setVisible(policy.showPendingActions);
+    findBmsDeleteFilesButton->setWidth(policy.showPendingActions ? 150.0f
+                                                                : 0.0f);
   }
   if (findBmsOpenButtonText != nullptr) {
     const bool downloadSource =
@@ -7509,6 +7570,16 @@ void MainMenuScene::refreshFindBmsModal() {
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
                           ui_theme::control, ui_theme::controlHover,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
+  styleThemedActionButton(
+      findBmsKeepFilesButton, findBmsKeepFilesButtonText,
+      policy.showPendingActions, ui_theme::successAction,
+      ui_theme::successActionHover, ui_theme::successActionPressed,
+      ui_theme::accentBorder);
+  styleThemedActionButton(
+      findBmsDeleteFilesButton, findBmsDeleteFilesButtonText,
+      policy.showPendingActions, ui_theme::dangerAction,
+      ui_theme::dangerActionHover, ui_theme::dangerActionPressed,
+      ui_theme::accentBorder);
   styleThemedActionButton(findBmsOpenButton, findBmsOpenButtonText,
                           !running && hasSource, ui_theme::infoAction,
                           ui_theme::infoActionHover,
@@ -7558,13 +7629,18 @@ void MainMenuScene::applyFindBmsUpdates() {
     findBmsProgressTotal = progress.totalBytes;
     findBmsProgressFraction =
         findBmsProgressFractionFor(progress, findBmsProgressFraction);
-    appendLogLine(findBmsProgressDisplayText(progress, true));
+    appendLogLine(findBmsProgressEventDisplayText(progress, true));
     shouldRefresh = true;
   }
   if (result) {
     findBmsJobRunning = false;
     findBmsResult = std::move(*result);
-    if (findBmsResult.status == BmsSearchResult::Status::Downloaded) {
+    findBmsPendingDecision.reset();
+    const bool keptMismatchedFiles =
+        findBmsResult.status == BmsSearchResult::Status::HashMismatch &&
+        !findBmsResult.pendingArtifact && !findBmsResult.outputPath.empty();
+    if (findBmsResult.status == BmsSearchResult::Status::Downloaded ||
+        keptMismatchedFiles) {
       findBmsProgressFraction = 1.0;
     }
     if (!findBmsResult.message.empty() &&
@@ -7572,8 +7648,9 @@ void MainMenuScene::applyFindBmsUpdates() {
          findBmsProgressLog.back() != findBmsResult.message)) {
       appendLogLine(findBmsResult.message);
     }
-    if (findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-      startLibraryRefresh();
+    if (findBmsResult.status == BmsSearchResult::Status::Downloaded ||
+        keptMismatchedFiles) {
+      startLibraryRefresh(findBmsDownloadRoot);
     }
     shouldRefresh = true;
   }

@@ -6,9 +6,11 @@
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace repository_test {
 
@@ -145,6 +147,18 @@ int main() {
       static_cast<int>(main_menu_library::emptyLibraryBootstrapMode(
           TargetPlatform::MacOS)),
       "desktop empty library uses the folder picker");
+
+  std::vector<ChartEntry> scanEntries{
+      {.path = fspath_to_path_t(std::filesystem::path("/library/manual"))}};
+  main_menu_library::appendUniqueScanFolder(
+      scanEntries, std::filesystem::path("/library/fallback"));
+  ASSERT_EQ(static_cast<std::size_t>(2), scanEntries.size(),
+            "transient fallback is included in the scan");
+  main_menu_library::appendUniqueScanFolder(
+      scanEntries,
+      std::filesystem::path("/library/alias/../fallback"));
+  ASSERT_EQ(static_cast<std::size_t>(2), scanEntries.size(),
+            "equivalent transient fallback is not duplicated");
 
   sqlite3 *db = nullptr;
   if (sqlite3_open(":memory:", &db) != SQLITE_OK) {

@@ -502,6 +502,13 @@ endif()
 
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME find_bms_archive_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_find_bms_archive_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(find_bms_archive_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME judgement_indicator_range_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_judgement_indicator_range_flow.py
@@ -1902,6 +1909,42 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(app_settings_store_tests PRIVATE SDL2)
     endif()
 
+    add_executable(find_bms_download_tests
+        tests/find_bms_download_tests.cpp
+        src/bms_search/ArchiveDecision.cpp
+        src/bms_search/DownloadedArchiveWorkflow.cpp
+        src/bms_search/DownloadStaging.cpp
+        src/bms_search/DownloadStorageIdentity.cpp
+        src/bms_search/PackageDownloadCandidate.cpp
+        src/bms_search/PendingArtifact.cpp
+        src/scene/FindBmsDialogPolicy.cpp
+        src/scene/FindBmsProgressPresentation.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+    )
+    target_include_directories(find_bms_download_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(find_bms_download_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(find_bms_download_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(find_bms_download_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(ir_credential_store_tests
         tests/ir_credential_store_tests.cpp
         src/ir/IrCredentialStore.cpp
@@ -2578,6 +2621,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endfunction()
 
     asobmashow_register_test(repository_boundary_tests)
+    asobmashow_register_test(find_bms_download_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)

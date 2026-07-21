@@ -803,8 +803,8 @@ static std::string formatChartEntrySource(const ChartEntry &entry) {
   const std::string pathText = formatChartEntryPath(entry);
   if (!entry.removable) {
     return pathText +
-           "\nBuilt-in folder. Archive imports and Find BMS downloads are "
-           "stored here.";
+           "\nBuilt-in folder. Find BMS uses this as a fallback when no "
+           "writable library folder is available.";
   }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (!entry.iosBookmark.empty()) {

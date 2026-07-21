@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "../BmsSearchService.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/OverlayPortal.h"
@@ -89,6 +90,7 @@ void SettingsScene::resetViewState() {
   touchVisualizationModeText = nullptr;
   floatingLaneCoverModeText = nullptr;
   archiveChartPreviewModeText = nullptr;
+  findBmsSkipUnarchivingModeText = nullptr;
   notePriorityModeText = nullptr;
   judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
@@ -115,6 +117,7 @@ void SettingsScene::resetViewState() {
   touchVisualizationModeButton = nullptr;
   floatingLaneCoverModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
+  findBmsSkipUnarchivingModeButton = nullptr;
   notePriorityModeButton = nullptr;
   judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
@@ -2093,6 +2096,28 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
       metrics, "Archive Preview", "Preview charts inside archives.",
       archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+  auto *findBmsArchiveControls = new View();
+  findBmsArchiveControls->setFlexDirection(FlexDirection::Column);
+  findBmsArchiveControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  findBmsArchiveControls->setAlignItems(YGAlignFlexStart);
+  findBmsSkipUnarchivingModeText =
+      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE);
+  findBmsSkipUnarchivingModeButton =
+      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                       findBmsSkipUnarchivingModeText, ui_theme::lime());
+  findBmsSkipUnarchivingModeButton->setOnClickListener([this]() {
+    context.settings.findBmsSkipUnarchivingForNonSolidArchives =
+        !context.settings.findBmsSkipUnarchivingForNonSolidArchives;
+    persistSettings();
+  });
+  findBmsArchiveControls->addView(findBmsSkipUnarchivingModeButton);
+  cardsColumn->addView(makeCard(
+      metrics, BmsSearchService::kSkipUnarchivingSettingLabel,
+      "Keep readable non-solid Find BMS downloads as archives. Solid archives "
+      "are still unarchived.",
+      findBmsArchiveControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *cacheCleanupControls = new View();
   cacheCleanupControls->setFlexDirection(FlexDirection::Column);
   cacheCleanupControls->setGap(metrics.compact ? 12.0f : 16.0f);
@@ -2366,6 +2391,10 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
     folderList->addView(makeWrappedText("No chart folders are installed.",
                                         metrics.bodyTextSize,
                                         ui_theme::textSecondary()));
+    folderList->addView(makeWrappedText(
+        "Find BMS downloads use Documents/BMS until a writable library "
+        "folder is added.",
+        metrics.smallTextSize, ui_theme::textMuted()));
   } else {
     for (const auto &entry : chartEntries) {
       const std::string entryPathText = formatChartEntryPath(entry);
@@ -2392,6 +2421,32 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       actions->setGap(metrics.compact ? 8.0f : 10.0f);
 
       const int folderActionWidth = metrics.compact ? 136 : 156;
+      if (entry.primaryStorageFolder) {
+        actions->addView(makeWrappedText("Download folder",
+                                         metrics.smallTextSize,
+                                         ui_theme::lime()));
+      } else if (entry.primaryStorageEligible) {
+        auto *downloadButton = makeAccentButton(
+            metrics.compact ? 180 : 210, metrics.actionButtonHeight,
+            makeText("Use for Downloads", metrics.smallTextSize,
+                     ui_theme::textPrimary(), TextView::CENTER,
+                     TextView::MIDDLE),
+            ui_theme::cyan());
+        downloadButton->setOnClickListener([this, entryPathText]() {
+          setFindBmsDownloadEntry(entryPathText);
+        });
+        actions->addView(downloadButton);
+      } else if (ChartRepository::IsDefaultBmsFolderPath(
+                     std::filesystem::path(entry.path))) {
+        actions->addView(makeWrappedText("Fallback download folder",
+                                         metrics.smallTextSize,
+                                         ui_theme::textMuted()));
+      } else {
+        actions->addView(makeWrappedText("Not writable by Find BMS",
+                                         metrics.smallTextSize,
+                                         ui_theme::textMuted()));
+      }
+
       if (entry.removable) {
         const bool confirmingDelete =
             pendingDeleteChartEntryPath == entryPathText;

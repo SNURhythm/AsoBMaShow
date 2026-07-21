@@ -1,9 +1,12 @@
 #pragma once
 
 #include "../LibraryFolderClearData.h"
+#include "../repositories/ChartRepository.h"
 #include "../targets.h"
 
+#include <filesystem>
 #include <string>
+#include <vector>
 
 namespace main_menu_library {
 
@@ -31,6 +34,9 @@ std::string folderKeyForLevel(int tableId, const std::string &level);
 std::string folderKeyForCourseTable(int tableId);
 std::string folderKeyForCourseGroup(int tableId, const std::string &groupName);
 std::string folderKeyForCourse(int courseId);
+
+void appendUniqueScanFolder(std::vector<ChartEntry> &entries,
+                            const std::filesystem::path &folder);
 
 inline bool difficultyRangeEnabledForFolder(bool difficultyTableFolder,
                                             bool clearMarkFolder, int tableId,

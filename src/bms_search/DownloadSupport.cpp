@@ -1,4 +1,6 @@
 #include "Internal.h"
+#include "DownloadedArchiveWorkflow.h"
+#include "DownloadStorageIdentity.h"
 #include "GoogleDriveDriver.h"
 
 #include "../RAII.h"
@@ -429,7 +431,9 @@ bool downloadAndExtractArchive(
     const std::string &archiveKey, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
     BmsSearchResult &result, const std::string &suggestedArchiveName,
+    const std::string &storageIdentity,
     bool *downloadedArchive) {
   if (downloadedArchive != nullptr) {
     *downloadedArchive = false;
@@ -445,35 +449,47 @@ bool downloadAndExtractArchive(
   if (archiveExtension.empty()) {
     archiveExtension = ".archive";
   }
-  const std::string archiveName = preferredArchiveName(
+  const std::string preferredName = preferredArchiveName(
       suggestedArchiveName, result.downloadUrl, downloadUrl, archiveKey,
       archiveExtension);
-  const std::string key = storageKeyFromArchiveName(archiveName);
+  const std::string identitySeed =
+      !storageIdentity.empty()
+          ? storageIdentity
+          : (!archiveKey.empty()
+                 ? archiveKey
+                 : (!result.downloadUrl.empty() ? result.downloadUrl
+                                                 : downloadUrl));
+  const auto storageNames =
+      findBmsStorageNames(preferredName, archiveExtension, identitySeed);
+  const std::string &archiveName = storageNames.archiveName;
+  const std::string &key = storageNames.storageKey;
   const std::filesystem::path baseDirectory = makeDownloadDirectory(libraryRoot);
-  const std::filesystem::path archiveDirectory = baseDirectory / "_archives";
-  const std::filesystem::path extractDirectory = baseDirectory / key;
-  std::string directoryError;
-  if (!ensureDownloadDirectory(
-          archiveDirectory, "Could not create download folder",
-          directoryError)) {
+  std::string stagingError;
+  const auto attempt = createFindBmsDownloadAttempt(archiveName, stagingError);
+  if (!attempt) {
     result.status = BmsSearchResult::Status::DownloadFailed;
-    result.message = directoryError;
+    result.message = stagingError.empty()
+                         ? "Could not prepare the archive download."
+                         : stagingError;
     return false;
   }
-
-  const std::filesystem::path archivePath = archiveDirectory / archiveName;
-  auto archiveCleanup = makeScopeExit([archivePath] {
-    if (archivePath.empty()) {
-      return;
-    }
-
-    std::error_code error;
-    std::filesystem::remove(archivePath, error);
-    if (error) {
-      SDL_Log("Could not delete downloaded archive %s: %s",
-              fspath_to_utf8(archivePath).c_str(), error.message().c_str());
-    }
+  auto attemptCleanup = makeScopeExit([root = attempt->root] {
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
   });
+  const auto &archivePath = attempt->archivePath;
+  const auto &extractDirectory = attempt->extractedPath;
+  auto saveDebugArtifacts = [&] {
+    std::string debugError;
+    if (const auto debugPath = saveIosDebugArtifacts(
+            key, downloadUrl, result.downloadUrl, archivePath, extractDirectory,
+            debugError)) {
+      result.debugPath = *debugPath;
+    } else if (!debugError.empty()) {
+      SDL_Log("Failed to save BMS Search debug artifacts: %s",
+              debugError.c_str());
+    }
+  };
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }
@@ -494,15 +510,7 @@ bool downloadAndExtractArchive(
   if (!GoogleDriveDriver::resolveWarningDownload(
           downloadUrl, result.downloadUrl, archivePath, cancelled,
           driveWarningError, progressCallback)) {
-    std::string debugError;
-    if (const auto debugPath = saveIosDebugArtifacts(
-            key, downloadUrl, result.downloadUrl, archivePath, extractDirectory,
-            debugError)) {
-      result.debugPath = *debugPath;
-    } else if (!debugError.empty()) {
-      SDL_Log("Failed to save BMS Search debug artifacts: %s",
-              debugError.c_str());
-    }
+    saveDebugArtifacts();
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         driveWarningError.empty() ? "Google Drive download failed."
@@ -511,86 +519,53 @@ bool downloadAndExtractArchive(
   }
 
   if (htmlBodyFromDownloadedFile(archivePath)) {
-    std::string debugError;
-    if (const auto debugPath = saveIosDebugArtifacts(
-            key, downloadUrl, result.downloadUrl, archivePath, extractDirectory,
-            debugError)) {
-      result.debugPath = *debugPath;
-    } else if (!debugError.empty()) {
-      SDL_Log("Failed to save BMS Search debug artifacts: %s",
-              debugError.c_str());
-    }
+    saveDebugArtifacts();
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         "Downloaded response was an HTML page instead of an archive.";
     return false;
   }
 
-  if (progressCallback) {
-    progressCallback({.message = "Extracting archive"});
+  const auto archiveReader = defaultArchiveReaderDependencies();
+  DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [archiveReader](const std::filesystem::path &path,
+                          const std::string &keyValue, bool skipUnarchiving,
+                          archive_file::PauseCallback pauseCallback) {
+            return decideDownloadedArchive(path, keyValue, skipUnarchiving,
+                                           std::move(pauseCallback),
+                                           archiveReader);
+          },
+      .extractArchive =
+          [](const std::filesystem::path &path,
+             const std::filesystem::path &destination,
+             std::string &errorMessage,
+             BmsSearchDownloadProgressCallback callback) {
+            return extractDownloadedArchive(path, destination, errorMessage,
+                                            std::move(callback));
+          },
+      .decideExtracted = decideExtractedArchive,
+      .commitArtifact =
+          [](const BmsSearchPendingArtifact &artifact,
+             std::string &errorMessage) {
+            return commitFindBmsPendingArtifact(artifact, errorMessage);
+          }};
+  const DownloadedArchiveWorkflowRequest request{
+      .attempt = *attempt,
+      .downloadRoot = baseDirectory,
+      .archiveName = archiveName,
+      .storageKey = key,
+      .archiveKey = archiveKey,
+      .options = options};
+  const bool processed = processDownloadedArchive(
+      request, cancelled, progressCallback, result, dependencies);
+  if (!processed && !cancelled.load()) {
+    saveDebugArtifacts();
   }
-
-  std::string extractError;
-  if (!extractDownloadedArchive(archivePath, extractDirectory, extractError,
-                                progressCallback)) {
-    std::string debugError;
-    if (const auto debugPath = saveIosDebugArtifacts(
-            key, downloadUrl, result.downloadUrl, archivePath, extractDirectory,
-            debugError)) {
-      result.debugPath = *debugPath;
-    } else if (!debugError.empty()) {
-      SDL_Log("Failed to save BMS Search debug artifacts: %s",
-              debugError.c_str());
-    }
-    result.status = BmsSearchResult::Status::DownloadFailed;
-    result.message =
-        extractError.empty() ? "Archive extraction failed." : extractError;
-    return false;
+  if (result.pendingArtifact) {
+    attemptCleanup.dismiss();
   }
-
-  const std::string normalizedArchiveKey = lowerCopy(trimCopy(archiveKey));
-  const bool requiresHashMatch =
-      isHexStringOfLength(normalizedArchiveKey, 64) ||
-      isHexStringOfLength(normalizedArchiveKey, 32);
-  const bool foundBmsFile = containsBmsFile(extractDirectory);
-  if (requiresHashMatch) {
-    std::string hashError;
-    if (!findMatchingBmsChartByHash(extractDirectory, normalizedArchiveKey,
-                                    hashError)) {
-      std::string debugError;
-      if (const auto debugPath = saveIosDebugArtifacts(
-              key, downloadUrl, result.downloadUrl, archivePath,
-              extractDirectory, debugError)) {
-        result.debugPath = *debugPath;
-      } else if (!debugError.empty()) {
-        SDL_Log("Failed to save BMS Search debug artifacts: %s",
-                debugError.c_str());
-      }
-      result.status = BmsSearchResult::Status::HashMismatch;
-      result.outputPath = extractDirectory;
-      result.message = hashError.empty()
-                           ? "Archive did not contain the selected BMS chart."
-                           : hashError;
-      return true;
-    }
-  } else if (!foundBmsFile) {
-    std::string debugError;
-    if (const auto debugPath = saveIosDebugArtifacts(
-            key, downloadUrl, result.downloadUrl, archivePath, extractDirectory,
-            debugError)) {
-      result.debugPath = *debugPath;
-    } else if (!debugError.empty()) {
-      SDL_Log("Failed to save BMS Search debug artifacts: %s",
-              debugError.c_str());
-    }
-  }
-
-  result.status = BmsSearchResult::Status::Downloaded;
-  result.outputPath = extractDirectory;
-  result.message =
-      foundBmsFile ? "Downloaded and extracted BMS archive."
-                   : "Archive extracted, but no BMS file was found.";
-  return true;
+  return processed;
 }
 
 

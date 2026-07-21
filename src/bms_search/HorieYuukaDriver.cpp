@@ -233,6 +233,7 @@ bool HorieYuukaDriver::tryDownload(
     const std::string &archiveKey, const std::filesystem::path &libraryRoot,
     std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
     BmsSearchResult &result) {
   std::optional<std::string> lastError;
 
@@ -293,7 +294,7 @@ bool HorieYuukaDriver::tryDownload(
     }
     return downloadCandidateById(result.candidates.front(), archiveKey,
                                  libraryRoot, cancelled, progressCallback,
-                                 result);
+                                 options, result);
   }
 
   result.status = BmsSearchResult::Status::NotFound;
@@ -305,6 +306,7 @@ bool HorieYuukaDriver::downloadCandidateById(
     const BmsSearchCandidate &candidate, const std::string &archiveKey,
     const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
     BmsSearchResult &result) {
   if (candidate.source != BmsSearchCandidate::Source::Horie ||
       candidate.id.empty()) {
@@ -344,8 +346,8 @@ bool HorieYuukaDriver::downloadCandidateById(
 
   const std::string absoluteUrl = resolveUrl(kHorieApiOrigin, grantDownloadUrl);
   downloadAndExtractArchive(absoluteUrl, absoluteUrl, archiveKey, libraryRoot,
-                            cancelled, progressCallback, result,
-                            candidate.name);
+                            cancelled, progressCallback, options, result,
+                            candidate.name, candidate.id);
   result.candidates = {candidate};
   return true;
 }
