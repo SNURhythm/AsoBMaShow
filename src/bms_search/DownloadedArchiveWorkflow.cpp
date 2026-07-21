@@ -90,7 +90,11 @@ BmsSearchPendingArtifact archiveArtifact(
           .sourcePath = request.attempt.archivePath,
           .downloadRoot = request.downloadRoot,
           .destinationPath =
-              request.downloadRoot / "_archives" / request.archiveName};
+              request.downloadRoot / "_archives" / request.archiveName,
+          .archiveName = request.archiveName,
+          .storageKey = request.storageKey,
+          .alternateDestinationPath =
+              request.downloadRoot / request.storageKey};
 }
 
 BmsSearchPendingArtifact extractedArtifact(
@@ -99,7 +103,11 @@ BmsSearchPendingArtifact extractedArtifact(
           .stagingRoot = request.attempt.root,
           .sourcePath = request.attempt.extractedPath,
           .downloadRoot = request.downloadRoot,
-          .destinationPath = request.downloadRoot / request.storageKey};
+          .destinationPath = request.downloadRoot / request.storageKey,
+          .archiveName = request.archiveName,
+          .storageKey = request.storageKey,
+          .alternateDestinationPath =
+              request.downloadRoot / "_archives" / request.archiveName};
 }
 
 } // namespace

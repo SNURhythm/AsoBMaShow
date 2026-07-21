@@ -28,6 +28,9 @@ struct BmsSearchPendingArtifact {
   std::filesystem::path sourcePath;
   std::filesystem::path downloadRoot;
   std::filesystem::path destinationPath;
+  std::string archiveName;
+  std::string storageKey;
+  std::filesystem::path alternateDestinationPath;
 };
 
 enum class BmsSearchPendingArtifactDecision { Keep, Delete };

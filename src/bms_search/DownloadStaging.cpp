@@ -34,6 +34,12 @@ bool isStrictDescendant(const std::filesystem::path &path,
   return pathIterator != path.end();
 }
 
+bool isSafePathComponent(const std::string &value) {
+  const std::filesystem::path path(value);
+  return !value.empty() && path != "." && path != ".." &&
+         path.filename() == path;
+}
+
 bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
                              std::string &errorMessage) {
   std::error_code error;
@@ -67,6 +73,48 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
       !isStrictDescendant(destinationPath, downloadRoot)) {
     errorMessage = "Refusing an unsafe Find BMS destination path.";
     return false;
+  }
+
+  const bool hasAlternateMetadata =
+      !artifact.archiveName.empty() || !artifact.storageKey.empty() ||
+      !artifact.alternateDestinationPath.empty();
+  if (hasAlternateMetadata) {
+    if (!isSafePathComponent(artifact.archiveName) ||
+        !isSafePathComponent(artifact.storageKey) ||
+        artifact.storageKey == "_archives" ||
+        artifact.alternateDestinationPath.empty()) {
+      errorMessage = "Refusing invalid Find BMS alternate metadata.";
+      return false;
+    }
+    const auto alternateDestinationPath =
+        normalizedPath(artifact.alternateDestinationPath, error);
+    if (error || alternateDestinationPath.empty() ||
+        !isStrictDescendant(alternateDestinationPath, downloadRoot)) {
+      errorMessage = "Refusing an unsafe Find BMS alternate path.";
+      return false;
+    }
+    const auto expectedArchivePath = normalizedPath(
+        downloadRoot / "_archives" / artifact.archiveName, error);
+    const auto expectedExtractedPath =
+        normalizedPath(downloadRoot / artifact.storageKey, error);
+    const auto expectedArchiveSource =
+        normalizedPath(stagingRoot / artifact.archiveName, error);
+    if (error || expectedArchivePath.empty() || expectedExtractedPath.empty() ||
+        expectedArchiveSource.empty()) {
+      errorMessage = "Could not resolve Find BMS alternate metadata.";
+      return false;
+    }
+    const bool pathsMatch =
+        artifact.kind == BmsSearchPendingArtifactKind::Archive
+            ? sourcePath == expectedArchiveSource &&
+                  destinationPath == expectedArchivePath &&
+                  alternateDestinationPath == expectedExtractedPath
+            : destinationPath == expectedExtractedPath &&
+                  alternateDestinationPath == expectedArchivePath;
+    if (!pathsMatch) {
+      errorMessage = "Refusing mismatched Find BMS alternate metadata.";
+      return false;
+    }
   }
   if (artifact.kind == BmsSearchPendingArtifactKind::Archive) {
     if (sourcePath.parent_path() != stagingRoot ||
@@ -263,6 +311,17 @@ bool commitFindBmsPendingArtifact(
 
   if (hadDestination) {
     removePath(backupPath);
+  }
+  if (!artifact.alternateDestinationPath.empty()) {
+    error.clear();
+    std::filesystem::remove_all(artifact.alternateDestinationPath, error);
+    if (error) {
+      errorMessage =
+          "Downloaded files were installed, but the stale alternate copy "
+          "could not be removed: " +
+          error.message();
+      return false;
+    }
   }
   removePath(artifact.stagingRoot);
   errorMessage.clear();

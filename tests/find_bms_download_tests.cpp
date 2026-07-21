@@ -203,6 +203,60 @@ void testArchiveCommitAndResolution() {
   assert(readText(artifact.destinationPath) == "archive bytes");
 }
 
+void testArchiveCommitRemovesExtractedAlternate() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive bytes");
+  const auto extractedAlternate = downloadRoot / "package";
+  writeText(extractedAlternate / "stale.bms", "stale chart");
+  const BmsSearchPendingArtifact artifact{
+      .kind = BmsSearchPendingArtifactKind::Archive,
+      .stagingRoot = attempt->root,
+      .sourcePath = attempt->archivePath,
+      .downloadRoot = downloadRoot,
+      .destinationPath = downloadRoot / "_archives/package.zip",
+      .archiveName = "package.zip",
+      .storageKey = "package",
+      .alternateDestinationPath = extractedAlternate};
+
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  assert(readText(artifact.destinationPath) == "archive bytes");
+  assert(!std::filesystem::exists(extractedAlternate));
+}
+
+void testExtractedCommitRemovesArchiveAlternate() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->extractedPath / "chart.bms", "new chart");
+  const auto archiveAlternate = downloadRoot / "_archives/package.zip";
+  writeText(archiveAlternate, "stale archive");
+  const BmsSearchPendingArtifact artifact{
+      .kind = BmsSearchPendingArtifactKind::ExtractedDirectory,
+      .stagingRoot = attempt->root,
+      .sourcePath = attempt->extractedPath,
+      .downloadRoot = downloadRoot,
+      .destinationPath = downloadRoot / "package",
+      .archiveName = "package.zip",
+      .storageKey = "package",
+      .alternateDestinationPath = archiveAlternate};
+
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  assert(readText(artifact.destinationPath / "chart.bms") == "new chart");
+  assert(!std::filesystem::exists(archiveAlternate));
+}
+
 void testFailedResolutionRetainsPendingArtifact() {
   CleanupPaths cleanup;
   std::string error;
@@ -268,6 +322,33 @@ void testUnsafeArchiveNameAndDownloadRootAreRefused() {
   assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(artifact,
                                                               error));
   assert(!error.empty());
+}
+
+void testUnsafeAlternateDestinationIsRefused() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->archivePath, "archive");
+  const auto outsidePath = downloadRoot.parent_path() / "outside";
+  writeText(outsidePath / "chart.bms", "outside chart");
+  const BmsSearchPendingArtifact artifact{
+      .kind = BmsSearchPendingArtifactKind::Archive,
+      .stagingRoot = attempt->root,
+      .sourcePath = attempt->archivePath,
+      .downloadRoot = downloadRoot,
+      .destinationPath = downloadRoot / "_archives/package.zip",
+      .archiveName = "package.zip",
+      .storageKey = "package",
+      .alternateDestinationPath = outsidePath};
+
+  assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  assert(!error.empty());
+  assert(std::filesystem::exists(outsidePath / "chart.bms"));
 }
 
 void testDirectArchiveSha256MatchStaysPacked() {
@@ -511,6 +592,8 @@ void testWorkflowStagesDirectArchiveMismatch() {
   assert(result.outputPath.empty());
   assert(result.pendingArtifact);
   assert(result.pendingArtifact->kind == BmsSearchPendingArtifactKind::Archive);
+  assert(result.pendingArtifact->alternateDestinationPath ==
+         downloadRoot / "package");
   assert(result.message.find("Keep Files or Delete Files") !=
          std::string::npos);
 }
@@ -616,6 +699,8 @@ void testWorkflowStagesFallbackExtractionMismatch() {
   assert(result.pendingArtifact->kind ==
          BmsSearchPendingArtifactKind::ExtractedDirectory);
   assert(result.pendingArtifact->sourcePath == attempt->extractedPath);
+  assert(result.pendingArtifact->alternateDestinationPath ==
+         downloadRoot / "_archives/package.zip");
   assert(!std::filesystem::exists(attempt->archivePath));
 }
 
@@ -825,9 +910,12 @@ int main() {
   testUnsafeStagingRootIsRefused();
   testCommitRestoresDestinationWhenSwapFails();
   testArchiveCommitAndResolution();
+  testArchiveCommitRemovesExtractedAlternate();
+  testExtractedCommitRemovesArchiveAlternate();
   testFailedResolutionRetainsPendingArtifact();
   testAlreadyMissingAttemptCanBeDeleted();
   testUnsafeArchiveNameAndDownloadRootAreRefused();
+  testUnsafeAlternateDestinationIsRefused();
   testDirectArchiveSha256MatchStaysPacked();
   testDirectArchiveDisabledDoesNotInspect();
   testDirectArchiveMismatchIsConfirmed();
