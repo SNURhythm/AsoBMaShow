@@ -121,6 +121,7 @@ private:
     std::string title;
     std::filesystem::path folderToAdd;
     std::string iosBookmark;
+    std::filesystem::path additionalFolderToScan;
     std::filesystem::path androidImportPath;
     bool androidImportFolder = false;
     bool rebuildLibraryMetadata = false;
@@ -465,6 +466,7 @@ private:
   std::mutex findBmsUpdateMutex;
   std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
   std::optional<BmsSearchResult> pendingFindBmsResult;
+  std::filesystem::path findBmsDownloadRoot;
 
   LibraryFolderItem activeFolder;
   LibraryFolderMetadataCache folderMetadataCache;
@@ -590,7 +592,8 @@ private:
   void refreshScoreClearRanksIfNeeded();
   void refreshIrRecordListIfNeeded();
   void refreshLibraryIfNeeded();
-  void startLibraryRefresh();
+  void startLibraryRefresh(
+      const std::filesystem::path &additionalFolderToScan = {});
   void startLibraryRebuild();
   void startLibraryTaskWorker();
   void stopLibraryTaskWorker();
@@ -603,7 +606,8 @@ private:
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
       const std::string &iosBookmark = "",
-      bool rebuildLibraryMetadata = false);
+      bool rebuildLibraryMetadata = false,
+      const std::filesystem::path &additionalFolderToScan = {});
 #if TARGET_OS_ANDROID
   void createPendingAndroidImportTask(bool folderImport);
   void enqueueAndroidImportTask(std::uint64_t id,

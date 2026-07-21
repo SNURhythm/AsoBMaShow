@@ -109,6 +109,22 @@ require(
     main_menu_source.count("preferredBmsDownloadRoot()") >= 3,
     "automatic and candidate downloads must share destination resolution",
 )
+require(
+    "additionalFolderToScan" in main_menu_source
+    and "additionalFolderToScan" in (
+        root / "src/scene/MainMenuScene.h"
+    ).read_text(encoding="utf-8"),
+    "Find BMS refresh tasks must carry a transient download root",
+)
+require(
+    "appendUniqueScanFolder(entries, task.additionalFolderToScan)"
+    in main_menu_source,
+    "library refresh must include the transient Find BMS download root",
+)
+require(
+    "startLibraryRefresh(findBmsDownloadRoot)" in main_menu_source,
+    "successful Find BMS downloads must refresh their actual library root",
+)
 
 if failures:
     for failure in failures:

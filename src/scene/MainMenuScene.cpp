@@ -1479,7 +1479,8 @@ bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
 
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
-    const std::string &iosBookmark, bool rebuildLibraryMetadata) {
+    const std::string &iosBookmark, bool rebuildLibraryMetadata,
+    const std::filesystem::path &additionalFolderToScan) {
   const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
   {
     std::lock_guard<std::mutex> lock(libraryTaskMutex);
@@ -1489,6 +1490,7 @@ void MainMenuScene::enqueueLibraryRefreshTask(
         .title = title,
         .folderToAdd = folderToAdd,
         .iosBookmark = iosBookmark,
+        .additionalFolderToScan = additionalFolderToScan,
         .rebuildLibraryMetadata = rebuildLibraryMetadata,
     });
     libraryTasks.push_back(LibraryTaskInfo{
@@ -1932,6 +1934,7 @@ void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
   if (entries.empty()) {
     entries = taskSession->SelectEffectiveEntries();
   }
+  main_menu_library::appendUniqueScanFolder(entries, task.additionalFolderToScan);
 
   if (stopToken.stop_requested()) {
     return;
@@ -2593,6 +2596,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsCancelled = false;
   findBmsResult = {};
   findBmsPendingDecision.reset();
+  findBmsDownloadRoot.clear();
   findBmsProgressMessage.clear();
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
@@ -6103,11 +6107,13 @@ void MainMenuScene::applyUnzipResult() {
       result->success ? 900 : 1800, true);
 }
 
-void MainMenuScene::startLibraryRefresh() {
+void MainMenuScene::startLibraryRefresh(
+    const std::filesystem::path &additionalFolderToScan) {
   if (willStart.load() || replayExportInProgress.load()) {
     return;
   }
-  enqueueLibraryRefreshTask("Refresh Library");
+  enqueueLibraryRefreshTask("Refresh Library", {}, "", false,
+                            additionalFolderToScan);
 }
 
 void MainMenuScene::startLibraryRebuild() {
@@ -7236,6 +7242,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   pendingFindBmsResult.reset();
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
+  findBmsDownloadRoot = downloadRoot;
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
@@ -7282,6 +7289,7 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   const BmsSearchCandidate candidate = findBmsResult.candidates[candidateIndex];
   const ChartMetaRecord record = findBmsModalChart;
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
+  findBmsDownloadRoot = downloadRoot;
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
@@ -7642,7 +7650,7 @@ void MainMenuScene::applyFindBmsUpdates() {
     }
     if (findBmsResult.status == BmsSearchResult::Status::Downloaded ||
         keptMismatchedFiles) {
-      startLibraryRefresh();
+      startLibraryRefresh(findBmsDownloadRoot);
     }
     shouldRefresh = true;
   }
