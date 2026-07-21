@@ -348,6 +348,51 @@ void testExtractedCommitRemovesSameKeyArchiveWithDifferentExtension() {
   assert(!std::filesystem::exists(staleArchive));
 }
 
+void testCommitRemovesRenamedRepresentationsWithSameStorageId() {
+  CleanupPaths cleanup;
+  std::string error;
+  const std::string storageId = "0123456789abcdef";
+  const std::string otherStorageId = "fedcba9876543210";
+  const std::string storageKey = "new-name--" + storageId;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      storageKey + ".zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->extractedPath / "chart.bms", "new chart");
+
+  const auto renamedExtracted = downloadRoot / ("old-name--" + storageId);
+  const auto renamedArchive =
+      downloadRoot / "_archives" / ("old-name--" + storageId + ".7z");
+  const auto otherExtracted =
+      downloadRoot / ("other-name--" + otherStorageId);
+  const auto otherArchive = downloadRoot / "_archives" /
+                            ("other-name--" + otherStorageId + ".7z");
+  writeText(renamedExtracted / "old.bms", "old chart");
+  writeText(renamedArchive, "old archive");
+  writeText(otherExtracted / "other.bms", "other chart");
+  writeText(otherArchive, "other archive");
+
+  const BmsSearchPendingArtifact artifact{
+      .kind = BmsSearchPendingArtifactKind::ExtractedDirectory,
+      .stagingRoot = attempt->root,
+      .sourcePath = attempt->extractedPath,
+      .downloadRoot = downloadRoot,
+      .destinationPath = downloadRoot / storageKey,
+      .archiveName = storageKey + ".zip",
+      .storageKey = storageKey,
+      .alternateDestinationPath =
+          downloadRoot / "_archives" / (storageKey + ".zip")};
+
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  assert(readText(artifact.destinationPath / "chart.bms") == "new chart");
+  assert(!std::filesystem::exists(renamedExtracted));
+  assert(!std::filesystem::exists(renamedArchive));
+  assert(std::filesystem::exists(otherExtracted));
+  assert(std::filesystem::exists(otherArchive));
+}
+
 #if !defined(_WIN32)
 void testAlternateCleanupFailureDoesNotFailCommit() {
   CleanupPaths cleanup;
@@ -1054,6 +1099,7 @@ int main() {
   testArchiveCommitRemovesExtractedAlternate();
   testExtractedCommitRemovesArchiveAlternate();
   testExtractedCommitRemovesSameKeyArchiveWithDifferentExtension();
+  testCommitRemovesRenamedRepresentationsWithSameStorageId();
 #if !defined(_WIN32)
   testAlternateCleanupFailureDoesNotFailCommit();
 #endif

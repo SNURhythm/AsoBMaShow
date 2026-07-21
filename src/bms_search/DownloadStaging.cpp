@@ -4,7 +4,9 @@
 #include "../Uuid.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace asobmshow::bms_search {
 namespace {
@@ -156,6 +158,61 @@ void removePath(const std::filesystem::path &path) {
   std::filesystem::remove_all(path, ignored);
 }
 
+std::optional<std::string_view> storageIdFromKey(std::string_view storageKey) {
+  constexpr std::size_t kStorageIdLength = 16;
+  constexpr std::size_t kDelimiterLength = 2;
+  if (storageKey.size() < kStorageIdLength + kDelimiterLength) {
+    return std::nullopt;
+  }
+  const std::size_t delimiterOffset =
+      storageKey.size() - kStorageIdLength - kDelimiterLength;
+  if (storageKey.substr(delimiterOffset, kDelimiterLength) != "--") {
+    return std::nullopt;
+  }
+  const std::string_view storageId = storageKey.substr(
+      storageKey.size() - kStorageIdLength, kStorageIdLength);
+  for (const char character : storageId) {
+    if (!((character >= '0' && character <= '9') ||
+          (character >= 'a' && character <= 'f'))) {
+      return std::nullopt;
+    }
+  }
+  return storageId;
+}
+
+bool storageKeysShareIdentity(std::string_view candidateKey,
+                              std::string_view storageKey) {
+  const auto storageId = storageIdFromKey(storageKey);
+  if (!storageId) {
+    return candidateKey == storageKey;
+  }
+  const auto candidateId = storageIdFromKey(candidateKey);
+  return candidateId && *candidateId == *storageId;
+}
+
+void removeStaleExtractedVariants(const BmsSearchPendingArtifact &artifact) {
+  std::error_code error;
+  for (std::filesystem::directory_iterator iterator(artifact.downloadRoot,
+                                                     error),
+       end;
+       !error && iterator != end; iterator.increment(error)) {
+    std::error_code entryError;
+    if (!iterator->is_directory(entryError) || entryError ||
+        iterator->path().filename() == "_archives") {
+      continue;
+    }
+    const auto path = iterator->path();
+    if (path.lexically_normal() ==
+        artifact.destinationPath.lexically_normal()) {
+      continue;
+    }
+    if (storageKeysShareIdentity(fspath_to_utf8(path.filename()),
+                                 artifact.storageKey)) {
+      removePath(path);
+    }
+  }
+}
+
 void removeStaleArchiveVariants(const BmsSearchPendingArtifact &artifact) {
   if (artifact.storageKey.empty()) {
     return;
@@ -177,7 +234,7 @@ void removeStaleArchiveVariants(const BmsSearchPendingArtifact &artifact) {
     }
     std::string archiveKey = fspath_to_utf8(path.filename());
     archiveKey.resize(archiveKey.size() - extension.size());
-    if (archiveKey == artifact.storageKey &&
+    if (storageKeysShareIdentity(archiveKey, artifact.storageKey) &&
         path.lexically_normal() != artifact.destinationPath.lexically_normal()) {
       removePath(path);
     }
@@ -346,6 +403,7 @@ bool commitFindBmsPendingArtifact(
     std::filesystem::remove_all(artifact.alternateDestinationPath,
                                 ignoredCleanupError);
   }
+  removeStaleExtractedVariants(artifact);
   removeStaleArchiveVariants(artifact);
   removePath(artifact.stagingRoot);
   errorMessage.clear();
