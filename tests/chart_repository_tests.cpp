@@ -898,6 +898,41 @@ void testEntryMutationsPreserveOriginalDatabasePathKey() {
   assert(entryAtPath(entries, second) == nullptr);
 }
 
+void testEntryUpsertPreservesOriginalDatabasePathKey() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  const auto resolvedPath = temporary.path() / "charts";
+  const auto storedPath = temporary.path() / "alias" / ".." / "charts";
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(),
+                   "CREATE TABLE entries (path TEXT PRIMARY KEY, "
+                   "ios_bookmark TEXT DEFAULT '', "
+                   "primary_storage_folder INTEGER NOT NULL DEFAULT 0)"));
+    assert(execute(database.get(),
+                   "INSERT INTO entries(path, ios_bookmark) VALUES ('" +
+                       storedPath.generic_string() + "', 'old-bookmark')"));
+  }
+
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  assert(session->InsertEntry(resolvedPath, "updated-bookmark"));
+
+  const auto entries = session->SelectAllEntries();
+  assert(entries.size() == 1);
+  assert(entryAtPath(entries, resolvedPath) != nullptr);
+  assert(entries.front().iosBookmark == "updated-bookmark");
+
+  Database verification = openDatabase(databasePath);
+  assert(verification);
+  assert(queryInt(verification.get(), "SELECT COUNT(*) FROM entries") == 1);
+  assert(queryString(verification.get(), "SELECT path FROM entries") ==
+         storedPath.generic_string());
+}
+
 } // namespace
 
 int main() {
@@ -914,5 +949,6 @@ int main() {
   testFindBmsDownloadEntryRejectsIneligiblePaths();
   testFindBmsDownloadEntryMigratesLegacyAndNormalizesDuplicates();
   testEntryMutationsPreserveOriginalDatabasePathKey();
+  testEntryUpsertPreservesOriginalDatabasePathKey();
   return 0;
 }

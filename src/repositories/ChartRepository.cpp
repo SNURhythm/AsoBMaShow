@@ -771,6 +771,9 @@ deleteArchiveRecords(sqlite3 *database,
 static bool clearChartMeta(sqlite3 *database);
 static bool insertEntry(sqlite3 *database, const std::filesystem::path &path,
                         const std::string &iosBookmark);
+static std::optional<std::string> storedEntryPathForResolvedPath(
+    sqlite3 *database, const std::filesystem::path &path,
+    bool requirePrimaryStorageEligibility);
 static std::vector<ChartEntry> selectAllEntries(sqlite3 *database);
 static std::vector<ChartEntry> selectEffectiveEntries(sqlite3 *database);
 static bool setPrimaryStorageEntry(sqlite3 *database,
@@ -1336,7 +1339,9 @@ static bool insertEntry(sqlite3 *db, const std::filesystem::path &path,
                                     logSqlErrorText)) {
     return false;
   }
-  const std::string pathText = chart_storage_identity::StoredPathText(path);
+  const std::string pathText =
+      storedEntryPathForResolvedPath(db, path, false)
+          .value_or(chart_storage_identity::StoredPathText(path));
   bindSqliteText(stmt, 1, pathText);
   bindSqliteText(stmt, 2, iosBookmark);
   int rc = sqlite3_step(stmt);
@@ -1412,7 +1417,7 @@ static bool isPrimaryStorageEligible(const std::filesystem::path &path) {
 
 static std::optional<std::string> storedEntryPathForResolvedPath(
     sqlite3 *db, const std::filesystem::path &path,
-    bool requirePrimaryStorageEligibility = false) {
+    bool requirePrimaryStorageEligibility) {
   const auto normalizedTarget = path.lexically_normal();
   const auto storedEntries = readStoredEntries(db);
   const auto target = std::find_if(
@@ -1580,7 +1585,7 @@ static bool deleteEntry(sqlite3 *db, const std::filesystem::path &path) {
     return false;
   }
   const std::string pathText =
-      storedEntryPathForResolvedPath(db, path)
+      storedEntryPathForResolvedPath(db, path, false)
           .value_or(chart_storage_identity::StoredPathText(path));
   bindSqliteText(stmt, 1, pathText);
   int rc = sqlite3_step(stmt);
