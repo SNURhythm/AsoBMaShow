@@ -292,6 +292,33 @@ void testExtractedCommitRemovesArchiveAlternate() {
   assert(!std::filesystem::exists(archiveAlternate));
 }
 
+void testExtractedCommitRemovesSameKeyArchiveWithDifferentExtension() {
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt(
+      "package.zip", error);
+  assert(attempt);
+  cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  writeText(attempt->extractedPath / "chart.bms", "new chart");
+  const auto staleArchive = downloadRoot / "_archives/package.7z";
+  writeText(staleArchive, "stale archive");
+  const BmsSearchPendingArtifact artifact{
+      .kind = BmsSearchPendingArtifactKind::ExtractedDirectory,
+      .stagingRoot = attempt->root,
+      .sourcePath = attempt->extractedPath,
+      .downloadRoot = downloadRoot,
+      .destinationPath = downloadRoot / "package",
+      .archiveName = "package.zip",
+      .storageKey = "package",
+      .alternateDestinationPath = downloadRoot / "_archives/package.zip"};
+
+  assert(asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error));
+  assert(readText(artifact.destinationPath / "chart.bms") == "new chart");
+  assert(!std::filesystem::exists(staleArchive));
+}
+
 #if !defined(_WIN32)
 void testAlternateCleanupFailureDoesNotFailCommit() {
   CleanupPaths cleanup;
@@ -996,6 +1023,7 @@ int main() {
   testArchiveCommitAndResolution();
   testArchiveCommitRemovesExtractedAlternate();
   testExtractedCommitRemovesArchiveAlternate();
+  testExtractedCommitRemovesSameKeyArchiveWithDifferentExtension();
 #if !defined(_WIN32)
   testAlternateCleanupFailureDoesNotFailCommit();
 #endif

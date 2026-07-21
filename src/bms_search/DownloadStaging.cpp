@@ -1,5 +1,6 @@
 #include "DownloadStaging.h"
 
+#include "../ArchiveFile.h"
 #include "../Uuid.h"
 
 #include <filesystem>
@@ -153,6 +154,34 @@ bool copyDirectoryContents(const std::filesystem::path &source,
 void removePath(const std::filesystem::path &path) {
   std::error_code ignored;
   std::filesystem::remove_all(path, ignored);
+}
+
+void removeStaleArchiveVariants(const BmsSearchPendingArtifact &artifact) {
+  if (artifact.storageKey.empty()) {
+    return;
+  }
+
+  std::error_code error;
+  const auto archivesPath = artifact.downloadRoot / "_archives";
+  for (std::filesystem::directory_iterator iterator(archivesPath, error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    std::error_code entryError;
+    if (!iterator->is_regular_file(entryError) || entryError) {
+      continue;
+    }
+
+    const auto path = iterator->path();
+    const std::string extension = archive_file::archiveExtensionFromPath(path);
+    if (extension.empty()) {
+      continue;
+    }
+    std::string archiveKey = fspath_to_utf8(path.filename());
+    archiveKey.resize(archiveKey.size() - extension.size());
+    if (archiveKey == artifact.storageKey &&
+        path.lexically_normal() != artifact.destinationPath.lexically_normal()) {
+      removePath(path);
+    }
+  }
 }
 
 } // namespace
@@ -317,6 +346,7 @@ bool commitFindBmsPendingArtifact(
     std::filesystem::remove_all(artifact.alternateDestinationPath,
                                 ignoredCleanupError);
   }
+  removeStaleArchiveVariants(artifact);
   removePath(artifact.stagingRoot);
   errorMessage.clear();
   return true;
