@@ -185,10 +185,12 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
       attempt.fallbackUrl = lookup.sourceUrl;
     }
     bool downloadedArchive = false;
+    const std::string effectiveArchiveKey =
+        archiveKey.empty() ? md5Hash : archiveKey;
     const bool finished = downloadAndExtractArchive(
         lookup.candidate->downloadUrl, lookup.candidate->originalUrl,
-        archiveKey.empty() ? md5Hash : archiveKey, libraryRoot, cancelled,
-        progressCallback, options, attempt, lookup.candidate->archiveName,
+        effectiveArchiveKey, libraryRoot, cancelled, progressCallback, options,
+        attempt, lookup.candidate->archiveName, effectiveArchiveKey,
         &downloadedArchive);
     if (finished || downloadedArchive || cancelled.load()) {
       result = std::move(attempt);

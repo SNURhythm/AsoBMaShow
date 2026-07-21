@@ -347,7 +347,7 @@ bool HorieYuukaDriver::downloadCandidateById(
   const std::string absoluteUrl = resolveUrl(kHorieApiOrigin, grantDownloadUrl);
   downloadAndExtractArchive(absoluteUrl, absoluteUrl, archiveKey, libraryRoot,
                             cancelled, progressCallback, options, result,
-                            candidate.name);
+                            candidate.name, candidate.id);
   result.candidates = {candidate};
   return true;
 }

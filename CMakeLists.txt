@@ -1914,6 +1914,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/ArchiveDecision.cpp
         src/bms_search/DownloadedArchiveWorkflow.cpp
         src/bms_search/DownloadStaging.cpp
+        src/bms_search/DownloadStorageIdentity.cpp
         src/bms_search/PendingArtifact.cpp
         src/scene/FindBmsDialogPolicy.cpp
         src/scene/FindBmsProgressPresentation.cpp

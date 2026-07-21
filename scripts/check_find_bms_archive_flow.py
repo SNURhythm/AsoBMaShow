@@ -13,8 +13,18 @@ root = (
 settings_path = root / "src/scene/SettingsSceneLayout.cpp"
 settings_tables_path = root / "src/scene/SettingsSceneTables.cpp"
 main_menu_path = root / "src/scene/MainMenuScene.cpp"
+download_support_path = root / "src/bms_search/DownloadSupport.cpp"
+horie_path = root / "src/bms_search/HorieYuukaDriver.cpp"
+package_sources_path = root / "src/bms_search/PackageSourceDrivers.cpp"
 
-for path in (settings_path, settings_tables_path, main_menu_path):
+for path in (
+    settings_path,
+    settings_tables_path,
+    main_menu_path,
+    download_support_path,
+    horie_path,
+    package_sources_path,
+):
     if not path.is_file():
         print(f"FAIL: missing {path.relative_to(root)}", file=sys.stderr)
         raise SystemExit(1)
@@ -22,6 +32,9 @@ for path in (settings_path, settings_tables_path, main_menu_path):
 settings_source = settings_path.read_text(encoding="utf-8")
 settings_tables_source = settings_tables_path.read_text(encoding="utf-8")
 main_menu_source = main_menu_path.read_text(encoding="utf-8")
+download_support_source = download_support_path.read_text(encoding="utf-8")
+horie_source = horie_path.read_text(encoding="utf-8")
+package_sources_source = package_sources_path.read_text(encoding="utf-8")
 failures: list[str] = []
 
 
@@ -124,6 +137,22 @@ require(
 require(
     "startLibraryRefresh(findBmsDownloadRoot)" in main_menu_source,
     "successful Find BMS downloads must refresh their actual library root",
+)
+require(
+    "candidate.name, candidate.id" in horie_source,
+    "Horie downloads must use the stable provider file ID for storage",
+)
+require(
+    "const std::string &storageIdentity" in download_support_source
+    and "!storageIdentity.empty()" in download_support_source
+    and "!archiveKey.empty()" in download_support_source
+    and "result.downloadUrl" in download_support_source,
+    "Find BMS storage identity must fall back through chart hash and URL",
+)
+require(
+    "lookup.candidate->archiveName" in package_sources_source
+    and "archiveKey.empty() ? md5Hash : archiveKey" in package_sources_source,
+    "package-source downloads must provide their chart hash as storage identity",
 )
 
 if failures:

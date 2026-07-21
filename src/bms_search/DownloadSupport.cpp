@@ -1,5 +1,6 @@
 #include "Internal.h"
 #include "DownloadedArchiveWorkflow.h"
+#include "DownloadStorageIdentity.h"
 #include "GoogleDriveDriver.h"
 
 #include "../RAII.h"
@@ -432,6 +433,7 @@ bool downloadAndExtractArchive(
     BmsSearchDownloadProgressCallback progressCallback,
     const BmsSearchDownloadOptions &options,
     BmsSearchResult &result, const std::string &suggestedArchiveName,
+    const std::string &storageIdentity,
     bool *downloadedArchive) {
   if (downloadedArchive != nullptr) {
     *downloadedArchive = false;
@@ -447,10 +449,20 @@ bool downloadAndExtractArchive(
   if (archiveExtension.empty()) {
     archiveExtension = ".archive";
   }
-  const std::string archiveName = preferredArchiveName(
+  const std::string preferredName = preferredArchiveName(
       suggestedArchiveName, result.downloadUrl, downloadUrl, archiveKey,
       archiveExtension);
-  const std::string key = storageKeyFromArchiveName(archiveName);
+  const std::string identitySeed =
+      !storageIdentity.empty()
+          ? storageIdentity
+          : (!archiveKey.empty()
+                 ? archiveKey
+                 : (!result.downloadUrl.empty() ? result.downloadUrl
+                                                 : downloadUrl));
+  const auto storageNames =
+      findBmsStorageNames(preferredName, archiveExtension, identitySeed);
+  const std::string &archiveName = storageNames.archiveName;
+  const std::string &key = storageNames.storageKey;
   const std::filesystem::path baseDirectory = makeDownloadDirectory(libraryRoot);
   std::string stagingError;
   const auto attempt = createFindBmsDownloadAttempt(archiveName, stagingError);

@@ -1,6 +1,7 @@
 #include "bms_search/ArchiveDecision.h"
 #include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
+#include "bms_search/DownloadStorageIdentity.h"
 #include "scene/FindBmsDialogPolicy.h"
 #include "scene/FindBmsProgressPresentation.h"
 
@@ -80,6 +81,40 @@ testDownloadRoot(const FindBmsDownloadAttempt &attempt) {
          ("AsoBMaShowFindBmsTestLibrary-" +
           attempt.root.filename().string()) /
          "BMSSEARCH";
+}
+
+void testStorageNamesDistinguishSameNamedPackages() {
+  const auto first = asobmshow::bms_search::findBmsStorageNames(
+      "song.zip", ".zip", "provider:file-a");
+  const auto second = asobmshow::bms_search::findBmsStorageNames(
+      "song.zip", ".zip", "provider:file-b");
+  const auto repeated = asobmshow::bms_search::findBmsStorageNames(
+      "song.zip", ".zip", "provider:file-a");
+  assert(first.storageKey != second.storageKey);
+  assert(first.archiveName != second.archiveName);
+  assert(first.storageKey == repeated.storageKey);
+  assert(first.archiveName == repeated.archiveName);
+  assert(first.archiveName == first.storageKey + ".zip");
+  const auto delimiter = first.storageKey.rfind("--");
+  assert(delimiter != std::string::npos);
+  assert(first.storageKey.size() - delimiter - 2 == 16);
+
+  const auto unsafe = asobmshow::bms_search::findBmsStorageNames(
+      "../song.zip", ".zip", "provider:file-c");
+  assert(unsafe.storageKey.find('/') == std::string::npos);
+  assert(unsafe.storageKey != ".");
+  assert(unsafe.storageKey != "..");
+}
+
+void testStorageNamesPreserveLongAndCompoundExtensions() {
+  const auto zip = asobmshow::bms_search::findBmsStorageNames(
+      std::string(180, 'a'), ".zip", "zip-id");
+  assert(zip.archiveName.ends_with(".zip"));
+  assert(zip.archiveName.size() <= 128);
+  const auto tar = asobmshow::bms_search::findBmsStorageNames(
+      std::string(180, 'b') + ".tar.gz", ".zip", "tar-id");
+  assert(tar.archiveName.ends_with(".tar.gz"));
+  assert(tar.archiveName.size() <= 128);
 }
 
 BmsSearchPendingArtifact extractedArtifact(
@@ -952,6 +987,8 @@ void testFindBmsDownloadProgressDisplaysSizes() {
 } // namespace
 
 int main() {
+  testStorageNamesDistinguishSameNamedPackages();
+  testStorageNamesPreserveLongAndCompoundExtensions();
   testExtractedCommitMergesTransactionally();
   testDeleteRemovesOnlyAttempt();
   testUnsafeStagingRootIsRefused();
