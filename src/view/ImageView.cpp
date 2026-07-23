@@ -37,6 +37,7 @@
 #include <optional>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -667,6 +668,31 @@ ImageView *ImageView::setFade(ImageFadeDirection direction, float strength) {
 ImageView *ImageView::clearFade() {
   fade_.reset();
   return this;
+}
+ImageView *ImageView::setScrimColor(const Color &color) {
+  themedScrimColorProvider_ = {};
+  scrimColor_ = color;
+  return this;
+}
+ImageView *ImageView::setThemedScrimColor(ThemeColorProvider provider) {
+  themedScrimColorProvider_ = std::move(provider);
+  if (themedScrimColorProvider_) {
+    scrimColor_ = themedScrimColorProvider_();
+  } else {
+    scrimColor_.reset();
+  }
+  return this;
+}
+ImageView *ImageView::clearScrimColor() {
+  themedScrimColorProvider_ = {};
+  scrimColor_.reset();
+  return this;
+}
+void ImageView::onThemeChanged() {
+  View::onThemeChanged();
+  if (themedScrimColorProvider_) {
+    scrimColor_ = themedScrimColorProvider_();
+  }
 }
 void ImageView::renderImpl(RenderContext &context) {
   applyAsyncImageIfReady();

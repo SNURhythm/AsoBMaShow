@@ -36,6 +36,11 @@ private:
   int currentImageHeight = 0;
   bool asyncImagePending = false;
   std::optional<ImageFade> fade_;
+  std::optional<Color> scrimColor_;
+  ThemeColorProvider themedScrimColorProvider_;
+
+protected:
+  void onThemeChanged() override;
 
 public:
   ImageView() = delete;
@@ -47,8 +52,14 @@ public:
   void freeImage();
   ImageView *setFade(ImageFadeDirection direction, float strength);
   ImageView *clearFade();
+  ImageView *setScrimColor(const Color &color);
+  ImageView *setThemedScrimColor(ThemeColorProvider provider);
+  ImageView *clearScrimColor();
   [[nodiscard]] const std::optional<ImageFade> &fade() const noexcept {
     return fade_;
+  }
+  [[nodiscard]] const std::optional<Color> &scrimColor() const noexcept {
+    return scrimColor_;
   }
   [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
