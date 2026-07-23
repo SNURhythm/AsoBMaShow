@@ -86,7 +86,7 @@ void testClearButtonVisibilityAndCallback() {
         input.getY() + input.getHeight() / 2);
   expect(input.getText().empty(), "clear button clears the editing value");
   expect(notifications == 1 && lastText.empty(),
-         "clear button publishes one normal text change");
+         "clear button publishes exactly one normal text change");
   expect(!input.isClearButtonVisible(),
          "clear button hides after the field becomes empty");
 }

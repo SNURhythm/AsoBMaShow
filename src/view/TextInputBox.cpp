@@ -169,9 +169,6 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
 }
 
 void TextInputBox::setEditingText(const std::string &newText) {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  hideNativeTextEditor(false);
-#endif
   editingText = newText;
   clearComposition();
   cursorPos = editingText.size();
@@ -180,6 +177,9 @@ void TextInputBox::setEditingText(const std::string &newText) {
   activeTouchId = -1;
   pendingFocusTouchId = -1;
   lastRenderedCaretCursor = static_cast<size_t>(-1);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  syncNativeTextEditorText();
+#endif
   refreshDisplay(false);
 }
 
@@ -856,6 +856,9 @@ void TextInputBox::clearFromButton() {
   selectionAnchor = 0;
   isDraggingSelection = false;
   lastRenderedCaretCursor = static_cast<size_t>(-1);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  syncNativeTextEditorText();
+#endif
   refreshDisplay(true);
 }
 
@@ -1010,6 +1013,16 @@ bool TextInputBox::syncNativeTextEditorState(
 
 void TextInputBox::syncNativeTextEditorSelection() {
   SetIOSNativeTextEditorSelection(this, selectionStart(), selectionEnd());
+}
+
+void TextInputBox::syncNativeTextEditorText() {
+  if (!nativeTextEditorVisible) {
+    return;
+  }
+  SetIOSNativeTextEditorState(
+      this, {.text = editingText,
+             .selectionStart = selectionStart(),
+             .selectionEnd = selectionEnd()});
 }
 
 void TextInputBox::handleNativeTextEditorEvent(

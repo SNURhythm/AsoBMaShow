@@ -112,6 +112,7 @@ private:
   bool syncNativeTextEditorState(const IOSNativeTextEditorState &state,
                                  bool &selectionChanged);
   void syncNativeTextEditorSelection();
+  void syncNativeTextEditorText();
   void handleNativeTextEditorEvent(IOSNativeTextEditorEvent event,
                                    const IOSNativeTextEditorState &state);
   static void handleNativeTextEditorEvent(void *context,
