@@ -2,7 +2,7 @@
 
 ## Goal
 
-Render a chart's parsed `#BANNER` image as decorative artwork on the right side of each main chart-selection row. The banner fades from invisible at its left edge to a subdued background image at its right edge so row content remains legible.
+Render a chart's parsed `#BANNER` image as decorative artwork on the right side of each main chart-selection row. The banner fades in from left to right behind the row's foreground content.
 
 ## Scope
 
@@ -10,60 +10,71 @@ Render a chart's parsed `#BANNER` image as decorative artwork on the right side 
 - Keep the existing `#STAGEFILE` jacket and frame on the left unchanged.
 - Reuse the existing `bms_parser::ChartMeta::Banner`, `Folder`, and asynchronous `ImageView` loading path. Parsing and repository persistence already support `#BANNER` and require no changes.
 - Do not add banners to music-player, IR-upload, result, replay, folder, or modal list rows.
+- Compile and commit Metal, SPIR-V, and GLES shader binaries in this change. DirectX shader compilation is intentionally deferred for the user to perform manually on Windows.
 
 ## Selected Approach
 
-Add an optional horizontal alpha-fade style to the common `ImageView` component. When an image is decoded or obtained from the shared cache, `ImageView` creates the GPU texture from an RGBA copy whose alpha channel is multiplied by a linear left-to-right opacity ramp. The shared decoded cache remains unmodified, so the same source image can still be displayed normally by other `ImageView` instances.
+Add an optional directional fade style to the common `ImageView` component and apply it in a dedicated fragment shader. The shader samples the original image once and multiplies its alpha by a directional fade multiplier. Decoded RGBA data and the shared image cache remain untouched.
 
-This approach is preferred over a new fragment shader because it reuses the current cross-platform texture program and avoids adding compiled shader artifacts for Metal, Vulkan, GLES, and DirectX. It is preferred over a card-colored overlay because the fade is real transparency and is independent of the active UI theme.
+The shader approach keeps the effect at render time, avoids per-image pixel copies, and allows the same cached texture to be drawn normally or with different fade settings by different `ImageView` instances.
 
-## Component Design
+## Fade Contract
 
-### Alpha-mask utility
+The common component exposes four directions:
 
-Create a small image-processing utility that accepts RGBA bytes, image dimensions, and left/right opacity values. It returns a transformed RGBA copy with:
+- Left to right
+- Right to left
+- Top to bottom
+- Bottom to top
 
-- RGB channels preserved exactly.
-- Source alpha multiplied by a linear opacity interpolation across each row.
-- Opacity inputs clamped to `[0.0, 1.0]`.
-- Invalid dimensions or byte counts rejected by returning an empty result.
-- A one-pixel-wide image using the left-edge opacity, since it has no horizontal span.
+It also accepts a strength clamped to `[0.0, 1.0]`:
 
-Keeping this math outside `ImageView` makes it independently testable without a rendering context.
+- `0.0` leaves source alpha unchanged across the image.
+- `1.0` makes the direction's origin transparent and reaches the source alpha at its destination.
+- Intermediate strengths preserve `1 - strength` of the source alpha at the origin and interpolate to the full source alpha at the destination.
 
-### `ImageView` property
+The chart banner uses left-to-right direction with strength `1.0`.
 
-Add a common-component setter for an optional horizontal alpha fade. The property stores the clamped left and right opacities and is applied whenever a cached, synchronous, thumbnail, or asynchronous image becomes a texture. Clearing the property restores normal rendering on the next texture application.
+## Shader Design
 
-Changing the property while an image is already available reapplies the cached decoded pixels immediately. Pending asynchronous loads retain the configured property and apply it when decoding completes. The cache continues to store original RGBA bytes, never faded bytes.
+Create `fs_image_fade.sc` using the existing `vs_text` varying contract and `s_texColor` sampler. A single `u_imageFadeParams` vector carries:
 
-### Chart-row banner layer
+- `x`, `y`: the signed UV direction vector.
+- `z`: the progress offset used by reverse directions.
+- `w`: the fade strength.
 
-Each `ChartListItemView` owns a named `ImageView` banner layer inserted as the first child of the row's `contentCard`. It is absolutely positioned against the right edge, inset inside the one-pixel border, sized to the card's inner height and a fixed width close to the common BMS banner aspect ratio. Because it is inserted before all normal row children, the clear lamp, jacket, text, score rank, difficulty, and favorite control render above it.
+The CPU maps directions as follows:
 
-The banner uses a left opacity of `0.0` and a right opacity of `0.48`. This keeps the right edge visibly identifiable while treating the artwork as background rather than foreground content. Its right corners follow the card's inset corner radius.
+| Direction | x | y | offset |
+| --- | ---: | ---: | ---: |
+| Left to right | 1 | 0 | 0 |
+| Right to left | -1 | 0 | 1 |
+| Top to bottom | 0 | 1 | 0 |
+| Bottom to top | 0 | -1 | 1 |
 
-## Data Flow
+The fragment shader computes clamped progress from `dot(v_texcoord0, direction) + offset`, then computes `mix(1.0 - strength, 1.0, progress)`. It multiplies only sampled alpha by that value and preserves RGB.
 
-When `ChartListItemView::setMeta` binds a normal available chart with a non-empty `meta.Banner`, it requests `meta.Folder / meta.Banner` through `setImageAsync`. When the row is rebound to a chart without a banner, an unavailable chart, or a solid archive placeholder, it calls `freeImage` so neither an old texture nor its image identity can leak from the recycled row.
+## `ImageView` Component
 
-Archive-member paths continue to work through the existing `ImageView` and `ArchiveFile` decoding path. A failed or missing banner leaves the background empty without affecting row interaction or metadata.
+Add a public property setter that accepts direction and strength, plus a clear method. `ImageView` stores the clamped configuration. When the property is present, rendering selects `vs_text.bin` plus `fs_image_fade.bin`, sets `u_imageFadeParams`, and submits the existing rounded image geometry. Without the property it continues using the current `fs_text.bin` program.
 
-## Rendering and Interaction
+Changing or clearing the property requires no image reload because the fade is applied at draw time. Synchronous, cached, thumbnail, archive-member, and asynchronous images all use the same path.
 
-- The banner is decorative and has no event handler.
-- Existing selection and unselection backgrounds remain visible through the transparent fade.
-- The content-card border remains unobscured because the banner is inset by one pixel.
-- The banner does not participate in flex layout, so it cannot displace or resize row content.
-- Selection, favorite toggling, score-rank display, marquee text, and recycler sizing remain unchanged.
+## Chart-row Banner Layer
+
+Each `ChartListItemView` owns a named `ImageView` banner layer inserted as the first child of the row's `contentCard`. It is absolutely positioned against the right edge, inset inside the one-pixel border, sized to the card's inner height and a fixed width close to the common 300:80 BMS banner aspect ratio. Because it is inserted before all normal row children, the clear lamp, jacket, text, score rank, difficulty, and favorite control render above it.
+
+When `setMeta` binds a normal available chart with a non-empty `meta.Banner`, it requests `meta.Folder / meta.Banner` through `setImageAsync`. When the row is rebound to a chart without a banner, an unavailable chart, or a solid archive placeholder, it calls `freeImage` so neither an old texture nor its image identity can leak from the recycled row.
+
+A failed or missing image leaves the layer empty without affecting row interaction or metadata. The banner is decorative and does not participate in flex layout or event handling.
 
 ## Testing
 
 Add focused tests for:
 
-1. Horizontal alpha-mask interpolation, source-alpha multiplication, RGB preservation, clamping, one-pixel width, and invalid buffer handling.
-2. `ImageView` horizontal-fade property storage and clamping.
-3. `ChartListItemView` binding the expected `Folder / Banner` path, anchoring the banner on the right as an absolute background layer, configuring the approved fade, and placing row content above it.
-4. Rebinding a recycled row to no banner, unavailable metadata, or a solid archive clearing the prior banner identity.
+1. Direction-to-uniform mapping and strength clamping for all four directions.
+2. `ImageView` storing, clamping, changing, and clearing its fade property.
+3. A shader audit proving the fragment shader samples the image, consumes the direction/offset/strength uniform, preserves RGB, and applies the fade to alpha.
+4. `ChartListItemView` binding `Folder / Banner`, anchoring the banner on the right as the first background layer, configuring left-to-right strength `1.0`, and clearing recycled banner identity for empty, unavailable, and solid-archive rows.
 
-Run the focused targets first, then the complete CTest suite and the repository's desktop `main` build. Compile shaders only if shader sources change; this design does not require shader changes.
+Compile shaders with the repository shader script and verify the new Metal, SPIR-V, and GLES binaries. Run the focused targets, complete CTest suite, and desktop `main` build.
