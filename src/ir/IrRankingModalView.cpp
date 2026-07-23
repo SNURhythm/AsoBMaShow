@@ -75,6 +75,13 @@ TextView *makeText(int size, TextView::TextAlign align = TextView::LEFT) {
   return text;
 }
 
+TextView *makeRankingLampBadge() {
+  auto *lamp = makeText(15, TextView::CENTER);
+  lamp->setWidth(kLampColumnWidth)->setHeight(32);
+  lamp->setCornerRadius(6);
+  return lamp;
+}
+
 Button *makeActionButton(const std::string &label, int width,
                          std::function<void()> action) {
   auto *button = new Button();
@@ -114,7 +121,8 @@ Button *makeIconActionButton(uint32_t codepoint,
   return button;
 }
 
-View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
+View *makeMetricCardWithValue(std::string label, TextView *&value,
+                              TextView *valueView) {
   auto *card = new View();
   card->setFlex(1.0F)->setMinWidth(0);
   card->setFlexDirection(FlexDirection::Column);
@@ -125,10 +133,14 @@ View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
   auto *caption = makeText(14);
   caption->setText(std::move(label));
   caption->setThemedColor(ui_theme::textMuted);
-  value = makeText(valueSize);
+  value = valueView;
   card->addView(caption);
   card->addView(value);
   return card;
+}
+
+View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
+  return makeMetricCardWithValue(std::move(label), value, makeText(valueSize));
 }
 
 class ModalScrim final : public View {
@@ -176,9 +188,7 @@ public:
     score_->setWidth(kScoreColumnWidth);
     rate_ = makeText(17, TextView::RIGHT);
     rate_->setWidth(kRateColumnWidth);
-    lamp_ = makeText(15, TextView::CENTER);
-    lamp_->setWidth(kLampColumnWidth)->setHeight(32);
-    lamp_->setCornerRadius(6);
+    lamp_ = makeRankingLampBadge();
     badPoints_ = makeText(17, TextView::RIGHT);
     badPoints_->setWidth(kBadPointsColumnWidth);
     combo_ = makeText(17, TextView::RIGHT);
@@ -556,7 +566,8 @@ struct IrRankingModal::Impl {
     summary->setHeight(82);
     summary->addView(makeMetricCard("EX Score", scoreDetailScore));
     summary->addView(makeMetricCard("Rate", scoreDetailRate));
-    summary->addView(makeMetricCard("Lamp", scoreDetailLamp, 17));
+    summary->addView(makeMetricCardWithValue(
+        "Lamp", scoreDetailLamp, makeRankingLampBadge()));
 
     scoreDetailJudgements = new View();
     scoreDetailJudgements->setFlexDirection(FlexDirection::Column);
@@ -763,7 +774,6 @@ struct IrRankingModal::Impl {
     const Color lampColor = clearLampColorForRank(detail.clearType);
     scoreDetailLamp->setBackgroundColor(lampColor);
     scoreDetailLamp->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
-    scoreDetailLamp->setCornerRadius(6);
     scoreDetailTitle->setThemedColor(
         detail.highlighted ? ui_theme::cyan : ui_theme::textPrimary);
     scoreDetailOpen = true;

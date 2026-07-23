@@ -104,6 +104,12 @@ require(
     "judgment headings and counts must use one shared, right-aligned column layout",
 )
 require(
+    "TextView *makeRankingLampBadge()" in source
+    and source.count("makeRankingLampBadge()") >= 3
+    and '"Lamp", scoreDetailLamp, makeRankingLampBadge())' in source,
+    "ranking rows and score details must share the padded clear-lamp badge",
+)
+require(
     "KPOOR is not exposed separately by Bokutachi; BP remains aggregate."
     in source,
     "score details must explain the Bokutachi KPOOR capability boundary",
