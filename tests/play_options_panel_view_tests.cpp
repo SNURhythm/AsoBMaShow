@@ -1,4 +1,5 @@
 #include "view/Button.h"
+#include "view/CheckboxButtonContent.h"
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
 #include "view/TextView.h"
@@ -94,6 +95,16 @@ int main() {
             "ruleset buttons have the approved labels");
     require(lr2->isSelected() && !beatoraja->isSelected(),
             "LR2 selected styling follows panel state");
+
+    auto *clubMode =
+        dynamic_cast<Button *>(panel->findViewByName("club-mode"));
+    auto *clubContent = dynamic_cast<CheckboxButtonContent *>(
+        clubMode == nullptr ? nullptr : clubMode->getContentView());
+    require(clubContent != nullptr && !clubContent->checked(),
+            "Club Beat starts with the FontAwesome unchecked icon");
+    panel->refresh({.ruleset = GameplayRuleset::LR2, .clubMode = true});
+    require(clubContent->checked(),
+            "Club Beat refresh switches to the FontAwesome checked icon");
 
     click(*beatoraja);
     require(selected == GameplayRuleset::Beatoraja,

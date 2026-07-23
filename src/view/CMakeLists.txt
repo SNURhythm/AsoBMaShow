@@ -1,1 +1,1 @@
-target_sources(main PRIVATE Button.cpp ChartListItemView.cpp DropdownView.cpp ImageView.cpp IrUploadCandidateListView.cpp LibraryFolderItemView.cpp PlayOptionSectionView.cpp PlayOptionsPanelView.cpp ScrollView.cpp SnappedSlider.cpp TextInputBox.cpp TextView.cpp View.cpp)
+target_sources(main PRIVATE Button.cpp ChartListItemView.cpp CheckboxButtonContent.cpp DropdownView.cpp ImageView.cpp IrUploadCandidateListView.cpp LibraryFolderItemView.cpp PlayOptionSectionView.cpp PlayOptionsPanelView.cpp ScrollView.cpp SnappedSlider.cpp TextInputBox.cpp TextView.cpp View.cpp)

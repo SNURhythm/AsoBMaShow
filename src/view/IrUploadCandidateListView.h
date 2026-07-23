@@ -2,6 +2,7 @@
 
 #include "../ir/IrUploadCandidates.h"
 #include "Button.h"
+#include "CheckboxButtonContent.h"
 #include "ImageView.h"
 #include "RecyclerView.h"
 #include "TextView.h"
@@ -22,7 +23,7 @@ public:
 private:
   View *clearLamp_ = nullptr;
   Button *selectionButton_ = nullptr;
-  TextView *selectionIcon_ = nullptr;
+  CheckboxButtonContent *selectionContent_ = nullptr;
   View *artworkFrame_ = nullptr;
   ImageView *jacketImage_ = nullptr;
   View *textColumn_ = nullptr;

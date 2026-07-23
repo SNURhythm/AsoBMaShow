@@ -1606,6 +1606,23 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(checkbox_button_content_tests
+        tests/checkbox_button_content_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/CheckboxButtonContent.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(checkbox_button_content_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(checkbox_button_content_tests PRIVATE cxx_std_23)
+    target_link_libraries(checkbox_button_content_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
         src/rendering/Color.cpp
@@ -1613,6 +1630,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/SimpleBatchRenderer.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/CheckboxButtonContent.cpp
         src/view/DropdownView.cpp
         src/view/PlayOptionSectionView.cpp
         src/view/PlayOptionsPanelView.cpp
@@ -1676,6 +1694,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/IrUploadCandidateListView.cpp
         src/view/ImageView.cpp
         src/view/Button.cpp
+        src/view/CheckboxButtonContent.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -2726,6 +2745,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         view_layout_tests
         button_enabled_tests
         text_input_box_tests
+        checkbox_button_content_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests

@@ -1,5 +1,6 @@
 #include "../src/rendering/UniformCache.h"
 #include "../src/view/Button.h"
+#include "../src/view/CheckboxButtonContent.h"
 #include "../src/view/ImageView.h"
 #include "../src/view/IrUploadCandidateListView.h"
 #include "../src/view/TextView.h"
@@ -161,6 +162,10 @@ int main() {
                text(row, "irUploadRank")->getText() == "A",
            "row shows chart, combo, date, option, and replay metadata");
     expect(selection->isSelected(), "row reflects external checkbox selection");
+    auto *selectionContent = dynamic_cast<CheckboxButtonContent *>(
+        selection->getContentView());
+    expect(selectionContent != nullptr && selectionContent->checked(),
+           "IR upload selection uses FontAwesome checkbox content");
     click(list, *selection);
     expect(toggles == 1 && toggledReplayId == first.replayId() &&
                rowSelections == 0,
@@ -181,6 +186,8 @@ int main() {
            "failed attempt appends its upload reason to the detail line");
     expect(
         !selection->isSelected() &&
+            !dynamic_cast<CheckboxButtonContent *>(selection->getContentView())
+                 ->checked() &&
             text(row, "irUploadAttempt")->getText().find("NORMAL") !=
                 std::string::npos &&
             text(row, "irUploadAttempt")->getText().find("RANDOM") ==

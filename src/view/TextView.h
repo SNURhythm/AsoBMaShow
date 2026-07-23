@@ -27,6 +27,9 @@ public:
   [[nodiscard]] bgfx::TextureHandle textureHandle() const { return texture; }
   [[nodiscard]] int textureWidth() const { return rect.w; }
   [[nodiscard]] int textureHeight() const { return rect.h; }
+  [[nodiscard]] const std::string &primaryFontPath() const {
+    return primaryFontPath_;
+  }
 
 protected:
   struct FontFace {
@@ -74,6 +77,7 @@ protected:
   TextOverflow overflow = TextOverflow::Visible;
   TTF_Font *font = nullptr;
   std::vector<std::string> fallbackFontPaths;
+  std::string primaryFontPath_;
   std::vector<FontFace> fontFaces;
   size_t nextFallbackFontPath = 0;
   std::unordered_map<Uint32, SelectedFont> fontSelectionCache;

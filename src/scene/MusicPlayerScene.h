@@ -16,6 +16,7 @@
 #include <vector>
 
 class Button;
+class CheckboxButtonContent;
 class DropdownView;
 class ImageView;
 class OverlayPortal;
@@ -281,7 +282,7 @@ private:
   SnappedSlider *playbackRateSlider = nullptr;
   TextView *playbackRateValueText = nullptr;
   Button *clubModeButton = nullptr;
-  TextView *clubModeButtonText = nullptr;
+  CheckboxButtonContent *clubModeButtonContent = nullptr;
   TextView *deletePlaylistButtonText = nullptr;
   TextView *clearPlaylistButtonText = nullptr;
   View *seekProgressTrack = nullptr;

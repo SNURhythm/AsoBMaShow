@@ -303,6 +303,7 @@ TextView::TextView(const std::string &fontPath, int fontSize)
     : View(), texture(BGFX_INVALID_HANDLE) {
   this->fontSize = fontSize;
   this->fontRasterSize = rasterFontSizeFor(fontSize);
+  primaryFontPath_ = fontPath;
   fallbackFontPaths = fontFallbackPaths(fontPath);
   ttfInitialized = acquireTtf();
   if (ttfInitialized) {
