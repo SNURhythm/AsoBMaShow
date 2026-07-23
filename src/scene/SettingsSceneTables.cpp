@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "DifficultyTableUrlCompletion.h"
 #include "../ChartLibraryScanner.h"
 #include "../DifficultyTableImporter.h"
 #include "../Utils.h"
@@ -209,6 +210,8 @@ void SettingsScene::requestDifficultyTableImportProgress(
 void SettingsScene::applyPendingDifficultyTableUpdates() {
   bool shouldReload = false;
   bool shouldRefreshImportModal = false;
+  bool completedImportFinished = false;
+  bool completedImportSucceeded = false;
   {
     std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
     if (pendingDifficultyTableStatus) {
@@ -237,6 +240,8 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
           pendingDifficultyTableImportStatusText;
       difficultyTableImportFinished = pendingDifficultyTableImportFinished;
       difficultyTableImportSucceeded = pendingDifficultyTableImportSucceeded;
+      completedImportFinished = pendingDifficultyTableImportFinished;
+      completedImportSucceeded = pendingDifficultyTableImportSucceeded;
       difficultyTableImportModalVisible = true;
       pendingDifficultyTableImportProgress = false;
       shouldRefreshImportModal = true;
@@ -250,6 +255,11 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
     loadChartEntries();
     observedLibraryRevision = context.chartRepository.GetLibraryRevision();
     lastLayoutWidth = -1;
+  }
+  if (settings_ui::applyDifficultyTableUrlCompletion(
+          completedImportFinished, completedImportSucceeded, tableUrlText) &&
+      tableUrlInput != nullptr) {
+    tableUrlInput->setEditingText(tableUrlText);
   }
   if (shouldRefreshImportModal) {
     refreshDifficultyTableImportModal();

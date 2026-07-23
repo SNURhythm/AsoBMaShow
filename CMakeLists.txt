@@ -1623,6 +1623,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(difficulty_table_url_completion_tests
+        tests/difficulty_table_url_completion_tests.cpp
+    )
+    target_include_directories(difficulty_table_url_completion_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(difficulty_table_url_completion_tests PRIVATE
+        cxx_std_23
+    )
+
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
         src/rendering/Color.cpp
@@ -2746,6 +2756,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         button_enabled_tests
         text_input_box_tests
         checkbox_button_content_tests
+        difficulty_table_url_completion_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests

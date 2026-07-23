@@ -1184,28 +1184,14 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   searchInput->setCornerRadius(ui_theme::controlRadius());
   searchInput->setThemedColor(ui_theme::textPrimary);
   searchInput->setVAlign(TextView::MIDDLE);
+  searchInput->setClearable(true);
   searchInput->onTextChanged([this, kind](const std::string &value) {
     trackBrowserSearchText(kind) = value;
     applyTrackBrowserFilter(kind);
     refreshUi();
   });
-  TextView *clearSearchText = nullptr;
-  auto *clearSearchButton = makeButton("Clear", 17, &clearSearchText);
-  clearSearchButton->setWidth(104);
-  styleButton(clearSearchButton, clearSearchText, ui_theme::control,
-              ui_theme::controlHover, ui_theme::controlPressed,
-              ui_theme::hairlineStrong);
-  clearSearchButton->setOnClickListener([this, kind, searchInput]() {
-    trackBrowserSearchText(kind).clear();
-    if (searchInput != nullptr) {
-      searchInput->setEditingText("");
-    }
-    applyTrackBrowserFilter(kind);
-    refreshUi();
-  });
   searchRow->addView(searchLabel);
   searchRow->addView(searchInput);
-  searchRow->addView(clearSearchButton);
   panel->addView(searchRow);
 
   auto *workspace = new View();
