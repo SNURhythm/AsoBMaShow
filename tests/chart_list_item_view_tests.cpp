@@ -62,8 +62,17 @@ int main() {
     auto *card = row.findViewByName("chartListContentCard");
     auto *banner = dynamic_cast<ImageView *>(
         row.findViewByName("chartListBanner"));
+    auto *difficulty = dynamic_cast<TextView *>(
+        row.findViewByName("chartListDifficulty"));
+    auto *keyMode = dynamic_cast<TextView *>(
+        row.findViewByName("chartListKeyMode"));
     require(card != nullptr && banner != nullptr,
             "chart row exposes its card and banner background");
+    require(difficulty != nullptr && keyMode != nullptr,
+            "chart row exposes difficulty and key-mode labels");
+    require(difficulty->fontWeight() == TextView::FontWeight::Bold &&
+                keyMode->fontWeight() == TextView::FontWeight::Bold,
+            "difficulty and key-mode labels use bold text");
     require(banner->imagePath() == path_t("/charts/first/banner.png"),
             "chart row binds Folder/Banner through ImageView");
     require(banner->fade().has_value() &&

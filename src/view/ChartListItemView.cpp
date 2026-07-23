@@ -59,8 +59,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankColumn = new View();
   titleView = new TextView(kUiFont, 26);
   artistView = new TextView(kUiFont, 17);
-  levelView = new TextView(kUiFont, 18);
-  keyModeView = new TextView(kUiFont, 14);
+  levelView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
+  keyModeView = new TextView(kUiFont, 14, TextView::FontWeight::Bold);
   scoreRankShadowView = new TextView(kUiFont, 40);
   scoreRankWeightView = new TextView(kUiFont, 40);
   scoreRankView = new TextView(kUiFont, 40);
@@ -158,12 +158,14 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setGap(6);
 
   levelView->setAlign(TextView::TextAlign::RIGHT);
+  levelView->setName("chartListDifficulty");
   levelView->setVAlign(TextView::TextVAlign::MIDDLE);
   levelView->setOverflow(TextView::TextOverflow::Marquee);
   levelView->setWidth(112)->setHeight(32);
   detailsLayout->addView(levelView);
 
   keyModeView->setAlign(TextView::TextAlign::RIGHT);
+  keyModeView->setName("chartListKeyMode");
   keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
   keyModeView->setOverflow(TextView::TextOverflow::Hidden);
   keyModeView->setWidth(112)->setHeight(24);

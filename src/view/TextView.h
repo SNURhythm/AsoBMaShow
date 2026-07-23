@@ -13,7 +13,9 @@ public:
   enum TextAlign { LEFT, CENTER, RIGHT };
   enum TextVAlign { TOP, MIDDLE, BOTTOM };
   enum class TextOverflow { Visible, Hidden, Marquee };
-  TextView(const std::string &fontPath, int fontSize);
+  enum class FontWeight { Regular, Bold };
+  TextView(const std::string &fontPath, int fontSize,
+           FontWeight fontWeight = FontWeight::Regular);
   ~TextView() override;
 
   void setText(const std::string &newText);
@@ -31,6 +33,9 @@ public:
     return primaryFontPath_;
   }
   [[nodiscard]] int pointSize() const noexcept { return fontSize; }
+  [[nodiscard]] FontWeight fontWeight() const noexcept {
+    return fontWeight_;
+  }
   [[nodiscard]] SDL_Color currentColor() const noexcept { return color; }
 
 protected:
@@ -84,6 +89,8 @@ protected:
   size_t nextFallbackFontPath = 0;
   std::unordered_map<Uint32, SelectedFont> fontSelectionCache;
   int fontSize = 0;
+  FontWeight fontWeight_ = FontWeight::Regular;
+  int fontStyle_ = TTF_STYLE_NORMAL;
   int fontRasterSize = 0;
   int fontLineHeight = 0;
   int fontAscent = 0;
