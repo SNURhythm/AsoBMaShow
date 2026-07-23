@@ -274,7 +274,8 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
   } else {
     jacketImage->freeImage();
   }
-  if (!unavailable && !solidArchive && !meta.Banner.empty()) {
+  if (!record.courseStart && !unavailable && !solidArchive &&
+      !meta.Banner.empty()) {
     bannerImage->setImageAsync(meta.Folder / meta.Banner);
   } else {
     bannerImage->freeImage();

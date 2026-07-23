@@ -89,6 +89,12 @@ int main() {
     row.setMeta(record);
     require(banner->imagePath().empty(),
             "solid archive rows do not request banner files");
+
+    record.solidArchive = false;
+    record.courseStart = true;
+    row.setMeta(record);
+    require(banner->imagePath().empty(),
+            "course rows do not borrow a chart banner");
   }
 
   rendering::UniformCache::getInstance().destroyAll();
