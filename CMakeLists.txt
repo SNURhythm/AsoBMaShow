@@ -1565,6 +1565,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(chart_filter_sort_panel_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_filter_sort_panel_view_tests PRIVATE cxx_std_23)
 
+    add_executable(image_fade_tests
+        tests/image_fade_tests.cpp
+        src/view/ImageFade.cpp
+    )
+    target_include_directories(image_fade_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(image_fade_tests PRIVATE cxx_std_23)
+
     add_executable(dropdown_view_tests
         tests/dropdown_view_tests.cpp
         src/bms_parser.cpp
@@ -2758,6 +2765,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         application_startup_tests
         application_result_recovery_tests
         chart_filter_sort_panel_view_tests
+        image_fade_tests
         dropdown_view_tests
         view_layout_tests
         button_enabled_tests
