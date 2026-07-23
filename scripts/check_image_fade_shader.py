@@ -15,7 +15,10 @@ shader = shader_path.read_text(encoding="utf-8") if shader_path.is_file() else "
 
 required = {
     "fade uniform": "uniform vec4 u_imageFadeParams",
+    "scrim uniform": "uniform vec4 u_imageScrimColor",
     "image sampler": "SAMPLER2D(s_texColor, 0)",
+    "scrim alpha clamp": "saturate(u_imageScrimColor.a)",
+    "scrim rgb blend": "mix(color.rgb, u_imageScrimColor.rgb, scrimAlpha)",
     "direction progress": "dot(v_texcoord0, u_imageFadeParams.xy)",
     "offset progress": "+ u_imageFadeParams.z",
     "strength clamp": "saturate(u_imageFadeParams.w)",

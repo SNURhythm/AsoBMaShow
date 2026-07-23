@@ -700,11 +700,24 @@ void ImageView::renderImpl(RenderContext &context) {
     return;
   }
   bgfx::ProgramHandle program;
-  if (fade_.has_value()) {
-    const auto params = imageFadeShaderParameters(*fade_);
+  if (fade_.has_value() || scrimColor_.has_value()) {
+    const ImageFade fade = fade_.value_or(
+        makeImageFade(ImageFadeDirection::LeftToRight, 0.0F));
+    const auto fadeParams = imageFadeShaderParameters(fade);
     bgfx::setUniform(
         rendering::UniformCache::getInstance().getVec4("u_imageFadeParams"),
-        params.data());
+        fadeParams.data());
+
+    const Color scrim = scrimColor_.value_or(Color(0, 0, 0, 0));
+    constexpr float inv255 = 1.0F / 255.0F;
+    const std::array<float, 4> scrimParams = {
+        static_cast<float>(scrim.r) * inv255,
+        static_cast<float>(scrim.g) * inv255,
+        static_cast<float>(scrim.b) * inv255,
+        static_cast<float>(scrim.a) * inv255};
+    bgfx::setUniform(
+        rendering::UniformCache::getInstance().getVec4("u_imageScrimColor"),
+        scrimParams.data());
     program = rendering::ShaderManager::getInstance().getProgram(
         "vs_text.bin", "fs_image_fade.bin");
   } else {
