@@ -1774,6 +1774,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ir_upload_candidate_list_view_tests
         tests/ir_upload_candidate_list_view_tests.cpp
         src/view/IrUploadCandidateListView.cpp
+        src/view/ImageFade.cpp
         src/view/ImageView.cpp
         src/view/Button.cpp
         src/view/CheckboxButtonContent.cpp
