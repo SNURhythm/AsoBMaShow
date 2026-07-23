@@ -93,6 +93,11 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setCornerRadius(ui_theme::childRadiusForInset(
           ui_theme::controlRadius(), 1.0F, 0.0F));
   bannerImage->setFade(ImageFadeDirection::LeftToRight, 1.0F);
+  bannerImage->setThemedScrimColor([] {
+    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
+               ? Color(255, 255, 255, 168)
+               : Color(5, 10, 18, 144);
+  });
   contentCard->addView(bannerImage);
 
   clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);

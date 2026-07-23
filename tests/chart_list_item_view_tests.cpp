@@ -1,6 +1,7 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
 #include "view/ImageView.h"
+#include "view/UiTheme.h"
 
 #include <bgfx/bgfx.h>
 
@@ -32,6 +33,11 @@ void require(bool condition, const char *message) {
     std::exit(1);
   }
 }
+
+bool sameColor(const Color &actual, const Color &expected) {
+  return actual.r == expected.r && actual.g == expected.g &&
+         actual.b == expected.b && actual.a == expected.a;
+}
 } // namespace
 
 int main() {
@@ -42,6 +48,7 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
   {
+    ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
     ChartMetaRecord record;
     record.meta.Folder = "/charts/first";
     record.meta.Banner = "banner.png";
@@ -64,6 +71,17 @@ int main() {
                     ImageFadeDirection::LeftToRight &&
                 banner->fade()->strength == 1.0F,
             "chart banner fades in from left to right at full strength");
+    require(banner->scrimColor().has_value() &&
+                sameColor(*banner->scrimColor(), Color(5, 10, 18, 144)),
+            "dark chart banner uses the readability scrim");
+    ui_theme::setActiveMode(ui_theme::ThemeMode::Light);
+    row.propagateThemeChange();
+    require(banner->scrimColor().has_value() &&
+                sameColor(*banner->scrimColor(),
+                          Color(255, 255, 255, 168)),
+            "chart banner scrim follows the active light theme");
+    ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
+    row.propagateThemeChange();
     require(banner->getWidth() == 368 &&
                 banner->getX() + banner->getWidth() ==
                     card->getX() + card->getWidth() - 1 &&
