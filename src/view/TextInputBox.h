@@ -8,7 +8,10 @@
 #include <SDL_ttf.h>
 #include <string>
 #include <functional>
+#include <memory>
 #include <vector>
+
+class Button;
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -26,6 +29,10 @@ public:
   void onUnselected() override;
   void onMove(int newX, int newY) override;
   void onResize(int newWidth, int newHeight) override;
+  void propagateThemeChange() override;
+
+  void setClearable(bool clearable);
+  [[nodiscard]] bool isClearButtonVisible() const noexcept;
 
   size_t onTextChanged(std::function<void(const std::string &)> callback);
   void removeOnTextChanged(std::function<void(const std::string &)> callback);
@@ -57,6 +64,9 @@ private:
   float pendingFocusUiX = 0.0f;
   float pendingFocusUiY = 0.0f;
   bool nativeTextEditorVisible = false;
+  std::unique_ptr<Button> clearButton;
+  bool clearable = false;
+  int trailingContentPadding = 12;
   uint64_t pointerDownListenerId = 0;
   size_t selectionAnchor = 0;
   size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
@@ -114,4 +124,7 @@ private:
   void finishEditing();
   void notifyEditingFinished();
   void syncTextInputRect(int cursorX, int cursorY);
+  void syncClearButton();
+  void syncClearButtonFrame();
+  void clearFromButton();
 };

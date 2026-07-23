@@ -361,12 +361,13 @@ void TextView::renderImpl(RenderContext &context) {
   SDL_Rect drawRect = resolvedTextRect();
   const float rotationDegrees = getRotationDegrees();
   const bool clip =
-      overflow != TextOverflow::Visible && getWidth() > 0 && getHeight() > 0;
+      overflow != TextOverflow::Visible && getContentWidth() > 0 &&
+      getContentHeight() > 0;
   if (rotationDegrees == 0.0f && overflow == TextOverflow::Marquee &&
       !wrapEnabled &&
-      rect.w > getWidth()) {
-    drawRect.x =
-        getX() - static_cast<int>(std::round(marqueeOffset(getWidth())));
+      rect.w > getContentWidth()) {
+    drawRect.x = getContentX() - static_cast<int>(
+                                   std::round(marqueeOffset(getContentWidth())));
   }
 
   const auto submitText = [this, &context, &drawRect]() {
@@ -403,7 +404,8 @@ void TextView::renderImpl(RenderContext &context) {
   };
 
   if (clip) {
-    ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
+    ScissorScope scissor(context, getContentX(), getContentY(),
+                         getContentWidth(), getContentHeight());
     submitText();
   } else {
     submitText();
@@ -412,9 +414,9 @@ void TextView::renderImpl(RenderContext &context) {
 
 SDL_Rect TextView::resolvedTextRect() const {
   const int contentHeight = rect.h > 0 ? rect.h : textLineHeight();
-  SDL_Rect drawRect = {getX(), getY(), rect.w, contentHeight};
-  const int width = getWidth();
-  const int height = getHeight();
+  SDL_Rect drawRect = {getContentX(), getContentY(), rect.w, contentHeight};
+  const int width = getContentWidth();
+  const int height = getContentHeight();
 
   switch (align) {
   case TextAlign::LEFT:

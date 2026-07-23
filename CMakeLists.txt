@@ -1588,6 +1588,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
     target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(text_input_box_tests
+        tests/text_input_box_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/TextInputBox.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(text_input_box_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(text_input_box_tests PRIVATE cxx_std_23)
+    target_link_libraries(text_input_box_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
         src/rendering/Color.cpp
@@ -2707,6 +2725,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         dropdown_view_tests
         view_layout_tests
         button_enabled_tests
+        text_input_box_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests
