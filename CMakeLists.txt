@@ -1603,6 +1603,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(image_view_fade_tests PRIVATE iconv)
     endif()
 
+    add_executable(chart_list_item_view_tests
+        tests/chart_list_item_view_tests.cpp
+        src/view/ChartListItemView.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageView.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(chart_list_item_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_list_item_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(chart_list_item_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(chart_list_item_view_tests PRIVATE iconv)
+    endif()
+
     add_executable(dropdown_view_tests
         tests/dropdown_view_tests.cpp
         src/bms_parser.cpp
@@ -2798,6 +2825,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_filter_sort_panel_view_tests
         image_fade_tests
         image_view_fade_tests
+        chart_list_item_view_tests
         dropdown_view_tests
         view_layout_tests
         button_enabled_tests

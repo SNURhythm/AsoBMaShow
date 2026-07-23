@@ -14,6 +14,7 @@ namespace {
 constexpr int kBottomGap = 8;
 constexpr int kArtworkFramePadding = 3;
 constexpr int kArtworkFrameBorderWidth = 1;
+constexpr int kBannerWidth = 368;
 constexpr uint32_t kIconStar = 0xf005;
 constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
 
@@ -49,6 +50,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
     : View(x, y, width, height) {
   (void)record;
   contentCard = new View();
+  bannerImage = new ImageView(0, 0, 0, 0);
   clearLamp = new View();
   artworkFrame = new View();
   jacketImage = new ImageView(0, 0, 0, 0);
@@ -69,14 +71,29 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       ->setAlignItems(YGAlignStretch)
       ->setPadding(Edge::Bottom, kBottomGap);
 
+  const int contentCardHeight = height > kBottomGap ? height - kBottomGap
+                                                     : height;
+  contentCard->setName("chartListContentCard");
   contentCard->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
-      ->setHeight(height > kBottomGap ? height - kBottomGap : height)
+      ->setHeight(contentCardHeight)
       ->setFlexShrink(0)
       ->setPadding(Edge::All, 8)
       ->setPadding(Edge::End, 24)
       ->setGap(12);
   this->addView(contentCard);
+
+  bannerImage->setName("chartListBanner");
+  bannerImage->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, YGUndefined)
+      ->setPosition(Edge::Top, 0)
+      ->setPosition(Edge::Right, 0)
+      ->setWidth(kBannerWidth)
+      ->setHeight(std::max(0, contentCardHeight - 2))
+      ->setCornerRadius(ui_theme::childRadiusForInset(
+          ui_theme::controlRadius(), 1.0F, 0.0F));
+  bannerImage->setFade(ImageFadeDirection::LeftToRight, 1.0F);
+  contentCard->addView(bannerImage);
 
   clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
   clearLamp->setCornerRadius(3.0f);
@@ -256,6 +273,11 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record) {
     jacketImage->setImageAsync(meta.Folder / meta.StageFile);
   } else {
     jacketImage->freeImage();
+  }
+  if (!unavailable && !solidArchive && !meta.Banner.empty()) {
+    bannerImage->setImageAsync(meta.Folder / meta.Banner);
+  } else {
+    bannerImage->freeImage();
   }
   favoriteButton->setVisible(!record.courseStart && !unavailable &&
                              !solidArchive &&
