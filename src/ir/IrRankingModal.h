@@ -9,6 +9,7 @@
 #include <string_view>
 
 class OverlayPortal;
+class View;
 
 namespace ir {
 
@@ -166,6 +167,7 @@ makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept;
 layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept;
 [[nodiscard]] IrRankingJudgementColumnGeometry
 layoutIrRankingJudgementColumns(float availableWidth) noexcept;
+void configureIrRankingDetailLampBadge(View &badge);
 [[nodiscard]] bool useCompactIrRankingColumns(int width) noexcept;
 [[nodiscard]] bool shouldLoadNextIrRankingPage(
     int entryCount, float scrollOffset, float viewportHeight, int itemHeight,

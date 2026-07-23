@@ -82,6 +82,12 @@ TextView *makeRankingLampBadge() {
   return lamp;
 }
 
+TextView *makeScoreDetailLampBadge() {
+  auto *lamp = makeRankingLampBadge();
+  configureIrRankingDetailLampBadge(*lamp);
+  return lamp;
+}
+
 Button *makeActionButton(const std::string &label, int width,
                          std::function<void()> action) {
   auto *button = new Button();
@@ -567,7 +573,7 @@ struct IrRankingModal::Impl {
     summary->addView(makeMetricCard("EX Score", scoreDetailScore));
     summary->addView(makeMetricCard("Rate", scoreDetailRate));
     summary->addView(makeMetricCardWithValue(
-        "Lamp", scoreDetailLamp, makeRankingLampBadge()));
+        "Lamp", scoreDetailLamp, makeScoreDetailLampBadge()));
 
     scoreDetailJudgements = new View();
     scoreDetailJudgements->setFlexDirection(FlexDirection::Column);

@@ -105,9 +105,10 @@ require(
 )
 require(
     "TextView *makeRankingLampBadge()" in source
-    and source.count("makeRankingLampBadge()") >= 3
-    and '"Lamp", scoreDetailLamp, makeRankingLampBadge())' in source,
-    "ranking rows and score details must share the padded clear-lamp badge",
+    and "TextView *makeScoreDetailLampBadge()" in source
+    and "configureIrRankingDetailLampBadge(*lamp);" in source
+    and '"Lamp", scoreDetailLamp, makeScoreDetailLampBadge())' in source,
+    "score details must use a padded clear-lamp badge that fits its metric card",
 )
 require(
     "KPOOR is not exposed separately by Bokutachi; BP remains aggregate."

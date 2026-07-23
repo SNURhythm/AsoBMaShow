@@ -1,4 +1,5 @@
 #include "IrRankingModal.h"
+#include "../view/View.h"
 
 #include <algorithm>
 #include <cctype>
@@ -167,6 +168,10 @@ layoutIrRankingJudgementColumns(float availableWidth) noexcept {
       std::min(kPreferredLabelWidth, width * kMaximumCompactLabelShare);
   return {.labelWidth = labelWidth,
           .valueWidth = (width - labelWidth) / kValueColumnCount};
+}
+
+void configureIrRankingDetailLampBadge(View &badge) {
+  badge.setWidthPercent(100.0f)->setMinWidth(0)->setFlexShrink(1.0f);
 }
 
 bool useCompactIrRankingColumns(int width) noexcept {

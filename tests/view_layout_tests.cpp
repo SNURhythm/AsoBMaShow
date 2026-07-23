@@ -205,6 +205,36 @@ void testRankingJudgementColumnsUseOneSharedMeasurement() {
   assert(empty.valueWidth == 0.0f);
 }
 
+void testRankingDetailLampShrinksInsideCompactMetricCard() {
+  View summary(0, 0, 282, 82);
+  summary.setFlexDirection(FlexDirection::Row);
+  summary.setAlignItems(YGAlignStretch);
+  summary.setGap(10);
+
+  View *lampCard = nullptr;
+  View *lamp = nullptr;
+  for (int index = 0; index < 3; ++index) {
+    auto *card = new View();
+    card->setFlex(1.0f)->setMinWidth(0);
+    card->setPadding(Edge::All, 10);
+    summary.addView(card);
+    if (index == 2) {
+      lampCard = card;
+      lamp = new View();
+      lamp->setWidth(174)->setHeight(32);
+      ir::configureIrRankingDetailLampBadge(*lamp);
+      card->addView(lamp);
+    }
+  }
+
+  summary.applyYogaLayout();
+  assert(lampCard != nullptr);
+  assert(lamp != nullptr);
+  assert(lampCard->getWidth() < 100);
+  assert(lamp->getWidth() == lampCard->getContentWidth());
+  assert(lamp->getWidth() < 174);
+}
+
 void testBlockingOverlayStopsAllInteractiveEvents() {
   View root(0, 0, 640, 480);
   auto *background = new EventRecordingView();
@@ -767,6 +797,7 @@ int main() {
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testRankingModalPanelStaysCenteredInsideSafeArea();
   testRankingJudgementColumnsUseOneSharedMeasurement();
+  testRankingDetailLampShrinksInsideCompactMetricCard();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testGyroscopeSettingsLayoutAndPresentation();
