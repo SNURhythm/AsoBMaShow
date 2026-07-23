@@ -188,6 +188,23 @@ void testRankingModalPanelStaysCenteredInsideSafeArea() {
   assert(compact.compact);
 }
 
+void testRankingJudgementColumnsUseOneSharedMeasurement() {
+  const auto wide = ir::layoutIrRankingJudgementColumns(696.0f);
+  assert(std::abs(wide.labelWidth - 152.0f) <= 0.001f);
+  assert(std::abs(wide.valueWidth - (696.0f - 152.0f) / 3.0f) <= 0.001f);
+  assert(std::abs(wide.labelWidth + wide.valueWidth * 3.0f - 696.0f) <= 0.001f);
+
+  const auto compact = ir::layoutIrRankingJudgementColumns(300.0f);
+  assert(compact.labelWidth < wide.labelWidth);
+  assert(compact.valueWidth > 0.0f);
+  assert(std::abs(compact.labelWidth + compact.valueWidth * 3.0f - 300.0f) <=
+         0.001f);
+
+  const auto empty = ir::layoutIrRankingJudgementColumns(-20.0f);
+  assert(empty.labelWidth == 0.0f);
+  assert(empty.valueWidth == 0.0f);
+}
+
 void testBlockingOverlayStopsAllInteractiveEvents() {
   View root(0, 0, 640, 480);
   auto *background = new EventRecordingView();
@@ -749,6 +766,7 @@ int main() {
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testRankingModalPanelStaysCenteredInsideSafeArea();
+  testRankingJudgementColumnsUseOneSharedMeasurement();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testGyroscopeSettingsLayoutAndPresentation();

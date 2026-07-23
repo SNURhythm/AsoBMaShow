@@ -157,6 +157,18 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept {
           .compact = width <= kCompactRowMaximumWidth + 44};
 }
 
+IrRankingJudgementColumnGeometry
+layoutIrRankingJudgementColumns(float availableWidth) noexcept {
+  constexpr float kPreferredLabelWidth = 152.0f;
+  constexpr float kMaximumCompactLabelShare = 0.4f;
+  constexpr float kValueColumnCount = 3.0f;
+  const float width = std::max(0.0f, availableWidth);
+  const float labelWidth =
+      std::min(kPreferredLabelWidth, width * kMaximumCompactLabelShare);
+  return {.labelWidth = labelWidth,
+          .valueWidth = (width - labelWidth) / kValueColumnCount};
+}
+
 bool useCompactIrRankingColumns(int width) noexcept {
   return width <= kCompactRowMaximumWidth;
 }

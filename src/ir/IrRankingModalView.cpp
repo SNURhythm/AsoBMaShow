@@ -354,6 +354,8 @@ struct IrRankingModal::Impl {
   View *scoreDetailJudgements = nullptr;
   TextView *scoreDetailJudgementUnavailable = nullptr;
   TextView *scoreDetailKpoorNote = nullptr;
+  std::array<TextView *, 6> scoreDetailJudgementLabels{};
+  std::array<TextView *, 3> scoreDetailJudgementHeadings{};
   std::array<TextView *, 5> scoreDetailTotals{};
   std::array<TextView *, 5> scoreDetailEarly{};
   std::array<TextView *, 5> scoreDetailLate{};
@@ -566,10 +568,9 @@ struct IrRankingModal::Impl {
     scoreDetailJudgements->setThemedBackgroundColor(ui_theme::fieldInk);
     scoreDetailJudgements->setCornerRadius(ui_theme::controlRadius());
 
-    const auto makeJudgementHeaderCell = [](TextView::TextAlign align) {
-      auto *cell = makeText(14, align);
+    const auto makeJudgementHeaderCell = [] {
+      auto *cell = makeText(14, TextView::RIGHT);
       cell->setThemedColor(ui_theme::textMuted);
-      cell->setFlex(1);
       return cell;
     };
     auto *judgementHeader = new View();
@@ -582,14 +583,18 @@ struct IrRankingModal::Impl {
     judgementHeading->setText("Judgment");
     judgementHeading->setThemedColor(ui_theme::textMuted);
     judgementHeading->setWidth(152);
-    auto *totalHeading = makeJudgementHeaderCell(TextView::CENTER);
+    scoreDetailJudgementLabels[0] = judgementHeading;
+    auto *totalHeading = makeJudgementHeaderCell();
     totalHeading->setText("Total");
-    auto *earlyHeading = makeJudgementHeaderCell(TextView::CENTER);
+    scoreDetailJudgementHeadings[0] = totalHeading;
+    auto *earlyHeading = makeJudgementHeaderCell();
     earlyHeading->setText("Early");
     earlyHeading->setThemedColor(ui_theme::fastFeedback);
-    auto *lateHeading = makeJudgementHeaderCell(TextView::CENTER);
+    scoreDetailJudgementHeadings[1] = earlyHeading;
+    auto *lateHeading = makeJudgementHeaderCell();
     lateHeading->setText("Late");
     lateHeading->setThemedColor(ui_theme::slowFeedback);
+    scoreDetailJudgementHeadings[2] = lateHeading;
     judgementHeader->addView(judgementHeading);
     judgementHeader->addView(totalHeading);
     judgementHeader->addView(earlyHeading);
@@ -611,14 +616,12 @@ struct IrRankingModal::Impl {
           name->setText(std::move(label));
           name->setThemedColor(std::move(labelColor));
           name->setWidth(152);
-          scoreDetailTotals[index] = makeText(17, TextView::CENTER);
-          scoreDetailTotals[index]->setFlex(1);
-          scoreDetailEarly[index] = makeText(17, TextView::CENTER);
+          scoreDetailJudgementLabels[index + 1] = name;
+          scoreDetailTotals[index] = makeText(17, TextView::RIGHT);
+          scoreDetailEarly[index] = makeText(17, TextView::RIGHT);
           scoreDetailEarly[index]->setThemedColor(ui_theme::fastFeedback);
-          scoreDetailEarly[index]->setFlex(1);
-          scoreDetailLate[index] = makeText(17, TextView::CENTER);
+          scoreDetailLate[index] = makeText(17, TextView::RIGHT);
           scoreDetailLate[index]->setThemedColor(ui_theme::slowFeedback);
-          scoreDetailLate[index]->setFlex(1);
           row->addView(name);
           row->addView(scoreDetailTotals[index]);
           row->addView(scoreDetailEarly[index]);
@@ -668,6 +671,31 @@ struct IrRankingModal::Impl {
     scoreDetailRoot->setVisible(false);
   }
 
+  void applyScoreDetailJudgementColumnLayout() {
+    constexpr float kTableHorizontalPadding = 8.0f;
+    constexpr float kRowHorizontalPadding = 20.0f;
+    const auto columns = layoutIrRankingJudgementColumns(
+        static_cast<float>(scoreDetailJudgements->getWidth()) -
+        kTableHorizontalPadding - kRowHorizontalPadding);
+    const auto fixWidth = [](View *cell, float width) {
+      cell->setWidth(width);
+      cell->setFlexGrow(0);
+      cell->setFlexBasis(width);
+      cell->setFlexShrink(0);
+    };
+    for (auto *label : scoreDetailJudgementLabels) {
+      fixWidth(label, columns.labelWidth);
+    }
+    for (auto *heading : scoreDetailJudgementHeadings) {
+      fixWidth(heading, columns.valueWidth);
+    }
+    for (std::size_t row = 0; row < scoreDetailTotals.size(); ++row) {
+      fixWidth(scoreDetailTotals[row], columns.valueWidth);
+      fixWidth(scoreDetailEarly[row], columns.valueWidth);
+      fixWidth(scoreDetailLate[row], columns.valueWidth);
+    }
+  }
+
   void updateScoreDetailLayout(const SafeInsets &safe) {
     const auto geometry =
         layoutIrRankingPanel({.viewportWidth = rendering::window_width,
@@ -686,6 +714,8 @@ struct IrRankingModal::Impl {
     scoreDetailRoot->setPadding(Edge::Right, safe.right + 36);
     scoreDetailPanel->setWidth(static_cast<float>(geometry.width));
     scoreDetailPanel->setHeight(static_cast<float>(geometry.height));
+    scoreDetailRoot->applyYogaLayout();
+    applyScoreDetailJudgementColumnLayout();
     scoreDetailRoot->applyYogaLayout();
   }
 
