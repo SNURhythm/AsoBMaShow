@@ -36,6 +36,11 @@ The property will be enabled for:
 The two standalone Music Player search `Clear` buttons will be removed because
 their behavior moves into the input component.
 
+Difficulty-table imports complete asynchronously. When an add operation reports
+success on the UI thread, the settings scene will clear both its stored URL
+text and the visible URL input. A failed or cancelled add will preserve the URL
+so the user can correct it or retry.
+
 ## Checkbox Icons
 
 Checkbox state will use FontAwesome square and square-check glyphs. Text labels
@@ -55,7 +60,8 @@ and code reference.
 
 Focused tests will cover default input padding, clear-button visibility and
 callback behavior, clear-button event consumption, and the expected
-FontAwesome checkbox glyphs/content structure. Existing IR upload and Play
-Options view tests will be extended where appropriate. After focused tests,
-the desktop `main` target will be built through the existing
+FontAwesome checkbox glyphs/content structure. The difficulty-table completion
+path will be tested to clear the URL only after success. Existing IR upload and
+Play Options view tests will be extended where appropriate. After focused
+tests, the desktop `main` target will be built through the existing
 `cmake-build-debug` directory.
