@@ -3,11 +3,13 @@
 //
 
 #pragma once
+#include "ImageFade.h"
 #include "View.h"
 #include "../path.h"
 #include <bgfx/bgfx.h>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,6 +35,7 @@ private:
   int currentImageWidth = 0;
   int currentImageHeight = 0;
   bool asyncImagePending = false;
+  std::optional<ImageFade> fade_;
 
 public:
   ImageView() = delete;
@@ -42,6 +45,11 @@ public:
   bool setImage(const path_t &path);
   bool setImageAsync(const path_t &path, bool prioritize = false);
   void freeImage();
+  ImageView *setFade(ImageFadeDirection direction, float strength);
+  ImageView *clearFade();
+  [[nodiscard]] const std::optional<ImageFade> &fade() const noexcept {
+    return fade_;
+  }
   [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
   [[nodiscard]] int imageHeight() const { return currentImageHeight; }

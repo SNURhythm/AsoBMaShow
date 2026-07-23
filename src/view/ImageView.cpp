@@ -403,7 +403,8 @@ private:
 void submitTexturedRoundedRect(const RenderContext &context,
                                bgfx::TextureHandle texture,
                                bgfx::UniformHandle sampler, int x, int y,
-                               int width, int height, float radius) {
+                               int width, int height, float radius,
+                               bgfx::ProgramHandle program) {
   if (!bgfx::isValid(texture) || width <= 0 || height <= 0) {
     return;
   }
@@ -503,9 +504,7 @@ void submitTexturedRoundedRect(const RenderContext &context,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
                  BGFX_STATE_MSAA);
-  static const bgfx::ProgramHandle kProgram =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
-  bgfx::submit(rendering::ui_view, kProgram);
+  bgfx::submit(rendering::ui_view, program);
 }
 } // namespace
 
@@ -661,13 +660,32 @@ void ImageView::freeImage() {
   asyncImagePending = false;
   freeTexture();
 }
+ImageView *ImageView::setFade(ImageFadeDirection direction, float strength) {
+  fade_ = makeImageFade(direction, strength);
+  return this;
+}
+ImageView *ImageView::clearFade() {
+  fade_.reset();
+  return this;
+}
 void ImageView::renderImpl(RenderContext &context) {
   applyAsyncImageIfReady();
   if (!bgfx::isValid(texture)) {
     return;
   }
+  bgfx::ProgramHandle program;
+  if (fade_.has_value()) {
+    const auto params = imageFadeShaderParameters(*fade_);
+    bgfx::setUniform(
+        rendering::UniformCache::getInstance().getVec4("u_imageFadeParams"),
+        params.data());
+    program = rendering::ShaderManager::getInstance().getProgram(
+        "vs_text.bin", "fs_image_fade.bin");
+  } else {
+    program = rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  }
   submitTexturedRoundedRect(context, texture, s_texColor, getX(), getY(),
-                            getWidth(), getHeight(), getCornerRadius());
+                            getWidth(), getHeight(), getCornerRadius(), program);
 }
 ImageView::ImageView(int x, int y, int width, int height)
     : View(x, y, width, height) {
