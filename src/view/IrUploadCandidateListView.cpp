@@ -58,7 +58,7 @@ std::string attemptDetail(const ReplaySummary &replay) {
 IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   clearLamp_ = new View();
   selectionButton_ = new Button();
-  selectionContent_ = new CheckboxButtonContent("", 20, 20);
+  selectionContent_ = new CheckboxButtonContent("", 20, 30);
   artworkFrame_ = new View();
   jacketImage_ = new ImageView(0, 0, 0, 0);
   textColumn_ = new View();
@@ -188,14 +188,8 @@ void IrUploadCandidateListItemView::setCandidate(
   selectionButton_->setEnabled(true);
   selectionContent_->setChecked(selected);
   if (selected) {
-    selectionButton_->setThemedBackgroundColors(
-        ui_theme::cyan, ui_theme::controlHover, ui_theme::controlPressed);
-    selectionContent_->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::cyan()); });
+    selectionContent_->setThemedColor(ui_theme::cyan);
   } else {
-    selectionButton_->setThemedBackgroundColors(ui_theme::panelStrong,
-                                                ui_theme::controlHover,
-                                                ui_theme::controlPressed);
     selectionContent_->setThemedColor(ui_theme::textMuted);
   }
   if (!selectionLocked) {

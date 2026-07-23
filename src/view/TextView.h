@@ -30,6 +30,8 @@ public:
   [[nodiscard]] const std::string &primaryFontPath() const {
     return primaryFontPath_;
   }
+  [[nodiscard]] int pointSize() const noexcept { return fontSize; }
+  [[nodiscard]] SDL_Color currentColor() const noexcept { return color; }
 
 protected:
   struct FontFace {

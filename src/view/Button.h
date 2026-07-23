@@ -52,6 +52,9 @@ public:
   [[nodiscard]] bool isEnabled() const { return enabled; }
   void setSelected(bool selected) { this->selected = selected; }
   [[nodiscard]] bool isSelected() const { return selected; }
+  [[nodiscard]] bool hasStyledBackgroundStyle() const noexcept {
+    return hasStyledBackground;
+  }
   void setContentView(View *view);
   [[nodiscard]] View *getContentView() { return contentView.get(); }
   [[nodiscard]] const View *getContentView() const { return contentView.get(); }

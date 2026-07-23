@@ -3,6 +3,7 @@
 #include "IconText.h"
 #include "TextView.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -17,7 +18,7 @@ CheckboxButtonContent::CheckboxButtonContent(std::string label, int labelSize,
       ->setGap(7);
 
   icon_ = new TextView(ui_icons::kFontAwesomeSolidPath, iconSize);
-  icon_->setWidth(24)->setHeight(54);
+  icon_->setWidth(std::max(24, iconSize + 4))->setHeight(54);
   icon_->setAlign(TextView::CENTER);
   icon_->setVAlign(TextView::MIDDLE);
   icon_->setOverflow(TextView::TextOverflow::Hidden);
