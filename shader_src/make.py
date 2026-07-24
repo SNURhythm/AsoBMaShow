@@ -129,5 +129,6 @@ if __name__ == "__main__":
         shutil.rmtree("../shaders/metal", ignore_errors=True)
         shutil.rmtree("../shaders/spirv", ignore_errors=True)
         shutil.rmtree("../shaders/essl", ignore_errors=True)
+        shutil.rmtree("../shaders/dx11", ignore_errors=True)
     else:
         compile_all_shaders()

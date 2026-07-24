@@ -852,6 +852,7 @@ void TextInputBox::clearFromButton() {
   }
   editingText.clear();
   clearComposition();
+  SDL_ClearComposition();
   cursorPos = 0;
   selectionAnchor = 0;
   isDraggingSelection = false;

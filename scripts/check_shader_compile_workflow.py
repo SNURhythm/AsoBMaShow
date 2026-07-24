@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
+import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
@@ -47,6 +50,7 @@ workflow_required = {
     "shader working directory": "working-directory: shader_src",
     "MinGW toolchain root": "MINGW: /mingw64",
     "MinGW compiler preflight": 'test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"',
+    "forced shader regeneration": "python3 make.py clean\n          python3 make.py",
     "current shader script": "python3 make.py",
     "Git for Windows commit shell": "- name: Commit generated shaders\n        shell: bash",
     "bot name": 'git config user.name "github-actions[bot]"',
@@ -68,6 +72,30 @@ failures = [
 failures.extend(
     label for label, fragment in cmake_required.items() if fragment not in cmake
 )
+
+with tempfile.TemporaryDirectory() as temp_dir:
+    sandbox = Path(temp_dir)
+    shader_source = sandbox / "shader_src"
+    shader_source.mkdir()
+    shader_root = sandbox / "shaders"
+    backends = ("metal", "spirv", "essl", "dx11")
+    for backend in backends:
+        output = shader_root / backend
+        output.mkdir(parents=True)
+        (output / "stale.bin").write_bytes(b"stale")
+
+    clean_environment = os.environ.copy()
+    clean_environment["SHADERC"] = sys.executable
+    subprocess.run(
+        [sys.executable, str((root / "shader_src" / "make.py").resolve()),
+         "clean"],
+        cwd=shader_source,
+        env=clean_environment,
+        check=True,
+    )
+    for backend in backends:
+        if (shader_root / backend).exists():
+            failures.append(f"clean command preserves {backend} output")
 
 for label, forbidden in {
     "pull-request trigger": "pull_request:",

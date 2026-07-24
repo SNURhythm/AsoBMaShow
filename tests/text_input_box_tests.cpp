@@ -27,6 +27,8 @@ int ui_view_height = design_height;
 
 namespace {
 
+int clearCompositionCalls = 0;
+
 void expect(bool condition, const char *message) {
   if (!condition) {
     std::cerr << message << '\n';
@@ -82,9 +84,12 @@ void testClearButtonVisibilityAndCallback() {
 
   expect(input.isClearButtonVisible(),
          "configured non-empty input shows its clear button");
+  clearCompositionCalls = 0;
   click(input, input.getX() + input.getWidth() - 18,
         input.getY() + input.getHeight() / 2);
   expect(input.getText().empty(), "clear button clears the editing value");
+  expect(clearCompositionCalls == 1,
+         "clear button cancels the platform IME composition");
   expect(notifications == 1 && lastText.empty(),
          "clear button publishes exactly one normal text change");
   expect(!input.isClearButtonVisible(),
@@ -108,6 +113,10 @@ void testEmptyInputHasNoClearHitTarget() {
 }
 
 } // namespace
+
+extern "C" void SDLCALL TextInputBoxTest_ClearComposition() {
+  ++clearCompositionCalls;
+}
 
 int main() {
   bgfx::Init init;

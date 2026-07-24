@@ -67,6 +67,7 @@ jobs:
           MINGW: /mingw64
         run: |
           test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"
+          python3 make.py clean
           python3 make.py
 
       - name: Commit generated shaders
