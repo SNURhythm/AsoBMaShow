@@ -37,6 +37,19 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Resolve shader compiler cache key
+        id: shaderc-cache-key
+        shell: bash
+        run: |
+          echo "value=$(git -C bgfx/bgfx rev-parse HEAD)-$(git -C bgfx/bimg rev-parse HEAD)-$(git -C bgfx/bx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore shader compiler
+        id: shaderc-cache
+        uses: actions/cache@v5
+        with:
+          path: bgfx/bgfx/.build/win64_mingw-gcc/bin/shadercRelease.exe
+          key: shaderc-windows-2022-mingw64-v1-${{ steps.shaderc-cache-key.outputs.value }}
+
       - name: Set up MINGW64
         uses: msys2/setup-msys2@v2
         with:

@@ -27,6 +27,17 @@ workflow_required = {
     "explicit branch checkout": "ref: ${{ github.ref_name }}",
     "complete branch history": "fetch-depth: 0",
     "recursive submodules": "submodules: recursive",
+    "shader compiler cache-key step": "id: shaderc-cache-key",
+    "bgfx cache-key revision": "git -C bgfx/bgfx rev-parse HEAD",
+    "bimg cache-key revision": "git -C bgfx/bimg rev-parse HEAD",
+    "bx cache-key revision": "git -C bgfx/bx rev-parse HEAD",
+    "shader compiler cache action": "uses: actions/cache@v5",
+    "shader compiler cache step": "id: shaderc-cache",
+    "shader compiler cache path": "path: bgfx/bgfx/.build/win64_mingw-gcc/bin/shadercRelease.exe",
+    "exact shader compiler cache key": (
+        "key: shaderc-windows-2022-mingw64-v1-"
+        "${{ steps.shaderc-cache-key.outputs.value }}"
+    ),
     "MSYS2 action": "uses: msys2/setup-msys2@v2",
     "MINGW64 environment": "msystem: MINGW64",
     "GNU Make package": "make",
@@ -62,6 +73,7 @@ for label, forbidden in {
     "pull-request trigger": "pull_request:",
     "force push": "--force",
     "generated shader trigger": '- "shaders/**"',
+    "shader compiler fallback cache key": "restore-keys:",
 }.items():
     if forbidden in workflow:
         failures.append(f"forbidden {label}")
