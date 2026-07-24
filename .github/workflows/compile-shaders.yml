@@ -57,7 +57,7 @@ jobs:
           python3 make.py
 
       - name: Commit generated shaders
-        shell: msys2 {0}
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

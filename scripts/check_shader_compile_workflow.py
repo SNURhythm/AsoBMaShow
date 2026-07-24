@@ -37,6 +37,7 @@ workflow_required = {
     "MinGW toolchain root": "MINGW: /mingw64",
     "MinGW compiler preflight": 'test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"',
     "current shader script": "python3 make.py",
+    "Git for Windows commit shell": "- name: Commit generated shaders\n        shell: bash",
     "bot name": 'git config user.name "github-actions[bot]"',
     "bot email": 'git config user.email "41898282+github-actions[bot]@users.noreply.github.com"',
     "shader-only staging": "git add -- shaders",
