@@ -50,7 +50,11 @@ jobs:
       - name: Compile shaders
         working-directory: shader_src
         shell: msys2 {0}
-        run: python3 make.py
+        env:
+          MINGW: /mingw64
+        run: |
+          test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"
+          python3 make.py
 
       - name: Commit generated shaders
         shell: msys2 {0}
