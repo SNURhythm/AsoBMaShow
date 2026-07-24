@@ -1,0 +1,66 @@
+name: Compile shaders
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "shader_src/**"
+      - ".github/workflows/compile-shaders.yml"
+      - "bgfx"
+      - ".gitmodules"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compile-shaders-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    name: Compile and commit shaders
+    if: startsWith(github.ref, 'refs/heads/')
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Preserve repository line endings
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - name: Checkout triggering branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up MINGW64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
+
+      - name: Compile shaders
+        working-directory: shader_src
+        shell: msys2 {0}
+        run: python3 make.py
+
+      - name: Commit generated shaders
+        shell: msys2 {0}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- shaders
+          if git diff --cached --quiet; then
+            echo "Shader binaries are already up to date."
+            exit 0
+          fi
+          git commit -m "chore: compile shaders"
+          git push origin "HEAD:${{ github.ref_name }}"
