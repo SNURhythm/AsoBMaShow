@@ -1,16 +1,19 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace settings_ui {
 
 inline bool applyDifficultyTableUrlCompletion(bool finished, bool succeeded,
-                                              std::string &url) {
-  if (!finished || !succeeded) {
+                                              std::string_view submittedUrl,
+                                              std::string &currentUrl) {
+  if (!finished || !succeeded || submittedUrl.empty() ||
+      currentUrl != submittedUrl) {
     return false;
   }
 
-  url.clear();
+  currentUrl.clear();
   return true;
 }
 

@@ -4,7 +4,7 @@
 
 **Goal:** Prevent a completed difficulty-table import from clearing a different URL typed after that import started.
 
-**Architecture:** Capture the submitted URL in `SettingsScene` when an add starts. Extend the existing pure completion helper to clear only when a finished successful import's submitted URL still matches the current field value, then consume the captured identity after completion.
+**Architecture:** Carry the submitted URL with the finished message in `SettingsScene`'s existing import-progress mailbox. Extend the existing pure completion helper to clear only when a finished successful import's submitted URL still matches the current field value, so pending completions cannot be confused with newer submissions.
 
 **Tech Stack:** C++23, CMake/CTest, `TextInputBox`, `SettingsScene`.
 
@@ -14,7 +14,7 @@
 - Keep the URL field editable while an import runs.
 - Clear only a finished, successful import whose submitted URL equals the current URL text.
 - Preserve newer text and all failed, cancelled, or unfinished values.
-- Consume submitted identity after a finished completion.
+- Bind submitted identity to the finished completion mailbox message and consume both together.
 - Do not reply to or resolve GitHub review threads unless separately requested.
 
 ---
@@ -28,7 +28,7 @@
 - Modify: `src/scene/SettingsSceneTables.cpp`
 
 **Interfaces:**
-- Consumes: the URL captured by `addDifficultyTableFromUrl()` and the current `tableUrlText`.
+- Consumes: the submitted URL carried by the finished import-progress message and the current `tableUrlText`.
 - Produces: `bool settings_ui::applyDifficultyTableUrlCompletion(bool finished, bool succeeded, std::string_view submittedUrl, std::string &currentUrl)`.
 
 - [ ] **Step 1: Write the failing submitted-identity regression test**
@@ -93,29 +93,36 @@ inline bool applyDifficultyTableUrlCompletion(bool finished, bool succeeded,
 }
 ```
 
-- [ ] **Step 4: Capture and consume the submitted URL in the scene**
+- [ ] **Step 4: Carry and consume the submitted URL with completion**
 
-Add this member next to `tableUrlText` in `src/scene/SettingsScene.h`:
+Add this mailbox member next to `pendingDifficultyTableImportName` in `src/scene/SettingsScene.h`:
 
 ```cpp
-std::string submittedDifficultyTableUrl;
+std::string pendingDifficultyTableImportSubmittedUrl;
 ```
 
-In `addDifficultyTableFromUrl()`, assign it immediately after input validation and before starting the background job:
+Extend `requestDifficultyTableImportProgress` with a final parameter:
 
 ```cpp
-submittedDifficultyTableUrl = url;
+const std::string &submittedUrl
 ```
 
-In `applyPendingDifficultyTableUpdates()`, pass it to the helper and consume it after a finished completion:
+Final success and failure calls pass `url`; intermediate progress calls pass an empty string. Store the value only when `finished` is true.
+
+In `applyPendingDifficultyTableUpdates()`, copy the submitted URL from the pending message when it is finished, clear the mailbox value while holding the mutex, and pass the local copy to the helper:
 
 ```cpp
+std::string completedImportSubmittedUrl;
+
+// Inside the pending-progress block:
+if (pendingDifficultyTableImportFinished) {
+  completedImportSubmittedUrl = pendingDifficultyTableImportSubmittedUrl;
+  pendingDifficultyTableImportSubmittedUrl.clear();
+}
+
 const bool clearedUrl = settings_ui::applyDifficultyTableUrlCompletion(
     completedImportFinished, completedImportSucceeded,
-    submittedDifficultyTableUrl, tableUrlText);
-if (completedImportFinished) {
-  submittedDifficultyTableUrl.clear();
-}
+    completedImportSubmittedUrl, tableUrlText);
 if (clearedUrl && tableUrlInput != nullptr) {
   tableUrlInput->setEditingText(tableUrlText);
 }

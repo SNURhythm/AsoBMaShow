@@ -308,6 +308,7 @@ private:
   int pendingDifficultyTableImportCurrent = 0;
   int pendingDifficultyTableImportTotal = 0;
   std::string pendingDifficultyTableImportName;
+  std::string pendingDifficultyTableImportSubmittedUrl;
   std::string pendingDifficultyTableImportStatusText;
   std::string pendingDifficultyTableStatusText;
   std::string pendingChartFolderStatusText;
@@ -414,7 +415,8 @@ private:
                                             const std::string &tableName,
                                             const std::string &statusText,
                                             bool finished,
-                                            bool succeeded = false);
+                                            bool succeeded,
+                                            const std::string &submittedUrl);
   void requestArchiveCacheCleanupStatus(const std::string &text,
                                         const SDL_Color &color);
   void applyPendingDifficultyTableUpdates();
