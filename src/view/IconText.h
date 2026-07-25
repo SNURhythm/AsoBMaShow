@@ -7,6 +7,9 @@ namespace ui_icons {
 
 inline constexpr const char *kFontAwesomeSolidPath =
     "assets/fonts/fa-solid-900.ttf";
+inline constexpr uint32_t kXmark = 0xf00d;
+inline constexpr uint32_t kSquare = 0xf0c8;
+inline constexpr uint32_t kSquareCheck = 0xf14a;
 
 inline std::string textForCodepoint(uint32_t codepoint) {
   std::string result;

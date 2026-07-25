@@ -1,6 +1,9 @@
 #include "TextInputBox.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
+#include "Button.h"
+#include "IconText.h"
+#include "UiTheme.h"
 #include "SDL2/SDL_events.h"
 #include <algorithm>
 #include <cctype>
@@ -115,6 +118,8 @@ void TextInputBox::releaseCachedCursors() {
 
 TextInputBox::TextInputBox(const std::string &fontPath, int fontSize)
     : TextView(fontPath, fontSize) {
+  View::setPadding(Edge::Left, 12.0f);
+  View::setPadding(Edge::Right, 12.0f);
   viewRect = {getX(), getY(), getWidth(), getHeight()};
 }
 
@@ -130,6 +135,27 @@ TextInputBox::~TextInputBox() {
 
 std::string TextInputBox::getText() const { return displayedText(); }
 
+void TextInputBox::setClearable(bool value) {
+  clearable = value;
+  if (clearable && clearButton == nullptr) {
+    clearButton = std::make_unique<Button>();
+    auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath,
+                              std::max(12, fontSize - 2));
+    icon->setText(ui_icons::textForCodepoint(ui_icons::kXmark));
+    icon->setAlign(TextView::CENTER);
+    icon->setVAlign(TextView::MIDDLE);
+    icon->setOverflow(TextView::TextOverflow::Hidden);
+    icon->setThemedColor(ui_theme::textMuted);
+    clearButton->setContentView(icon);
+    clearButton->setOnClickListener([this]() { clearFromButton(); });
+  }
+  syncClearButton();
+}
+
+bool TextInputBox::isClearButtonVisible() const noexcept {
+  return clearButton != nullptr && clearButton->getVisible();
+}
+
 void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
   const int lineHeight = std::max(1, rect.h > 0 ? rect.h : textLineHeight());
   const int lineWidth = std::max(1, rect.w);
@@ -143,9 +169,6 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
 }
 
 void TextInputBox::setEditingText(const std::string &newText) {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  hideNativeTextEditor(false);
-#endif
   editingText = newText;
   clearComposition();
   cursorPos = editingText.size();
@@ -154,6 +177,9 @@ void TextInputBox::setEditingText(const std::string &newText) {
   activeTouchId = -1;
   pendingFocusTouchId = -1;
   lastRenderedCaretCursor = static_cast<size_t>(-1);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  syncNativeTextEditorText();
+#endif
   refreshDisplay(false);
 }
 
@@ -184,6 +210,9 @@ size_t TextInputBox::getPrevUnicodePos(size_t pos) {
   return pos;
 }
 bool TextInputBox::handleEventsImpl(SDL_Event &event) {
+  if (isClearButtonVisible() && !clearButton->handleEvents(event)) {
+    return false;
+  }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (nativeTextEditorVisible &&
       (event.type == SDL_TEXTINPUT || event.type == SDL_TEXTEDITING ||
@@ -525,52 +554,75 @@ bool TextInputBox::handleEventsImpl(SDL_Event &event) {
 }
 void TextInputBox::onMove(int newX, int newY) {
   TextView::onMove(newX, newY);
+  syncClearButtonFrame();
   refreshDisplay(false);
 }
 void TextInputBox::onResize(int newWidth, int newHeight) {
   TextView::onResize(newWidth, newHeight);
+  syncClearButtonFrame();
   refreshDisplay(false);
+}
+
+void TextInputBox::propagateThemeChange() {
+  TextView::propagateThemeChange();
+  if (clearButton != nullptr) {
+    clearButton->propagateThemeChange();
+  }
 }
 
 void TextInputBox::renderImpl(RenderContext &context) {
   static const bgfx::ProgramHandle kSimpleProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
-  if (isSelected) {
-    renderSelection(context, kSimpleProgram);
-  }
-
-  TextView::renderImpl(context);
-  if (!isSelected) {
-    return;
-  }
-
-  const size_t caretDisplayCursor =
-      composition.empty() ? cursorPos : compositionCursorDisplayPos();
-  const Uint32 blinkInterval = 500;
-  const Uint32 currentTime = SDL_GetTicks();
-  if (lastRenderedCaretCursor != caretDisplayCursor) {
-    lastBlink = currentTime;
-    lastRenderedCaretCursor = caretDisplayCursor;
-  }
-
-  const bool showCaret =
-      (currentTime - lastBlink) % (2 * blinkInterval) < blinkInterval;
-
-  if (showCaret) {
-    int caretX = 0;
-    int caretY = 0;
-    cursorToPos(caretDisplayCursor, text, caretX, caretY);
-    int height = rect.h;
-    if (height == 0) {
-      height = textLineHeight();
+  const auto renderTextContent = [&]() {
+    if (isSelected) {
+      renderSelection(context, kSimpleProgram);
     }
-    submitRect(context, kSimpleProgram, caretX, caretY, 2, height,
-               sdlColorToAbgr(color));
+
+    TextView::renderImpl(context);
+    if (!isSelected) {
+      return;
+    }
+
+    const size_t caretDisplayCursor =
+        composition.empty() ? cursorPos : compositionCursorDisplayPos();
+    const Uint32 blinkInterval = 500;
+    const Uint32 currentTime = SDL_GetTicks();
+    if (lastRenderedCaretCursor != caretDisplayCursor) {
+      lastBlink = currentTime;
+      lastRenderedCaretCursor = caretDisplayCursor;
+    }
+
+    const bool showCaret =
+        (currentTime - lastBlink) % (2 * blinkInterval) < blinkInterval;
+
+    if (showCaret) {
+      int caretX = 0;
+      int caretY = 0;
+      cursorToPos(caretDisplayCursor, text, caretX, caretY);
+      int height = rect.h;
+      if (height == 0) {
+        height = textLineHeight();
+      }
+      submitRect(context, kSimpleProgram, caretX, caretY, 2, height,
+                 sdlColorToAbgr(color));
+    }
+
+    if (!composition.empty()) {
+      submitRect(context, kSimpleProgram, compositionX, compositionY,
+                 compositionWidth, 2, 0xFFFFFFFF);
+    }
+  };
+
+  if (isClearButtonVisible()) {
+    ScissorScope scissor(context, getContentX(), getContentY(),
+                         getContentWidth(), getContentHeight());
+    renderTextContent();
+  } else {
+    renderTextContent();
   }
 
-  if (!composition.empty()) {
-    submitRect(context, kSimpleProgram, compositionX, compositionY,
-               compositionWidth, 2, 0xFFFFFFFF);
+  if (isClearButtonVisible()) {
+    clearButton->render(context);
   }
 }
 
@@ -747,6 +799,7 @@ size_t TextInputBox::compositionCursorDisplayPos() const {
 void TextInputBox::refreshDisplay(bool notifyTextChanged, bool notifySubmit) {
   const std::string display = displayedText();
   TextView::setText(display);
+  syncClearButton();
   updateCompositionGeometry(display);
 
   if (notifyTextChanged) {
@@ -766,6 +819,48 @@ void TextInputBox::refreshDisplay(bool notifyTextChanged, bool notifySubmit) {
   cursorToPos(composition.empty() ? cursorPos : compositionCursorDisplayPos(),
               display, cursorX, cursorY);
   syncTextInputRect(cursorX, cursorY);
+}
+
+void TextInputBox::syncClearButton() {
+  const bool visible = clearable && !displayedText().empty();
+  if (clearButton != nullptr) {
+    clearButton->setVisible(visible);
+  }
+
+  const int desiredPadding = visible ? 48 : 12;
+  if (trailingContentPadding != desiredPadding) {
+    trailingContentPadding = desiredPadding;
+    View::setPadding(Edge::Right,
+                     static_cast<float>(trailingContentPadding));
+  }
+  syncClearButtonFrame();
+}
+
+void TextInputBox::syncClearButtonFrame() {
+  if (clearButton == nullptr) {
+    return;
+  }
+  constexpr int kClearButtonWidth = 40;
+  clearButton->setSize(kClearButtonWidth, getHeight());
+  clearButton->setPositionNoLayout(getX() + getWidth() - kClearButtonWidth,
+                                   getY());
+}
+
+void TextInputBox::clearFromButton() {
+  if (editingText.empty() && composition.empty()) {
+    return;
+  }
+  editingText.clear();
+  clearComposition();
+  SDL_ClearComposition();
+  cursorPos = 0;
+  selectionAnchor = 0;
+  isDraggingSelection = false;
+  lastRenderedCaretCursor = static_cast<size_t>(-1);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  syncNativeTextEditorText();
+#endif
+  refreshDisplay(true);
 }
 
 void TextInputBox::updateCompositionGeometry(const std::string &display) {
@@ -919,6 +1014,16 @@ bool TextInputBox::syncNativeTextEditorState(
 
 void TextInputBox::syncNativeTextEditorSelection() {
   SetIOSNativeTextEditorSelection(this, selectionStart(), selectionEnd());
+}
+
+void TextInputBox::syncNativeTextEditorText() {
+  if (!nativeTextEditorVisible) {
+    return;
+  }
+  SetIOSNativeTextEditorState(
+      this, {.text = editingText,
+             .selectionStart = selectionStart(),
+             .selectionEnd = selectionEnd()});
 }
 
 void TextInputBox::handleNativeTextEditorEvent(

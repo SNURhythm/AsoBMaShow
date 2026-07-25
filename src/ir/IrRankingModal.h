@@ -9,6 +9,7 @@
 #include <string_view>
 
 class OverlayPortal;
+class View;
 
 namespace ir {
 
@@ -113,6 +114,11 @@ struct IrRankingPanelGeometry {
   bool compact = false;
 };
 
+struct IrRankingJudgementColumnGeometry {
+  float labelWidth = 0.0f;
+  float valueWidth = 0.0f;
+};
+
 class IrRankingModalModel {
 public:
   void open(IrRankingRequest request, std::string chartTitle);
@@ -159,6 +165,9 @@ formatIrRankingTimestamp(std::optional<std::int64_t> unixMillis);
 makeBokutachiRankingQuery(const bms_parser::ChartMeta &meta) noexcept;
 [[nodiscard]] IrRankingPanelGeometry
 layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept;
+[[nodiscard]] IrRankingJudgementColumnGeometry
+layoutIrRankingJudgementColumns(float availableWidth) noexcept;
+void configureIrRankingDetailLampBadge(View &badge);
 [[nodiscard]] bool useCompactIrRankingColumns(int width) noexcept;
 [[nodiscard]] bool shouldLoadNextIrRankingPage(
     int entryCount, float scrollOffset, float viewportHeight, int itemHeight,

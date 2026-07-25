@@ -136,17 +136,24 @@ std::vector<std::string> fontFallbackPaths(const std::string &primaryPath) {
   return paths;
 }
 
-std::string fontCacheKey(const std::string &path, int fontSize) {
-  return path + "#" + std::to_string(fontSize);
+int fontStyleForWeight(TextView::FontWeight weight) {
+  return weight == TextView::FontWeight::Bold ? TTF_STYLE_BOLD
+                                               : TTF_STYLE_NORMAL;
+}
+
+std::string fontCacheKey(const std::string &path, int fontSize,
+                         int fontStyle) {
+  return path + "#" + std::to_string(fontSize) + "#" +
+         std::to_string(fontStyle);
 }
 
 TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
-                               bool required) {
+                               int fontStyle, bool required) {
   if (!required && !canReadFile(path)) {
     return nullptr;
   }
 
-  const std::string key = fontCacheKey(path, fontSize);
+  const std::string key = fontCacheKey(path, fontSize, fontStyle);
   {
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
     auto cached = g_fontCache.find(key);
@@ -161,6 +168,7 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
     SDL_Log("Failed to load font '%s': %s", path.c_str(), TTF_GetError());
   }
   if (opened != nullptr) {
+    TTF_SetFontStyle(opened, fontStyle);
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
     auto [cached, inserted] = g_fontCache.emplace(key, CachedFont{opened, 1});
     if (!inserted) {
@@ -172,13 +180,13 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
   return opened;
 }
 
-void releaseFontCandidate(const std::string &path, int fontSize,
+void releaseFontCandidate(const std::string &path, int fontSize, int fontStyle,
                           TTF_Font *font) {
   if (font == nullptr) {
     return;
   }
 
-  const std::string key = fontCacheKey(path, fontSize);
+  const std::string key = fontCacheKey(path, fontSize, fontStyle);
   std::lock_guard<std::mutex> lock(g_fontCacheMutex);
   auto cached = g_fontCache.find(key);
   if (cached == g_fontCache.end()) {
@@ -299,10 +307,14 @@ int logicalLengthFor(int rasterLength) {
 
 } // namespace
 
-TextView::TextView(const std::string &fontPath, int fontSize)
+TextView::TextView(const std::string &fontPath, int fontSize,
+                   FontWeight fontWeight)
     : View(), texture(BGFX_INVALID_HANDLE) {
   this->fontSize = fontSize;
+  fontWeight_ = fontWeight;
+  fontStyle_ = fontStyleForWeight(fontWeight);
   this->fontRasterSize = rasterFontSizeFor(fontSize);
+  primaryFontPath_ = fontPath;
   fallbackFontPaths = fontFallbackPaths(fontPath);
   ttfInitialized = acquireTtf();
   if (ttfInitialized) {
@@ -334,7 +346,7 @@ TextView::~TextView() {
 
   for (auto &face : fontFaces) {
     if (face.font != nullptr) {
-      releaseFontCandidate(face.path, fontRasterSize, face.font);
+      releaseFontCandidate(face.path, fontRasterSize, fontStyle_, face.font);
       face.font = nullptr;
     }
   }
@@ -361,12 +373,13 @@ void TextView::renderImpl(RenderContext &context) {
   SDL_Rect drawRect = resolvedTextRect();
   const float rotationDegrees = getRotationDegrees();
   const bool clip =
-      overflow != TextOverflow::Visible && getWidth() > 0 && getHeight() > 0;
+      overflow != TextOverflow::Visible && getContentWidth() > 0 &&
+      getContentHeight() > 0;
   if (rotationDegrees == 0.0f && overflow == TextOverflow::Marquee &&
       !wrapEnabled &&
-      rect.w > getWidth()) {
-    drawRect.x =
-        getX() - static_cast<int>(std::round(marqueeOffset(getWidth())));
+      rect.w > getContentWidth()) {
+    drawRect.x = getContentX() - static_cast<int>(
+                                   std::round(marqueeOffset(getContentWidth())));
   }
 
   const auto submitText = [this, &context, &drawRect]() {
@@ -403,7 +416,8 @@ void TextView::renderImpl(RenderContext &context) {
   };
 
   if (clip) {
-    ScissorScope scissor(context, getX(), getY(), getWidth(), getHeight());
+    ScissorScope scissor(context, getContentX(), getContentY(),
+                         getContentWidth(), getContentHeight());
     submitText();
   } else {
     submitText();
@@ -412,9 +426,9 @@ void TextView::renderImpl(RenderContext &context) {
 
 SDL_Rect TextView::resolvedTextRect() const {
   const int contentHeight = rect.h > 0 ? rect.h : textLineHeight();
-  SDL_Rect drawRect = {getX(), getY(), rect.w, contentHeight};
-  const int width = getWidth();
-  const int height = getHeight();
+  SDL_Rect drawRect = {getContentX(), getContentY(), rect.w, contentHeight};
+  const int width = getContentWidth();
+  const int height = getContentHeight();
 
   switch (align) {
   case TextAlign::LEFT:
@@ -482,7 +496,8 @@ TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
   }
 
   const std::string &path = fallbackFontPaths[pathIndex];
-  TTF_Font *opened = acquireFontCandidate(path, fontRasterSize, required);
+  TTF_Font *opened =
+      acquireFontCandidate(path, fontRasterSize, fontStyle_, required);
   if (opened == nullptr) {
     return nullptr;
   }

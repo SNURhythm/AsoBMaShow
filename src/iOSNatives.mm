@@ -1229,6 +1229,7 @@ bool RequestIOSPhotoAddAuthorization(std::string &errorMessage) {
 - (void)keyboardWillHide:(NSNotification *)notification;
 - (void)setSelectionStart:(std::size_t)selectionStart
                       end:(std::size_t)selectionEnd;
+- (void)setState:(const IOSNativeTextEditorState &)state;
 - (UIViewAnimationOptions)animationOptionsForKeyboardNotification:
     (NSNotification *)notification;
 - (void)updateFrameAnimated:(BOOL)animated
@@ -1391,6 +1392,12 @@ static constexpr CGFloat kNativeTextEditorVerticalPadding = 6.0;
   if (range != nil) {
     _textField.selectedTextRange = range;
   }
+}
+
+- (void)setState:(const IOSNativeTextEditorState &)state {
+  NSString *text = NSStringFromUtf8(state.text);
+  _textField.text = text != nil ? text : @"";
+  [self setSelectionStart:state.selectionStart end:state.selectionEnd];
 }
 
 - (UIViewAnimationOptions)animationOptionsForKeyboardNotification:
@@ -1599,6 +1606,30 @@ void SetIOSNativeTextEditorSelection(void *context,
     selectionBlock();
   } else {
     dispatch_async(dispatch_get_main_queue(), selectionBlock);
+  }
+}
+
+void SetIOSNativeTextEditorState(
+    void *context, const IOSNativeTextEditorState &state) {
+  void *editorContext = context;
+  const IOSNativeTextEditorState editorState = state;
+  auto stateBlock = ^{
+    @autoreleasepool {
+      if (gNativeTextEditor == nil) {
+        return;
+      }
+      if (editorContext != nullptr &&
+          [gNativeTextEditor context] != editorContext) {
+        return;
+      }
+      [gNativeTextEditor setState:editorState];
+    }
+  };
+
+  if ([NSThread isMainThread]) {
+    stateBlock();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), stateBlock);
   }
 }
 

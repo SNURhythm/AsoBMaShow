@@ -2167,6 +2167,7 @@ View *SettingsScene::buildDifficultyTablesTab(const LayoutMetrics &metrics) {
   urlRow->setAlignSelf(YGAlignStretch);
 
   tableUrlInput = makeTextInput(metrics, minInputWidth);
+  tableUrlInput->setClearable(true);
   tableUrlInput->setMinWidth(static_cast<float>(minInputWidth));
   tableUrlInput->setFlexGrow(1.0f);
   tableUrlInput->setFlexShrink(1.0f);

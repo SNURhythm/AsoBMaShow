@@ -75,6 +75,19 @@ TextView *makeText(int size, TextView::TextAlign align = TextView::LEFT) {
   return text;
 }
 
+TextView *makeRankingLampBadge() {
+  auto *lamp = makeText(15, TextView::CENTER);
+  lamp->setWidth(kLampColumnWidth)->setHeight(32);
+  lamp->setCornerRadius(6);
+  return lamp;
+}
+
+TextView *makeScoreDetailLampBadge() {
+  auto *lamp = makeRankingLampBadge();
+  configureIrRankingDetailLampBadge(*lamp);
+  return lamp;
+}
+
 Button *makeActionButton(const std::string &label, int width,
                          std::function<void()> action) {
   auto *button = new Button();
@@ -114,7 +127,8 @@ Button *makeIconActionButton(uint32_t codepoint,
   return button;
 }
 
-View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
+View *makeMetricCardWithValue(std::string label, TextView *&value,
+                              TextView *valueView) {
   auto *card = new View();
   card->setFlex(1.0F)->setMinWidth(0);
   card->setFlexDirection(FlexDirection::Column);
@@ -125,10 +139,14 @@ View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
   auto *caption = makeText(14);
   caption->setText(std::move(label));
   caption->setThemedColor(ui_theme::textMuted);
-  value = makeText(valueSize);
+  value = valueView;
   card->addView(caption);
   card->addView(value);
   return card;
+}
+
+View *makeMetricCard(std::string label, TextView *&value, int valueSize = 22) {
+  return makeMetricCardWithValue(std::move(label), value, makeText(valueSize));
 }
 
 class ModalScrim final : public View {
@@ -176,9 +194,7 @@ public:
     score_->setWidth(kScoreColumnWidth);
     rate_ = makeText(17, TextView::RIGHT);
     rate_->setWidth(kRateColumnWidth);
-    lamp_ = makeText(15, TextView::CENTER);
-    lamp_->setWidth(kLampColumnWidth)->setHeight(32);
-    lamp_->setCornerRadius(6);
+    lamp_ = makeRankingLampBadge();
     badPoints_ = makeText(17, TextView::RIGHT);
     badPoints_->setWidth(kBadPointsColumnWidth);
     combo_ = makeText(17, TextView::RIGHT);
@@ -354,6 +370,8 @@ struct IrRankingModal::Impl {
   View *scoreDetailJudgements = nullptr;
   TextView *scoreDetailJudgementUnavailable = nullptr;
   TextView *scoreDetailKpoorNote = nullptr;
+  std::array<TextView *, 6> scoreDetailJudgementLabels{};
+  std::array<TextView *, 3> scoreDetailJudgementHeadings{};
   std::array<TextView *, 5> scoreDetailTotals{};
   std::array<TextView *, 5> scoreDetailEarly{};
   std::array<TextView *, 5> scoreDetailLate{};
@@ -554,7 +572,8 @@ struct IrRankingModal::Impl {
     summary->setHeight(82);
     summary->addView(makeMetricCard("EX Score", scoreDetailScore));
     summary->addView(makeMetricCard("Rate", scoreDetailRate));
-    summary->addView(makeMetricCard("Lamp", scoreDetailLamp, 17));
+    summary->addView(makeMetricCardWithValue(
+        "Lamp", scoreDetailLamp, makeScoreDetailLampBadge()));
 
     scoreDetailJudgements = new View();
     scoreDetailJudgements->setFlexDirection(FlexDirection::Column);
@@ -566,10 +585,9 @@ struct IrRankingModal::Impl {
     scoreDetailJudgements->setThemedBackgroundColor(ui_theme::fieldInk);
     scoreDetailJudgements->setCornerRadius(ui_theme::controlRadius());
 
-    const auto makeJudgementHeaderCell = [](TextView::TextAlign align) {
-      auto *cell = makeText(14, align);
+    const auto makeJudgementHeaderCell = [] {
+      auto *cell = makeText(14, TextView::RIGHT);
       cell->setThemedColor(ui_theme::textMuted);
-      cell->setFlex(1);
       return cell;
     };
     auto *judgementHeader = new View();
@@ -582,14 +600,18 @@ struct IrRankingModal::Impl {
     judgementHeading->setText("Judgment");
     judgementHeading->setThemedColor(ui_theme::textMuted);
     judgementHeading->setWidth(152);
-    auto *totalHeading = makeJudgementHeaderCell(TextView::CENTER);
+    scoreDetailJudgementLabels[0] = judgementHeading;
+    auto *totalHeading = makeJudgementHeaderCell();
     totalHeading->setText("Total");
-    auto *earlyHeading = makeJudgementHeaderCell(TextView::CENTER);
+    scoreDetailJudgementHeadings[0] = totalHeading;
+    auto *earlyHeading = makeJudgementHeaderCell();
     earlyHeading->setText("Early");
     earlyHeading->setThemedColor(ui_theme::fastFeedback);
-    auto *lateHeading = makeJudgementHeaderCell(TextView::CENTER);
+    scoreDetailJudgementHeadings[1] = earlyHeading;
+    auto *lateHeading = makeJudgementHeaderCell();
     lateHeading->setText("Late");
     lateHeading->setThemedColor(ui_theme::slowFeedback);
+    scoreDetailJudgementHeadings[2] = lateHeading;
     judgementHeader->addView(judgementHeading);
     judgementHeader->addView(totalHeading);
     judgementHeader->addView(earlyHeading);
@@ -611,14 +633,12 @@ struct IrRankingModal::Impl {
           name->setText(std::move(label));
           name->setThemedColor(std::move(labelColor));
           name->setWidth(152);
-          scoreDetailTotals[index] = makeText(17, TextView::CENTER);
-          scoreDetailTotals[index]->setFlex(1);
-          scoreDetailEarly[index] = makeText(17, TextView::CENTER);
+          scoreDetailJudgementLabels[index + 1] = name;
+          scoreDetailTotals[index] = makeText(17, TextView::RIGHT);
+          scoreDetailEarly[index] = makeText(17, TextView::RIGHT);
           scoreDetailEarly[index]->setThemedColor(ui_theme::fastFeedback);
-          scoreDetailEarly[index]->setFlex(1);
-          scoreDetailLate[index] = makeText(17, TextView::CENTER);
+          scoreDetailLate[index] = makeText(17, TextView::RIGHT);
           scoreDetailLate[index]->setThemedColor(ui_theme::slowFeedback);
-          scoreDetailLate[index]->setFlex(1);
           row->addView(name);
           row->addView(scoreDetailTotals[index]);
           row->addView(scoreDetailEarly[index]);
@@ -668,6 +688,31 @@ struct IrRankingModal::Impl {
     scoreDetailRoot->setVisible(false);
   }
 
+  void applyScoreDetailJudgementColumnLayout() {
+    constexpr float kTableHorizontalPadding = 8.0f;
+    constexpr float kRowHorizontalPadding = 20.0f;
+    const auto columns = layoutIrRankingJudgementColumns(
+        static_cast<float>(scoreDetailJudgements->getWidth()) -
+        kTableHorizontalPadding - kRowHorizontalPadding);
+    const auto fixWidth = [](View *cell, float width) {
+      cell->setWidth(width);
+      cell->setFlexGrow(0);
+      cell->setFlexBasis(width);
+      cell->setFlexShrink(0);
+    };
+    for (auto *label : scoreDetailJudgementLabels) {
+      fixWidth(label, columns.labelWidth);
+    }
+    for (auto *heading : scoreDetailJudgementHeadings) {
+      fixWidth(heading, columns.valueWidth);
+    }
+    for (std::size_t row = 0; row < scoreDetailTotals.size(); ++row) {
+      fixWidth(scoreDetailTotals[row], columns.valueWidth);
+      fixWidth(scoreDetailEarly[row], columns.valueWidth);
+      fixWidth(scoreDetailLate[row], columns.valueWidth);
+    }
+  }
+
   void updateScoreDetailLayout(const SafeInsets &safe) {
     const auto geometry =
         layoutIrRankingPanel({.viewportWidth = rendering::window_width,
@@ -686,6 +731,8 @@ struct IrRankingModal::Impl {
     scoreDetailRoot->setPadding(Edge::Right, safe.right + 36);
     scoreDetailPanel->setWidth(static_cast<float>(geometry.width));
     scoreDetailPanel->setHeight(static_cast<float>(geometry.height));
+    scoreDetailRoot->applyYogaLayout();
+    applyScoreDetailJudgementColumnLayout();
     scoreDetailRoot->applyYogaLayout();
   }
 
@@ -733,7 +780,6 @@ struct IrRankingModal::Impl {
     const Color lampColor = clearLampColorForRank(detail.clearType);
     scoreDetailLamp->setBackgroundColor(lampColor);
     scoreDetailLamp->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
-    scoreDetailLamp->setCornerRadius(6);
     scoreDetailTitle->setThemedColor(
         detail.highlighted ? ui_theme::cyan : ui_theme::textPrimary);
     scoreDetailOpen = true;

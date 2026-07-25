@@ -188,6 +188,53 @@ void testRankingModalPanelStaysCenteredInsideSafeArea() {
   assert(compact.compact);
 }
 
+void testRankingJudgementColumnsUseOneSharedMeasurement() {
+  const auto wide = ir::layoutIrRankingJudgementColumns(696.0f);
+  assert(std::abs(wide.labelWidth - 152.0f) <= 0.001f);
+  assert(std::abs(wide.valueWidth - (696.0f - 152.0f) / 3.0f) <= 0.001f);
+  assert(std::abs(wide.labelWidth + wide.valueWidth * 3.0f - 696.0f) <= 0.001f);
+
+  const auto compact = ir::layoutIrRankingJudgementColumns(300.0f);
+  assert(compact.labelWidth < wide.labelWidth);
+  assert(compact.valueWidth > 0.0f);
+  assert(std::abs(compact.labelWidth + compact.valueWidth * 3.0f - 300.0f) <=
+         0.001f);
+
+  const auto empty = ir::layoutIrRankingJudgementColumns(-20.0f);
+  assert(empty.labelWidth == 0.0f);
+  assert(empty.valueWidth == 0.0f);
+}
+
+void testRankingDetailLampShrinksInsideCompactMetricCard() {
+  View summary(0, 0, 282, 82);
+  summary.setFlexDirection(FlexDirection::Row);
+  summary.setAlignItems(YGAlignStretch);
+  summary.setGap(10);
+
+  View *lampCard = nullptr;
+  View *lamp = nullptr;
+  for (int index = 0; index < 3; ++index) {
+    auto *card = new View();
+    card->setFlex(1.0f)->setMinWidth(0);
+    card->setPadding(Edge::All, 10);
+    summary.addView(card);
+    if (index == 2) {
+      lampCard = card;
+      lamp = new View();
+      lamp->setWidth(174)->setHeight(32);
+      ir::configureIrRankingDetailLampBadge(*lamp);
+      card->addView(lamp);
+    }
+  }
+
+  summary.applyYogaLayout();
+  assert(lampCard != nullptr);
+  assert(lamp != nullptr);
+  assert(lampCard->getWidth() < 100);
+  assert(lamp->getWidth() == lampCard->getContentWidth());
+  assert(lamp->getWidth() < 174);
+}
+
 void testBlockingOverlayStopsAllInteractiveEvents() {
   View root(0, 0, 640, 480);
   auto *background = new EventRecordingView();
@@ -749,6 +796,8 @@ int main() {
   testViewRotationTransformsRenderingAndScissor();
   testOverlayPortalDispatchesPresentedViewsAboveContent();
   testRankingModalPanelStaysCenteredInsideSafeArea();
+  testRankingJudgementColumnsUseOneSharedMeasurement();
+  testRankingDetailLampShrinksInsideCompactMetricCard();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testGyroscopeSettingsLayoutAndPresentation();

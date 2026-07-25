@@ -7,6 +7,7 @@
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
+#include "../view/CheckboxButtonContent.h"
 #include "../view/DropdownView.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
@@ -785,7 +786,7 @@ void MusicPlayerScene::cleanupScene() {
   playbackRateSlider = nullptr;
   playbackRateValueText = nullptr;
   clubModeButton = nullptr;
-  clubModeButtonText = nullptr;
+  clubModeButtonContent = nullptr;
   deletePlaylistButtonText = nullptr;
   clearPlaylistButtonText = nullptr;
   seekProgressTrack = nullptr;
@@ -1183,28 +1184,14 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   searchInput->setCornerRadius(ui_theme::controlRadius());
   searchInput->setThemedColor(ui_theme::textPrimary);
   searchInput->setVAlign(TextView::MIDDLE);
+  searchInput->setClearable(true);
   searchInput->onTextChanged([this, kind](const std::string &value) {
     trackBrowserSearchText(kind) = value;
     applyTrackBrowserFilter(kind);
     refreshUi();
   });
-  TextView *clearSearchText = nullptr;
-  auto *clearSearchButton = makeButton("Clear", 17, &clearSearchText);
-  clearSearchButton->setWidth(104);
-  styleButton(clearSearchButton, clearSearchText, ui_theme::control,
-              ui_theme::controlHover, ui_theme::controlPressed,
-              ui_theme::hairlineStrong);
-  clearSearchButton->setOnClickListener([this, kind, searchInput]() {
-    trackBrowserSearchText(kind).clear();
-    if (searchInput != nullptr) {
-      searchInput->setEditingText("");
-    }
-    applyTrackBrowserFilter(kind);
-    refreshUi();
-  });
   searchRow->addView(searchLabel);
   searchRow->addView(searchInput);
-  searchRow->addView(clearSearchButton);
   panel->addView(searchRow);
 
   auto *workspace = new View();
@@ -1847,7 +1834,9 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   playbackRateValueText->setVAlign(TextView::MIDDLE);
   playbackRateValueText->setThemedColor(ui_theme::textPrimary);
 
-  clubModeButton = makeButton("☐ Club Beat", 17, &clubModeButtonText);
+  clubModeButton = makeButton("", 17, nullptr);
+  clubModeButtonContent = new CheckboxButtonContent("Club Beat", 17, 16);
+  clubModeButton->setContentView(clubModeButtonContent);
   clubModeButton->setFlex(1.0f);
   clubModeButton->setOnClickListener([this]() { toggleClubMode(); });
 
@@ -4070,19 +4059,23 @@ void MusicPlayerScene::toggleClubMode() {
 }
 
 void MusicPlayerScene::refreshClubModeControl() {
-  if (clubModeButton == nullptr || clubModeButtonText == nullptr) {
+  if (clubModeButton == nullptr || clubModeButtonContent == nullptr) {
     return;
   }
   const bool enabled = context.musicPlayer.ClubMode();
-  clubModeButtonText->setText(enabled ? "☑ Club Beat" : "☐ Club Beat");
+  clubModeButtonContent->setChecked(enabled);
   if (enabled) {
-    styleButton(clubModeButton, clubModeButtonText, ui_theme::primaryAction,
-                ui_theme::primaryActionHover, ui_theme::primaryActionPressed,
-                ui_theme::accentBorderStrong);
+    styleButton(clubModeButton, clubModeButtonContent->labelView(),
+                ui_theme::primaryAction, ui_theme::primaryActionHover,
+                ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
+    clubModeButtonContent->setThemedColor(
+        [] { return ui_theme::textOn(ui_theme::primaryAction()); });
   } else {
-    styleButton(clubModeButton, clubModeButtonText, ui_theme::control,
-                ui_theme::controlHover, ui_theme::controlPressed,
-                ui_theme::hairlineStrong);
+    styleButton(clubModeButton, clubModeButtonContent->labelView(),
+                ui_theme::control, ui_theme::controlHover,
+                ui_theme::controlPressed, ui_theme::hairlineStrong);
+    clubModeButtonContent->setThemedColor(
+        [] { return ui_theme::textOn(ui_theme::control()); });
   }
 }
 

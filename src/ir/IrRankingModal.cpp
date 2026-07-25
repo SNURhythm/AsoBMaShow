@@ -1,4 +1,5 @@
 #include "IrRankingModal.h"
+#include "../view/View.h"
 
 #include <algorithm>
 #include <cctype>
@@ -155,6 +156,22 @@ layoutIrRankingPanel(const IrRankingPanelLayoutInput &input) noexcept {
           .width = width,
           .height = height,
           .compact = width <= kCompactRowMaximumWidth + 44};
+}
+
+IrRankingJudgementColumnGeometry
+layoutIrRankingJudgementColumns(float availableWidth) noexcept {
+  constexpr float kPreferredLabelWidth = 152.0f;
+  constexpr float kMaximumCompactLabelShare = 0.4f;
+  constexpr float kValueColumnCount = 3.0f;
+  const float width = std::max(0.0f, availableWidth);
+  const float labelWidth =
+      std::min(kPreferredLabelWidth, width * kMaximumCompactLabelShare);
+  return {.labelWidth = labelWidth,
+          .valueWidth = (width - labelWidth) / kValueColumnCount};
+}
+
+void configureIrRankingDetailLampBadge(View &badge) {
+  badge.setWidthPercent(100.0f)->setMinWidth(0)->setFlexShrink(1.0f);
 }
 
 bool useCompactIrRankingColumns(int width) noexcept {

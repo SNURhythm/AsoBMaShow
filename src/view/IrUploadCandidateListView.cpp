@@ -58,7 +58,7 @@ std::string attemptDetail(const ReplaySummary &replay) {
 IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   clearLamp_ = new View();
   selectionButton_ = new Button();
-  selectionIcon_ = new TextView(kUiFont, 20);
+  selectionContent_ = new CheckboxButtonContent("", 20, 30);
   artworkFrame_ = new View();
   jacketImage_ = new ImageView(0, 0, 0, 0);
   textColumn_ = new View();
@@ -85,10 +85,7 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
   selectionButton_->setName("irUploadSelection");
   selectionButton_->setWidth(34)->setHeight(34)->setFlexShrink(0);
   selectionButton_->setCornerRadius(6.0F);
-  selectionIcon_->setAlign(TextView::TextAlign::CENTER);
-  selectionIcon_->setVAlign(TextView::TextVAlign::MIDDLE);
-  selectionIcon_->setOverflow(TextView::TextOverflow::Hidden);
-  selectionButton_->setContentView(selectionIcon_);
+  selectionButton_->setContentView(selectionContent_);
   addView(selectionButton_);
 
   clearLamp_->setName("irUploadClearLamp");
@@ -189,17 +186,11 @@ void IrUploadCandidateListItemView::setCandidate(
   selectionButton_->setOnClickListener({});
   selectionButton_->setSelected(selected);
   selectionButton_->setEnabled(true);
-  selectionIcon_->setText(selected ? "✓" : "");
+  selectionContent_->setChecked(selected);
   if (selected) {
-    selectionButton_->setThemedBackgroundColors(
-        ui_theme::cyan, ui_theme::controlHover, ui_theme::controlPressed);
-    selectionIcon_->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::cyan()); });
+    selectionContent_->setThemedColor(ui_theme::cyan);
   } else {
-    selectionButton_->setThemedBackgroundColors(ui_theme::panelStrong,
-                                                ui_theme::controlHover,
-                                                ui_theme::controlPressed);
-    selectionIcon_->setThemedColor(ui_theme::textMuted);
+    selectionContent_->setThemedColor(ui_theme::textMuted);
   }
   if (!selectionLocked) {
     selectionButton_->setOnClickListener(

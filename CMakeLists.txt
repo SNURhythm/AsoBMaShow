@@ -565,6 +565,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(ir_ranking_detail_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME ios_native_text_editor_sync_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_ios_native_text_editor_sync.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(ios_native_text_editor_sync_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME image_fade_shader_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_image_fade_shader.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(image_fade_shader_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME shader_compile_workflow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_shader_compile_workflow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(shader_compile_workflow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME records_ir_marker_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_records_ir_marker.py
@@ -1558,6 +1579,64 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(chart_filter_sort_panel_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_filter_sort_panel_view_tests PRIVATE cxx_std_23)
 
+    add_executable(image_fade_tests
+        tests/image_fade_tests.cpp
+        src/view/ImageFade.cpp
+    )
+    target_include_directories(image_fade_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(image_fade_tests PRIVATE cxx_std_23)
+
+    add_executable(image_view_fade_tests
+        tests/image_view_fade_tests.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(image_view_fade_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(image_view_fade_tests PRIVATE cxx_std_23)
+    target_link_libraries(image_view_fade_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(image_view_fade_tests PRIVATE iconv)
+    endif()
+
+    add_executable(chart_list_item_view_tests
+        tests/chart_list_item_view_tests.cpp
+        src/view/ChartListItemView.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageView.cpp
+        src/view/Button.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(chart_list_item_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_list_item_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(chart_list_item_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(chart_list_item_view_tests PRIVATE iconv)
+    endif()
+
     add_executable(dropdown_view_tests
         tests/dropdown_view_tests.cpp
         src/bms_parser.cpp
@@ -1588,6 +1667,54 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
     target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(text_input_box_tests
+        tests/text_input_box_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/TextInputBox.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(text_input_box_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(text_input_box_tests PRIVATE cxx_std_23)
+    target_compile_definitions(text_input_box_tests PRIVATE
+        SDL_ClearComposition=TextInputBoxTest_ClearComposition
+    )
+    target_link_libraries(text_input_box_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(checkbox_button_content_tests
+        tests/checkbox_button_content_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/CheckboxButtonContent.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(checkbox_button_content_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(checkbox_button_content_tests PRIVATE cxx_std_23)
+    target_link_libraries(checkbox_button_content_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(difficulty_table_url_completion_tests
+        tests/difficulty_table_url_completion_tests.cpp
+    )
+    target_include_directories(difficulty_table_url_completion_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(difficulty_table_url_completion_tests PRIVATE
+        cxx_std_23
+    )
+
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
         src/rendering/Color.cpp
@@ -1595,6 +1722,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/SimpleBatchRenderer.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/CheckboxButtonContent.cpp
         src/view/DropdownView.cpp
         src/view/PlayOptionSectionView.cpp
         src/view/PlayOptionsPanelView.cpp
@@ -1656,8 +1784,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ir_upload_candidate_list_view_tests
         tests/ir_upload_candidate_list_view_tests.cpp
         src/view/IrUploadCandidateListView.cpp
+        src/view/ImageFade.cpp
         src/view/ImageView.cpp
         src/view/Button.cpp
+        src/view/CheckboxButtonContent.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -2704,9 +2834,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         application_startup_tests
         application_result_recovery_tests
         chart_filter_sort_panel_view_tests
+        image_fade_tests
+        image_view_fade_tests
+        chart_list_item_view_tests
         dropdown_view_tests
         view_layout_tests
         button_enabled_tests
+        text_input_box_tests
+        checkbox_button_content_tests
+        difficulty_table_url_completion_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests

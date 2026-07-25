@@ -35,6 +35,7 @@ private:
   bool selected = false;
   std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
   View *contentCard;
+  ImageView *bannerImage;
   View *clearLamp;
   View *artworkFrame;
   ImageView *jacketImage;

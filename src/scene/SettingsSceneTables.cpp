@@ -1,4 +1,5 @@
 #include "SettingsSceneShared.h"
+#include "DifficultyTableUrlCompletion.h"
 #include "../ChartLibraryScanner.h"
 #include "../DifficultyTableImporter.h"
 #include "../Utils.h"
@@ -195,7 +196,8 @@ void SettingsScene::requestChartFolderStatus(const std::string &text,
 
 void SettingsScene::requestDifficultyTableImportProgress(
     int current, int total, const std::string &tableName,
-    const std::string &statusText, bool finished, bool succeeded) {
+    const std::string &statusText, bool finished, bool succeeded,
+    const std::string &submittedUrl) {
   std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
   pendingDifficultyTableImportProgress = true;
   pendingDifficultyTableImportCurrent = current;
@@ -204,11 +206,17 @@ void SettingsScene::requestDifficultyTableImportProgress(
   pendingDifficultyTableImportStatusText = statusText;
   pendingDifficultyTableImportFinished = finished;
   pendingDifficultyTableImportSucceeded = finished && succeeded;
+  if (finished) {
+    pendingDifficultyTableImportSubmittedUrl = submittedUrl;
+  }
 }
 
 void SettingsScene::applyPendingDifficultyTableUpdates() {
   bool shouldReload = false;
   bool shouldRefreshImportModal = false;
+  bool completedImportFinished = false;
+  bool completedImportSucceeded = false;
+  std::string completedImportSubmittedUrl;
   {
     std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
     if (pendingDifficultyTableStatus) {
@@ -237,6 +245,13 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
           pendingDifficultyTableImportStatusText;
       difficultyTableImportFinished = pendingDifficultyTableImportFinished;
       difficultyTableImportSucceeded = pendingDifficultyTableImportSucceeded;
+      completedImportFinished = pendingDifficultyTableImportFinished;
+      completedImportSucceeded = pendingDifficultyTableImportSucceeded;
+      if (pendingDifficultyTableImportFinished) {
+        completedImportSubmittedUrl =
+            pendingDifficultyTableImportSubmittedUrl;
+        pendingDifficultyTableImportSubmittedUrl.clear();
+      }
       difficultyTableImportModalVisible = true;
       pendingDifficultyTableImportProgress = false;
       shouldRefreshImportModal = true;
@@ -250,6 +265,12 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
     loadChartEntries();
     observedLibraryRevision = context.chartRepository.GetLibraryRevision();
     lastLayoutWidth = -1;
+  }
+  const bool clearedUrl = settings_ui::applyDifficultyTableUrlCompletion(
+      completedImportFinished, completedImportSucceeded,
+      completedImportSubmittedUrl, tableUrlText);
+  if (clearedUrl && tableUrlInput != nullptr) {
+    tableUrlInput->setEditingText(tableUrlText);
   }
   if (shouldRefreshImportModal) {
     refreshDifficultyTableImportModal();
@@ -396,7 +417,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
       if (!token.stop_requested()) {
         difficultyTableJobRunning = false;
         requestDifficultyTableImportProgress(
-            0, 1, url, "Could not open chart database.", true, false);
+            0, 1, url, "Could not open chart database.", true, false, url);
         requestDifficultyTableStatus("Could not open chart database.",
                                      {255, 177, 170, 255});
       }
@@ -413,7 +434,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
       lastProgress = progress;
       requestDifficultyTableImportProgress(
           progress.current, progress.total, progress.tableName,
-          "Downloading and importing tables...", false);
+          "Downloading and importing tables...", false, false, {});
     };
     DifficultyTableImporter importer;
     const bool imported = importer.ImportFromUrl(
@@ -430,7 +451,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
                  : (errorMessage.empty() ? "Add failed." : errorMessage);
     requestDifficultyTableImportProgress(
         lastProgress.current, lastProgress.total, lastProgress.tableName,
-        finalMessage, true, imported);
+        finalMessage, true, imported, url);
     requestDifficultyTableStatus(finalMessage,
                                  imported ? SDL_Color{181, 228, 165, 255}
                                           : SDL_Color{255, 177, 170, 255},

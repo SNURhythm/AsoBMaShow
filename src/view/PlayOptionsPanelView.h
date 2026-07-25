@@ -9,6 +9,7 @@
 #include <vector>
 
 class Button;
+class CheckboxButtonContent;
 class DropdownView;
 class OverlayPortal;
 class PlayOptionSectionView;
@@ -94,5 +95,5 @@ private:
   DropdownView *playbackModeDropdown = nullptr;
   bool playbackModeDropdownOpen = false;
   Button *clubModeButton = nullptr;
-  TextView *clubModeButtonText = nullptr;
+  CheckboxButtonContent *clubModeButtonContent = nullptr;
 };

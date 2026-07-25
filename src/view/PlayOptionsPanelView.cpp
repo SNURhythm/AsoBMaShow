@@ -4,6 +4,7 @@
 #include "../LongNoteModeUtils.h"
 #include "../scene/play/Pacemaker.h"
 #include "Button.h"
+#include "CheckboxButtonContent.h"
 #include "DropdownView.h"
 #include "OverlayPortal.h"
 #include "PlayOptionSectionView.h"
@@ -341,7 +342,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(playbackGroup);
 
   addView(makeLabel("Club Mode"));
-  clubModeButton = makeButton("Club Beat", 18, &clubModeButtonText);
+  clubModeButton = makeButton("", 18, nullptr);
+  clubModeButton->setName("club-mode");
+  clubModeButtonContent = new CheckboxButtonContent("Club Beat", 18, 17);
+  clubModeButton->setContentView(clubModeButtonContent);
   clubModeButton->setWidthPercent(100.0f);
   clubModeButton->setOnClickListener([this]() {
     if (callbacks.onClubModeToggled) {
@@ -447,9 +451,16 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
          .enabled = !state.playbackLocked,
          .maxVisibleItems = 2});
   }
-  if (clubModeButton != nullptr && clubModeButtonText != nullptr) {
-    clubModeButtonText->setText(state.clubMode ? "☑ Club Beat" : "☐ Club Beat");
-    styleButton(clubModeButton, clubModeButtonText, state.clubMode, true);
+  if (clubModeButton != nullptr && clubModeButtonContent != nullptr) {
+    clubModeButtonContent->setChecked(state.clubMode);
+    styleButton(clubModeButton, clubModeButtonContent->labelView(),
+                state.clubMode, true);
+    clubModeButtonContent->setThemedColor(
+        state.clubMode
+            ? View::ThemeColorProvider{[] {
+                return ui_theme::textOn(ui_theme::primaryAction());
+              }}
+            : View::ThemeColorProvider{ui_theme::textPrimary});
   }
   for (const auto &item : pacemakerButtons) {
     styleButton(item.button, item.text,

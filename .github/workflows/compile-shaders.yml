@@ -1,0 +1,84 @@
+name: Compile shaders
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "shader_src/**"
+      - ".github/workflows/compile-shaders.yml"
+      - "bgfx"
+      - ".gitmodules"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compile-shaders-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    name: Compile and commit shaders
+    if: startsWith(github.ref, 'refs/heads/')
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Preserve repository line endings
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - name: Checkout triggering branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Resolve shader compiler cache key
+        id: shaderc-cache-key
+        shell: bash
+        run: |
+          echo "value=$(git -C bgfx/bgfx rev-parse HEAD)-$(git -C bgfx/bimg rev-parse HEAD)-$(git -C bgfx/bx rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore shader compiler
+        id: shaderc-cache
+        uses: actions/cache@v5
+        with:
+          path: bgfx/bgfx/.build/win64_mingw-gcc/bin/shadercRelease.exe
+          key: shaderc-windows-2022-mingw64-v1-${{ steps.shaderc-cache-key.outputs.value }}
+
+      - name: Set up MINGW64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
+
+      - name: Compile shaders
+        working-directory: shader_src
+        shell: msys2 {0}
+        env:
+          MINGW: /mingw64
+        run: |
+          test -x "$MINGW/bin/x86_64-w64-mingw32-g++.exe"
+          python3 make.py clean
+          python3 make.py
+
+      - name: Commit generated shaders
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- shaders
+          if git diff --cached --quiet; then
+            echo "Shader binaries are already up to date."
+            exit 0
+          fi
+          git commit -m "chore: compile shaders"
+          git push origin "HEAD:${{ github.ref_name }}"

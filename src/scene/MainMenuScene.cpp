@@ -3025,7 +3025,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->setGap(10);
 
   searchBox = new TextInputBox("assets/fonts/notosanscjkjp.ttf", 30);
-  searchBox->setText(searchText);
+  searchBox->setEditingText(searchText);
+  searchBox->setClearable(true);
   searchBox->setHeight(56);
   searchBox->setFlex(1);
   searchBox->setThemedBackgroundColor(ui_theme::mainMenuSurface);

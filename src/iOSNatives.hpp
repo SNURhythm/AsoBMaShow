@@ -177,4 +177,6 @@ void HideIOSNativeTextEditor(void *context, bool notifyFinished);
 void SetIOSNativeTextEditorSelection(void *context,
                                      std::size_t selectionStart,
                                      std::size_t selectionEnd);
+void SetIOSNativeTextEditorState(void *context,
+                                 const IOSNativeTextEditorState &state);
 #endif

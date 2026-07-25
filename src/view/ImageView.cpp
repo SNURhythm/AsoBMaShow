@@ -37,6 +37,7 @@
 #include <optional>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -403,7 +404,8 @@ private:
 void submitTexturedRoundedRect(const RenderContext &context,
                                bgfx::TextureHandle texture,
                                bgfx::UniformHandle sampler, int x, int y,
-                               int width, int height, float radius) {
+                               int width, int height, float radius,
+                               bgfx::ProgramHandle program) {
   if (!bgfx::isValid(texture) || width <= 0 || height <= 0) {
     return;
   }
@@ -503,9 +505,7 @@ void submitTexturedRoundedRect(const RenderContext &context,
                           context.scissor.width, context.scissor.height);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA |
                  BGFX_STATE_MSAA);
-  static const bgfx::ProgramHandle kProgram =
-      rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
-  bgfx::submit(rendering::ui_view, kProgram);
+  bgfx::submit(rendering::ui_view, program);
 }
 } // namespace
 
@@ -661,13 +661,70 @@ void ImageView::freeImage() {
   asyncImagePending = false;
   freeTexture();
 }
+ImageView *ImageView::setFade(ImageFadeDirection direction, float strength) {
+  fade_ = makeImageFade(direction, strength);
+  return this;
+}
+ImageView *ImageView::clearFade() {
+  fade_.reset();
+  return this;
+}
+ImageView *ImageView::setScrimColor(const Color &color) {
+  themedScrimColorProvider_ = {};
+  scrimColor_ = color;
+  return this;
+}
+ImageView *ImageView::setThemedScrimColor(ThemeColorProvider provider) {
+  themedScrimColorProvider_ = std::move(provider);
+  if (themedScrimColorProvider_) {
+    scrimColor_ = themedScrimColorProvider_();
+  } else {
+    scrimColor_.reset();
+  }
+  return this;
+}
+ImageView *ImageView::clearScrimColor() {
+  themedScrimColorProvider_ = {};
+  scrimColor_.reset();
+  return this;
+}
+void ImageView::onThemeChanged() {
+  View::onThemeChanged();
+  if (themedScrimColorProvider_) {
+    scrimColor_ = themedScrimColorProvider_();
+  }
+}
 void ImageView::renderImpl(RenderContext &context) {
   applyAsyncImageIfReady();
   if (!bgfx::isValid(texture)) {
     return;
   }
+  bgfx::ProgramHandle program;
+  if (fade_.has_value() || scrimColor_.has_value()) {
+    const ImageFade fade = fade_.value_or(
+        makeImageFade(ImageFadeDirection::LeftToRight, 0.0F));
+    const auto fadeParams = imageFadeShaderParameters(fade);
+    bgfx::setUniform(
+        rendering::UniformCache::getInstance().getVec4("u_imageFadeParams"),
+        fadeParams.data());
+
+    const Color scrim = scrimColor_.value_or(Color(0, 0, 0, 0));
+    constexpr float inv255 = 1.0F / 255.0F;
+    const std::array<float, 4> scrimParams = {
+        static_cast<float>(scrim.r) * inv255,
+        static_cast<float>(scrim.g) * inv255,
+        static_cast<float>(scrim.b) * inv255,
+        static_cast<float>(scrim.a) * inv255};
+    bgfx::setUniform(
+        rendering::UniformCache::getInstance().getVec4("u_imageScrimColor"),
+        scrimParams.data());
+    program = rendering::ShaderManager::getInstance().getProgram(
+        "vs_text.bin", "fs_image_fade.bin");
+  } else {
+    program = rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  }
   submitTexturedRoundedRect(context, texture, s_texColor, getX(), getY(),
-                            getWidth(), getHeight(), getCornerRadius());
+                            getWidth(), getHeight(), getCornerRadius(), program);
 }
 ImageView::ImageView(int x, int y, int width, int height)
     : View(x, y, width, height) {

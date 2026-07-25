@@ -98,6 +98,19 @@ require(
     "score detail view must bind all Bokutachi judgment cells",
 )
 require(
+    "applyScoreDetailJudgementColumnLayout();" in source
+    and "layoutIrRankingJudgementColumns(" in source
+    and source.count("TextView::RIGHT") >= 4,
+    "judgment headings and counts must use one shared, right-aligned column layout",
+)
+require(
+    "TextView *makeRankingLampBadge()" in source
+    and "TextView *makeScoreDetailLampBadge()" in source
+    and "configureIrRankingDetailLampBadge(*lamp);" in source
+    and '"Lamp", scoreDetailLamp, makeScoreDetailLampBadge())' in source,
+    "score details must use a padded clear-lamp badge that fits its metric card",
+)
+require(
     "KPOOR is not exposed separately by Bokutachi; BP remains aggregate."
     in source,
     "score details must explain the Bokutachi KPOOR capability boundary",

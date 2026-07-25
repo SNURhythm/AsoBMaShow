@@ -1,8 +1,10 @@
 #include "../src/rendering/UniformCache.h"
 #include "../src/view/Button.h"
+#include "../src/view/CheckboxButtonContent.h"
 #include "../src/view/ImageView.h"
 #include "../src/view/IrUploadCandidateListView.h"
 #include "../src/view/TextView.h"
+#include "../src/view/UiTheme.h"
 
 #include <SDL2/SDL.h>
 
@@ -36,6 +38,11 @@ void expect(bool condition, const char *message) {
     std::cerr << message << '\n';
     std::exit(1);
   }
+}
+
+bool sameColor(SDL_Color left, SDL_Color right) {
+  return left.r == right.r && left.g == right.g && left.b == right.b &&
+         left.a == right.a;
 }
 
 TextView *text(View *row, const char *name) {
@@ -161,6 +168,19 @@ int main() {
                text(row, "irUploadRank")->getText() == "A",
            "row shows chart, combo, date, option, and replay metadata");
     expect(selection->isSelected(), "row reflects external checkbox selection");
+    auto *selectionContent = dynamic_cast<CheckboxButtonContent *>(
+        selection->getContentView());
+    expect(selectionContent != nullptr && selectionContent->checked(),
+           "IR upload selection uses FontAwesome checkbox content");
+    expect(selectionContent->iconView()->pointSize() == 30,
+           "IR upload checkbox uses the large icon size");
+    expect(selectionContent->iconView()->getWidth() >= 30,
+           "IR upload checkbox gives the large glyph enough layout width");
+    expect(!selection->hasStyledBackgroundStyle(),
+           "IR upload checkbox has no outer selection box");
+    expect(sameColor(selectionContent->iconView()->currentColor(),
+                     ui_theme::sdl(ui_theme::cyan())),
+           "selected IR upload checkbox tints the glyph cyan");
     click(list, *selection);
     expect(toggles == 1 && toggledReplayId == first.replayId() &&
                rowSelections == 0,
@@ -169,9 +189,16 @@ int main() {
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);
     selection = button(row, "irUploadSelection");
+    selectionContent = dynamic_cast<CheckboxButtonContent *>(
+        selection->getContentView());
     expect(row == firstRow &&
                image(row, "irUploadJacket")->imagePath() == secondJacket,
            "rebind replaces jacket identity");
+    expect(!selection->hasStyledBackgroundStyle(),
+           "unchecked IR upload checkbox remains unboxed");
+    expect(sameColor(selectionContent->iconView()->currentColor(),
+                     ui_theme::sdl(ui_theme::textMuted())),
+           "unchecked IR upload checkbox uses the muted tint");
     expect(text(row, "irUploadStatus")->getText() == "Retry",
            "rebind replaces status");
     expect(text(row, "irUploadAttempt")
@@ -181,6 +208,8 @@ int main() {
            "failed attempt appends its upload reason to the detail line");
     expect(
         !selection->isSelected() &&
+            !dynamic_cast<CheckboxButtonContent *>(selection->getContentView())
+                 ->checked() &&
             text(row, "irUploadAttempt")->getText().find("NORMAL") !=
                 std::string::npos &&
             text(row, "irUploadAttempt")->getText().find("RANDOM") ==
