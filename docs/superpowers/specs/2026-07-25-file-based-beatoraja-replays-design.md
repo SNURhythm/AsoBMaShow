@@ -42,6 +42,8 @@ explicit compatibility update rather than silently changing stored data.
 
 - Each recorded play owns one immutable `.brd` file under the active profile.
 - The file uses Beatoraja's gzip-JSON envelope and stock replay fields.
+- The profile directory and hash/LN-mode/index filename grammar match
+  Beatoraja's replay path layout.
 - SQLite stores result history, provenance, provider-neutral IR submission
   snapshots, delivery state, and a small replay-file reference. It never
   stores raw replay event rows for new records.
@@ -74,6 +76,8 @@ It also does not make imported Beatoraja files eligible for IR submission.
   of one row per event.
 - Produce directly shareable Beatoraja `.brd` data for every new recorded
   play.
+- Match Beatoraja's `replay/` directory and chart/course filename stems while
+  retaining more than its four native replay slots.
 - Preserve AsoBMaShow-only touch visualization and timed lane-cover behavior
   without making stock Beatoraja reject the file.
 - Make replay files independently deletable by the user.
@@ -91,6 +95,9 @@ It also does not make imported Beatoraja files eligible for IR submission.
 - Do not claim score equality when a replay is rejudged by a different
   ruleset. File compatibility means the replay loads and its logical input is
   consumable.
+- Do not make stock Beatoraja enumerate more than its four native replay
+  slots. AsoBMaShow history indexes above three use the same filename grammar
+  but must be copied to slot 0, 1, 2, or 3 for Beatoraja's UI to select them.
 - Do not synthesize new IR eligibility for migrated development records that
   lack a provider-neutral IR snapshot. Existing outbox entries and receipts
   remain valid and are preserved.
@@ -138,7 +145,7 @@ The implementation separates five concepts:
 | `ReplayPlaybackData` | `.brd` file | Chart playback setup, raw logical input, touch visualization, timed lane-cover changes, and course playback timing |
 | `PersistedChartResult` | SQLite | Attempt identity, chart identity/display data, score and judgement totals, gauge/timing summaries, clear state, play time, and `ScoreProvenance` |
 | `IrSubmissionSnapshot` | SQLite | Versioned provider-neutral submission facts and ruleset proof inputs captured at completion |
-| `ReplayFileReference` | SQLite | Relative path, content SHA-256, codec/version, compressed size, and record association |
+| `ReplayFileReference` | SQLite | Beatoraja filename stem/history index, relative path, content SHA-256, codec/version, compressed size, and record association |
 | `CompletedChartAttempt` | Memory only | A short-lived command that coordinates the independently valid result, IR snapshot, replay payload, and automatic provider drafts |
 
 `ReplayPlaybackData` cannot include `ScoreProvenance`, IR eligibility, provider
@@ -158,31 +165,58 @@ eligibility.
 Add `replayDirectory` to `PlayerProfilePaths`, resolved as:
 
 ```text
-<profile>/replays/
+<profile>/replay/
 ```
 
-New single-chart files use the canonical attempt UUID:
+This is the direct analogue of Beatoraja's
+`<playerpath>/<player>/replay/` directory.
+
+Single-chart filenames use Beatoraja's exact stem and index grammar:
 
 ```text
-replays/<attempt-id>.brd
+replay/<ln-prefix><lowercase-sha256><slot-suffix>.brd
 ```
 
-Course files use the course attempt UUID and contain the stock Beatoraja JSON
-array of per-stage replay objects:
+`ln-prefix` is empty for charts without undefined long notes. For charts whose
+LN interpretation is mode-dependent it is empty for LN mode 0, `C` for mode
+1, and `H` for mode 2. `slot-suffix` is empty for history index 0 and
+`_<history-index>` for every positive index. Examples are:
 
 ```text
-replays/course-<attempt-id>.brd
+replay/0123...cdef.brd
+replay/C0123...cdef_1.brd
+replay/H0123...cdef_27.brd
 ```
 
-Migrated records with a canonical attempt ID use the same names. Rows without
-one use deterministic, collision-free legacy names based on the preserved
-record kind and integer ID. SQLite stores only a normalized relative path
-beneath `replays/`; absolute paths, `..`, links, and path aliases are rejected.
+Course files use Beatoraja's course stem and contain its JSON array of
+per-stage replay objects. The stem concatenates the first ten SHA-256
+characters of every stage in order, applies the same LN prefix, appends the
+two-digit Beatoraja IDs for applicable constraints, then applies the same slot
+suffix:
 
-Internal UUID filenames avoid collisions while retaining every past play.
-When sharing a selected replay, the app copies the existing bytes without
-re-encoding and suggests Beatoraja's chart-hash/LN-mode/slot filename. Filename
-adaptation is an export presentation concern; file contents are identical.
+```text
+replay/<ln-prefix><stage-1-sha-prefix>...<stage-n-sha-prefix>[_<constraints>][_<history-index>].brd
+```
+
+The constraint adapter reproduces Beatoraja's enum ordering and excludes its
+`CLASS`, `MIRROR`, and `RANDOM` markers as Beatoraja does. AsoBMaShow-only
+constraints remain in the result/extension data and do not create a private
+filename grammar.
+
+Beatoraja's
+[`MusicSelector`](https://github.com/exch-bms2/beatoraja/blob/5f46fe198e88abbefe9215ca2de397aef8f54bd8/src/bms/player/beatoraja/select/MusicSelector.java)
+exposes four indexes: 0 through 3. AsoBMaShow treats that index as an
+unbounded, monotonically allocated history index for each complete filename
+stem. It never overwrites or reuses an index, even after a file is deleted.
+Files at indexes 0 through 3 are directly discoverable by stock Beatoraja.
+Files at higher indexes still follow its path formula but are outside its UI's
+four-slot scan. Sharing such a replay copies the unchanged bytes to a chosen
+0..3 destination slot; only the filename changes.
+
+Migration assigns indexes in ascending creation-time/public-ID order within
+each stem, producing deterministic paths. SQLite stores only the normalized
+relative path and allocated history index beneath `replay/`; absolute paths,
+`..`, links, and path aliases are rejected.
 
 ## `.brd` Codec
 
@@ -320,7 +354,9 @@ filename remains `replays.db`:
 - `course_results` and lightweight `course_result_stages` hold course result,
   provenance, stage identity, and ordering without input events;
 - `replay_files` holds the relative path, file SHA-256, codec/version, byte
-  size, record kind, and record ID;
+  size, Beatoraja stem/history index, record kind, and record ID;
+- `replay_file_reservations` temporarily owns an attempt's monotonically
+  allocated history index and relative path until file/result finalization;
 - `ir_submission_snapshots` holds provider-neutral, versioned snapshots;
 - pending score projection, IR outbox, receipts, and remote mirror tables are
   retained and relinked to result/attempt identity rather than replay rows.
@@ -337,29 +373,37 @@ coordinator therefore orders durable operations so SQLite never commits a
 reference to a file that was not finalized:
 
 1. Validate the independent result, IR snapshot, and replay payload.
-2. Encode the replay to a private temporary file in the target replay
+2. In a short SQLite transaction, idempotently reserve the next history index
+   for the Beatoraja filename stem. The reservation is keyed by attempt ID,
+   unique by stem/index and path, and is not visible as a result or replay-file
+   reference.
+3. Encode the replay to a private temporary file in the target replay
    directory.
-3. Flush the file, close it, atomically rename it to the deterministic final
+4. Flush the file, close it, atomically rename it to the reserved final
    path, and sync the parent directory where the platform supports that
    durability contract.
-4. Decode the final file, validate its chart/mode and extension, and compute
+5. Decode the final file, validate its chart/mode and extension, and compute
    its SHA-256 and byte size.
-5. In one SQLite transaction, insert or verify the result, replay reference,
-   IR snapshot, pending score projection, and any automatic IR drafts.
-6. Project and acknowledge the score through the existing idempotent
+6. In one SQLite transaction, insert or verify the result, replay reference,
+   IR snapshot, pending score projection, and any automatic IR drafts, then
+   consume the matching reservation.
+7. Project and acknowledge the score through the existing idempotent
    cross-database coordinator.
 
 The attempt is not reported durable until the file and result transaction are
 both confirmed. A retry with the same attempt ID accepts an existing file only
 when its bytes hash to the expected value and its decoded identity matches.
 It accepts an existing result only when its independent result and snapshot
-fingerprints match.
+fingerprints match. A retry reuses its attempt reservation rather than
+allocating a second filename.
 
-A crash before rename leaves only a temporary file. A crash after rename but
-before SQLite commit can leave an unreferenced final file, never a database
-reference to an unfinished file. Startup removes stale temporary files and
-may reuse or quarantine deterministic unreferenced files during idempotent
-recovery. It never invents a result from an orphan replay.
+A crash before file creation leaves a retryable reservation. A crash before
+rename leaves the reservation and a temporary file. A crash after rename but
+before result commit leaves the reservation and its finalized file, never a
+database replay reference to an unfinished file. Retry resumes from that exact
+reservation after validating any existing bytes. Startup removes only stale
+temporary files and abandoned reservations that cannot belong to durable
+attempt work. It never invents a result from an orphan replay.
 
 ## Atomic Legacy Migration
 
@@ -373,20 +417,23 @@ all-files-first staging phase followed by one database cutover transaction:
    observe the profile.
 2. Read the complete legacy replay/course snapshot and validate all source
    rows needed for migration.
-3. For each replay, encode a deterministic sibling temporary `.brd`, flush
-   and rename it, decode it again, and record its SHA-256 and size in memory.
-   Existing deterministic files are reused only after exact validation.
-4. Translate legacy `Press`/`Release` events into the stock `keyinput` stream
+3. Group rows by their exact Beatoraja filename stem and assign monotonically
+   increasing history indexes in creation-time/public-ID order.
+4. For each replay, encode a deterministic sibling temporary `.brd`, flush
+   and rename it to that stem/index path, decode it again, and record its
+   SHA-256 and size in memory. Existing deterministic files are reused only
+   after exact validation.
+5. Translate legacy `Press`/`Release` events into the stock `keyinput` stream
    where possible. Preserve the complete old event, touch, and lane-cover
    playback in the AsoBMaShow extension when stock input is insufficient.
-5. Revalidate every final file immediately before cutover.
-6. Begin one SQLite transaction, create the new result/reference/snapshot
+6. Revalidate every final file immediately before cutover.
+7. Begin one SQLite transaction, create the new result/reference/snapshot
    schema, copy header facts and derive any missing result aggregates from the
    already loaded legacy events while preserving public IDs, insert every
    validated file reference, relink durable pending work, verify counts and
    foreign keys, drop the legacy replay-event structures, and bump
    `user_version`.
-7. Commit once. Only this commit makes the new schema visible.
+8. Commit once. Only this commit makes the new schema visible.
 
 No legacy row is deleted or changed during file staging. If encoding, disk
 space, validation, or the final database transaction fails, the old schema
@@ -436,7 +483,7 @@ database and replay directory together before the existing durable profile
 rename. Profile validation accepts missing user-deleted replay files but
 rejects unsafe paths, links, and replay-directory escapes.
 
-Portable profile archives include `replays/` recursively. Archive manifests
+Portable profile archives include `replay/` recursively. Archive manifests
 and `checksums.sha256` cover every included `.brd`; member-count, per-file,
 compressed, expanded, and aggregate size limits prevent replay files from
 bypassing current archive budgets. Import validates names and contents in a
@@ -498,6 +545,11 @@ Focused coverage will include:
   Beatoraja-compatible reference reader;
 - byte-level `keyinput` tests cover press/release sign, little-endian time,
   URL-safe Base64, inner gzip, logical lane mapping, and scratch direction;
+- path fixtures cover Beatoraja's undefined-LN prefixes, unsuffixed slot 0,
+  numeric slot suffixes, course hash concatenation, constraint suffixes, and
+  the four-slot UI boundary;
+- concurrent/retried reservations allocate one stable history index per
+  attempt, while deletion never causes an old index to be reused;
 - stock files ignore the AsoBMaShow extension while AsoBMaShow round-trips
   touch, timed lane cover, course rests, and migrated legacy playback;
 - malformed gzip, decompression bombs, excessive arrays, invalid key codes,
@@ -530,8 +582,10 @@ configured CTest suite; `git diff --check`; and the desktop `main` build.
   those tables no longer exist.
 - Every successfully persisted play has a validated immutable `.brd` and a
   compact hash/path reference.
-- An AsoBMaShow `.brd` can be shared as a Beatoraja replay without content
-  conversion; only the suggested destination filename may differ.
+- AsoBMaShow stores `.brd` files under Beatoraja's `replay/` directory and
+  hash/LN-mode/index filename grammar.
+- A history file above Beatoraja's fourth native slot can be shared without
+  content conversion by copying it to a selected 0..3 slot filename.
 - Initial lane cover is visible in stock Beatoraja, and timed changes remain
   available when the same file is replayed in AsoBMaShow.
 - A deleted replay file disables only replay-dependent actions.
