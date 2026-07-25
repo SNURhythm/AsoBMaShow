@@ -59,18 +59,17 @@ IrSubmissionBuildOutcome invalid(std::string_view diagnostic) {
 } // namespace
 
 IrSubmissionBuildOutcome makeIrSubmission(
-    const result_persistence::ChartResultAttempt &attempt,
-    std::int64_t playedAtUnixMillis) noexcept {
+    const result_persistence::PersistedChartResult &result) noexcept {
   try {
-    const auto &score = attempt.score;
-    const auto &meta = attempt.replay.chartMeta;
-    if (!uuid::isCanonicalLowerV4(attempt.attemptId)) {
+    const auto &score = result.score;
+    if (!result.attemptId.has_value() ||
+        !uuid::isCanonicalLowerV4(*result.attemptId)) {
       return invalid("attempt ID is not a canonical version-4 UUID");
     }
-    if (playedAtUnixMillis <= 0) {
+    if (result.playedAtUnixMillis <= 0) {
       return invalid("play completion time must be positive");
     }
-    if (meta.KeyMode <= 0) {
+    if (result.keyMode <= 0) {
       return invalid("chart key mode must be positive");
     }
 
@@ -81,13 +80,6 @@ IrSubmissionBuildOutcome makeIrSubmission(
         (md5.empty() && sha256.empty())) {
       return invalid("chart hash identity is malformed");
     }
-    const std::string replayMd5 = normalizedHash(meta.MD5);
-    const std::string replaySha256 = normalizedHash(meta.SHA256);
-    if ((!replayMd5.empty() && replayMd5 != md5) ||
-        (!replaySha256.empty() && replaySha256 != sha256)) {
-      return invalid("score and replay chart identities disagree");
-    }
-
     const std::array counts{score.maxCombo, score.comboBreak, score.pGreat,
                             score.great,    score.good,       score.bad,
                             score.poor,     score.kPoor,      score.fast,
@@ -96,9 +88,8 @@ IrSubmissionBuildOutcome makeIrSubmission(
       return invalid("score counters must not be negative");
     }
     if (score.maxScore <= 0 || score.score < 0 || score.score > score.maxScore ||
-        meta.TotalNotes <= 0 || meta.TotalNotes > std::numeric_limits<int>::max() / 2 ||
-        score.maxScore != meta.TotalNotes * 2 ||
-        score.maxCombo > meta.TotalNotes) {
+        score.maxScore % 2 != 0 ||
+        score.maxCombo > score.maxScore / 2) {
       return invalid("score range is inconsistent with chart notes");
     }
     const long long expectedScore =
@@ -123,8 +114,8 @@ IrSubmissionBuildOutcome makeIrSubmission(
     int earlyPoor = 0;
     int latePoor = 0;
     bool judgementTimingBreakdownAvailable = false;
-    if (attempt.judgementTiming.has_value()) {
-      const auto &timing = attempt.judgementTiming->byJudgement;
+    if (result.judgementTiming.has_value()) {
+      const auto &timing = result.judgementTiming->byJudgement;
       std::array<int, JudgementCount> judgementTotals{};
       judgementTotals[PGreat] = score.pGreat;
       judgementTotals[Great] = score.great;
@@ -181,15 +172,15 @@ IrSubmissionBuildOutcome makeIrSubmission(
       judgementTimingBreakdownAvailable = true;
     }
 
-    std::vector<float> gaugeHistory = attempt.adoptedGaugeHistory;
+    std::vector<float> gaugeHistory = result.adoptedGaugeHistory;
     if (std::ranges::any_of(gaugeHistory,
                             [](float value) { return !std::isfinite(value); })) {
       return invalid("adopted gauge history is not finite");
     }
 
     return {.value = IrSubmission{
-                .attemptId = attempt.attemptId,
-                .keyMode = meta.KeyMode,
+                .attemptId = *result.attemptId,
+                .keyMode = result.keyMode,
                 .chartMd5 = md5,
                 .chartSha256 = sha256,
                 .score = score.score,
@@ -221,7 +212,7 @@ IrSubmissionBuildOutcome makeIrSubmission(
                 .gaugeHistory = std::move(gaugeHistory),
                 .finalGauge = score.finalGauge,
                 .clearType = score.clearType,
-                .playedAtUnixMillis = playedAtUnixMillis,
+                .playedAtUnixMillis = result.playedAtUnixMillis,
                 .provenance = score.provenance,
             }};
   } catch (...) {

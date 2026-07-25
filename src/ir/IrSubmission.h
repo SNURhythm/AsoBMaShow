@@ -54,7 +54,6 @@ struct IrSubmissionBuildOutcome {
 };
 
 [[nodiscard]] IrSubmissionBuildOutcome makeIrSubmission(
-    const result_persistence::ChartResultAttempt &attempt,
-    std::int64_t playedAtUnixMillis) noexcept;
+    const result_persistence::PersistedChartResult &result) noexcept;
 
 } // namespace ir

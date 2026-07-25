@@ -939,7 +939,7 @@ std::string chartAttemptId(int suffix) {
   return value;
 }
 
-result_persistence::ChartResultAttempt
+legacy_result_persistence::LegacyChartResultAttempt
 sampleChartAttempt(const std::filesystem::path &root, const std::string &hash,
                    int idSuffix) {
   ReplayData replay = sampleReplay(root, hash);
@@ -984,7 +984,7 @@ sampleChartAttempt(const std::filesystem::path &root, const std::string &hash,
       .replay = replay,
       .score = score,
       .payloadFingerprint =
-          result_persistence::payloadFingerprint(replay, score),
+          legacy_result_persistence::legacyPayloadFingerprint(replay, score),
   };
 }
 
@@ -1612,7 +1612,7 @@ void testChangedPayloadForSameAttemptConflicts(
   auto changed = original;
   ++changed.replay.events.front().diffMicros;
   changed.payloadFingerprint =
-      result_persistence::payloadFingerprint(changed.replay, changed.score);
+      legacy_result_persistence::legacyPayloadFingerprint(changed.replay, changed.score);
   const auto conflict = helper.StageChartResult(changed, {});
   assert(conflict.status == result_persistence::StageStatus::IntegrityConflict);
   assert(!conflict.receipt.has_value());
@@ -1635,7 +1635,7 @@ void testStageRejectsSemanticResultConflicts(
 
   const auto expectConflict = [&](auto attempt) {
     attempt.payloadFingerprint =
-        result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+        legacy_result_persistence::legacyPayloadFingerprint(attempt.replay, attempt.score);
     const auto outcome = helper.StageChartResult(attempt, {});
     assert(outcome.status ==
            result_persistence::StageStatus::IntegrityConflict);
@@ -1659,7 +1659,7 @@ void testStageRejectsSemanticResultConflicts(
   unspecifiedProvenanceMode.score.provenance =
       unspecifiedProvenanceMode.replay.provenance;
   unspecifiedProvenanceMode.payloadFingerprint =
-      result_persistence::payloadFingerprint(unspecifiedProvenanceMode.replay,
+      legacy_result_persistence::legacyPayloadFingerprint(unspecifiedProvenanceMode.replay,
                                              unspecifiedProvenanceMode.score);
   const auto unspecifiedModeOutcome =
       helper.StageChartResult(unspecifiedProvenanceMode, {});
@@ -1680,7 +1680,7 @@ void testStageRejectsSemanticResultConflicts(
   md5OnlyIdentity.replay.chartMeta.SHA256.clear();
   md5OnlyIdentity.score.provenance.stages.front().chartSha256.clear();
   md5OnlyIdentity.replay.provenance = md5OnlyIdentity.score.provenance;
-  md5OnlyIdentity.payloadFingerprint = result_persistence::payloadFingerprint(
+  md5OnlyIdentity.payloadFingerprint = legacy_result_persistence::legacyPayloadFingerprint(
       md5OnlyIdentity.replay, md5OnlyIdentity.score);
   const auto md5OnlyOutcome = helper.StageChartResult(md5OnlyIdentity, {});
   assert(md5OnlyOutcome.status ==
@@ -1709,7 +1709,7 @@ void testStageAcceptsStandard9KeysGaugeMaximum(
   attempt.score.clearType = attempt.replay.clearType;
   attempt.score.provenance = attempt.replay.provenance;
   attempt.payloadFingerprint =
-      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+      legacy_result_persistence::legacyPayloadFingerprint(attempt.replay, attempt.score);
 
   const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
@@ -1728,7 +1728,7 @@ void testStageAcceptsNonLongNoteChartMode(const std::filesystem::path &root) {
   attempt.score.longNoteMode = long_note_mode::kUnknownValue;
   attempt.score.provenance = attempt.replay.provenance;
   attempt.payloadFingerprint =
-      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+      legacy_result_persistence::legacyPayloadFingerprint(attempt.replay, attempt.score);
 
   const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
@@ -1749,7 +1749,7 @@ void testStageAcceptsUnforcedLongNoteChartMode(
   attempt.score.longNoteMode = long_note_mode::kCnValue;
   attempt.score.provenance = attempt.replay.provenance;
   attempt.payloadFingerprint =
-      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+      legacy_result_persistence::legacyPayloadFingerprint(attempt.replay, attempt.score);
 
   const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
@@ -1774,7 +1774,7 @@ void testStageAcceptsChargeNoteJudgementsAboveNominalNoteCount(
   attempt.replay.maxCombo = attempt.score.maxCombo;
   attempt.replay.clearType = kClearTypeFullComboRank;
   attempt.payloadFingerprint =
-      result_persistence::payloadFingerprint(attempt.replay, attempt.score);
+      legacy_result_persistence::legacyPayloadFingerprint(attempt.replay, attempt.score);
 
   const auto staged = helper.StageChartResult(attempt, {});
   assert(staged.status == result_persistence::StageStatus::Staged);
@@ -1819,7 +1819,7 @@ void testAcknowledgedAttemptRemainsIdempotentByFingerprint(
   auto changed = attempt;
   ++changed.score.fast;
   changed.payloadFingerprint =
-      result_persistence::payloadFingerprint(changed.replay, changed.score);
+      legacy_result_persistence::legacyPayloadFingerprint(changed.replay, changed.score);
   assert(helper.StageChartResult(changed, {}).status ==
          result_persistence::StageStatus::IntegrityConflict);
 
@@ -4418,7 +4418,7 @@ ir::IrOutboxDraft sampleIrDraft(std::string attemptId, std::int64_t createdAt,
 }
 
 ir::IrOutboxDraft
-automaticIrDraft(const result_persistence::ChartResultAttempt &attempt,
+automaticIrDraft(const legacy_result_persistence::LegacyChartResultAttempt &attempt,
                  std::string providerId, std::int64_t createdAt) {
   return {
       .providerId = std::move(providerId),
@@ -5679,7 +5679,7 @@ void testLoadIrReconciliationCandidatesReturnsCanonicalScopedEvidence(
   modified.score.clearType = kClearTypeAssistedEasyClearRank;
   modified.score.provenance = modified.replay.provenance;
   modified.payloadFingerprint =
-      result_persistence::payloadFingerprint(modified.replay, modified.score);
+      legacy_result_persistence::legacyPayloadFingerprint(modified.replay, modified.score);
   const auto modifiedStage = helper.StageChartResult(modified, {});
   assert(modifiedStage.status == result_persistence::StageStatus::Staged &&
          modifiedStage.receipt);
@@ -5960,7 +5960,7 @@ void testListIrUploadCandidateReplaysUsesBoundedScopedSnapshot(
   assert(helper.EnsureSchema());
 
   struct StoredAttempt {
-    result_persistence::ChartResultAttempt attempt;
+    legacy_result_persistence::LegacyChartResultAttempt attempt;
     int replayId = 0;
   };
   const auto stage = [&](std::string_view name, int suffix,

@@ -399,4 +399,10 @@ std::vector<IrOutboxDraft> IrDriverRegistry::buildAutomaticDrafts(
   return drafts;
 }
 
+std::vector<IrOutboxDraft> IrDriverRegistry::buildAutomaticDrafts(
+    const std::map<std::string, IrProviderSettings> &settings,
+    const IrSubmissionSnapshot &snapshot) const {
+  return buildAutomaticDrafts(settings, snapshot.submission);
+}
+
 } // namespace ir

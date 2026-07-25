@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../CourseIdentity.h"
+#include "../LegacyChartResultAttempt.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
@@ -250,7 +251,8 @@ public:
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
   result_persistence::StageOutcome
-  StageChartResult(const result_persistence::ChartResultAttempt &attempt,
+  StageChartResult(
+      const legacy_result_persistence::LegacyChartResultAttempt &attempt,
                    std::span<const ir::IrOutboxDraft> irDrafts);
   result_persistence::PendingReadOutcome
   LoadPendingChartScore(std::string_view attemptId);

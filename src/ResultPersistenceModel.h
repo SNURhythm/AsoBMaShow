@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayData.h"
+#include "ScoreProvenance.h"
 
 #include <array>
 #include <bit>
@@ -31,7 +31,7 @@ struct ChartScoreWrite {
   int kPoor = 0;
   int fast = 0;
   int slow = 0;
-  float finalGauge = 0.0f;
+  float finalGauge = 0.0F;
   int clearType = kClearTypeFailedRank;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
 
@@ -111,17 +111,64 @@ struct ChartJudgementTiming {
   bool operator==(const ChartJudgementTiming &) const = default;
 };
 
-struct ChartResultAttempt {
-  std::string attemptId;
-  ReplayData replay;
+struct PersistedChartResult {
+  int resultId = 0;
+  std::optional<std::string> attemptId;
   ChartScoreWrite score;
+  int keyMode = 0;
   std::vector<float> adoptedGaugeHistory;
   std::optional<ChartJudgementTiming> judgementTiming;
-  std::string payloadFingerprint;
+  std::int64_t playedAtUnixMillis = 0;
+  std::string resultFingerprint;
+
+  bool operator==(const PersistedChartResult &) const = default;
 };
 
+struct PersistedCourseStageResult {
+  int stageIndex = 0;
+  ChartScoreWrite score;
+  int keyMode = 0;
+  std::vector<float> adoptedGaugeHistory;
+  std::optional<ChartJudgementTiming> judgementTiming;
+
+  bool operator==(const PersistedCourseStageResult &) const = default;
+};
+
+struct PersistedCourseResult {
+  int resultId = 0;
+  std::optional<std::string> attemptId;
+  std::string courseKey;
+  int legacyCourseId = 0;
+  std::string courseName;
+  std::string courseGroupName;
+  std::string constraintJson;
+  int completedCharts = 0;
+  int totalCharts = 0;
+  std::string requestedPlayOption;
+  std::string assistOption;
+  GaugeType initialGaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
+  GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
+  GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  int longNoteMode = 0;
+  int finalScore = 0;
+  int maxScore = 0;
+  int maxCombo = 0;
+  float finalGauge = 0.0F;
+  int clearType = kClearTypeFailedRank;
+  ScoreProvenance provenance = ScoreProvenance::Legacy();
+  std::vector<PersistedCourseStageResult> stages;
+  std::int64_t playedAtUnixMillis = 0;
+  std::string resultFingerprint;
+
+  bool operator==(const PersistedCourseResult &) const = default;
+};
+
+// replayId remains only while the v10 staging adapter exists. New result
+// staging uses resultId and Task 7 removes the compatibility member.
 struct StageReceipt {
   std::string attemptId;
+  int resultId = 0;
   int replayId = 0;
   std::string createdAt;
   bool scorePending = false;
@@ -131,12 +178,23 @@ struct StageReceipt {
     const bms_parser::ChartMeta &meta, const RhythmState &state,
     const ScoreProvenance &provenance, int storageLongNoteMode);
 
-[[nodiscard]] std::optional<ChartResultAttempt> makeChartResultAttempt(
+[[nodiscard]] std::optional<PersistedChartResult> capturePersistedChartResult(
     std::string attemptId, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &provenance,
-    int storageLongNoteMode, ReplayData replay, std::string &diagnostic);
+    int storageLongNoteMode, std::int64_t playedAtUnixMillis,
+    std::string &diagnostic);
 
-[[nodiscard]] std::string payloadFingerprint(const ReplayData &replay,
-                                             const ChartScoreWrite &score);
+[[nodiscard]] bool
+validatePersistedChartResult(const PersistedChartResult &result,
+                             std::string &diagnostic) noexcept;
+
+[[nodiscard]] std::string resultFingerprint(const PersistedChartResult &result);
+
+[[nodiscard]] bool
+validatePersistedCourseResult(const PersistedCourseResult &result,
+                              std::string &diagnostic) noexcept;
+
+[[nodiscard]] std::string
+resultFingerprint(const PersistedCourseResult &result);
 
 } // namespace result_persistence

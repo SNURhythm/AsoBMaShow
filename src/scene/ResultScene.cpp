@@ -1206,10 +1206,10 @@ void ResultScene::retryResultPersistence() {
 
   local->persistenceContinueChosen = false;
   std::vector<ir::IrOutboxDraft> automaticDrafts;
-  if (persistenceOptions.irSubmission) {
+  if (persistenceOptions.irSnapshot) {
     automaticDrafts = context.irDrivers.buildAutomaticDrafts(
         context.settings.irProviders,
-        *persistenceOptions.irSubmission);
+        *persistenceOptions.irSnapshot);
   }
   persistenceOptions.outcome = context.resultPersistence.persist(
       *persistenceOptions.attempt, automaticDrafts);

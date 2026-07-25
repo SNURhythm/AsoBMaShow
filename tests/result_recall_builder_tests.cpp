@@ -73,7 +73,7 @@ ReplayResultRecord validRecord() {
   chart.Meta = record.replay.chartMeta;
   RhythmState state = replay_result::BuildResultState(chart, record.replay);
   std::string diagnostic;
-  auto attempt = result_persistence::makeChartResultAttempt(
+  auto attempt = legacy_result_persistence::makeLegacyChartResultAttempt(
       kAttemptId, chart.Meta, state, record.replay.provenance,
       record.replay.chartMeta.LnMode, record.replay, diagnostic);
   assert(attempt.has_value());
@@ -205,7 +205,7 @@ void testSubmissionValidationExplainsInvariantFailure() {
   chart.Meta = record.replay.chartMeta;
   RhythmState state = replay_result::BuildResultState(chart, record.replay);
   std::string diagnostic;
-  auto attempt = result_persistence::makeChartResultAttempt(
+  auto attempt = legacy_result_persistence::makeLegacyChartResultAttempt(
       *record.attemptId, chart.Meta, state, record.replay.provenance,
       record.replay.chartMeta.LnMode, record.replay, diagnostic);
   assert(attempt.has_value());

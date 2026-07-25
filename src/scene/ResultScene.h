@@ -1,7 +1,9 @@
 #pragma once
+#include "../LegacyChartResultAttempt.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrSubmission.h"
+#include "../ir/IrSubmissionSnapshot.h"
 #include "../ir/IrResultPresentation.h"
 #include "../ir/IrRankingModal.h"
 #include "ResultPresentationModel.h"
@@ -67,7 +69,10 @@ struct ResultCourseOptions {
 };
 
 struct ResultPersistenceOptions {
-  std::shared_ptr<const result_persistence::ChartResultAttempt> attempt;
+  std::shared_ptr<const legacy_result_persistence::LegacyChartResultAttempt>
+      attempt;
+  std::shared_ptr<const result_persistence::PersistedChartResult> result;
+  std::shared_ptr<const ir::IrSubmissionSnapshot> irSnapshot;
   std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
 };

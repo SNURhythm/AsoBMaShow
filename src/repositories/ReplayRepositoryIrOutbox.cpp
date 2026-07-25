@@ -411,7 +411,7 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
 
 replay_repository_detail::IrDraftStageOutcome
 replay_repository_detail::ValidateIrDraftsForAttempt(
-    const result_persistence::ChartResultAttempt &attempt,
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
     std::span<const ir::IrOutboxDraft> drafts) {
   using replay_repository_detail::IrDraftStageStatus;
   std::vector<const ir::IrOutboxDraft *> sorted;

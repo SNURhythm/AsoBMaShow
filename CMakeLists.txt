@@ -1001,6 +1001,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -1127,6 +1128,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrScoreReconciliation.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp
@@ -1309,6 +1311,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_parser.cpp
         src/scene/play/GameplayGaugeRules.cpp
     )
+
+    add_executable(ir_submission_snapshot_tests
+        tests/ir_submission_snapshot_tests.cpp
+        src/FileChecksum.cpp
+        src/ResultPersistenceModel.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(ir_submission_snapshot_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
+    )
+    target_compile_features(ir_submission_snapshot_tests PRIVATE cxx_std_23)
     target_include_directories(result_persistence_model_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
     )
@@ -1331,6 +1352,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ResultRecallBuilder.cpp
         src/ReplayResultStateBuilder.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
         src/ir/IrSubmission.cpp
         src/ir/IrOutboxModels.cpp
         src/FileChecksum.cpp
@@ -1398,6 +1420,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
@@ -2568,6 +2592,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2630,6 +2655,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2685,6 +2711,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
+        src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2896,6 +2923,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_library_scanner_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
+        ir_submission_snapshot_tests
         result_recall_builder_tests
         result_persistence_coordinator_tests
         result_persistence_integration_tests

@@ -927,7 +927,7 @@ bool validateChartScoreReplaySemantics(
 }
 
 std::optional<std::string> validateChartResultAttempt(
-    const result_persistence::ChartResultAttempt &attempt,
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
     std::string &diagnostic) {
   diagnostic.clear();
   if (!uuid::isCanonicalLowerV4(attempt.attemptId)) {
@@ -935,8 +935,9 @@ std::optional<std::string> validateChartResultAttempt(
     return std::nullopt;
   }
   if (!isCanonicalLowerHex(attempt.payloadFingerprint, 64) ||
-      attempt.payloadFingerprint != result_persistence::payloadFingerprint(
-                                        attempt.replay, attempt.score)) {
+      attempt.payloadFingerprint !=
+          legacy_result_persistence::legacyPayloadFingerprint(
+              attempt.replay, attempt.score)) {
     diagnostic = "attempt fingerprint is malformed or inconsistent";
     return std::nullopt;
   }
@@ -1139,7 +1140,8 @@ ExistingAttemptOutcome findExistingAttempt(sqlite3 *db,
 }
 
 bool insertPendingChartScore(
-    sqlite3 *db, const result_persistence::ChartResultAttempt &attempt,
+    sqlite3 *db,
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
     int replayId, std::string_view provenanceJson,
     std::string_view createdAt) {
   constexpr const char *query =
@@ -1545,7 +1547,7 @@ std::optional<int> replay_repository_detail::SaveReplayOnConnection(
 }
 
 result_persistence::StageOutcome ReplayRepository::StageChartResult(
-    const result_persistence::ChartResultAttempt &attempt,
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
     std::span<const ir::IrOutboxDraft> irDrafts) {
   using result_persistence::PendingReadStatus;
   using result_persistence::StageOutcome;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
+#include "LegacyChartResultAttempt.h"
 #include "ResultPersistenceCoordinator.h"
 #include "ir/IrSubmission.h"
 #include "repositories/ReplayRepository.h"
@@ -17,7 +18,8 @@ using ReplayChartLoader = std::function<std::unique_ptr<bms_parser::Chart>(
     const ReplayData &, std::atomic_bool &)>;
 
 struct HistoricalIrContext {
-  std::shared_ptr<const result_persistence::ChartResultAttempt> attempt;
+  std::shared_ptr<
+      const legacy_result_persistence::LegacyChartResultAttempt> attempt;
   std::shared_ptr<const ir::IrSubmission> submission;
   result_persistence::SaveOutcome saveOutcome;
 };

@@ -68,7 +68,7 @@ std::optional<ReplayData>
 LoadLatestReplayOnConnection(sqlite3 *database,
                              const bms_parser::ChartMeta &chartMeta);
 IrDraftStageOutcome ValidateIrDraftsForAttempt(
-    const result_persistence::ChartResultAttempt &attempt,
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
     std::span<const ir::IrOutboxDraft> drafts);
 IrDraftStageOutcome InsertInactiveIrDraftsOnConnection(
     sqlite3 *database, std::span<const ir::IrOutboxDraft> drafts);

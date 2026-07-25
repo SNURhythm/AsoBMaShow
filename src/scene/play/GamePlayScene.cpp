@@ -2916,25 +2916,51 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       }
 
       std::string constructionDiagnostic;
-      std::optional<result_persistence::ChartResultAttempt> attempt;
+      std::optional<legacy_result_persistence::LegacyChartResultAttempt>
+          attempt;
+      std::optional<result_persistence::PersistedChartResult> result;
+      std::optional<ir::IrSubmissionSnapshot> irSnapshot;
       if (chart != nullptr && state != nullptr) {
-        attempt = result_persistence::makeChartResultAttempt(
+        const std::int64_t playedAtUnixMillis = nowUnixMillis();
+        attempt = legacy_result_persistence::makeLegacyChartResultAttempt(
             resultPersistenceAttemptId, chart->Meta, *state, attemptProvenance,
             scoreLongNoteModeForClearLamp(chart->Meta), recordedReplay,
             constructionDiagnostic);
+        std::string resultDiagnostic;
+        result = result_persistence::capturePersistedChartResult(
+            resultPersistenceAttemptId, chart->Meta, *state,
+            attemptProvenance, scoreLongNoteModeForClearLamp(chart->Meta),
+            playedAtUnixMillis, resultDiagnostic);
+        if (result.has_value()) {
+          std::string snapshotDiagnostic;
+          irSnapshot = ir::captureIrSubmissionSnapshot(
+              *result, snapshotDiagnostic);
+          if (!irSnapshot.has_value() && constructionDiagnostic.empty()) {
+            constructionDiagnostic = std::move(snapshotDiagnostic);
+          }
+        } else if (constructionDiagnostic.empty()) {
+          constructionDiagnostic = std::move(resultDiagnostic);
+        }
       }
-      if (attempt.has_value()) {
+      if (attempt.has_value() && result.has_value() &&
+          irSnapshot.has_value()) {
         resultPersistenceOptions.attempt =
-            std::make_shared<const result_persistence::ChartResultAttempt>(
+            std::make_shared<
+                const legacy_result_persistence::LegacyChartResultAttempt>(
                 std::move(*attempt));
-        const auto submission = ir::makeIrSubmission(
-            *resultPersistenceOptions.attempt, nowUnixMillis());
+        resultPersistenceOptions.result =
+            std::make_shared<const result_persistence::PersistedChartResult>(
+                std::move(*result));
+        resultPersistenceOptions.irSnapshot =
+            std::make_shared<const ir::IrSubmissionSnapshot>(
+                std::move(*irSnapshot));
         resultPersistenceOptions.irSubmission =
-            submission.value ? std::make_shared<const ir::IrSubmission>(
-                                   std::move(*submission.value))
-                             : nullptr;
+            std::make_shared<const ir::IrSubmission>(
+                resultPersistenceOptions.irSnapshot->submission);
       } else {
         resultPersistenceOptions.attempt.reset();
+        resultPersistenceOptions.result.reset();
+        resultPersistenceOptions.irSnapshot.reset();
         resultPersistenceOptions.irSubmission.reset();
         resultPersistenceOptions.outcome = {
             .state = result_persistence::SaveState::InvalidAttempt,
@@ -2950,10 +2976,10 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
 
     if (resultPersistenceOptions.attempt != nullptr) {
       const std::vector<ir::IrOutboxDraft> automaticDrafts =
-          resultPersistenceOptions.irSubmission
+          resultPersistenceOptions.irSnapshot
               ? context.irDrivers.buildAutomaticDrafts(
                     context.settings.irProviders,
-                    *resultPersistenceOptions.irSubmission)
+                    *resultPersistenceOptions.irSnapshot)
               : std::vector<ir::IrOutboxDraft>{};
       resultPersistenceOptions.outcome = context.resultPersistence.persist(
           *resultPersistenceOptions.attempt, automaticDrafts);

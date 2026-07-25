@@ -31,6 +31,8 @@
 namespace {
 
 using namespace result_persistence;
+using legacy_result_persistence::LegacyChartResultAttempt;
+using legacy_result_persistence::legacyPayloadFingerprint;
 
 class TemporaryDirectory {
 public:
@@ -174,7 +176,7 @@ std::string attemptId(int suffix) {
   return value;
 }
 
-ChartResultAttempt sampleAttempt(const std::filesystem::path &root,
+LegacyChartResultAttempt sampleAttempt(const std::filesystem::path &root,
                                  const std::string &hash, int suffix) {
   ReplayData replay = sampleReplay(root, hash);
   replay.provenance.stages.front().chartMd5 = replay.chartMeta.MD5;
@@ -216,10 +218,10 @@ ChartResultAttempt sampleAttempt(const std::filesystem::path &root,
   return {.attemptId = attemptId(suffix),
           .replay = replay,
           .score = score,
-          .payloadFingerprint = payloadFingerprint(replay, score)};
+          .payloadFingerprint = legacyPayloadFingerprint(replay, score)};
 }
 
-ir::IrOutboxDraft automaticIrDraft(const ChartResultAttempt &attempt,
+ir::IrOutboxDraft automaticIrDraft(const LegacyChartResultAttempt &attempt,
                                    std::int64_t createdAtUnixMillis) {
   return {
       .providerId = "tachi",
@@ -235,6 +237,20 @@ ir::IrOutboxDraft automaticIrDraft(const ChartResultAttempt &attempt,
           },
       .createdAtUnixMillis = createdAtUnixMillis,
   };
+}
+
+PersistedChartResult persistedForIr(const LegacyChartResultAttempt &attempt,
+                                    std::int64_t playedAtUnixMillis) {
+  PersistedChartResult result{
+      .attemptId = attempt.attemptId,
+      .score = attempt.score,
+      .keyMode = attempt.replay.chartMeta.KeyMode,
+      .adoptedGaugeHistory = attempt.adoptedGaugeHistory,
+      .judgementTiming = attempt.judgementTiming,
+      .playedAtUnixMillis = playedAtUnixMillis,
+  };
+  result.resultFingerprint = resultFingerprint(result);
+  return result;
 }
 
 void assertDatabaseCounts(const std::filesystem::path &replayPath,
@@ -268,7 +284,7 @@ void testPersistCreatesOneReplayOneScoreNoPending() {
   ReplayRepository replay(replayPath);
   ScoreRepository score(scorePath);
   Coordinator coordinator(score, replay);
-  const ChartResultAttempt fixed =
+  const LegacyChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-persist", 1);
 
   const SaveOutcome first = coordinator.persist(fixed);
@@ -290,7 +306,7 @@ void testCrashAfterStageRecoversExactlyOneScore() {
   ReplayRepository replay(replayPath);
   ScoreRepository score(scorePath);
   assert(score.EnsureSchema());
-  const ChartResultAttempt fixed =
+  const LegacyChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-stage-crash", 2);
 
   const StageOutcome staged = replay.StageChartResult(fixed, {});
@@ -318,7 +334,7 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   const auto scorePath = temporary.path() / "score.db";
   ReplayRepository replay(replayPath);
   ScoreRepository score(scorePath);
-  const ChartResultAttempt fixed =
+  const LegacyChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-before-ack", 3);
 
   const StageOutcome staged = replay.StageChartResult(fixed, {});
@@ -347,7 +363,7 @@ void testProjectionConflictNamesDifferingBadCount() {
   const auto scorePath = temporary.path() / "score.db";
   ReplayRepository replay(replayPath);
   ScoreRepository score(scorePath);
-  const ChartResultAttempt fixed =
+  const LegacyChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "projection-bad-conflict", 4);
 
   const StageOutcome staged = replay.StageChartResult(fixed, {});
@@ -377,7 +393,7 @@ void testActivationFailureRetainsPendingAndRecoveryActivatesIr() {
   const auto scorePath = temporary.path() / "score.db";
   ReplayRepository replay(replayPath);
   ScoreRepository score(scorePath);
-  const ChartResultAttempt fixed =
+  const LegacyChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-ir-activation", 5);
   const std::array drafts{automaticIrDraft(fixed, 50'000)};
 
@@ -434,12 +450,13 @@ void testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode() {
   assert(drivers.registerDriver(std::make_shared<ir::tachi::TachiDriver>(),
                                 registrationError));
 
-  ChartResultAttempt automatic =
+  LegacyChartResultAttempt automatic =
       sampleAttempt(temporary.path(), "automatic-ir", 6);
   automatic.replay.chartMeta.KeyMode = 7;
   automatic.payloadFingerprint =
-      payloadFingerprint(automatic.replay, automatic.score);
-  const auto submission = ir::makeIrSubmission(automatic, 1'700'000'000'123LL);
+      legacyPayloadFingerprint(automatic.replay, automatic.score);
+  const auto submission = ir::makeIrSubmission(
+      persistedForIr(automatic, 1'700'000'000'123LL));
   assert(submission.value.has_value());
 
   std::map<std::string, ir::IrProviderSettings> providers;
@@ -471,11 +488,11 @@ void testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode() {
          automaticDrafts.front().rulesetProof.validationFingerprint);
   database.reset();
 
-  ChartResultAttempt manual = sampleAttempt(temporary.path(), "manual-ir", 7);
+  LegacyChartResultAttempt manual = sampleAttempt(temporary.path(), "manual-ir", 7);
   manual.replay.chartMeta.KeyMode = 7;
-  manual.payloadFingerprint = payloadFingerprint(manual.replay, manual.score);
-  const auto manualSubmission =
-      ir::makeIrSubmission(manual, 1'700'000'000'456LL);
+  manual.payloadFingerprint = legacyPayloadFingerprint(manual.replay, manual.score);
+  const auto manualSubmission = ir::makeIrSubmission(
+      persistedForIr(manual, 1'700'000'000'456LL));
   assert(manualSubmission.value.has_value());
   providers["tachi"].autoSubmit = false;
   const auto manualDrafts =
@@ -490,7 +507,7 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
   TemporaryDirectory temporary("profile-gate");
   ReplayRepository replay(temporary.path() / "replay.db");
   ScoreRepository score(temporary.path() / "score.db");
-  const ChartResultAttempt fixed =
+  const LegacyChartResultAttempt fixed =
       sampleAttempt(temporary.path(), "fixed-profile-gate", 4);
 
   std::mutex mutex;
@@ -501,7 +518,7 @@ void testProfileSwitchCannotAcquireGateMidPersist() {
 
   Dependencies dependencies{
       .stage =
-          [&](const ChartResultAttempt &value,
+          [&](const LegacyChartResultAttempt &value,
               std::span<const ir::IrOutboxDraft> drafts) {
             stageObservedWriteLease = profile_database_activity::writesActive();
             return replay.StageChartResult(value, drafts);
@@ -584,7 +601,7 @@ void testSuccessfulBoundedRecoveryReportsRemainingBacklog() {
   assert(score.EnsureSchema());
 
   for (int suffix = 0; suffix < 3; ++suffix) {
-    const ChartResultAttempt attempt = sampleAttempt(
+    const LegacyChartResultAttempt attempt = sampleAttempt(
         temporary.path(), "bounded-backlog-" + std::to_string(suffix), suffix);
     assert(replay.StageChartResult(attempt, {}).status == StageStatus::Staged);
   }
@@ -619,7 +636,7 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
   std::vector<std::string> conflictIds;
   conflictIds.reserve(256);
   for (int suffix = 0; suffix < 256; ++suffix) {
-    const ChartResultAttempt conflict =
+    const LegacyChartResultAttempt conflict =
         sampleAttempt(temporary.path(),
                       "persistent-conflict-" + std::to_string(suffix), suffix);
     const StageOutcome staged = replay.StageChartResult(conflict, {});
@@ -635,7 +652,7 @@ void testRecoveryRetainsConflictAndProcessesLaterValidRow() {
     conflictIds.push_back(conflict.attemptId);
   }
 
-  const ChartResultAttempt valid =
+  const LegacyChartResultAttempt valid =
       sampleAttempt(temporary.path(), "never-attempted-valid", 256);
   assert(replay.StageChartResult(valid, {}).status == StageStatus::Staged);
   assertDatabaseCounts(replayPath, scorePath, 257, 256, 257);

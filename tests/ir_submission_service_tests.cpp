@@ -536,7 +536,7 @@ profile(bool enabled = true, bool autoSubmit = true,
   return result;
 }
 
-result_persistence::ChartResultAttempt
+legacy_result_persistence::LegacyChartResultAttempt
 canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
                  const std::filesystem::path &root) {
   ReplayData replay;
@@ -620,7 +620,7 @@ canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
       .replay = replay,
       .score = score,
       .payloadFingerprint =
-          result_persistence::payloadFingerprint(replay, score),
+          legacy_result_persistence::legacyPayloadFingerprint(replay, score),
   };
 }
 
@@ -2884,6 +2884,10 @@ void testProjectionFailureKeepsReceiptsAndOutboxRetryable() {
     return;
   }
   harness.projectionShouldSucceed = false;
+  // Keep the delivery worker from consuming the pending row immediately
+  // after reconciliation reports the projection failure. This test owns the
+  // reconciliation boundary; delivery behavior is covered separately.
+  harness.driver->blockRequestsUntilCancelled();
   harness.driver->pushReconciliation({
       .status = ir::IrUserScoreSnapshotStatus::Succeeded,
       .snapshot = ir::IrUserScoreSnapshot{

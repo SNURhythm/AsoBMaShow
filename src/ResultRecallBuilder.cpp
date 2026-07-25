@@ -61,7 +61,7 @@ HistoricalIrBuildOutcome historicalIrFor(const ReplayResultRecord &record,
   }
 
   std::string diagnostic;
-  auto attempt = result_persistence::makeChartResultAttempt(
+  auto attempt = legacy_result_persistence::makeLegacyChartResultAttempt(
       *record.attemptId, meta, state, record.replay.provenance,
       record.replay.chartMeta.LnMode, record.replay, diagnostic);
   if (!attempt.has_value()) {
@@ -81,8 +81,17 @@ HistoricalIrBuildOutcome historicalIrFor(const ReplayResultRecord &record,
                 "metadata may have changed since the score was saved, so it "
                 "cannot be uploaded safely."};
   }
-  auto submission =
-      ir::makeIrSubmission(*attempt, record.playedAtUnixMillis);
+  result_persistence::PersistedChartResult persisted{
+      .attemptId = attempt->attemptId,
+      .score = attempt->score,
+      .keyMode = meta.KeyMode,
+      .adoptedGaugeHistory = attempt->adoptedGaugeHistory,
+      .judgementTiming = attempt->judgementTiming,
+      .playedAtUnixMillis = record.playedAtUnixMillis,
+  };
+  persisted.resultFingerprint =
+      result_persistence::resultFingerprint(persisted);
+  auto submission = ir::makeIrSubmission(persisted);
   if (!submission.value.has_value()) {
     const std::string invariant =
         submission.diagnostic.empty()
@@ -93,7 +102,8 @@ HistoricalIrBuildOutcome historicalIrFor(const ReplayResultRecord &record,
   }
 
   auto attemptPtr =
-      std::make_shared<const result_persistence::ChartResultAttempt>(
+      std::make_shared<
+          const legacy_result_persistence::LegacyChartResultAttempt>(
           std::move(*attempt));
   auto submissionPtr = std::make_shared<const ir::IrSubmission>(
       std::move(*submission.value));

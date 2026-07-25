@@ -20,7 +20,7 @@
 // implementations. These definitions satisfy the production adapter
 // constructor while every test exercises injected dependencies.
 result_persistence::StageOutcome ReplayRepository::StageChartResult(
-    const result_persistence::ChartResultAttempt &,
+    const legacy_result_persistence::LegacyChartResultAttempt &,
     std::span<const ir::IrOutboxDraft>) {
   std::abort();
 }
@@ -55,6 +55,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
 namespace {
 
 using namespace result_persistence;
+using legacy_result_persistence::LegacyChartResultAttempt;
 
 constexpr std::string_view kUnstagedMessage =
     "This result could not be stored. Retry before leaving to avoid losing "
@@ -78,8 +79,8 @@ constexpr std::string_view kRecoveryMessage =
     "Some previously completed results are still waiting to be saved. They "
     "were kept safely and will be retried later.";
 
-ChartResultAttempt attempt(std::string id = "attempt-a") {
-  ChartResultAttempt value;
+LegacyChartResultAttempt attempt(std::string id = "attempt-a") {
+  LegacyChartResultAttempt value;
   value.attemptId = std::move(id);
   return value;
 }
@@ -114,7 +115,7 @@ struct Harness {
   RecoveryMarkOutcome markResult{.status = RecoveryMarkStatus::Recorded,
                                  .diagnostic = {}};
 
-  std::function<StageOutcome(const ChartResultAttempt &,
+  std::function<StageOutcome(const LegacyChartResultAttempt &,
                              std::span<const ir::IrOutboxDraft>)>
       stageHandler;
   std::function<PendingReadOutcome(std::string_view)> loadHandler;
@@ -137,7 +138,7 @@ struct Harness {
   Dependencies dependencies() {
     return {
         .stage =
-            [this](const ChartResultAttempt &value,
+            [this](const LegacyChartResultAttempt &value,
                    std::span<const ir::IrOutboxDraft> drafts) {
               assert(profile_database_activity::writesActive());
               ++stageCalls;
@@ -203,7 +204,7 @@ void assertOnlyStageCalled(const Harness &harness,
 }
 
 void testSaveOutcomePresentationSemantics() {
-  const ChartResultAttempt currentAttempt = attempt();
+  const LegacyChartResultAttempt currentAttempt = attempt();
   const SaveOutcome invalid{
       .state = SaveState::InvalidAttempt,
       .receipt = std::nullopt,
@@ -679,7 +680,7 @@ void testRetryAfterAcknowledgementFailureResumesIdempotently() {
   std::size_t stageNumber = 0;
   std::size_t projectNumber = 0;
   std::size_t acknowledgeNumber = 0;
-  harness.stageHandler = [&](const ChartResultAttempt &,
+  harness.stageHandler = [&](const LegacyChartResultAttempt &,
                              std::span<const ir::IrOutboxDraft>) {
     ++stageNumber;
     return StageOutcome{.status = stageNumber == 1 ? StageStatus::Staged
@@ -704,7 +705,7 @@ void testRetryAfterAcknowledgementFailureResumesIdempotently() {
                               .diagnostic = {}};
   };
   Coordinator coordinator(harness.dependencies());
-  const ChartResultAttempt fixedAttempt = attempt();
+  const LegacyChartResultAttempt fixedAttempt = attempt();
 
   const SaveOutcome first = coordinator.persist(fixedAttempt);
 

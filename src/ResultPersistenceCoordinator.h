@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LegacyChartResultAttempt.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
 
@@ -38,7 +39,9 @@ struct SaveOutcome {
   [[nodiscard]] bool requiresUserDecision(bool attemptAvailable,
                                           bool continueChosen) const noexcept;
   [[nodiscard]] const StageReceipt *
-  validatedReceiptFor(const ChartResultAttempt &attempt) const noexcept;
+  validatedReceiptFor(
+      const legacy_result_persistence::LegacyChartResultAttempt &attempt)
+      const noexcept;
 };
 
 struct SaveConflictDetails {
@@ -65,7 +68,8 @@ struct RecoverySummary {
 [[nodiscard]] RecoverySummary recoveryFailureSummary(std::string diagnostic);
 
 struct Dependencies {
-  std::function<StageOutcome(const ChartResultAttempt &,
+  std::function<StageOutcome(
+      const legacy_result_persistence::LegacyChartResultAttempt &,
                              std::span<const ir::IrOutboxDraft>)>
       stage;
   std::function<PendingReadOutcome(std::string_view)> loadPending;
@@ -82,7 +86,8 @@ public:
   Coordinator(ScoreRepository &score, ReplayRepository &replay);
   explicit Coordinator(Dependencies dependencies);
 
-  SaveOutcome persist(const ChartResultAttempt &attempt,
+  SaveOutcome persist(
+      const legacy_result_persistence::LegacyChartResultAttempt &attempt,
                       std::span<const ir::IrOutboxDraft> irDrafts = {});
   RecoverySummary recoverAll(std::size_t limit = 256);
 

@@ -2,6 +2,7 @@
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingModels.h"
 #include "ir/IrSubmission.h"
+#include "ReplayData.h"
 
 #include <iostream>
 #include <limits>
@@ -27,9 +28,15 @@ std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
 }
 
-result_persistence::ChartResultAttempt validAttempt() {
-  result_persistence::ChartResultAttempt attempt;
+struct SubmissionFixture : result_persistence::PersistedChartResult {
+  ReplayData replay;
+};
+
+SubmissionFixture validAttempt() {
+  SubmissionFixture attempt;
   attempt.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  attempt.keyMode = 7;
+  attempt.playedAtUnixMillis = 1'700'000'000'123LL;
   attempt.replay.chartMeta.KeyMode = 7;
   attempt.replay.chartMeta.MD5 = repeated('B', 32);
   attempt.replay.chartMeta.SHA256 = repeated('A', 64);
@@ -52,6 +59,12 @@ result_persistence::ChartResultAttempt validAttempt() {
   attempt.score.clearType = kClearTypeNormalClearRank;
   attempt.score.provenance = ScoreProvenance::Legacy();
   return attempt;
+}
+
+ir::IrSubmissionBuildOutcome makeSubmission(
+    SubmissionFixture attempt, std::int64_t playedAtUnixMillis) {
+  attempt.playedAtUnixMillis = playedAtUnixMillis;
+  return ir::makeIrSubmission(attempt);
 }
 
 class FakeDriver : public ir::IrDriver {
@@ -126,7 +139,7 @@ private:
 };
 
 void testCanonicalSubmissionBuildsFromAttempt() {
-  const auto outcome = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
+  const auto outcome = makeSubmission(validAttempt(), 1700000000123LL);
   expect(outcome.value.has_value(), "valid result builds canonical submission");
   if (!outcome.value.has_value()) {
     return;
@@ -151,20 +164,20 @@ void testCanonicalSubmissionBuildsFromAttempt() {
 void testCanonicalSubmissionRejectsInvalidInput() {
   auto attempt = validAttempt();
   attempt.attemptId = "123E4567-E89B-42D3-A456-426614174000";
-  expect(!ir::makeIrSubmission(attempt, 1700000000123LL).value.has_value(),
+  expect(!makeSubmission(attempt, 1700000000123LL).value.has_value(),
          "submission rejects non-canonical attempt id");
 
   attempt = validAttempt();
   attempt.score.score = 8;
-  expect(!ir::makeIrSubmission(attempt, 1700000000123LL).value.has_value(),
+  expect(!makeSubmission(attempt, 1700000000123LL).value.has_value(),
          "submission rejects inconsistent EX score");
 
   attempt = validAttempt();
   attempt.score.chartSha256 = "not-a-hash";
-  expect(!ir::makeIrSubmission(attempt, 1700000000123LL).value.has_value(),
+  expect(!makeSubmission(attempt, 1700000000123LL).value.has_value(),
          "submission rejects malformed present hash");
 
-  expect(!ir::makeIrSubmission(validAttempt(), 0).value.has_value(),
+  expect(!makeSubmission(validAttempt(), 0).value.has_value(),
          "submission rejects nonpositive capture time");
 }
 
@@ -228,7 +241,7 @@ void testCanonicalSubmissionUsesCapturedResultMetrics() {
   timing.byJudgement[Bad] = {.fast = 0, .slow = 1};
   attempt.judgementTiming = timing;
 
-  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  const auto outcome = makeSubmission(attempt, 1'700'000'000'123LL);
   expect(outcome.value.has_value(), "captured result metrics build");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
@@ -307,7 +320,7 @@ void testCanonicalSubmissionUsesCapturedTimingForClassicLongNotes() {
   timing.byJudgement[Bad] = {.fast = 0, .slow = 1};
   attempt.judgementTiming = timing;
 
-  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  const auto outcome = makeSubmission(attempt, 1'700'000'000'123LL);
   expect(outcome.value.has_value(), "classic long-note result builds");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
@@ -349,7 +362,7 @@ void testCanonicalSubmissionIgnoresReplayOnlyDetailedEvidence() {
        .score = 7},
   };
 
-  const auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  const auto outcome = makeSubmission(attempt, 1'700'000'000'123LL);
   expect(outcome.value.has_value(), "replay-only evidence builds safely");
   if (outcome.value) {
     expect(outcome.value->gaugeHistory.empty(),
@@ -387,7 +400,7 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
        .score = 5},
   };
 
-  auto outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  auto outcome = makeSubmission(attempt, 1'700'000'000'123LL);
   expect(outcome.value && outcome.value->gaugeHistory.empty(),
          "missing adopted history does not fall back to replay gauges");
   expect(outcome.value && outcome.value->pGreatFast == 0 &&
@@ -395,7 +408,7 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
          "missing captured timing does not fall back to replay timing");
 
   attempt.adoptedGaugeHistory = {41.0F, 57.5F, 82.5F};
-  outcome = ir::makeIrSubmission(attempt, 1'700'000'000'123LL);
+  outcome = makeSubmission(attempt, 1'700'000'000'123LL);
   expect(outcome.value &&
              outcome.value->gaugeHistory == attempt.adoptedGaugeHistory,
          "state-derived adopted history takes priority over replay fallback");
@@ -404,7 +417,7 @@ void testCanonicalSubmissionUsesOnlyAdoptedGaugeHistory() {
 void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   auto attempt = validAttempt();
   attempt.adoptedGaugeHistory = {std::numeric_limits<float>::quiet_NaN()};
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+  expect(!makeSubmission(attempt, 1'700'000'000'123LL).value,
          "non-finite captured gauge history is rejected");
 
   attempt = validAttempt();
@@ -418,7 +431,7 @@ void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
        .gauge = 20.0F,
        .gaugeType = GaugeType::Normal},
   };
-  expect(ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value.has_value(),
+  expect(makeSubmission(attempt, 1'700'000'000'123LL).value.has_value(),
          "non-authoritative replay gauge values are not projected");
 
   attempt = validAttempt();
@@ -426,7 +439,7 @@ void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   result_persistence::ChartJudgementTiming timing;
   timing.byJudgement[PGreat] = {.fast = 1, .slow = 1};
   attempt.judgementTiming = timing;
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+  expect(!makeSubmission(attempt, 1'700'000'000'123LL).value,
          "captured timing must match aggregate timing");
 
   attempt = validAttempt();
@@ -435,7 +448,7 @@ void testCanonicalSubmissionRejectsInvalidDetailedEvidence() {
   timing = {};
   timing.byJudgement[Good] = {.fast = 2, .slow = 0};
   attempt.judgementTiming = timing;
-  expect(!ir::makeIrSubmission(attempt, 1'700'000'000'123LL).value,
+  expect(!makeSubmission(attempt, 1'700'000'000'123LL).value,
          "captured timing cannot exceed its judgement total");
 }
 
@@ -661,7 +674,7 @@ void testReadOnlyDriverCannotBuildSubmissionDraft() {
   std::string diagnostic;
   expect(registry.registerDriver(driver, diagnostic),
          "read-only driver registers");
-  const auto submission = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
+  const auto submission = makeSubmission(validAttempt(), 1700000000123LL);
   expect(submission.value.has_value(), "test submission is valid");
   if (!submission.value.has_value()) {
     return;
@@ -682,7 +695,7 @@ void testReadOnlyDriverCannotBuildSubmissionDraft() {
 
 void testBaseBuildDraftIsUnsupported() {
   FakeDriver driver("ranking", {.chartRankings = true});
-  const auto submission = ir::makeIrSubmission(validAttempt(), 1700000000123LL);
+  const auto submission = makeSubmission(validAttempt(), 1700000000123LL);
   expect(submission.value.has_value(),
          "test submission is valid for base call");
   if (!submission.value.has_value()) {

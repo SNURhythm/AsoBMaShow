@@ -157,7 +157,8 @@ bool SaveOutcome::requiresUserDecision(bool attemptAvailable,
 }
 
 const StageReceipt *SaveOutcome::validatedReceiptFor(
-    const ChartResultAttempt &attempt) const noexcept {
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt) const
+    noexcept {
   if (!durable() || !receipt.has_value() ||
       receipt->attemptId != attempt.attemptId || receipt->replayId <= 0 ||
       receipt->createdAt.empty()) {
@@ -201,7 +202,9 @@ saveConflictDetails(const SaveOutcome &outcome, std::string_view attemptId) {
 Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
     : Coordinator(Dependencies{
           .stage =
-              [&replay](const ChartResultAttempt &attempt,
+              [&replay](
+                            const legacy_result_persistence::
+                                LegacyChartResultAttempt &attempt,
                         std::span<const ir::IrOutboxDraft> irDrafts) {
                 return replay.StageChartResult(attempt, irDrafts);
               },
@@ -233,7 +236,7 @@ Coordinator::Coordinator(Dependencies dependencies)
     : dependencies_(std::move(dependencies)) {}
 
 SaveOutcome Coordinator::persist(
-    const ChartResultAttempt &attempt,
+    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
     std::span<const ir::IrOutboxDraft> irDrafts) {
   profile_database_activity::WriteGuard bindingLease;
   StageOutcome staged = dependencies_.stage(attempt, irDrafts);

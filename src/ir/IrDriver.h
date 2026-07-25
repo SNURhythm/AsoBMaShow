@@ -6,6 +6,7 @@
 #include "IrRankingModels.h"
 #include "IrRemoteScoreModels.h"
 #include "IrSubmission.h"
+#include "IrSubmissionSnapshot.h"
 
 #include <chrono>
 #include <cstdint>
@@ -193,6 +194,9 @@ public:
   [[nodiscard]] std::vector<IrOutboxDraft> buildAutomaticDrafts(
       const std::map<std::string, IrProviderSettings> &settings,
       const IrSubmission &submission) const;
+  [[nodiscard]] std::vector<IrOutboxDraft> buildAutomaticDrafts(
+      const std::map<std::string, IrProviderSettings> &settings,
+      const IrSubmissionSnapshot &snapshot) const;
 
 private:
   std::map<std::string, std::shared_ptr<const IrDriver>, std::less<>> drivers_;

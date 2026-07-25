@@ -4,20 +4,17 @@
 #include "FileChecksum.h"
 #include "Utils.h"
 #include "Uuid.h"
-#include "path.h"
 
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace result_persistence {
 namespace {
@@ -57,10 +54,6 @@ public:
     bytes_.insert(bytes_.end(), raw.begin(), raw.end());
   }
 
-  void path(const std::filesystem::path &value) {
-    string(fspath_to_utf8(value));
-  }
-
   template <typename Value, typename Append>
   void optional(const std::optional<Value> &value, Append append) {
     boolean(value.has_value());
@@ -86,54 +79,6 @@ public:
 private:
   std::vector<std::byte> bytes_;
 };
-
-void appendChartMeta(CanonicalEncoder &encoder,
-                     const bms_parser::ChartMeta &meta) {
-  encoder.string(meta.SHA256);
-  encoder.string(meta.MD5);
-  encoder.path(meta.BmsPath);
-  encoder.path(meta.Folder);
-  encoder.string(meta.Artist);
-  encoder.string(meta.SubArtist);
-  encoder.float64(meta.Bpm);
-  encoder.string(meta.Genre);
-  encoder.string(meta.Title);
-  encoder.string(meta.SubTitle);
-  encoder.integer(static_cast<std::int32_t>(meta.Rank));
-  encoder.float64(meta.Total);
-  encoder.boolean(meta.HasTotal);
-  encoder.integer(static_cast<std::int64_t>(meta.PlayLength));
-  encoder.integer(static_cast<std::int64_t>(meta.TotalLength));
-  encoder.path(meta.Banner);
-  encoder.path(meta.StageFile);
-  encoder.path(meta.BackBmp);
-  encoder.path(meta.Preview);
-  encoder.boolean(meta.BgaPoorDefault);
-  encoder.integer(static_cast<std::int32_t>(meta.Difficulty));
-  encoder.float64(meta.PlayLevel);
-  encoder.float64(meta.MinBpm);
-  encoder.float64(meta.MaxBpm);
-  encoder.float64(meta.MostPrevalentBpm);
-  encoder.float64(meta.GuessedBeatBpm);
-  encoder.integer(static_cast<std::int32_t>(meta.GuessedBeatsPerMeasure));
-  encoder.integer(static_cast<std::int32_t>(meta.Player));
-  encoder.integer(static_cast<std::int32_t>(meta.KeyMode));
-  encoder.boolean(meta.IsDP);
-  encoder.integer(static_cast<std::int32_t>(meta.TotalNotes));
-  encoder.integer(static_cast<std::int32_t>(meta.TotalLongNotes));
-  encoder.integer(static_cast<std::int32_t>(meta.TotalScratchNotes));
-  encoder.integer(static_cast<std::int32_t>(meta.TotalBackSpinNotes));
-  encoder.integer(static_cast<std::int32_t>(meta.TotalLandmineNotes));
-  encoder.integer(static_cast<std::int32_t>(meta.LnMode));
-  encoder.optional(meta.RandomSeed, [&](unsigned int value) {
-    encoder.integer(static_cast<std::uint32_t>(value));
-  });
-  encoder.optional(meta.RandomPrng,
-                   [&](const std::string &value) { encoder.string(value); });
-  encoder.vector(meta.RandomValues, [&](int value) {
-    encoder.integer(static_cast<std::int32_t>(value));
-  });
-}
 
 void appendProvenance(CanonicalEncoder &encoder,
                       const ScoreProvenance &provenance) {
@@ -202,68 +147,6 @@ void appendProvenance(CanonicalEncoder &encoder,
   encoder.enumeration(provenance.eligibility);
 }
 
-void appendReplay(CanonicalEncoder &encoder, const ReplayData &replay) {
-  encoder.boolean(replay.autoPlay);
-  appendChartMeta(encoder, replay.chartMeta);
-  encoder.optional(replay.randomSeed, [&](unsigned int value) {
-    encoder.integer(static_cast<std::uint32_t>(value));
-  });
-  encoder.optional(replay.randomPrng,
-                   [&](const std::string &value) { encoder.string(value); });
-  encoder.vector(replay.randomValues, [&](int value) {
-    encoder.integer(static_cast<std::int32_t>(value));
-  });
-  encoder.optional(replay.playOption,
-                   [&](const std::string &value) { encoder.string(value); });
-  encoder.optional(replay.playOptionSeed, [&](long long value) {
-    encoder.integer(static_cast<std::int64_t>(value));
-  });
-  encoder.optional(replay.playOption2,
-                   [&](const std::string &value) { encoder.string(value); });
-  encoder.optional(replay.playOption2Seed, [&](long long value) {
-    encoder.integer(static_cast<std::int64_t>(value));
-  });
-  encoder.string(replay.assistOption);
-  encoder.integer(
-      static_cast<std::int32_t>(gaugeTypeIndex(replay.initialGaugeType)));
-  encoder.integer(static_cast<std::int32_t>(
-      gaugeAutoShiftModeValue(replay.gaugeAutoShift)));
-  encoder.integer(static_cast<std::int32_t>(
-      gaugeTypeIndex(replay.gaugeAutoShiftLowerBound)));
-  encoder.integer(static_cast<std::int32_t>(replay.finalScore));
-  encoder.integer(static_cast<std::int32_t>(replay.maxCombo));
-  encoder.float32(replay.finalGauge);
-  encoder.integer(static_cast<std::int32_t>(replay.clearType));
-  encoder.vector(replay.events, [&](const ReplayEvent &event) {
-    encoder.enumeration(event.action);
-    encoder.integer(static_cast<std::int32_t>(event.lane));
-    encoder.integer(static_cast<std::int64_t>(event.noteTimeMicros));
-    encoder.integer(static_cast<std::int64_t>(event.songTimeMicros));
-    encoder.integer(static_cast<std::int64_t>(event.judgeTimeMicros));
-    encoder.enumeration(event.judgement);
-    encoder.integer(static_cast<std::int64_t>(event.diffMicros));
-    encoder.float32(event.gauge);
-    encoder.integer(static_cast<std::int32_t>(gaugeTypeIndex(event.gaugeType)));
-    encoder.integer(static_cast<std::int32_t>(event.combo));
-    encoder.integer(static_cast<std::int32_t>(event.score));
-  });
-  encoder.vector(replay.touchSamples, [&](const ReplayTouchSample &sample) {
-    encoder.enumeration(sample.action);
-    encoder.integer(static_cast<std::int64_t>(sample.fingerId));
-    encoder.integer(static_cast<std::int64_t>(sample.songTimeMicros));
-    encoder.float32(sample.x);
-    encoder.float32(sample.y);
-  });
-  encoder.vector(
-      replay.laneCoverEvents, [&](const ReplayLaneCoverEvent &event) {
-        encoder.integer(static_cast<std::int64_t>(event.songTimeMicros));
-        encoder.integer(
-            static_cast<std::int32_t>(event.noteStartPositionPercent));
-        encoder.boolean(event.resetVisibleTimeReference);
-      });
-  appendProvenance(encoder, replay.provenance);
-}
-
 void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   encoder.string(score.chartPath);
   encoder.string(score.chartMd5);
@@ -288,6 +171,49 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   appendProvenance(encoder, score.provenance);
 }
 
+void appendTiming(CanonicalEncoder &encoder,
+                  const std::optional<ChartJudgementTiming> &timing) {
+  encoder.optional(timing, [&](const ChartJudgementTiming &value) {
+    for (const auto &count : value.byJudgement) {
+      encoder.integer(static_cast<std::int32_t>(count.fast));
+      encoder.integer(static_cast<std::int32_t>(count.slow));
+    }
+  });
+}
+
+void appendGaugeHistory(CanonicalEncoder &encoder,
+                        const std::vector<float> &history) {
+  encoder.vector(history, [&](float value) { encoder.float32(value); });
+}
+
+bool lowerHex(std::string_view value, std::size_t size) noexcept {
+  return value.size() == size &&
+         std::ranges::all_of(value, [](unsigned char character) {
+           return std::isdigit(character) != 0 ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+bool knownClearRank(int value) noexcept {
+  constexpr std::array ranks{
+      kClearTypeFailedRank,
+      kClearTypeAssistedEasyClearRank,
+      kClearTypeLightAssistedEasyClearRank,
+      kClearTypeEasyClearRank,
+      kClearTypeNormalClearRank,
+      kClearTypeHardClearRank,
+      kClearTypeExHardClearRank,
+      kClearTypeFullComboRank,
+  };
+  return std::ranges::find(ranks, value) != ranks.end();
+}
+
+bool canonicalCourseKey(std::string_view value) noexcept {
+  constexpr std::string_view prefix = "course:v1:";
+  return value.starts_with(prefix) && value.size() == prefix.size() + 64U &&
+         lowerHex(value.substr(prefix.size()), 64);
+}
+
 int judgementCount(const RhythmState &state, Judgement judgement) {
   const auto found = state.judgeCount.find(judgement);
   return found == state.judgeCount.end() ? 0 : found->second;
@@ -305,70 +231,105 @@ ChartJudgementTiming captureChartJudgementTiming(const RhythmState &state) {
   return timing;
 }
 
-bool isHexDigest(std::string_view value, std::size_t expectedSize) {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isxdigit(character) != 0;
-         });
-}
-
-bool isCanonicalLowerHexDigest(std::string_view value,
-                               std::size_t expectedSize) noexcept {
-  return value.size() == expectedSize &&
-         std::ranges::all_of(value, [](unsigned char character) {
-           return std::isdigit(character) != 0 ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
-struct NormalizedChartIdentity {
-  std::string sha256;
-  std::string md5;
-};
-
-std::optional<NormalizedChartIdentity>
-chartIdentity(const bms_parser::ChartMeta &meta) {
-  NormalizedChartIdentity identity{.sha256 = normalizedHash(meta.SHA256),
-                                   .md5 = normalizedHash(meta.MD5)};
-  if ((!meta.SHA256.empty() && !isHexDigest(identity.sha256, 64)) ||
-      (!meta.MD5.empty() && !isHexDigest(identity.md5, 32)) ||
-      (identity.sha256.empty() && identity.md5.empty())) {
-    return std::nullopt;
-  }
-  return identity;
-}
-
-bool sameChartIdentity(const bms_parser::ChartMeta &left,
-                       const bms_parser::ChartMeta &right) {
-  const auto normalizedLeft = chartIdentity(left);
-  const auto normalizedRight = chartIdentity(right);
-  if (!normalizedLeft.has_value() || !normalizedRight.has_value()) {
+bool validateScore(const ChartScoreWrite &score, std::string &diagnostic) {
+  if (!hasProjectableChartIdentity(score)) {
+    diagnostic = "chart identity is not projectable";
     return false;
   }
-  if (!normalizedLeft->sha256.empty() && !normalizedRight->sha256.empty()) {
-    return normalizedLeft->sha256 == normalizedRight->sha256;
+  const std::array counts{score.score,      score.maxScore, score.maxCombo,
+                          score.comboBreak, score.pGreat,   score.great,
+                          score.good,       score.bad,      score.poor,
+                          score.kPoor,      score.fast,     score.slow};
+  if (std::ranges::any_of(counts, [](int value) { return value < 0; }) ||
+      score.longNoteMode < 0) {
+    diagnostic = "score counters must not be negative";
+    return false;
   }
-  return !normalizedLeft->md5.empty() && !normalizedRight->md5.empty() &&
-         normalizedLeft->md5 == normalizedRight->md5;
+  if (score.maxScore <= 0 || (score.maxScore % 2) != 0 ||
+      score.score > score.maxScore || score.maxCombo > score.maxScore / 2 ||
+      static_cast<std::int64_t>(score.pGreat) * 2LL + score.great !=
+          score.score) {
+    diagnostic = "score range is inconsistent with result counters";
+    return false;
+  }
+  if (!std::isfinite(score.finalGauge) || score.finalGauge < 0.0F ||
+      !knownClearRank(score.clearType)) {
+    diagnostic = "score gauge or clear rank is invalid";
+    return false;
+  }
+  std::string provenanceDiagnostic;
+  if (!serializeValidatedScoreProvenance(score.provenance,
+                                         provenanceDiagnostic)) {
+    diagnostic = "result provenance is invalid";
+    return false;
+  }
+  return true;
 }
 
-bool sameFloatBits(float left, float right) {
-  return std::bit_cast<std::uint32_t>(left) ==
-         std::bit_cast<std::uint32_t>(right);
+bool validateTiming(const ChartScoreWrite &score,
+                    const std::optional<ChartJudgementTiming> &timing,
+                    std::string &diagnostic) {
+  if (!timing.has_value()) {
+    return true;
+  }
+  const std::array totals{score.pGreat, score.great, score.good, score.bad,
+                          score.kPoor,  score.poor,  0};
+  std::int64_t fast = 0;
+  std::int64_t slow = 0;
+  for (int index = 0; index < JudgementCount; ++index) {
+    const auto &count = timing->byJudgement[static_cast<std::size_t>(index)];
+    if (count.fast < 0 || count.slow < 0) {
+      diagnostic = "captured judgement timing must not be negative";
+      return false;
+    }
+    const auto judgement = static_cast<Judgement>(index);
+    if (judgement == Kpoor || judgement == None) {
+      if (count.fast != 0 || count.slow != 0) {
+        diagnostic = "KPOOR and NONE cannot have captured timing";
+        return false;
+      }
+      continue;
+    }
+    if (static_cast<std::int64_t>(count.fast) + count.slow >
+        totals[static_cast<std::size_t>(index)]) {
+      diagnostic = "captured judgement timing exceeds result totals";
+      return false;
+    }
+    fast += count.fast;
+    slow += count.slow;
+  }
+  if (fast != score.fast || slow != score.slow) {
+    diagnostic = "captured judgement timing disagrees with aggregate timing";
+    return false;
+  }
+  return true;
 }
 
-std::optional<ChartResultAttempt> rejected(std::string_view invariant,
-                                           std::string &diagnostic) {
-  diagnostic.assign(invariant);
-  return std::nullopt;
+bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
+                         const std::vector<float> &gaugeHistory,
+                         const std::optional<ChartJudgementTiming> &timing,
+                         std::string &diagnostic) {
+  if (keyMode <= 0) {
+    diagnostic = "chart key mode must be positive";
+    return false;
+  }
+  if (!validateScore(score, diagnostic) ||
+      !validateTiming(score, timing, diagnostic)) {
+    return false;
+  }
+  if (std::ranges::any_of(gaugeHistory,
+                          [](float value) { return !std::isfinite(value); })) {
+    diagnostic = "adopted gauge history must be finite";
+    return false;
+  }
+  return true;
 }
 
 } // namespace
 
 bool hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept {
-  return isCanonicalLowerHexDigest(score.chartSha256, 64) &&
-         (score.chartMd5.empty() ||
-          isCanonicalLowerHexDigest(score.chartMd5, 32));
+  return lowerHex(score.chartSha256, 64) &&
+         (score.chartMd5.empty() || lowerHex(score.chartMd5, 32));
 }
 
 ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
@@ -401,66 +362,183 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
   };
 }
 
-std::optional<ChartResultAttempt> makeChartResultAttempt(
+std::optional<PersistedChartResult> capturePersistedChartResult(
     std::string attemptId, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &provenance,
-    int storageLongNoteMode, ReplayData replay, std::string &diagnostic) {
+    int storageLongNoteMode, std::int64_t playedAtUnixMillis,
+    std::string &diagnostic) {
   diagnostic.clear();
   if (!uuid::isCanonicalLowerV4(attemptId)) {
-    return rejected("invalid attempt ID", diagnostic);
+    diagnostic = "attempt ID is not a canonical version-4 UUID";
+    return std::nullopt;
   }
-  if (!sameChartIdentity(meta, replay.chartMeta)) {
-    return rejected("chart identity mismatch", diagnostic);
+  PersistedChartResult result{
+      .attemptId = std::move(attemptId),
+      .score =
+          captureChartScoreWrite(meta, state, provenance, storageLongNoteMode),
+      .keyMode = meta.KeyMode,
+      .adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType),
+      .judgementTiming = captureChartJudgementTiming(state),
+      .playedAtUnixMillis = playedAtUnixMillis,
+  };
+  if (!validatePersistedChartResult(result, diagnostic)) {
+    return std::nullopt;
   }
-  if (replay.provenance != provenance) {
-    return rejected("provenance mismatch", diagnostic);
-  }
-
-  ChartScoreWrite score =
-      captureChartScoreWrite(meta, state, provenance, storageLongNoteMode);
-  if (!hasProjectableChartIdentity(score)) {
-    return rejected("chart identity is not projectable", diagnostic);
-  }
-  if (replay.finalScore != score.score) {
-    return rejected("final score mismatch", diagnostic);
-  }
-  if (!sameFloatBits(replay.finalGauge, score.finalGauge)) {
-    return rejected("final gauge mismatch", diagnostic);
-  }
-  if (replay.maxCombo != score.maxCombo) {
-    return rejected("max combo mismatch", diagnostic);
-  }
-
-  const int totalNotes = std::max(0, meta.TotalNotes);
-  const bool fullCombo =
-      totalNotes > 0 && score.comboBreak == 0 && score.maxCombo >= totalNotes;
-  const int expectedReplayClearType = clear_policy::fullComboRankForPlayback(
-      score.clearType, fullCombo, provenance.playback);
-  if (replay.clearType != expectedReplayClearType) {
-    return rejected("clear type mismatch", diagnostic);
-  }
-
-  const std::string fingerprint = payloadFingerprint(replay, score);
-  std::vector<float> adoptedGaugeHistory =
-      state.gaugeHistoryFor(state.gaugeType);
-  ChartJudgementTiming judgementTiming =
-      captureChartJudgementTiming(state);
-  return ChartResultAttempt{.attemptId = std::move(attemptId),
-                            .replay = std::move(replay),
-                            .score = std::move(score),
-                            .adoptedGaugeHistory =
-                                std::move(adoptedGaugeHistory),
-                            .judgementTiming =
-                                std::move(judgementTiming),
-                            .payloadFingerprint = fingerprint};
+  result.resultFingerprint = resultFingerprint(result);
+  return result;
 }
 
-std::string payloadFingerprint(const ReplayData &replay,
-                               const ChartScoreWrite &score) {
+bool validatePersistedChartResult(const PersistedChartResult &result,
+                                  std::string &diagnostic) noexcept {
+  try {
+    diagnostic.clear();
+    if (result.resultId < 0 || result.playedAtUnixMillis < 0) {
+      diagnostic = "result identity or play time is invalid";
+      return false;
+    }
+    if (result.attemptId.has_value() &&
+        !uuid::isCanonicalLowerV4(*result.attemptId)) {
+      diagnostic = "attempt ID is not a canonical version-4 UUID";
+      return false;
+    }
+    if (!validateResultFacts(result.score, result.keyMode,
+                             result.adoptedGaugeHistory, result.judgementTiming,
+                             diagnostic)) {
+      return false;
+    }
+    if (!result.resultFingerprint.empty() &&
+        (!lowerHex(result.resultFingerprint, 64) ||
+         result.resultFingerprint != resultFingerprint(result))) {
+      diagnostic = "result fingerprint is malformed or inconsistent";
+      return false;
+    }
+    return true;
+  } catch (...) {
+    diagnostic = "result validation failed";
+    return false;
+  }
+}
+
+std::string resultFingerprint(const PersistedChartResult &result) {
   CanonicalEncoder encoder;
-  encoder.string("asobmashow-chart-result-v1");
-  appendReplay(encoder, replay);
-  appendScore(encoder, score);
+  encoder.string("asobmashow-chart-result-v2");
+  encoder.optional(result.attemptId,
+                   [&](const std::string &value) { encoder.string(value); });
+  appendScore(encoder, result.score);
+  encoder.integer(static_cast<std::int32_t>(result.keyMode));
+  appendGaugeHistory(encoder, result.adoptedGaugeHistory);
+  appendTiming(encoder, result.judgementTiming);
+  encoder.integer(result.playedAtUnixMillis);
+  return encoder.finish();
+}
+
+bool validatePersistedCourseResult(const PersistedCourseResult &result,
+                                   std::string &diagnostic) noexcept {
+  try {
+    diagnostic.clear();
+    if (result.resultId < 0 || result.playedAtUnixMillis < 0 ||
+        result.legacyCourseId < 0) {
+      diagnostic = "course result identity or play time is invalid";
+      return false;
+    }
+    if (result.attemptId.has_value() &&
+        !uuid::isCanonicalLowerV4(*result.attemptId)) {
+      diagnostic = "course attempt ID is not a canonical version-4 UUID";
+      return false;
+    }
+    if (!canonicalCourseKey(result.courseKey)) {
+      diagnostic = "course identity is malformed";
+      return false;
+    }
+    if (result.totalCharts <= 0 || result.completedCharts <= 0 ||
+        result.completedCharts > result.totalCharts ||
+        result.stages.size() !=
+            static_cast<std::size_t>(result.completedCharts)) {
+      diagnostic = "course completion prefix is malformed";
+      return false;
+    }
+    if (result.longNoteMode < 0 || result.finalScore < 0 ||
+        result.maxScore <= 0 || result.finalScore > result.maxScore ||
+        result.maxCombo < 0 || !std::isfinite(result.finalGauge) ||
+        result.finalGauge < 0.0F || !knownClearRank(result.clearType)) {
+      diagnostic = "course result facts are invalid";
+      return false;
+    }
+    std::int64_t stageScore = 0;
+    std::int64_t stageMaxScore = 0;
+    for (std::size_t index = 0; index < result.stages.size(); ++index) {
+      const auto &stage = result.stages[index];
+      if (stage.stageIndex != static_cast<int>(index) ||
+          !validateResultFacts(stage.score, stage.keyMode,
+                               stage.adoptedGaugeHistory, stage.judgementTiming,
+                               diagnostic)) {
+        if (diagnostic.empty()) {
+          diagnostic = "course stage ordering is malformed";
+        }
+        return false;
+      }
+      stageScore += stage.score.score;
+      stageMaxScore += stage.score.maxScore;
+    }
+    if (stageScore != result.finalScore || stageMaxScore != result.maxScore) {
+      diagnostic = "course totals disagree with ordered stages";
+      return false;
+    }
+    std::string provenanceDiagnostic;
+    if (!serializeValidatedScoreProvenance(result.provenance,
+                                           provenanceDiagnostic)) {
+      diagnostic = "course provenance is invalid";
+      return false;
+    }
+    if (!result.resultFingerprint.empty() &&
+        (!lowerHex(result.resultFingerprint, 64) ||
+         result.resultFingerprint != resultFingerprint(result))) {
+      diagnostic = "course result fingerprint is malformed or inconsistent";
+      return false;
+    }
+    return true;
+  } catch (...) {
+    diagnostic = "course result validation failed";
+    return false;
+  }
+}
+
+std::string resultFingerprint(const PersistedCourseResult &result) {
+  CanonicalEncoder encoder;
+  encoder.string("asobmashow-course-result-v2");
+  encoder.optional(result.attemptId,
+                   [&](const std::string &value) { encoder.string(value); });
+  encoder.string(result.courseKey);
+  encoder.integer(static_cast<std::int32_t>(result.legacyCourseId));
+  encoder.string(result.courseName);
+  encoder.string(result.courseGroupName);
+  encoder.string(result.constraintJson);
+  encoder.integer(static_cast<std::int32_t>(result.completedCharts));
+  encoder.integer(static_cast<std::int32_t>(result.totalCharts));
+  encoder.string(result.requestedPlayOption);
+  encoder.string(result.assistOption);
+  encoder.integer(
+      static_cast<std::int32_t>(gaugeTypeIndex(result.initialGaugeType)));
+  encoder.enumeration(result.gaugeProfile);
+  encoder.integer(static_cast<std::int32_t>(
+      gaugeAutoShiftModeValue(result.gaugeAutoShift)));
+  encoder.integer(static_cast<std::int32_t>(
+      gaugeTypeIndex(result.gaugeAutoShiftLowerBound)));
+  encoder.integer(static_cast<std::int32_t>(result.longNoteMode));
+  encoder.integer(static_cast<std::int32_t>(result.finalScore));
+  encoder.integer(static_cast<std::int32_t>(result.maxScore));
+  encoder.integer(static_cast<std::int32_t>(result.maxCombo));
+  encoder.float32(result.finalGauge);
+  encoder.integer(static_cast<std::int32_t>(result.clearType));
+  appendProvenance(encoder, result.provenance);
+  encoder.vector(result.stages, [&](const PersistedCourseStageResult &stage) {
+    encoder.integer(static_cast<std::int32_t>(stage.stageIndex));
+    appendScore(encoder, stage.score);
+    encoder.integer(static_cast<std::int32_t>(stage.keyMode));
+    appendGaugeHistory(encoder, stage.adoptedGaugeHistory);
+    appendTiming(encoder, stage.judgementTiming);
+  });
+  encoder.integer(result.playedAtUnixMillis);
   return encoder.finish();
 }
 
