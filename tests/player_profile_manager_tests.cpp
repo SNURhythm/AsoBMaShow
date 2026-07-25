@@ -7,6 +7,7 @@
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
+#include "support/ReplaySchema10Fixture.h"
 
 #include <algorithm>
 #include <array>
@@ -179,14 +180,19 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
   const auto scorePath = root / "db" / "score.db";
   const auto replayPath = root / "db" / "replay.db";
   ScoreRepository scoreHelper(scorePath);
-  ReplayRepository replayHelper(replayPath);
   expect(scoreHelper.EnsureSchema(), "legacy score schema initializes");
-  expect(replayHelper.EnsureSchema(), "legacy replay schema initializes");
 
   LegacyData result{openDatabase(scorePath), openDatabase(replayPath)};
   expect(result.scoreConnection != nullptr, "legacy score database opens");
   expect(result.replayConnection != nullptr, "legacy replay database opens");
   if (!result.scoreConnection || !result.replayConnection) {
+    return result;
+  }
+  try {
+    replay_schema10_fixture::createExactSchema(result.replayConnection.get());
+  } catch (const std::exception &exception) {
+    expect(false, "legacy replay schema initializes: " +
+                      std::string(exception.what()));
     return result;
   }
 
@@ -220,23 +226,17 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
          "replay database enters WAL mode");
   expect(execute(result.replayConnection.get(), "PRAGMA wal_autocheckpoint=0"),
          "replay auto-checkpoint is disabled");
-  expect(
-      execute(
-          result.replayConnection.get(),
-          "INSERT INTO replays (chart_path,chart_md5,chart_sha256,"
-          "chart_title,chart_artist,ln_mode,gauge_type,gauge_auto_shift,"
-          "final_score,max_combo,final_gauge,clear_type,assist_option) VALUES "
-          "('legacy.bms','0123456789abcdef0123456789abcdef',"
-          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-          "'Legacy Song','Legacy Artist',0,0,0,100,3,0.75,2,'OFF')"),
-      "WAL-backed replay row inserts");
-  expect(
-      execute(result.replayConnection.get(),
-              "INSERT INTO replay_events (replay_id,event_index,action,lane,"
-              "note_time_micros,song_time_micros,judge_time_micros,judgement,"
-              "diff_micros,gauge,gauge_type,combo,score) VALUES "
-              "(1,0,1,2,1000,1000,1000,0,0,0.75,0,1,2)"),
-      "WAL-backed replay event row inserts");
+  try {
+    replay_schema10_fixture::insertSimpleChart(
+        result.replayConnection.get(), 1,
+        "0123456789abcdef0123456789abcdef",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "2026-07-10 12:34:56", 2,
+        serializeScoreProvenance(ScoreProvenance::Legacy()));
+  } catch (const std::exception &exception) {
+    expect(false, "WAL-backed replay rows insert: " +
+                      std::string(exception.what()));
+  }
   return result;
 }
 
@@ -308,13 +308,21 @@ void seedIrOperationalState(const std::filesystem::path &path,
   expect(
       execute(
           database.get(),
-          "INSERT INTO replays(chart_sha256,gauge_type,gauge_auto_shift,"
-          "final_score,max_combo,final_gauge,clear_type,assist_option) "
-          "VALUES('"
-          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
-          "0,0,1,1,0.0,0,'OFF');"
+          "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
+          "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
+          "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
+          "fast,slow,final_gauge,clear_type,gauge_history_json,"
+          "judgement_timing_json,provenance_json,result_fingerprint,"
+          "played_at_unix_ms) VALUES("
+          "'10000000-0000-4000-8000-000000000004','remote.bms',"
+          "'dddddddddddddddddddddddddddddddd',"
+          "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
+          "'Remote Song','Remote Artist',7,0,1,2,1,0,0,1,0,0,0,0,0,0,0.0,0,"
+          "'[]',NULL,'{\"ruleset\":{\"version\":0},\"eligibility\":2,"
+          "\"source\":{\"kind\":\"legacy\"}}',lower(hex(zeroblob(32))),"
+          "4000);"
           "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
-          "replay_id,attempt_id,chart_sha256,confirmation_source,"
+          "result_id,attempt_id,chart_sha256,confirmation_source,"
           "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac',"
           "last_insert_rowid(),'10000000-0000-4000-8000-000000000004',"
           "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
@@ -380,24 +388,40 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
 void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
                                std::string_view label) {
   Database scores = openDatabase(paths.scoresDb);
-  Database replays = openDatabase(paths.replaysDb);
-  expect(scores != nullptr && replays != nullptr,
-         std::string(label) + " marker databases open");
-  if (!scores || !replays) {
+  expect(scores != nullptr, std::string(label) + " score marker database opens");
+  if (!scores) {
     return;
   }
   expect(execute(scores.get(),
                  "CREATE TABLE validation_policy_marker(value TEXT);"
                  "INSERT INTO validation_policy_marker VALUES('score')"),
          std::string(label) + " score marker is written");
+  scores.reset();
+  setDatabaseVersion(paths.scoresDb, 5, std::string(label) + " score");
+
+  std::error_code removeError;
+  std::filesystem::remove(paths.replaysDb, removeError);
+  expect(!removeError, std::string(label) + " current replay database removes");
+  if (removeError) {
+    return;
+  }
+  Database replays = openDatabase(paths.replaysDb);
+  expect(replays != nullptr,
+         std::string(label) + " replay marker database opens");
+  if (!replays) {
+    return;
+  }
+  try {
+    replay_schema10_fixture::createExactSchema(replays.get());
+  } catch (const std::exception &exception) {
+    expect(false, std::string(label) + " replay v10 schema creates: " +
+                      exception.what());
+    return;
+  }
   expect(execute(replays.get(),
                  "CREATE TABLE validation_policy_marker(value TEXT);"
                  "INSERT INTO validation_policy_marker VALUES('replay')"),
          std::string(label) + " replay marker is written");
-  scores.reset();
-  replays.reset();
-  setDatabaseVersion(paths.scoresDb, 5, std::string(label) + " score");
-  setDatabaseVersion(paths.replaysDb, 3, std::string(label) + " replay");
 }
 
 void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
@@ -406,8 +430,8 @@ void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
   expect(sqliteDatabaseUserVersion(paths.scoresDb, error) == 5,
          std::string(label) + " keeps score schema version 5: " + error);
   error.clear();
-  expect(sqliteDatabaseUserVersion(paths.replaysDb, error) == 3,
-         std::string(label) + " keeps replay schema version 3: " + error);
+  expect(sqliteDatabaseUserVersion(paths.replaysDb, error) == 10,
+         std::string(label) + " keeps replay schema version 10: " + error);
   expect(rowCount(paths.scoresDb, "validation_policy_marker") == 1,
          std::string(label) + " keeps the score marker row");
   expect(rowCount(paths.replaysDb, "validation_policy_marker") == 1,
@@ -528,10 +552,14 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
          "score rows survive migration");
   expect(rowCount(paths.scoresDb, "course_scores") == 1,
          "course score rows survive migration");
-  expect(rowCount(paths.replaysDb, "replays") == 1,
-         "replay rows survive migration");
-  expect(rowCount(paths.replaysDb, "replay_events") == 1,
-         "replay event rows survive migration");
+  expect(rowCount(paths.replaysDb, "chart_results") == 1,
+         "replay result survives migration");
+  expect(rowCount(paths.replaysDb, "replay_files") == 1,
+         "replay events migrate into one file reference");
+  expect(std::filesystem::exists(
+             paths.root / "replay" /
+             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.brd"),
+         "legacy replay events migrate into a Beatoraja-layout file");
 
   std::string integrityError;
   expect(sqliteIntegrityCheck(paths.scoresDb, integrityError),
@@ -2248,10 +2276,8 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
 
   {
     Database scores = openDatabase(paths.scoresDb);
-    Database replays = openDatabase(paths.replaysDb);
-    expect(scores != nullptr && replays != nullptr,
-           "supported-older marker databases open");
-    if (!scores || !replays) {
+    expect(scores != nullptr, "supported-older score marker database opens");
+    if (!scores) {
       return;
     }
     expect(execute(scores.get(),
@@ -2259,30 +2285,49 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
                    "INSERT INTO migration_marker VALUES('score');"
                    "PRAGMA user_version=5"),
            "score v5 fixture and marker are written");
+  }
+  {
+    std::error_code removeError;
+    std::filesystem::remove(paths.replaysDb, removeError);
+    expect(!removeError, "current replay database removes for v10 fixture");
+    if (removeError) {
+      return;
+    }
+    Database replays = openDatabase(paths.replaysDb);
+    expect(replays != nullptr, "supported-older replay marker database opens");
+    if (!replays) {
+      return;
+    }
+    try {
+      replay_schema10_fixture::createExactSchema(replays.get());
+    } catch (const std::exception &exception) {
+      expect(false, "replay v10 fixture creates: " +
+                        std::string(exception.what()));
+      return;
+    }
     expect(execute(replays.get(),
                    "CREATE TABLE migration_marker(value TEXT);"
-                   "INSERT INTO migration_marker VALUES('replay');"
-                   "PRAGMA user_version=3"),
-           "replay v3 fixture and marker are written");
+                   "INSERT INTO migration_marker VALUES('replay')"),
+           "replay v10 fixture and marker are written");
   }
 
   std::string versionError;
   expect(!creator.validateProfile(profileId).ok(),
          "strict public validation rejects a profile awaiting migration");
   expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) == 5 &&
-             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,
+             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 10,
          "strict validation does not mutate supported older databases");
 
   PlayerProfileManager reopened(
       temp.path(), dependenciesFor("22222222-2222-4222-8222-222222222222"));
   const ProfileResult initialized = reopened.Initialize();
   expect(initialized.ok() && reopened.activeProfile().id == profileId,
-         "startup admits the active v5/v3 profile for its schema owners: " +
+         "startup admits the active v5/v10 profile for its schema owners: " +
              initialized.message);
   expect(reopened.listProfiles().size() == 1,
          "profile discovery keeps a supported older profile selectable");
   expect(sqliteDatabaseUserVersion(paths.scoresDb, versionError) == 5 &&
-             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 3,
+             sqliteDatabaseUserVersion(paths.replaysDb, versionError) == 10,
          "profile startup preflight remains read-only");
 
   ScoreRepository score(paths.scoresDb);
@@ -2295,12 +2340,24 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
                  ScoreRepository::kCurrentSchemaVersion &&
              sqliteDatabaseUserVersion(paths.replaysDb, versionError) ==
                  ReplayRepository::kCurrentSchemaVersion,
-         "database owners advance v5/v3 to the current schemas");
+         "database owners advance v5/v10 to the current schemas");
   expect(rowCount(paths.scoresDb, "migration_marker") == 1 &&
              rowCount(paths.replaysDb, "migration_marker") == 1,
          "database migrations preserve profile rows");
   expect(reopened.validateProfile(profileId).ok(),
          "strict validation succeeds after owned migration");
+}
+
+void testUnsupportedPreV10ReplayProfileFailsActivationPreflight() {
+  TempDirectory temp("profile-unsupported-pre-v10-replay");
+  PlayerProfileManager manager(temp.path(), dependenciesFor());
+  expect(manager.Initialize().ok(), "pre-v10 replay fixture initializes");
+  const auto paths = manager.activePaths();
+  setDatabaseVersion(paths.replaysDb, 9, "pre-v10 replay");
+
+  expect(manager.validateProfileForActivation(manager.activeProfile().id).error ==
+             ProfileError::IntegrityFailure,
+         "activation preflight rejects replay schemas older than v10");
 }
 
 void testProfileCrudConstraintsAndDataIsolation() {
@@ -2653,6 +2710,7 @@ int main() {
   testSupportedOlderDeleteRollbackRestoresManageableSource();
   testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
+  testUnsupportedPreV10ReplayProfileFailsActivationPreflight();
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();

@@ -49,6 +49,7 @@ LoadIrSubmissionSnapshotOnConnection(sqlite3 *database,
                                      std::string_view attemptId);
 
 bool CreateReplayTablesOnConnection(sqlite3 *database);
+bool CreateCompactReplaySchema11OnConnection(sqlite3 *database);
 std::optional<int> SaveReplayOnConnection(sqlite3 *database,
                                           const ReplayData &replay,
                                           const std::string &provenanceJson);

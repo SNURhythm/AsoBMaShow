@@ -424,7 +424,7 @@ void testReservationIntegrityAndMonotonicity() {
          "deleted reservation indexes are never reused");
 }
 
-void testVersion10FailsClosed() {
+void testMalformedVersion10FailsClosed() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
   sqlite3 *raw = nullptr;
@@ -438,7 +438,7 @@ void testVersion10FailsClosed() {
 
   ReplayRepository repository(databasePath);
   expect(!repository.EnsureSchema(),
-         "v10 database blocks until the atomic file migrator runs");
+         "malformed v10 database fails closed during atomic migration");
   repository.Shutdown();
 
   Database database(databasePath);
@@ -448,7 +448,7 @@ void testVersion10FailsClosed() {
              scalarInteger(database.get(),
                            "SELECT count(*) FROM sqlite_master WHERE "
                            "type='table' AND name='chart_results'") == 0,
-         "fail-closed v10 open leaves legacy data and schema untouched");
+         "malformed v10 migration leaves legacy data and schema untouched");
 }
 
 } // namespace
@@ -458,7 +458,7 @@ int main() {
   testMalformedVersion11FailsClosed();
   testCompactStageAndIndependentReads();
   testReservationIntegrityAndMonotonicity();
-  testVersion10FailsClosed();
+  testMalformedVersion10FailsClosed();
   if (failures != 0) {
     std::cerr << failures << " replay repository v11 test(s) failed\n";
     return 1;

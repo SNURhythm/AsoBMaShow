@@ -997,6 +997,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRankingModels.cpp
         src/ir/IrSettingsPresentation.cpp
         src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ir/IrSubmissionService.cpp
         src/ir/tachi/BokutachiCacheStore.cpp
         src/ir/tachi/TachiBatchManual.cpp
@@ -1008,7 +1009,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
         src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
@@ -1131,6 +1140,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/AtomicFile.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrReceiptModels.cpp
@@ -1156,6 +1172,43 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
         target_link_libraries(replay_repository_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(replay_file_migration_tests
+        tests/replay_file_migration_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/CourseIdentity.cpp
+        src/ResultPersistenceModel.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/ScoreProvenance.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_file_migration_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
+    )
+    target_compile_features(replay_file_migration_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_file_migration_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_file_migration_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_file_migration_tests PRIVATE SDL2)
     endif()
 
     add_executable(music_playlist_repository_tests
@@ -1443,6 +1496,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
         src/MinizBridge.c
         src/replay/GzipCodec.cpp
         src/replay/Base64Url.cpp
@@ -2621,6 +2675,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
@@ -2682,8 +2743,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
         src/ir/IrOutboxModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
@@ -2740,6 +2810,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
         src/ir/IrOutboxModels.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
@@ -2879,6 +2956,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
+    asobmashow_register_test(replay_file_migration_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)

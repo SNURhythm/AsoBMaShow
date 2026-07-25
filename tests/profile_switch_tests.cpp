@@ -12,8 +12,10 @@
 #include "../src/input/InputProfileStore.h"
 #include "../src/scene/MainMenuProfileSelections.h"
 #include "../src/sqlite3.h"
+#include "support/ReplaySchema10Fixture.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -25,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -381,30 +384,63 @@ void seedChartScore(const std::filesystem::path &path,
       "chart-matrix score row inserts");
 }
 
-ReplayData sampleReplay(const std::filesystem::path &root, int score) {
-  ReplayData replay;
-  replay.chartMeta.BmsPath = root / "BMS" / "chart.bms";
-  replay.chartMeta.MD5 = kChartMd5;
-  replay.chartMeta.SHA256 = kChartSha;
-  replay.chartMeta.Title = "Chart";
-  replay.chartMeta.Artist = "Artist";
-  replay.chartMeta.TotalNotes = 1;
-  replay.finalScore = score;
-  replay.maxCombo = 1;
-  replay.finalGauge = 75.0f;
-  replay.clearType = kClearTypeNormalClearRank;
-  replay.events.push_back({.action = ReplayEventAction::Press,
-                           .lane = 1,
-                           .noteTimeMicros = 1000,
-                           .songTimeMicros = 1000,
-                           .judgeTimeMicros = 1000,
-                           .judgement = PGreat,
-                           .gauge = 75.0f,
-                           .gaugeType = GaugeType::Normal,
-                           .combo = 1,
-                           .score = score});
-  replay.provenance = ScoreProvenance::Legacy();
-  return replay;
+void seedCompactReplayResult(const std::filesystem::path &path, int score,
+                             std::int64_t playedAtUnixMillis) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, "compact replay seed database opens");
+  if (!database) {
+    return;
+  }
+  const std::string provenance =
+      serializeScoreProvenance(ScoreProvenance::Legacy());
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
+          "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
+          "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
+          "fast,slow,final_gauge,clear_type,gauge_history_json,"
+          "judgement_timing_json,provenance_json,result_fingerprint,"
+          "played_at_unix_ms) VALUES('switch-" +
+              std::to_string(playedAtUnixMillis) + "','chart.bms','" +
+              std::string(kChartMd5) + "','" + std::string(kChartSha) +
+              "','Chart','Artist',7,0," + std::to_string(score) + "," +
+              std::to_string(score) +
+              ",1,0,1,0,0,0,0,0,0,0,75.0,300,'[75.0]',NULL," +
+              replay_schema10_fixture::quote(provenance) + ",'" +
+              std::string(64, 'f') + "'," +
+              std::to_string(playedAtUnixMillis) + ")"),
+      "compact replay result row inserts");
+}
+
+void replaceWithSchema10Replays(const std::filesystem::path &path,
+                                std::span<const int> scores,
+                                std::string_view label) {
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  expect(!error, std::string(label) + " old replay database removes");
+  if (error) {
+    return;
+  }
+  Database database = openDatabase(path);
+  expect(database != nullptr, std::string(label) + " v10 database opens");
+  if (!database) {
+    return;
+  }
+  try {
+    replay_schema10_fixture::createExactSchema(database.get());
+    const std::string provenance =
+        serializeScoreProvenance(ScoreProvenance::Legacy());
+    for (std::size_t index = 0; index < scores.size(); ++index) {
+      replay_schema10_fixture::insertSimpleChart(
+          database.get(), static_cast<std::int64_t>(index + 1), kChartMd5,
+          kChartSha, "2026-07-11 00:00:0" + std::to_string(index),
+          scores[index], provenance);
+    }
+  } catch (const std::exception &exception) {
+    expect(false, std::string(label) + " v10 fixture creates: " +
+                      exception.what());
+  }
 }
 
 std::string firstBindingId(const InputProfile &profile) {
@@ -541,14 +577,9 @@ struct SwitchFixture {
 
     seedScore(firstPaths.scoresDb, kClearTypeEasyClearRank, 500);
     seedScore(secondPaths.scoresDb, kClearTypeHardClearRank, 1500);
-    ReplayRepository firstReplay(firstPaths.replaysDb);
-    ReplayRepository secondReplay(secondPaths.replaysDb);
-    expect(firstReplay.SaveReplay(sampleReplay(temp.path(), 500)).has_value(),
-           "first replay seed saves");
-    expect(secondReplay.SaveReplay(sampleReplay(temp.path(), 1500)).has_value(),
-           "second replay seed saves");
-    expect(secondReplay.SaveReplay(sampleReplay(temp.path(), 1600)).has_value(),
-           "second profile's additional replay seed saves");
+    seedCompactReplayResult(firstPaths.replaysDb, 500, 500);
+    seedCompactReplayResult(secondPaths.replaysDb, 1500, 1500);
+    seedCompactReplayResult(secondPaths.replaysDb, 1600, 1600);
 
     currentSettings = firstSettings;
     currentInput = firstInput;
@@ -747,7 +778,13 @@ struct SwitchFixture {
   }
 
   [[nodiscard]] std::size_t currentReplayCount() {
-    return replay.ListReplays(sampleReplay(temp.path(), 0).chartMeta, 0).size();
+    Database database = openDatabase(replay.GetDatabasePath());
+    return database == nullptr
+               ? 0
+               : static_cast<std::size_t>(queryInt(
+                     database.get(),
+                     "SELECT count(*) FROM chart_results WHERE chart_sha256='" +
+                         std::string(kChartSha) + "' AND long_note_mode=0"));
   }
 };
 
@@ -1030,11 +1067,12 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
 
   seedValidationPolicyMarker(fixture.secondPaths.scoresDb, "score-marker",
                              "supported-older score");
+  replaceWithSchema10Replays(fixture.secondPaths.replaysDb,
+                             std::array{2, 2},
+                             "supported-older replay");
   seedValidationPolicyMarker(fixture.secondPaths.replaysDb, "replay-marker",
                              "supported-older replay");
   setDatabaseVersion(fixture.secondPaths.scoresDb, 5, "supported-older score");
-  setDatabaseVersion(fixture.secondPaths.replaysDb, 3,
-                     "supported-older replay");
 
   expect(fixture.manager.validateProfileForActivation(fixture.secondId).ok(),
          "activation preflight admits supported-older databases");

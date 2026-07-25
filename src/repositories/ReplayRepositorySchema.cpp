@@ -1,5 +1,6 @@
 #include "ReplayRepository.h"
 #include "ReplayRepositoryInternal.h"
+#include "ReplayRepositoryReplayFileMigration.h"
 
 #include "../BmsMetadataText.h"
 #include "ChartSqlExpressions.h"
@@ -9,6 +10,8 @@
 #include "../Uuid.h"
 #include "../Utils.h"
 #include "../path.h"
+#include "../replay/BeatorajaReplayCodec.h"
+#include "../replay/ReplayFileStore.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -1365,8 +1368,32 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (*version == kReplayDatabaseSchemaVersion) {
     return validateCompactReplaySchema11(db);
   }
-  if (*version <= 10) {
+  if (*version == 10) {
     SDL_Log("Replay database migration from schema %d to 11 is required",
+            *version);
+    const char *filename = sqlite3_db_filename(db, "main");
+    if (filename == nullptr || *filename == '\0') {
+      SDL_Log("Replay database migration cannot resolve the profile root");
+      return false;
+    }
+    const std::filesystem::path profileRoot =
+        std::filesystem::path(filename).parent_path();
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore fileStore(profileRoot);
+    const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+        db, profileRoot, codec, fileStore);
+    if (outcome.status !=
+            replay_repository_detail::ReplayMigrationOutcome::Status::Migrated &&
+        outcome.status != replay_repository_detail::ReplayMigrationOutcome::
+                              Status::AlreadyCurrent) {
+      SDL_Log("Replay database migration failed: %s",
+              outcome.diagnostic.c_str());
+      return false;
+    }
+    return validateCompactReplaySchema11(db);
+  }
+  if (*version < 10) {
+    SDL_Log("Replay database schema %d is too old for file migration",
             *version);
     return false;
   }
@@ -1726,6 +1753,11 @@ sqlite3 *openReplayDatabase(const std::filesystem::path &path,
 }
 
 } // namespace
+bool replay_repository_detail::CreateCompactReplaySchema11OnConnection(
+    sqlite3 *database) {
+  return database != nullptr && createCompactReplaySchema11(database);
+}
+
 bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
     return false;

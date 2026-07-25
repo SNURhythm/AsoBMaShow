@@ -19,6 +19,8 @@
 #include <cctype>
 #include <ctime>
 #include <iomanip>
+#include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -666,26 +668,84 @@ bool cleanupStaging(const std::filesystem::path &applicationRoot,
   return true;
 }
 
-bool compareSourceRows(const std::filesystem::path &source,
-                       const std::filesystem::path &destination,
-                       std::string &errorMessage) {
-  const auto sourceCounts = sqliteUserTableRowCounts(source, errorMessage);
-  if (!sourceCounts) {
-    return false;
-  }
-  const auto destinationCounts =
-      sqliteUserTableRowCounts(destination, errorMessage);
-  if (!destinationCounts) {
-    return false;
-  }
-  for (const auto &[table, count] : *sourceCounts) {
-    const auto found = destinationCounts->find(table);
-    if (found == destinationCounts->end() || found->second != count) {
+using SqliteRowCounts = std::map<std::string, std::int64_t>;
+
+bool rowsPreserved(const SqliteRowCounts &before, const SqliteRowCounts &after,
+                   std::string &errorMessage) {
+  for (const auto &[table, count] : before) {
+    const auto found = after.find(table);
+    if (found == after.end() || found->second != count) {
       errorMessage = "row count mismatch for SQLite table '" + table + "'";
       return false;
     }
   }
   return true;
+}
+
+bool replayRowsPreserved(const SqliteRowCounts &before, int beforeVersion,
+                         const SqliteRowCounts &after, int afterVersion,
+                         std::string &errorMessage) {
+  if (beforeVersion == afterVersion) {
+    return rowsPreserved(before, after, errorMessage);
+  }
+  if (beforeVersion != 10 ||
+      afterVersion != ReplayRepository::kCurrentSchemaVersion) {
+    errorMessage = "unsupported replay database migration while comparing rows";
+    return false;
+  }
+
+  const std::map<std::string, std::string> transformed{
+      {"replays", "chart_results"},
+      {"course_replays", "course_results"},
+      {"course_replay_stages", "course_result_stages"},
+  };
+  const std::set<std::string> filePayloadTables{
+      "replay_events", "replay_touch_samples", "replay_lane_cover_events"};
+  for (const auto &[sourceTable, count] : before) {
+    if (filePayloadTables.contains(sourceTable)) {
+      continue;
+    }
+    const auto mapping = transformed.find(sourceTable);
+    const std::string &destinationTable =
+        mapping == transformed.end() ? sourceTable : mapping->second;
+    const auto found = after.find(destinationTable);
+    if (found == after.end() || found->second != count) {
+      errorMessage = "row count mismatch for migrated SQLite table '" +
+                     sourceTable + "' -> '" + destinationTable + "'";
+      return false;
+    }
+  }
+  const auto replayCount = before.contains("replays") ? before.at("replays") : 0;
+  const auto courseCount =
+      before.contains("course_replays") ? before.at("course_replays") : 0;
+  const auto files = after.find("replay_files");
+  if (files == after.end() || files->second != replayCount + courseCount) {
+    errorMessage = "migrated replay file count does not match legacy records";
+    return false;
+  }
+  return true;
+}
+
+bool compareSourceRows(const std::filesystem::path &source,
+                       const std::filesystem::path &destination,
+                       bool replayDatabase, std::string &errorMessage) {
+  const auto sourceCounts = sqliteUserTableRowCounts(source, errorMessage);
+  const auto sourceVersion = sqliteDatabaseUserVersion(source, errorMessage);
+  if (!sourceCounts || !sourceVersion) {
+    return false;
+  }
+  const auto destinationCounts =
+      sqliteUserTableRowCounts(destination, errorMessage);
+  const auto destinationVersion =
+      sqliteDatabaseUserVersion(destination, errorMessage);
+  if (!destinationCounts || !destinationVersion) {
+    return false;
+  }
+  return replayDatabase
+             ? replayRowsPreserved(*sourceCounts, *sourceVersion,
+                                   *destinationCounts, *destinationVersion,
+                                   errorMessage)
+             : rowsPreserved(*sourceCounts, *destinationCounts, errorMessage);
 }
 
 bool pathExists(const std::filesystem::path &path, bool &exists,
@@ -778,6 +838,11 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
       *replayVersion > ReplayRepository::kCurrentSchemaVersion) {
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
+  }
+  if (*replayVersion < 10) {
+    return failure(ProfileError::IntegrityFailure,
+                   "profile replay database is older than the supported v10 "
+                   "file migration source");
   }
   if (!policy.allowSupportedOlderDatabases &&
       (*scoreVersion != ScoreRepository::kCurrentSchemaVersion ||
@@ -1218,6 +1283,11 @@ ProfileResult buildProfile(
         return fail(ProfileError::FutureVersion,
                     "legacy profile database is newer than supported");
       }
+      if (source.filename() == "replay.db" && *version < 10) {
+        return fail(ProfileError::MigrationFailure,
+                    "legacy replay database is older than the supported v10 "
+                    "file migration source");
+      }
     }
   }
 
@@ -1403,9 +1473,11 @@ ProfileResult buildProfile(
     return fail(ProfileError::MigrationFailure, errorMessage);
   }
   if ((hasScoreSource &&
-       !compareSourceRows(*scoreSource, staging.scoresDb, errorMessage)) ||
+       !compareSourceRows(*scoreSource, staging.scoresDb, false,
+                          errorMessage)) ||
       (hasReplaySource &&
-       !compareSourceRows(*replaySource, staging.replaysDb, errorMessage))) {
+       !compareSourceRows(*replaySource, staging.replaysDb, true,
+                          errorMessage))) {
     return fail(ProfileError::IntegrityFailure, errorMessage);
   }
   if (mode == BuildMode::Duplicate &&
@@ -2039,6 +2111,11 @@ PlayerProfileManager::validateProfile(std::string_view id,
     return failure(ProfileError::FutureVersion,
                    "profile database is newer than supported");
   }
+  if (*replayVersion < 10) {
+    return failure(ProfileError::IntegrityFailure,
+                   "profile replay database is older than the supported v10 "
+                   "file migration source");
+  }
   if (!policy.allowSupportedOlderDatabases &&
       (*scoreVersion != ScoreRepository::kCurrentSchemaVersion ||
        *replayVersion != ReplayRepository::kCurrentSchemaVersion)) {
@@ -2269,23 +2346,19 @@ ProfileResult PlayerProfileManager::installProfile(
       sqliteUserTableRowCounts(staging.scoresDb, errorMessage);
   const auto replayRowsAfter =
       sqliteUserTableRowCounts(staging.replaysDb, errorMessage);
-  auto rowsPreserved = [](const auto &before, const auto &after) {
-    if (!before || !after) {
-      return false;
-    }
-    for (const auto &[table, count] : *before) {
-      const auto found = after->find(table);
-      if (found == after->end() || found->second != count) {
-        return false;
-      }
-    }
-    return true;
-  };
-  if (!rowsPreserved(scoreRowsBefore, scoreRowsAfter) ||
-      !rowsPreserved(replayRowsBefore, replayRowsAfter)) {
+  const auto scoreVersionAfter =
+      sqliteDatabaseUserVersion(staging.scoresDb, errorMessage);
+  const auto replayVersionAfter =
+      sqliteDatabaseUserVersion(staging.replaysDb, errorMessage);
+  if (!scoreRowsAfter || !replayRowsAfter || !scoreVersionAfter ||
+      !replayVersionAfter ||
+      !rowsPreserved(*scoreRowsBefore, *scoreRowsAfter, errorMessage) ||
+      !replayRowsPreserved(*replayRowsBefore, *replayVersionBefore,
+                           *replayRowsAfter, *replayVersionAfter,
+                           errorMessage)) {
     return cleanStagingAndFail(
         ProfileError::IntegrityFailure,
-        "database migration changed imported row counts");
+        "database migration changed imported row counts: " + errorMessage);
   }
   ProfileResult staged = validateProfileFiles(
       applicationDataRoot_, staging, sourceProfile.id,
