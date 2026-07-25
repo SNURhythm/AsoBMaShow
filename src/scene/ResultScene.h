@@ -205,6 +205,7 @@ makeResultRemoteSource(ResultRemoteOptions remote) {
 
 class TextView;
 class Button;
+class BlockingOverlayView;
 class PracticeAnalyticsView;
 class OverlayPortal;
 
@@ -295,6 +296,11 @@ private:
   View *resultPersistenceStatus = nullptr;
   TextView *persistenceStatusMessage = nullptr;
   Button *persistenceRetryButton = nullptr;
+  Button *persistenceDetailsButton = nullptr;
+  BlockingOverlayView *persistenceDetailsModalRoot = nullptr;
+  TextView *persistenceDetailsStateText = nullptr;
+  TextView *persistenceDetailsReasonText = nullptr;
+  TextView *persistenceDetailsReferenceText = nullptr;
   View *irResultStatus = nullptr;
   TextView *irResultStatusText = nullptr;
   TextView *irResultDetailText = nullptr;

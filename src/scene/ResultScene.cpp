@@ -10,6 +10,7 @@
 #include "../path.h"
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticeResultModel.h"
+#include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/ClearLampColors.h"
 #include "../view/IconText.h"
@@ -796,6 +797,59 @@ void ResultScene::addResultPersistenceStatus() {
       persistenceOptions.attempt != nullptr &&
       persistenceOptions.outcome.retryable());
   actions->addView(persistenceRetryButton);
+  persistenceDetailsButton = makeButton(
+      "Show Details", ui_theme::infoAction(), ui_theme::infoActionHover(),
+      ui_theme::infoActionPressed(), ui_theme::accentBorder(), [this]() {
+        const auto *current = localSource();
+        if (current == nullptr || persistenceDetailsModalRoot == nullptr) {
+          return;
+        }
+        const std::string_view attemptId =
+            current->persistenceOptions.attempt == nullptr
+                ? std::string_view{}
+                : std::string_view(
+                      current->persistenceOptions.attempt->attemptId);
+        const auto details = result_persistence::saveConflictDetails(
+            current->persistenceOptions.outcome, attemptId);
+        if (!details.has_value()) {
+          return;
+        }
+        if (persistenceDetailsStateText != nullptr) {
+          persistenceDetailsStateText->setText("Save state: " +
+                                               details->state);
+        }
+        if (persistenceDetailsReasonText != nullptr) {
+          persistenceDetailsReasonText->setText("Reason\n" +
+                                                details->reason);
+        }
+        if (persistenceDetailsReferenceText != nullptr) {
+          std::string references =
+              details->attemptId.empty()
+                  ? "Attempt ID: unavailable"
+                  : "Attempt ID: " + details->attemptId;
+          if (details->replayId.has_value()) {
+            references += "\nReplay ID: " +
+                          std::to_string(*details->replayId);
+          }
+          persistenceDetailsReferenceText->setText(references);
+        }
+        persistenceDetailsModalRoot->setSize(rendering::window_width,
+                                             rendering::window_height);
+        persistenceDetailsModalRoot->setVisible(true);
+        persistenceDetailsModalRoot->applyYogaLayout();
+      });
+  const std::string_view attemptId =
+      persistenceOptions.attempt == nullptr
+          ? std::string_view{}
+          : std::string_view(persistenceOptions.attempt->attemptId);
+  const bool hasConflictDetails =
+      result_persistence::saveConflictDetails(persistenceOptions.outcome,
+                                              attemptId)
+          .has_value();
+  persistenceDetailsButton->setVisible(hasConflictDetails);
+  persistenceDetailsButton->setDisplay(hasConflictDetails ? YGDisplayFlex
+                                                           : YGDisplayNone);
+  actions->addView(persistenceDetailsButton);
   actions->addView(makeButton(
       "Continue Without Saving", ui_theme::warningAction(),
       ui_theme::warningActionHover(), ui_theme::warningActionPressed(),
@@ -808,6 +862,98 @@ void ResultScene::addResultPersistenceStatus() {
     rootLayout->addView(status);
   }
   resultPersistenceStatus = status;
+
+  persistenceDetailsModalRoot = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  persistenceDetailsModalRoot->setPositionType(YGPositionTypeAbsolute);
+  persistenceDetailsModalRoot->setPosition(Edge::Left, 0);
+  persistenceDetailsModalRoot->setPosition(Edge::Top, 0);
+  persistenceDetailsModalRoot->setZIndex(2200);
+  persistenceDetailsModalRoot->setVisible(false);
+  persistenceDetailsModalRoot->setFlexDirection(FlexDirection::Column);
+  persistenceDetailsModalRoot->setAlignItems(YGAlignCenter);
+  persistenceDetailsModalRoot->setJustifyContent(YGJustifyCenter);
+  persistenceDetailsModalRoot->setBackgroundColor(ui_theme::scrim());
+
+  auto *modalPanel = new View();
+  const float modalWidth = std::max(
+      320.0F,
+      std::min(760.0F, static_cast<float>(rendering::window_width) - 64.0F));
+  const float modalHeight = std::max(
+      420.0F,
+      std::min(600.0F, static_cast<float>(rendering::window_height) - 64.0F));
+  modalPanel->setWidth(modalWidth)
+      ->setHeight(modalHeight)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(14)
+      ->setPadding(Edge::All, 24)
+      ->setBackgroundColor(ui_theme::panelStrong())
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setShadow(ui_theme::shadow(), ui_theme::kModalShadow)
+      ->setBorderColor(ui_theme::hairline())
+      ->setBorderWidth(1);
+
+  auto *modalTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  modalTitle->setText("Save Conflict Details");
+  modalTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  modalTitle->setHeight(42);
+  modalPanel->addView(modalTitle);
+
+  auto *modalIntroduction =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  modalIntroduction->setText(
+      "This diagnostic identifies the integrity check that raised the "
+      "warning.");
+  modalIntroduction->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  modalIntroduction->setWrap(true);
+  modalIntroduction->setHeight(50);
+  modalPanel->addView(modalIntroduction);
+
+  persistenceDetailsStateText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  persistenceDetailsStateText->setColor(
+      ui_theme::sdl(ui_theme::textPrimary()));
+  persistenceDetailsStateText->setWrap(true);
+  persistenceDetailsStateText->setHeight(34);
+  modalPanel->addView(persistenceDetailsStateText);
+
+  persistenceDetailsReasonText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  persistenceDetailsReasonText->setColor(
+      ui_theme::sdl(ui_theme::textPrimary()));
+  persistenceDetailsReasonText->setWrap(true);
+  persistenceDetailsReasonText->setMinHeight(130);
+  persistenceDetailsReasonText->setFlexGrow(1);
+  persistenceDetailsReasonText->setFlexShrink(1);
+  modalPanel->addView(persistenceDetailsReasonText);
+
+  persistenceDetailsReferenceText =
+      new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+  persistenceDetailsReferenceText->setColor(
+      ui_theme::sdl(ui_theme::textMuted()));
+  persistenceDetailsReferenceText->setWrap(true);
+  persistenceDetailsReferenceText->setHeight(66);
+  modalPanel->addView(persistenceDetailsReferenceText);
+
+  auto *modalFooter = new View();
+  modalFooter->setFlexDirection(FlexDirection::Row);
+  modalFooter->setJustifyContent(YGJustifyFlexEnd);
+  modalFooter->setHeight(60);
+  modalFooter->setFlexShrink(0);
+  auto *closeButton = makeButton(
+      "Close", ui_theme::infoAction(), ui_theme::infoActionHover(),
+      ui_theme::infoActionPressed(), ui_theme::accentBorder(), [this]() {
+        if (persistenceDetailsModalRoot != nullptr) {
+          persistenceDetailsModalRoot->setVisible(false);
+        }
+      });
+  closeButton->setSize(160, 60);
+  modalFooter->addView(closeButton);
+  modalPanel->addView(modalFooter);
+
+  persistenceDetailsModalRoot->addView(modalPanel);
+  rootLayout->addView(persistenceDetailsModalRoot);
 }
 
 ir::IrResultPresentation ResultScene::makeIrResultPresentation() const {
@@ -1122,6 +1268,24 @@ void ResultScene::updateResultPersistencePresentation() {
     persistenceRetryButton->setEnabled(
         local->persistenceOptions.attempt != nullptr &&
         local->persistenceOptions.outcome.retryable());
+  }
+  const std::string_view attemptId =
+      local->persistenceOptions.attempt == nullptr
+          ? std::string_view{}
+          : std::string_view(local->persistenceOptions.attempt->attemptId);
+  const bool hasConflictDetails =
+      result_persistence::saveConflictDetails(
+          local->persistenceOptions.outcome, attemptId)
+          .has_value();
+  if (persistenceDetailsButton != nullptr) {
+    const bool showDetails = decisionRequired && hasConflictDetails;
+    persistenceDetailsButton->setVisible(showDetails);
+    persistenceDetailsButton->setDisplay(showDetails ? YGDisplayFlex
+                                                     : YGDisplayNone);
+  }
+  if ((!decisionRequired || !hasConflictDetails) &&
+      persistenceDetailsModalRoot != nullptr) {
+    persistenceDetailsModalRoot->setVisible(false);
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -2585,6 +2749,10 @@ void ResultScene::update(float dt) {
 }
 
 void ResultScene::renderScene() {
+  if (persistenceDetailsModalRoot != nullptr) {
+    persistenceDetailsModalRoot->setSize(rendering::window_width,
+                                         rendering::window_height);
+  }
   if (rankingOverlayPortal != nullptr) {
     rankingOverlayPortal->setSize(rendering::window_width,
                                   rendering::window_height);
@@ -2599,6 +2767,11 @@ void ResultScene::cleanupScene() {
   resultPersistenceStatus = nullptr;
   persistenceStatusMessage = nullptr;
   persistenceRetryButton = nullptr;
+  persistenceDetailsButton = nullptr;
+  persistenceDetailsModalRoot = nullptr;
+  persistenceDetailsStateText = nullptr;
+  persistenceDetailsReasonText = nullptr;
+  persistenceDetailsReferenceText = nullptr;
   irResultStatus = nullptr;
   irResultStatusText = nullptr;
   irResultDetailText = nullptr;
