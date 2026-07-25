@@ -341,6 +341,36 @@ void testCommittedScoreBeforeAckRecoversWithoutDuplicate() {
   assertDatabaseCounts(replayPath, scorePath, 1, 1, 0);
 }
 
+void testProjectionConflictNamesDifferingBadCount() {
+  TemporaryDirectory temporary("projection-bad-conflict");
+  const auto replayPath = temporary.path() / "replay.db";
+  const auto scorePath = temporary.path() / "score.db";
+  ReplayRepository replay(replayPath);
+  ScoreRepository score(scorePath);
+  const ChartResultAttempt fixed =
+      sampleAttempt(temporary.path(), "projection-bad-conflict", 4);
+
+  const StageOutcome staged = replay.StageChartResult(fixed, {});
+  assert(staged.status == StageStatus::Staged);
+  const PendingReadOutcome loaded =
+      replay.LoadPendingChartScore(fixed.attemptId);
+  assert(loaded.status == PendingReadStatus::Found && loaded.value);
+
+  PendingChartScoreWrite conflicting = *loaded.value;
+  ++conflicting.score.bad;
+  assert(score.SaveProjectedScore(conflicting).status ==
+         ProjectionStatus::Inserted);
+
+  Coordinator coordinator(score, replay);
+  const SaveOutcome outcome = coordinator.persist(fixed);
+  assert(outcome.state == SaveState::PendingConflict);
+  assert(outcome.diagnostic.find(
+             "score projection: score payload differs: ") !=
+         std::string::npos);
+  assert(outcome.diagnostic.find("bad expected=1 actual=2") !=
+         std::string::npos);
+}
+
 void testActivationFailureRetainsPendingAndRecoveryActivatesIr() {
   TemporaryDirectory temporary("ir-activation-recovery");
   const auto replayPath = temporary.path() / "replay.db";
@@ -645,6 +675,7 @@ int main() {
   testPersistCreatesOneReplayOneScoreNoPending();
   testCrashAfterStageRecoversExactlyOneScore();
   testCommittedScoreBeforeAckRecoversWithoutDuplicate();
+  testProjectionConflictNamesDifferingBadCount();
   testActivationFailureRetainsPendingAndRecoveryActivatesIr();
   testGameplayEquivalentAutomaticDraftCaptureHonorsProfileMode();
   testProfileSwitchCannotAcquireGateMidPersist();

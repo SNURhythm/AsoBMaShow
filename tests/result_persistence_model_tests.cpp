@@ -331,6 +331,15 @@ void testScoreDifferenceDiagnostics() {
   expectScoreDifference(fixture, [](auto &v) { ++v.provenance.schemaVersion; },
                         "provenance");
 
+  auto positiveZeroGauge = score;
+  positiveZeroGauge.finalGauge = 0.0F;
+  auto negativeZeroGauge = positiveZeroGauge;
+  negativeZeroGauge.finalGauge = -0.0F;
+  expect(result_persistence::describeChartScoreDifference(
+             positiveZeroGauge, negativeZeroGauge)
+             .find("finalGauge") != std::string::npos,
+         "score difference preserves final gauge bit patterns");
+
   auto privateTextMismatch = score;
   privateTextMismatch.chartPath = "private/chart/location.bms";
   privateTextMismatch.chartMd5 = repeated('c', 32);

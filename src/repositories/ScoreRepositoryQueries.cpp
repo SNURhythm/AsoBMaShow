@@ -18,7 +18,6 @@
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <atomic>
-#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -253,29 +252,6 @@ bool readStrictScoreInteger(sqlite3_stmt *stmt, int column, int &value) {
   return true;
 }
 
-bool sameFloatBits(float left, float right) {
-  return std::bit_cast<std::uint32_t>(left) ==
-         std::bit_cast<std::uint32_t>(right);
-}
-
-bool sameChartScoreWrite(const result_persistence::ChartScoreWrite &left,
-                         const result_persistence::ChartScoreWrite &right) {
-  return left.chartPath == right.chartPath && left.chartMd5 == right.chartMd5 &&
-         left.chartSha256 == right.chartSha256 &&
-         left.chartTitle == right.chartTitle &&
-         left.chartArtist == right.chartArtist &&
-         left.longNoteMode == right.longNoteMode && left.score == right.score &&
-         left.maxScore == right.maxScore && left.maxCombo == right.maxCombo &&
-         left.comboBreak == right.comboBreak && left.pGreat == right.pGreat &&
-         left.great == right.great && left.good == right.good &&
-         left.bad == right.bad && left.poor == right.poor &&
-         left.kPoor == right.kPoor && left.fast == right.fast &&
-         left.slow == right.slow &&
-         sameFloatBits(left.finalGauge, right.finalGauge) &&
-         left.clearType == right.clearType &&
-         left.provenance == right.provenance;
-}
-
 result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
     sqlite3 *db, const result_persistence::PendingChartScoreWrite &pending,
     const std::string &expectedProvenanceJson) {
@@ -392,12 +368,20 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
   }
   stored.provenance = std::move(*storedProvenance);
 
-  if (storedAttemptId != pending.attemptId ||
-      storedCreatedAt != pending.createdAt ||
-      !sameChartScoreWrite(stored, pending.score)) {
+  if (storedAttemptId != pending.attemptId) {
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic =
-                "stored projected score does not match the attempted payload"};
+                "stored projected score attempt identity differs"};
+  }
+  if (storedCreatedAt != pending.createdAt) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic = "stored projected score timestamp differs"};
+  }
+  const std::string scoreDifference =
+      describeChartScoreDifference(pending.score, stored);
+  if (!scoreDifference.empty()) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic = scoreDifference};
   }
   return {.status = ProjectionStatus::AlreadyPresent};
 }

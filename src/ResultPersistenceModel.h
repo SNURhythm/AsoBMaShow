@@ -3,6 +3,8 @@
 #include "ReplayData.h"
 
 #include <array>
+#include <bit>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -73,7 +75,17 @@ describeChartScoreDifference(const ChartScoreWrite &expected,
   scalar("kPoor", expected.kPoor, actual.kPoor);
   scalar("fast", expected.fast, actual.fast);
   scalar("slow", expected.slow, actual.slow);
-  scalar("finalGauge", expected.finalGauge, actual.finalGauge);
+  const std::uint32_t expectedGaugeBits =
+      std::bit_cast<std::uint32_t>(expected.finalGauge);
+  const std::uint32_t actualGaugeBits =
+      std::bit_cast<std::uint32_t>(actual.finalGauge);
+  if (expectedGaugeBits != actualGaugeBits) {
+    differences.push_back(
+        "finalGauge expected=" + std::to_string(expected.finalGauge) +
+        " actual=" + std::to_string(actual.finalGauge) +
+        " expectedBits=" + std::to_string(expectedGaugeBits) +
+        " actualBits=" + std::to_string(actualGaugeBits));
+  }
   scalar("clearType", expected.clearType, actual.clearType);
   opaque("provenance", expected.provenance, actual.provenance);
 
