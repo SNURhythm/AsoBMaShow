@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySimulation.h"
+#include "../../replay/ReplayPlaybackData.h"
 
 #include <array>
 #include <atomic>
@@ -21,6 +22,12 @@ inline constexpr std::size_t kRealtimeGameplayTransactionHistorySize = 256;
 
 enum class RealtimeGameplayInputType : std::uint8_t { Press, Release };
 
+enum class RealtimeLogicalControlKind : std::uint8_t {
+  Lane,
+  ScratchClockwise,
+  ScratchCounterClockwise,
+};
+
 struct RealtimeGameplayInput {
   std::uint64_t epoch = 0;
   RealtimeGameplayInputType type = RealtimeGameplayInputType::Press;
@@ -29,6 +36,8 @@ struct RealtimeGameplayInput {
   bool backSpin = false;
   std::int64_t steadyTimestampMicros = 0;
   std::int64_t inputDelayMicros = 0;
+  RealtimeLogicalControlKind replayControl =
+      RealtimeLogicalControlKind::Lane;
 };
 
 struct RealtimeGameplayAudioReservation {
@@ -205,6 +214,8 @@ public:
   [[nodiscard]] bool running() const noexcept;
   [[nodiscard]] std::vector<GameplayReplayEvent>
   copyReplayEventsAfterStop() const;
+  [[nodiscard]] std::vector<replay::InputTransition>
+  copyAcceptedReplayInputAfterStop() const;
   [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
   [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
 
@@ -217,6 +228,8 @@ private:
   void run();
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
+  void recordAcceptedReplayInput(const RealtimeGameplayInput &,
+                                 std::int64_t songTimeMicros);
   bool advanceAutomatic();
   bool commitAutomaticTransactions(
       std::span<const GameplayInputResult> transactions);
@@ -235,6 +248,7 @@ private:
   std::uint64_t snapshotGeneration_ = 0;
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
+  std::vector<replay::InputTransition> acceptedReplayInput_;
   std::array<RealtimeGameplayTransaction,
              kRealtimeGameplayTransactionHistorySize>
       transactionHistory_{};

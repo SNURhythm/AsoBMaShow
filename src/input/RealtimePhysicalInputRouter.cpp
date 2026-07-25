@@ -11,7 +11,8 @@ RealtimePhysicalInputRouter::RealtimePhysicalInputRouter(
       pipeline_(*this, profile, std::move(activeScopes),
                 [this](const LogicalInputTransition &transition) {
                   emitCommand(transition);
-                }) {}
+                }, {},
+                [this](const auto &transition) { emitApplied(transition); }) {}
 
 void RealtimePhysicalInputRouter::consume(
     const PhysicalInputEvent &event, std::int64_t steadyTimestampMicros) {
@@ -24,7 +25,7 @@ void RealtimePhysicalInputRouter::disconnectDevice(
     std::string_view deviceId, std::int64_t steadyTimestampMicros) {
   const std::lock_guard lock(mutex_);
   currentTimestampMicros_ = steadyTimestampMicros;
-  pipeline_.disconnectDevice(deviceId);
+  pipeline_.disconnectDevice(deviceId, steadyTimestampMicros);
 }
 
 void RealtimePhysicalInputRouter::setGameplayEnabled(
@@ -45,7 +46,7 @@ void RealtimePhysicalInputRouter::setGameplayEnabled(
     (void)emit(desiredLanePressed_[lane]
                    ? RealtimePhysicalInputTransitionType::Press
                    : RealtimePhysicalInputTransitionType::Release,
-               static_cast<int>(lane));
+               static_cast<int>(lane), false, desiredReplayControls_[lane]);
   }
 }
 
@@ -53,32 +54,51 @@ bms_parser::Note *RealtimePhysicalInputRouter::pressLane(
     int mainLane, int compensateLane, double inputDelay) {
   (void)compensateLane;
   (void)inputDelay;
-  (void)emit(RealtimePhysicalInputTransitionType::Press, mainLane);
+  prepare(RealtimePhysicalInputTransitionType::Press, mainLane);
   return nullptr;
 }
 
 bms_parser::Note *RealtimePhysicalInputRouter::pressLane(int lane,
                                                          double inputDelay) {
   (void)inputDelay;
-  (void)emit(RealtimePhysicalInputTransitionType::Press, lane);
+  prepare(RealtimePhysicalInputTransitionType::Press, lane);
   return nullptr;
 }
 
 bms_parser::Note *RealtimePhysicalInputRouter::releaseLane(
     int lane, double inputDelay, bool isBackSpin) {
   (void)inputDelay;
-  (void)emit(RealtimePhysicalInputTransitionType::Release, lane, isBackSpin);
+  prepare(RealtimePhysicalInputTransitionType::Release, lane, isBackSpin);
   return nullptr;
 }
 
-bool RealtimePhysicalInputRouter::emit(
+void RealtimePhysicalInputRouter::prepare(
     RealtimePhysicalInputTransitionType type, int lane, bool backSpin) {
+  pendingTransition_ = {.type = type, .lane = lane, .backSpin = backSpin};
+}
+
+void RealtimePhysicalInputRouter::emitApplied(
+    const LogicalGameplayInputAdapter::AppliedTransition &applied) {
+  if (!pendingTransition_.has_value()) {
+    return;
+  }
+  auto pending = *pendingTransition_;
+  pendingTransition_.reset();
+  pending.replayControl = applied.control.kind;
+  (void)emit(pending.type, pending.lane, pending.backSpin,
+             pending.replayControl);
+}
+
+bool RealtimePhysicalInputRouter::emit(
+    RealtimePhysicalInputTransitionType type, int lane, bool backSpin,
+    replay::LogicalControlKind replayControl) {
   const bool tracked = lane >= 0 &&
                        static_cast<std::size_t>(lane) <
                            desiredLanePressed_.size();
   if (tracked) {
     desiredLanePressed_[static_cast<std::size_t>(lane)] =
         type == RealtimePhysicalInputTransitionType::Press;
+    desiredReplayControls_[static_cast<std::size_t>(lane)] = replayControl;
   }
   if (!gameplayEnabled_ || !sink_) {
     return true;
@@ -91,6 +111,7 @@ bool RealtimePhysicalInputRouter::emit(
   const bool published = sink_({.type = type,
                                 .lane = lane,
                                 .backSpin = backSpin,
+                                .replayControl = replayControl,
                                 .steadyTimestampMicros =
                                     currentTimestampMicros_});
   if (published && tracked) {

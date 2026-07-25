@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -137,10 +138,16 @@ void InputBindingResolver::consume(const input::PhysicalInputEvent &event) {
     evaluations.push_back(
         {.bindingIndex = index, .active = active, .value = value});
   }
-  applyEvaluations(evaluations);
+  const auto timestamp =
+      event.timestampMicros >
+              static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+          ? std::numeric_limits<std::int64_t>::max()
+          : static_cast<std::int64_t>(event.timestampMicros);
+  applyEvaluations(evaluations, timestamp);
 }
 
-void InputBindingResolver::disconnectDevice(std::string_view stableId) {
+void InputBindingResolver::disconnectDevice(
+    std::string_view stableId, std::int64_t steadyTimestampMicros) {
   std::vector<BindingEvaluation> evaluations;
   for (std::size_t index = 0; index < profile_.bindings.size(); ++index) {
     if (physicalStates_[index].active &&
@@ -150,10 +157,10 @@ void InputBindingResolver::disconnectDevice(std::string_view stableId) {
           {.bindingIndex = index, .active = false, .value = 0.0f});
     }
   }
-  applyEvaluations(evaluations);
+  applyEvaluations(evaluations, steadyTimestampMicros);
 }
 
-void InputBindingResolver::reset() {
+void InputBindingResolver::reset(std::int64_t steadyTimestampMicros) {
   std::vector<BindingEvaluation> evaluations;
   for (std::size_t index = 0; index < physicalStates_.size(); ++index) {
     if (physicalStates_[index].active) {
@@ -161,7 +168,7 @@ void InputBindingResolver::reset() {
           {.bindingIndex = index, .active = false, .value = 0.0f});
     }
   }
-  applyEvaluations(evaluations);
+  applyEvaluations(evaluations, steadyTimestampMicros);
 }
 
 std::set<input::DeviceClass> InputBindingResolver::activeDeviceClasses() const {
@@ -179,7 +186,8 @@ bool InputBindingResolver::scopeIsActive(input::InputScope scope) const {
 }
 
 void InputBindingResolver::applyEvaluations(
-    std::span<const BindingEvaluation> evaluations) {
+    std::span<const BindingEvaluation> evaluations,
+    std::int64_t steadyTimestampMicros) {
   std::vector<LogicalStateKey> affectedKeys;
   std::map<LogicalStateKey, std::size_t> previousCounts;
   std::map<LogicalStateKey, float> pressValues;
@@ -229,7 +237,8 @@ void InputBindingResolver::applyEvaluations(
       transitions.push_back({.scope = key.scope,
                              .action = key.action,
                              .pressed = false,
-                             .value = 0.0f});
+                             .value = 0.0f,
+                             .steadyTimestampMicros = steadyTimestampMicros});
     }
   }
   for (const auto &key : affectedKeys) {
@@ -241,7 +250,8 @@ void InputBindingResolver::applyEvaluations(
       transitions.push_back({.scope = key.scope,
                              .action = key.action,
                              .pressed = true,
-                             .value = pressValues.at(key)});
+                             .value = pressValues.at(key),
+                             .steadyTimestampMicros = steadyTimestampMicros});
     }
   }
 

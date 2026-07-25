@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -18,6 +19,8 @@ struct RealtimePhysicalInputTransition {
       RealtimePhysicalInputTransitionType::Press;
   int lane = 0;
   bool backSpin = false;
+  replay::LogicalControlKind replayControl =
+      replay::LogicalControlKind::Lane;
   LogicalInputTransition command;
   std::int64_t steadyTimestampMicros = 0;
 };
@@ -46,7 +49,12 @@ private:
   bms_parser::Note *releaseLane(int lane, double inputDelay,
                                 bool isBackSpin) override;
   bool emit(RealtimePhysicalInputTransitionType, int lane,
-            bool backSpin = false);
+            bool backSpin = false,
+            replay::LogicalControlKind replayControl =
+                replay::LogicalControlKind::Lane);
+  void emitApplied(const LogicalGameplayInputAdapter::AppliedTransition &);
+  void prepare(RealtimePhysicalInputTransitionType, int lane,
+               bool backSpin = false);
   void emitCommand(const LogicalInputTransition &);
 
   std::mutex mutex_;
@@ -55,6 +63,9 @@ private:
   bool gameplayEnabled_ = false;
   std::array<bool, kTrackedLaneCapacity> desiredLanePressed_{};
   std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
+  std::array<replay::LogicalControlKind, kTrackedLaneCapacity>
+      desiredReplayControls_{};
+  std::optional<RealtimePhysicalInputTransition> pendingTransition_;
   LogicalGameplayInputPipeline pipeline_;
 };
 

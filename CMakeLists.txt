@@ -790,6 +790,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_file_store_tests PRIVATE cxx_std_23)
 
+    add_executable(replay_input_recorder_tests
+        tests/replay_input_recorder_tests.cpp
+        src/replay/ReplayInputRecorder.cpp
+    )
+    target_include_directories(replay_input_recorder_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_input_recorder_tests PRIVATE cxx_std_23)
+
     add_executable(ir_driver_tests
         tests/ir_driver_tests.cpp
         src/ir/IrDriver.cpp
@@ -2899,6 +2908,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         beatoraja_replay_codec_tests
         atomic_file_tests
         replay_file_store_tests
+        replay_input_recorder_tests
         ir_driver_tests
         ir_receipt_models_tests
         ir_upload_candidates_tests

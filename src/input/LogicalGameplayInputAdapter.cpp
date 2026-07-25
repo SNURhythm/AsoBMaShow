@@ -64,8 +64,10 @@ InputProfile makeGameplayInputProfileWithEscapeFallback(
 }
 
 LogicalGameplayInputAdapter::LogicalGameplayInputAdapter(
-    IRhythmControl &control, CommandCallback commandCallback)
-    : control_(control), commandCallback_(std::move(commandCallback)) {}
+    IRhythmControl &control, CommandCallback commandCallback,
+    AppliedTransitionCallback appliedTransitionCallback)
+    : control_(control), commandCallback_(std::move(commandCallback)),
+      appliedTransitionCallback_(std::move(appliedTransitionCallback)) {}
 
 void LogicalGameplayInputAdapter::apply(
     std::span<const input::LogicalInputTransition> transitions) {
@@ -170,6 +172,7 @@ void LogicalGameplayInputAdapter::applyLane(
     const bool inserted = heldLaneScopes_[lane].insert(transition.scope).second;
     if (inserted && !wasHeld) {
       control_.pressLane(lane);
+      notifyApplied(transition, replayLaneControl(transition), true);
     }
     return;
   }
@@ -183,6 +186,7 @@ void LogicalGameplayInputAdapter::applyLane(
   }
   if (!isLaneHeld(lane)) {
     control_.releaseLane(lane, 0.0, false);
+    notifyApplied(transition, replayLaneControl(transition), false);
   }
 }
 
@@ -205,12 +209,18 @@ void LogicalGameplayInputAdapter::applyScratch(
     }
 
     if (!state.heldDirections.empty()) {
+      const ScratchDirection fallback = *state.heldDirections.begin();
       state.activeDirection = *state.heldDirections.begin();
       if (oppositeReleasedInBatch) {
+        state.deferredReleaseDirection = direction;
         return;
       }
       control_.releaseLane(lane, 0.0, true);
+      notifyApplied(transition, replayScratchControl(transition, direction),
+                    false);
       control_.pressLane(lane);
+      notifyApplied(transition, replayScratchControl(transition, fallback),
+                    true);
       return;
     }
 
@@ -218,8 +228,14 @@ void LogicalGameplayInputAdapter::applyScratch(
     const bool digitalLaneHeld = heldLaneScopes_.contains(lane);
     if (reversing || !digitalLaneHeld) {
       control_.releaseLane(lane, 0.0, reversing);
+      const auto releasedDirection =
+          state.deferredReleaseDirection.value_or(direction);
+      notifyApplied(transition,
+                    replayScratchControl(transition, releasedDirection),
+                    false);
       if (reversing && digitalLaneHeld) {
         control_.pressLane(lane);
+        notifyApplied(transition, replayLaneControl(transition), true);
       }
     }
     scratchLaneStates_.erase(found);
@@ -233,14 +249,56 @@ void LogicalGameplayInputAdapter::applyScratch(
     return;
   }
   if (state.activeDirection.has_value()) {
+    const ScratchDirection previous = *state.activeDirection;
     control_.releaseLane(lane, 0.0, true);
+    notifyApplied(transition, replayScratchControl(transition, previous),
+                  false);
     control_.pressLane(lane);
+    notifyApplied(transition, replayScratchControl(transition, direction),
+                  true);
     state.activeDirection = direction;
     return;
   }
   state.activeDirection = direction;
   if (!wasHeld) {
     control_.pressLane(lane);
+    notifyApplied(transition, replayScratchControl(transition, direction),
+                  true);
+  }
+}
+
+replay::LogicalControl LogicalGameplayInputAdapter::replayLaneControl(
+    const input::LogicalInputTransition &transition) {
+  int lane = transition.action.lane;
+  if (transition.scope.player == 2) {
+    lane -= transition.scope.keyMode == 48 ? 26 : 8;
+  }
+  const bool digitalScratch =
+      (transition.scope.keyMode == 5 || transition.scope.keyMode == 7 ||
+       transition.scope.keyMode == 10 || transition.scope.keyMode == 14) &&
+      transition.action.lane == scratchLane(transition.scope);
+  return {.kind = digitalScratch ? replay::LogicalControlKind::ScratchClockwise
+                                 : replay::LogicalControlKind::Lane,
+          .player = transition.scope.player,
+          .lane = digitalScratch ? -1 : lane};
+}
+
+replay::LogicalControl LogicalGameplayInputAdapter::replayScratchControl(
+    const input::LogicalInputTransition &transition,
+    ScratchDirection direction) {
+  return {.kind = direction == ScratchDirection::Clockwise
+                      ? replay::LogicalControlKind::ScratchClockwise
+                      : replay::LogicalControlKind::ScratchCounterClockwise,
+          .player = transition.scope.player,
+          .lane = -1};
+}
+
+void LogicalGameplayInputAdapter::notifyApplied(
+    const input::LogicalInputTransition &source,
+    replay::LogicalControl control, bool pressed) {
+  if (appliedTransitionCallback_) {
+    appliedTransitionCallback_(
+        {.source = source, .control = control, .pressed = pressed});
   }
 }
 
@@ -248,8 +306,11 @@ LogicalGameplayInputPipeline::LogicalGameplayInputPipeline(
     IRhythmControl &control, const InputProfile &profile,
     std::vector<input::InputScope> activeScopes,
     LogicalGameplayInputAdapter::CommandCallback commandCallback,
-    LogicalGameplayRegistryPolicy registryPolicy)
-    : adapter_(control, std::move(commandCallback)),
+    LogicalGameplayRegistryPolicy registryPolicy,
+    LogicalGameplayInputAdapter::AppliedTransitionCallback
+        appliedTransitionCallback)
+    : adapter_(control, std::move(commandCallback),
+               std::move(appliedTransitionCallback)),
       resolver_(
           profile, std::move(activeScopes),
           {.onTransitions =
@@ -270,7 +331,8 @@ bool LogicalGameplayInputPipeline::consumeRegistryEvent(
 }
 
 bool LogicalGameplayInputPipeline::consumeDirectKeyboard(int scancode,
-                                                         bool pressed) {
+                                                         bool pressed,
+                                                         std::int64_t steadyTimestampMicros) {
   if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_NUM_SCANCODES) {
     return false;
   }
@@ -280,15 +342,21 @@ bool LogicalGameplayInputPipeline::consumeDirectKeyboard(int scancode,
                                  .index = scancode,
                                  .direction = input::ControlDirection::Any},
                      .rawValue = pressed ? 1.0 : 0.0,
-                     .normalizedValue = pressed ? 1.0F : 0.0F});
+                     .normalizedValue = pressed ? 1.0F : 0.0F,
+                     .timestampMicros = steadyTimestampMicros > 0
+                                            ? static_cast<std::uint64_t>(
+                                                  steadyTimestampMicros)
+                                            : 0});
   return true;
 }
 
-void LogicalGameplayInputPipeline::disconnectDevice(std::string_view stableId) {
-  resolver_.disconnectDevice(stableId);
+void LogicalGameplayInputPipeline::disconnectDevice(
+    std::string_view stableId, std::int64_t steadyTimestampMicros) {
+  resolver_.disconnectDevice(stableId, steadyTimestampMicros);
 }
 
-void LogicalGameplayInputPipeline::reset() {
-  resolver_.reset();
+void LogicalGameplayInputPipeline::reset(
+    std::int64_t steadyTimestampMicros) {
+  resolver_.reset(steadyTimestampMicros);
   adapter_.reset();
 }

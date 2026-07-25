@@ -6,6 +6,7 @@
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
+#include "../../replay/ReplayInputRecorder.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "NoteTimeRange.h"
@@ -14,6 +15,7 @@
 #include "../Scene.h"
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
+#include "../../input/LogicalGameplayInputAdapter.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeResultFlow.h"
 #include "../../view/TextView.h"
@@ -118,6 +120,12 @@ private:
   void renderCoursePauseHoldRing();
   void beginReplayRecording();
   void finishReplayRecording();
+  void captureReplayAppliedTransition(
+      const LogicalGameplayInputAdapter::AppliedTransition &);
+  void captureReplayControl(std::int64_t steadyTimestampMicros,
+                            replay::LogicalControl, bool pressed);
+  void captureReplayControlAtSongTime(std::int64_t songTimeMicros,
+                                      replay::LogicalControl, bool pressed);
   void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayEvents(long long gameplayTimeMicros);
@@ -209,6 +217,9 @@ private:
   std::uint64_t realtimeGameplayEpoch = 0;
   std::unordered_map<int, bool> lanePressed;
   ReplayData recordedReplay;
+  replay::ReplayPlaybackData recordedPlaybackReplay;
+  std::unique_ptr<replay::ReplayInputRecorder> replayInputRecorder;
+  std::vector<replay::InputTransition> pendingReplayInput;
   ReplayData analyticsReplay;
   ResultPersistenceOptions resultPersistenceOptions;
   std::string resultPersistenceAttemptId;
@@ -223,6 +234,7 @@ private:
   bool playbackInitializationFailed = false;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
+  bool rawReplayFinished = false;
   bool resultTransitionScheduled = false;
   bool resultPersistenceAttemptCreationTried = false;
   bool floatingLaneCoverDragActive = false;

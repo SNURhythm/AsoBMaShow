@@ -172,12 +172,33 @@ void testScratchFlickEmitsAtomicBackspinAndPressPair() {
   require(capture.events.size() == 3 &&
               capture.events[0].type ==
                   gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[0].replayControl ==
+                  gameplay::RealtimeLogicalControlKind::ScratchClockwise &&
               capture.events[1].type ==
                   gameplay::RealtimeGameplayInputType::Release &&
               capture.events[1].backSpin &&
+              capture.events[1].replayControl ==
+                  gameplay::RealtimeLogicalControlKind::ScratchClockwise &&
               capture.events[2].type ==
-                  gameplay::RealtimeGameplayInputType::Press,
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events[2].replayControl == gameplay::
+                                                         RealtimeLogicalControlKind::
+                                                             ScratchCounterClockwise,
           "scratch reversal remains ordered on the realtime ingress");
+
+  require(router.consume({.fingerId = 3,
+                          .phase = gameplay::RealtimeTouchPhase::Up,
+                          .normalizedX = 0.75F,
+                          .normalizedY = 0.51F,
+                          .steadyTimestampMicros = 40}),
+          "scratch lift releases the active direction");
+  require(capture.events.size() == 4 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().replayControl == gameplay::
+                                                           RealtimeLogicalControlKind::
+                                                               ScratchCounterClockwise,
+          "scratch lift retains the matching replay direction");
 }
 
 void testScratchLongNoteIgnoresSmallDirectionJitter() {

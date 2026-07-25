@@ -26,8 +26,9 @@ public:
 
   void setMode(Mode);
   void consume(const input::PhysicalInputEvent &);
-  void disconnectDevice(std::string_view stableId);
-  void reset();
+  void disconnectDevice(std::string_view stableId,
+                        std::int64_t steadyTimestampMicros = 0);
+  void reset(std::int64_t steadyTimestampMicros = 0);
   std::set<input::DeviceClass> activeDeviceClasses() const;
 
 private:
@@ -49,7 +50,8 @@ private:
   };
 
   bool scopeIsActive(input::InputScope scope) const;
-  void applyEvaluations(std::span<const BindingEvaluation> evaluations);
+  void applyEvaluations(std::span<const BindingEvaluation> evaluations,
+                        std::int64_t steadyTimestampMicros = 0);
 
   InputProfile profile_;
   std::vector<input::InputScope> activeScopes_;

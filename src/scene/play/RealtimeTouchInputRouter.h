@@ -84,7 +84,9 @@ private:
   [[nodiscard]] bool laneOccupied(int lane,
                                   std::int64_t exceptFinger) const noexcept;
   bool emit(RealtimeGameplayInputType type, int lane,
-            std::int64_t timestampMicros, bool backSpin = false) noexcept;
+            std::int64_t timestampMicros, bool backSpin = false,
+            RealtimeLogicalControlKind replayControl =
+                RealtimeLogicalControlKind::Lane) noexcept;
   bool beginLane(FingerState &finger, std::size_t laneIndex,
                  const RealtimeTouchSample &sample) noexcept;
   bool releaseLane(FingerState &finger, std::int64_t timestampMicros,

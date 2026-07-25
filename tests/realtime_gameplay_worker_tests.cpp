@@ -698,6 +698,45 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
   }
 }
 
+void testStoppedWorkerTransfersEveryAcceptedDirectedInput() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.inputTriggeredKeysounds = false;
+  config.activationSongTimeMicros = 10'000'000;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           std::move(config));
+  require(worker.start(), "raw-input fixture starts");
+  for (int index = 0; index < 300; ++index) {
+    require(worker.enqueueInput(
+                {.epoch = 7,
+                 .type = index % 2 == 0
+                             ? gameplay::RealtimeGameplayInputType::Press
+                             : gameplay::RealtimeGameplayInputType::Release,
+                 .lane = 7,
+                 .compensateLane = 7,
+                 .steadyTimestampMicros = 1'000 + index,
+                 .replayControl =
+                     gameplay::RealtimeLogicalControlKind::ScratchCounterClockwise}),
+            "directed raw input enters the worker");
+  }
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->transactionSequence >= 300;
+          }),
+          "worker processes every input beyond snapshot history capacity");
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(replayInput.size() == 300 &&
+              replayInput.front().songTimeMicros == 1'000 &&
+              replayInput.back().songTimeMicros == 1'299 &&
+              replayInput.front().control.kind == replay::LogicalControlKind::
+                                                        ScratchCounterClockwise &&
+              replayInput.front().pressed && !replayInput.back().pressed,
+          "stopped worker retains the full accepted directed input stream");
+}
+
 void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
   FakeClock clock;
   FakeAudio audio;
@@ -767,6 +806,7 @@ int main() {
   testPracticeAutoplayCompletesWithoutFramePump();
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
+  testStoppedWorkerTransfersEveryAcceptedDirectedInput();
   testLr2MultiBadPublishesEveryTransactionWithOneKeysound();
   return 0;
 }

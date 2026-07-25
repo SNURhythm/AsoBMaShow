@@ -98,6 +98,50 @@ void testLaneTransitionsPreserveDpLaneNumbers() {
   require(commands.empty(), "lane transitions never leak to commands");
 }
 
+void testAppliedReplayTransitionsContainOnlyEffectiveLogicalEdges() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 2),
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 2),
+      transition({1, 7}, input::LogicalActionKind::Pause, true),
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 2, 0.0F),
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 2, 0.0F),
+  });
+
+  require(applied.size() == 2 && applied[0].pressed &&
+              !applied[1].pressed &&
+              applied[0].control ==
+                  replay::LogicalControl{.kind =
+                                             replay::LogicalControlKind::Lane,
+                                         .player = 1,
+                                         .lane = 2},
+          "only effective lane edges are exposed to replay capture");
+
+  applied.clear();
+  auto clockwise = transition(
+      {2, 14}, input::LogicalActionKind::ScratchClockwise, true);
+  clockwise.steadyTimestampMicros = 123'456;
+  adapter.apply(std::vector{clockwise});
+  adapter.apply(std::vector{transition(
+      {2, 14}, input::LogicalActionKind::ScratchCounterClockwise, true)});
+  require(applied.size() == 3 && applied[0].pressed &&
+              applied[0].source.steadyTimestampMicros == 123'456 &&
+              applied[0].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              !applied[1].pressed &&
+              applied[1].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied[2].pressed &&
+              applied[2].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              applied[2].control.player == 2,
+          "scratch reversal exposes the old release and new directed press");
+}
+
 void testGameplayScopesEnableBothPlayersOnlyForDp() {
   require(makeGameplayInputScopes(7) ==
               std::vector<input::InputScope>{{.player = 1, .keyMode = 7}},
@@ -933,6 +977,49 @@ void testRealtimePhysicalInputDisconnectReleasesHeldLane() {
           "native disconnect releases held realtime lanes immediately");
 }
 
+void testRealtimePhysicalInputPreservesScratchDirection() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-scratch-ccw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind =
+                      input::LogicalActionKind::ScratchCounterClockwise},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(
+      profile, makeGameplayInputScopes(7),
+      [&](const auto &value) {
+        output.push_back(value);
+        return true;
+      });
+  router.setGameplayEnabled(true, 100);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 1.0,
+       .normalizedValue = 1.0F},
+      200);
+  router.consume(
+      {.control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A},
+       .rawValue = 0.0,
+       .normalizedValue = 0.0F},
+      300);
+  require(output.size() == 2 &&
+              output[0].replayControl == replay::LogicalControlKind::
+                                                 ScratchCounterClockwise &&
+              output[1].replayControl == replay::LogicalControlKind::
+                                                 ScratchCounterClockwise,
+          "native realtime scratch press and release retain direction");
+}
+
 void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   const audio::PlaybackRate assistedRate{75};
   require(clear_policy::assistClearRequired(assistedRate),
@@ -971,6 +1058,7 @@ void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
 
 int main() {
   testLaneTransitionsPreserveDpLaneNumbers();
+  testAppliedReplayTransitionsContainOnlyEffectiveLogicalEdges();
   testGameplayScopesEnableBothPlayersOnlyForDp();
   testScratchReversalAndLateReleaseOrdering();
   testScratchReversalFallsBackToOlderHeldDirection();
@@ -997,6 +1085,7 @@ int main() {
   testRealtimePhysicalInputPauseDefersReleasedLaneUntilResume();
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
+  testRealtimePhysicalInputPreservesScratchDirection();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

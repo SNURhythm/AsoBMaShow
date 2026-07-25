@@ -86,6 +86,7 @@ struct LogicalInputTransition {
   LogicalAction action;
   bool pressed = false;
   float value = 0.0f;
+  std::int64_t steadyTimestampMicros = 0;
 };
 
 struct InputDeviceSnapshot {

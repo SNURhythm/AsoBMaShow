@@ -5,6 +5,7 @@
 #include "InputBindingResolver.h"
 #include "InputProfile.h"
 #include "InputTypes.h"
+#include "../replay/ReplayPlaybackData.h"
 
 #include <functional>
 #include <map>
@@ -26,8 +27,16 @@ class LogicalGameplayInputAdapter {
 public:
   using CommandCallback =
       std::function<void(const input::LogicalInputTransition &)>;
+  struct AppliedTransition {
+    input::LogicalInputTransition source;
+    replay::LogicalControl control;
+    bool pressed = false;
+  };
+  using AppliedTransitionCallback =
+      std::function<void(const AppliedTransition &)>;
 
-  LogicalGameplayInputAdapter(IRhythmControl &, CommandCallback);
+  LogicalGameplayInputAdapter(IRhythmControl &, CommandCallback,
+                              AppliedTransitionCallback = {});
 
   void apply(std::span<const input::LogicalInputTransition> transitions);
   void reset();
@@ -37,6 +46,7 @@ private:
   struct ScratchLaneState {
     std::set<ScratchDirection> heldDirections;
     std::optional<ScratchDirection> activeDirection;
+    std::optional<ScratchDirection> deferredReleaseDirection;
   };
 
   static int scratchLane(input::InputScope scope);
@@ -45,9 +55,17 @@ private:
   void applyScratch(const input::LogicalInputTransition &transition,
                     ScratchDirection direction, bool reversing = false,
                     bool oppositeReleasedInBatch = false);
+  [[nodiscard]] static replay::LogicalControl
+  replayLaneControl(const input::LogicalInputTransition &transition);
+  [[nodiscard]] static replay::LogicalControl
+  replayScratchControl(const input::LogicalInputTransition &transition,
+                       ScratchDirection direction);
+  void notifyApplied(const input::LogicalInputTransition &,
+                     replay::LogicalControl, bool pressed);
 
   IRhythmControl &control_;
   CommandCallback commandCallback_;
+  AppliedTransitionCallback appliedTransitionCallback_;
   std::map<int, std::set<input::InputScope>> heldLaneScopes_;
   std::map<int, ScratchLaneState> scratchLaneStates_;
 };
@@ -62,7 +80,9 @@ public:
       IRhythmControl &, const InputProfile &,
       std::vector<input::InputScope> activeScopes,
       LogicalGameplayInputAdapter::CommandCallback commandCallback = {},
-      LogicalGameplayRegistryPolicy registryPolicy = {});
+      LogicalGameplayRegistryPolicy registryPolicy = {},
+      LogicalGameplayInputAdapter::AppliedTransitionCallback
+          appliedTransitionCallback = {});
   LogicalGameplayInputPipeline(const LogicalGameplayInputPipeline &) = delete;
   LogicalGameplayInputPipeline &
   operator=(const LogicalGameplayInputPipeline &) = delete;
@@ -71,9 +91,11 @@ public:
   operator=(LogicalGameplayInputPipeline &&) = delete;
 
   bool consumeRegistryEvent(const input::PhysicalInputEvent &event);
-  bool consumeDirectKeyboard(int scancode, bool pressed);
-  void disconnectDevice(std::string_view stableId);
-  void reset();
+  bool consumeDirectKeyboard(int scancode, bool pressed,
+                             std::int64_t steadyTimestampMicros = 0);
+  void disconnectDevice(std::string_view stableId,
+                        std::int64_t steadyTimestampMicros = 0);
+  void reset(std::int64_t steadyTimestampMicros = 0);
 
 private:
   LogicalGameplayInputAdapter adapter_;

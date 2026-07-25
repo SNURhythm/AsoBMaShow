@@ -90,7 +90,9 @@ bool RealtimeTouchInputRouter::laneOccupied(
 
 bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
                                     std::int64_t timestampMicros,
-                                    bool backSpin) noexcept {
+                                    bool backSpin,
+                                    RealtimeLogicalControlKind
+                                        replayControl) noexcept {
   return sink_.emit != nullptr &&
          sink_.emit(sink_.context,
                     {.epoch = epoch_,
@@ -98,7 +100,8 @@ bool RealtimeTouchInputRouter::emit(RealtimeGameplayInputType type, int lane,
                      .lane = lane,
                      .compensateLane = lane,
                      .backSpin = backSpin,
-                     .steadyTimestampMicros = timestampMicros});
+                     .steadyTimestampMicros = timestampMicros,
+                     .replayControl = replayControl});
 }
 
 bool RealtimeTouchInputRouter::beginLane(
@@ -134,7 +137,13 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
                                            std::int64_t timestampMicros,
                                            bool backSpin) noexcept {
   const int lane = finger.lane;
-  const bool shouldEmit = lane >= 0 && (finger.pressed || finger.scratch);
+  const bool shouldEmit = lane >= 0 && finger.pressed;
+  const auto replayControl =
+      finger.scratchDirection > 0
+          ? RealtimeLogicalControlKind::ScratchClockwise
+          : finger.scratchDirection < 0
+                ? RealtimeLogicalControlKind::ScratchCounterClockwise
+                : RealtimeLogicalControlKind::Lane;
   finger.lane = -1;
   finger.pressed = false;
   finger.scratch = false;
@@ -144,7 +153,7 @@ bool RealtimeTouchInputRouter::releaseLane(FingerState &finger,
     return true;
   }
   return emit(RealtimeGameplayInputType::Release, lane, timestampMicros,
-              backSpin);
+              backSpin, replayControl);
 }
 
 bool RealtimeTouchInputRouter::handleScratchMove(
@@ -169,12 +178,18 @@ bool RealtimeTouchInputRouter::handleScratchMove(
   }
   if (finger.pressed &&
       !emit(RealtimeGameplayInputType::Release, finger.lane,
-            sample.steadyTimestampMicros, true)) {
+            sample.steadyTimestampMicros, true,
+            finger.scratchDirection > 0
+                ? RealtimeLogicalControlKind::ScratchClockwise
+                : RealtimeLogicalControlKind::ScratchCounterClockwise)) {
     return false;
   }
   finger.pressed = false;
   if (!emit(RealtimeGameplayInputType::Press, finger.lane,
-            sample.steadyTimestampMicros)) {
+            sample.steadyTimestampMicros, false,
+            direction > 0
+                ? RealtimeLogicalControlKind::ScratchClockwise
+                : RealtimeLogicalControlKind::ScratchCounterClockwise)) {
     return false;
   }
   finger.pressed = true;

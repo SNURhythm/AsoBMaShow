@@ -4,6 +4,7 @@
 
 #include "RhythmInputHandler.h"
 #include "SDLTouchInputSource.h"
+#include "InputTimestamp.h"
 #include "../rendering/common.h"
 #include "bx/math.h"
 #include "../rendering/Camera.h"
@@ -11,6 +12,7 @@
 #include "../targets.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <map>
 #include <cmath>
 #include <memory>
@@ -23,6 +25,12 @@
 
 namespace {
 constexpr Uint32 kCancelledTouchGraceMs = 50;
+
+std::int64_t steadyNowMicros() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 bool hasActiveLongNote(FlickState &flickState) {
   if (flickState.activeLongNote == nullptr) {
@@ -50,7 +58,7 @@ void RhythmInputHandler::onKeyDown(int keyCode, KeySource keySource) {
   SDL_Log("KeyDown: %d (%d)", keyCode, scancode);
   if (logicalInputPipeline != nullptr) {
     logicalInputPipeline->consumeDirectKeyboard(static_cast<int>(scancode),
-                                                true);
+                                                true, steadyNowMicros());
   }
 }
 void RhythmInputHandler::onKeyUp(int keyCode, KeySource keySource) {
@@ -58,7 +66,7 @@ void RhythmInputHandler::onKeyUp(int keyCode, KeySource keySource) {
   const auto scancode = InputNormalizer::normalizeScancode(keyCode, keySource);
   if (logicalInputPipeline != nullptr) {
     logicalInputPipeline->consumeDirectKeyboard(static_cast<int>(scancode),
-                                                false);
+                                                false, steadyNowMicros());
   }
 }
 
@@ -96,6 +104,7 @@ void RhythmInputHandler::beginFingerLane(SDL_FingerID fingerIndex, int lane,
   flickStates.erase(fingerIndex);
   control->pressLane(lane);
   fingerLanePressed[fingerIndex] = true;
+  notifyTouchLaneApplied(lane, true);
 }
 
 void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
@@ -107,6 +116,11 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   }
 
   const int lane = laneIt->second;
+  const auto flick = flickStates.find(fingerIndex);
+  const std::optional<int> scratchDirection =
+      flick != flickStates.end() && flick->second.lastFlickDirection != 0
+          ? std::optional<int>(flick->second.lastFlickDirection)
+          : std::nullopt;
   const auto pressedIt = fingerLanePressed.find(fingerIndex);
   const bool shouldRelease =
       isScratchLane(lane) ||
@@ -116,6 +130,9 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   flickStates.erase(fingerIndex);
   if (shouldRelease) {
     control->releaseLane(lane, 0.0, false);
+    if (!isScratchLane(lane) || scratchDirection.has_value()) {
+      notifyTouchLaneApplied(lane, false, scratchDirection);
+    }
   }
 }
 
@@ -151,9 +168,11 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
     int direction = dy < 0 ? 1 : -1;
     if (direction != flickState.lastFlickDirection) {
       SDL_Log("Distance: %f, Direction: %d", distance, direction);
+      const int previousDirection = flickState.lastFlickDirection;
       flickState.lastFlickDirection = direction;
       if (hasActiveScratchPress) {
         control->releaseLane(lane, 0.0, true);
+        notifyTouchLaneApplied(lane, false, previousDirection);
         fingerLanePressed[fingerIndex] = false;
       }
       auto *note = control->pressLane(lane);
@@ -162,6 +181,7 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
               ? static_cast<bms_parser::LongNote *>(note)
               : nullptr;
       fingerLanePressed[fingerIndex] = true;
+      notifyTouchLaneApplied(lane, true, direction);
     }
   }
 }
@@ -299,13 +319,27 @@ bool RhythmInputHandler::startListenSDL() {
         if (logicalInputPipeline != nullptr &&
             deviceClass < registryDeviceClassEnabled.size() &&
             registryDeviceClassEnabled[deviceClass]) {
-          logicalInputPipeline->consumeRegistryEvent(event);
+          auto normalized = event;
+          const std::int64_t current = steadyNowMicros();
+          if (event.timestampMicros == 0) {
+            normalized.timestampMicros = static_cast<std::uint64_t>(current);
+          } else if (event.timestampDomain ==
+                     input::InputTimestampDomain::SdlMilliseconds) {
+            normalized.timestampMicros = static_cast<std::uint64_t>(
+                input::rebaseWrappingTimestampMillis(
+                    static_cast<std::uint32_t>(event.timestampMicros / 1000U),
+                    SDL_GetTicks(), current));
+          }
+          normalized.timestampDomain =
+              input::InputTimestampDomain::SteadyClock;
+          logicalInputPipeline->consumeRegistryEvent(normalized);
         }
       });
   deviceSubscriptionToken = inputDeviceRegistry->subscribeDevices(
       [this](const input::InputDeviceSnapshot &device) {
         if (!device.connected && logicalInputPipeline != nullptr) {
-          logicalInputPipeline->disconnectDevice(device.stableId);
+          logicalInputPipeline->disconnectDevice(device.stableId,
+                                                 steadyNowMicros());
         }
       });
   return true;
@@ -472,11 +506,16 @@ RhythmInputHandler::RhythmInputHandler(
     InputDeviceRegistry &registry, const InputProfile &profile,
     std::vector<input::InputScope> activeScopes,
     LogicalGameplayInputAdapter::CommandCallback commandCallback,
-    float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy)
-    : inputDeviceRegistry(&registry), control(control) {
+    float configuredPlayAreaWidth, LogicalGameplayRegistryPolicy registryPolicy,
+    LogicalGameplayInputAdapter::AppliedTransitionCallback
+        configuredAppliedTransitionCallback)
+    : inputDeviceRegistry(&registry), keyMode(meta.KeyMode),
+      appliedTransitionCallback(
+          std::move(configuredAppliedTransitionCallback)),
+      control(control) {
   logicalInputPipeline = std::make_unique<LogicalGameplayInputPipeline>(
       *control, profile, std::move(activeScopes), std::move(commandCallback),
-      registryPolicy);
+      registryPolicy, appliedTransitionCallback);
   laneOrder = meta.GetTotalLaneIndices();
   totalLaneCount = static_cast<int>(laneOrder.size());
   scratchLaneCount = meta.GetScratchLaneCount();
@@ -489,3 +528,37 @@ RhythmInputHandler::RhythmInputHandler(
 }
 
 RhythmInputHandler::~RhythmInputHandler() { stopListen(); }
+
+void RhythmInputHandler::notifyTouchLaneApplied(
+    int lane, bool pressed, std::optional<int> scratchDirection) {
+  if (!appliedTransitionCallback) {
+    return;
+  }
+  const bool playerTwo =
+      (keyMode == 10 || keyMode == 14) && lane >= 8;
+  const int player = playerTwo ? 2 : 1;
+  const auto kind =
+      scratchDirection.has_value()
+          ? (*scratchDirection > 0
+                 ? replay::LogicalControlKind::ScratchClockwise
+                 : replay::LogicalControlKind::ScratchCounterClockwise)
+          : replay::LogicalControlKind::Lane;
+  const int localLane = playerTwo ? lane - 8 : lane;
+  input::LogicalActionKind sourceKind = input::LogicalActionKind::Lane;
+  if (scratchDirection.has_value()) {
+    sourceKind = *scratchDirection > 0
+                     ? input::LogicalActionKind::ScratchClockwise
+                     : input::LogicalActionKind::ScratchCounterClockwise;
+  }
+  const auto timestamp = steadyNowMicros();
+  appliedTransitionCallback(
+      {.source = {.scope = {.player = player, .keyMode = keyMode},
+                  .action = {.kind = sourceKind, .lane = lane},
+                  .pressed = pressed,
+                  .value = pressed ? 1.0F : 0.0F,
+                  .steadyTimestampMicros = timestamp},
+       .control = {.kind = kind,
+                   .player = player,
+                   .lane = scratchDirection.has_value() ? -1 : localLane},
+       .pressed = pressed});
+}
