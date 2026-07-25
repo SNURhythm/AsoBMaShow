@@ -648,7 +648,9 @@ SafeAreaInsets getSafeAreaInsetsUi() {
 }
 
 bool revealPathInFileManager(const std::filesystem::path &path,
+                             const OverlayAnchor &sourceAnchor,
                              std::string &errorMessage) {
+  (void)sourceAnchor;
   errorMessage.clear();
   if (path.empty()) {
     errorMessage = "Chart file path is empty";
@@ -685,7 +687,16 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return RevealIOSFileInFiles(targetPathText, errorMessage);
+  const NormalizedOverlayAnchor normalizedSourceAnchor =
+      normalizeOverlayAnchor(sourceAnchor, rendering::window_width,
+                             rendering::window_height);
+  return RevealIOSFileInFiles(
+      targetPathText,
+      {.x = normalizedSourceAnchor.x,
+       .y = normalizedSourceAnchor.y,
+       .width = normalizedSourceAnchor.width,
+       .height = normalizedSourceAnchor.height},
+      errorMessage);
 #elif TARGET_OS_ANDROID
   errorMessage = "Reveal is not supported on Android yet";
   return false;
@@ -5667,7 +5678,7 @@ bool MainMenuScene::clearSameFolderScope() {
 
 void MainMenuScene::revealSelectedChartInFileManager() {
   if (willStart.load() || replayExportInProgress.load() ||
-      recyclerView == nullptr) {
+      recyclerView == nullptr || revealButton == nullptr) {
     return;
   }
 
@@ -5681,7 +5692,14 @@ void MainMenuScene::revealSelectedChartInFileManager() {
   }
 
   std::string errorMessage;
-  if (!revealPathInFileManager(record->meta.BmsPath, errorMessage)) {
+  const OverlayAnchor sourceAnchor{
+      .x = revealButton->getX(),
+      .y = revealButton->getY(),
+      .width = revealButton->getWidth(),
+      .height = revealButton->getHeight(),
+  };
+  if (!revealPathInFileManager(record->meta.BmsPath, sourceAnchor,
+                               errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
             fspath_to_utf8(record->meta.BmsPath).c_str(),
             errorMessage.c_str());

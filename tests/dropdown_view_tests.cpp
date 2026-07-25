@@ -10,6 +10,7 @@
 #pragma clang diagnostic pop
 #endif
 
+#include <cmath>
 #include <functional>
 #include <optional>
 #include <string>
@@ -46,6 +47,20 @@ void testOverlayPlacementUsesWindowEdges() {
       placeAnchoredOverlay(constrained, 200, 120, 46, 100, 100, 10, 4);
   if (!clamped.opensBelow || clamped.x != 10 || clamped.y != 64 ||
       clamped.width != 80 || clamped.height != 26) {
+    std::abort();
+  }
+}
+
+void testNormalizedOverlayAnchorUsesTriggerBounds() {
+  const OverlayAnchor trigger{
+      .x = 192, .y = 540, .width = 96, .height = 54};
+  const NormalizedOverlayAnchor normalized =
+      normalizeOverlayAnchor(trigger, 1920, 1080);
+  constexpr float tolerance = 0.0001f;
+  if (std::abs(normalized.x - 0.1f) > tolerance ||
+      std::abs(normalized.y - 0.5f) > tolerance ||
+      std::abs(normalized.width - 0.05f) > tolerance ||
+      std::abs(normalized.height - 0.05f) > tolerance) {
     std::abort();
   }
 }
@@ -88,6 +103,7 @@ static_assert(
 
 int main() {
   testOverlayPlacementUsesWindowEdges();
+  testNormalizedOverlayAnchorUsesTriggerBounds();
 
   DropdownView::State state{.enabled = true};
   const DropdownView::Option unavailable{
