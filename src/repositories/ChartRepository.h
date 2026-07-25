@@ -60,6 +60,7 @@ struct ChartMetaQuery {
   std::optional<double> bpmMax;
   std::optional<std::string> difficultyMinLevel;
   std::optional<std::string> difficultyMaxLevel;
+  std::optional<std::filesystem::path> exactFolder;
   ChartRecordSortCriterion sortCriterion = ChartRecordSortCriterion::Default;
   ChartRecordSortDirection sortDirection =
       ChartRecordSortDirection::Descending;
