@@ -834,11 +834,18 @@ bool validateChartScoreReplaySemantics(
   }
   const ScoreStageProvenance *stage =
       score_provenance::uniqueStageForChart(score.provenance, chartMeta);
-  if (stage == nullptr || stage->longNoteMode <= long_note_mode::kUnknownValue ||
-      long_note_mode::normalizeValue(stage->longNoteMode) !=
-          stage->longNoteMode) {
+  if (stage == nullptr) {
     return reject(
-        "score long-note mode does not match a unique provenance stage");
+        "score provenance does not identify a unique stage for the chart");
+  }
+  if (long_note_mode::normalizeValue(stage->longNoteMode) !=
+      stage->longNoteMode) {
+    return reject(
+        "score provenance stage long-note mode is outside the canonical "
+        "range");
+  }
+  if (stage->longNoteMode <= long_note_mode::kUnknownValue) {
+    return reject("score provenance stage long-note mode is unspecified");
   }
   if (storedReplayChartLongNoteMode.has_value()) {
     const int replayChartLongNoteMode = *storedReplayChartLongNoteMode;

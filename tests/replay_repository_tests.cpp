@@ -1652,6 +1652,22 @@ void testStageRejectsSemanticResultConflicts(
   longNoteModeConflict.score.longNoteMode = 1;
   expectConflict(longNoteModeConflict);
 
+  auto unspecifiedProvenanceMode =
+      sampleChartAttempt(root, "stage-semantic-unspecified-ln-mode", 18);
+  unspecifiedProvenanceMode.replay.provenance.stages.front().longNoteMode =
+      long_note_mode::kUnknownValue;
+  unspecifiedProvenanceMode.score.provenance =
+      unspecifiedProvenanceMode.replay.provenance;
+  unspecifiedProvenanceMode.payloadFingerprint =
+      result_persistence::payloadFingerprint(unspecifiedProvenanceMode.replay,
+                                             unspecifiedProvenanceMode.score);
+  const auto unspecifiedModeOutcome =
+      helper.StageChartResult(unspecifiedProvenanceMode, {});
+  assert(unspecifiedModeOutcome.status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  assert(unspecifiedModeOutcome.diagnostic ==
+         "score provenance stage long-note mode is unspecified");
+
   auto impossibleScore =
       sampleChartAttempt(root, "stage-semantic-impossible", 12);
   ++impossibleScore.score.score;

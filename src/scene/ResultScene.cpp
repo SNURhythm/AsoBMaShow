@@ -2211,8 +2211,8 @@ void ResultScene::startRetry(bool samePattern) {
             practiceConfiguration.has_value()
                 ? practiceConfiguration->gaugeAutoShiftLowerBound
                 : retrySource.gaugeAutoShiftLowerBound;
-        options.longNoteMode = normalizeChartLongNoteModeValue(
-            retrySource.chartMeta.LnMode);
+        options.longNoteMode = resultRetryLongNoteMode(
+            retrySource.chartMeta, local->attemptProvenance);
         options.assistOption = retrySource.assistOption;
         options.clubMode = local->attemptProvenance.clubMode;
         options.pacemakerTarget =
