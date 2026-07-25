@@ -220,6 +220,21 @@ inline void applyPracticeConfigurationToStartOptions(
                                            : attemptProvenance.playback;
 }
 
+[[nodiscard]] inline int
+resultRetryLongNoteMode(const bms_parser::ChartMeta &chartMeta,
+                        const ScoreProvenance &attemptProvenance) {
+  const int chartLongNoteMode =
+      normalizeChartLongNoteModeValue(chartMeta.LnMode);
+  if (chartLongNoteMode > long_note_mode::kUnknownValue) {
+    return chartLongNoteMode;
+  }
+  const ScoreStageProvenance *stage =
+      score_provenance::uniqueStageForChart(attemptProvenance, chartMeta);
+  return stage == nullptr
+             ? long_note_mode::kUnknownValue
+             : normalizeChartLongNoteModeValue(stage->longNoteMode);
+}
+
 [[nodiscard]] inline Judge
 makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
   Judge judge(rank);

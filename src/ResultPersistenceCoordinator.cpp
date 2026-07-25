@@ -41,7 +41,35 @@ void appendDiagnostic(std::string &destination, std::string_view diagnostic) {
   destination += diagnostic;
 }
 
+std::string phaseDiagnostic(std::string_view phase,
+                            std::string_view diagnostic,
+                            std::string_view fallback) {
+  std::string result(phase);
+  result += ": ";
+  result += diagnostic.empty() ? fallback : diagnostic;
+  return result;
+}
+
+void appendPhaseDiagnostic(std::string &destination, std::string_view phase,
+                           std::string_view diagnostic,
+                           std::string_view fallback) {
+  appendDiagnostic(destination,
+                   phaseDiagnostic(phase, diagnostic, fallback));
+}
+
+bool isConflictState(SaveState state) noexcept {
+  return state == SaveState::UnstagedConflict ||
+         state == SaveState::PendingConflict;
+}
+
+void ensureConflictDiagnostic(SaveState state, std::string &diagnostic) {
+  if (isConflictState(state) && diagnostic.empty()) {
+    diagnostic = "persistence conflict reported without details";
+  }
+}
+
 SaveOutcome unstagedOutcome(SaveState state, std::string diagnostic) {
+  ensureConflictDiagnostic(state, diagnostic);
   return {.state = state,
           .receipt = std::nullopt,
           .userMessage = std::string(saveStateUserMessage(state)),
@@ -50,6 +78,7 @@ SaveOutcome unstagedOutcome(SaveState state, std::string diagnostic) {
 
 SaveOutcome durableOutcome(SaveState state, const StageReceipt &receipt,
                            std::string diagnostic) {
+  ensureConflictDiagnostic(state, diagnostic);
   return {.state = state,
           .receipt = receipt,
           .userMessage = std::string(saveStateUserMessage(state)),
@@ -137,6 +166,38 @@ const StageReceipt *SaveOutcome::validatedReceiptFor(
   return &*receipt;
 }
 
+std::optional<SaveConflictDetails>
+saveConflictDetails(const SaveOutcome &outcome, std::string_view attemptId) {
+  SaveConflictDetails details;
+  switch (outcome.state) {
+  case SaveState::UnstagedConflict:
+    details.state = "UnstagedConflict";
+    break;
+  case SaveState::PendingConflict:
+    details.state = "PendingConflict";
+    break;
+  case SaveState::Saved:
+  case SaveState::InvalidAttempt:
+  case SaveState::Unstaged:
+  case SaveState::PendingScore:
+  case SaveState::PendingAcknowledgement:
+    return std::nullopt;
+  }
+
+  details.reason = outcome.diagnostic.empty()
+                       ? "No diagnostic was provided."
+                       : outcome.diagnostic;
+  if (!attemptId.empty()) {
+    details.attemptId = attemptId;
+  } else if (outcome.receipt.has_value()) {
+    details.attemptId = outcome.receipt->attemptId;
+  }
+  if (outcome.receipt.has_value() && outcome.receipt->replayId > 0) {
+    details.replayId = outcome.receipt->replayId;
+  }
+  return details;
+}
+
 Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
     : Coordinator(Dependencies{
           .stage =
@@ -180,22 +241,47 @@ SaveOutcome Coordinator::persist(
   case StageStatus::StorageFailure:
     return unstagedOutcome(SaveState::Unstaged, std::move(staged.diagnostic));
   case StageStatus::IntegrityConflict:
-    return unstagedOutcome(SaveState::UnstagedConflict,
-                           std::move(staged.diagnostic));
+    return unstagedOutcome(
+        SaveState::UnstagedConflict,
+        phaseDiagnostic("staging", staged.diagnostic,
+                        "integrity conflict reported without details"));
   case StageStatus::Staged:
   case StageStatus::AlreadyStaged:
     break;
   default:
-    appendDiagnostic(staged.diagnostic, "unknown staging status");
-    return unstagedOutcome(SaveState::UnstagedConflict,
-                           std::move(staged.diagnostic));
+    return unstagedOutcome(
+        SaveState::UnstagedConflict,
+        phaseDiagnostic("staging", staged.diagnostic,
+                        "unknown staging status"));
+  }
+  if (!staged.diagnostic.empty()) {
+    staged.diagnostic =
+        phaseDiagnostic("staging", staged.diagnostic,
+                        "successful staging reported an empty diagnostic");
   }
   if (!staged.receipt.has_value() ||
       staged.receipt->attemptId != attempt.attemptId ||
       staged.receipt->replayId <= 0 || staged.receipt->createdAt.empty() ||
       (staged.status == StageStatus::Staged && !staged.receipt->scorePending)) {
-    appendDiagnostic(staged.diagnostic,
-                     "staging returned inconsistent success metadata");
+    std::string receiptDiagnostic = "inconsistent success metadata";
+    if (!staged.receipt.has_value()) {
+      receiptDiagnostic += ": receipt is missing";
+    } else if (staged.receipt->attemptId != attempt.attemptId) {
+      receiptDiagnostic += ": attempt ID expected=" + attempt.attemptId +
+                           " actual=" + staged.receipt->attemptId;
+    } else if (staged.receipt->replayId <= 0) {
+      receiptDiagnostic +=
+          ": replay ID must be positive actual=" +
+          std::to_string(staged.receipt->replayId);
+    } else if (staged.receipt->createdAt.empty()) {
+      receiptDiagnostic += ": timestamp is empty";
+    } else {
+      receiptDiagnostic +=
+          ": newly staged receipt reports score already confirmed";
+    }
+    appendPhaseDiagnostic(staged.diagnostic, "staging receipt validation",
+                          receiptDiagnostic,
+                          "inconsistent success metadata");
     return unstagedOutcome(SaveState::UnstagedConflict,
                            std::move(staged.diagnostic));
   }
@@ -207,66 +293,99 @@ SaveOutcome Coordinator::persist(
   }
 
   PendingReadOutcome loaded = dependencies_.loadPending(attempt.attemptId);
-  appendDiagnostic(staged.diagnostic, loaded.diagnostic);
   switch (loaded.status) {
   case PendingReadStatus::StorageFailure:
+    appendDiagnostic(staged.diagnostic, loaded.diagnostic);
     return durableOutcome(SaveState::PendingScore, receipt,
                           std::move(staged.diagnostic));
   case PendingReadStatus::NotFound:
+    appendPhaseDiagnostic(staged.diagnostic, "pending score read",
+                          loaded.diagnostic,
+                          "no pending score was found");
+    return durableOutcome(SaveState::PendingConflict, receipt,
+                          std::move(staged.diagnostic));
   case PendingReadStatus::IntegrityConflict:
+    appendPhaseDiagnostic(staged.diagnostic, "pending score read",
+                          loaded.diagnostic,
+                          "integrity conflict reported without details");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   case PendingReadStatus::Found:
+    if (!loaded.diagnostic.empty()) {
+      appendPhaseDiagnostic(staged.diagnostic, "pending score read",
+                            loaded.diagnostic,
+                            "Found reported without details");
+    }
     if (!loaded.value.has_value()) {
-      appendDiagnostic(staged.diagnostic,
-                       "pending read returned Found without a payload");
+      appendPhaseDiagnostic(staged.diagnostic, "pending score read", {},
+                            "Found without a payload");
       return durableOutcome(SaveState::PendingConflict, receipt,
                             std::move(staged.diagnostic));
     }
     break;
   default:
-    appendDiagnostic(staged.diagnostic, "unknown pending read status");
+    appendPhaseDiagnostic(staged.diagnostic, "pending score read", {},
+                          "unknown pending read status");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
 
   const PendingChartScoreWrite &pending = *loaded.value;
-  if (pending.attemptId != attempt.attemptId ||
-      pending.attemptId != receipt.attemptId ||
-      pending.replayId != receipt.replayId) {
-    appendDiagnostic(staged.diagnostic,
-                     "pending score identity does not match its receipt");
+  if (pending.attemptId != attempt.attemptId) {
+    appendPhaseDiagnostic(
+        staged.diagnostic, "pending score validation",
+        "attempt ID expected=" + attempt.attemptId +
+            " actual=" + pending.attemptId,
+        "attempt ID differs");
+    return durableOutcome(SaveState::PendingConflict, receipt,
+                          std::move(staged.diagnostic));
+  }
+  if (pending.replayId != receipt.replayId) {
+    appendPhaseDiagnostic(
+        staged.diagnostic, "pending score validation",
+        "replay ID expected=" + std::to_string(receipt.replayId) +
+            " actual=" + std::to_string(pending.replayId),
+        "replay ID differs");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
   if (pending.createdAt != receipt.createdAt) {
-    appendDiagnostic(staged.diagnostic,
-                     "pending score timestamp does not match its receipt");
+    appendPhaseDiagnostic(
+        staged.diagnostic, "pending score validation",
+        "timestamp expected=" + receipt.createdAt +
+            " actual=" + pending.createdAt,
+        "timestamp differs");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
   if (!(pending.score == attempt.score)) {
-    appendDiagnostic(
-        staged.diagnostic,
-        "pending score payload does not match the current attempt");
+    appendPhaseDiagnostic(
+        staged.diagnostic, "pending score validation",
+        describeChartScoreDifference(attempt.score, pending.score),
+        "score payload differs without an identifiable field");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
 
   ProjectionOutcome projected = dependencies_.project(pending);
-  appendDiagnostic(staged.diagnostic, projected.diagnostic);
   switch (projected.status) {
   case ProjectionStatus::StorageFailure:
+    appendDiagnostic(staged.diagnostic, projected.diagnostic);
     return durableOutcome(SaveState::PendingScore, receipt,
                           std::move(staged.diagnostic));
   case ProjectionStatus::IntegrityConflict:
+    appendPhaseDiagnostic(staged.diagnostic, "score projection",
+                          projected.diagnostic,
+                          "integrity conflict reported without details");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   case ProjectionStatus::Inserted:
   case ProjectionStatus::AlreadyPresent:
+    appendDiagnostic(staged.diagnostic, projected.diagnostic);
     break;
   default:
-    appendDiagnostic(staged.diagnostic, "unknown projection status");
+    appendPhaseDiagnostic(staged.diagnostic, "score projection", {},
+                          "unknown projection status");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
@@ -274,19 +393,24 @@ SaveOutcome Coordinator::persist(
   AcknowledgeOutcome acknowledged =
       dependencies_.acknowledgeAndActivate(pending.attemptId,
                                            pending.replayId);
-  appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
   switch (acknowledged.status) {
   case AcknowledgeStatus::StorageFailure:
+    appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
     return durableOutcome(SaveState::PendingAcknowledgement, receipt,
                           std::move(staged.diagnostic));
   case AcknowledgeStatus::IntegrityConflict:
+    appendPhaseDiagnostic(staged.diagnostic, "acknowledgement",
+                          acknowledged.diagnostic,
+                          "integrity conflict reported without details");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   case AcknowledgeStatus::Acknowledged:
   case AcknowledgeStatus::AlreadyAcknowledged:
+    appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
     break;
   default:
-    appendDiagnostic(staged.diagnostic, "unknown acknowledgement status");
+    appendPhaseDiagnostic(staged.diagnostic, "acknowledgement", {},
+                          "unknown acknowledgement status");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }

@@ -540,6 +540,8 @@ replayActionFromRealtime(gameplay::GameplayReplayAction action) {
     return ReplayEventAction::Mine;
   case gameplay::GameplayReplayAction::Gauge:
     return ReplayEventAction::Gauge;
+  case gameplay::GameplayReplayAction::MultiBad:
+    return ReplayEventAction::MultiBad;
   case gameplay::GameplayReplayAction::Press:
   default:
     return ReplayEventAction::Press;
@@ -3890,6 +3892,19 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
 
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   switch (event.action) {
+  case ReplayEventAction::MultiBad:
+    if (auto *note = findReplayNote(event);
+        note != nullptr && event.judgement != None) {
+      note->Play(event.judgeTimeMicros);
+      if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+          longNote != nullptr && !longNote->IsTail() &&
+          longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
+        longNote->Tail->Play(event.judgeTimeMicros);
+      }
+      onJudge(recordedJudge, false);
+      applyReplayGauge(event);
+    }
+    break;
   case ReplayEventAction::Press: {
     if (auto pressedIt = lanePressed.find(event.lane);
         pressedIt != lanePressed.end()) {
@@ -3945,7 +3960,9 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     applyReplayGauge(event);
     break;
   }
-  (void)finishIfGaugeFailed();
+  if (event.action != ReplayEventAction::MultiBad) {
+    (void)finishIfGaugeFailed();
+  }
 }
 
 void GamePlayScene::applyReplayGauge(const ReplayEvent &event) {
@@ -4159,7 +4176,9 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
       recordedReplay.events.push_back(event);
     }
   }
-  (void)finishIfGaugeFailed();
+  if (action != ReplayEventAction::MultiBad) {
+    (void)finishIfGaugeFailed();
+  }
 }
 
 void GamePlayScene::recordPreparationLaneEvent(ReplayEventAction action,

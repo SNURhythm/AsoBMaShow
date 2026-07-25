@@ -274,6 +274,8 @@ ReplayEventAction actionFromInt(int value) {
     return ReplayEventAction::Mine;
   case 4:
     return ReplayEventAction::Gauge;
+  case 5:
+    return ReplayEventAction::MultiBad;
   case 0:
   default:
     return ReplayEventAction::Press;
@@ -832,11 +834,18 @@ bool validateChartScoreReplaySemantics(
   }
   const ScoreStageProvenance *stage =
       score_provenance::uniqueStageForChart(score.provenance, chartMeta);
-  if (stage == nullptr || stage->longNoteMode <= long_note_mode::kUnknownValue ||
-      long_note_mode::normalizeValue(stage->longNoteMode) !=
-          stage->longNoteMode) {
+  if (stage == nullptr) {
     return reject(
-        "score long-note mode does not match a unique provenance stage");
+        "score provenance does not identify a unique stage for the chart");
+  }
+  if (long_note_mode::normalizeValue(stage->longNoteMode) !=
+      stage->longNoteMode) {
+    return reject(
+        "score provenance stage long-note mode is outside the canonical "
+        "range");
+  }
+  if (stage->longNoteMode <= long_note_mode::kUnknownValue) {
+    return reject("score provenance stage long-note mode is unspecified");
   }
   if (storedReplayChartLongNoteMode.has_value()) {
     const int replayChartLongNoteMode = *storedReplayChartLongNoteMode;
@@ -1612,13 +1621,31 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
                                   ? "staged result has no valid pending score"
                                   : std::move(pending.diagnostic)};
       }
-      if (pending.value->attemptId != attempt.attemptId ||
-          pending.value->replayId != existing.value.replayId ||
-          pending.value->createdAt != existing.value.createdAt ||
-          pending.value->score != attempt.score) {
+      if (pending.value->attemptId != attempt.attemptId) {
         return {.status = StageStatus::IntegrityConflict,
                 .diagnostic =
-                    "pending score differs from the staged result payload"};
+                    "staged pending score attempt identity differs"};
+      }
+      if (pending.value->replayId != existing.value.replayId) {
+        return {
+            .status = StageStatus::IntegrityConflict,
+            .diagnostic =
+                "staged pending replay ID expected=" +
+                std::to_string(existing.value.replayId) +
+                " actual=" + std::to_string(pending.value->replayId),
+        };
+      }
+      if (pending.value->createdAt != existing.value.createdAt) {
+        return {.status = StageStatus::IntegrityConflict,
+                .diagnostic = "staged pending score timestamp differs"};
+      }
+      if (pending.value->score != attempt.score) {
+        return {
+            .status = StageStatus::IntegrityConflict,
+            .diagnostic =
+                "staged pending " + describeChartScoreDifference(
+                                        attempt.score, pending.value->score),
+        };
       }
     }
     const auto verified = replay_repository_detail::VerifyIrDraftsOnConnection(

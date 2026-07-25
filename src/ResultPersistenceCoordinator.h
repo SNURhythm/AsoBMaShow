@@ -41,6 +41,17 @@ struct SaveOutcome {
   validatedReceiptFor(const ChartResultAttempt &attempt) const noexcept;
 };
 
+struct SaveConflictDetails {
+  std::string state;
+  std::string reason;
+  std::string attemptId;
+  std::optional<int> replayId;
+};
+
+[[nodiscard]] std::optional<SaveConflictDetails>
+saveConflictDetails(const SaveOutcome &outcome,
+                    std::string_view attemptId = {});
+
 struct RecoverySummary {
   std::size_t attempted = 0;
   std::size_t saved = 0;

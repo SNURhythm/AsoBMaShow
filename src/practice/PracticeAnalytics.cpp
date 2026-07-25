@@ -171,6 +171,7 @@ ChartLayout buildChartLayout(const bms_parser::Chart &chart) {
 
 bool isTimingEvent(const ReplayEvent &event) {
   return (event.action == ReplayEventAction::Press ||
+          event.action == ReplayEventAction::MultiBad ||
           event.action == ReplayEventAction::Release) &&
          event.judgement != None && event.judgement != Kpoor;
 }

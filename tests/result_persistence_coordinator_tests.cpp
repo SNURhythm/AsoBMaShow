@@ -255,6 +255,45 @@ void testSaveOutcomePresentationSemantics() {
   assert(!empty.requiresUserDecision(false, false));
 }
 
+void testConflictDetailsExposeDiagnosticAndReferences() {
+  const SaveOutcome saved{
+      .state = SaveState::Saved,
+      .receipt = receipt("attempt-a", 17, false),
+      .userMessage = {},
+      .diagnostic = {},
+  };
+  assert(!saveConflictDetails(saved, "attempt-a").has_value());
+
+  const SaveOutcome unstagedConflict{
+      .state = SaveState::UnstagedConflict,
+      .receipt = std::nullopt,
+      .userMessage = std::string(kUnstagedConflictMessage),
+      .diagnostic = "score payload contains an unexpected multi-BAD count",
+  };
+  const std::optional<SaveConflictDetails> unstagedDetails =
+      saveConflictDetails(unstagedConflict, "attempt-a");
+  assert(unstagedDetails.has_value());
+  assert(unstagedDetails->state == "UnstagedConflict");
+  assert(unstagedDetails->reason ==
+         "score payload contains an unexpected multi-BAD count");
+  assert(unstagedDetails->attemptId == "attempt-a");
+  assert(!unstagedDetails->replayId.has_value());
+
+  const SaveOutcome pendingConflict{
+      .state = SaveState::PendingConflict,
+      .receipt = receipt("attempt-a", 17, true),
+      .userMessage = std::string(kPendingConflictMessage),
+      .diagnostic = {},
+  };
+  const std::optional<SaveConflictDetails> pendingDetails =
+      saveConflictDetails(pendingConflict);
+  assert(pendingDetails.has_value());
+  assert(pendingDetails->state == "PendingConflict");
+  assert(pendingDetails->reason == "No diagnostic was provided.");
+  assert(pendingDetails->attemptId == "attempt-a");
+  assert(pendingDetails->replayId == 17);
+}
+
 void testPersistOrdersStageLoadProjectAcknowledge() {
   Harness harness;
   Coordinator coordinator(harness.dependencies());
@@ -329,8 +368,67 @@ void testStageConflictReturnsUnstagedConflictWithoutReceipt() {
   assert(!outcome.durable());
   assert(!outcome.receipt.has_value());
   assert(outcome.userMessage == kUnstagedConflictMessage);
-  assert(outcome.diagnostic == "attempt fingerprint mismatch");
+  assert(outcome.diagnostic == "staging: attempt fingerprint mismatch");
   assertOnlyStageCalled(harness);
+}
+
+void testEveryPersistDependencyConflictHasPhaseDiagnostic() {
+  {
+    Harness harness;
+    harness.stageResult = {.status = StageStatus::IntegrityConflict};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::UnstagedConflict);
+    assert(outcome.diagnostic ==
+           "staging: integrity conflict reported without details");
+  }
+  {
+    Harness harness;
+    harness.loadResult = {.status = PendingReadStatus::NotFound};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(outcome.diagnostic ==
+           "pending score read: no pending score was found");
+  }
+  {
+    Harness harness;
+    harness.loadResult = {.status = PendingReadStatus::IntegrityConflict};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(outcome.diagnostic ==
+           "pending score read: integrity conflict reported without details");
+  }
+  {
+    Harness harness;
+    harness.projectResult = {.status = ProjectionStatus::IntegrityConflict};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(outcome.diagnostic ==
+           "score projection: integrity conflict reported without details");
+  }
+  {
+    Harness harness;
+    harness.acknowledgeResult =
+        {.status = AcknowledgeStatus::IntegrityConflict};
+    Coordinator coordinator(harness.dependencies());
+
+    const SaveOutcome outcome = coordinator.persist(attempt());
+
+    assert(outcome.state == SaveState::PendingConflict);
+    assert(outcome.diagnostic ==
+           "acknowledgement: integrity conflict reported without details");
+  }
 }
 
 void testMalformedSuccessfulStageMetadataIsNotDurable() {
@@ -346,6 +444,8 @@ void testMalformedSuccessfulStageMetadataIsNotDurable() {
     assert(!outcome.durable());
     assert(!outcome.receipt.has_value());
     assert(outcome.userMessage == kUnstagedConflictMessage);
+    assert(outcome.diagnostic.find("staging receipt validation:") !=
+           std::string::npos);
     assert(outcome.diagnostic.find("inconsistent success metadata") !=
            std::string::npos);
     assertOnlyStageCalled(harness);
@@ -411,17 +511,17 @@ void testPendingReadFailuresStopBeforeProjection() {
                      .value = std::nullopt,
                      .diagnostic = "pending row missing"},
                     SaveState::PendingConflict, kPendingConflictMessage,
-                    "pending row missing");
+                    "pending score read: pending row missing");
   assertReadFailure({.status = PendingReadStatus::IntegrityConflict,
                      .value = std::nullopt,
                      .diagnostic = "pending row corrupt"},
                     SaveState::PendingConflict, kPendingConflictMessage,
-                    "pending row corrupt");
+                    "pending score read: pending row corrupt");
   assertReadFailure({.status = PendingReadStatus::Found,
                      .value = std::nullopt,
                      .diagnostic = {}},
                     SaveState::PendingConflict, kPendingConflictMessage,
-                    "pending read returned Found without a payload");
+                    "pending score read: Found without a payload");
 }
 
 void testPendingPayloadMismatchStopsBeforeProjection() {
@@ -452,17 +552,25 @@ void testPendingPayloadMismatchStopsBeforeProjection() {
   };
 
   assertMismatch(pending("different-attempt", 17),
-                 "pending score identity does not match its receipt");
+                 "pending score validation: attempt ID expected=attempt-a "
+                 "actual=different-attempt");
   assertMismatch(pending("attempt-a", 18),
-                 "pending score identity does not match its receipt");
+                 "pending score validation: replay ID expected=17 actual=18");
   PendingChartScoreWrite timestampMismatch = pending();
   timestampMismatch.createdAt = "2026-07-14 12:34:57";
   assertMismatch(std::move(timestampMismatch),
-                 "pending score timestamp does not match its receipt");
+                 "pending score validation: timestamp expected=2026-07-14 "
+                 "12:34:56 actual=2026-07-14 12:34:57");
   PendingChartScoreWrite scoreMismatch = pending();
   ++scoreMismatch.score.fast;
   assertMismatch(std::move(scoreMismatch),
-                 "pending score payload does not match the current attempt");
+                 "pending score validation: score payload differs: "
+                 "fast expected=0 actual=1");
+  PendingChartScoreWrite badMismatch = pending();
+  badMismatch.score.bad = 2;
+  assertMismatch(std::move(badMismatch),
+                 "pending score validation: score payload differs: "
+                 "bad expected=0 actual=2");
 }
 
 void testProjectionFailureRetainsPendingScore() {
@@ -503,7 +611,7 @@ void testProjectionConflictReturnsDurablePendingConflict() {
   assert(outcome.durable());
   assert(outcome.receipt.has_value());
   assert(outcome.userMessage == kPendingConflictMessage);
-  assert(outcome.diagnostic == "score payload differs");
+  assert(outcome.diagnostic == "score projection: score payload differs");
   assert((harness.events == std::vector<std::string>{"stage:attempt-a",
                                                      "load:attempt-a",
                                                      "project:attempt-a"}));
@@ -553,7 +661,8 @@ void testAcknowledgeConflictRetainsPendingConflict() {
   assert(outcome.durable());
   assert(outcome.receipt.has_value());
   assert(outcome.userMessage == kPendingConflictMessage);
-  assert(outcome.diagnostic == "outbox replay identity differs");
+  assert(outcome.diagnostic ==
+         "acknowledgement: outbox replay identity differs");
   assert((harness.events ==
           std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
                                    "project:attempt-a", "ack:attempt-a:17"}));
@@ -702,7 +811,7 @@ void testUnknownPersistStatusesFailClosed() {
     assert(!outcome.durable());
     assert(!outcome.receipt.has_value());
     assert(outcome.userMessage == kUnstagedConflictMessage);
-    assert(outcome.diagnostic == "unknown staging status");
+    assert(outcome.diagnostic == "staging: unknown staging status");
     assertOnlyStageCalled(harness);
   }
   {
@@ -719,7 +828,8 @@ void testUnknownPersistStatusesFailClosed() {
     assert(outcome.durable());
     assert(outcome.receipt.has_value());
     assert(outcome.userMessage == kPendingConflictMessage);
-    assert(outcome.diagnostic == "unknown pending read status");
+    assert(outcome.diagnostic ==
+           "pending score read: unknown pending read status");
     assert((harness.events ==
             std::vector<std::string>{"stage:attempt-a", "load:attempt-a"}));
     assert(harness.projectCalls == 0);
@@ -738,7 +848,8 @@ void testUnknownPersistStatusesFailClosed() {
     assert(outcome.durable());
     assert(outcome.receipt.has_value());
     assert(outcome.userMessage == kPendingConflictMessage);
-    assert(outcome.diagnostic == "unknown projection status");
+    assert(outcome.diagnostic ==
+           "score projection: unknown projection status");
     assert((harness.events == std::vector<std::string>{"stage:attempt-a",
                                                        "load:attempt-a",
                                                        "project:attempt-a"}));
@@ -758,7 +869,8 @@ void testUnknownPersistStatusesFailClosed() {
     assert(outcome.durable());
     assert(outcome.receipt.has_value());
     assert(outcome.userMessage == kPendingConflictMessage);
-    assert(outcome.diagnostic == "unknown acknowledgement status");
+    assert(outcome.diagnostic ==
+           "acknowledgement: unknown acknowledgement status");
     assert((harness.events ==
             std::vector<std::string>{"stage:attempt-a", "load:attempt-a",
                                      "project:attempt-a", "ack:attempt-a:17"}));
@@ -1325,10 +1437,12 @@ void testPersistentFirstBatchDoesNotStarveNewValidRow() {
 
 int main() {
   testSaveOutcomePresentationSemantics();
+  testConflictDetailsExposeDiagnosticAndReferences();
   testPersistOrdersStageLoadProjectAcknowledge();
   testPersistForwardsEveryDraftToAtomicStaging();
   testStageStorageFailureReturnsTruthfulUnstagedMessage();
   testStageConflictReturnsUnstagedConflictWithoutReceipt();
+  testEveryPersistDependencyConflictHasPhaseDiagnostic();
   testMalformedSuccessfulStageMetadataIsNotDurable();
   testPendingReadFailuresStopBeforeProjection();
   testPendingPayloadMismatchStopsBeforeProjection();

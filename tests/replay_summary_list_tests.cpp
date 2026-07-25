@@ -1,6 +1,7 @@
 #include "../src/ReplaySummaryFormatting.h"
 #include "../src/ReplayResultStateBuilder.h"
 #include "../src/ReplayAutoPlay.h"
+#include "../src/scene/play/Pacemaker.h"
 
 #include <cmath>
 #include <iostream>
@@ -149,6 +150,48 @@ int main() {
   }
   if (lr2RulesetResult.gaugeRules().ruleset != GameplayRuleset::LR2) {
     std::cerr << "replay result must retain the recorded LR2 gauge ruleset"
+              << std::endl;
+    return 1;
+  }
+
+  bms_parser::Chart multiBadChart;
+  multiBadChart.Meta.TotalNotes = 2;
+  multiBadChart.Meta.Total = 100.0;
+  ReplayData multiBadReplay;
+  multiBadReplay.initialGaugeType = GaugeType::Normal;
+  multiBadReplay.events = {
+      {.action = ReplayEventAction::MultiBad,
+       .lane = 1,
+       .noteTimeMicros = 800'000,
+       .songTimeMicros = 1'000'000,
+       .judgeTimeMicros = 1'000'000,
+       .judgement = Bad,
+       .diffMicros = 200'000,
+       .gauge = 18.0f,
+       .gaugeType = GaugeType::Normal,
+       .combo = 0,
+       .score = 0},
+      {.action = ReplayEventAction::Press,
+       .lane = 2,
+       .noteTimeMicros = 950'000,
+       .songTimeMicros = 1'000'000,
+       .judgeTimeMicros = 1'000'000,
+       .judgement = Good,
+       .diffMicros = 50'000,
+       .gauge = 20.0f,
+       .gaugeType = GaugeType::Normal,
+       .combo = 1,
+       .score = 0},
+  };
+  const RhythmState multiBadResult =
+      replay_result::BuildResultState(multiBadChart, multiBadReplay);
+  const auto multiBadProgression =
+      pacemaker::buildReplayScoreProgression(multiBadReplay, 2);
+  if (multiBadResult.judgeCount.at(Bad) != 1 ||
+      multiBadResult.judgeCount.at(Good) != 1 ||
+      multiBadResult.maxCombo != 1 || multiBadProgression.size() != 3) {
+    std::cerr << "a replay must count every multi-BAD judgement while "
+                 "retaining one physical press boundary"
               << std::endl;
     return 1;
   }

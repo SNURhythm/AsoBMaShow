@@ -492,7 +492,7 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
       multiBad.hasJudge = true;
       multiBad.judge =
           JudgeResult(Bad, inputTime - noteTimingMicros(multiBadNote));
-      setReplayEvent(multiBad, ReplayEventAction::Press,
+      setReplayEvent(multiBad, ReplayEventAction::MultiBad,
                      multiBadNote->Lane, multiBadNote, inputTime, inputTime,
                      multiBad.judge);
       inputTransactions.push_back(multiBad);

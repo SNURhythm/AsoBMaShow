@@ -1652,6 +1652,22 @@ void testStageRejectsSemanticResultConflicts(
   longNoteModeConflict.score.longNoteMode = 1;
   expectConflict(longNoteModeConflict);
 
+  auto unspecifiedProvenanceMode =
+      sampleChartAttempt(root, "stage-semantic-unspecified-ln-mode", 18);
+  unspecifiedProvenanceMode.replay.provenance.stages.front().longNoteMode =
+      long_note_mode::kUnknownValue;
+  unspecifiedProvenanceMode.score.provenance =
+      unspecifiedProvenanceMode.replay.provenance;
+  unspecifiedProvenanceMode.payloadFingerprint =
+      result_persistence::payloadFingerprint(unspecifiedProvenanceMode.replay,
+                                             unspecifiedProvenanceMode.score);
+  const auto unspecifiedModeOutcome =
+      helper.StageChartResult(unspecifiedProvenanceMode, {});
+  assert(unspecifiedModeOutcome.status ==
+         result_persistence::StageStatus::IntegrityConflict);
+  assert(unspecifiedModeOutcome.diagnostic ==
+         "score provenance stage long-note mode is unspecified");
+
   auto impossibleScore =
       sampleChartAttempt(root, "stage-semantic-impossible", 12);
   ++impossibleScore.score.score;
@@ -2250,6 +2266,17 @@ void testChartAndCourseRoundTripAndPathIsolation(
                         .songTimeMicros = -1900000,
                         .judgeTimeMicros = -1900000,
                         .judgement = None});
+  replay.events.push_back({.action = ReplayEventAction::MultiBad,
+                           .lane = 2,
+                           .noteTimeMicros = 950000,
+                           .songTimeMicros = 1000000,
+                           .judgeTimeMicros = 1000000,
+                           .judgement = Bad,
+                           .diffMicros = 50000,
+                           .gauge = 80.5f,
+                           .gaugeType = GaugeType::Hard,
+                           .combo = 0,
+                           .score = 91});
   replay.touchSamples.push_back({.action = ReplayTouchAction::Down,
                                  .fingerId = 9,
                                  .songTimeMicros = -1800000,
@@ -2275,6 +2302,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(loaded->provenance.startingGaugePercent == 37);
   assert(!loaded->events.empty());
   assert(loaded->events.front().songTimeMicros == -1900000);
+  assert(loaded->events.back().action == ReplayEventAction::MultiBad);
   assert(!loaded->touchSamples.empty());
   assert(loaded->touchSamples.front().songTimeMicros == -1800000);
   assert(!loaded->laneCoverEvents.empty());

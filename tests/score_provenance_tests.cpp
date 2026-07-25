@@ -675,6 +675,28 @@ void testResultRetryPlaybackAuthority() {
          practiceConfiguration.playback);
 }
 
+void testResultRetryLongNoteModeAuthority() {
+  ScoreProvenance attempt = sampleVerifiedProvenance("result-retry-ln-mode");
+  attempt.stages.front().chartMd5 = std::string(32, 'b');
+  attempt.stages.front().chartSha256 = std::string(64, 'a');
+  attempt.stages.front().longNoteMode = long_note_mode::kCnValue;
+
+  bms_parser::ChartMeta noLongNotes;
+  noLongNotes.MD5 = attempt.stages.front().chartMd5;
+  noLongNotes.SHA256 = attempt.stages.front().chartSha256;
+  noLongNotes.TotalLongNotes = 0;
+  noLongNotes.TotalBackSpinNotes = 0;
+  noLongNotes.LnMode = long_note_mode::kUnknownValue;
+  assert(resultRetryLongNoteMode(noLongNotes, attempt) ==
+         long_note_mode::kCnValue);
+
+  bms_parser::ChartMeta forcedLongNotes = noLongNotes;
+  forcedLongNotes.TotalLongNotes = 1;
+  forcedLongNotes.LnMode = long_note_mode::kHcnValue;
+  assert(resultRetryLongNoteMode(forcedLongNotes, attempt) ==
+         long_note_mode::kHcnValue);
+}
+
 std::vector<JudgeWindowProvenance> provenanceWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   std::vector<JudgeWindowProvenance> result;
@@ -955,6 +977,7 @@ int main() {
   testPlayStartCaptureIsImmutableAndShared();
   testReplayStartRestoresPracticeProvenance();
   testResultRetryPlaybackAuthority();
+  testResultRetryLongNoteModeAuthority();
   testReplayUsesPersistedJudgeWindowsAsAuthority();
   testReplayJudgeOverrideValidatesChartAndWindows();
   testCourseReplaySelectsMatchingStageJudgeWindows();
