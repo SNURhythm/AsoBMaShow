@@ -1122,13 +1122,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     add_executable(replay_repository_tests
-        tests/replay_repository_tests.cpp
+        tests/replay_repository_v11_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
         src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -1136,8 +1137,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/ir/IrScoreReconciliation.cpp
         src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
         src/Utils.cpp

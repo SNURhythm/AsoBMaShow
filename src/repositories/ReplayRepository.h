@@ -5,6 +5,8 @@
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
+#include "../ir/IrSubmissionSnapshot.h"
+#include "../replay/BeatorajaReplayPath.h"
 #include "../ir/IrRemoteScoreModels.h"
 #include "../ir/IrScoreReconciliation.h"
 #include "ScoreRepositoryModels.h"
@@ -21,6 +23,20 @@
 #include <vector>
 
 namespace ir {
+
+struct IrSubmissionSnapshotReadOutcome {
+  enum class Status {
+    Loaded,
+    NotFound,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<IrSubmissionSnapshot> snapshot;
+  std::string diagnostic;
+};
 
 struct IrRemoteSnapshotMutation {
   std::string providerId;
@@ -79,6 +95,64 @@ struct IrRemoteScoreLookupOutcome {
 };
 
 } // namespace ir
+
+struct ReplayFileReference {
+  enum class RecordKind { ChartResult, CourseResult };
+
+  std::int64_t id = 0;
+  RecordKind recordKind = RecordKind::ChartResult;
+  int recordId = 0;
+  std::string stem;
+  std::int64_t historyIndex = 0;
+  std::filesystem::path relativePath;
+  std::string contentSha256;
+  std::uint64_t compressedSize = 0;
+  int codecVersion = 1;
+
+  bool operator==(const ReplayFileReference &) const = default;
+};
+
+struct ReplayFileReservation {
+  std::string attemptId;
+  std::string stem;
+  std::int64_t historyIndex = 0;
+  std::filesystem::path relativePath;
+
+  bool operator==(const ReplayFileReservation &) const = default;
+};
+
+struct ReservationOutcome {
+  enum class Status {
+    Reserved,
+    AlreadyReserved,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<ReplayFileReservation> reservation;
+  std::string diagnostic;
+};
+
+struct ResultRecord {
+  result_persistence::PersistedChartResult result;
+  std::optional<ReplayFileReference> replayFile;
+};
+
+struct ResultReadOutcome {
+  enum class Status {
+    Loaded,
+    NotFound,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<ResultRecord> record;
+  std::string diagnostic;
+};
 
 namespace result_persistence {
 
@@ -174,6 +248,10 @@ struct ReplaySummary {
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
+  enum class ReplayFileState { Missing, Available, Unreadable };
+  ReplayFileState replayFileState = ReplayFileState::Missing;
+  std::optional<std::uint64_t> replayFileSize;
+  // Temporary v10 read compatibility; removed with legacy playback reads.
   int eventCount = 0;
   int touchSampleCount = 0;
   std::optional<bms_parser::ChartMeta> chartMeta;
@@ -231,7 +309,7 @@ struct CourseReplayLookup {
 
 class ReplayRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 10;
+  static constexpr int kCurrentSchemaVersion = 11;
 
   ReplayRepository();
   explicit ReplayRepository(std::filesystem::path databasePath);
@@ -248,12 +326,21 @@ public:
   [[nodiscard]] static bool HasActiveWrites();
   void Shutdown();
   bool EnsureSchema();
+  ReservationOutcome reserveReplayFile(std::string_view attemptId,
+                                       std::string_view stem);
+  result_persistence::StageOutcome stageCompletedChartAttempt(
+      const result_persistence::PersistedChartResult &result,
+      const ir::IrSubmissionSnapshot &irSnapshot,
+      const ReplayFileReference &replayFile,
+      std::span<const ir::IrOutboxDraft> irDrafts);
+  ResultReadOutcome loadChartResult(int resultId);
+  ir::IrSubmissionSnapshotReadOutcome
+  loadIrSubmissionSnapshot(std::string_view attemptId);
   std::optional<int> SaveReplay(const ReplayData &replay);
   std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
-  result_persistence::StageOutcome
-  StageChartResult(
+  result_persistence::StageOutcome StageChartResult(
       const legacy_result_persistence::LegacyChartResultAttempt &attempt,
-                   std::span<const ir::IrOutboxDraft> irDrafts);
+      std::span<const ir::IrOutboxDraft> irDrafts);
   result_persistence::PendingReadOutcome
   LoadPendingChartScore(std::string_view attemptId);
   result_persistence::PendingBatchOutcome
@@ -266,9 +353,10 @@ public:
       std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);
   ir::IrOutboxInsertOutcome
   EnqueueReadyIrOutboxDraft(const ir::IrOutboxDraft &draft, bool userIntent);
-  ir::IrManualBatchEnqueueOutcome EnqueueReadyIrOutboxDrafts(
-      std::span<const ir::IrOutboxDraft> drafts,
-      std::string_view requestOrigin, bool userIntent, std::int64_t nowMs);
+  ir::IrManualBatchEnqueueOutcome
+  EnqueueReadyIrOutboxDrafts(std::span<const ir::IrOutboxDraft> drafts,
+                             std::string_view requestOrigin, bool userIntent,
+                             std::int64_t nowMs);
   ir::IrOutboxReadOutcome LoadIrOutbox(std::string_view providerId,
                                        std::string_view attemptId);
   ir::IrOutboxBatchOutcome ListDueIrOutbox(std::int64_t nowMs,
@@ -292,8 +380,8 @@ public:
                              std::string_view errorMessage, std::int64_t nowMs);
   ir::IrOutboxMutationOutcome
   ApplyIrOutboxDelivery(const ir::IrOutboxDeliveryUpdate &update);
-  ir::IrOutboxMutationOutcome ApplyIrOutboxDeliveries(
-      std::span<const ir::IrOutboxDeliveryUpdate> updates);
+  ir::IrOutboxMutationOutcome
+  ApplyIrOutboxDeliveries(std::span<const ir::IrOutboxDeliveryUpdate> updates);
   ir::IrReceiptReadOutcome
   LoadIrSubmissionReceipt(std::string_view providerId,
                           std::string_view serverOrigin,
@@ -313,20 +401,20 @@ public:
   // the mirror is durable but before receipts and outbox work are settled.
   ir::IrRemoteSnapshotApplyOutcome
   ReplaceIrRemoteScoreMirror(const ir::IrRemoteSnapshotMutation &mutation);
-  ir::IrRemoteSnapshotApplyOutcome FinalizeIrRemoteSnapshot(
-      const ir::IrRemoteSnapshotMutation &mutation,
-      std::int64_t expectedSyncGeneration);
+  ir::IrRemoteSnapshotApplyOutcome
+  FinalizeIrRemoteSnapshot(const ir::IrRemoteSnapshotMutation &mutation,
+                           std::int64_t expectedSyncGeneration);
   ir::IrRemoteScoreReadOutcome
   ListIrRemoteScores(std::string_view providerId,
                      std::string_view serverOrigin);
-  ir::IrRemoteScoreMirrorStateOutcome LoadIrRemoteScoreMirrorState(
-      std::string_view providerId, std::string_view serverOrigin);
+  ir::IrRemoteScoreMirrorStateOutcome
+  LoadIrRemoteScoreMirrorState(std::string_view providerId,
+                               std::string_view serverOrigin);
   ir::IrRemoteScoreReadOutcome ListIrRemoteScoresForChart(
       std::string_view providerId, std::string_view serverOrigin,
       std::string_view chartMd5, std::string_view chartSha256);
   ir::IrRemoteScoreLookupOutcome
-  LoadIrRemoteScore(std::string_view providerId,
-                    std::string_view serverOrigin,
+  LoadIrRemoteScore(std::string_view providerId, std::string_view serverOrigin,
                     std::string_view remoteScoreId);
   ir::IrOutboxMutationOutcome
   ClearIrRemoteScores(std::string_view providerId,
@@ -351,10 +439,10 @@ public:
   ClearIrAccountDataSnapshot(const std::filesystem::path &snapshotDatabasePath,
                              std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
-  std::vector<ReplaySummary>
-  ListReplays(const bms_parser::ChartMeta &chartMeta, int limit = 100,
-              std::string_view irProviderId = {},
-              std::string_view irServerOrigin = {});
+  std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
+                                         int limit = 100,
+                                         std::string_view irProviderId = {},
+                                         std::string_view irServerOrigin = {});
   std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
                                                int limit = 100);
   std::optional<ReplayData> LoadReplay(int replayId,
