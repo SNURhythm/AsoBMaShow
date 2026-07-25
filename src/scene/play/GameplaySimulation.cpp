@@ -1409,7 +1409,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     commitJudge(multiBad.judge);
     multiBad.hasReplayEvent = true;
     multiBad.replayEvent = {
-        .action = GameplayReplayAction::Press,
+        .action = GameplayReplayAction::MultiBad,
         .noteId = multiBadId,
         .lane = multiBadNote.lane,
         .noteTimeMicros = multiBadNote.timingMicros,
@@ -1420,10 +1420,6 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     };
     recordReplay(multiBad.replayEvent);
     inputTransactions_.push_back(multiBad);
-    finishTransaction(judgedTime);
-    if (terminal()) {
-      return inputBatch();
-    }
   }
 
   const JudgeResult judge = config_.judge.judgeAt(

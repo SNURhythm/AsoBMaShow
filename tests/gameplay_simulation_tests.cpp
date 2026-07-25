@@ -1139,7 +1139,7 @@ struct JudgeSummary {
   bool operator==(const JudgeSummary &) const = default;
 };
 
-enum class ReplayActionSummary { Press, Release, Miss, Mine, Gauge };
+enum class ReplayActionSummary { Press, Release, Miss, Mine, Gauge, MultiBad };
 
 ReplayActionSummary replayActionSummary(ReplayEventAction action) {
   switch (action) {
@@ -1153,6 +1153,8 @@ ReplayActionSummary replayActionSummary(ReplayEventAction action) {
     return ReplayActionSummary::Mine;
   case ReplayEventAction::Gauge:
     return ReplayActionSummary::Gauge;
+  case ReplayEventAction::MultiBad:
+    return ReplayActionSummary::MultiBad;
   }
   return ReplayActionSummary::Press;
 }
@@ -1170,6 +1172,8 @@ replayActionSummary(gameplay::GameplayReplayAction action) {
     return ReplayActionSummary::Mine;
   case gameplay::GameplayReplayAction::Gauge:
     return ReplayActionSummary::Gauge;
+  case gameplay::GameplayReplayAction::MultiBad:
+    return ReplayActionSummary::MultiBad;
   }
   return ReplayActionSummary::Press;
 }
@@ -1743,17 +1747,30 @@ void testLr2MultiBadBatchAndFixedSelection() {
             "LR2 press emits multi-BAD followed by selected transaction");
     const auto &multiBad = batch.transactions[0];
     const auto &selected = batch.transactions[1];
+    const auto replayEvents = simulation.replayEvents();
+    const auto pressEventCount = std::ranges::count(
+        replayEvents, gameplay::GameplayReplayAction::Press,
+        &gameplay::GameplayReplayEvent::action);
     require(multiBad.noteId == 0 && multiBad.hasJudge &&
                 multiBad.judge.judgement == Bad &&
+                multiBad.hasReplayEvent &&
+                multiBad.replayEvent.action ==
+                    gameplay::GameplayReplayAction::MultiBad &&
                 multiBad.soundNoteId == gameplay::kInvalidNoteId &&
                 !multiBad.hasLaneVisual && selected.noteId == 1 &&
                 selected.judge.judgement == Good &&
+                selected.hasReplayEvent &&
+                selected.replayEvent.action ==
+                    gameplay::GameplayReplayAction::Press &&
                 selected.soundNoteId == 1 && selected.hasLaneVisual &&
                 batch.noteId == selected.noteId &&
                 simulation.noteState(0).played &&
                 simulation.noteState(1).played &&
                 !simulation.noteState(2).played,
             "LR2 batch ordering and selected-only sound/visual are stable");
+    require(replayEvents.size() == 2 && pressEventCount == 1,
+            "one LR2 input records one press plus its extra multi-BAD "
+            "judgement");
     return std::array{batch.transactions[0].noteId,
                       batch.transactions[1].noteId};
   };
@@ -1765,6 +1782,37 @@ void testLr2MultiBadBatchAndFixedSelection() {
     require(run(mode) == expected,
             "application note-priority setting cannot alter LR2 selection");
   }
+}
+
+void testLr2MultiBadCompletesOneInputBeforeSurvivalFailure() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 800'000)->SetNote(1, new bms_parser::Note(1));
+  addTimeline(*measure, 950'000)->SetNote(2, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition,
+      {.judge = lr2Judge(),
+       .attempt = {.initialGaugeType = GaugeType::Hazard,
+                   .startingGaugePercent = 2}});
+
+  const auto batch =
+      simulation.pressLane(1, 2, {.songTimeMicros = 1'000'000});
+  const auto snapshot = simulation.snapshot();
+  require(batch.transactions.size() == 2 &&
+              batch.transactions.front().judge.judgement == Bad &&
+              batch.transactions.back().judge.judgement == Good &&
+              snapshot.judgeCounts[Bad] == 1 &&
+              snapshot.judgeCounts[Good] == 1 &&
+              simulation.noteState(0).played &&
+              simulation.noteState(1).played &&
+              simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::SurvivalGaugeFailed,
+          "one LR2 input commits every multi-BAD judgement before its "
+          "survival failure becomes terminal");
 }
 
 void testLr2MultiBadLongHeadConsumesTail() {
@@ -1841,9 +1889,15 @@ void testLegacyControllerUsesSharedLr2BatchResolution() {
   require(batch.transactions.size() == 2 &&
               batch.transactions[0].note == multiBad &&
               batch.transactions[0].judge.judgement == Bad &&
+              batch.transactions[0].hasReplayEvent &&
+              batch.transactions[0].replayEvent.action ==
+                  ReplayEventAction::MultiBad &&
               batch.transactions[0].keySoundNote == nullptr &&
               batch.transactions[1].note == selected &&
               batch.transactions[1].judge.judgement == Good &&
+              batch.transactions[1].hasReplayEvent &&
+              batch.transactions[1].replayEvent.action ==
+                  ReplayEventAction::Press &&
               batch.transactions[1].keySoundNote == selected &&
               batch.note == selected && multiBad->IsPlayed &&
               selected->IsPlayed && !future->IsPlayed,
@@ -2142,6 +2196,7 @@ int main() {
   testLr2CandidateFilterGoldenClusters();
   testLr2RepeatedKpoorAndStrictAutomaticPoor();
   testLr2MultiBadBatchAndFixedSelection();
+  testLr2MultiBadCompletesOneInputBeforeSurvivalFailure();
   testLr2MultiBadLongHeadConsumesTail();
   testBeatorajaStillEmitsOnePrioritySelectedTransaction();
   testLegacyControllerUsesSharedLr2BatchResolution();

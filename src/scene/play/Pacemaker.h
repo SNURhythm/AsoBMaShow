@@ -61,6 +61,7 @@ inline bool replayEventCountsAsPlayedNote(const ReplayEvent &event) {
     return false;
   }
   return event.action == ReplayEventAction::Press ||
+         event.action == ReplayEventAction::MultiBad ||
          event.action == ReplayEventAction::Release ||
          event.action == ReplayEventAction::Miss;
 }

@@ -1063,6 +1063,17 @@ bool applyReplayEventForVideo(
   };
 
   switch (event.action) {
+  case ReplayEventAction::MultiBad: {
+    if (auto *note = findReplayNote(lookup, event); note != nullptr) {
+      note->Play(event.judgeTimeMicros);
+      if (auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+          longNote != nullptr && !longNote->IsTail() &&
+          longNote->Tail != nullptr && !longNote->Tail->IsPlayed) {
+        longNote->Tail->Play(event.judgeTimeMicros);
+      }
+    }
+    return applyHud();
+  }
   case ReplayEventAction::Press: {
     bool suppressHudForLongNoteHead = false;
     if (auto *note = findReplayNote(lookup, event); note != nullptr) {

@@ -49,6 +49,7 @@ inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
   for (const auto &event : replayData.events) {
     const bool isJudgedNoteEvent =
         event.action == ReplayEventAction::Press ||
+        event.action == ReplayEventAction::MultiBad ||
         event.action == ReplayEventAction::Release;
     if (!isJudgedNoteEvent || event.judgement == None ||
         event.noteTimeMicros < 0) {

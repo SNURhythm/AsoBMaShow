@@ -73,6 +73,10 @@ void testReplaySchedulePreservesExistingExclusions() {
                   .lane = 2,
                   .noteTimeMicros = 2'000'000,
                   .songTimeMicros = 2'000'000},
+      ReplayEvent{.action = ReplayEventAction::MultiBad,
+                  .lane = 1,
+                  .noteTimeMicros = 1'000'000,
+                  .songTimeMicros = 1'000'000},
       ReplayEvent{.action = ReplayEventAction::Miss,
                   .lane = 1,
                   .noteTimeMicros = 1'000'000,
@@ -80,7 +84,8 @@ void testReplaySchedulePreservesExistingExclusions() {
 
   require(buildReplayKeysoundSchedule(definition, events, 0, std::nullopt)
               .empty(),
-          "unresolved, WAV-less, and non-Press replay events stay silent");
+          "unresolved, WAV-less, and judgement-only replay events stay "
+          "silent");
 
   const std::array outsideRange{
       ReplayEvent{.action = ReplayEventAction::Press,

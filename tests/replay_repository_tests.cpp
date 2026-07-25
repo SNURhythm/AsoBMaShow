@@ -2250,6 +2250,17 @@ void testChartAndCourseRoundTripAndPathIsolation(
                         .songTimeMicros = -1900000,
                         .judgeTimeMicros = -1900000,
                         .judgement = None});
+  replay.events.push_back({.action = ReplayEventAction::MultiBad,
+                           .lane = 2,
+                           .noteTimeMicros = 950000,
+                           .songTimeMicros = 1000000,
+                           .judgeTimeMicros = 1000000,
+                           .judgement = Bad,
+                           .diffMicros = 50000,
+                           .gauge = 80.5f,
+                           .gaugeType = GaugeType::Hard,
+                           .combo = 0,
+                           .score = 91});
   replay.touchSamples.push_back({.action = ReplayTouchAction::Down,
                                  .fingerId = 9,
                                  .songTimeMicros = -1800000,
@@ -2275,6 +2286,7 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(loaded->provenance.startingGaugePercent == 37);
   assert(!loaded->events.empty());
   assert(loaded->events.front().songTimeMicros == -1900000);
+  assert(loaded->events.back().action == ReplayEventAction::MultiBad);
   assert(!loaded->touchSamples.empty());
   assert(loaded->touchSamples.front().songTimeMicros == -1800000);
   assert(!loaded->laneCoverEvents.empty());

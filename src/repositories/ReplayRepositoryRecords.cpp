@@ -274,6 +274,8 @@ ReplayEventAction actionFromInt(int value) {
     return ReplayEventAction::Mine;
   case 4:
     return ReplayEventAction::Gauge;
+  case 5:
+    return ReplayEventAction::MultiBad;
   case 0:
   default:
     return ReplayEventAction::Press;

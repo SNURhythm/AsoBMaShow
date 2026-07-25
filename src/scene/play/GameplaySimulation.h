@@ -95,7 +95,7 @@ struct GameplayInputContext {
   std::int64_t inputDelayMicros = 0;
 };
 
-enum class GameplayReplayAction { Press, Release, Miss, Mine, Gauge };
+enum class GameplayReplayAction { Press, Release, Miss, Mine, Gauge, MultiBad };
 
 struct GameplayReplayEvent {
   GameplayReplayAction action = GameplayReplayAction::Press;

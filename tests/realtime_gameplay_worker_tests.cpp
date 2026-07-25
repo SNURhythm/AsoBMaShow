@@ -724,16 +724,27 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
               snapshot->transactions[snapshot->transactionCount - 2]
                       .result.judge.judgement == Bad &&
               snapshot->transactions[snapshot->transactionCount - 2]
+                      .result.hasReplayEvent &&
+              snapshot->transactions[snapshot->transactionCount - 2]
+                      .result.replayEvent.action ==
+                  gameplay::GameplayReplayAction::MultiBad &&
+              snapshot->transactions[snapshot->transactionCount - 2]
                       .result.soundNoteId == gameplay::kInvalidNoteId &&
               snapshot->transactions[snapshot->transactionCount - 1]
                       .result.judge.judgement == Good &&
+              snapshot->transactions[snapshot->transactionCount - 1]
+                      .result.hasReplayEvent &&
+              snapshot->transactions[snapshot->transactionCount - 1]
+                      .result.replayEvent.action ==
+                  gameplay::GameplayReplayAction::Press &&
               snapshot->transactions[snapshot->transactionCount - 1]
                       .result.soundNoteId == 1 &&
               audio.reserveCount.load() == 1 &&
               audio.commitCount.load() == 1 &&
               audio.lastCommitted.load() == 1 &&
               worker.fault() == gameplay::RealtimeGameplayFault::None,
-          "only the selected LR2 transaction owns the reserved keysound");
+          "only the selected LR2 transaction is a press and owns the "
+          "reserved keysound");
   worker.stop();
 }
 
