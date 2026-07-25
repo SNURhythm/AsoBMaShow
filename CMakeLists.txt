@@ -1644,6 +1644,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(dropdown_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(dropdown_view_tests PRIVATE cxx_std_23)
 
+    add_executable(context_menu_view_tests
+        tests/context_menu_view_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/ContextMenuView.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(context_menu_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(context_menu_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(context_menu_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(view_layout_tests
         tests/view_layout_tests.cpp
         src/ir/IrRankingModal.cpp
@@ -2838,6 +2856,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         image_view_fade_tests
         chart_list_item_view_tests
         dropdown_view_tests
+        context_menu_view_tests
         view_layout_tests
         button_enabled_tests
         text_input_box_tests
