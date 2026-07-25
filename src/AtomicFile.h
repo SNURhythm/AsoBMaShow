@@ -44,6 +44,14 @@ bool syncDirectory(const std::filesystem::path &path,
 bool renameDurably(const std::filesystem::path &from,
                    const std::filesystem::path &to, std::string &errorMessage);
 
+enum class RenameNoReplaceResult { Renamed, DestinationExists, Failed };
+
+// Atomically installs `from` at `to` without replacing any existing entry.
+// POSIX callers must sync the destination directory after Renamed is returned.
+RenameNoReplaceResult renameNoReplaceDurably(const std::filesystem::path &from,
+                                             const std::filesystem::path &to,
+                                             std::string &errorMessage);
+
 bool writeWithBackup(const std::filesystem::path &path,
                      std::span<const std::byte> contents,
                      std::string &errorMessage,

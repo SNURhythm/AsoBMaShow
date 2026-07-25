@@ -766,6 +766,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(beatoraja_replay_codec_tests PRIVATE cxx_std_23)
 
+    add_executable(atomic_file_tests
+        tests/atomic_file_tests.cpp
+        src/AtomicFile.cpp
+    )
+    target_include_directories(atomic_file_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(atomic_file_tests PRIVATE cxx_std_23)
+
+    add_executable(replay_file_store_tests
+        tests/replay_file_store_tests.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
+    )
+    target_include_directories(replay_file_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
+    )
+    target_compile_features(replay_file_store_tests PRIVATE cxx_std_23)
+
     add_executable(ir_driver_tests
         tests/ir_driver_tests.cpp
         src/ir/IrDriver.cpp
@@ -2846,6 +2870,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_identity_tests
         beatoraja_replay_path_tests
         beatoraja_replay_codec_tests
+        atomic_file_tests
+        replay_file_store_tests
         ir_driver_tests
         ir_receipt_models_tests
         ir_upload_candidates_tests

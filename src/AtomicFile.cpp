@@ -12,6 +12,9 @@
 #include <Windows.h>
 #else
 #include <fcntl.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -340,6 +343,62 @@ bool renameDurably(const std::filesystem::path &from,
                    const std::filesystem::path &to, std::string &errorMessage) {
   errorMessage.clear();
   return realReplace(from, to, errorMessage);
+}
+
+RenameNoReplaceResult renameNoReplaceDurably(const std::filesystem::path &from,
+                                             const std::filesystem::path &to,
+                                             std::string &errorMessage) {
+  errorMessage.clear();
+#ifdef _WIN32
+  if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) {
+    return RenameNoReplaceResult::Renamed;
+  }
+  const DWORD error = GetLastError();
+  if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) {
+    errorMessage = "no-replace destination already exists";
+    return RenameNoReplaceResult::DestinationExists;
+  }
+  errorMessage = "MoveFileEx no-replace failed: " + std::to_string(error);
+  return RenameNoReplaceResult::Failed;
+#else
+#if defined(__linux__) && defined(SYS_renameat2)
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1U << 0)
+#endif
+  if (::syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(),
+                RENAME_NOREPLACE) == 0) {
+    return RenameNoReplaceResult::Renamed;
+  }
+  const int renameError = errno;
+  if (renameError == EEXIST) {
+    errorMessage = "no-replace destination already exists";
+    return RenameNoReplaceResult::DestinationExists;
+  }
+  if (renameError != ENOSYS && renameError != EINVAL) {
+    errorMessage = "renameat2 no-replace failed: " +
+                   std::string(std::strerror(renameError));
+    return RenameNoReplaceResult::Failed;
+  }
+#endif
+  if (::link(from.c_str(), to.c_str()) != 0) {
+    const int linkError = errno;
+    if (linkError == EEXIST) {
+      errorMessage = "no-replace destination already exists";
+      return RenameNoReplaceResult::DestinationExists;
+    }
+    errorMessage =
+        "link no-replace failed: " + std::string(std::strerror(linkError));
+    return RenameNoReplaceResult::Failed;
+  }
+  if (::unlink(from.c_str()) != 0) {
+    const int unlinkError = errno;
+    errorMessage = "installed no-replace destination but could not remove "
+                   "source name: " +
+                   std::string(std::strerror(unlinkError));
+    return RenameNoReplaceResult::Failed;
+  }
+  return RenameNoReplaceResult::Renamed;
+#endif
 }
 
 Operations defaultOperations() {
