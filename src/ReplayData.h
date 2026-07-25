@@ -4,6 +4,7 @@
 #include "CourseIdentity.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
+#include "replay/ReplayPlaybackData.h"
 #include "scene/play/Judge.h"
 #include "scene/play/RhythmState.h"
 
@@ -13,49 +14,11 @@
 #include <utility>
 #include <vector>
 
-enum class ReplayEventAction {
-  Press = 0,
-  Release = 1,
-  Miss = 2,
-  Mine = 3,
-  Gauge = 4,
-  MultiBad = 5,
-};
-
-enum class ReplayTouchAction {
-  Down = 0,
-  Move = 1,
-  Up = 2,
-  Cancel = 3,
-};
-
-struct ReplayEvent {
-  ReplayEventAction action = ReplayEventAction::Press;
-  int lane = -1;
-  long long noteTimeMicros = -1;
-  long long songTimeMicros = 0;
-  long long judgeTimeMicros = 0;
-  Judgement judgement = None;
-  long long diffMicros = 0;
-  float gauge = 0.0f;
-  GaugeType gaugeType = GaugeType::Normal;
-  int combo = 0;
-  int score = 0;
-};
-
-struct ReplayTouchSample {
-  ReplayTouchAction action = ReplayTouchAction::Move;
-  long long fingerId = 0;
-  long long songTimeMicros = 0;
-  float x = 0.0f;
-  float y = 0.0f;
-};
-
-struct ReplayLaneCoverEvent {
-  long long songTimeMicros = 0;
-  int noteStartPositionPercent = 0;
-  bool resetVisibleTimeReference = false;
-};
+using ReplayEventAction = replay::LegacyPlaybackAction;
+using ReplayTouchAction = replay::ReplayTouchAction;
+using ReplayEvent = replay::LegacyPlaybackEvent;
+using ReplayTouchSample = replay::ReplayTouchSample;
+using ReplayLaneCoverEvent = replay::ReplayLaneCoverEvent;
 
 struct ReplayData {
   int id = 0;

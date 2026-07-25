@@ -127,6 +127,7 @@ struct ChartPlaybackSetup {
   std::optional<std::int64_t> playOption2Seed;
   std::string assistOption;
   GaugeType initialGaugeType = GaugeType::Normal;
+  GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::string playbackRulesetId;
@@ -244,9 +245,9 @@ expectPath(chart(sha, 1, true), 1,
            "replay/C0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef_1.brd");
 expectPath(chart(sha, 2, true), 27,
            "replay/H0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef_27.brd");
-expectPath(course({shaA, shaB}, 1, true, {2, 7}), 0,
+expectPath(course({shaA, shaB}, 1, true, {1, 4, 7, 13, 2, 3}), 0,
            "replay/C" + shaA.substr(0, 10) + shaB.substr(0, 10) +
-               "_0207.brd");
+               "_040713.brd");
 ```
 
 Also reject uppercase/non-64-character/non-hex chart hashes, negative or

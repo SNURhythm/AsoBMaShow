@@ -741,6 +741,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(course_identity_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(course_identity_tests PRIVATE cxx_std_23)
 
+    add_executable(beatoraja_replay_path_tests
+        tests/beatoraja_replay_path_tests.cpp
+        src/replay/BeatorajaReplayPath.cpp
+    )
+    target_include_directories(beatoraja_replay_path_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(beatoraja_replay_path_tests PRIVATE cxx_std_23)
+
     add_executable(ir_driver_tests
         tests/ir_driver_tests.cpp
         src/ir/IrDriver.cpp
@@ -2819,6 +2828,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         replay_record_filters_tests
         result_record_summary_tests
         course_identity_tests
+        beatoraja_replay_path_tests
         ir_driver_tests
         ir_receipt_models_tests
         ir_upload_candidates_tests
