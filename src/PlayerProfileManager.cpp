@@ -40,6 +40,8 @@ enum class ProfileUse : unsigned char {
 namespace {
 using Json = nlohmann::json;
 constexpr std::uintmax_t kMaximumPracticeFileBytes = 1U * 1024U * 1024U;
+constexpr std::uintmax_t kMaximumReplayFileBytes =
+    2ULL * 1024ULL * 1024ULL * 1024ULL;
 
 enum class BuildMode { Migration, Create, Duplicate };
 
@@ -404,6 +406,7 @@ PlayerProfilePaths makePathsAtRoot(const std::filesystem::path &root) {
   paths.scoresDb = paths.root / "scores.db";
   paths.replaysDb = paths.root / "replays.db";
   paths.practiceDirectory = paths.root / "practice";
+  paths.replayDirectory = paths.root / "replay";
   return paths;
 }
 
@@ -504,6 +507,98 @@ bool copyPracticeDirectory(const std::filesystem::path &applicationRoot,
         std::filesystem::copy_options::none, error);
     if (error) {
       errorMessage = "unable to copy practice preset: " + error.message();
+      return false;
+    }
+  }
+  return true;
+}
+
+bool validateReplayDirectory(const std::filesystem::path &applicationRoot,
+                             const PlayerProfilePaths &paths,
+                             std::vector<std::filesystem::path> *files,
+                             std::string &errorMessage) {
+  if (!ensureContainedPath(applicationRoot, paths.replayDirectory,
+                           errorMessage)) {
+    return false;
+  }
+  std::error_code error;
+  const auto status =
+      std::filesystem::symlink_status(paths.replayDirectory, error);
+  if (error == std::errc::no_such_file_or_directory ||
+      status.type() == std::filesystem::file_type::not_found) {
+    errorMessage.clear();
+    return true;
+  }
+  if (error || !std::filesystem::is_directory(status) ||
+      hasUnsafeLink(paths.replayDirectory, status, errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "profile replay path is not a safe directory";
+    }
+    return false;
+  }
+  std::filesystem::directory_iterator iterator(paths.replayDirectory, error);
+  if (error) {
+    errorMessage =
+        "unable to enumerate profile replay directory: " + error.message();
+    return false;
+  }
+  for (const auto &entry : iterator) {
+    if (!ensureContainedPath(applicationRoot, entry.path(), errorMessage)) {
+      return false;
+    }
+    error.clear();
+    const auto entryStatus =
+        std::filesystem::symlink_status(entry.path(), error);
+    if (error || !std::filesystem::is_regular_file(entryStatus) ||
+        hasUnsafeLink(entry.path(), entryStatus, errorMessage)) {
+      if (errorMessage.empty()) {
+        errorMessage = "profile replay directory contains an unsafe entry";
+      }
+      return false;
+    }
+    if (entry.path().extension() != ".brd") {
+      continue;
+    }
+    const auto size = std::filesystem::file_size(entry.path(), error);
+    if (error || size == 0 || size > kMaximumReplayFileBytes) {
+      errorMessage = error ? "unable to inspect profile replay file size: " +
+                                 error.message()
+                           : "profile replay file exceeds its size limit";
+      return false;
+    }
+    if (files != nullptr) {
+      files->push_back(entry.path());
+    }
+  }
+  if (files != nullptr) {
+    std::ranges::sort(*files);
+  }
+  return true;
+}
+
+bool copyReplayDirectory(const std::filesystem::path &applicationRoot,
+                         const PlayerProfilePaths &source,
+                         const PlayerProfilePaths &destination,
+                         std::string &errorMessage) {
+  std::vector<std::filesystem::path> files;
+  if (!validateReplayDirectory(applicationRoot, source, &files,
+                               errorMessage)) {
+    return false;
+  }
+  std::error_code error;
+  if (!std::filesystem::create_directory(destination.replayDirectory, error) &&
+      (error ||
+       !std::filesystem::is_directory(destination.replayDirectory))) {
+    errorMessage = "unable to create duplicate replay directory: " +
+                   (error ? error.message() : "path already exists");
+    return false;
+  }
+  for (const auto &sourceFile : files) {
+    std::filesystem::copy_file(
+        sourceFile, destination.replayDirectory / sourceFile.filename(),
+        std::filesystem::copy_options::none, error);
+    if (error) {
+      errorMessage = "unable to copy replay file: " + error.message();
       return false;
     }
   }
@@ -800,6 +895,10 @@ ProfileResult validateProfileFiles(const std::filesystem::path &applicationRoot,
   }
   if (!validatePracticeDirectory(applicationRoot, paths, nullptr,
                                  safetyError)) {
+    return failure(ProfileError::IntegrityFailure, safetyError);
+  }
+  if (!validateReplayDirectory(applicationRoot, paths, nullptr,
+                               safetyError)) {
     return failure(ProfileError::IntegrityFailure, safetyError);
   }
 
@@ -1321,6 +1420,11 @@ ProfileResult buildProfile(
       return fail(ProfileError::IoFailure,
                   "unable to duplicate practice data: " + errorMessage);
     }
+    if (!copyReplayDirectory(applicationRoot, *duplicateSource, staging,
+                             errorMessage)) {
+      return fail(ProfileError::IoFailure,
+                  "unable to duplicate replay data: " + errorMessage);
+    }
   } else {
     filesystemError.clear();
     if (!std::filesystem::create_directory(staging.practiceDirectory,
@@ -1328,6 +1432,14 @@ ProfileResult buildProfile(
         filesystemError) {
       return fail(ProfileError::IoFailure,
                   "unable to create profile practice directory: " +
+                      filesystemError.message());
+    }
+    filesystemError.clear();
+    if (!std::filesystem::create_directory(staging.replayDirectory,
+                                           filesystemError) ||
+        filesystemError) {
+      return fail(ProfileError::IoFailure,
+                  "unable to create profile replay directory: " +
                       filesystemError.message());
     }
   }
@@ -1530,6 +1642,23 @@ ProfileResult buildProfile(
                                              errorMessage)) {
     return fail(ProfileError::IoFailure,
                 "unable to sync staged practice directory: " + errorMessage);
+  }
+  std::vector<std::filesystem::path> replayFiles;
+  if (!validateReplayDirectory(applicationRoot, staging, &replayFiles,
+                               errorMessage)) {
+    return fail(ProfileError::IntegrityFailure, errorMessage);
+  }
+  for (const auto &file : replayFiles) {
+    if (!dependencies.filesystem.syncFile(file, errorMessage)) {
+      return fail(ProfileError::IoFailure,
+                  "unable to make staged replay data durable: " +
+                      errorMessage);
+    }
+  }
+  if (!dependencies.filesystem.syncDirectory(staging.replayDirectory,
+                                             errorMessage)) {
+    return fail(ProfileError::IoFailure,
+                "unable to sync staged replay directory: " + errorMessage);
   }
   if (!dependencies.filesystem.syncDirectory(staging.root, errorMessage)) {
     return fail(mode == BuildMode::Migration ? ProfileError::MigrationFailure
@@ -2313,6 +2442,22 @@ ProfileResult PlayerProfileManager::installProfile(
               filesystemError.message());
     }
   }
+  bool replayDirectoryExists = false;
+  if (!pathExists(staging.replayDirectory, replayDirectoryExists,
+                  errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IoFailure, errorMessage);
+  }
+  if (!replayDirectoryExists) {
+    filesystemError.clear();
+    if (!std::filesystem::create_directory(staging.replayDirectory,
+                                           filesystemError) ||
+        filesystemError) {
+      return cleanStagingAndFail(
+          ProfileError::IoFailure,
+          "unable to create imported replay directory: " +
+              filesystemError.message());
+    }
+  }
   if (!writeProfileMetadata(staging.profileJson, sourceProfile, errorMessage)) {
     return cleanStagingAndFail(ProfileError::IoFailure,
                                "unable to write imported profile metadata: " +
@@ -2393,6 +2538,25 @@ ProfileResult PlayerProfileManager::installProfile(
                                               errorMessage)) {
     return cleanStagingAndFail(ProfileError::IoFailure,
                                "unable to sync imported practice directory: " +
+                                   errorMessage);
+  }
+  std::vector<std::filesystem::path> importedReplayFiles;
+  if (!validateReplayDirectory(applicationDataRoot_, staging,
+                               &importedReplayFiles, errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IntegrityFailure, errorMessage);
+  }
+  for (const auto &file : importedReplayFiles) {
+    if (!dependencies_.filesystem.syncFile(file, errorMessage)) {
+      return cleanStagingAndFail(ProfileError::IoFailure,
+                                 "unable to make imported replay data "
+                                 "durable: " +
+                                     errorMessage);
+    }
+  }
+  if (!dependencies_.filesystem.syncDirectory(staging.replayDirectory,
+                                              errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IoFailure,
+                               "unable to sync imported replay directory: " +
                                    errorMessage);
   }
   if (!dependencies_.filesystem.syncDirectory(staging.root, errorMessage)) {

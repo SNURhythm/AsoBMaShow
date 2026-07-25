@@ -643,9 +643,20 @@ bool isPracticeMember(std::string_view name) {
              practice::PresetFileKind::Primary;
 }
 
+bool isReplayMember(std::string_view name) {
+  constexpr std::string_view prefix = "replay/";
+  if (!name.starts_with(prefix)) {
+    return false;
+  }
+  const std::string_view filename = name.substr(prefix.size());
+  return !filename.empty() && filename != "." && filename != ".." &&
+         !filename.contains('/') && !filename.contains('\\') &&
+         filename.ends_with(".brd");
+}
+
 bool isKnownMember(std::string_view name) {
   return std::ranges::find(kMemberNames, name) != kMemberNames.end() ||
-         isPracticeMember(name);
+         isPracticeMember(name) || isReplayMember(name);
 }
 
 std::vector<std::string>
@@ -677,6 +688,32 @@ archiveMemberNames(const std::filesystem::path &sourceDirectory,
     names.insert(names.end(), practiceNames.begin(), practiceNames.end());
   } else if (error) {
     errorMessage = "unable to inspect staged practice data: " + error.message();
+    return {};
+  }
+  const auto replayDirectory = sourceDirectory / "replay";
+  error.clear();
+  if (std::filesystem::exists(replayDirectory, error)) {
+    std::filesystem::directory_iterator iterator(replayDirectory, error);
+    if (error) {
+      errorMessage =
+          "unable to enumerate staged replay data: " + error.message();
+      return {};
+    }
+    std::vector<std::string> replayNames;
+    for (const auto &entry : iterator) {
+      const std::string name = "replay/" + entry.path().filename().string();
+      const auto status = std::filesystem::symlink_status(entry.path(), error);
+      if (error || !std::filesystem::is_regular_file(status) ||
+          std::filesystem::is_symlink(status) || !isReplayMember(name)) {
+        errorMessage = "staged replay data contains an unsafe entry";
+        return {};
+      }
+      replayNames.push_back(name);
+    }
+    std::ranges::sort(replayNames);
+    names.insert(names.end(), replayNames.begin(), replayNames.end());
+  } else if (error) {
+    errorMessage = "unable to inspect staged replay data: " + error.message();
     return {};
   }
   names.emplace_back("checksums.sha256");
@@ -841,8 +878,7 @@ ManifestParseResult parseManifest(std::string_view contents) {
       encodedFormatVersion == 1
           ? std::span<const std::string_view>(kVersionOneManifestKeys)
           : std::span<const std::string_view>(kVersionTwoManifestKeys);
-  if ((encodedFormatVersion != 1 &&
-       encodedFormatVersion != ProfileArchiveManifest::kFormatVersion) ||
+  if (encodedFormatVersion < 1 ||
       document.size() != requiredKeys.size()) {
     return {.error = ProfileError::IntegrityFailure,
             .message = "archive manifest contains unsupported metadata"};
@@ -893,8 +929,7 @@ ManifestParseResult parseManifest(std::string_view contents) {
                   "for portable import because their migration requires chart "
                   "library context"};
     }
-    if ((manifest.formatVersion != 1 &&
-         manifest.formatVersion != ProfileArchiveManifest::kFormatVersion) ||
+    if (manifest.formatVersion < 1 ||
         manifest.profileSchemaVersion < 0 ||
         manifest.settingsSchemaVersion < 0 || manifest.inputSchemaVersion < 0 ||
         manifest.practiceSchemaVersion < 0 ||
@@ -1227,6 +1262,16 @@ validateArchive(const std::filesystem::path &archivePath,
                 .message = "unable to create extracted practice directory"};
       }
     }
+    if (isReplayMember(name)) {
+      std::error_code directoryError;
+      std::filesystem::create_directory(extractDirectory / "replay",
+                                        directoryError);
+      if (directoryError &&
+          !std::filesystem::is_directory(extractDirectory / "replay")) {
+        return {.error = ProfileError::IoFailure,
+                .message = "unable to create extracted replay directory"};
+      }
+    }
     std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
     if (!output) {
       return {.error = ProfileError::IoFailure,
@@ -1325,6 +1370,15 @@ validateArchive(const std::filesystem::path &archivePath,
     return {.error = ProfileError::IntegrityFailure,
             .message = "version-one archive cannot contain practice data"};
   }
+  const bool hasReplayMembers =
+      std::ranges::any_of(memberNames, [](std::string_view name) {
+        return isReplayMember(name);
+      });
+  if (manifest.manifest->formatVersion < 3 && hasReplayMembers) {
+    return {.error = ProfileError::IntegrityFailure,
+            .message = "archive versions before three cannot contain replay "
+                       "files"};
+  }
   for (const std::string &name : memberNames) {
     if (!isPracticeMember(name)) {
       continue;
@@ -1418,7 +1472,8 @@ validateArchive(const std::filesystem::path &archivePath,
 
 bool ProfileArchiveSizePolicy::memberSizeAllowed(std::string_view memberName,
                                                  std::uint64_t bytes) {
-  if (memberName == "scores.db" || memberName == "replays.db") {
+  if (memberName == "scores.db" || memberName == "replays.db" ||
+      isReplayMember(memberName)) {
     return bytes <= kMaximumDatabaseBytes;
   }
   return isKnownMember(memberName) && bytes <= kMaximumMetadataBytes;
@@ -1531,6 +1586,13 @@ ProfileArchiveService::Export(std::string_view profileId,
                    "unable to stage practice export directory: " +
                        filesystemError.message());
   }
+  filesystemError.clear();
+  std::filesystem::create_directory(workspace / "replay", filesystemError);
+  if (filesystemError) {
+    return failure(ProfileError::IoFailure,
+                   "unable to stage replay export directory: " +
+                       filesystemError.message());
+  }
   if (!copyFileStreaming(source.settingsJson, workspace / "settings.json",
                          "settings.json", errorMessage) ||
       !copyFileStreaming(source.inputJson, workspace / "input.json",
@@ -1608,6 +1670,36 @@ ProfileArchiveService::Export(std::string_view profileId,
   } else if (filesystemError) {
     return failure(ProfileError::IoFailure,
                    "unable to inspect practice data for export: " +
+                       filesystemError.message());
+  }
+  filesystemError.clear();
+  if (std::filesystem::exists(source.replayDirectory, filesystemError)) {
+    std::filesystem::directory_iterator iterator(source.replayDirectory,
+                                                 filesystemError);
+    if (filesystemError) {
+      return failure(ProfileError::IoFailure,
+                     "unable to enumerate replay data for export: " +
+                         filesystemError.message());
+    }
+    std::vector<std::filesystem::path> replayFiles;
+    for (const auto &entry : iterator) {
+      replayFiles.push_back(entry.path());
+    }
+    std::ranges::sort(replayFiles);
+    for (const auto &replayFile : replayFiles) {
+      const std::string memberName =
+          "replay/" + replayFile.filename().string();
+      if (!isReplayMember(memberName) ||
+          !copyFileStreaming(replayFile,
+                             workspace / "replay" / replayFile.filename(),
+                             memberName, errorMessage)) {
+        return failure(ProfileError::IoFailure,
+                       "unable to stage replay export: " + errorMessage);
+      }
+    }
+  } else if (filesystemError) {
+    return failure(ProfileError::IoFailure,
+                   "unable to inspect replay data for export: " +
                        filesystemError.message());
   }
   for (const std::string_view database : {"scores.db", "replays.db"}) {
@@ -1884,6 +1976,14 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
                          practiceError.message();
           return false;
         }
+        std::error_code replayError;
+        std::filesystem::create_directory(staging.replayDirectory,
+                                          replayError);
+        if (replayError) {
+          errorMessage = "unable to create imported replay directory: " +
+                         replayError.message();
+          return false;
+        }
         const auto extractedPractice = extracted / "practice";
         if (validated.manifest->formatVersion >= 2 &&
             std::filesystem::exists(extractedPractice, practiceError)) {
@@ -1908,6 +2008,32 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
         } else if (practiceError) {
           errorMessage = "unable to inspect imported practice data: " +
                          practiceError.message();
+          return false;
+        }
+        const auto extractedReplay = extracted / "replay";
+        if (validated.manifest->formatVersion >= 3 &&
+            std::filesystem::exists(extractedReplay, replayError)) {
+          std::filesystem::directory_iterator iterator(extractedReplay,
+                                                       replayError);
+          if (replayError) {
+            errorMessage = "unable to enumerate imported replay data: " +
+                           replayError.message();
+            return false;
+          }
+          for (const auto &entry : iterator) {
+            const std::string memberName =
+                "replay/" + entry.path().filename().string();
+            if (!isReplayMember(memberName) ||
+                !copyFileStreaming(entry.path(),
+                                   staging.replayDirectory /
+                                       entry.path().filename(),
+                                   memberName, errorMessage)) {
+              return false;
+            }
+          }
+        } else if (replayError) {
+          errorMessage = "unable to inspect imported replay data: " +
+                         replayError.message();
           return false;
         }
         const bool settingsWritten =

@@ -159,8 +159,9 @@ std::size_t ResultRecordIdentityHash::operator()(
   std::visit(
       [&seed](const auto &value) {
         using Value = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<Value, LocalReplayRecordId>) {
-          combineHash(seed, std::hash<int>{}(value.replayId));
+        if constexpr (std::is_same_v<Value, LocalResultRecordId>) {
+          combineHash(seed, std::hash<int>{}(static_cast<int>(value.kind)));
+          combineHash(seed, std::hash<int>{}(value.resultId));
         } else {
           combineHash(seed, std::hash<std::string>{}(value.providerId));
           combineHash(seed, std::hash<std::string>{}(value.serverOrigin));
@@ -172,7 +173,7 @@ std::size_t ResultRecordIdentityHash::operator()(
 }
 
 bool ResultRecordSummary::isLocal() const noexcept {
-  return std::holds_alternative<LocalReplayRecordId>(identity);
+  return std::holds_alternative<LocalResultRecordId>(identity);
 }
 
 bool ResultRecordSummary::isRemote() const noexcept {
@@ -180,8 +181,15 @@ bool ResultRecordSummary::isRemote() const noexcept {
 }
 
 std::optional<int> ResultRecordSummary::localReplayId() const noexcept {
-  const auto *localIdentity = std::get_if<LocalReplayRecordId>(&identity);
-  return localIdentity ? std::optional<int>(localIdentity->replayId)
+  const auto *localIdentity = std::get_if<LocalResultRecordId>(&identity);
+  return localIdentity ? std::optional<int>(localIdentity->resultId)
+                       : std::nullopt;
+}
+
+std::optional<LocalResultRecordId>
+ResultRecordSummary::localResultRecordId() const noexcept {
+  const auto *localIdentity = std::get_if<LocalResultRecordId>(&identity);
+  return localIdentity ? std::optional<LocalResultRecordId>(*localIdentity)
                        : std::nullopt;
 }
 
@@ -195,8 +203,13 @@ ResultRecordSummary::remoteScoreId() const noexcept {
 
 std::string ResultRecordSummary::stableKey() const {
   if (const auto *localIdentity =
-          std::get_if<LocalReplayRecordId>(&identity)) {
-    return "l:" + std::to_string(localIdentity->replayId);
+          std::get_if<LocalResultRecordId>(&identity)) {
+    const char kind =
+        localIdentity->kind == ReplayFileReference::RecordKind::CourseResult
+            ? 'c'
+            : 'r';
+    return std::string("l:") + kind + ":" +
+           std::to_string(localIdentity->resultId);
   }
 
   const auto &remoteIdentity = std::get<IrRemoteRecordId>(identity);
@@ -212,14 +225,25 @@ std::string ResultRecordSummary::stableKey() const {
 }
 
 ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
+  const bool replayAvailable =
+      summary.autoPlay ||
+      summary.replayFileState == ReplaySummary::ReplayFileState::Available;
   ResultRecordSummary result{
-      .identity = LocalReplayRecordId{.replayId = summary.id},
+      .identity = LocalResultRecordId{
+          .kind = summary.courseReplay
+                      ? ReplayFileReference::RecordKind::CourseResult
+                      : ReplayFileReference::RecordKind::ChartResult,
+          .resultId = summary.id,
+      },
       .capabilities =
           {
-              .watch = true,
-              .gBattle = !summary.autoPlay && !summary.courseReplay,
+              .watch = replayAvailable,
+              .gBattle = replayAvailable && !summary.autoPlay &&
+                         !summary.courseReplay,
               .resultRecall = !summary.autoPlay,
-              .videoExport = true,
+              .videoExport = replayAvailable,
+              .shareReplay = replayAvailable && !summary.autoPlay,
+              .deleteReplayFile = replayAvailable && !summary.autoPlay,
               .irUpload = irUploadActionable(summary.irRecordState),
           },
       .course = summary.courseReplay,
@@ -265,6 +289,8 @@ ResultRecordSummary makeRemoteResultRecord(std::string_view providerId,
               .gBattle = false,
               .resultRecall = true,
               .videoExport = false,
+              .shareReplay = false,
+              .deleteReplayFile = false,
               .irUpload = false,
           },
       .course = false,

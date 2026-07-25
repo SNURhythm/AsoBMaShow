@@ -92,6 +92,7 @@ void testLocalConversionPreservesRecordSemantics() {
   replay.playOption = "MIRROR";
   replay.irRecordState = ir::IrRecordState::Eligible;
   replay.irSubmissionEligible = true;
+  replay.replayFileState = ReplaySummary::ReplayFileState::Available;
 
   const ResultRecordSummary result = makeLocalResultRecord(replay);
 
@@ -99,11 +100,14 @@ void testLocalConversionPreservesRecordSemantics() {
          "local conversion keeps the local tag");
   expect(result.localReplayId() == 73 && !result.remoteScoreId(),
          "local conversion exposes only the replay identity");
-  expect(std::get<LocalReplayRecordId>(result.identity).replayId == 73,
+  expect(std::get<LocalResultRecordId>(result.identity).resultId == 73,
          "local identity preserves the replay ID");
   expect(result.capabilities.watch && result.capabilities.gBattle &&
              result.capabilities.resultRecall &&
-             result.capabilities.videoExport && result.capabilities.irUpload,
+             result.capabilities.videoExport &&
+             result.capabilities.shareReplay &&
+             result.capabilities.deleteReplayFile &&
+             result.capabilities.irUpload,
          "normal local replay preserves all current actions");
   expect(!result.course && !result.autoPlay && result.score == 987 &&
              result.maxScore == 1'000 && result.maxCombo == 500,
@@ -149,6 +153,22 @@ void testLocalConversionPreservesRecordSemantics() {
   expect(!uploaded.capabilities.irUpload &&
              uploaded.irState == ir::IrRecordState::Uploaded,
          "uploaded local IR state is visible but not uploadable");
+
+  replay.irRecordState = ir::IrRecordState::Eligible;
+  replay.replayFileState = ReplaySummary::ReplayFileState::Missing;
+  const ResultRecordSummary missing = makeLocalResultRecord(replay);
+  expect(!missing.capabilities.watch && !missing.capabilities.gBattle &&
+             !missing.capabilities.videoExport &&
+             !missing.capabilities.shareReplay &&
+             !missing.capabilities.deleteReplayFile &&
+             missing.capabilities.resultRecall && missing.capabilities.irUpload,
+         "a missing replay disables file actions without hiding result or IR");
+  replay.replayFileState = ReplaySummary::ReplayFileState::Corrupt;
+  const ResultRecordSummary corrupt = makeLocalResultRecord(replay);
+  expect(!corrupt.capabilities.watch && !corrupt.capabilities.shareReplay &&
+             !corrupt.capabilities.deleteReplayFile &&
+             corrupt.capabilities.resultRecall && corrupt.capabilities.irUpload,
+         "a corrupt replay also preserves non-replay capabilities");
 }
 
 void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
@@ -242,9 +262,16 @@ void testRemoteConversionFailsClosed() {
 }
 
 void testIdentityEqualityHashAndStableKeys() {
-  const ResultRecordIdentity localA = LocalReplayRecordId{.replayId = 42};
-  const ResultRecordIdentity localB = LocalReplayRecordId{.replayId = 42};
-  const ResultRecordIdentity localOther = LocalReplayRecordId{.replayId = 43};
+  const ResultRecordIdentity localA =
+      LocalResultRecordId{.resultId = 42};
+  const ResultRecordIdentity localB =
+      LocalResultRecordId{.resultId = 42};
+  const ResultRecordIdentity localOther =
+      LocalResultRecordId{.resultId = 43};
+  const ResultRecordIdentity courseSameId = LocalResultRecordId{
+      .kind = ReplayFileReference::RecordKind::CourseResult,
+      .resultId = 42,
+  };
   const ResultRecordIdentity remoteA = IrRemoteRecordId{
       .providerId = "tachi",
       .serverOrigin = "https://boku.tachi.ac",
@@ -257,16 +284,18 @@ void testIdentityEqualityHashAndStableKeys() {
       .remoteScoreId = "score:42",
   };
 
-  expect(localA == localB && localA != localOther && localA != remoteA &&
+  expect(localA == localB && localA != localOther && localA != courseSameId &&
+             localA != remoteA &&
              remoteA == remoteB && remoteA != remoteOther,
-         "tagged identity equality includes type and every remote scope");
+         "tagged identity equality includes result kind and remote scope");
   std::unordered_set<ResultRecordIdentity, ResultRecordIdentityHash> values;
   values.insert(localA);
   values.insert(localB);
+  values.insert(courseSameId);
   values.insert(remoteA);
   values.insert(remoteB);
   values.insert(remoteOther);
-  expect(values.size() == 3,
+  expect(values.size() == 4,
          "identity hash agrees with tagged identity equality");
 
   ReplaySummary replay;

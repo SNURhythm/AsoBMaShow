@@ -1,14 +1,18 @@
 #include "ResultPersistenceCoordinator.h"
 
+#include "CourseIdentity.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileStore.h"
+#include "replay/ReplayFileActionService.h"
 #include "sqlite3.h"
 
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <string>
@@ -176,6 +180,62 @@ CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
   return attempt;
 }
 
+CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
+  const auto first = validAttempt(
+      "123e4567-e89b-42d3-a456-426614174010", 0);
+  const auto second = validAttempt(
+      "123e4567-e89b-42d3-a456-426614174011", 1);
+  CompletedCourseAttempt attempt;
+  attempt.replay.stages = {first.replay, second.replay};
+  attempt.replay.restMicrosAfterStage = {750'000, 0};
+
+  auto &result = attempt.result;
+  result.attemptId = std::move(attemptId);
+  const std::vector<course_identity::ChartIdentity> identities{
+      {.sha256 = first.result.score.chartSha256,
+       .md5 = first.result.score.chartMd5},
+      {.sha256 = second.result.score.chartSha256,
+       .md5 = second.result.score.chartMd5},
+  };
+  result.constraintJson = R"(["no_speed","gauge_7k","cn"])";
+  result.courseKey =
+      course_identity::makeCourseKey(identities, result.constraintJson);
+  result.legacyCourseId = 7;
+  result.courseName = "Integration Course";
+  result.courseGroupName = "Tests";
+  result.completedCharts = 2;
+  result.totalCharts = 2;
+  result.requestedPlayOption = "RANDOM";
+  result.assistOption = assist_options::kOff;
+  result.initialGaugeType = GaugeType::Normal;
+  result.gaugeProfile = GaugeProfile::Course7Keys;
+  result.gaugeAutoShift = GaugeAutoShiftMode::None;
+  result.gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
+  result.longNoteMode = 2;
+  result.maxCombo = 8;
+  result.finalGauge = second.result.score.finalGauge;
+  result.clearType = kClearTypeNormalClearRank;
+  result.provenance = first.result.score.provenance;
+  result.playedAtUnixMillis = 1'700'000'999'000LL;
+  result.stages = {
+      {.stageIndex = 0,
+       .score = first.result.score,
+       .keyMode = first.result.keyMode,
+       .adoptedGaugeHistory = first.result.adoptedGaugeHistory,
+       .judgementTiming = first.result.judgementTiming},
+      {.stageIndex = 1,
+       .score = second.result.score,
+       .keyMode = second.result.keyMode,
+       .adoptedGaugeHistory = second.result.adoptedGaugeHistory,
+       .judgementTiming = second.result.judgementTiming},
+  };
+  result.finalScore = first.result.score.score + second.result.score.score;
+  result.maxScore =
+      first.result.score.maxScore + second.result.score.maxScore;
+  result.resultFingerprint = resultFingerprint(result);
+  return attempt;
+}
+
 ir::IrOutboxDraft draftFor(const CompletedChartAttempt &attempt) {
   return {
       .providerId = "tachi",
@@ -330,9 +390,48 @@ void testCompleteFileAndDatabasePipeline() {
                     "SELECT count(*) FROM replay_files") == 1,
          "retry is idempotent across reservation, file, result, and score");
 
-  std::string removalDiagnostic;
-  expect(environment.fileStore.remove(metadata, removalDiagnostic),
-         "user can remove the standalone replay file");
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const LocalResultRecordId recordId{.resultId = saved.receipt->resultId};
+  const auto available = actions.inspect(recordId);
+  expect(available.availability == ReplayAvailability::Available &&
+             available.sourcePath == temporary.path() / reference.relativePath &&
+             available.suggestedFilename ==
+                 reference.relativePath.filename().string(),
+         "file actions expose the verified existing Beatoraja file");
+
+  std::vector<char> originalBytes;
+  {
+    std::ifstream input(temporary.path() / reference.relativePath,
+                        std::ios::binary);
+    originalBytes.assign(std::istreambuf_iterator<char>(input),
+                         std::istreambuf_iterator<char>());
+  }
+  {
+    std::ofstream corrupt(temporary.path() / reference.relativePath,
+                          std::ios::binary | std::ios::trunc);
+    corrupt.put('x');
+  }
+  expect(actions.inspect(recordId).availability == ReplayAvailability::Corrupt,
+         "changed replay bytes are reported as corrupt");
+  {
+    std::ofstream restore(temporary.path() / reference.relativePath,
+                          std::ios::binary | std::ios::trunc);
+    restore.write(originalBytes.data(),
+                  static_cast<std::streamsize>(originalBytes.size()));
+  }
+  expect(actions.inspect(recordId).availability ==
+             ReplayAvailability::Available,
+         "restoring identical bytes automatically restores availability");
+  {
+    std::ofstream corrupt(temporary.path() / reference.relativePath,
+                          std::ios::binary | std::ios::trunc);
+    corrupt.put('x');
+  }
+  const auto removed = actions.remove(recordId);
+  expect(removed.availability == ReplayAvailability::Missing && removed.changed,
+         "user can remove a corrupt but safely contained standalone replay "
+         "file");
   const auto afterDelete = environment.replayRepository.loadChartResult(
       saved.receipt->resultId);
   const auto snapshotAfterDelete =
@@ -340,6 +439,10 @@ void testCompleteFileAndDatabasePipeline() {
           *attempt.result.attemptId);
   expect(afterDelete.status == ResultReadOutcome::Status::Loaded &&
              snapshotAfterDelete.snapshot == attempt.irSnapshot &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_files") == 1 &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM ir_outbox") == 1 &&
              scalar(environment.scoreDatabase, "SELECT count(*) FROM scores") ==
                  1,
          "deleting .brd does not delete result, score, provenance, or IR "
@@ -410,12 +513,97 @@ void testCrashAfterCompactStageRecoversWithoutReplayReconstruction() {
          "startup recovery projects compact facts without replay events");
 }
 
+void testCoursePipelineUsesOneBeatorajaArrayFile() {
+  TemporaryDirectory temporary("course");
+  Environment environment(temporary.path());
+  const auto attempt = validCourseAttempt(
+      "123e4567-e89b-42d3-a456-426614174012");
+  const auto saved = environment.coordinator.persistCourse(attempt);
+  if (!saved.saved()) {
+    std::cerr << "course pipeline state=" << static_cast<int>(saved.state)
+              << " diagnostic=" << saved.diagnostic << '\n';
+  }
+  expect(saved.saved() && saved.receipt && saved.receipt->resultId > 0,
+         "course result and replay file save atomically");
+  if (!saved.receipt) {
+    return;
+  }
+  const auto loaded = environment.replayRepository.loadCourseResult(
+      saved.receipt->resultId);
+  auto expectedResult = attempt.result;
+  expectedResult.resultId = saved.receipt->resultId;
+  expect(loaded.status == CourseResultReadOutcome::Status::Loaded &&
+             loaded.record && loaded.record->replayFile &&
+             loaded.record->result == expectedResult,
+         "compact ordered course facts load independently");
+  if (!loaded.record || !loaded.record->replayFile) {
+    return;
+  }
+  const auto &reference = *loaded.record->replayFile;
+  const replay::ReplayFileMetadata metadata{
+      .relativePath = reference.relativePath,
+      .sha256 = reference.contentSha256,
+      .compressedSize = reference.compressedSize,
+      .codecVersion = reference.codecVersion,
+  };
+  const auto decoded = environment.fileStore.load(metadata, environment.codec);
+  expect(decoded.course && decoded.course->stages == attempt.replay.stages &&
+             decoded.course->restMicrosAfterStage ==
+                 attempt.replay.restMicrosAfterStage,
+         "one Beatoraja JSON-array .brd round-trips every ordered stage");
+  const auto playback =
+      environment.replayRepository.loadCourseReplayPlayback(
+          saved.receipt->resultId);
+  expect(playback.status ==
+                 CourseReplayPlaybackReadOutcome::Status::Loaded &&
+             playback.result == expectedResult &&
+             playback.playback == attempt.replay,
+         "course playback is loaded from its referenced .brd file");
+  const auto retried = environment.coordinator.persistCourse(attempt);
+  expect(retried.saved() && retried.receipt &&
+             retried.receipt->resultId == saved.receipt->resultId &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM course_results") == 1 &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM course_result_stages") == 2 &&
+             scalar(environment.replayDatabase,
+                    "SELECT count(*) FROM replay_files") == 1,
+         "course persistence retry is idempotent");
+
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const LocalResultRecordId courseRecord{
+      .kind = ReplayFileReference::RecordKind::CourseResult,
+      .resultId = saved.receipt->resultId,
+  };
+  expect(actions.inspect(courseRecord).availability ==
+             ReplayAvailability::Available,
+         "course action resolves the course row, not a chart with the same ID");
+  const auto removed = actions.remove(courseRecord);
+  expect(removed.availability == ReplayAvailability::Missing && removed.changed,
+         "course replay file can be deleted independently");
+  const auto afterDelete = environment.replayRepository.loadCourseResult(
+      saved.receipt->resultId);
+  expect(afterDelete.status == CourseResultReadOutcome::Status::Loaded &&
+             afterDelete.record && afterDelete.record->result.stages.size() == 2,
+         "course result recall survives replay-file deletion");
+  const auto playbackAfterDelete =
+      environment.replayRepository.loadCourseReplayPlayback(
+          saved.receipt->resultId);
+  expect(playbackAfterDelete.status ==
+                 CourseReplayPlaybackReadOutcome::Status::ReplayUnavailable &&
+             playbackAfterDelete.result == expectedResult &&
+             !playbackAfterDelete.playback.has_value(),
+         "deleted course replay disables playback without deleting result facts");
+}
+
 } // namespace
 
 int main() {
   testCompleteFileAndDatabasePipeline();
   testFilesystemFailuresNeverStageDatabaseRows();
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
+  testCoursePipelineUsesOneBeatorajaArrayFile();
   if (failures != 0) {
     std::cerr << failures << " result persistence integration test(s) failed\n";
     return 1;

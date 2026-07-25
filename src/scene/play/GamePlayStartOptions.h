@@ -532,3 +532,36 @@ inline StartOptions makeCourseReplayStageStartOptions(
   }
   return enforceCoursePlaybackRules(std::move(options));
 }
+
+inline StartOptions makeCourseReplayStageStartOptions(
+    const std::shared_ptr<CoursePlaySession> &session,
+    const std::shared_ptr<const replay::ReplayPlaybackData> &stagePlayback,
+    const bms_parser::ChartMeta &chartMeta) {
+  StartOptions options;
+  options.startPosition = 0;
+  options.autoKeySound = false;
+  options.autoPlay = false;
+  options.ownsChart = true;
+  if (stagePlayback != nullptr) {
+    applyReplayPlaybackToStartOptions(options, stagePlayback);
+  }
+  if (session != nullptr) {
+    if (session->currentIndex < session->stageProvenance.size() &&
+        session->stageProvenance[session->currentIndex].has_value()) {
+      applyScoreProvenanceToStartOptions(
+          options, *session->stageProvenance[session->currentIndex], chartMeta);
+    }
+    options.gaugeType = session->gaugeType;
+    options.gaugeProfile = session->gaugeProfile;
+    options.gaugeAutoShift = session->gaugeAutoShift;
+    options.gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound;
+    options.courseSession = session;
+    options.courseConstraints = session->constraints;
+    options.ruleset = session->ruleset;
+    options.requiredRulesetDescriptor = session->rulesetDescriptor;
+    options.touchVisualizationEnabled =
+        session->replayTouchVisualizationEnabled;
+    options.replayGhostRenderingEnabled = false;
+  }
+  return enforceCoursePlaybackRules(std::move(options));
+}

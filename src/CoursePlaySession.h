@@ -285,6 +285,7 @@ struct CoursePlaySession {
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
   std::vector<CourseReplayStageData> replayStages;
+  replay::CourseReplayPlaybackData recordedReplayPlayback;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
   std::vector<std::optional<ScoreProvenance>> stageProvenance;
@@ -308,8 +309,11 @@ struct CoursePlaySession {
   bool autoKeySound = false;
   bool courseReplayPlayback = false;
   bool courseReplaySaved = false;
+  std::string coursePersistenceAttemptId;
   int savedCourseReplayId = 0;
   std::shared_ptr<CourseReplayData> courseReplayData = nullptr;
+  std::shared_ptr<replay::CourseReplayPlaybackData> courseReplayPlaybackData =
+      nullptr;
   std::optional<bool> replayTouchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
 
@@ -330,13 +334,27 @@ struct CoursePlaySession {
     }
   }
 
+  void snapshotRulesetFromProvenance(const ScoreProvenance &provenance) {
+    if (provenance.ruleset == RulesetDescriptor::Legacy()) {
+      ruleset = GameplayRuleset::Beatoraja;
+      rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+      return;
+    }
+    rulesetDescriptor = provenance.ruleset;
+    if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
+      ruleset = *recorded;
+    }
+  }
+
   [[nodiscard]] bool hasNextChart() const {
     return currentIndex + 1 < entries.size();
   }
 
   [[nodiscard]] bool hasNextCourseReplayStage() const {
-    return courseReplayData != nullptr &&
-           currentIndex + 1 < courseReplayData->stages.size();
+    return (courseReplayPlaybackData != nullptr &&
+            currentIndex + 1 < courseReplayPlaybackData->stages.size()) ||
+           (courseReplayData != nullptr &&
+            currentIndex + 1 < courseReplayData->stages.size());
   }
 
   [[nodiscard]] const bms_parser::ChartMeta *currentMeta() const {
@@ -344,14 +362,26 @@ struct CoursePlaySession {
   }
 
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
-    return courseReplayData != nullptr &&
-           index < courseReplayData->stages.size();
+    return (courseReplayPlaybackData != nullptr &&
+            index < courseReplayPlaybackData->stages.size()) ||
+           (courseReplayData != nullptr && index < courseReplayData->stages.size());
+  }
+
+  [[nodiscard]] std::shared_ptr<const replay::ReplayPlaybackData>
+  currentCourseReplayStagePlayback() const {
+    if (courseReplayPlaybackData == nullptr ||
+        currentIndex >= courseReplayPlaybackData->stages.size()) {
+      return nullptr;
+    }
+    return std::shared_ptr<const replay::ReplayPlaybackData>(
+        courseReplayPlaybackData, &courseReplayPlaybackData->stages[currentIndex]);
   }
 
   [[nodiscard]] const CourseReplayStageData *
   courseReplayStage(std::size_t index) const {
-    return hasCourseReplayStage(index) ? &courseReplayData->stages[index]
-                                       : nullptr;
+    return courseReplayData != nullptr && index < courseReplayData->stages.size()
+               ? &courseReplayData->stages[index]
+               : nullptr;
   }
 
   [[nodiscard]] std::shared_ptr<ReplayData>
@@ -366,6 +396,14 @@ struct CoursePlaySession {
     playOptionSeed = replay.playOptionSeed;
     playOption2 = replay.playOption2;
     playOption2Seed = replay.playOption2Seed;
+  }
+
+  void applyReplayStagePlayOptions(
+      const replay::ReplayPlaybackData &replay) {
+    playOption = replay.setup.playOption;
+    playOptionSeed = replay.setup.playOptionSeed;
+    playOption2 = replay.setup.playOption2;
+    playOption2Seed = replay.setup.playOption2Seed;
   }
 
   CourseReplayStageData &ensureReplayStage(std::size_t index) {
@@ -407,6 +445,17 @@ struct CoursePlaySession {
     ensureReplayStage(currentIndex).replay = replay;
   }
 
+  void recordReplayPlaybackStage(
+      const replay::ReplayPlaybackData &replay) {
+    if (recordedReplayPlayback.stages.size() <= currentIndex) {
+      recordedReplayPlayback.stages.resize(currentIndex + 1);
+    }
+    if (recordedReplayPlayback.restMicrosAfterStage.size() <= currentIndex) {
+      recordedReplayPlayback.restMicrosAfterStage.resize(currentIndex + 1);
+    }
+    recordedReplayPlayback.stages[currentIndex] = replay;
+  }
+
   void recordStageProvenance(std::size_t index,
                              const ScoreProvenance &provenance) {
     if (stageProvenance.size() <= index) {
@@ -438,6 +487,11 @@ struct CoursePlaySession {
 
   void recordRestMicrosAfterCurrentStage(long long restMicros) {
     ensureReplayStage(currentIndex).restMicrosAfterStage =
+        std::max(0LL, restMicros);
+    if (recordedReplayPlayback.restMicrosAfterStage.size() <= currentIndex) {
+      recordedReplayPlayback.restMicrosAfterStage.resize(currentIndex + 1);
+    }
+    recordedReplayPlayback.restMicrosAfterStage[currentIndex] =
         std::max(0LL, restMicros);
   }
 };

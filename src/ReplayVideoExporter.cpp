@@ -6,6 +6,7 @@
 #include "PreparationPlan.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
+#include "repositories/ChartStorageIdentity.h"
 #include "replay/LegacyReplayPlaybackAdapter.h"
 #include "replay/ReplayPlaybackMaterializer.h"
 #include "ResultPresentationUtils.h"
@@ -4179,6 +4180,110 @@ ReplayVideoExportResult ReplayVideoExporter::Export(
   const ReplayData adapted = replay::makeMaterializedPlaybackAdapter(
       playback, *materialized.value, result, chart->Meta);
   return Export(context, chart, adapted, options);
+}
+
+ReplayVideoExportResult
+ReplayVideoExporter::ExportCourseReplay(
+    ApplicationContext &context,
+    const replay::CourseReplayPlaybackData &playback,
+    const result_persistence::PersistedCourseResult &result,
+    const ReplayVideoExportOptions &options) {
+  if (playback.stages.empty() ||
+      playback.stages.size() != result.stages.size() ||
+      playback.restMicrosAfterStage.size() != playback.stages.size()) {
+    return {.success = false, .message = "Invalid course replay"};
+  }
+
+  CourseReplayData adaptedCourse;
+  adaptedCourse.id = result.resultId;
+  adaptedCourse.courseId = result.legacyCourseId;
+  adaptedCourse.courseKey = result.courseKey;
+  adaptedCourse.courseName = result.courseName;
+  adaptedCourse.courseGroupName = result.courseGroupName;
+  adaptedCourse.constraintJson = result.constraintJson;
+  adaptedCourse.requestedPlayOption = result.requestedPlayOption;
+  adaptedCourse.assistOption = result.assistOption;
+  adaptedCourse.initialGaugeType = result.initialGaugeType;
+  adaptedCourse.gaugeProfile = result.gaugeProfile;
+  adaptedCourse.gaugeAutoShift = result.gaugeAutoShift;
+  adaptedCourse.gaugeAutoShiftLowerBound = result.gaugeAutoShiftLowerBound;
+  adaptedCourse.longNoteMode = result.longNoteMode;
+  adaptedCourse.finalScore = result.finalScore;
+  adaptedCourse.maxCombo = result.maxCombo;
+  adaptedCourse.finalGauge = result.finalGauge;
+  adaptedCourse.clearType = result.clearType;
+  adaptedCourse.completedCharts = result.completedCharts;
+  adaptedCourse.totalCharts = result.totalCharts;
+  adaptedCourse.provenance = result.provenance;
+  adaptedCourse.stages.reserve(playback.stages.size());
+
+  for (std::size_t index = 0; index < playback.stages.size(); ++index) {
+    const auto &stagePlayback = playback.stages[index];
+    const auto &stage = result.stages[index];
+    bms_parser::ChartMeta meta;
+    meta.BmsPath = stage.score.chartPath;
+    chart_storage_identity::ToAbsolutePath(meta.BmsPath);
+    meta.MD5 = stage.score.chartMd5;
+    meta.SHA256 = stage.score.chartSha256;
+    meta.Title = stage.score.chartTitle;
+    meta.Artist = stage.score.chartArtist;
+    meta.KeyMode = stage.keyMode;
+    meta.TotalNotes = stage.score.maxScore / 2;
+    meta.LnMode = stage.score.longNoteMode;
+
+    result_persistence::PersistedChartResult stageResult{
+        .resultId = result.resultId,
+        .score = stage.score,
+        .keyMode = stage.keyMode,
+        .adoptedGaugeHistory = stage.adoptedGaugeHistory,
+        .judgementTiming = stage.judgementTiming,
+        .playedAtUnixMillis = result.playedAtUnixMillis,
+    };
+    std::optional<ReplayData> adapted;
+    if (stagePlayback.legacy.has_value()) {
+      adapted = replay::makeLegacyPlaybackAdapter(stagePlayback, stageResult,
+                                                  std::move(meta));
+    } else {
+      std::atomic_bool parseCancelled = false;
+      auto chart = play_options::prepareReplayChart(
+          meta.BmsPath, stagePlayback, parseCancelled);
+      if (chart == nullptr || parseCancelled) {
+        return {.success = false, .message = "Course stage is unavailable"};
+      }
+      auto playbackPointer =
+          std::make_shared<const replay::ReplayPlaybackData>(stagePlayback);
+      StartOptions startOptions;
+      applyReplayPlaybackToStartOptions(startOptions, playbackPointer);
+      applyScoreProvenanceToStartOptions(startOptions, stage.score.provenance,
+                                         chart->Meta);
+      const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+          startOptions, chart->Meta, context.settings.notePriorityMode);
+      if (!policy.built()) {
+        return {.success = false,
+                .message = policy.diagnostic.empty()
+                               ? "Unsupported course replay gameplay policy"
+                               : policy.diagnostic};
+      }
+      const auto materialized =
+          replay::materializeReplay(stagePlayback, *chart, *policy.policy);
+      if (!materialized.materialized()) {
+        return {.success = false,
+                .message = materialized.diagnostic.empty()
+                               ? "Unable to materialize course replay"
+                               : materialized.diagnostic};
+      }
+      adapted = replay::makeMaterializedPlaybackAdapter(
+          stagePlayback, *materialized.value, stageResult, chart->Meta);
+    }
+    if (!adapted.has_value()) {
+      return {.success = false, .message = "Invalid course replay stage"};
+    }
+    adaptedCourse.stages.push_back(
+        {.replay = std::move(*adapted),
+         .restMicrosAfterStage = playback.restMicrosAfterStage[index]});
+  }
+
+  return ExportCourseReplay(context, adaptedCourse, options);
 }
 
 ReplayVideoExportResult

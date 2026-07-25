@@ -9,6 +9,7 @@
 #include "../ReplayRecordFilters.h"
 #include "../ResultRecordSummary.h"
 #include "../ReplayVideoExporter.h"
+#include "../PlatformDocumentHandoff.h"
 #include "../repositories/ScoreRepository.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
@@ -96,6 +97,10 @@ private:
   std::atomic_bool folderItemsReloadRequested = false;
   std::atomic_bool chartListReloadRequested = false;
   std::atomic_bool replayExportInProgress = false;
+  bool replayFileActionInProgress = false;
+  bool replayDeleteConfirmationPending = false;
+  platform_document_handoff::PlatformDocumentHandoffOperation
+      replayDocumentHandoff;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
   std::uint64_t replayIrUploadFeedbackRevision = 0;
@@ -379,6 +384,8 @@ private:
   Button *replayGBattleButton = nullptr;
   Button *replayModalResultButton = nullptr;
   Button *replayModalExportButton = nullptr;
+  Button *replayModalShareButton = nullptr;
+  Button *replayModalDeleteButton = nullptr;
   Button *replayModalFilterButton = nullptr;
   Button *replayModalCloseButton = nullptr;
   Button *replayFps60Button = nullptr;
@@ -399,6 +406,8 @@ private:
   TextView *replayGBattleButtonText = nullptr;
   TextView *replayModalResultButtonText = nullptr;
   TextView *replayModalExportButtonText = nullptr;
+  TextView *replayModalShareButtonText = nullptr;
+  TextView *replayModalDeleteButtonText = nullptr;
   TextView *replayModalFilterButtonText = nullptr;
   TextView *replayModalCloseButtonText = nullptr;
   TextView *replayFps60ButtonText = nullptr;
@@ -814,6 +823,9 @@ private:
   void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startReplayVideoExport(const ChartMetaRecord &record, int replayId,
                               ReplayVideoExportOptions options);
+  void startReplayFileShare();
+  void requestReplayFileDeletion();
+  void applyReplayDocumentHandoffResult();
   void startReplayResultRecall(const ChartMetaRecord &record, int replayId);
   void startRemoteResultRecall(IrRemoteRecordId identity,
                                std::string selectedStableKey);

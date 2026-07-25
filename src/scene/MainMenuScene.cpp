@@ -16,9 +16,12 @@
 #include "../ResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
+#include "../PlatformDocumentHandoff.h"
 #include "../RAII.h"
 #include "../repositories/ScoreCacheQueries.h"
+#include "../repositories/ChartStorageIdentity.h"
 #include "../repositories/SqliteRAII.h"
+#include "../replay/ReplayFileActionService.h"
 #include "../ir/tachi/TachiBatchManual.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrReplayRecordState.h"
@@ -1211,8 +1214,9 @@ void MainMenuScene::init() {
         androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
       return "A chart library scan or import is active.";
     }
-    if (replayExportInProgress.load(std::memory_order_acquire)) {
-      return "A replay export is active.";
+    if (replayExportInProgress.load(std::memory_order_acquire) ||
+        replayFileActionInProgress) {
+      return "A replay operation is active.";
     }
     if (unzipInProgress.load(std::memory_order_acquire) ||
         findBmsJobRunning.load(std::memory_order_acquire)) {
@@ -2552,6 +2556,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayGBattleButton = nullptr;
   replayModalResultButton = nullptr;
   replayModalExportButton = nullptr;
+  replayModalShareButton = nullptr;
+  replayModalDeleteButton = nullptr;
   replayModalFilterButton = nullptr;
   replayModalCloseButton = nullptr;
   replayFps60Button = nullptr;
@@ -2572,6 +2578,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayGBattleButtonText = nullptr;
   replayModalResultButtonText = nullptr;
   replayModalExportButtonText = nullptr;
+  replayModalShareButtonText = nullptr;
+  replayModalDeleteButtonText = nullptr;
   replayModalFilterButtonText = nullptr;
   replayModalCloseButtonText = nullptr;
   replayFps60ButtonText = nullptr;
@@ -8522,16 +8530,20 @@ void MainMenuScene::buildReplayModal() {
       makeModalButton("View Result", 18, &replayModalResultButtonText);
   replayModalExportButton =
       makeModalButton("Export Video", 18, &replayModalExportButtonText);
+  replayModalShareButton =
+      makeModalButton("Share .brd", 17, &replayModalShareButtonText);
+  replayModalDeleteButton =
+      makeModalButton("Delete File", 17, &replayModalDeleteButtonText);
   replayModalCloseButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
+    if (replayExportInProgress.load() || replayFileActionInProgress ||
+        replayResultRecallInProgress || replayIrUploadInProgress) {
       return;
     }
     hideReplayModal();
   });
   replayModalFilterButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
+    if (replayExportInProgress.load() || replayFileActionInProgress ||
+        replayResultRecallInProgress || replayIrUploadInProgress) {
       return;
     }
     if (replayFilterSortContent != nullptr &&
@@ -8546,8 +8558,8 @@ void MainMenuScene::buildReplayModal() {
     showReplayFilterSortOptions();
   });
   replayWatchButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
+    if (replayExportInProgress.load() || replayFileActionInProgress ||
+        replayResultRecallInProgress || replayIrUploadInProgress) {
       return;
     }
     if (!selectedResultRecordSummary.has_value() ||
@@ -8571,8 +8583,8 @@ void MainMenuScene::buildReplayModal() {
     replayModalRoot->applyYogaLayoutFromRoot();
   });
   replayGBattleButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
+    if (replayExportInProgress.load() || replayFileActionInProgress ||
+        replayResultRecallInProgress || replayIrUploadInProgress) {
       return;
     }
     if (!selectedResultRecordSummary.has_value() ||
@@ -8583,8 +8595,8 @@ void MainMenuScene::buildReplayModal() {
     startGBattlePlayback(replayModalChart, selectedReplaySummary->id);
   });
   replayModalResultButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress ||
+    if (replayExportInProgress.load() || replayFileActionInProgress ||
+        replayResultRecallInProgress || replayIrUploadInProgress ||
         !selectedResultRecordSummary.has_value() ||
         !selectedResultRecordSummary->capabilities.resultRecall) {
       return;
@@ -8601,8 +8613,8 @@ void MainMenuScene::buildReplayModal() {
     startRemoteResultRecall(*remoteIdentity, *selectedResultRecordStableKey);
   });
   replayModalExportButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
+    if (replayExportInProgress.load() || replayFileActionInProgress ||
+        replayResultRecallInProgress || replayIrUploadInProgress) {
       return;
     }
     if (replayWatchOptionsContent != nullptr &&
@@ -8644,10 +8656,22 @@ void MainMenuScene::buildReplayModal() {
     }
     showReplayExportOptions();
   });
+  replayModalShareButton->setOnClickListener([this]() {
+    if (!replayFileActionInProgress) {
+      startReplayFileShare();
+    }
+  });
+  replayModalDeleteButton->setOnClickListener([this]() {
+    if (!replayFileActionInProgress) {
+      requestReplayFileDeletion();
+    }
+  });
   footer->addView(replayWatchButton);
   footer->addView(replayGBattleButton);
   footer->addView(replayModalResultButton);
   footer->addView(replayModalExportButton);
+  footer->addView(replayModalShareButton);
+  footer->addView(replayModalDeleteButton);
   panel->addView(footer);
 
   replayModalRoot->addView(panel);
@@ -8687,6 +8711,39 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     }
     replaySummaries.insert(replaySummaries.begin(),
                            autoPlayReplaySummary(replayModalChart));
+  }
+
+  replay::ReplayFileStore replayFileStore(
+      context.replayRepository.GetResolvedDatabasePath().parent_path());
+  ReplayFileActionService replayFileActions(context.replayRepository,
+                                            replayFileStore);
+  for (ReplaySummary &summary : replaySummaries) {
+    if (summary.autoPlay || summary.id <= 0) {
+      continue;
+    }
+    const auto inspected = replayFileActions.inspect({
+        .kind = summary.courseReplay
+                    ? ReplayFileReference::RecordKind::CourseResult
+                    : ReplayFileReference::RecordKind::ChartResult,
+        .resultId = summary.id,
+    });
+    switch (inspected.availability) {
+    case ReplayAvailability::Available:
+      summary.replayFileState = ReplaySummary::ReplayFileState::Available;
+      break;
+    case ReplayAvailability::Missing:
+      summary.replayFileState = ReplaySummary::ReplayFileState::Missing;
+      break;
+    case ReplayAvailability::Corrupt:
+      summary.replayFileState = ReplaySummary::ReplayFileState::Corrupt;
+      break;
+    case ReplayAvailability::Unsafe:
+      summary.replayFileState = ReplaySummary::ReplayFileState::Unsafe;
+      break;
+    case ReplayAvailability::IoFailure:
+      summary.replayFileState = ReplaySummary::ReplayFileState::IoFailure;
+      break;
+    }
   }
 
   std::vector<ir::IrRemoteScore> remoteScores;
@@ -8860,8 +8917,8 @@ void MainMenuScene::hideReplayModal() {
   if (replayModalRoot == nullptr) {
     return;
   }
-  if (replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress) {
+  if (replayExportInProgress.load() || replayFileActionInProgress ||
+      replayResultRecallInProgress || replayIrUploadInProgress) {
     return;
   }
   replayModalRoot->setVisible(false);
@@ -8869,6 +8926,7 @@ void MainMenuScene::hideReplayModal() {
   ++replayIrUploadFeedbackRevision;
   clearReplayModalSelection();
   replayExportSelection.reset();
+  replayDeleteConfirmationPending = false;
   if (replayWatchButtonText != nullptr) {
     replayWatchButtonText->setText("Watch");
   }
@@ -8897,10 +8955,12 @@ void MainMenuScene::refreshReplayModalActions() {
           ? selectedResultRecordSummary->capabilities
           : ResultRecordCapabilities{};
   const bool exportInProgress = replayExportInProgress.load();
+  const bool fileActionInProgress = replayFileActionInProgress;
   const bool resultRecallInProgress = replayResultRecallInProgress;
   const bool irUploadInProgress = replayIrUploadInProgress;
   const bool modalOperationInProgress =
-      exportInProgress || resultRecallInProgress || irUploadInProgress;
+      exportInProgress || fileActionInProgress || resultRecallInProgress ||
+      irUploadInProgress;
   const bool watchVisible = capabilities.watch && !filterSortMode &&
                             !optionsMode && !progressMode;
   const bool gbattleVisible = capabilities.gBattle && !filterSortMode &&
@@ -8915,6 +8975,11 @@ void MainMenuScene::refreshReplayModalActions() {
   const bool resultVisible = resultAction.visible;
   const bool exportVisible = capabilities.videoExport && !filterSortMode &&
                              !watchOptionsMode && !progressMode;
+  const bool shareVisible = capabilities.shareReplay && !filterSortMode &&
+                            !watchOptionsMode && !optionsMode && !progressMode;
+  const bool deleteVisible = capabilities.deleteReplayFile &&
+                             !filterSortMode && !watchOptionsMode &&
+                             !optionsMode && !progressMode;
 
   if (replayModalCloseButtonText != nullptr) {
     replayModalCloseButtonText->setText(ui_icons::textForCodepoint(kIconXmark));
@@ -8936,6 +9001,14 @@ void MainMenuScene::refreshReplayModalActions() {
   if (replayModalExportButtonText != nullptr) {
     replayModalExportButtonText->setText(exportInProgress ? "Exporting"
                                                           : "Export Video");
+  }
+  if (replayModalShareButtonText != nullptr) {
+    replayModalShareButtonText->setText(fileActionInProgress ? "Sharing..."
+                                                               : "Share .brd");
+  }
+  if (replayModalDeleteButtonText != nullptr) {
+    replayModalDeleteButtonText->setText(
+        replayDeleteConfirmationPending ? "Confirm Delete" : "Delete File");
   }
 
   if (replayModalFilterButton != nullptr) {
@@ -8961,6 +9034,14 @@ void MainMenuScene::refreshReplayModalActions() {
     replayModalExportButton->setVisible(exportVisible);
     replayModalExportButton->setWidth(
         exportVisible ? (optionsMode ? 160.0F : 142.0F) : 0.0F);
+  }
+  if (replayModalShareButton != nullptr) {
+    replayModalShareButton->setVisible(shareVisible);
+    replayModalShareButton->setWidth(shareVisible ? 118.0F : 0.0F);
+  }
+  if (replayModalDeleteButton != nullptr) {
+    replayModalDeleteButton->setVisible(deleteVisible);
+    replayModalDeleteButton->setWidth(deleteVisible ? 126.0F : 0.0F);
   }
 
   styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
@@ -9002,6 +9083,15 @@ void MainMenuScene::refreshReplayModalActions() {
                           ui_theme::violetAction, ui_theme::violetActionHover,
                           ui_theme::violetActionPressed,
                           ui_theme::violetActionHover);
+  styleThemedActionButton(replayModalShareButton, replayModalShareButtonText,
+                          shareVisible && !modalOperationInProgress,
+                          ui_theme::infoAction, ui_theme::infoActionHover,
+                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+  styleThemedActionButton(
+      replayModalDeleteButton, replayModalDeleteButtonText,
+      deleteVisible && !modalOperationInProgress, ui_theme::dangerAction,
+      ui_theme::dangerActionHover, ui_theme::dangerActionPressed,
+      ui_theme::dangerActionHover);
 
   if (replayModalRoot != nullptr) {
     replayModalRoot->applyYogaLayoutFromRoot();
@@ -9135,6 +9225,7 @@ void MainMenuScene::clearReplayModalSelection() {
   selectedReplaySummary.reset();
   selectedResultRecordSummary.reset();
   selectedResultRecordStableKey.reset();
+  replayDeleteConfirmationPending = false;
 }
 
 bool MainMenuScene::selectReplayModalIndex(int index) {
@@ -9149,6 +9240,28 @@ bool MainMenuScene::selectReplayModalIndex(int index) {
       visibleResultRecordSummaries[static_cast<std::size_t>(index)];
   selectedReplaySummary = selectedResultRecordSummary->local;
   selectedResultRecordStableKey = selectedResultRecordSummary->stableKey();
+  if (replayModalTitleText != nullptr && selectedReplaySummary.has_value() &&
+      !selectedReplaySummary->autoPlay) {
+    switch (selectedReplaySummary->replayFileState) {
+    case ReplaySummary::ReplayFileState::Available:
+      replayModalTitleText->setText("Records");
+      break;
+    case ReplaySummary::ReplayFileState::Missing:
+      replayModalTitleText->setText("Replay missing — result kept");
+      break;
+    case ReplaySummary::ReplayFileState::Corrupt:
+      replayModalTitleText->setText("Replay corrupt — result kept");
+      break;
+    case ReplaySummary::ReplayFileState::Unsafe:
+      replayModalTitleText->setText("Replay path unsafe — result kept");
+      break;
+    case ReplaySummary::ReplayFileState::IoFailure:
+      replayModalTitleText->setText("Replay unavailable — result kept");
+      break;
+    }
+  } else if (replayModalTitleText != nullptr) {
+    replayModalTitleText->setText("Records");
+  }
   return true;
 }
 
@@ -9611,42 +9724,116 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         }
         joinRetiredPreviewLoadThreads();
 
-        auto replay = context.replayRepository.LoadCourseReplay(replayId);
-        if (!replay.has_value() || replay->stages.empty()) {
+        auto replayRead =
+            context.replayRepository.loadCourseReplayPlayback(replayId);
+        if (replayRead.status !=
+                CourseReplayPlaybackReadOutcome::Status::Loaded ||
+            !replayRead.result.has_value() ||
+            !replayRead.playback.has_value() ||
+            replayRead.playback->stages.empty()) {
+          SDL_Log("Unable to load course replay file for result %d: %s",
+                  replayId, replayRead.diagnostic.c_str());
           return failReplayLoad();
         }
 
-        auto replayData =
-            std::make_shared<CourseReplayData>(std::move(*replay));
+        auto persisted = std::move(*replayRead.result);
+        auto playback = std::make_shared<replay::CourseReplayPlaybackData>(
+            std::move(*replayRead.playback));
         auto session = std::make_shared<CoursePlaySession>();
-        session->courseId = replayData->courseId;
-        session->courseKey = replayData->courseKey;
-        session->courseName = replayData->courseName;
-        session->courseGroupName = replayData->courseGroupName;
-        session->constraintJson = replayData->constraintJson;
-        session->entries.reserve(replayData->stages.size());
-        for (const auto &stage : replayData->stages) {
-          session->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
+        session->courseId = persisted.legacyCourseId;
+        session->courseKey = persisted.courseKey;
+        session->courseName = persisted.courseName;
+        session->courseGroupName = persisted.courseGroupName;
+        session->constraintJson = persisted.constraintJson;
+        session->entries.reserve(persisted.stages.size());
+        for (const auto &stage : persisted.stages) {
+          bms_parser::ChartMeta meta;
+          meta.BmsPath = stage.score.chartPath;
+          chart_storage_identity::ToAbsolutePath(meta.BmsPath);
+          meta.MD5 = stage.score.chartMd5;
+          meta.SHA256 = stage.score.chartSha256;
+          meta.Title = stage.score.chartTitle;
+          meta.Artist = stage.score.chartArtist;
+          meta.KeyMode = stage.keyMode;
+          meta.TotalNotes = stage.score.maxScore / 2;
+          meta.LnMode = stage.score.longNoteMode;
+          session->entries.push_back({.meta = std::move(meta)});
+          session->recordStageProvenance(
+              static_cast<std::size_t>(stage.stageIndex),
+              stage.score.provenance);
         }
-        session->snapshotRulesetFromReplay(replayData->stages.front().replay);
+        session->snapshotRulesetFromProvenance(persisted.provenance);
         const CourseConstraintSettings constraintSettings =
-            courseConstraintSettingsFromJson(replayData->constraintJson);
+            courseConstraintSettingsFromJson(persisted.constraintJson);
         session->currentIndex = 0;
-        session->gaugeType = replayData->initialGaugeType;
-        session->gaugeProfile = replayData->gaugeProfile;
-        session->gaugeAutoShift = replayData->gaugeAutoShift;
+        session->gaugeType = persisted.initialGaugeType;
+        session->gaugeProfile = persisted.gaugeProfile;
+        session->gaugeAutoShift = persisted.gaugeAutoShift;
         session->gaugeAutoShiftLowerBound =
-            replayData->gaugeAutoShiftLowerBound;
-        session->longNoteMode = replayData->longNoteMode;
+            persisted.gaugeAutoShiftLowerBound;
+        session->longNoteMode = persisted.longNoteMode;
         session->constraints = constraintSettings.rules;
-        session->requestedPlayOption = replayData->requestedPlayOption;
-        session->assistOption = replayData->assistOption;
+        session->requestedPlayOption = persisted.requestedPlayOption;
+        session->assistOption = persisted.assistOption;
         session->autoKeySound = false;
         session->courseReplayPlayback = true;
-        session->courseReplayData = std::move(replayData);
+        const bool migrated = std::ranges::any_of(
+            playback->stages, [](const auto &stage) {
+              return stage.legacy.has_value();
+            });
+        if (migrated) {
+          auto legacyCourse = std::make_shared<CourseReplayData>();
+          legacyCourse->id = persisted.resultId;
+          legacyCourse->courseId = persisted.legacyCourseId;
+          legacyCourse->courseKey = persisted.courseKey;
+          legacyCourse->courseName = persisted.courseName;
+          legacyCourse->courseGroupName = persisted.courseGroupName;
+          legacyCourse->constraintJson = persisted.constraintJson;
+          legacyCourse->requestedPlayOption = persisted.requestedPlayOption;
+          legacyCourse->assistOption = persisted.assistOption;
+          legacyCourse->initialGaugeType = persisted.initialGaugeType;
+          legacyCourse->gaugeProfile = persisted.gaugeProfile;
+          legacyCourse->gaugeAutoShift = persisted.gaugeAutoShift;
+          legacyCourse->gaugeAutoShiftLowerBound =
+              persisted.gaugeAutoShiftLowerBound;
+          legacyCourse->longNoteMode = persisted.longNoteMode;
+          legacyCourse->finalScore = persisted.finalScore;
+          legacyCourse->maxCombo = persisted.maxCombo;
+          legacyCourse->finalGauge = persisted.finalGauge;
+          legacyCourse->clearType = persisted.clearType;
+          legacyCourse->completedCharts = persisted.completedCharts;
+          legacyCourse->totalCharts = persisted.totalCharts;
+          legacyCourse->provenance = persisted.provenance;
+          for (std::size_t index = 0; index < persisted.stages.size(); ++index) {
+            result_persistence::PersistedChartResult stageResult{
+                .resultId = persisted.resultId,
+                .score = persisted.stages[index].score,
+                .keyMode = persisted.stages[index].keyMode,
+                .adoptedGaugeHistory =
+                    persisted.stages[index].adoptedGaugeHistory,
+                .judgementTiming = persisted.stages[index].judgementTiming,
+                .playedAtUnixMillis = persisted.playedAtUnixMillis,
+            };
+            auto adapted = replay::makeLegacyPlaybackAdapter(
+                playback->stages[index], stageResult,
+                session->entries[index].meta);
+            if (!adapted.has_value()) {
+              return failReplayLoad();
+            }
+            adapted->chartMeta.BmsPath = session->entries[index].meta.BmsPath;
+            legacyCourse->stages.push_back(
+                {.replay = std::move(*adapted),
+                 .restMicrosAfterStage =
+                     playback->restMicrosAfterStage[index]});
+          }
+          session->courseReplayData = std::move(legacyCourse);
+        } else {
+          session->courseReplayPlaybackData = std::move(playback);
+        }
         session->replayTouchVisualizationEnabled =
             selectedReplayRenderTouchPoints;
-        session->replayGhostRenderingEnabled = selectedReplayRenderGhosts;
+        session->replayGhostRenderingEnabled =
+            migrated && selectedReplayRenderGhosts;
 
         hideReplayModal();
         startCourseReplayDirect(std::move(session));
@@ -9660,6 +9847,36 @@ void MainMenuScene::startCourseReplayDirect(
   if (session == nullptr ||
       !session->hasCourseReplayStage(session->currentIndex)) {
     resetReplayWatchLoadingUi();
+    return;
+  }
+
+  if (auto stagePlayback = session->currentCourseReplayStagePlayback()) {
+    const bms_parser::ChartMeta *stageMeta = session->currentMeta();
+    if (stageMeta == nullptr || stageMeta->BmsPath.empty()) {
+      resetReplayWatchLoadingUi();
+      return;
+    }
+    session->applyReplayStagePlayOptions(*stagePlayback);
+    std::atomic_bool parseCancelled = false;
+    auto replayChart = play_options::prepareReplayChart(
+        stageMeta->BmsPath, *stagePlayback, parseCancelled);
+    if (replayChart == nullptr || parseCancelled) {
+      resetReplayWatchLoadingUi();
+      return;
+    }
+    context.jukebox.stop();
+    context.jukebox.loadChart(*replayChart, true, parseCancelled);
+    if (parseCancelled) {
+      resetReplayWatchLoadingUi();
+      return;
+    }
+    StartOptions options = makeCourseReplayStageStartOptions(
+        session, stagePlayback, replayChart->Meta);
+    context.sceneManager->changeScene(
+        std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                        std::move(options)),
+        true);
+    willStart.store(false);
     return;
   }
 
@@ -10002,6 +10219,131 @@ void MainMenuScene::queueReplayExportResult(
   };
 }
 
+void MainMenuScene::startReplayFileShare() {
+  if (replayFileActionInProgress || !selectedResultRecordSummary.has_value() ||
+      !selectedResultRecordSummary->capabilities.shareReplay) {
+    return;
+  }
+  const auto record = selectedResultRecordSummary->localResultRecordId();
+  if (!record.has_value()) {
+    return;
+  }
+
+  replay::ReplayFileStore fileStore(
+      context.replayRepository.GetResolvedDatabasePath().parent_path());
+  ReplayFileActionService actions(context.replayRepository, fileStore);
+  const auto inspected = actions.inspect(*record);
+  if (inspected.availability != ReplayAvailability::Available ||
+      !inspected.sourcePath.has_value() || inspected.suggestedFilename.empty()) {
+    if (replayModalTitleText != nullptr) {
+      replayModalTitleText->setText(
+          inspected.availability == ReplayAvailability::Missing
+              ? "Replay missing — result kept"
+              : "Replay unavailable — result kept");
+    }
+    reloadReplayRecordModels(true);
+    return;
+  }
+
+  std::error_code sizeError;
+  const std::uint64_t size =
+      std::filesystem::file_size(*inspected.sourcePath, sizeError);
+  if (sizeError || size == 0) {
+    if (replayModalTitleText != nullptr) {
+      replayModalTitleText->setText("Replay unavailable — result kept");
+    }
+    return;
+  }
+
+  try {
+    replayDocumentHandoff = platform_document_handoff::ExportDocumentAsync({
+        .localPath = *inspected.sourcePath,
+        .mimeType = "application/octet-stream",
+        .suggestedName = inspected.suggestedFilename,
+        .maxBytes = size,
+    });
+    if (!replayDocumentHandoff) {
+      throw std::runtime_error("Replay share picker did not start");
+    }
+    replayFileActionInProgress = true;
+    if (replayModalTitleText != nullptr) {
+      replayModalTitleText->setText("Share Replay File");
+    }
+  } catch (const std::exception &error) {
+    SDL_Log("Unable to share replay file: %s", error.what());
+    replayDocumentHandoff.close();
+    replayFileActionInProgress = false;
+    if (replayModalTitleText != nullptr) {
+      replayModalTitleText->setText("Could not share replay");
+    }
+  }
+  refreshReplayModalActions();
+}
+
+void MainMenuScene::requestReplayFileDeletion() {
+  if (replayFileActionInProgress || !selectedResultRecordSummary.has_value() ||
+      !selectedResultRecordSummary->capabilities.deleteReplayFile) {
+    return;
+  }
+  const auto record = selectedResultRecordSummary->localResultRecordId();
+  if (!record.has_value()) {
+    return;
+  }
+  if (!replayDeleteConfirmationPending) {
+    replayDeleteConfirmationPending = true;
+    if (replayModalTitleText != nullptr) {
+      replayModalTitleText->setText(
+          "Delete replay file? Score and result will remain.");
+    }
+    refreshReplayModalActions();
+    return;
+  }
+
+  replayDeleteConfirmationPending = false;
+  replayFileActionInProgress = true;
+  replay::ReplayFileStore fileStore(
+      context.replayRepository.GetResolvedDatabasePath().parent_path());
+  ReplayFileActionService actions(context.replayRepository, fileStore);
+  const auto removed = actions.remove(*record);
+  replayFileActionInProgress = false;
+  reloadReplayRecordModels(true);
+  if (replayModalTitleText != nullptr) {
+    if (removed.availability == ReplayAvailability::Missing) {
+      replayModalTitleText->setText(removed.changed
+                                        ? "Replay deleted — result kept"
+                                        : "Replay already missing — result kept");
+    } else if (removed.availability == ReplayAvailability::Corrupt) {
+      replayModalTitleText->setText("Replay corrupt — file not deleted");
+    } else if (removed.availability == ReplayAvailability::Unsafe) {
+      replayModalTitleText->setText("Replay path unsafe — file not deleted");
+    } else {
+      replayModalTitleText->setText("Could not delete replay file");
+    }
+  }
+  refreshReplayModalActions();
+}
+
+void MainMenuScene::applyReplayDocumentHandoffResult() {
+  if (!replayDocumentHandoff || !replayDocumentHandoff.ready()) {
+    return;
+  }
+  auto result = replayDocumentHandoff.takeResult();
+  replayDocumentHandoff.close();
+  replayFileActionInProgress = false;
+  if (replayModalTitleText != nullptr) {
+    if (!result.has_value()) {
+      replayModalTitleText->setText("Replay share did not finish");
+    } else if (result->cancelled()) {
+      replayModalTitleText->setText("Replay share cancelled");
+    } else if (!result->ok()) {
+      replayModalTitleText->setText("Could not share replay");
+    } else {
+      replayModalTitleText->setText("Replay file shared");
+    }
+  }
+  refreshReplayModalActions();
+}
+
 void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
                                            int replayId,
                                            ReplayVideoExportOptions options) {
@@ -10063,9 +10405,16 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
       }
 
       if (record.courseStart) {
-        auto replay = context.replayRepository.LoadCourseReplay(replayId);
-        if (!replay.has_value()) {
-          complete({.success = false, .message = "No Replay"});
+        auto replayRead =
+            context.replayRepository.loadCourseReplayPlayback(replayId);
+        if (replayRead.status !=
+                CourseReplayPlaybackReadOutcome::Status::Loaded ||
+            !replayRead.result.has_value() ||
+            !replayRead.playback.has_value()) {
+          complete({.success = false,
+                    .message = replayRead.diagnostic.empty()
+                                   ? "Replay unavailable"
+                                   : replayRead.diagnostic});
           return;
         }
         if (stopToken != nullptr && stopToken->stop_requested()) {
@@ -10073,9 +10422,8 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
           return;
         }
 
-        complete(ReplayVideoExporter::ExportCourseReplay(context,
-                                                         replay.value(),
-                                                         options));
+        complete(ReplayVideoExporter::ExportCourseReplay(
+            context, *replayRead.playback, *replayRead.result, options));
         return;
       }
 
@@ -10728,6 +11076,7 @@ void MainMenuScene::update(float dt) {
   applyUnzipResult();
   applyReplayExportProgress();
   applyReplayExportResult();
+  applyReplayDocumentHandoffResult();
   observeReplayIrServiceRevisions();
 #if TARGET_OS_ANDROID
   pollPendingAndroidArchiveImport();
@@ -10823,6 +11172,9 @@ void MainMenuScene::cleanupScene() {
   revealContextMenu.reset();
   rankingsModal.reset();
   cancelActivePreviewLoading();
+  replayDocumentHandoff.close();
+  replayFileActionInProgress = false;
+  replayDeleteConfirmationPending = false;
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;

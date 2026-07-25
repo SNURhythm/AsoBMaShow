@@ -527,7 +527,11 @@ void testFirstRunMigrationIsLosslessAndIdempotent() {
              paths.bokutachiCacheJson ==
                  paths.root / "bokutachi-cache.json" &&
              paths.scoresDb == paths.root / "scores.db" &&
-             paths.replaysDb == paths.root / "replays.db",
+             paths.replaysDb == paths.root / "replays.db" &&
+             paths.practiceDirectory == paths.root / "practice" &&
+             paths.replayDirectory == paths.root / "replay" &&
+             std::filesystem::is_directory(paths.practiceDirectory) &&
+             std::filesystem::is_directory(paths.replayDirectory),
          "all profile paths follow fixed layout");
   expect(!std::filesystem::exists(paths.irCredentialsJson),
          "migration starts without device-local IR credentials");
@@ -2390,7 +2394,11 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(std::filesystem::exists(manager.pathsFor(secondId).settingsJson) &&
              std::filesystem::exists(manager.pathsFor(secondId).inputJson) &&
              std::filesystem::exists(manager.pathsFor(secondId).scoresDb) &&
-             std::filesystem::exists(manager.pathsFor(secondId).replaysDb),
+             std::filesystem::exists(manager.pathsFor(secondId).replaysDb) &&
+             std::filesystem::is_directory(
+                 manager.pathsFor(secondId).practiceDirectory) &&
+             std::filesystem::is_directory(
+                 manager.pathsFor(secondId).replayDirectory),
          "created profile owns all isolated data files");
   expect(!std::filesystem::exists(
              manager.pathsFor(secondId).irCredentialsJson),
@@ -2406,6 +2414,9 @@ void testProfileCrudConstraintsAndDataIsolation() {
 
   writeFile(manager.pathsFor(firstId).irCredentialsJson,
             R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-api-key"}}})");
+  constexpr std::string_view replayBytes = "duplicate-replay-bytes\n";
+  writeFile(manager.pathsFor(firstId).replayDirectory / "copy-test.brd",
+            replayBytes);
   seedIrOperationalState(manager.pathsFor(firstId).replaysDb,
                          "duplicate source");
   seedImportedIrScore(manager.pathsFor(firstId).scoresDb, "duplicate source");
@@ -2430,6 +2441,9 @@ void testProfileCrudConstraintsAndDataIsolation() {
   expect(AppSettingsStore::Load(manager.pathsFor(copyId).settingsJson)
                  .settings.selectedGameplayRuleset == "beatoraja",
          "duplicate preserves the per-profile ruleset selection");
+  expect(readFile(manager.pathsFor(copyId).replayDirectory / "copy-test.brd") ==
+             replayBytes,
+         "duplicate preserves replay paths and exact file bytes");
   expect(matchingRowCount(manager.pathsFor(copyId).scoresDb,
                           "SELECT COUNT(*) FROM scores WHERE score_source=0") ==
              matchingRowCount(manager.pathsFor(firstId).scoresDb,

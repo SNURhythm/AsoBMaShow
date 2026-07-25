@@ -2619,6 +2619,10 @@ ReplayRepository::ListReplays(const bms_parser::ChartMeta &chartMeta, int limit,
 std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta, int limit,
     std::string_view irProviderId, std::string_view irServerOrigin) {
+  return ListCompactChartResultsOnConnection(
+      db, chartMeta, limit, irProviderId, irServerOrigin);
+
+#if 0 // Removed after the v10-to-v11 atomic migration boundary is retired.
   std::vector<ReplaySummary> replays;
 
   std::string snapshotError;
@@ -2808,6 +2812,7 @@ std::vector<ReplaySummary> replay_repository_detail::ListReplaysOnConnection(
     return {};
   }
   return replays;
+#endif
 }
 
 std::vector<ReplaySummary>
@@ -2825,6 +2830,9 @@ ReplayRepository::ListCourseReplays(const CourseReplayLookup &lookup,
 std::vector<ReplaySummary>
 replay_repository_detail::ListCourseReplaysOnConnection(
     sqlite3 *db, const CourseReplayLookup &lookup, int limit) {
+  return ListCompactCourseResultsOnConnection(db, lookup, limit);
+
+#if 0 // Removed after the v10-to-v11 atomic migration boundary is retired.
   std::vector<ReplaySummary> replays;
   if (lookup.courseKey.empty() && lookup.legacyCourseId <= 0) {
     return replays;
@@ -3036,6 +3044,7 @@ replay_repository_detail::ListCourseReplaysOnConnection(
     return {};
   }
   return replays;
+#endif
 }
 
 bool ReplayRepository::RecoverCourseRecords(

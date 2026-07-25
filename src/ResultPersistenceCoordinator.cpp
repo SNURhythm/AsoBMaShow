@@ -1,5 +1,6 @@
 #include "ResultPersistenceCoordinator.h"
 
+#include "CourseConstraintUtils.h"
 #include "ProfileDatabaseActivity.h"
 
 #include <algorithm>
@@ -129,6 +130,36 @@ bool validateCompletedAttempt(const CompletedChartAttempt &attempt,
       if (diagnostic.empty()) {
         diagnostic = "IR draft differs from the completed result snapshot";
       }
+      return false;
+    }
+  }
+  return true;
+}
+
+bool validateCompletedCourseAttempt(const CompletedCourseAttempt &attempt,
+                                    std::string &diagnostic) {
+  diagnostic.clear();
+  const auto &result = attempt.result;
+  if (result.resultId != 0 || !result.attemptId.has_value() ||
+      !validatePersistedCourseResult(result, diagnostic) ||
+      result.resultFingerprint.empty() || attempt.replay.stages.empty() ||
+      attempt.replay.stages.size() != result.stages.size() ||
+      attempt.replay.restMicrosAfterStage.size() != result.stages.size()) {
+    if (diagnostic.empty()) {
+      diagnostic = "completed course result/replay envelope is invalid";
+    }
+    return false;
+  }
+  for (std::size_t index = 0; index < result.stages.size(); ++index) {
+    const auto &stage = result.stages[index];
+    const auto &setup = attempt.replay.stages[index].setup;
+    if (stage.stageIndex != static_cast<int>(index) ||
+        setup.chartMd5 != stage.score.chartMd5 ||
+        setup.chartSha256 != stage.score.chartSha256 ||
+        setup.keyMode != stage.keyMode ||
+        setup.longNoteMode != stage.score.longNoteMode ||
+        attempt.replay.restMicrosAfterStage[index] < 0) {
+      diagnostic = "course replay stage differs from its compact result";
       return false;
     }
   }
@@ -267,6 +298,12 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
                 return replay::BeatorajaReplayCodec{}.encodeChart(
                     playback, playedAtUnixMillis, diagnostic);
               },
+          .encodeCourseReplay =
+              [](const replay::CourseReplayPlaybackData &playback,
+                 std::int64_t playedAtUnixMillis, std::string &diagnostic) {
+                return replay::BeatorajaReplayCodec{}.encodeCourse(
+                    playback, playedAtUnixMillis, diagnostic);
+              },
           .finalizeReplay =
               [&replay](const replay::ReplayPathIdentity &identity,
                         std::span<const std::byte> encoded,
@@ -285,6 +322,11 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
                         std::span<const ir::IrOutboxDraft> irDrafts) {
                 return replay.stageCompletedChartAttempt(result, snapshot,
                                                          file, irDrafts);
+              },
+          .stageCourse =
+              [&replay](const PersistedCourseResult &result,
+                        const ReplayFileReference &file) {
+                return replay.stageCompletedCourseAttempt(result, file);
               },
           .loadPending =
               [&replay](std::string_view attemptId) {
@@ -325,6 +367,13 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay,
                 return codec.encodeChart(playback, playedAtUnixMillis,
                                          diagnostic);
               },
+          .encodeCourseReplay =
+              [&codec](const replay::CourseReplayPlaybackData &playback,
+                       std::int64_t playedAtUnixMillis,
+                       std::string &diagnostic) {
+                return codec.encodeCourse(playback, playedAtUnixMillis,
+                                          diagnostic);
+              },
           .finalizeReplay =
               [&fileStore, &codec](
                   const replay::ReplayPathIdentity &identity,
@@ -341,6 +390,11 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay,
                         std::span<const ir::IrOutboxDraft> irDrafts) {
                 return replay.stageCompletedChartAttempt(result, snapshot,
                                                          file, irDrafts);
+              },
+          .stageCourse =
+              [&replay](const PersistedCourseResult &result,
+                        const ReplayFileReference &file) {
+                return replay.stageCompletedCourseAttempt(result, file);
               },
           .loadPending =
               [&replay](std::string_view attemptId) {
@@ -630,6 +684,116 @@ SaveOutcome Coordinator::persist(
 
   receipt.scorePending = false;
   return durableOutcome(SaveState::Saved, receipt,
+                        std::move(staged.diagnostic));
+}
+
+SaveOutcome Coordinator::persistCourse(const CompletedCourseAttempt &attempt) {
+  profile_database_activity::WriteGuard bindingLease;
+  std::string diagnostic;
+  if (!validateCompletedCourseAttempt(attempt, diagnostic)) {
+    return unstagedOutcome(SaveState::InvalidAttempt, std::move(diagnostic));
+  }
+  if (!dependencies_.reserve || !dependencies_.encodeCourseReplay ||
+      !dependencies_.finalizeReplay || !dependencies_.stageCourse) {
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           "course persistence dependencies are incomplete");
+  }
+
+  replay::CoursePathInput pathInput;
+  pathInput.longNoteMode = attempt.result.longNoteMode;
+  pathInput.beatorajaConstraintIds =
+      beatorajaCourseConstraintIds(attempt.result.constraintJson);
+  pathInput.stageSha256.reserve(attempt.replay.stages.size());
+  for (const auto &stage : attempt.replay.stages) {
+    pathInput.stageSha256.push_back(stage.setup.chartSha256);
+    pathInput.hasUndefinedLongNotes =
+        pathInput.hasUndefinedLongNotes || stage.setup.hasUndefinedLongNotes;
+  }
+  const auto stem = replay::courseStem(pathInput, diagnostic);
+  if (!stem.has_value()) {
+    return unstagedOutcome(SaveState::InvalidAttempt, std::move(diagnostic));
+  }
+
+  const std::string &attemptId = *attempt.result.attemptId;
+  ReservationOutcome reserved = dependencies_.reserve(attemptId, *stem);
+  switch (reserved.status) {
+  case ReservationOutcome::Status::StorageFailure:
+    return unstagedOutcome(SaveState::Unstaged,
+                           std::move(reserved.diagnostic));
+  case ReservationOutcome::Status::IntegrityConflict:
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           std::move(reserved.diagnostic));
+  case ReservationOutcome::Status::Invalid:
+    return unstagedOutcome(SaveState::InvalidAttempt,
+                           std::move(reserved.diagnostic));
+  case ReservationOutcome::Status::Reserved:
+  case ReservationOutcome::Status::AlreadyReserved:
+    break;
+  }
+  if (!reserved.reservation.has_value() ||
+      reserved.reservation->attemptId != attemptId ||
+      reserved.reservation->stem != *stem) {
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           "course replay reservation is inconsistent");
+  }
+
+  auto encoded = dependencies_.encodeCourseReplay(
+      attempt.replay, attempt.result.playedAtUnixMillis, diagnostic);
+  if (!encoded.has_value()) {
+    return unstagedOutcome(
+        SaveState::InvalidAttempt,
+        phaseDiagnostic("course replay encoding", diagnostic,
+                        "course replay is invalid"));
+  }
+  const replay::ReplayPathIdentity identity{
+      .stem = reserved.reservation->stem,
+      .historyIndex = reserved.reservation->historyIndex,
+      .relativePath = reserved.reservation->relativePath,
+  };
+  replay::FinalizeOutcome finalized = dependencies_.finalizeReplay(
+      identity, *encoded,
+      {.stageSha256 = pathInput.stageSha256, .course = true}, attemptId);
+  if (!finalized.metadata.has_value()) {
+    return unstagedOutcome(
+        SaveState::UnfinalizedReplay,
+        phaseDiagnostic("course replay file finalization",
+                        finalized.diagnostic, "file validation failed"));
+  }
+  if (finalized.metadata->relativePath != identity.relativePath) {
+    return unstagedOutcome(
+        SaveState::UnstagedConflict,
+        "finalized course replay path differs from reservation");
+  }
+  const ReplayFileReference replayFile{
+      .recordKind = ReplayFileReference::RecordKind::CourseResult,
+      .stem = identity.stem,
+      .historyIndex = identity.historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  StageOutcome staged = dependencies_.stageCourse(attempt.result, replayFile);
+  if (staged.status == StageStatus::StorageFailure) {
+    return unstagedOutcome(SaveState::Unstaged,
+                           std::move(staged.diagnostic));
+  }
+  if (staged.status == StageStatus::IntegrityConflict) {
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           std::move(staged.diagnostic));
+  }
+  if ((staged.status != StageStatus::Staged &&
+       staged.status != StageStatus::AlreadyStaged) ||
+      !staged.receipt.has_value() ||
+      staged.receipt->attemptId != attemptId ||
+      staged.receipt->resultId <= 0 || staged.receipt->createdAt.empty() ||
+      staged.receipt->scorePending) {
+    return unstagedOutcome(
+        SaveState::UnstagedConflict,
+        staged.diagnostic.empty() ? "course staging receipt is inconsistent"
+                                  : std::move(staged.diagnostic));
+  }
+  return durableOutcome(SaveState::Saved, *staged.receipt,
                         std::move(staged.diagnostic));
 }
 

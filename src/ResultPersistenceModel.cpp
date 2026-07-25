@@ -388,6 +388,20 @@ std::optional<PersistedChartResult> capturePersistedChartResult(
   return result;
 }
 
+PersistedCourseStageResult capturePersistedCourseStageResult(
+    int stageIndex, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const ScoreProvenance &provenance,
+    int storageLongNoteMode) {
+  return {
+      .stageIndex = stageIndex,
+      .score =
+          captureChartScoreWrite(meta, state, provenance, storageLongNoteMode),
+      .keyMode = meta.KeyMode,
+      .adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType),
+      .judgementTiming = captureChartJudgementTiming(state),
+  };
+}
+
 bool validatePersistedChartResult(const PersistedChartResult &result,
                                   std::string &diagnostic) noexcept {
   try {

@@ -1533,6 +1533,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayPath.cpp
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
+        src/replay/ReplayFileActionService.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
@@ -2704,6 +2705,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/repositories/ReplayRepositoryReplayFileMigration.cpp
         src/MinizBridge.c
@@ -2713,6 +2715,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
         src/ir/IrOutboxModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp
@@ -2839,6 +2843,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
         src/repositories/ReplayRepositoryReplayFileMigration.cpp
         src/MinizBridge.c
@@ -2848,6 +2853,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
         src/ir/IrOutboxModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp
         src/ScoreProvenance.cpp

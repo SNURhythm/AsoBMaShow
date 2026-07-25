@@ -43,9 +43,18 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
     const ir::IrSubmissionSnapshot &irSnapshot,
     const ReplayFileReference &replayFile,
     std::span<const ir::IrOutboxDraft> irDrafts);
+result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
+    sqlite3 *database,
+    const result_persistence::PersistedCourseResult &result,
+    const ReplayFileReference &replayFile);
 ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId);
 CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
                                                      int resultId);
+std::vector<ReplaySummary> ListCompactChartResultsOnConnection(
+    sqlite3 *database, const bms_parser::ChartMeta &chartMeta, int limit,
+    std::string_view irProviderId, std::string_view irServerOrigin);
+std::vector<ReplaySummary> ListCompactCourseResultsOnConnection(
+    sqlite3 *database, const CourseReplayLookup &lookup, int limit);
 ir::IrSubmissionSnapshotReadOutcome
 LoadIrSubmissionSnapshotOnConnection(sqlite3 *database,
                                      std::string_view attemptId);

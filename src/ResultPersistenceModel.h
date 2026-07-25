@@ -181,6 +181,11 @@ struct StageReceipt {
     int storageLongNoteMode, std::int64_t playedAtUnixMillis,
     std::string &diagnostic);
 
+[[nodiscard]] PersistedCourseStageResult capturePersistedCourseStageResult(
+    int stageIndex, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const ScoreProvenance &provenance,
+    int storageLongNoteMode);
+
 [[nodiscard]] bool
 validatePersistedChartResult(const PersistedChartResult &result,
                              std::string &diagnostic) noexcept;

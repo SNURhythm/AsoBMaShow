@@ -14,12 +14,6 @@
 #include <variant>
 #include <vector>
 
-struct LocalReplayRecordId {
-  int replayId = 0;
-
-  bool operator==(const LocalReplayRecordId &) const = default;
-};
-
 struct IrRemoteRecordId {
   std::string providerId;
   std::string serverOrigin;
@@ -29,7 +23,7 @@ struct IrRemoteRecordId {
 };
 
 using ResultRecordIdentity =
-    std::variant<LocalReplayRecordId, IrRemoteRecordId>;
+    std::variant<LocalResultRecordId, IrRemoteRecordId>;
 
 struct ResultRecordIdentityHash {
   [[nodiscard]] std::size_t
@@ -41,6 +35,8 @@ struct ResultRecordCapabilities {
   bool gBattle = false;
   bool resultRecall = false;
   bool videoExport = false;
+  bool shareReplay = false;
+  bool deleteReplayFile = false;
   bool irUpload = false;
 
   bool operator==(const ResultRecordCapabilities &) const = default;
@@ -73,6 +69,8 @@ struct ResultRecordSummary {
   [[nodiscard]] bool isLocal() const noexcept;
   [[nodiscard]] bool isRemote() const noexcept;
   [[nodiscard]] std::optional<int> localReplayId() const noexcept;
+  [[nodiscard]] std::optional<LocalResultRecordId>
+  localResultRecordId() const noexcept;
   [[nodiscard]] std::optional<std::string_view>
   remoteScoreId() const noexcept;
   [[nodiscard]] std::string stableKey() const;

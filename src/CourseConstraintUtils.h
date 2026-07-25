@@ -154,6 +154,63 @@ courseConstraintSettingsFromJson(const std::string &constraintJson) {
   return settings;
 }
 
+inline std::vector<int>
+beatorajaCourseConstraintIds(std::string_view constraintJson) {
+  // Beatoraja stores CourseDataConstraint ordinal + 1 in course replay names.
+  const CourseConstraintSettings settings =
+      courseConstraintSettingsFromJson(std::string(constraintJson));
+  std::vector<int> result;
+  if (settings.gradeConstraint == "grade") {
+    result.push_back(1);
+  } else if (settings.gradeConstraint == "grade_mirror") {
+    result.push_back(2);
+  } else if (settings.gradeConstraint == "grade_random") {
+    result.push_back(3);
+  }
+  if (settings.rules.noSpeed) {
+    result.push_back(4);
+  }
+  if (settings.rules.judgement == CourseJudgementConstraint::NoGood) {
+    result.push_back(5);
+  } else if (settings.rules.judgement ==
+             CourseJudgementConstraint::NoGreat) {
+    result.push_back(6);
+  }
+  switch (settings.gaugeProfile) {
+  case GaugeProfile::CourseLR2:
+    result.push_back(7);
+    break;
+  case GaugeProfile::Course5Keys:
+    result.push_back(8);
+    break;
+  case GaugeProfile::Course7Keys:
+    result.push_back(9);
+    break;
+  case GaugeProfile::Course9Keys:
+    result.push_back(10);
+    break;
+  case GaugeProfile::Course24Keys:
+    result.push_back(11);
+    break;
+  default:
+    break;
+  }
+  switch (settings.rules.longNoteMode) {
+  case CourseLongNoteMode::LN:
+    result.push_back(12);
+    break;
+  case CourseLongNoteMode::CN:
+    result.push_back(13);
+    break;
+  case CourseLongNoteMode::HCN:
+    result.push_back(14);
+    break;
+  case CourseLongNoteMode::Unspecified:
+    break;
+  }
+  return result;
+}
+
 inline std::string coursePlayOptionForConstraints(
     const std::string &selectedPlayOption,
     const CourseConstraintSettings &constraintSettings) {

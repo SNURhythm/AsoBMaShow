@@ -51,4 +51,9 @@ public:
   static ReplayVideoExportResult
   ExportCourseReplay(ApplicationContext &context, const CourseReplayData &replay,
                      const ReplayVideoExportOptions &options = {});
+  static ReplayVideoExportResult ExportCourseReplay(
+      ApplicationContext &context,
+      const replay::CourseReplayPlaybackData &playback,
+      const result_persistence::PersistedCourseResult &result,
+      const ReplayVideoExportOptions &options = {});
 };

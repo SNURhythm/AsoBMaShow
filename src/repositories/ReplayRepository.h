@@ -113,6 +113,14 @@ struct ReplayFileReference {
   bool operator==(const ReplayFileReference &) const = default;
 };
 
+struct LocalResultRecordId {
+  ReplayFileReference::RecordKind kind =
+      ReplayFileReference::RecordKind::ChartResult;
+  int resultId = 0;
+
+  bool operator==(const LocalResultRecordId &) const = default;
+};
+
 struct ReplayFileReservation {
   std::string attemptId;
   std::string stem;
@@ -187,6 +195,22 @@ struct ChartReplayPlaybackReadOutcome {
   Status status = Status::StorageFailure;
   std::optional<result_persistence::PersistedChartResult> result;
   std::optional<replay::ReplayPlaybackData> playback;
+  std::string diagnostic;
+};
+
+struct CourseReplayPlaybackReadOutcome {
+  enum class Status {
+    Loaded,
+    ResultNotFound,
+    ReplayUnavailable,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<result_persistence::PersistedCourseResult> result;
+  std::optional<replay::CourseReplayPlaybackData> playback;
   std::string diagnostic;
 };
 
@@ -284,7 +308,13 @@ struct ReplaySummary {
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
-  enum class ReplayFileState { Missing, Available, Unreadable };
+  enum class ReplayFileState {
+    Missing,
+    Available,
+    Corrupt,
+    Unsafe,
+    IoFailure,
+  };
   ReplayFileState replayFileState = ReplayFileState::Missing;
   std::optional<std::uint64_t> replayFileSize;
   // Temporary v10 read compatibility; removed with legacy playback reads.
@@ -369,9 +399,13 @@ public:
       const ir::IrSubmissionSnapshot &irSnapshot,
       const ReplayFileReference &replayFile,
       std::span<const ir::IrOutboxDraft> irDrafts);
+  result_persistence::StageOutcome stageCompletedCourseAttempt(
+      const result_persistence::PersistedCourseResult &result,
+      const ReplayFileReference &replayFile);
   ResultReadOutcome loadChartResult(int resultId);
   CourseResultReadOutcome loadCourseResult(int resultId);
   ChartReplayPlaybackReadOutcome loadChartReplayPlayback(int resultId);
+  CourseReplayPlaybackReadOutcome loadCourseReplayPlayback(int resultId);
   ir::IrSubmissionSnapshotReadOutcome
   loadIrSubmissionSnapshot(std::string_view attemptId);
   std::optional<int> SaveReplay(const ReplayData &replay);

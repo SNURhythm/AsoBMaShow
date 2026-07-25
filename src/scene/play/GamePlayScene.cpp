@@ -2314,6 +2314,7 @@ bool GamePlayScene::restartCourseFromBeginning() {
   session->completedResults.clear();
   if (!session->courseReplayPlayback) {
     session->replayStages.clear();
+    session->recordedReplayPlayback = {};
     session->stageProvenance.clear();
   }
   session->carriedGauge.reset();
@@ -2552,6 +2553,32 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
   if (session == nullptr ||
       !session->hasCourseReplayStage(session->currentIndex)) {
     return false;
+  }
+
+  if (auto stagePlayback = session->currentCourseReplayStagePlayback()) {
+    const bms_parser::ChartMeta *stageMeta = session->currentMeta();
+    if (stageMeta == nullptr || stageMeta->BmsPath.empty()) {
+      return false;
+    }
+    session->applyReplayStagePlayOptions(*stagePlayback);
+    std::atomic_bool parseCancelled = false;
+    auto replayChart = play_options::prepareReplayChart(
+        stageMeta->BmsPath, *stagePlayback, parseCancelled);
+    if (replayChart == nullptr || parseCancelled) {
+      return false;
+    }
+    context.jukebox.stop();
+    context.jukebox.loadChart(*replayChart, true, parseCancelled);
+    if (parseCancelled) {
+      return false;
+    }
+    StartOptions nextOptions = makeCourseReplayStageStartOptions(
+        session, stagePlayback, replayChart->Meta);
+    context.sceneManager->changeScene(
+        std::make_unique<GamePlayScene>(context, std::move(replayChart),
+                                        std::move(nextOptions)),
+        false);
+    return true;
   }
 
   auto stageReplay = session->currentCourseReplayStageReplay();
@@ -3286,6 +3313,7 @@ bool GamePlayScene::finishIfGaugeFailed() {
     }
     if (shouldRecordReplay()) {
       options.courseSession->recordReplayStage(recordedReplay);
+      options.courseSession->recordReplayPlaybackStage(recordedPlaybackReplay);
     }
   }
   scheduleResultTransition(0);
@@ -3428,6 +3456,7 @@ void GamePlayScene::update(float dt) {
     }
     if (shouldRecordReplay()) {
       options.courseSession->recordReplayStage(recordedReplay);
+      options.courseSession->recordReplayPlaybackStage(recordedPlaybackReplay);
     }
   }
   scheduleResultTransition(2000);

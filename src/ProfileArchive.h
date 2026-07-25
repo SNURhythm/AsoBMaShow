@@ -10,7 +10,7 @@
 #include <string_view>
 
 struct ProfileArchiveManifest {
-  static constexpr int kFormatVersion = 2;
+  static constexpr int kFormatVersion = 3;
 
   int formatVersion = kFormatVersion;
   std::string sourceApplicationVersion;

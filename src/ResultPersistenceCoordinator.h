@@ -74,6 +74,9 @@ struct Dependencies {
   std::function<std::optional<std::vector<std::byte>>(
       const replay::ReplayPlaybackData &, std::int64_t, std::string &)>
       encodeReplay;
+  std::function<std::optional<std::vector<std::byte>>(
+      const replay::CourseReplayPlaybackData &, std::int64_t, std::string &)>
+      encodeCourseReplay;
   std::function<replay::FinalizeOutcome(
       const replay::ReplayPathIdentity &, std::span<const std::byte>,
       const replay::ExpectedReplayIdentity &, std::string_view)>
@@ -83,6 +86,9 @@ struct Dependencies {
                              const ReplayFileReference &,
                              std::span<const ir::IrOutboxDraft>)>
       stage;
+  std::function<StageOutcome(const PersistedCourseResult &,
+                             const ReplayFileReference &)>
+      stageCourse;
   std::function<PendingReadOutcome(std::string_view)> loadPending;
   std::function<PendingBatchOutcome(std::size_t)> listPending;
   std::function<ProjectionOutcome(const PendingChartScoreWrite &)> project;
@@ -102,6 +108,7 @@ public:
 
   SaveOutcome persist(const CompletedChartAttempt &attempt,
                       std::span<const ir::IrOutboxDraft> irDrafts = {});
+  SaveOutcome persistCourse(const CompletedCourseAttempt &attempt);
   RecoverySummary recoverAll(std::size_t limit = 256);
 
 private:
