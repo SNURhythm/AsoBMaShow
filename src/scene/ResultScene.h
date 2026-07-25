@@ -69,8 +69,7 @@ struct ResultCourseOptions {
 };
 
 struct ResultPersistenceOptions {
-  std::shared_ptr<const legacy_result_persistence::LegacyChartResultAttempt>
-      attempt;
+  std::shared_ptr<const result_persistence::CompletedChartAttempt> attempt;
   std::shared_ptr<const result_persistence::PersistedChartResult> result;
   std::shared_ptr<const ir::IrSubmissionSnapshot> irSnapshot;
   std::shared_ptr<const ir::IrSubmission> irSubmission;

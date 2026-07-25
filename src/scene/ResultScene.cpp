@@ -541,7 +541,7 @@ void ResultScene::loadPreviousBest() {
           : persistenceOptions.outcome.validatedReceiptFor(
                 *persistenceOptions.attempt);
   if (receipt != nullptr) {
-    excludeAttemptId = persistenceOptions.attempt->attemptId;
+    excludeAttemptId = persistenceOptions.attempt->result.attemptId;
   } else if (local->replayResult && local->retryData.has_value() &&
              !local->retryData->autoPlay &&
              !local->retryData->createdAt.empty()) {
@@ -626,7 +626,7 @@ void ResultScene::applyResultPersistenceReceipt() {
     if (!replay.has_value()) {
       return;
     }
-    replay->id = receipt->replayId;
+    replay->id = receipt->resultId;
     replay->createdAt = receipt->createdAt;
   };
   applyReceipt(local->presentationReplay);
@@ -805,10 +805,11 @@ void ResultScene::addResultPersistenceStatus() {
           return;
         }
         const std::string_view attemptId =
-            current->persistenceOptions.attempt == nullptr
+            current->persistenceOptions.attempt == nullptr ||
+                    !current->persistenceOptions.attempt->result.attemptId
                 ? std::string_view{}
                 : std::string_view(
-                      current->persistenceOptions.attempt->attemptId);
+                      *current->persistenceOptions.attempt->result.attemptId);
         const auto details = result_persistence::saveConflictDetails(
             current->persistenceOptions.outcome, attemptId);
         if (!details.has_value()) {
@@ -827,9 +828,9 @@ void ResultScene::addResultPersistenceStatus() {
               details->attemptId.empty()
                   ? "Attempt ID: unavailable"
                   : "Attempt ID: " + details->attemptId;
-          if (details->replayId.has_value()) {
-            references += "\nReplay ID: " +
-                          std::to_string(*details->replayId);
+          if (details->resultId.has_value()) {
+            references += "\nResult ID: " +
+                          std::to_string(*details->resultId);
           }
           persistenceDetailsReferenceText->setText(references);
         }
@@ -839,9 +840,10 @@ void ResultScene::addResultPersistenceStatus() {
         persistenceDetailsModalRoot->applyYogaLayout();
       });
   const std::string_view attemptId =
-      persistenceOptions.attempt == nullptr
+      persistenceOptions.attempt == nullptr ||
+              !persistenceOptions.attempt->result.attemptId
           ? std::string_view{}
-          : std::string_view(persistenceOptions.attempt->attemptId);
+          : std::string_view(*persistenceOptions.attempt->result.attemptId);
   const bool hasConflictDetails =
       result_persistence::saveConflictDetails(persistenceOptions.outcome,
                                               attemptId)
@@ -1270,9 +1272,11 @@ void ResultScene::updateResultPersistencePresentation() {
         local->persistenceOptions.outcome.retryable());
   }
   const std::string_view attemptId =
-      local->persistenceOptions.attempt == nullptr
+      local->persistenceOptions.attempt == nullptr ||
+              !local->persistenceOptions.attempt->result.attemptId
           ? std::string_view{}
-          : std::string_view(local->persistenceOptions.attempt->attemptId);
+          : std::string_view(
+                *local->persistenceOptions.attempt->result.attemptId);
   const bool hasConflictDetails =
       result_persistence::saveConflictDetails(
           local->persistenceOptions.outcome, attemptId)

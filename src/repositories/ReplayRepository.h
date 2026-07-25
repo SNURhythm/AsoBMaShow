@@ -171,7 +171,7 @@ struct StageOutcome {
 
 struct PendingChartScoreWrite {
   std::string attemptId;
-  int replayId = 0;
+  int resultId = 0;
   std::string createdAt;
   ChartScoreWrite score;
 };
@@ -347,7 +347,7 @@ public:
   ListPendingChartScores(std::size_t limit = 256);
   result_persistence::AcknowledgeOutcome
   AcknowledgePendingChartScoreAndActivateIr(std::string_view attemptId,
-                                            int replayId);
+                                            int resultId);
   result_persistence::RecoveryMarkOutcome
   RecordPendingChartScoreRecoveryAttempt(
       std::string_view attemptId, result_persistence::RecoveryAttemptKind kind);

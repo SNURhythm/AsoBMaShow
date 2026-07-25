@@ -25,7 +25,7 @@ constexpr const char *kIrOutboxColumns =
     "created_at_ms,updated_at_ms,completed_at_ms";
 
 constexpr const char *kIrSubmissionReceiptColumns =
-    "id,provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+    "id,provider_id,server_origin,result_id,attempt_id,chart_md5,chart_sha256,"
     "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
     "observed_in_snapshot,confirmed_at_ms";
 
@@ -334,36 +334,36 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
     return {.status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
   }
 
-  SqliteStatementHandle replay;
+  SqliteStatementHandle result;
   if (prepareSqliteStatement(database,
-                             "SELECT id FROM replays WHERE attempt_id=?",
-                             replay) != SQLITE_OK ||
-      !bindSqliteText(replay.get(), 1, claimed.attemptId)) {
+                             "SELECT id FROM chart_results WHERE attempt_id=?",
+                             result) != SQLITE_OK ||
+      !bindSqliteText(result.get(), 1, claimed.attemptId)) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "could not prepare IR receipt replay lookup"};
+            .diagnostic = "could not prepare IR receipt result lookup"};
   }
-  const int replayStep = sqlite3_step(replay.get());
-  if (replayStep != SQLITE_ROW ||
-      sqlite3_column_type(replay.get(), 0) != SQLITE_INTEGER) {
+  const int resultStep = sqlite3_step(result.get());
+  if (resultStep != SQLITE_ROW ||
+      sqlite3_column_type(result.get(), 0) != SQLITE_INTEGER) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = replayStep == SQLITE_DONE
-                              ? "IR receipt replay attempt is missing"
-                              : "IR receipt replay lookup did not complete"};
+            .diagnostic = resultStep == SQLITE_DONE
+                              ? "IR receipt result attempt is missing"
+                              : "IR receipt result lookup did not complete"};
   }
-  const sqlite3_int64 replayId = sqlite3_column_int64(replay.get(), 0);
-  if (replayId <= 0 || replayId > std::numeric_limits<int>::max() ||
-      sqlite3_step(replay.get()) != SQLITE_DONE) {
+  const sqlite3_int64 resultId = sqlite3_column_int64(result.get(), 0);
+  if (resultId <= 0 || resultId > std::numeric_limits<int>::max() ||
+      sqlite3_step(result.get()) != SQLITE_DONE) {
     return {.status = ir::IrOutboxMutationStatus::StorageFailure,
-            .diagnostic = "IR receipt replay lookup is invalid"};
+            .diagnostic = "IR receipt result lookup is invalid"};
   }
 
   const ir::IrSuccessfulReceiptDraft &receipt = *update.successfulReceipt;
   constexpr const char *receiptQuery =
       "INSERT INTO ir_submission_receipts("
-      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+      "provider_id,server_origin,result_id,attempt_id,chart_md5,chart_sha256,"
       "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
       "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-      "ON CONFLICT(provider_id,server_origin,replay_id) DO UPDATE SET "
+      "ON CONFLICT(provider_id,server_origin,result_id) DO UPDATE SET "
       "attempt_id=excluded.attempt_id,"
       "chart_md5=excluded.chart_md5,"
       "chart_sha256=excluded.chart_sha256,"
@@ -381,7 +381,7 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
           SQLITE_OK ||
       !bindSqliteText(receiptStatement.get(), 1, claimed.providerId) ||
       !bindSqliteText(receiptStatement.get(), 2, receipt.serverOrigin) ||
-      sqlite3_bind_int64(receiptStatement.get(), 3, replayId) != SQLITE_OK ||
+      sqlite3_bind_int64(receiptStatement.get(), 3, resultId) != SQLITE_OK ||
       !bindSqliteText(receiptStatement.get(), 4, claimed.attemptId) ||
       (claimed.chartMd5.empty()
            ? sqlite3_bind_null(receiptStatement.get(), 5) != SQLITE_OK

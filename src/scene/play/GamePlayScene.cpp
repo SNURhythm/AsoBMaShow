@@ -76,6 +76,8 @@ resultPersistenceStateName(result_persistence::SaveState state) noexcept {
     return "Saved";
   case result_persistence::SaveState::InvalidAttempt:
     return "InvalidAttempt";
+  case result_persistence::SaveState::UnfinalizedReplay:
+    return "UnfinalizedReplay";
   case result_persistence::SaveState::Unstaged:
     return "Unstaged";
   case result_persistence::SaveState::PendingScore:
@@ -3061,16 +3063,10 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
       }
 
       std::string constructionDiagnostic;
-      std::optional<legacy_result_persistence::LegacyChartResultAttempt>
-          attempt;
       std::optional<result_persistence::PersistedChartResult> result;
       std::optional<ir::IrSubmissionSnapshot> irSnapshot;
       if (chart != nullptr && state != nullptr) {
         const std::int64_t playedAtUnixMillis = nowUnixMillis();
-        attempt = legacy_result_persistence::makeLegacyChartResultAttempt(
-            resultPersistenceAttemptId, chart->Meta, *state, attemptProvenance,
-            scoreLongNoteModeForClearLamp(chart->Meta), recordedReplay,
-            constructionDiagnostic);
         std::string resultDiagnostic;
         result = result_persistence::capturePersistedChartResult(
             resultPersistenceAttemptId, chart->Meta, *state,
@@ -3087,18 +3083,21 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
           constructionDiagnostic = std::move(resultDiagnostic);
         }
       }
-      if (attempt.has_value() && result.has_value() &&
-          irSnapshot.has_value()) {
+      if (result.has_value() && irSnapshot.has_value()) {
+        result_persistence::CompletedChartAttempt attempt{
+            .result = std::move(*result),
+            .replay = std::move(recordedPlaybackReplay),
+            .irSnapshot = std::move(*irSnapshot),
+        };
         resultPersistenceOptions.attempt =
-            std::make_shared<
-                const legacy_result_persistence::LegacyChartResultAttempt>(
-                std::move(*attempt));
+            std::make_shared<const result_persistence::CompletedChartAttempt>(
+                std::move(attempt));
         resultPersistenceOptions.result =
             std::make_shared<const result_persistence::PersistedChartResult>(
-                std::move(*result));
+                resultPersistenceOptions.attempt->result);
         resultPersistenceOptions.irSnapshot =
             std::make_shared<const ir::IrSubmissionSnapshot>(
-                std::move(*irSnapshot));
+                resultPersistenceOptions.attempt->irSnapshot);
         resultPersistenceOptions.irSubmission =
             std::make_shared<const ir::IrSubmission>(
                 resultPersistenceOptions.irSnapshot->submission);
@@ -3138,7 +3137,7 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
             : resultPersistenceOptions.outcome.validatedReceiptFor(
                   *resultPersistenceOptions.attempt);
     if (receipt != nullptr) {
-      recordedReplay.id = receipt->replayId;
+      recordedReplay.id = receipt->resultId;
       recordedReplay.createdAt = receipt->createdAt;
     }
     SDL_Log("Result persistence state=%s diagnostic=%s",

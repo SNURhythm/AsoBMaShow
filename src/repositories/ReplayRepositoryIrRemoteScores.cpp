@@ -592,7 +592,7 @@ bool deleteOlderRemoteGeneration(sqlite3 *db,
 bool insertReceipt(sqlite3 *db, const ir::IrSubmissionReceipt &receipt) {
   constexpr const char *query =
       "INSERT INTO ir_submission_receipts("
-      "provider_id,server_origin,replay_id,attempt_id,chart_md5,chart_sha256,"
+      "provider_id,server_origin,result_id,attempt_id,chart_md5,chart_sha256,"
       "remote_user_id,remote_chart_id,remote_score_id,confirmation_source,"
       "observed_in_snapshot,confirmed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)";
   SqliteStatementHandle statement;
@@ -624,7 +624,7 @@ bool insertReceipt(sqlite3 *db, const ir::IrSubmissionReceipt &receipt) {
 
 bool updateReceipt(sqlite3 *db, const ir::IrSubmissionReceipt &receipt) {
   constexpr const char *query =
-      "UPDATE ir_submission_receipts SET replay_id=?,attempt_id=?,"
+      "UPDATE ir_submission_receipts SET result_id=?,attempt_id=?,"
       "chart_md5=?,chart_sha256=?,remote_user_id=?,remote_chart_id=?,"
       "remote_score_id=?,confirmation_source=?,observed_in_snapshot=?,"
       "confirmed_at_ms=? WHERE id=? AND provider_id=? AND server_origin=?";
@@ -697,9 +697,9 @@ bool deleteOutboxIds(sqlite3 *db, const ir::IrRemoteSnapshotMutation &mutation,
             "AND EXISTS(SELECT 1 FROM ir_submission_receipts receipt WHERE "
             "receipt.provider_id=? AND receipt.server_origin=? AND "
             "receipt.attempt_id=ir_outbox.attempt_id AND "
-            "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays "
-            "replay WHERE replay.id=receipt.replay_id AND "
-            "replay.attempt_id=ir_outbox.attempt_id))"
+            "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM "
+            "chart_results result WHERE result.id=receipt.result_id AND "
+            "result.attempt_id=ir_outbox.attempt_id))"
           : "DELETE FROM ir_outbox WHERE id=? AND provider_id=? AND state IN "
             "(0,3,4) AND local_result_ready=1 AND (remote_origin IS NULL OR "
             "remote_origin=?) AND EXISTS(SELECT 1 FROM "
@@ -1345,9 +1345,9 @@ ReplayRepository::ClearIrAccountEvidence(std::string_view providerId,
       "SELECT 1 FROM ir_submission_receipts receipt WHERE "
       "receipt.provider_id=? AND receipt.server_origin=? AND "
       "receipt.attempt_id=ir_outbox.attempt_id AND "
-      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays replay "
-      "WHERE replay.id=receipt.replay_id AND "
-      "replay.attempt_id=ir_outbox.attempt_id))";
+      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM chart_results "
+      "result WHERE result.id=receipt.result_id AND "
+      "result.attempt_id=ir_outbox.attempt_id))";
   if (prepareSqliteStatement(database, outboxQuery, outboxStatement) !=
           SQLITE_OK ||
       sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),
@@ -1440,9 +1440,9 @@ ir::IrOutboxMutationOutcome ReplayRepository::ClearIrProviderAccountEvidence(
       "DELETE FROM ir_outbox WHERE provider_id=? AND state=5 AND EXISTS("
       "SELECT 1 FROM ir_submission_receipts receipt WHERE "
       "receipt.provider_id=? AND receipt.attempt_id=ir_outbox.attempt_id AND "
-      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM replays replay "
-      "WHERE replay.id=receipt.replay_id AND "
-      "replay.attempt_id=ir_outbox.attempt_id))";
+      "receipt.confirmation_source=0 AND EXISTS(SELECT 1 FROM chart_results "
+      "result WHERE result.id=receipt.result_id AND "
+      "result.attempt_id=ir_outbox.attempt_id))";
   if (prepareSqliteStatement(database, outboxQuery, outboxStatement) !=
           SQLITE_OK ||
       sqlite3_bind_text(outboxStatement.get(), 1, providerId.data(),

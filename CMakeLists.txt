@@ -1397,19 +1397,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     add_executable(result_persistence_coordinator_tests
-        tests/result_persistence_coordinator_tests.cpp
+        tests/result_persistence_coordinator_v11_tests.cpp
+        src/FileChecksum.cpp
         src/ResultPersistenceCoordinator.cpp
+        src/ResultPersistenceModel.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(result_persistence_coordinator_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
     )
     target_compile_features(result_persistence_coordinator_tests PRIVATE
         cxx_std_23
     )
 
     add_executable(result_persistence_integration_tests
-        tests/result_persistence_integration_tests.cpp
+        tests/result_persistence_v11_integration_tests.cpp
         src/AtomicFile.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
@@ -1430,7 +1441,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositoryResultRecords.cpp
         src/repositories/ReplayRepositorySchema.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayFileStore.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/LegacyChartResultAttempt.cpp

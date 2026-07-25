@@ -1229,18 +1229,18 @@ std::optional<std::string> readStagedReplayTimestamp(
 }
 
 constexpr const char *kPendingChartScoreSelect =
-    "SELECT p.attempt_id, p.replay_id, p.chart_path, p.chart_md5,"
+    "SELECT p.attempt_id, p.result_id, p.chart_path, p.chart_md5,"
     "p.chart_sha256, p.chart_title, p.chart_artist, p.ln_mode, p.score,"
     "p.max_score, p.max_combo, p.combo_break, p.pgreat, p.great, p.good,"
     "p.bad, p.poor, p.kpoor, p.fast, p.slow, p.final_gauge, p.clear_type,"
     "p.ruleset_version, p.eligibility, p.provenance_json, p.created_at,"
     "p.recovery_attempts, p.last_recovery_at, r.id, r.attempt_id,"
-    "r.attempt_fingerprint, r.chart_path, r.chart_md5, r.chart_sha256,"
-    "r.chart_title, r.chart_artist, r.created_at, r.final_score,"
-    "r.max_combo, r.final_gauge, r.clear_type, r.ruleset_version,"
-    "r.eligibility, r.provenance_json, r.ln_mode "
+    "r.result_fingerprint, r.chart_path, r.chart_md5, r.chart_sha256,"
+    "r.chart_title, r.chart_artist, r.created_at, r.score,"
+    "r.max_combo, r.final_gauge, r.clear_type, p.ruleset_version,"
+    "p.eligibility, r.provenance_json, r.long_note_mode "
     "FROM pending_chart_score_writes p "
-    "LEFT JOIN replays r ON r.id = p.replay_id ";
+    "LEFT JOIN chart_results r ON r.id = p.result_id ";
 
 bool readStrictText(sqlite3_stmt *stmt, int column, std::string &value,
                     bool allowEmpty = true) {
@@ -1288,8 +1288,8 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
 
   PendingChartScoreWrite pending;
   pending.attemptId = result.attemptId;
-  if (!readStrictInteger(stmt, 1, pending.replayId) ||
-      pending.replayId <= 0) {
+  if (!readStrictInteger(stmt, 1, pending.resultId) ||
+      pending.resultId <= 0) {
     return conflict("pending score replay identity is malformed");
   }
 
@@ -1377,7 +1377,7 @@ result_persistence::PendingBatchEntry decodePendingChartScoreRow(
   std::string linkedArtist;
   std::string linkedCreatedAt;
   if (!readStrictInteger(stmt, 28, linkedReplayId) ||
-      linkedReplayId != pending.replayId ||
+      linkedReplayId != pending.resultId ||
       !readStrictText(stmt, 29, linkedAttemptId, false) ||
       linkedAttemptId != pending.attemptId ||
       !uuid::isCanonicalLowerV4(linkedAttemptId) ||
@@ -1628,13 +1628,13 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
                 .diagnostic =
                     "staged pending score attempt identity differs"};
       }
-      if (pending.value->replayId != existing.value.replayId) {
+      if (pending.value->resultId != existing.value.replayId) {
         return {
             .status = StageStatus::IntegrityConflict,
             .diagnostic =
                 "staged pending replay ID expected=" +
                 std::to_string(existing.value.replayId) +
-                " actual=" + std::to_string(pending.value->replayId),
+                " actual=" + std::to_string(pending.value->resultId),
         };
       }
       if (pending.value->createdAt != existing.value.createdAt) {
@@ -1671,7 +1671,7 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
     return {
         .status = StageStatus::AlreadyStaged,
         .receipt = StageReceipt{.attemptId = attempt.attemptId,
-                                .replayId = existing.value.replayId,
+                                .resultId = existing.value.replayId,
                                 .createdAt = existing.value.createdAt,
                                 .scorePending = existing.value.scorePending},
     };
@@ -1716,7 +1716,7 @@ result_persistence::StageOutcome ReplayRepository::StageChartResult(
   return {
       .status = StageStatus::Staged,
       .receipt = StageReceipt{.attemptId = attempt.attemptId,
-                              .replayId = *replayId,
+                              .resultId = *replayId,
                               .createdAt = *createdAt,
                               .scorePending = true},
   };
@@ -1810,11 +1810,11 @@ ReplayRepository::ListPendingChartScores(std::size_t limit) {
 
 result_persistence::AcknowledgeOutcome
 ReplayRepository::AcknowledgePendingChartScoreAndActivateIr(
-    std::string_view attemptId, int replayId) {
+    std::string_view attemptId, int resultId) {
   using result_persistence::AcknowledgeStatus;
   using result_persistence::PendingReadStatus;
   profile_database_activity::WriteGuard writeGuard;
-  if (!uuid::isCanonicalLowerV4(attemptId) || replayId <= 0) {
+  if (!uuid::isCanonicalLowerV4(attemptId) || resultId <= 0) {
     return {.status = AcknowledgeStatus::IntegrityConflict,
             .diagnostic = "pending score identity is malformed"};
   }
@@ -1844,19 +1844,19 @@ ReplayRepository::AcknowledgePendingChartScoreAndActivateIr(
             .diagnostic = std::move(pending.diagnostic)};
   }
   if (pending.status == PendingReadStatus::Found) {
-    if (!pending.value.has_value() || pending.value->replayId != replayId) {
+    if (!pending.value.has_value() || pending.value->resultId != resultId) {
       return {.status = AcknowledgeStatus::IntegrityConflict,
-              .diagnostic = "pending score names a different replay"};
+              .diagnostic = "pending score names a different result"};
     }
     SqliteStatementHandle deleteStmt;
     if (!prepareSqliteStatementLogged(
             impl_->sessionDatabase,
             "DELETE FROM pending_chart_score_writes "
-            "WHERE attempt_id = ? AND replay_id = ?",
+            "WHERE attempt_id = ? AND result_id = ?",
             deleteStmt, "preparing pending chart score acknowledgement",
             logSqlErrorText) ||
         !bindTextView(deleteStmt.get(), 1, attemptId) ||
-        sqlite3_bind_int(deleteStmt.get(), 2, replayId) != SQLITE_OK ||
+        sqlite3_bind_int(deleteStmt.get(), 2, resultId) != SQLITE_OK ||
         sqlite3_step(deleteStmt.get()) != SQLITE_DONE ||
         sqlite3_changes(impl_->sessionDatabase) != 1) {
       return {.status = AcknowledgeStatus::StorageFailure,
@@ -1887,17 +1887,26 @@ ReplayRepository::AcknowledgePendingChartScoreAndActivateIr(
     return {.status = AcknowledgeStatus::Acknowledged};
   }
 
-  ExistingAttemptOutcome existing =
-      findExistingAttempt(impl_->sessionDatabase, attemptId);
-  if (existing.status == ExistingAttemptStatus::StorageFailure) {
+  SqliteStatementHandle resultStmt;
+  if (!prepareSqliteStatementLogged(
+          impl_->sessionDatabase,
+          "SELECT COUNT(*) FROM chart_results r WHERE r.id=? AND "
+          "r.attempt_id=? AND NOT EXISTS(SELECT 1 FROM "
+          "pending_chart_score_writes p WHERE p.result_id=r.id)",
+          resultStmt, "checking acknowledged chart result", logSqlErrorText) ||
+      sqlite3_bind_int(resultStmt.get(), 1, resultId) != SQLITE_OK ||
+      !bindTextView(resultStmt.get(), 2, attemptId) ||
+      sqlite3_step(resultStmt.get()) != SQLITE_ROW ||
+      sqlite3_column_type(resultStmt.get(), 0) != SQLITE_INTEGER) {
     return {.status = AcknowledgeStatus::StorageFailure,
-            .diagnostic = std::move(existing.diagnostic)};
+            .diagnostic = "could not verify acknowledged result"};
   }
-  if (existing.status != ExistingAttemptStatus::Found ||
-      existing.value.replayId != replayId || existing.value.scorePending) {
+  const sqlite3_int64 resultCount =
+      sqlite3_column_int64(resultStmt.get(), 0);
+  if (resultCount != 1 || sqlite3_step(resultStmt.get()) != SQLITE_DONE) {
     return {.status = AcknowledgeStatus::IntegrityConflict,
             .diagnostic =
-                "acknowledged score has no matching durable replay identity"};
+                "acknowledged score has no matching durable result identity"};
   }
   SqliteStatementHandle inactiveStmt;
   if (!prepareSqliteStatementLogged(

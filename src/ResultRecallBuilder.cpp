@@ -111,7 +111,7 @@ HistoricalIrBuildOutcome historicalIrFor(const ReplayResultRecord &record,
       .state = result_persistence::SaveState::Saved,
       .receipt = result_persistence::StageReceipt{
           .attemptId = attemptPtr->attemptId,
-          .replayId = record.replay.id,
+          .resultId = record.replay.id,
           .createdAt = record.replay.createdAt,
           .scorePending = false}};
   return {.value = HistoricalIrContext{.attempt = std::move(attemptPtr),

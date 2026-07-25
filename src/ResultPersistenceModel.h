@@ -164,12 +164,9 @@ struct PersistedCourseResult {
   bool operator==(const PersistedCourseResult &) const = default;
 };
 
-// replayId remains only while the v10 staging adapter exists. New result
-// staging uses resultId and Task 7 removes the compatibility member.
 struct StageReceipt {
   std::string attemptId;
   int resultId = 0;
-  int replayId = 0;
   std::string createdAt;
   bool scorePending = false;
 };

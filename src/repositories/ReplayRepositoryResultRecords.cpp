@@ -582,16 +582,35 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
               .diagnostic = verified.diagnostic};
     }
     const auto createdAt = readCreatedAt(database, id);
-    if (!createdAt.has_value() || !transaction.commit(transactionError)) {
+    SqliteStatementHandle pending;
+    if (!createdAt.has_value() ||
+        prepareSqliteStatement(
+            database,
+            "SELECT COUNT(*) FROM pending_chart_score_writes "
+            "WHERE attempt_id=? AND result_id=?",
+            pending) != SQLITE_OK ||
+        !bindText(pending.get(), 1, *sourceResult.attemptId) ||
+        sqlite3_bind_int(pending.get(), 2, id) != SQLITE_OK ||
+        sqlite3_step(pending.get()) != SQLITE_ROW ||
+        sqlite3_column_type(pending.get(), 0) != SQLITE_INTEGER) {
+      return {.status = StageStatus::StorageFailure,
+              .diagnostic = "could not inspect idempotent score state"};
+    }
+    const sqlite3_int64 pendingCount = sqlite3_column_int64(pending.get(), 0);
+    if ((pendingCount != 0 && pendingCount != 1) ||
+        sqlite3_step(pending.get()) != SQLITE_DONE) {
+      return {.status = StageStatus::IntegrityConflict,
+              .diagnostic = "idempotent result has invalid pending state"};
+    }
+    if (!transaction.commit(transactionError)) {
       return {.status = StageStatus::StorageFailure,
               .diagnostic = "could not finish idempotent result staging"};
     }
     return {.status = StageStatus::AlreadyStaged,
             .receipt = StageReceipt{.attemptId = *sourceResult.attemptId,
                                     .resultId = id,
-                                    .replayId = id,
                                     .createdAt = *createdAt,
-                                    .scorePending = true}};
+                                    .scorePending = pendingCount == 1}};
   }
   if (existingStep != SQLITE_DONE) {
     return {.status = StageStatus::StorageFailure,
@@ -780,7 +799,6 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
   return {.status = StageStatus::Staged,
           .receipt = StageReceipt{.attemptId = *sourceResult.attemptId,
                                   .resultId = resultId,
-                                  .replayId = resultId,
                                   .createdAt = *createdAt,
                                   .scorePending = true}};
 }

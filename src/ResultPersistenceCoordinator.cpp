@@ -3,6 +3,7 @@
 #include "ProfileDatabaseActivity.h"
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -15,6 +16,9 @@ constexpr std::string_view kUnstagedMessage =
 constexpr std::string_view kInvalidAttemptMessage =
     "This result could not be prepared for saving and cannot be retried. "
     "Continuing will discard it.";
+constexpr std::string_view kUnfinalizedReplayMessage =
+    "The replay file could not be finished. Retry before leaving to avoid "
+    "losing this play.";
 constexpr std::string_view kPendingScoreMessage =
     "The replay is safe, but the score is still pending. Retry now or it will "
     "be retried automatically later.";
@@ -85,6 +89,52 @@ SaveOutcome durableOutcome(SaveState state, const StageReceipt &receipt,
           .diagnostic = std::move(diagnostic)};
 }
 
+bool validateCompletedAttempt(const CompletedChartAttempt &attempt,
+                              std::span<const ir::IrOutboxDraft> drafts,
+                              std::string &diagnostic) {
+  diagnostic.clear();
+  if (attempt.result.resultId != 0 ||
+      !attempt.result.attemptId.has_value() ||
+      !validatePersistedChartResult(attempt.result, diagnostic) ||
+      attempt.result.resultFingerprint.empty()) {
+    if (diagnostic.empty()) {
+      diagnostic = "completed result identity is invalid";
+    }
+    return false;
+  }
+  const auto expectedSnapshot =
+      ir::captureIrSubmissionSnapshot(attempt.result, diagnostic);
+  if (!expectedSnapshot.has_value() ||
+      *expectedSnapshot != attempt.irSnapshot) {
+    if (diagnostic.empty()) {
+      diagnostic = "IR snapshot differs from the completed result";
+    }
+    return false;
+  }
+  const auto &setup = attempt.replay.setup;
+  if (setup.chartMd5 != attempt.result.score.chartMd5 ||
+      setup.chartSha256 != attempt.result.score.chartSha256 ||
+      setup.keyMode != attempt.result.keyMode ||
+      setup.longNoteMode != attempt.result.score.longNoteMode) {
+    diagnostic = "replay setup differs from the completed result";
+    return false;
+  }
+  std::set<std::string> providers;
+  for (const ir::IrOutboxDraft &draft : drafts) {
+    if (!ir::validateIrOutboxDraft(draft, diagnostic) ||
+        !providers.insert(draft.providerId).second ||
+        draft.attemptId != *attempt.result.attemptId ||
+        draft.chartMd5 != attempt.irSnapshot.submission.chartMd5 ||
+        draft.chartSha256 != attempt.irSnapshot.submission.chartSha256) {
+      if (diagnostic.empty()) {
+        diagnostic = "IR draft differs from the completed result snapshot";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 std::string_view saveStateUserMessage(SaveState state) noexcept {
@@ -93,6 +143,8 @@ std::string_view saveStateUserMessage(SaveState state) noexcept {
     return {};
   case SaveState::InvalidAttempt:
     return kInvalidAttemptMessage;
+  case SaveState::UnfinalizedReplay:
+    return kUnfinalizedReplayMessage;
   case SaveState::Unstaged:
     return kUnstagedMessage;
   case SaveState::PendingScore:
@@ -130,6 +182,7 @@ bool SaveOutcome::durable() const noexcept {
   case SaveState::Unstaged:
   case SaveState::UnstagedConflict:
   case SaveState::InvalidAttempt:
+  case SaveState::UnfinalizedReplay:
     return false;
   }
   return false;
@@ -141,6 +194,7 @@ bool SaveOutcome::retryable() const noexcept {
   case SaveState::InvalidAttempt:
     return false;
   case SaveState::Unstaged:
+  case SaveState::UnfinalizedReplay:
   case SaveState::PendingScore:
   case SaveState::PendingAcknowledgement:
   case SaveState::UnstagedConflict:
@@ -157,10 +211,11 @@ bool SaveOutcome::requiresUserDecision(bool attemptAvailable,
 }
 
 const StageReceipt *SaveOutcome::validatedReceiptFor(
-    const legacy_result_persistence::LegacyChartResultAttempt &attempt) const
-    noexcept {
+    const CompletedChartAttempt &attempt) const noexcept {
   if (!durable() || !receipt.has_value() ||
-      receipt->attemptId != attempt.attemptId || receipt->replayId <= 0 ||
+      !attempt.result.attemptId.has_value() ||
+      receipt->attemptId != *attempt.result.attemptId ||
+      receipt->resultId <= 0 ||
       receipt->createdAt.empty()) {
     return nullptr;
   }
@@ -179,6 +234,7 @@ saveConflictDetails(const SaveOutcome &outcome, std::string_view attemptId) {
     break;
   case SaveState::Saved:
   case SaveState::InvalidAttempt:
+  case SaveState::UnfinalizedReplay:
   case SaveState::Unstaged:
   case SaveState::PendingScore:
   case SaveState::PendingAcknowledgement:
@@ -193,20 +249,42 @@ saveConflictDetails(const SaveOutcome &outcome, std::string_view attemptId) {
   } else if (outcome.receipt.has_value()) {
     details.attemptId = outcome.receipt->attemptId;
   }
-  if (outcome.receipt.has_value() && outcome.receipt->replayId > 0) {
-    details.replayId = outcome.receipt->replayId;
+  if (outcome.receipt.has_value() && outcome.receipt->resultId > 0) {
+    details.resultId = outcome.receipt->resultId;
   }
   return details;
 }
 
 Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
     : Coordinator(Dependencies{
+          .reserve =
+              [&replay](std::string_view attemptId, std::string_view stem) {
+                return replay.reserveReplayFile(attemptId, stem);
+              },
+          .encodeReplay =
+              [](const replay::ReplayPlaybackData &playback,
+                 std::int64_t playedAtUnixMillis, std::string &diagnostic) {
+                return replay::BeatorajaReplayCodec{}.encodeChart(
+                    playback, playedAtUnixMillis, diagnostic);
+              },
+          .finalizeReplay =
+              [&replay](const replay::ReplayPathIdentity &identity,
+                        std::span<const std::byte> encoded,
+                        const replay::ExpectedReplayIdentity &expected,
+                        std::string_view attemptToken) {
+                replay::ReplayFileStore store(
+                    replay.GetResolvedDatabasePath().parent_path());
+                replay::BeatorajaReplayCodec codec;
+                return store.finalize(identity, encoded, codec, expected,
+                                      attemptToken);
+              },
           .stage =
-              [&replay](
-                            const legacy_result_persistence::
-                                LegacyChartResultAttempt &attempt,
+              [&replay](const PersistedChartResult &result,
+                        const ir::IrSubmissionSnapshot &snapshot,
+                        const ReplayFileReference &file,
                         std::span<const ir::IrOutboxDraft> irDrafts) {
-                return replay.StageChartResult(attempt, irDrafts);
+                return replay.stageCompletedChartAttempt(result, snapshot,
+                                                         file, irDrafts);
               },
           .loadPending =
               [&replay](std::string_view attemptId) {
@@ -221,9 +299,65 @@ Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay)
                 return score.SaveProjectedScore(pending);
               },
           .acknowledgeAndActivate =
-              [&replay](std::string_view attemptId, int replayId) {
+              [&replay](std::string_view attemptId, int resultId) {
                 return replay.AcknowledgePendingChartScoreAndActivateIr(
-                    attemptId, replayId);
+                    attemptId, resultId);
+              },
+          .recordRecoveryAttempt =
+              [&replay](std::string_view attemptId, RecoveryAttemptKind kind) {
+                return replay.RecordPendingChartScoreRecoveryAttempt(attemptId,
+                                                                     kind);
+              },
+      }) {}
+
+Coordinator::Coordinator(ScoreRepository &score, ReplayRepository &replay,
+                         replay::ReplayFileStore &fileStore,
+                         replay::BeatorajaReplayCodec &codec)
+    : Coordinator(Dependencies{
+          .reserve =
+              [&replay](std::string_view attemptId, std::string_view stem) {
+                return replay.reserveReplayFile(attemptId, stem);
+              },
+          .encodeReplay =
+              [&codec](const replay::ReplayPlaybackData &playback,
+                       std::int64_t playedAtUnixMillis,
+                       std::string &diagnostic) {
+                return codec.encodeChart(playback, playedAtUnixMillis,
+                                         diagnostic);
+              },
+          .finalizeReplay =
+              [&fileStore, &codec](
+                  const replay::ReplayPathIdentity &identity,
+                  std::span<const std::byte> encoded,
+                  const replay::ExpectedReplayIdentity &expected,
+                  std::string_view attemptToken) {
+                return fileStore.finalize(identity, encoded, codec, expected,
+                                          attemptToken);
+              },
+          .stage =
+              [&replay](const PersistedChartResult &result,
+                        const ir::IrSubmissionSnapshot &snapshot,
+                        const ReplayFileReference &file,
+                        std::span<const ir::IrOutboxDraft> irDrafts) {
+                return replay.stageCompletedChartAttempt(result, snapshot,
+                                                         file, irDrafts);
+              },
+          .loadPending =
+              [&replay](std::string_view attemptId) {
+                return replay.LoadPendingChartScore(attemptId);
+              },
+          .listPending =
+              [&replay](std::size_t limit) {
+                return replay.ListPendingChartScores(limit);
+              },
+          .project =
+              [&score](const PendingChartScoreWrite &pending) {
+                return score.SaveProjectedScore(pending);
+              },
+          .acknowledgeAndActivate =
+              [&replay](std::string_view attemptId, int resultId) {
+                return replay.AcknowledgePendingChartScoreAndActivateIr(
+                    attemptId, resultId);
               },
           .recordRecoveryAttempt =
               [&replay](std::string_view attemptId, RecoveryAttemptKind kind) {
@@ -236,10 +370,86 @@ Coordinator::Coordinator(Dependencies dependencies)
     : dependencies_(std::move(dependencies)) {}
 
 SaveOutcome Coordinator::persist(
-    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
+    const CompletedChartAttempt &attempt,
     std::span<const ir::IrOutboxDraft> irDrafts) {
   profile_database_activity::WriteGuard bindingLease;
-  StageOutcome staged = dependencies_.stage(attempt, irDrafts);
+  std::string diagnostic;
+  if (!validateCompletedAttempt(attempt, irDrafts, diagnostic)) {
+    return unstagedOutcome(SaveState::InvalidAttempt, std::move(diagnostic));
+  }
+  const std::string &attemptId = *attempt.result.attemptId;
+  const auto stem = replay::chartStem(
+      attempt.replay.setup.chartSha256, attempt.replay.setup.longNoteMode,
+      attempt.replay.setup.hasUndefinedLongNotes, diagnostic);
+  if (!stem.has_value()) {
+    return unstagedOutcome(SaveState::InvalidAttempt, std::move(diagnostic));
+  }
+  if (!dependencies_.reserve || !dependencies_.encodeReplay ||
+      !dependencies_.finalizeReplay || !dependencies_.stage ||
+      !dependencies_.loadPending || !dependencies_.project ||
+      !dependencies_.acknowledgeAndActivate) {
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           "persistence dependencies are incomplete");
+  }
+  ReservationOutcome reserved = dependencies_.reserve(attemptId, *stem);
+  switch (reserved.status) {
+  case ReservationOutcome::Status::StorageFailure:
+    return unstagedOutcome(SaveState::Unstaged,
+                           std::move(reserved.diagnostic));
+  case ReservationOutcome::Status::IntegrityConflict:
+    return unstagedOutcome(
+        SaveState::UnstagedConflict,
+        phaseDiagnostic("replay reservation", reserved.diagnostic,
+                        "integrity conflict reported without details"));
+  case ReservationOutcome::Status::Invalid:
+    return unstagedOutcome(SaveState::InvalidAttempt,
+                           std::move(reserved.diagnostic));
+  case ReservationOutcome::Status::Reserved:
+  case ReservationOutcome::Status::AlreadyReserved:
+    break;
+  }
+  if (!reserved.reservation.has_value() ||
+      reserved.reservation->attemptId != attemptId ||
+      reserved.reservation->stem != *stem) {
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           "replay reservation metadata is inconsistent");
+  }
+  auto encoded = dependencies_.encodeReplay(
+      attempt.replay, attempt.result.playedAtUnixMillis, diagnostic);
+  if (!encoded.has_value()) {
+    return unstagedOutcome(SaveState::InvalidAttempt,
+                           phaseDiagnostic("replay encoding", diagnostic,
+                                           "replay is invalid"));
+  }
+  const replay::ReplayPathIdentity identity{
+      .stem = reserved.reservation->stem,
+      .historyIndex = reserved.reservation->historyIndex,
+      .relativePath = reserved.reservation->relativePath,
+  };
+  const replay::ExpectedReplayIdentity expected{
+      .stageSha256 = {attempt.replay.setup.chartSha256}, .course = false};
+  replay::FinalizeOutcome finalized = dependencies_.finalizeReplay(
+      identity, *encoded, expected, attemptId);
+  if (!finalized.metadata.has_value()) {
+    return unstagedOutcome(
+        SaveState::UnfinalizedReplay,
+        phaseDiagnostic("replay file finalization", finalized.diagnostic,
+                        "file validation failed"));
+  }
+  if (finalized.metadata->relativePath != identity.relativePath) {
+    return unstagedOutcome(SaveState::UnstagedConflict,
+                           "finalized replay path differs from reservation");
+  }
+  const ReplayFileReference replayFile{
+      .stem = identity.stem,
+      .historyIndex = identity.historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  StageOutcome staged = dependencies_.stage(
+      attempt.result, attempt.irSnapshot, replayFile, irDrafts);
   switch (staged.status) {
   case StageStatus::StorageFailure:
     return unstagedOutcome(SaveState::Unstaged, std::move(staged.diagnostic));
@@ -263,19 +473,19 @@ SaveOutcome Coordinator::persist(
                         "successful staging reported an empty diagnostic");
   }
   if (!staged.receipt.has_value() ||
-      staged.receipt->attemptId != attempt.attemptId ||
-      staged.receipt->replayId <= 0 || staged.receipt->createdAt.empty() ||
+      staged.receipt->attemptId != attemptId ||
+      staged.receipt->resultId <= 0 || staged.receipt->createdAt.empty() ||
       (staged.status == StageStatus::Staged && !staged.receipt->scorePending)) {
     std::string receiptDiagnostic = "inconsistent success metadata";
     if (!staged.receipt.has_value()) {
       receiptDiagnostic += ": receipt is missing";
-    } else if (staged.receipt->attemptId != attempt.attemptId) {
-      receiptDiagnostic += ": attempt ID expected=" + attempt.attemptId +
+    } else if (staged.receipt->attemptId != attemptId) {
+      receiptDiagnostic += ": attempt ID expected=" + attemptId +
                            " actual=" + staged.receipt->attemptId;
-    } else if (staged.receipt->replayId <= 0) {
+    } else if (staged.receipt->resultId <= 0) {
       receiptDiagnostic +=
-          ": replay ID must be positive actual=" +
-          std::to_string(staged.receipt->replayId);
+          ": result ID must be positive actual=" +
+          std::to_string(staged.receipt->resultId);
     } else if (staged.receipt->createdAt.empty()) {
       receiptDiagnostic += ": timestamp is empty";
     } else {
@@ -295,7 +505,7 @@ SaveOutcome Coordinator::persist(
                           std::move(staged.diagnostic));
   }
 
-  PendingReadOutcome loaded = dependencies_.loadPending(attempt.attemptId);
+  PendingReadOutcome loaded = dependencies_.loadPending(attemptId);
   switch (loaded.status) {
   case PendingReadStatus::StorageFailure:
     appendDiagnostic(staged.diagnostic, loaded.diagnostic);
@@ -334,21 +544,21 @@ SaveOutcome Coordinator::persist(
   }
 
   const PendingChartScoreWrite &pending = *loaded.value;
-  if (pending.attemptId != attempt.attemptId) {
+  if (pending.attemptId != attemptId) {
     appendPhaseDiagnostic(
         staged.diagnostic, "pending score validation",
-        "attempt ID expected=" + attempt.attemptId +
+        "attempt ID expected=" + attemptId +
             " actual=" + pending.attemptId,
         "attempt ID differs");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
-  if (pending.replayId != receipt.replayId) {
+  if (pending.resultId != receipt.resultId) {
     appendPhaseDiagnostic(
         staged.diagnostic, "pending score validation",
-        "replay ID expected=" + std::to_string(receipt.replayId) +
-            " actual=" + std::to_string(pending.replayId),
-        "replay ID differs");
+        "result ID expected=" + std::to_string(receipt.resultId) +
+            " actual=" + std::to_string(pending.resultId),
+        "result ID differs");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
@@ -361,10 +571,10 @@ SaveOutcome Coordinator::persist(
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
   }
-  if (!(pending.score == attempt.score)) {
+  if (!(pending.score == attempt.result.score)) {
     appendPhaseDiagnostic(
         staged.diagnostic, "pending score validation",
-        describeChartScoreDifference(attempt.score, pending.score),
+        describeChartScoreDifference(attempt.result.score, pending.score),
         "score payload differs without an identifiable field");
     return durableOutcome(SaveState::PendingConflict, receipt,
                           std::move(staged.diagnostic));
@@ -395,7 +605,7 @@ SaveOutcome Coordinator::persist(
 
   AcknowledgeOutcome acknowledged =
       dependencies_.acknowledgeAndActivate(pending.attemptId,
-                                           pending.replayId);
+                                           pending.resultId);
   switch (acknowledged.status) {
   case AcknowledgeStatus::StorageFailure:
     appendDiagnostic(staged.diagnostic, acknowledged.diagnostic);
@@ -425,6 +635,12 @@ SaveOutcome Coordinator::persist(
 
 RecoverySummary Coordinator::recoverAll(std::size_t limit) {
   profile_database_activity::WriteGuard bindingLease;
+  if (!dependencies_.listPending || !dependencies_.project ||
+      !dependencies_.acknowledgeAndActivate ||
+      !dependencies_.recordRecoveryAttempt) {
+    return recoveryFailureSummary(
+        "recovery dependencies are incomplete");
+  }
   const std::size_t effectiveLimit = std::min(limit, std::size_t{256});
   PendingBatchOutcome batch = dependencies_.listPending(effectiveLimit);
   RecoverySummary summary;
@@ -515,7 +731,7 @@ RecoverySummary Coordinator::recoverAll(std::size_t limit) {
              "pending recovery entry identity does not match its payload");
       continue;
     }
-    if (pending.replayId <= 0 || pending.createdAt.empty()) {
+    if (pending.resultId <= 0 || pending.createdAt.empty()) {
       retain(entry, RecoveryAttemptKind::IntegrityConflict,
              "pending recovery payload has invalid replay metadata");
       continue;
@@ -542,7 +758,7 @@ RecoverySummary Coordinator::recoverAll(std::size_t limit) {
 
     AcknowledgeOutcome acknowledged =
         dependencies_.acknowledgeAndActivate(pending.attemptId,
-                                             pending.replayId);
+                                             pending.resultId);
     switch (acknowledged.status) {
     case AcknowledgeStatus::StorageFailure:
       retain(entry, RecoveryAttemptKind::StorageFailure,
