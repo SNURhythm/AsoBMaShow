@@ -123,6 +123,18 @@ std::string StoredPathText(std::filesystem::path path) {
   return fspath_to_utf8(path);
 }
 
+std::string StoredFolderPathText(std::filesystem::path path) {
+  if (path.empty()) {
+    return "";
+  }
+  ToRelativePath(path);
+  path = path.lexically_normal();
+  if (path.has_relative_path() && !path.has_filename()) {
+    path = path.parent_path();
+  }
+  return fspath_to_utf8(path);
+}
+
 void ToRelativePath([[maybe_unused]] std::filesystem::path &path) {
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (path.empty() || path.is_relative()) {

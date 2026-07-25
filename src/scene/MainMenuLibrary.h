@@ -1,10 +1,12 @@
 #pragma once
 
+#include "../ChartRecordFilters.h"
 #include "../LibraryFolderClearData.h"
 #include "../repositories/ChartRepository.h"
 #include "../targets.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +39,24 @@ std::string folderKeyForCourse(int courseId);
 
 void appendUniqueScanFolder(std::vector<ChartEntry> &entries,
                             const std::filesystem::path &folder);
+
+std::optional<std::filesystem::path>
+sameFolderForChart(const ChartMetaRecord &record);
+
+ChartRecordFilters
+filtersForSameFolder(const ChartRecordFilters &currentFilters);
+
+ChartMetaQuery chartQueryForSameFolder(
+    const std::filesystem::path &folder, const std::string &keyword,
+    const ChartRecordFilters &filters, int selectedLongNoteMode);
+
+std::filesystem::path chartSelectionPathForReload(
+    const std::filesystem::path &visibleSelectionPath,
+    const std::optional<ChartMetaRecord> &retainedSelection);
+
+float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
+                                  int itemHeight,
+                                  int viewportHeight) noexcept;
 
 inline bool difficultyRangeEnabledForFolder(bool difficultyTableFolder,
                                             bool clearMarkFolder, int tableId,

@@ -17,6 +17,13 @@ struct IOSNormalizedSafeAreaInsets {
   float right = 0.0f;
 };
 
+struct IOSNormalizedRect {
+  float x = 0.5f;
+  float y = 0.5f;
+  float width = 0.0f;
+  float height = 0.0f;
+};
+
 struct IOSSystemTextMetrics {
   int ascent = 0;
   int descent = 0;
@@ -132,6 +139,7 @@ bool DownloadURLBinaryIOS(const std::string &url,
                           void *progressContext = nullptr);
 bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
+                          const IOSNormalizedRect &sourceAnchor,
                           std::string &errorMessage);
 bool RequestIOSPhotoAddAuthorization(std::string &errorMessage);
 bool SaveVideoToIOSPhotos(const std::string &filePath,

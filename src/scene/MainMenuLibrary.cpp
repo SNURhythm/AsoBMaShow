@@ -41,4 +41,64 @@ void appendUniqueScanFolder(std::vector<ChartEntry> &entries,
   }
 }
 
+std::optional<std::filesystem::path>
+sameFolderForChart(const ChartMetaRecord &record) {
+  std::filesystem::path folder = record.meta.Folder;
+  if (folder.empty() && !record.meta.BmsPath.empty()) {
+    folder = record.meta.BmsPath.parent_path();
+  }
+  if (folder.empty()) {
+    return std::nullopt;
+  }
+  return folder.lexically_normal();
+}
+
+ChartRecordFilters
+filtersForSameFolder(const ChartRecordFilters &currentFilters) {
+  ChartRecordFilters filters;
+  filters.sort = currentFilters.sort;
+  return filters;
+}
+
+ChartMetaQuery chartQueryForSameFolder(
+    const std::filesystem::path &folder, const std::string &keyword,
+    const ChartRecordFilters &filters, int selectedLongNoteMode) {
+  ChartMetaQuery query;
+  query.keyword = keyword;
+  query.exactFolder = folder.lexically_normal();
+  query.selectedLongNoteMode = selectedLongNoteMode;
+  chart_record_filters::applyToQuery(query, filters, false);
+  query.sortCriterion = filters.sort.criterion;
+  query.sortDirection = filters.sort.direction;
+  return query;
+}
+
+std::filesystem::path chartSelectionPathForReload(
+    const std::filesystem::path &visibleSelectionPath,
+    const std::optional<ChartMetaRecord> &retainedSelection) {
+  if (!visibleSelectionPath.empty()) {
+    return visibleSelectionPath;
+  }
+  if (retainedSelection.has_value()) {
+    return retainedSelection->meta.BmsPath;
+  }
+  return {};
+}
+
+float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
+                                  int itemHeight,
+                                  int viewportHeight) noexcept {
+  if (selectedIndex < 0 || selectedIndex >= itemCount || itemCount <= 0 ||
+      itemHeight <= 0 || viewportHeight <= 0) {
+    return 0.0f;
+  }
+  const float selectedY = static_cast<float>(selectedIndex * itemHeight);
+  const float centeredOffset =
+      selectedY - static_cast<float>(std::max(0, viewportHeight - itemHeight)) /
+                      2.0f;
+  const float maxOffset = static_cast<float>(
+      std::max(0, std::max(1, itemCount) * itemHeight - viewportHeight));
+  return std::clamp(centeredOffset, 0.0f, maxOffset);
+}
+
 } // namespace main_menu_library

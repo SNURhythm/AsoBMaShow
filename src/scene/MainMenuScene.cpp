@@ -648,7 +648,9 @@ SafeAreaInsets getSafeAreaInsetsUi() {
 }
 
 bool revealPathInFileManager(const std::filesystem::path &path,
+                             const OverlayAnchor &sourceAnchor,
                              std::string &errorMessage) {
+  (void)sourceAnchor;
   errorMessage.clear();
   if (path.empty()) {
     errorMessage = "Chart file path is empty";
@@ -685,7 +687,16 @@ bool revealPathInFileManager(const std::filesystem::path &path,
   }
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return RevealIOSFileInFiles(targetPathText, errorMessage);
+  const NormalizedOverlayAnchor normalizedSourceAnchor =
+      normalizeOverlayAnchor(sourceAnchor, rendering::window_width,
+                             rendering::window_height);
+  return RevealIOSFileInFiles(
+      targetPathText,
+      {.x = normalizedSourceAnchor.x,
+       .y = normalizedSourceAnchor.y,
+       .width = normalizedSourceAnchor.width,
+       .height = normalizedSourceAnchor.height},
+      errorMessage);
 #elif TARGET_OS_ANDROID
   errorMessage = "Reveal is not supported on Android yet";
   return false;
@@ -1258,6 +1269,9 @@ void MainMenuScene::init() {
 }
 
 void MainMenuScene::onPause() {
+  if (revealContextMenu != nullptr) {
+    revealContextMenu->dismiss();
+  }
   if (rankingsModal) {
     rankingsModal->close();
   }
@@ -1326,6 +1340,9 @@ void MainMenuScene::applyThemeChange() {
     if (view != nullptr) {
       view->propagateThemeChange();
     }
+  }
+  if (revealContextMenu != nullptr && !revealContextMenu->isOpen()) {
+    revealContextMenu->propagateThemeChange();
   }
   if (folderRecyclerView != nullptr) {
     folderRecyclerView->rebindVisibleItems();
@@ -2397,10 +2414,13 @@ void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
+  revealContextMenu.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
   rootLayout = nullptr;
   overlayPortal = nullptr;
+  revealButton = nullptr;
+  temporaryChartFolder.reset();
   jacketView = nullptr;
   searchBox = nullptr;
   chartFilterPanel = nullptr;
@@ -3383,7 +3403,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   viewerButton->setOnClickListener([this]() { openChartViewerForSelection(); });
   chartActionsRow->addView(viewerButton);
 
-  auto *revealButton = new Button(0, 0, 105, 58);
+  revealButton = new Button(0, 0, 105, 58);
   revealButton->setFlex(1);
   auto *revealButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
   revealButtonText->setText("Reveal");
@@ -3393,10 +3413,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
   styleThemedActionButton(revealButton, revealButtonText, true,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
-  revealButton->setOnClickListener(
-      [this]() { revealSelectedChartInFileManager(); });
+  revealButton->setOnClickListener([this]() { toggleRevealContextMenu(); });
   chartActionsRow->addView(revealButton);
   rightContent->addView(chartActionsRow);
+
+  ContextMenuView::Callbacks revealMenuCallbacks;
+  revealMenuCallbacks.onActionSelected = [this](const std::string &actionId) {
+    if (actionId == "show-same-folder") {
+      showSelectedChartFolder();
+    } else if (actionId == "reveal-file") {
+      revealSelectedChartInFileManager();
+    }
+  };
+  revealContextMenu = std::make_unique<ContextMenuView>(
+      overlayPortal, std::move(revealMenuCallbacks));
 
   rightContent->addView(replayButtonSlot);
   rightContent->addView(unzipButtonSlot);
@@ -3716,7 +3746,8 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   const int folderCount = static_cast<int>(folders.size());
   folderRecyclerView->setItems(std::move(folders));
-  folderRecyclerView->selectedIndex = activeIndex;
+  const bool sidebarFolderSelected = !temporaryChartFolder.has_value();
+  folderRecyclerView->selectedIndex = sidebarFolderSelected ? activeIndex : -1;
   if (preserveViewState) {
     const float maxOffset =
         std::max(0.0f, static_cast<float>(std::max(1, folderCount) *
@@ -3726,9 +3757,11 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         std::clamp(previousScrollOffset, 0.0f, maxOffset);
     folderRecyclerView->rebindVisibleItems();
   }
-  auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
-  if (selectedView != nullptr) {
-    selectedView->onSelected();
+  if (sidebarFolderSelected) {
+    auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
+    if (selectedView != nullptr) {
+      selectedView->onSelected();
+    }
   }
 }
 
@@ -3775,7 +3808,8 @@ void MainMenuScene::refreshFavoriteFolderCount() {
 
   const int folderCount = static_cast<int>(folders.size());
   folderRecyclerView->setItems(std::move(folders));
-  folderRecyclerView->selectedIndex = activeIndex;
+  const bool sidebarFolderSelected = !temporaryChartFolder.has_value();
+  folderRecyclerView->selectedIndex = sidebarFolderSelected ? activeIndex : -1;
   const float maxOffset =
       std::max(0.0f, static_cast<float>(std::max(1, folderCount) *
                                             folderRecyclerView->itemHeight -
@@ -3783,17 +3817,26 @@ void MainMenuScene::refreshFavoriteFolderCount() {
   folderRecyclerView->scrollOffset =
       std::clamp(previousScrollOffset, 0.0f, maxOffset);
   folderRecyclerView->rebindVisibleItems();
-  auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
-  if (selectedView != nullptr) {
-    selectedView->onSelected();
+  if (sidebarFolderSelected) {
+    auto selectedView = folderRecyclerView->getViewByIndex(activeIndex);
+    if (selectedView != nullptr) {
+      selectedView->onSelected();
+    }
   }
 }
 
 ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
+  const int selectedLongNoteMode =
+      long_note_mode::valueFromId(profileSelections.longNoteMode);
+  if (temporaryChartFolder.has_value()) {
+    return main_menu_library::chartQueryForSameFolder(
+        *temporaryChartFolder, searchText, chartRecordFilters,
+        selectedLongNoteMode);
+  }
+
   ChartMetaQuery query;
   query.keyword = searchText;
-  query.selectedLongNoteMode =
-      long_note_mode::valueFromId(profileSelections.longNoteMode);
+  query.selectedLongNoteMode = selectedLongNoteMode;
 
   switch (activeFolder.type) {
   case LibraryFolderItem::Type::SolidArchives:
@@ -3838,6 +3881,9 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
 }
 
 bool MainMenuScene::chartDifficultyRangeEnabled() const {
+  if (temporaryChartFolder.has_value()) {
+    return false;
+  }
   return main_menu_library::difficultyRangeEnabledForFolder(
       activeFolder.type == LibraryFolderItem::Type::DifficultyTable,
       activeFolder.clearMarkFolder, activeFolder.tableId,
@@ -3883,13 +3929,14 @@ void MainMenuScene::setChartSortPanelVisible(bool visible) {
 }
 
 void MainMenuScene::refreshChartFilterPanel() {
+  const bool sameFolderScope = temporaryChartFolder.has_value();
   const bool difficultyRangeEnabled = chartDifficultyRangeEnabled();
   const auto levels = chartFilterDifficultyLevels();
   const std::optional<int> folderClearMarkRank =
-      activeFolder.clearMarkFolder
+      !sameFolderScope && activeFolder.clearMarkFolder
           ? std::optional<int>(activeFolder.clearMarkRank)
           : std::nullopt;
-  if (activeFolder.clearMarkFolder) {
+  if (!sameFolderScope && activeFolder.clearMarkFolder) {
     chartRecordFilters.clearMarkRank.reset();
     chartRecordFilters.clearMarkOrAbove = false;
     chartRecordFilters.clearMarkOrBelow = false;
@@ -3926,7 +3973,9 @@ void MainMenuScene::refreshChartFilterPanel() {
     chartRecordFilters.difficultyMaxLevel.reset();
     chartDifficultyMinDropdownOpen = false;
     chartDifficultyMaxDropdownOpen = false;
-    if (chartRecordFilters.sort.criterion == ChartRecordSortCriterion::Difficulty) {
+    if (!sameFolderScope &&
+        chartRecordFilters.sort.criterion ==
+            ChartRecordSortCriterion::Difficulty) {
       chartRecordFilters.sort = {};
     }
   }
@@ -3936,7 +3985,8 @@ void MainMenuScene::refreshChartFilterPanel() {
         .filters = chartRecordFilters,
         .bpmMinText = chartBpmMinText,
         .bpmMaxText = chartBpmMaxText,
-        .clearMarkFilterVisible = !activeFolder.clearMarkFolder,
+        .clearMarkFilterVisible =
+            sameFolderScope || !activeFolder.clearMarkFolder,
         .effectiveClearMarkRank = effectiveClearMarkRank,
         .clearMarkDropdownOpen = chartClearMarkDropdownOpen,
         .scoreRankDropdownOpen = chartScoreRankDropdownOpen,
@@ -3949,7 +3999,7 @@ void MainMenuScene::refreshChartFilterPanel() {
   if (chartSortPanel != nullptr) {
     chartSortPanel->refresh({
         .sort = chartRecordFilters.sort,
-        .difficultySortEnabled = difficultyRangeEnabled,
+        .difficultySortEnabled = difficultyRangeEnabled || sameFolderScope,
     }, chartSortPanelVisible);
   }
   refreshChartFilterButtons();
@@ -3985,7 +4035,7 @@ void MainMenuScene::refreshChartFilterButtons() {
 }
 
 void MainMenuScene::setChartClearFilter(std::optional<int> rank) {
-  if (activeFolder.clearMarkFolder) {
+  if (!temporaryChartFolder.has_value() && activeFolder.clearMarkFolder) {
     rank.reset();
   }
   chartRecordFilters.clearMarkRank = rank;
@@ -4003,7 +4053,7 @@ void MainMenuScene::setChartScoreRankFilter(std::optional<std::string> rank) {
   const std::optional<int> effectiveClearMarkRank =
       chartRecordFilters.clearMarkRank.has_value()
           ? chartRecordFilters.clearMarkRank
-          : (activeFolder.clearMarkFolder
+          : (!temporaryChartFolder.has_value() && activeFolder.clearMarkFolder
                  ? std::optional<int>(activeFolder.clearMarkRank)
                  : std::nullopt);
   if (!chart_record_filters::scoreRankFilterEnabled(effectiveClearMarkRank)) {
@@ -4058,7 +4108,7 @@ void MainMenuScene::setChartDifficultyMaxFilter(
 }
 
 void MainMenuScene::setChartClearMarkDropdownOpen(bool open) {
-  if (activeFolder.clearMarkFolder) {
+  if (!temporaryChartFolder.has_value() && activeFolder.clearMarkFolder) {
     open = false;
   }
   chartClearMarkDropdownOpen = open;
@@ -4074,7 +4124,7 @@ void MainMenuScene::setChartScoreRankDropdownOpen(bool open) {
   const std::optional<int> effectiveClearMarkRank =
       chartRecordFilters.clearMarkRank.has_value()
           ? chartRecordFilters.clearMarkRank
-          : (activeFolder.clearMarkFolder
+          : (!temporaryChartFolder.has_value() && activeFolder.clearMarkFolder
                  ? std::optional<int>(activeFolder.clearMarkRank)
                  : std::nullopt);
   if (!chart_record_filters::scoreRankFilterEnabled(effectiveClearMarkRank)) {
@@ -4135,7 +4185,7 @@ void MainMenuScene::setChartDifficultyDropdownOpen(bool minLevel, bool open) {
 void MainMenuScene::setChartSortCriterion(
     ChartRecordSortCriterion criterion) {
   if (criterion == ChartRecordSortCriterion::Difficulty &&
-      !chartDifficultyRangeEnabled()) {
+      !chartDifficultyRangeEnabled() && !temporaryChartFolder.has_value()) {
     return;
   }
   chartRecordFilters.sort =
@@ -4153,12 +4203,17 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       preserveViewState ? recyclerView->scrollOffset : 0.0f;
   const int previousSelectedIndex =
       preserveViewState ? recyclerView->selectedIndex : -1;
-  path_t previousSelectedPath;
+  std::filesystem::path visibleSelectedPath;
   if (preserveViewState && previousSelectedIndex >= 0 &&
       previousSelectedIndex < recyclerView->size()) {
-    previousSelectedPath =
-        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
+    visibleSelectedPath =
+        recyclerView->get(previousSelectedIndex).meta.BmsPath;
   }
+  const path_t previousSelectedPath =
+      preserveViewState
+          ? fspath_to_path_t(main_menu_library::chartSelectionPathForReload(
+                visibleSelectedPath, selectedChartRecord))
+          : path_t{};
   int previousTopIndex = -1;
   float previousTopItemOffset = 0.0f;
   path_t previousTopPath;
@@ -4178,7 +4233,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   ChartMetaQuery query = chartQueryForActiveFolder();
 
   std::optional<ChartMetaRecord> leadingRecord;
-  if (activeFolder.type == LibraryFolderItem::Type::Course &&
+  if (!temporaryChartFolder.has_value() &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
       activeFolder.courseId > 0) {
     ChartMetaRecord courseRecord;
     courseRecord.courseStart = true;
@@ -4205,7 +4261,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
   refreshSelectedChartActionState();
-  if (!selectedChartRecord.has_value() && !preserveViewState &&
+  if (!temporaryChartFolder.has_value() && !selectedChartRecord.has_value() &&
+      !preserveViewState &&
       activeFolder.type == LibraryFolderItem::Type::Course && count > 0) {
     recyclerView->selectedIndex = 0;
     if (recyclerView->onSelected) {
@@ -4477,7 +4534,8 @@ void MainMenuScene::selectChartByPathAfterReload(
   const path_t target = fspath_to_path_t(path);
   const ChartMetaQuery query = chartQueryForActiveFolder();
   int index = chartSession->FindChartMetaIndex(query, path);
-  if (index >= 0 && activeFolder.type == LibraryFolderItem::Type::Course &&
+  if (index >= 0 && !temporaryChartFolder.has_value() &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
       activeFolder.courseId > 0) {
     index += 1;
   }
@@ -4490,18 +4548,10 @@ void MainMenuScene::selectChartByPathAfterReload(
         recyclerView->onUnselected(recyclerView->get(previous), previous);
       }
       recyclerView->selectedIndex = index;
-      const float selectedY =
-          static_cast<float>(index * recyclerView->itemHeight);
-      const float viewportHeight =
-          static_cast<float>(recyclerView->getHeight());
-      const float itemHeight = static_cast<float>(recyclerView->itemHeight);
-      const float centeredOffset =
-          selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
-      const float maxOffset =
-          std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
-                                                recyclerView->itemHeight -
-                                            recyclerView->getHeight()));
-      recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
+      recyclerView->scrollOffset =
+          main_menu_library::centeredScrollOffsetForItem(
+              index, recyclerView->size(), recyclerView->itemHeight,
+              recyclerView->getHeight());
       recyclerView->rebindVisibleItems();
       suppressPreviewForChartPath = record.meta.BmsPath;
       if (recyclerView->onSelected) {
@@ -4526,6 +4576,7 @@ void MainMenuScene::selectChartByPathAfterReload(
 }
 
 void MainMenuScene::selectFolder(LibraryFolderItem item) {
+  const bool clearedSameFolderScope = clearSameFolderScope();
   auto toggleExpandedFolder = [this](const std::string &key) {
     const auto it = expandedLibraryFolders.find(key);
     if (it == expandedLibraryFolders.end()) {
@@ -4539,7 +4590,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
     const std::string previousActiveKey = activeFolder.key;
     toggleExpandedFolder(item.key);
     reloadFolderItems(true);
-    if (activeFolder.key != previousActiveKey) {
+    if (clearedSameFolderScope || activeFolder.key != previousActiveKey) {
       reloadChartList();
     }
     return;
@@ -4552,7 +4603,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
     toggleExpandedFolder(item.key);
     reloadFolderItems(true);
   }
-  if (item.expandable && chartQueryUnchanged) {
+  if (item.expandable && chartQueryUnchanged && !clearedSameFolderScope) {
     return;
   }
   reloadChartList();
@@ -5530,9 +5581,104 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       true);
 }
 
-void MainMenuScene::revealSelectedChartInFileManager() {
+void MainMenuScene::toggleRevealContextMenu() {
+  if (revealContextMenu == nullptr || revealButton == nullptr) {
+    return;
+  }
+  if (revealContextMenu->isOpen()) {
+    revealContextMenu->dismiss();
+    return;
+  }
   if (willStart.load() || replayExportInProgress.load() ||
       recyclerView == nullptr) {
+    return;
+  }
+
+  const auto record = selectedRecordSnapshot();
+  if (!record.has_value() || record->courseStart || record->solidArchive ||
+      record->unavailable || record->meta.BmsPath.empty()) {
+    return;
+  }
+
+  const bool canShowSameFolder =
+      main_menu_library::sameFolderForChart(*record).has_value();
+  revealContextMenu->setViewportSize(rendering::window_width,
+                                     rendering::window_height);
+  revealContextMenu->show(
+      {.x = revealButton->getX(),
+       .y = revealButton->getY(),
+       .width = revealButton->getWidth(),
+       .height = revealButton->getHeight()},
+      {{.id = "show-same-folder",
+        .label = "Show Same Folder",
+        .enabled = canShowSameFolder},
+       {.id = "reveal-file", .label = "Reveal File"}},
+      220);
+}
+
+void MainMenuScene::showSelectedChartFolder() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr) {
+    return;
+  }
+  const auto record = selectedRecordSnapshot();
+  if (!record.has_value() || record->courseStart || record->solidArchive ||
+      record->unavailable || record->meta.BmsPath.empty()) {
+    return;
+  }
+  const auto folder = main_menu_library::sameFolderForChart(*record);
+  if (!folder.has_value()) {
+    return;
+  }
+
+  temporaryChartFolder = *folder;
+  searchText.clear();
+  if (searchBox != nullptr) {
+    searchBox->setEditingText("");
+  }
+  chartRecordFilters =
+      main_menu_library::filtersForSameFolder(chartRecordFilters);
+  chartBpmMinText.clear();
+  chartBpmMaxText.clear();
+  chartClearMarkDropdownOpen = false;
+  chartScoreRankDropdownOpen = false;
+  chartDifficultyMinDropdownOpen = false;
+  chartDifficultyMaxDropdownOpen = false;
+  chartDifficultyRangeTableId.reset();
+
+  if (folderRecyclerView != nullptr) {
+    const int selectedIndex = folderRecyclerView->selectedIndex;
+    if (selectedIndex >= 0 && selectedIndex < folderRecyclerView->size() &&
+        folderRecyclerView->onUnselected) {
+      folderRecyclerView->onUnselected(folderRecyclerView->get(selectedIndex),
+                                       selectedIndex);
+    }
+    folderRecyclerView->selectedIndex = -1;
+    folderRecyclerView->rebindVisibleItems();
+  }
+
+  refreshChartFilterPanel();
+  reloadChartList(true);
+  if (recyclerView->selectedIndex >= 0) {
+    recyclerView->scrollOffset =
+        main_menu_library::centeredScrollOffsetForItem(
+            recyclerView->selectedIndex, recyclerView->size(),
+            recyclerView->itemHeight, recyclerView->getHeight());
+    recyclerView->rebindVisibleItems();
+  }
+}
+
+bool MainMenuScene::clearSameFolderScope() {
+  if (!temporaryChartFolder.has_value()) {
+    return false;
+  }
+  temporaryChartFolder.reset();
+  return true;
+}
+
+void MainMenuScene::revealSelectedChartInFileManager() {
+  if (willStart.load() || replayExportInProgress.load() ||
+      recyclerView == nullptr || revealButton == nullptr) {
     return;
   }
 
@@ -5546,7 +5692,14 @@ void MainMenuScene::revealSelectedChartInFileManager() {
   }
 
   std::string errorMessage;
-  if (!revealPathInFileManager(record->meta.BmsPath, errorMessage)) {
+  const OverlayAnchor sourceAnchor{
+      .x = revealButton->getX(),
+      .y = revealButton->getY(),
+      .width = revealButton->getWidth(),
+      .height = revealButton->getHeight(),
+  };
+  if (!revealPathInFileManager(record->meta.BmsPath, sourceAnchor,
+                               errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
             fspath_to_utf8(record->meta.BmsPath).c_str(),
             errorMessage.c_str());
@@ -5612,6 +5765,9 @@ void MainMenuScene::setPlayableChartActionsVisible(bool visible,
     const bool showChartActions = visible && chartActionsVisible;
     chartActionsRow->setVisible(showChartActions);
     chartActionsRow->setHeight(showChartActions ? 58.0f : 0.0f);
+    if (!showChartActions && revealContextMenu != nullptr) {
+      revealContextMenu->dismiss();
+    }
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -10525,6 +10681,13 @@ void MainMenuScene::renderScene() {
   if (overlayPortal != nullptr) {
     overlayPortal->setSize(rendering::window_width, rendering::window_height);
   }
+  if (revealContextMenu != nullptr) {
+    revealContextMenu->setViewportSize(rendering::window_width,
+                                       rendering::window_height);
+    if (layoutChanged && revealContextMenu->isOpen()) {
+      revealContextMenu->dismiss();
+    }
+  }
   if (parseLogModalRoot != nullptr) {
     parseLogModalRoot->setSize(rendering::window_width,
                                rendering::window_height);
@@ -10559,6 +10722,7 @@ void MainMenuScene::renderScene() {
 
 void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
+  revealContextMenu.reset();
   rankingsModal.reset();
   cancelActivePreviewLoading();
   context.profileSwitchBlockers.scene = nullptr;
@@ -10614,6 +10778,7 @@ void MainMenuScene::cleanupScene() {
   chartSession.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
+  temporaryChartFolder.reset();
   rootLayout = nullptr;
   overlayPortal = nullptr;
   jacketView = nullptr;
@@ -10622,6 +10787,7 @@ void MainMenuScene::cleanupScene() {
   rankingsButton = nullptr;
   rankingsButtonText = nullptr;
   chartActionsRow = nullptr;
+  revealButton = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;
   findBmsButtonSlot = nullptr;

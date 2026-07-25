@@ -160,6 +160,108 @@ int main() {
   ASSERT_EQ(static_cast<std::size_t>(2), scanEntries.size(),
             "equivalent transient fallback is not duplicated");
 
+  ChartMetaRecord explicitFolderRecord;
+  explicitFolderRecord.meta.Folder = "/library/A/../A";
+  const auto explicitFolder =
+      main_menu_library::sameFolderForChart(explicitFolderRecord);
+  ASSERT_EQ(true, explicitFolder.has_value(),
+            "same-folder scope uses chart metadata folder");
+  ASSERT_EQ(std::filesystem::path("/library/A"), *explicitFolder,
+            "same-folder scope normalizes metadata folder");
+
+  ChartMetaRecord archiveRecord;
+  archiveRecord.meta.BmsPath = "/packs/pack.zip/A/song.bms";
+  const auto archiveFolder =
+      main_menu_library::sameFolderForChart(archiveRecord);
+  ASSERT_EQ(true, archiveFolder.has_value(),
+            "same-folder scope falls back to chart path parent");
+  ASSERT_EQ(std::filesystem::path("/packs/pack.zip/A"), *archiveFolder,
+            "archive chart scope keeps its exact inner parent path");
+
+  ChartMetaRecord emptyRecord;
+  ASSERT_EQ(false,
+            main_menu_library::sameFolderForChart(emptyRecord).has_value(),
+            "same-folder scope rejects records without a usable path");
+
+  ChartRecordFilters activeFilters;
+  activeFilters.clearMarkRank = kClearTypeHardClearRank;
+  activeFilters.clearMarkOrAbove = true;
+  activeFilters.scoreRank = "AAA";
+  activeFilters.scoreRankOrBelow = true;
+  activeFilters.bpmMin = 120.0;
+  activeFilters.bpmMax = 180.0;
+  activeFilters.difficultyMinLevel = "10";
+  activeFilters.difficultyMaxLevel = "12";
+  activeFilters.sort = {
+      .criterion = ChartRecordSortCriterion::Difficulty,
+      .direction = ChartRecordSortDirection::Ascending,
+  };
+  const auto sameFolderFilters =
+      main_menu_library::filtersForSameFolder(activeFilters);
+  ASSERT_EQ(false, sameFolderFilters.clearMarkRank.has_value(),
+            "same-folder scope clears clear-mark filtering");
+  ASSERT_EQ(false, sameFolderFilters.scoreRank.has_value(),
+            "same-folder scope clears score filtering");
+  ASSERT_EQ(false, sameFolderFilters.bpmMin.has_value(),
+            "same-folder scope clears minimum BPM filtering");
+  ASSERT_EQ(false, sameFolderFilters.bpmMax.has_value(),
+            "same-folder scope clears maximum BPM filtering");
+  ASSERT_EQ(false, sameFolderFilters.difficultyMinLevel.has_value(),
+            "same-folder scope clears minimum difficulty filtering");
+  ASSERT_EQ(false, sameFolderFilters.difficultyMaxLevel.has_value(),
+            "same-folder scope clears maximum difficulty filtering");
+  ASSERT_EQ(static_cast<int>(ChartRecordSortCriterion::Difficulty),
+            static_cast<int>(sameFolderFilters.sort.criterion),
+            "same-folder scope preserves sort criterion");
+  ASSERT_EQ(static_cast<int>(ChartRecordSortDirection::Ascending),
+            static_cast<int>(sameFolderFilters.sort.direction),
+            "same-folder scope preserves sort direction");
+
+  const auto sameFolderQuery = main_menu_library::chartQueryForSameFolder(
+      *archiveFolder, "needle", sameFolderFilters,
+      long_note_mode::kCnValue);
+  ASSERT_EQ(std::filesystem::path("/packs/pack.zip/A"),
+            *sameFolderQuery.exactFolder,
+            "same-folder query uses exact archive-internal parent");
+  ASSERT_EQ(std::string("needle"), sameFolderQuery.keyword,
+            "same-folder query preserves its current search text");
+  ASSERT_EQ(0, sameFolderQuery.tableId,
+            "same-folder query does not inherit a table scope");
+  ASSERT_EQ(false, sameFolderQuery.favoritesOnly,
+            "same-folder query does not inherit favorites scope");
+  ASSERT_EQ(long_note_mode::kCnValue, sameFolderQuery.selectedLongNoteMode,
+            "same-folder query preserves selected long-note mode");
+  ASSERT_EQ(static_cast<int>(ChartRecordSortCriterion::Difficulty),
+            static_cast<int>(sameFolderQuery.sortCriterion),
+            "same-folder query preserves sort criterion");
+  ASSERT_EQ(static_cast<int>(ChartRecordSortDirection::Ascending),
+            static_cast<int>(sameFolderQuery.sortDirection),
+            "same-folder query preserves sort direction");
+
+  ChartMetaRecord retainedSelection;
+  retainedSelection.meta.BmsPath = "/library/A/selected.bms";
+  ASSERT_EQ(std::filesystem::path("/library/A/selected.bms"),
+            main_menu_library::chartSelectionPathForReload(
+                {}, retainedSelection),
+            "reload falls back to retained chart after list selection reset");
+  ASSERT_EQ(std::filesystem::path("/library/B/visible.bms"),
+            main_menu_library::chartSelectionPathForReload(
+                "/library/B/visible.bms", retainedSelection),
+            "visible list selection takes priority during reload");
+
+  ASSERT_EQ(70.0f,
+            main_menu_library::centeredScrollOffsetForItem(2, 100, 108, 400),
+            "selected chart is centered in a long list");
+  ASSERT_EQ(300.0f,
+            main_menu_library::centeredScrollOffsetForItem(9, 10, 50, 200),
+            "selected chart scroll clamps at the list end");
+  ASSERT_EQ(0.0f,
+            main_menu_library::centeredScrollOffsetForItem(0, 10, 50, 200),
+            "selected chart scroll clamps at the list start");
+  ASSERT_EQ(0.0f,
+            main_menu_library::centeredScrollOffsetForItem(-1, 10, 50, 200),
+            "missing selection leaves scroll at the start");
+
   sqlite3 *db = nullptr;
   if (sqlite3_open(":memory:", &db) != SQLITE_OK) {
     std::cerr << "open failed" << std::endl;

@@ -15,6 +15,7 @@
 #include "../path.h"
 #include "../utils/Debouncer.h"
 #include "../view/ImageView.h"
+#include "../view/ContextMenuView.h"
 #include "../view/ResultRecordListView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
@@ -243,6 +244,7 @@ private:
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
+  std::unique_ptr<ContextMenuView> revealContextMenu;
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   ChartFilterPanelView *chartFilterPanel = nullptr;
@@ -256,6 +258,7 @@ private:
   TextView *rankingsButtonText = nullptr;
   std::unique_ptr<ir::IrRankingModal> rankingsModal;
   View *chartActionsRow = nullptr;
+  Button *revealButton = nullptr;
   View *replayButtonSlot = nullptr;
   Button *replayButton = nullptr;
   View *findBmsButtonSlot = nullptr;
@@ -488,6 +491,7 @@ private:
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
+  std::optional<std::filesystem::path> temporaryChartFolder;
   std::optional<ChartMetaRecord> selectedChartRecord;
   ChartRecordFilters chartRecordFilters;
   bool chartFilterPanelVisible = false;
@@ -703,6 +707,9 @@ private:
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
   void openChartViewerForSelection();
   void openChartViewerDirect(const ChartMetaRecord &record);
+  void toggleRevealContextMenu();
+  void showSelectedChartFolder();
+  bool clearSameFolderScope();
   void revealSelectedChartInFileManager();
   void startUnzipSelectedArchiveFolder();
   void startUnzipArchiveFolder(const ChartMetaRecord &record);

@@ -3585,6 +3585,7 @@ bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage) {
 }
 
 bool RevealIOSFileInFiles(const std::string &filePath,
+                          const IOSNormalizedRect &sourceAnchor,
                           std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
@@ -3604,6 +3605,7 @@ bool RevealIOSFileInFiles(const std::string &filePath,
       return false;
     }
 
+    const IOSNormalizedRect normalizedSourceAnchor = sourceAnchor;
     BOOL (^presentBlock)(void) = ^BOOL {
       @autoreleasepool {
         UIWindow *window = FindActiveWindow();
@@ -3620,9 +3622,22 @@ bool RevealIOSFileInFiles(const std::string &filePath,
           return NO;
         }
 
-        const CGRect sourceRect =
-            CGRectMake(CGRectGetMidX(presentingView.bounds),
-                       CGRectGetMidY(presentingView.bounds), 1.0, 1.0);
+        const CGRect bounds = presentingView.bounds;
+        const CGFloat boundsWidth = CGRectGetWidth(bounds);
+        const CGFloat boundsHeight = CGRectGetHeight(bounds);
+        CGRect sourceRect = CGRectMake(
+            CGRectGetMinX(bounds) +
+                static_cast<CGFloat>(normalizedSourceAnchor.x) * boundsWidth,
+            CGRectGetMinY(bounds) +
+                static_cast<CGFloat>(normalizedSourceAnchor.y) * boundsHeight,
+            static_cast<CGFloat>(normalizedSourceAnchor.width) * boundsWidth,
+            static_cast<CGFloat>(normalizedSourceAnchor.height) *
+                boundsHeight);
+        if (CGRectGetWidth(sourceRect) <= 0.0 ||
+            CGRectGetHeight(sourceRect) <= 0.0) {
+          sourceRect = CGRectMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds),
+                                  1.0, 1.0);
+        }
         return [gIOSRevealFileController presentOptionsMenuFromRect:sourceRect
                                                             inView:presentingView
                                                           animated:YES];

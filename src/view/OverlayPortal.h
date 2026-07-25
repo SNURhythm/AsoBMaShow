@@ -12,6 +12,39 @@ struct OverlayAnchor {
   int height = 0;
 };
 
+struct NormalizedOverlayAnchor {
+  float x = 0.5f;
+  float y = 0.5f;
+  float width = 0.0f;
+  float height = 0.0f;
+};
+
+[[nodiscard]] inline NormalizedOverlayAnchor
+normalizeOverlayAnchor(const OverlayAnchor &anchor, int viewportWidth,
+                       int viewportHeight) {
+  if (viewportWidth <= 0 || viewportHeight <= 0) {
+    return {};
+  }
+  const float inverseWidth = 1.0f / static_cast<float>(viewportWidth);
+  const float inverseHeight = 1.0f / static_cast<float>(viewportHeight);
+  const float left =
+      std::clamp(static_cast<float>(anchor.x) * inverseWidth, 0.0f, 1.0f);
+  const float top =
+      std::clamp(static_cast<float>(anchor.y) * inverseHeight, 0.0f, 1.0f);
+  const float right = std::clamp(
+      (static_cast<float>(anchor.x) + std::max(0, anchor.width)) *
+          inverseWidth,
+      0.0f, 1.0f);
+  const float bottom = std::clamp(
+      (static_cast<float>(anchor.y) + std::max(0, anchor.height)) *
+          inverseHeight,
+      0.0f, 1.0f);
+  return {.x = left,
+          .y = top,
+          .width = std::max(0.0f, right - left),
+          .height = std::max(0.0f, bottom - top)};
+}
+
 struct OverlayPlacement {
   int x = 0;
   int y = 0;

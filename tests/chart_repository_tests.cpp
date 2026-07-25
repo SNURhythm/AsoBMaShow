@@ -630,6 +630,131 @@ void testChartQueryBehaviorMatrix() {
   assert(hardCount != allCounts.end() && hardCount->second == 1);
 }
 
+void testExactFolderQuery() {
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "chart.db";
+  ChartRepository charts(chartPath);
+  assert(charts.EnsureReady());
+
+  {
+    Database database = openDatabase(chartPath);
+    assert(database);
+    assert(execute(
+        database.get(),
+        "INSERT INTO chart_meta(path,md5,sha256,title,subtitle,genre,artist,"
+        "sub_artist,folder,level,source_priority,source_archive_size) VALUES"
+        "('library/A/one.bms','md5-one','sha-one','One','','','','',"
+        "'library/A',1,0,0),"
+        "('library/A/two.bms','md5-two','sha-two','Two','','','','',"
+        "'library/A',2,0,0),"
+        "('library/A/no-folder.bms','md5-no-folder','sha-no-folder',"
+        "'No Folder','','','','','',8,0,0),"
+        "('library/A/nested/three.bms','md5-three','sha-three','Three','','',"
+        "'','','library/A/nested',3,0,0),"
+        "('library/A/nested/no-folder.bms','md5-nested-no-folder',"
+        "'sha-nested-no-folder','Nested No Folder','','','','','',9,0,0),"
+        "('library/B/four.bms','md5-four','sha-four','Four','','','','',"
+        "'library/B',4,0,0),"
+        "('packs/pack.zip/A/five.bms','md5-five','sha-five','Five','','',"
+        "'','','packs/pack.zip/A',5,0,0),"
+        "('packs/pack.zip/A/six.bms','md5-six','sha-six','Six','','','','',"
+        "'packs/pack.zip/A',6,0,0),"
+        "('packs/pack.zip/A/no-folder.bms','md5-archive-no-folder',"
+        "'sha-archive-no-folder','Archive No Folder','','','','','',10,0,0),"
+        "('packs/pack.zip/B/seven.bms','md5-seven','sha-seven','Seven','','',"
+        "'','','packs/pack.zip/B',7,0,0),"
+        "('C:\\library\\A\\windows.bms','md5-windows','sha-windows',"
+        "'Windows','','','','','',11,0,0),"
+        "('C:\\library\\A\\nested\\deep.bms','md5-windows-nested',"
+        "'sha-windows-nested','Windows Nested','','','','','',12,0,0),"
+        "('library/C/aliased.bms','md5-aliased','sha-aliased','Aliased','','',"
+        "'','','library/C/../C',13,0,0),"
+        "('library/C/trailing.bms','md5-trailing','sha-trailing','Trailing',"
+        "'','','','','library/C/',14,0,0)"));
+  }
+
+  auto session = charts.OpenSession();
+  assert(session.has_value());
+  const auto queryPaths = [&](const ChartMetaQuery &query) {
+    std::vector<ChartMetaRecord> records;
+    session->QueryChartMeta(query, records);
+    std::vector<std::string> paths;
+    paths.reserve(records.size());
+    for (const auto &record : records) {
+      paths.push_back(
+          chart_storage_identity::StoredPathText(record.meta.BmsPath));
+    }
+    return paths;
+  };
+
+  ChartMetaQuery query;
+  query.exactFolder = std::filesystem::path("library/A");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"library/A/no-folder.bms",
+                                   "library/A/one.bms",
+                                   "library/A/two.bms"}));
+  assert(session->CountChartMeta(query) == 3);
+  assert(session->FindChartMetaIndex(query, "library/A/no-folder.bms") == 0);
+  assert(session->FindChartMetaIndex(query, "library/A/one.bms") == 1);
+  assert(session->FindChartMetaIndex(query, "library/A/two.bms") == 2);
+  assert(session->FindChartMetaIndex(query,
+                                     "library/A/nested/three.bms") == -1);
+  assert(session->FindChartMetaIndex(
+             query, "library/A/nested/no-folder.bms") == -1);
+
+  query.limit = 1;
+  query.offset = 1;
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"library/A/one.bms"}));
+  assert(session->CountChartMeta(query) == 3);
+
+  query = {};
+  query.exactFolder = std::filesystem::path("library/A/nested");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"library/A/nested/no-folder.bms",
+                                   "library/A/nested/three.bms"}));
+  assert(session->CountChartMeta(query) == 2);
+
+  query = {};
+  query.exactFolder = std::filesystem::path("packs/pack.zip/A");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"packs/pack.zip/A/no-folder.bms",
+                                   "packs/pack.zip/A/five.bms",
+                                   "packs/pack.zip/A/six.bms"}));
+  assert(session->CountChartMeta(query) == 3);
+  assert(session->FindChartMetaIndex(query,
+                                     "packs/pack.zip/B/seven.bms") == -1);
+
+  query.sortCriterion = ChartRecordSortCriterion::Title;
+  query.sortDirection = ChartRecordSortDirection::Descending;
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"packs/pack.zip/A/six.bms",
+                                   "packs/pack.zip/A/five.bms",
+                                   "packs/pack.zip/A/no-folder.bms"}));
+  assert(session->FindChartMetaIndex(query,
+                                     "packs/pack.zip/A/five.bms") == 1);
+
+  query = {};
+  query.exactFolder = std::filesystem::path(R"(C:\library\A)");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({R"(C:\library\A\windows.bms)"}));
+  assert(session->CountChartMeta(query) == 1);
+  assert(session->FindChartMetaIndex(
+             query, std::filesystem::path(R"(C:\library\A\windows.bms)")) ==
+         0);
+  assert(session->FindChartMetaIndex(
+             query,
+             std::filesystem::path(R"(C:\library\A\nested\deep.bms)")) ==
+         -1);
+
+  query = {};
+  query.exactFolder = std::filesystem::path("library/C");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"library/C/aliased.bms",
+                                   "library/C/trailing.bms"}));
+  assert(session->CountChartMeta(query) == 2);
+}
+
 void testChartMigrationCompatibilityMatrix() {
   constexpr std::string_view lowerMd5 =
       "abcdefabcdefabcdefabcdefabcdefab";
@@ -948,6 +1073,7 @@ int main() {
   testSelectChartMetaByPathsHydratesInInputOrder();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
+  testExactFolderQuery();
   testChartMigrationCompatibilityMatrix();
   testLegacyIosContainerPathRebasesToCurrentDocuments();
   testFindBmsDownloadEntrySelectionLifecycle();
