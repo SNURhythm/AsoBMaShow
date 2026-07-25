@@ -5,6 +5,8 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace result_persistence {
 
@@ -33,6 +35,60 @@ struct ChartScoreWrite {
 
   bool operator==(const ChartScoreWrite &) const = default;
 };
+
+[[nodiscard]] inline std::string
+describeChartScoreDifference(const ChartScoreWrite &expected,
+                             const ChartScoreWrite &actual) {
+  std::vector<std::string> differences;
+  const auto opaque = [&](std::string_view name, const auto &left,
+                          const auto &right) {
+    if (left != right) {
+      differences.emplace_back(name);
+    }
+  };
+  const auto scalar = [&](std::string_view name, const auto &left,
+                          const auto &right) {
+    if (left != right) {
+      differences.push_back(std::string(name) +
+                            " expected=" + std::to_string(left) +
+                            " actual=" + std::to_string(right));
+    }
+  };
+
+  opaque("chartPath", expected.chartPath, actual.chartPath);
+  opaque("chartMd5", expected.chartMd5, actual.chartMd5);
+  opaque("chartSha256", expected.chartSha256, actual.chartSha256);
+  opaque("chartTitle", expected.chartTitle, actual.chartTitle);
+  opaque("chartArtist", expected.chartArtist, actual.chartArtist);
+  scalar("longNoteMode", expected.longNoteMode, actual.longNoteMode);
+  scalar("score", expected.score, actual.score);
+  scalar("maxScore", expected.maxScore, actual.maxScore);
+  scalar("maxCombo", expected.maxCombo, actual.maxCombo);
+  scalar("comboBreak", expected.comboBreak, actual.comboBreak);
+  scalar("pGreat", expected.pGreat, actual.pGreat);
+  scalar("great", expected.great, actual.great);
+  scalar("good", expected.good, actual.good);
+  scalar("bad", expected.bad, actual.bad);
+  scalar("poor", expected.poor, actual.poor);
+  scalar("kPoor", expected.kPoor, actual.kPoor);
+  scalar("fast", expected.fast, actual.fast);
+  scalar("slow", expected.slow, actual.slow);
+  scalar("finalGauge", expected.finalGauge, actual.finalGauge);
+  scalar("clearType", expected.clearType, actual.clearType);
+  opaque("provenance", expected.provenance, actual.provenance);
+
+  if (differences.empty()) {
+    return {};
+  }
+  std::string result = "score payload differs: ";
+  for (std::size_t index = 0; index < differences.size(); ++index) {
+    if (index != 0) {
+      result += "; ";
+    }
+    result += differences[index];
+  }
+  return result;
+}
 
 [[nodiscard]] bool
 hasProjectableChartIdentity(const ChartScoreWrite &score) noexcept;

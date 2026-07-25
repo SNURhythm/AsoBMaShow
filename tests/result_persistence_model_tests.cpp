@@ -222,6 +222,19 @@ void expectScoreFingerprintChange(const AttemptFixture &fixture, Mutator mutate,
          std::string("score fingerprint covers ") + std::string(fieldName));
 }
 
+template <typename Mutator>
+void expectScoreDifference(const AttemptFixture &fixture, Mutator mutate,
+                           std::string_view expectedFragment) {
+  const auto expected = scoreFor(fixture);
+  auto actual = expected;
+  mutate(actual);
+  const std::string diagnostic =
+      result_persistence::describeChartScoreDifference(expected, actual);
+  expect(diagnostic.find(expectedFragment) != std::string::npos,
+         std::string("score diagnostic names ") +
+             std::string(expectedFragment));
+}
+
 void testUuidPolicies() {
   expect(uuid::isStructurallyValid("123E4567-E89B-42D3-A456-426614174000"),
          "legacy structural UUID accepts upper case");
@@ -272,6 +285,67 @@ void testScoreCapture() {
          "capture stores base gauge facts");
   expect(score.provenance == fixture.provenance,
          "capture stores the supplied provenance");
+}
+
+void testScoreDifferenceDiagnostics() {
+  const AttemptFixture fixture;
+  const auto score = scoreFor(fixture);
+  expect(result_persistence::describeChartScoreDifference(score, score).empty(),
+         "equal score payloads have no difference diagnostic");
+
+  expectScoreDifference(fixture, [](auto &v) { v.chartPath += "!"; },
+                        "chartPath");
+  expectScoreDifference(fixture, [](auto &v) { v.chartMd5 += "!"; },
+                        "chartMd5");
+  expectScoreDifference(fixture, [](auto &v) { v.chartSha256 += "!"; },
+                        "chartSha256");
+  expectScoreDifference(fixture, [](auto &v) { v.chartTitle += "!"; },
+                        "chartTitle");
+  expectScoreDifference(fixture, [](auto &v) { v.chartArtist += "!"; },
+                        "chartArtist");
+  expectScoreDifference(fixture, [](auto &v) { ++v.longNoteMode; },
+                        "longNoteMode expected=2 actual=3");
+  expectScoreDifference(fixture, [](auto &v) { ++v.score; }, "score expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.maxScore; },
+                        "maxScore expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.maxCombo; },
+                        "maxCombo expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.comboBreak; },
+                        "comboBreak expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.pGreat; },
+                        "pGreat expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.great; },
+                        "great expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.good; }, "good expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.bad; },
+                        "bad expected=1 actual=2");
+  expectScoreDifference(fixture, [](auto &v) { ++v.poor; }, "poor expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.kPoor; },
+                        "kPoor expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.fast; }, "fast expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.slow; }, "slow expected=");
+  expectScoreDifference(fixture, [](auto &v) { v.finalGauge += 0.5F; },
+                        "finalGauge expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.clearType; },
+                        "clearType expected=");
+  expectScoreDifference(fixture, [](auto &v) { ++v.provenance.schemaVersion; },
+                        "provenance");
+
+  auto privateTextMismatch = score;
+  privateTextMismatch.chartPath = "private/chart/location.bms";
+  privateTextMismatch.chartMd5 = repeated('c', 32);
+  privateTextMismatch.chartSha256 = repeated('d', 64);
+  privateTextMismatch.chartTitle = "private title";
+  privateTextMismatch.chartArtist = "private artist";
+  const std::string privateTextDiagnostic =
+      result_persistence::describeChartScoreDifference(score,
+                                                       privateTextMismatch);
+  expect(privateTextDiagnostic.find("private") == std::string::npos &&
+             privateTextDiagnostic.find(repeated('c', 32)) ==
+                 std::string::npos &&
+             privateTextDiagnostic.find(repeated('d', 64)) ==
+                 std::string::npos,
+         "score difference diagnostic does not expose text payloads");
 }
 
 void expectRejected(const AttemptFixture &fixture, std::string attemptId,
@@ -873,6 +947,7 @@ void testScoreFingerprintCoverage() {
 int main() {
   testUuidPolicies();
   testScoreCapture();
+  testScoreDifferenceDiagnostics();
   testAttemptValidationAndFingerprint();
   testFullComboNormalization();
   testVersionOneFingerprintGolden();
