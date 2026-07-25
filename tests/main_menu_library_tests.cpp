@@ -193,7 +193,7 @@ int main() {
   activeFilters.difficultyMinLevel = "10";
   activeFilters.difficultyMaxLevel = "12";
   activeFilters.sort = {
-      .criterion = ChartRecordSortCriterion::Title,
+      .criterion = ChartRecordSortCriterion::Difficulty,
       .direction = ChartRecordSortDirection::Ascending,
   };
   const auto sameFolderFilters =
@@ -210,7 +210,7 @@ int main() {
             "same-folder scope clears minimum difficulty filtering");
   ASSERT_EQ(false, sameFolderFilters.difficultyMaxLevel.has_value(),
             "same-folder scope clears maximum difficulty filtering");
-  ASSERT_EQ(static_cast<int>(ChartRecordSortCriterion::Title),
+  ASSERT_EQ(static_cast<int>(ChartRecordSortCriterion::Difficulty),
             static_cast<int>(sameFolderFilters.sort.criterion),
             "same-folder scope preserves sort criterion");
   ASSERT_EQ(static_cast<int>(ChartRecordSortDirection::Ascending),
@@ -231,7 +231,7 @@ int main() {
             "same-folder query does not inherit favorites scope");
   ASSERT_EQ(long_note_mode::kCnValue, sameFolderQuery.selectedLongNoteMode,
             "same-folder query preserves selected long-note mode");
-  ASSERT_EQ(static_cast<int>(ChartRecordSortCriterion::Title),
+  ASSERT_EQ(static_cast<int>(ChartRecordSortCriterion::Difficulty),
             static_cast<int>(sameFolderQuery.sortCriterion),
             "same-folder query preserves sort criterion");
   ASSERT_EQ(static_cast<int>(ChartRecordSortDirection::Ascending),

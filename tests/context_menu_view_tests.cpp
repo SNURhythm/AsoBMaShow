@@ -10,6 +10,8 @@
 #pragma clang diagnostic pop
 #endif
 
+#include "../src/rendering/UniformCache.h"
+
 #include <cassert>
 #include <string>
 #include <vector>
@@ -33,6 +35,12 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 int main() {
+  bgfx::Init init;
+  init.type = bgfx::RendererType::Noop;
+  init.resolution.width = 64;
+  init.resolution.height = 64;
+  assert(bgfx::init(init));
+
   OverlayPortal portal(0, 0, 800, 600);
   std::vector<bool> openChanges;
   std::vector<std::string> selections;
@@ -101,4 +109,6 @@ int main() {
   }
   assert(!portal.isPresented(identity));
   assert(openChanges.back() == true);
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::shutdown();
 }
