@@ -666,7 +666,11 @@ void testExactFolderQuery() {
         "('C:\\library\\A\\windows.bms','md5-windows','sha-windows',"
         "'Windows','','','','','',11,0,0),"
         "('C:\\library\\A\\nested\\deep.bms','md5-windows-nested',"
-        "'sha-windows-nested','Windows Nested','','','','','',12,0,0)"));
+        "'sha-windows-nested','Windows Nested','','','','','',12,0,0),"
+        "('library/C/aliased.bms','md5-aliased','sha-aliased','Aliased','','',"
+        "'','','library/C/../C',13,0,0),"
+        "('library/C/trailing.bms','md5-trailing','sha-trailing','Trailing',"
+        "'','','','','library/C/',14,0,0)"));
   }
 
   auto session = charts.OpenSession();
@@ -742,6 +746,13 @@ void testExactFolderQuery() {
              query,
              std::filesystem::path(R"(C:\library\A\nested\deep.bms)")) ==
          -1);
+
+  query = {};
+  query.exactFolder = std::filesystem::path("library/C");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"library/C/aliased.bms",
+                                   "library/C/trailing.bms"}));
+  assert(session->CountChartMeta(query) == 2);
 }
 
 void testChartMigrationCompatibilityMatrix() {
