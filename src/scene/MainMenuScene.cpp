@@ -4532,18 +4532,10 @@ void MainMenuScene::selectChartByPathAfterReload(
         recyclerView->onUnselected(recyclerView->get(previous), previous);
       }
       recyclerView->selectedIndex = index;
-      const float selectedY =
-          static_cast<float>(index * recyclerView->itemHeight);
-      const float viewportHeight =
-          static_cast<float>(recyclerView->getHeight());
-      const float itemHeight = static_cast<float>(recyclerView->itemHeight);
-      const float centeredOffset =
-          selectedY - std::max(0.0f, viewportHeight - itemHeight) / 2.0f;
-      const float maxOffset =
-          std::max(0.0f, static_cast<float>(std::max(1, recyclerView->size()) *
-                                                recyclerView->itemHeight -
-                                            recyclerView->getHeight()));
-      recyclerView->scrollOffset = std::clamp(centeredOffset, 0.0f, maxOffset);
+      recyclerView->scrollOffset =
+          main_menu_library::centeredScrollOffsetForItem(
+              index, recyclerView->size(), recyclerView->itemHeight,
+              recyclerView->getHeight());
       recyclerView->rebindVisibleItems();
       suppressPreviewForChartPath = record.meta.BmsPath;
       if (recyclerView->onSelected) {
@@ -5651,6 +5643,13 @@ void MainMenuScene::showSelectedChartFolder() {
 
   refreshChartFilterPanel();
   reloadChartList(true);
+  if (recyclerView->selectedIndex >= 0) {
+    recyclerView->scrollOffset =
+        main_menu_library::centeredScrollOffsetForItem(
+            recyclerView->selectedIndex, recyclerView->size(),
+            recyclerView->itemHeight, recyclerView->getHeight());
+    recyclerView->rebindVisibleItems();
+  }
 }
 
 bool MainMenuScene::clearSameFolderScope() {

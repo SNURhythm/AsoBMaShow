@@ -647,14 +647,20 @@ void testExactFolderQuery() {
         "'library/A',1,0,0),"
         "('library/A/two.bms','md5-two','sha-two','Two','','','','',"
         "'library/A',2,0,0),"
+        "('library/A/no-folder.bms','md5-no-folder','sha-no-folder',"
+        "'No Folder','','','','','',8,0,0),"
         "('library/A/nested/three.bms','md5-three','sha-three','Three','','',"
         "'','','library/A/nested',3,0,0),"
+        "('library/A/nested/no-folder.bms','md5-nested-no-folder',"
+        "'sha-nested-no-folder','Nested No Folder','','','','','',9,0,0),"
         "('library/B/four.bms','md5-four','sha-four','Four','','','','',"
         "'library/B',4,0,0),"
         "('packs/pack.zip/A/five.bms','md5-five','sha-five','Five','','',"
         "'','','packs/pack.zip/A',5,0,0),"
         "('packs/pack.zip/A/six.bms','md5-six','sha-six','Six','','','','',"
         "'packs/pack.zip/A',6,0,0),"
+        "('packs/pack.zip/A/no-folder.bms','md5-archive-no-folder',"
+        "'sha-archive-no-folder','Archive No Folder','','','','','',10,0,0),"
         "('packs/pack.zip/B/seven.bms','md5-seven','sha-seven','Seven','','',"
         "'','','packs/pack.zip/B',7,0,0)"));
   }
@@ -676,26 +682,38 @@ void testExactFolderQuery() {
   ChartMetaQuery query;
   query.exactFolder = std::filesystem::path("library/A");
   assert(queryPaths(query) ==
-         std::vector<std::string>({"library/A/one.bms",
+         std::vector<std::string>({"library/A/no-folder.bms",
+                                   "library/A/one.bms",
                                    "library/A/two.bms"}));
-  assert(session->CountChartMeta(query) == 2);
-  assert(session->FindChartMetaIndex(query, "library/A/one.bms") == 0);
-  assert(session->FindChartMetaIndex(query, "library/A/two.bms") == 1);
+  assert(session->CountChartMeta(query) == 3);
+  assert(session->FindChartMetaIndex(query, "library/A/no-folder.bms") == 0);
+  assert(session->FindChartMetaIndex(query, "library/A/one.bms") == 1);
+  assert(session->FindChartMetaIndex(query, "library/A/two.bms") == 2);
   assert(session->FindChartMetaIndex(query,
                                      "library/A/nested/three.bms") == -1);
+  assert(session->FindChartMetaIndex(
+             query, "library/A/nested/no-folder.bms") == -1);
 
   query.limit = 1;
   query.offset = 1;
   assert(queryPaths(query) ==
-         std::vector<std::string>({"library/A/two.bms"}));
+         std::vector<std::string>({"library/A/one.bms"}));
+  assert(session->CountChartMeta(query) == 3);
+
+  query = {};
+  query.exactFolder = std::filesystem::path("library/A/nested");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({"library/A/nested/no-folder.bms",
+                                   "library/A/nested/three.bms"}));
   assert(session->CountChartMeta(query) == 2);
 
   query = {};
   query.exactFolder = std::filesystem::path("packs/pack.zip/A");
   assert(queryPaths(query) ==
-         std::vector<std::string>({"packs/pack.zip/A/five.bms",
+         std::vector<std::string>({"packs/pack.zip/A/no-folder.bms",
+                                   "packs/pack.zip/A/five.bms",
                                    "packs/pack.zip/A/six.bms"}));
-  assert(session->CountChartMeta(query) == 2);
+  assert(session->CountChartMeta(query) == 3);
   assert(session->FindChartMetaIndex(query,
                                      "packs/pack.zip/B/seven.bms") == -1);
 
@@ -703,7 +721,8 @@ void testExactFolderQuery() {
   query.sortDirection = ChartRecordSortDirection::Descending;
   assert(queryPaths(query) ==
          std::vector<std::string>({"packs/pack.zip/A/six.bms",
-                                   "packs/pack.zip/A/five.bms"}));
+                                   "packs/pack.zip/A/five.bms",
+                                   "packs/pack.zip/A/no-folder.bms"}));
   assert(session->FindChartMetaIndex(query,
                                      "packs/pack.zip/A/five.bms") == 1);
 }

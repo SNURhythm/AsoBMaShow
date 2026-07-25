@@ -503,7 +503,12 @@ bool chartMetaQueryNeedsChartJoinForCourseEntries(
 void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
                              const ChartMetaQuery &chartQuery) {
   if (chartQuery.exactFolder.has_value()) {
-    query += " AND " + chartAlias + ".folder = @exact_folder";
+    const auto folderPrefix = "(rtrim(@exact_folder, '/') || '/')";
+    query += " AND (" + chartAlias + ".folder = @exact_folder OR (coalesce(" +
+             chartAlias + ".folder, '') = '' AND substr(" + chartAlias +
+             ".path, 1, length(" + folderPrefix + ")) = " + folderPrefix +
+             " AND instr(substr(" + chartAlias + ".path, length(" +
+             folderPrefix + ") + 1), '/') = 0))";
   }
 }
 

@@ -238,6 +238,19 @@ int main() {
             static_cast<int>(sameFolderQuery.sortDirection),
             "same-folder query preserves sort direction");
 
+  ASSERT_EQ(70.0f,
+            main_menu_library::centeredScrollOffsetForItem(2, 100, 108, 400),
+            "selected chart is centered in a long list");
+  ASSERT_EQ(300.0f,
+            main_menu_library::centeredScrollOffsetForItem(9, 10, 50, 200),
+            "selected chart scroll clamps at the list end");
+  ASSERT_EQ(0.0f,
+            main_menu_library::centeredScrollOffsetForItem(0, 10, 50, 200),
+            "selected chart scroll clamps at the list start");
+  ASSERT_EQ(0.0f,
+            main_menu_library::centeredScrollOffsetForItem(-1, 10, 50, 200),
+            "missing selection leaves scroll at the start");
+
   sqlite3 *db = nullptr;
   if (sqlite3_open(":memory:", &db) != SQLITE_OK) {
     std::cerr << "open failed" << std::endl;

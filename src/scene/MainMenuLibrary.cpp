@@ -73,4 +73,20 @@ ChartMetaQuery chartQueryForSameFolder(
   return query;
 }
 
+float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
+                                  int itemHeight,
+                                  int viewportHeight) noexcept {
+  if (selectedIndex < 0 || selectedIndex >= itemCount || itemCount <= 0 ||
+      itemHeight <= 0 || viewportHeight <= 0) {
+    return 0.0f;
+  }
+  const float selectedY = static_cast<float>(selectedIndex * itemHeight);
+  const float centeredOffset =
+      selectedY - static_cast<float>(std::max(0, viewportHeight - itemHeight)) /
+                      2.0f;
+  const float maxOffset = static_cast<float>(
+      std::max(0, std::max(1, itemCount) * itemHeight - viewportHeight));
+  return std::clamp(centeredOffset, 0.0f, maxOffset);
+}
+
 } // namespace main_menu_library

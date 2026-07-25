@@ -50,6 +50,10 @@ ChartMetaQuery chartQueryForSameFolder(
     const std::filesystem::path &folder, const std::string &keyword,
     const ChartRecordFilters &filters, int selectedLongNoteMode);
 
+float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
+                                  int itemHeight,
+                                  int viewportHeight) noexcept;
+
 inline bool difficultyRangeEnabledForFolder(bool difficultyTableFolder,
                                             bool clearMarkFolder, int tableId,
                                             const std::string &tableLevel) {
