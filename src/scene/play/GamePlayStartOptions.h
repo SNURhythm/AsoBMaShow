@@ -5,6 +5,7 @@
 #include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
+#include "../../replay/ReplayPlaybackData.h"
 #include "Pacemaker.h"
 #include "GameplayRulesetPolicy.h"
 
@@ -73,6 +74,7 @@ struct StartOptions {
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::shared_ptr<ReplayData> replayData = nullptr;
+  std::shared_ptr<const replay::ReplayPlaybackData> replayPlayback = nullptr;
   std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
@@ -259,30 +261,69 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options,
   return judge;
 }
 
-inline void applyReplayProvenanceToStartOptions(StartOptions &options,
-                                                const ReplayData &replay) {
-  options.playback = replay.provenance.playback;
-  options.clubMode = replay.provenance.clubMode;
-  options.judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent;
-  options.startingGaugePercent = replay.provenance.startingGaugePercent;
-  options.gaugeType = replay.provenance.gaugeType;
-  options.gaugeProfile = replay.provenance.gaugeProfile;
-  options.gaugeAutoShift = replay.provenance.gaugeAutoShift;
-  options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
-  if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+inline void applyScoreProvenanceToStartOptions(
+    StartOptions &options, const ScoreProvenance &provenance,
+    const bms_parser::ChartMeta &chartMeta) {
+  options.playback = provenance.playback;
+  options.clubMode = provenance.clubMode;
+  options.judgeWindowScalePercent = provenance.judgeWindowScalePercent;
+  options.startingGaugePercent = provenance.startingGaugePercent;
+  options.gaugeType = provenance.gaugeType;
+  options.gaugeProfile = provenance.gaugeProfile;
+  options.gaugeAutoShift = provenance.gaugeAutoShift;
+  options.gaugeAutoShiftLowerBound = provenance.gaugeAutoShiftLowerBound;
+  if (provenance.ruleset == RulesetDescriptor::Legacy()) {
     options.ruleset = GameplayRuleset::Beatoraja;
     options.requiredRulesetDescriptor =
         RulesetDescriptor::For(GameplayRuleset::Beatoraja);
     options.replayRulesetOverride.reset();
   } else {
-    options.requiredRulesetDescriptor = replay.provenance.ruleset;
+    options.requiredRulesetDescriptor = provenance.ruleset;
     if (const auto recordedRuleset =
-            gameplayRulesetFromId(replay.provenance.ruleset.id)) {
+            gameplayRulesetFromId(provenance.ruleset.id)) {
       options.ruleset = *recordedRuleset;
     }
     options.replayRulesetOverride =
-        play_start_detail::replayJudgeOverrideForChart(replay.provenance,
-                                                       replay.chartMeta);
+        play_start_detail::replayJudgeOverrideForChart(provenance, chartMeta);
+  }
+}
+
+inline void applyReplayProvenanceToStartOptions(StartOptions &options,
+                                                const ReplayData &replay) {
+  applyScoreProvenanceToStartOptions(options, replay.provenance,
+                                     replay.chartMeta);
+}
+
+inline void applyReplayPlaybackToStartOptions(
+    StartOptions &options,
+    std::shared_ptr<const replay::ReplayPlaybackData> playback) {
+  if (playback == nullptr) {
+    return;
+  }
+  const auto &setup = playback->setup;
+  options.replayPlayback = std::move(playback);
+  options.gaugeType = setup.initialGaugeType;
+  options.gaugeProfile = setup.gaugeProfile;
+  options.gaugeAutoShift = setup.gaugeAutoShift;
+  options.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
+  options.playOption = setup.playOption;
+  options.playOptionSeed = setup.playOptionSeed;
+  options.playOption2 = setup.playOption2;
+  options.playOption2Seed = setup.playOption2Seed;
+  options.longNoteMode = setup.longNoteMode;
+  options.assistOption = setup.assistOption;
+  options.playback.percent = setup.playbackRatePercent;
+  options.clubMode = setup.clubMode;
+  options.judgeWindowScalePercent = setup.judgeWindowScalePercent;
+  options.startingGaugePercent =
+      static_cast<int>(std::lround(setup.startingGaugePercent));
+  if (const auto ruleset =
+          gameplayRulesetFromId(setup.playbackRulesetId)) {
+    options.ruleset = *ruleset;
+    const auto descriptor = RulesetDescriptor::For(*ruleset);
+    if (descriptor.version == setup.playbackRulesetRevision) {
+      options.requiredRulesetDescriptor = descriptor;
+    }
   }
 }
 

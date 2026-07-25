@@ -1,10 +1,7 @@
 #pragma once
 
 #include "CoursePlaySession.h"
-#include "LegacyChartResultAttempt.h"
-#include "ResultPersistenceCoordinator.h"
-#include "ir/IrSubmission.h"
-#include "repositories/ReplayRepository.h"
+#include "ResultPersistenceModel.h"
 
 #include <atomic>
 #include <functional>
@@ -14,22 +11,13 @@
 
 namespace result_recall {
 
-using ReplayChartLoader = std::function<std::unique_ptr<bms_parser::Chart>(
-    const ReplayData &, std::atomic_bool &)>;
-
-struct HistoricalIrContext {
-  std::shared_ptr<
-      const legacy_result_persistence::LegacyChartResultAttempt> attempt;
-  std::shared_ptr<const ir::IrSubmission> submission;
-  result_persistence::SaveOutcome saveOutcome;
-};
+using ResultChartLoader = std::function<std::unique_ptr<bms_parser::Chart>(
+    const result_persistence::PersistedChartResult &, std::atomic_bool &)>;
 
 struct ChartResult {
   std::unique_ptr<bms_parser::Chart> chart;
-  ReplayData replay;
+  result_persistence::PersistedChartResult result;
   RhythmState state;
-  std::optional<HistoricalIrContext> historicalIr;
-  std::string historicalIrDiagnostic;
 };
 
 struct ChartBuildOutcome {
@@ -39,6 +27,7 @@ struct ChartBuildOutcome {
 
 struct CourseResult {
   std::shared_ptr<CoursePlaySession> session;
+  result_persistence::PersistedCourseResult result;
 };
 
 struct CourseBuildOutcome {
@@ -47,11 +36,13 @@ struct CourseBuildOutcome {
 };
 
 [[nodiscard]] ChartBuildOutcome
-BuildChartResult(ReplayResultRecord record, std::atomic_bool &cancelled,
-                 ReplayChartLoader loader = {});
+BuildChartResult(result_persistence::PersistedChartResult result,
+                 std::atomic_bool &cancelled,
+                 ResultChartLoader loader = {});
 
 [[nodiscard]] CourseBuildOutcome
-BuildCourseResult(CourseReplayData replay, std::atomic_bool &cancelled,
-                  ReplayChartLoader loader = {});
+BuildCourseResult(result_persistence::PersistedCourseResult result,
+                  std::atomic_bool &cancelled,
+                  ResultChartLoader loader = {});
 
 } // namespace result_recall

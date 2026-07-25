@@ -3,6 +3,7 @@
 #include "ArchiveFile.h"
 #include "CoursePlaySession.h"
 #include "ReplayData.h"
+#include "replay/ReplayPlaybackData.h"
 #include "bms_parser.hpp"
 #include "path.h"
 
@@ -457,6 +458,26 @@ inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
   return true;
 }
 
+inline bool applyReplayPlayOptions(
+    bms_parser::Chart &chart, const replay::ReplayPlaybackData &playback) {
+  std::optional<std::string> ignoredOption;
+  std::optional<long long> ignoredSeed;
+  const auto &setup = playback.setup;
+  if (setup.playOption.has_value() &&
+      !applyPlayOptionModifier(chart, *setup.playOption,
+                               setup.playOptionSeed, 0, ignoredOption,
+                               ignoredSeed, "raw replay")) {
+    return false;
+  }
+  if (chart.Meta.IsDP && setup.playOption2.has_value() &&
+      !applyPlayOptionModifier(chart, *setup.playOption2,
+                               setup.playOption2Seed, 1, ignoredOption,
+                               ignoredSeed, "raw replay")) {
+    return false;
+  }
+  return true;
+}
+
 inline PlayOptionReplayInfo
 applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option) {
   PlayOptionReplayInfo info;
@@ -640,6 +661,22 @@ prepareReplayChart(const std::filesystem::path &path, const ReplayData &replay,
     return nullptr;
   }
   applyEffectiveLongNoteModeToChart(*chart, replay.chartMeta.LnMode);
+  return chart;
+}
+
+inline std::unique_ptr<bms_parser::Chart> prepareReplayChart(
+    const std::filesystem::path &path,
+    const replay::ReplayPlaybackData &playback,
+    std::atomic_bool &cancelled) {
+  const auto &setup = playback.setup;
+  auto chart = parseChart(path, setup.randomSeed, setup.randomPrng,
+                          randomValuesOrNull(setup.randomValues), cancelled,
+                          "raw replay");
+  if (chart == nullptr || cancelled ||
+      !applyReplayPlayOptions(*chart, playback)) {
+    return nullptr;
+  }
+  applyEffectiveLongNoteModeToChart(*chart, setup.longNoteMode);
   return chart;
 }
 

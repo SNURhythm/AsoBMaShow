@@ -1,5 +1,7 @@
 #include "repositories/ReplayRepository.h"
 #include "ir/IrSubmissionSnapshot.h"
+#include "replay/BeatorajaReplayCodec.h"
+#include "replay/ReplayFileStore.h"
 #include "replay/ReplayPlaybackData.h"
 #include "sqlite3.h"
 
@@ -170,6 +172,108 @@ ReplayFileReference referenceFor(const ReplayFileReservation &reservation,
           .contentSha256 = repeated(hash, 64),
           .compressedSize = 1234,
           .codecVersion = 1};
+}
+
+replay::ReplayPlaybackData samplePlayback() {
+  replay::ReplayPlaybackData playback;
+  playback.setup.chartMd5 = repeated('b', 32);
+  playback.setup.chartSha256 = repeated('a', 64);
+  playback.setup.keyMode = 7;
+  playback.setup.longNoteMode = 1;
+  playback.setup.playOption = "NORMAL";
+  playback.setup.playOption2 = "NORMAL";
+  playback.setup.playbackRulesetId = "beatoraja";
+  playback.setup.playbackRulesetRevision = 1;
+  playback.input = {
+      {.songTimeMicros = 1000,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 0},
+       .pressed = true},
+      {.songTimeMicros = 2000,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 0},
+       .pressed = false},
+  };
+  return playback;
+}
+
+void testReplayFileReadIsIndependentFromResultAndIr() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(), "file-backed read schema is available");
+  constexpr std::string_view attempt =
+      "123e4567-e89b-42d3-a456-426614174001";
+  const std::string stem = repeated('a', 64);
+  const auto reservation = repository.reserveReplayFile(attempt, stem);
+  expect(reservation.reservation.has_value(),
+         "file-backed read reserves a replay path");
+  if (!reservation.reservation.has_value()) {
+    return;
+  }
+
+  const auto playback = samplePlayback();
+  replay::BeatorajaReplayCodec codec;
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(
+      playback, 1'700'000'000'123LL, diagnostic);
+  replay::ReplayFileStore store(temporary.path());
+  const replay::ReplayPathIdentity path{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = reservation.reservation->relativePath,
+  };
+  const auto finalized =
+      encoded.has_value()
+          ? store.finalize(path, *encoded, codec,
+                           {.stageSha256 = {repeated('a', 64)},
+                            .course = false},
+                           "repository_read")
+          : replay::FinalizeOutcome{};
+  expect(finalized.metadata.has_value(),
+         "file-backed read installs a valid replay file");
+  if (!finalized.metadata.has_value()) {
+    return;
+  }
+
+  auto result = validResult(std::string(attempt));
+  const auto snapshot = snapshotFor(result);
+  const ReplayFileReference reference{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  const auto staged =
+      repository.stageCompletedChartAttempt(result, snapshot, reference, {});
+  expect(staged.receipt.has_value(),
+         "file-backed read stages its compact result");
+  if (!staged.receipt.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      repository.loadChartReplayPlayback(staged.receipt->resultId);
+  expect(loaded.status == ChartReplayPlaybackReadOutcome::Status::Loaded &&
+             loaded.playback.has_value() && *loaded.playback == playback,
+         "watch loads and decodes raw input from the referenced brd file");
+
+  expect(store.remove(*finalized.metadata, diagnostic),
+         "test user deletion removes only the replay file");
+  const auto unavailable =
+      repository.loadChartReplayPlayback(staged.receipt->resultId);
+  expect(unavailable.status ==
+             ChartReplayPlaybackReadOutcome::Status::ReplayUnavailable,
+         "watch reports replay unavailable after user file deletion");
+  expect(repository.loadChartResult(staged.receipt->resultId).status ==
+             ResultReadOutcome::Status::Loaded,
+         "result recall remains available after replay file deletion");
+  expect(repository.loadIrSubmissionSnapshot(attempt).status ==
+             ir::IrSubmissionSnapshotReadOutcome::Status::Loaded,
+         "manual IR snapshot remains available after replay file deletion");
 }
 
 void testFreshCompactSchema() {
@@ -457,6 +561,7 @@ int main() {
   testFreshCompactSchema();
   testMalformedVersion11FailsClosed();
   testCompactStageAndIndependentReads();
+  testReplayFileReadIsIndependentFromResultAndIr();
   testReservationIntegrityAndMonotonicity();
   testMalformedVersion10FailsClosed();
   if (failures != 0) {

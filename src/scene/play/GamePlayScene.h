@@ -7,6 +7,7 @@
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
 #include "../../replay/ReplayInputRecorder.h"
+#include "../../replay/ReplayPlaybackDriver.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "NoteTimeRange.h"
@@ -129,6 +130,7 @@ private:
   void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayEvents(long long gameplayTimeMicros);
+  void initializeRawReplayPlayback();
   void processReplayLaneCoverEvents(long long gameplayTimeMicros);
   void applyReplayEvent(const ReplayEvent &event, long long visualTimeMicros);
   void applyReplayLaneCoverEvent(const ReplayLaneCoverEvent &event);
@@ -219,6 +221,7 @@ private:
   ReplayData recordedReplay;
   replay::ReplayPlaybackData recordedPlaybackReplay;
   std::unique_ptr<replay::ReplayInputRecorder> replayInputRecorder;
+  std::unique_ptr<replay::ReplayPlaybackDriver> replayPlaybackDriver;
   std::vector<replay::InputTransition> pendingReplayInput;
   ReplayData analyticsReplay;
   ResultPersistenceOptions resultPersistenceOptions;

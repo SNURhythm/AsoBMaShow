@@ -7,6 +7,7 @@
 #include "../ir/IrOutboxModels.h"
 #include "../ir/IrSubmissionSnapshot.h"
 #include "../replay/BeatorajaReplayPath.h"
+#include "../replay/ReplayPlaybackData.h"
 #include "../ir/IrRemoteScoreModels.h"
 #include "../ir/IrScoreReconciliation.h"
 #include "ScoreRepositoryModels.h"
@@ -151,6 +152,41 @@ struct ResultReadOutcome {
 
   Status status = Status::StorageFailure;
   std::optional<ResultRecord> record;
+  std::string diagnostic;
+};
+
+struct CourseResultRecord {
+  result_persistence::PersistedCourseResult result;
+  std::optional<ReplayFileReference> replayFile;
+};
+
+struct CourseResultReadOutcome {
+  enum class Status {
+    Loaded,
+    NotFound,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<CourseResultRecord> record;
+  std::string diagnostic;
+};
+
+struct ChartReplayPlaybackReadOutcome {
+  enum class Status {
+    Loaded,
+    ResultNotFound,
+    ReplayUnavailable,
+    Invalid,
+    StorageFailure,
+    IntegrityConflict,
+  };
+
+  Status status = Status::StorageFailure;
+  std::optional<result_persistence::PersistedChartResult> result;
+  std::optional<replay::ReplayPlaybackData> playback;
   std::string diagnostic;
 };
 
@@ -334,6 +370,8 @@ public:
       const ReplayFileReference &replayFile,
       std::span<const ir::IrOutboxDraft> irDrafts);
   ResultReadOutcome loadChartResult(int resultId);
+  CourseResultReadOutcome loadCourseResult(int resultId);
+  ChartReplayPlaybackReadOutcome loadChartReplayPlayback(int resultId);
   ir::IrSubmissionSnapshotReadOutcome
   loadIrSubmissionSnapshot(std::string_view attemptId);
   std::optional<int> SaveReplay(const ReplayData &replay);

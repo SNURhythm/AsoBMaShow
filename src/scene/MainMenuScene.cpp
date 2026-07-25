@@ -12,6 +12,7 @@
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayAutoPlay.h"
 #include "../ReplayVideoExporter.h"
+#include "../replay/LegacyReplayPlaybackAdapter.h"
 #include "../ResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
 #include "../ProfileDatabaseActivity.h"
@@ -9381,17 +9382,38 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return true;
         }
 
-        auto replay = context.replayRepository.LoadReplay(
-            replayId, replayLoadMetaForRecord(record));
-        if (!replay.has_value()) {
+        auto replayRead =
+            context.replayRepository.loadChartReplayPlayback(replayId);
+        if (replayRead.status !=
+                ChartReplayPlaybackReadOutcome::Status::Loaded ||
+            !replayRead.result.has_value() ||
+            !replayRead.playback.has_value()) {
+          SDL_Log("Unable to load replay file for result %d: %s", replayId,
+                  replayRead.diagnostic.c_str());
           resetReplayWatchLoadingUi();
           refreshReplayAvailability(&record);
           return true;
         }
 
+        auto playback = std::make_shared<replay::ReplayPlaybackData>(
+            std::move(*replayRead.playback));
         std::atomic_bool parseCancelled = false;
-        auto replayChart = play_options::prepareReplayChart(
-            record.meta.BmsPath, replay.value(), parseCancelled);
+        std::unique_ptr<bms_parser::Chart> replayChart;
+        std::shared_ptr<ReplayData> legacyReplay;
+        if (playback->legacy.has_value()) {
+          auto adapted = replay::makeLegacyPlaybackAdapter(
+              *playback, *replayRead.result, record.meta);
+          if (!adapted.has_value()) {
+            return failReplayLoad();
+          }
+          legacyReplay =
+              std::make_shared<ReplayData>(std::move(*adapted));
+          replayChart = play_options::prepareReplayChart(
+              record.meta.BmsPath, *legacyReplay, parseCancelled);
+        } else {
+          replayChart = play_options::prepareReplayChart(
+              record.meta.BmsPath, *playback, parseCancelled);
+        }
         if (replayChart == nullptr || parseCancelled) {
           return failReplayLoad();
         }
@@ -9407,20 +9429,23 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return failReplayLoad();
         }
 
-        auto replayData =
-            std::make_shared<ReplayData>(std::move(replay.value()));
         StartOptions replayOptions{
             .startPosition = 0,
             .autoKeySound = false,
             .autoPlay = false,
-            .gaugeType = replayData->initialGaugeType,
-            .gaugeAutoShift = replayData->gaugeAutoShift,
-            .replayData = replayData,
+            .replayData = legacyReplay,
             .pacemakerTarget = pacemakerTarget,
             .touchVisualizationEnabled = selectedReplayRenderTouchPoints,
-            .replayGhostRenderingEnabled = selectedReplayRenderGhosts,
+            .replayGhostRenderingEnabled =
+                legacyReplay != nullptr && selectedReplayRenderGhosts,
         };
-        applyReplayProvenanceToStartOptions(replayOptions, *replayData);
+        if (legacyReplay != nullptr) {
+          applyReplayProvenanceToStartOptions(replayOptions, *legacyReplay);
+        } else {
+          applyReplayPlaybackToStartOptions(replayOptions, playback);
+          applyScoreProvenanceToStartOptions(
+              replayOptions, replayRead.result->score.provenance, chart->Meta);
+        }
         context.jukebox.stop();
         hideReplayModal();
         changeToGameplayScene(chart, std::move(replayOptions));
@@ -9466,17 +9491,25 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
         }
         joinRetiredPreviewLoadThreads();
 
-        auto replay = context.replayRepository.LoadReplay(
-            replayId, replayLoadMetaForRecord(record));
-        if (!replay.has_value() || replay->autoPlay) {
+        auto replayRead =
+            context.replayRepository.loadChartReplayPlayback(replayId);
+        if (replayRead.status !=
+                ChartReplayPlaybackReadOutcome::Status::Loaded ||
+            !replayRead.result.has_value() ||
+            !replayRead.playback.has_value() ||
+            replayRead.result->score.provenance.autoPlay) {
+          SDL_Log("Unable to load G-Battle replay file for result %d: %s",
+                  replayId, replayRead.diagnostic.c_str());
           resetReplayWatchLoadingUi();
           refreshReplayAvailability(&record);
           return true;
         }
 
+        auto replayPlayback = std::make_shared<replay::ReplayPlaybackData>(
+            std::move(*replayRead.playback));
         std::atomic_bool parseCancelled = false;
         auto preparedChart = play_options::prepareReplayChart(
-            record.meta.BmsPath, replay.value(), parseCancelled);
+            record.meta.BmsPath, *replayPlayback, parseCancelled);
         if (preparedChart == nullptr || parseCancelled) {
           return failGBattleLoad();
         }
@@ -9492,8 +9525,39 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
           return failGBattleLoad();
         }
 
+        std::optional<ReplayData> adapted;
+        if (replayPlayback->legacy.has_value()) {
+          adapted = replay::makeLegacyPlaybackAdapter(
+              *replayPlayback, *replayRead.result, chart->Meta);
+        } else {
+          StartOptions recordedOptions;
+          applyReplayPlaybackToStartOptions(recordedOptions, replayPlayback);
+          applyScoreProvenanceToStartOptions(
+              recordedOptions, replayRead.result->score.provenance,
+              chart->Meta);
+          const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+              recordedOptions, chart->Meta, context.settings.notePriorityMode);
+          if (!policy.built()) {
+            SDL_Log("Unable to build G-Battle replay policy: %s",
+                    policy.diagnostic.c_str());
+            return failGBattleLoad();
+          }
+          const auto materialized = replay::materializeReplay(
+              *replayPlayback, *chart, *policy.policy);
+          if (!materialized.materialized()) {
+            SDL_Log("Unable to materialize G-Battle replay: %s",
+                    materialized.diagnostic.c_str());
+            return failGBattleLoad();
+          }
+          adapted = replay::makeMaterializedPlaybackAdapter(
+              *replayPlayback, *materialized.value, *replayRead.result,
+              chart->Meta);
+        }
+        if (!adapted.has_value()) {
+          return failGBattleLoad();
+        }
         auto recordData =
-            std::make_shared<ReplayData>(std::move(replay.value()));
+            std::make_shared<ReplayData>(std::move(*adapted));
         context.jukebox.stop();
         hideReplayModal();
         changeToGameplayScene(
@@ -9895,7 +9959,7 @@ void MainMenuScene::resetReplayWatchLoadingUi() {
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
-  if (options.replayData == nullptr) {
+  if (options.replayData == nullptr && options.replayPlayback == nullptr) {
     options.clubMode = context.settings.gameplayClubModeEnabled;
   }
   context.sceneManager->changeScene(
@@ -10057,16 +10121,22 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         return;
       }
 
-      auto replay = context.replayRepository.LoadReplay(
-          replayId, replayLoadMetaForRecord(record));
-      if (!replay.has_value()) {
-        complete({.success = false, .message = "No Replay"});
+      auto replayRead =
+          context.replayRepository.loadChartReplayPlayback(replayId);
+      if (replayRead.status !=
+              ChartReplayPlaybackReadOutcome::Status::Loaded ||
+          !replayRead.result.has_value() ||
+          !replayRead.playback.has_value()) {
+        complete({.success = false,
+                  .message = replayRead.diagnostic.empty()
+                                 ? "Replay unavailable"
+                                 : replayRead.diagnostic});
         return;
       }
 
       std::atomic_bool parseCancelled = false;
       auto chart = play_options::prepareReplayChart(
-          record.meta.BmsPath, replay.value(), parseCancelled);
+          record.meta.BmsPath, *replayRead.playback, parseCancelled);
       if (chart == nullptr || parseCancelled) {
         complete({.success = false, .message = "No Chart"});
         return;
@@ -10076,8 +10146,9 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         return;
       }
 
-      complete(ReplayVideoExporter::Export(context, chart.get(), replay.value(),
-                                           options));
+      complete(ReplayVideoExporter::Export(
+          context, chart.get(), *replayRead.playback, *replayRead.result,
+          options));
     } catch (const std::exception &e) {
       complete({.success = false, .message = e.what()});
     } catch (...) {
@@ -10230,19 +10301,21 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
           }
           joinRetiredPreviewLoadThreads();
 
-          auto stored = context.replayRepository.LoadReplayResult(
-              summary.id, replayLoadMetaForRecord(record));
-          std::atomic_bool cancelled = false;
-          auto recalled = stored.has_value()
-                              ? result_recall::BuildChartResult(
-                                    std::move(*stored), cancelled)
-                              : result_recall::ChartBuildOutcome{};
-          if (!recalled.value.has_value() ||
-              !recalled.value->historicalIr.has_value() ||
-              recalled.value->historicalIr->submission == nullptr) {
+          (void)record;
+          if (!summary.attemptId.has_value()) {
             finishReplayIrUpload(
                 summary.id,
-                "This saved result could not be verified for IR.");
+                "This saved result has no IR snapshot identity.");
+            return true;
+          }
+          auto snapshot = context.replayRepository.loadIrSubmissionSnapshot(
+              *summary.attemptId);
+          if (snapshot.status !=
+                  ir::IrSubmissionSnapshotReadOutcome::Status::Loaded ||
+              !snapshot.snapshot.has_value()) {
+            finishReplayIrUpload(
+                summary.id,
+                "This saved result has no independently stored IR snapshot.");
             return true;
           }
 
@@ -10266,7 +10339,7 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
           };
           const auto action = ir::executeIrSavedResultUpload(
               ir::kTachiProviderId,
-              *recalled.value->historicalIr->submission, dependencies);
+              snapshot.snapshot->submission, dependencies);
           finishReplayIrUpload(summary.id, action.message);
         } catch (const std::exception &) {
           finishReplayIrUpload(summary.id,
@@ -10379,13 +10452,15 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
           return true;
         }
 
-        auto stored = context.replayRepository.LoadReplayResult(
-            replayId, replayLoadMetaForRecord(record));
+        auto stored = context.replayRepository.loadChartResult(replayId);
         std::atomic_bool cancelled = false;
-        auto recalled = stored.has_value()
-                            ? result_recall::BuildChartResult(
-                                  std::move(*stored), cancelled)
-                            : result_recall::ChartBuildOutcome{};
+        auto recalled =
+            stored.status == ResultReadOutcome::Status::Loaded &&
+                    stored.record.has_value()
+                ? result_recall::BuildChartResult(
+                      std::move(stored.record->result), cancelled)
+                : result_recall::ChartBuildOutcome{
+                      .diagnostic = std::move(stored.diagnostic)};
         if (!recalled.value.has_value()) {
           finishReplayResultRecallFailure(
               recalled.diagnostic.empty() ? "saved replay was not found"
@@ -10395,19 +10470,38 @@ void MainMenuScene::startReplayResultRecall(const ChartMetaRecord &record,
 
         auto result = std::move(*recalled.value);
         ResultPersistenceOptions persistence;
-        if (result.historicalIr.has_value()) {
-          persistence.irSubmission = result.historicalIr->submission;
-          persistence.outcome = result.historicalIr->saveOutcome;
+        auto persisted =
+            std::make_shared<const result_persistence::PersistedChartResult>(
+                result.result);
+        persistence.result = persisted;
+        if (persisted->attemptId.has_value()) {
+          auto snapshot = context.replayRepository.loadIrSubmissionSnapshot(
+              *persisted->attemptId);
+          if (snapshot.status ==
+                  ir::IrSubmissionSnapshotReadOutcome::Status::Loaded &&
+              snapshot.snapshot.has_value()) {
+            persistence.irSnapshot =
+                std::make_shared<const ir::IrSubmissionSnapshot>(
+                    std::move(*snapshot.snapshot));
+            persistence.irSubmission =
+                std::make_shared<const ir::IrSubmission>(
+                    persistence.irSnapshot->submission);
+          }
+          persistence.outcome = {
+              .state = result_persistence::SaveState::Saved,
+              .receipt = result_persistence::StageReceipt{
+                  .attemptId = *persisted->attemptId,
+                  .resultId = persisted->resultId,
+                  .scorePending = false}};
         }
-        const ReplayData replay = result.replay;
         auto chart = std::move(result.chart);
         const bms_parser::ChartMeta meta = chart->Meta;
         replayResultRecallInProgress = false;
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
-                context, meta, result.state, replay.provenance, nullptr,
-                std::move(persistence), &replay, ResultPracticeOptions{},
-                false, ResultCourseOptions{},
+                context, meta, result.state, result.result.score.provenance,
+                nullptr, std::move(persistence), nullptr,
+                ResultPracticeOptions{}, false, ResultCourseOptions{},
                 profileSelections.pacemakerTarget, std::move(chart)),
             true);
         return true;
@@ -10469,15 +10563,17 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
 }
 
 void MainMenuScene::startCourseReplayResultRecall(int replayId) {
-  auto stored = context.replayRepository.LoadCourseReplay(replayId);
+  auto stored = context.replayRepository.loadCourseResult(replayId);
   std::atomic_bool cancelled = false;
-  auto recalled = stored.has_value()
-                      ? result_recall::BuildCourseResult(std::move(*stored),
-                                                        cancelled)
-                      : result_recall::CourseBuildOutcome{};
+  auto recalled =
+      stored.status == CourseResultReadOutcome::Status::Loaded &&
+              stored.record.has_value()
+          ? result_recall::BuildCourseResult(
+                std::move(stored.record->result), cancelled)
+          : result_recall::CourseBuildOutcome{
+                .diagnostic = std::move(stored.diagnostic)};
   if (!recalled.value.has_value() || recalled.value->session == nullptr ||
-      recalled.value->session->completedResults.empty() ||
-      recalled.value->session->courseReplayData == nullptr) {
+      recalled.value->session->completedResults.empty()) {
     finishReplayResultRecallFailure(
         recalled.diagnostic.empty() ? "saved course replay was not found"
                                     : recalled.diagnostic);
@@ -10487,12 +10583,15 @@ void MainMenuScene::startCourseReplayResultRecall(int replayId) {
   auto session = std::move(recalled.value->session);
   session->currentIndex = 0;
   const auto &result = session->completedResults.front();
-  const auto &replay = session->courseReplayData->stages.front().replay;
-  session->applyReplayStagePlayOptions(replay);
+  const ScoreProvenance provenance =
+      !session->stageProvenance.empty() &&
+              session->stageProvenance.front().has_value()
+          ? *session->stageProvenance.front()
+          : session->aggregateProvenance();
   replayResultRecallInProgress = false;
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
-          context, result.meta, result.state, replay.provenance, nullptr,
+          context, result.meta, result.state, provenance, nullptr,
           ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,

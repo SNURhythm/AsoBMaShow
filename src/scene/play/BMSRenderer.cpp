@@ -3608,6 +3608,29 @@ void BMSRenderer::setReplayData(const ReplayData *replayData) {
                    });
 }
 
+void BMSRenderer::setReplayTouchSamples(
+    const std::vector<replay::ReplayTouchSample> &samples) {
+  replayTouchSamples.clear();
+  replayActiveTouchSamples.clear();
+  replayReleasedTouchSamples.clear();
+  replayTouchCursor = 0;
+  lastReplayTouchTimeMicros = -1;
+  replayTouchSamples.reserve(samples.size());
+  for (const auto &sample : samples) {
+    replayTouchSamples.push_back(
+        {.action = static_cast<::ReplayTouchAction>(sample.action),
+         .fingerId = sample.fingerId,
+         .songTimeMicros = sample.songTimeMicros,
+         .x = sample.x,
+         .y = sample.y});
+  }
+  std::stable_sort(replayTouchSamples.begin(), replayTouchSamples.end(),
+                   [](const ReplayTouchSample &left,
+                      const ReplayTouchSample &right) {
+                     return left.songTimeMicros < right.songTimeMicros;
+                   });
+}
+
 void BMSRenderer::setAutoPlayMarkVisible(bool visible) {
   autoPlayMarkVisible = visible;
   if (autoPlayMarkText != nullptr) {

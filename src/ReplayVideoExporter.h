@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ReplayData.h"
+#include "ResultPersistenceModel.h"
+#include "replay/ReplayPlaybackData.h"
 #include "context.h"
 
 #include <cstddef>
@@ -41,6 +43,11 @@ public:
   Export(ApplicationContext &context, bms_parser::Chart *chart,
          const ReplayData &replay,
          const ReplayVideoExportOptions &options = {});
+  static ReplayVideoExportResult Export(
+      ApplicationContext &context, bms_parser::Chart *chart,
+      const replay::ReplayPlaybackData &playback,
+      const result_persistence::PersistedChartResult &result,
+      const ReplayVideoExportOptions &options = {});
   static ReplayVideoExportResult
   ExportCourseReplay(ApplicationContext &context, const CourseReplayData &replay,
                      const ReplayVideoExportOptions &options = {});

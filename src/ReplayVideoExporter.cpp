@@ -6,6 +6,8 @@
 #include "PreparationPlan.h"
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
+#include "replay/LegacyReplayPlaybackAdapter.h"
+#include "replay/ReplayPlaybackMaterializer.h"
 #include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "audio/ChartAudioRenderer.h"
@@ -22,6 +24,7 @@
 #include "scene/play/BMSRenderer.h"
 #include "scene/play/GamePlayTiming.h"
 #include "scene/play/Judge.h"
+#include "scene/play/GamePlayStartOptions.h"
 #include "skin/DefaultSkin.h"
 #include "view/UiTheme.h"
 #include "view/View.h"
@@ -4132,6 +4135,50 @@ ReplayVideoExporter::Export(ApplicationContext &context,
                   static_cast<double>(elapsedMicros(totalStart)) / 1000000.0,
                   platformSaveResult.message.c_str());
   return platformSaveResult;
+}
+
+ReplayVideoExportResult ReplayVideoExporter::Export(
+    ApplicationContext &context, bms_parser::Chart *chart,
+    const replay::ReplayPlaybackData &playback,
+    const result_persistence::PersistedChartResult &result,
+    const ReplayVideoExportOptions &options) {
+  if (chart == nullptr) {
+    return {.success = false, .message = "No chart selected"};
+  }
+  if (playback.legacy.has_value()) {
+    auto adapted = replay::makeLegacyPlaybackAdapter(playback, result,
+                                                     chart->Meta);
+    if (!adapted.has_value()) {
+      return {.success = false, .message = "Invalid migrated replay"};
+    }
+    return Export(context, chart, *adapted, options);
+  }
+
+  auto playbackPointer =
+      std::make_shared<const replay::ReplayPlaybackData>(playback);
+  StartOptions startOptions;
+  applyReplayPlaybackToStartOptions(startOptions, playbackPointer);
+  applyScoreProvenanceToStartOptions(startOptions, result.score.provenance,
+                                     chart->Meta);
+  const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+      startOptions, chart->Meta, context.settings.notePriorityMode);
+  if (!policy.built()) {
+    return {.success = false,
+            .message = policy.diagnostic.empty()
+                           ? "Unsupported replay gameplay policy"
+                           : policy.diagnostic};
+  }
+  const auto materialized =
+      replay::materializeReplay(playback, *chart, *policy.policy);
+  if (!materialized.materialized()) {
+    return {.success = false,
+            .message = materialized.diagnostic.empty()
+                           ? "Unable to materialize replay"
+                           : materialized.diagnostic};
+  }
+  const ReplayData adapted = replay::makeMaterializedPlaybackAdapter(
+      playback, *materialized.value, result, chart->Meta);
+  return Export(context, chart, adapted, options);
 }
 
 ReplayVideoExportResult

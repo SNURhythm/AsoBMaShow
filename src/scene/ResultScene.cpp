@@ -2074,19 +2074,20 @@ void ResultScene::showSavedCourseStage() {
     return;
   }
   auto session = local->courseOptions.session;
-  if (session == nullptr || session->courseReplayData == nullptr ||
-      session->currentIndex >= session->completedResults.size() ||
-      session->currentIndex >= session->courseReplayData->stages.size()) {
+  if (session == nullptr ||
+      session->currentIndex >= session->completedResults.size()) {
     exitResult();
     return;
   }
   const auto &result = session->completedResults[session->currentIndex];
-  const auto &replay =
-      session->courseReplayData->stages[session->currentIndex].replay;
-  session->applyReplayStagePlayOptions(replay);
+  const ScoreProvenance provenance =
+      session->currentIndex < session->stageProvenance.size() &&
+              session->stageProvenance[session->currentIndex].has_value()
+          ? *session->stageProvenance[session->currentIndex]
+          : session->aggregateProvenance();
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
-          context, result.meta, result.state, replay.provenance, nullptr,
+          context, result.meta, result.state, provenance, nullptr,
           ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,

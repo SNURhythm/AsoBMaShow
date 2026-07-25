@@ -58,5 +58,50 @@ int main() {
     return 1;
   }
 
+  auto raw = std::make_shared<replay::ReplayPlaybackData>();
+  raw->setup.keyMode = 14;
+  raw->setup.longNoteMode = 2;
+  raw->setup.playOption = "R-RANDOM";
+  raw->setup.playOptionSeed = 17;
+  raw->setup.playOption2 = "MIRROR";
+  raw->setup.playOption2Seed = 29;
+  raw->setup.assistOption = "AUTO-SCRATCH";
+  raw->setup.initialGaugeType = GaugeType::ExHard;
+  raw->setup.gaugeProfile = GaugeProfile::Standard;
+  raw->setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  raw->setup.gaugeAutoShiftLowerBound = GaugeType::Easy;
+  raw->setup.playbackRulesetId = "beatoraja";
+  raw->setup.playbackRulesetRevision = 2;
+  raw->setup.playbackRatePercent = 125;
+  raw->setup.judgeWindowScalePercent = 90;
+  raw->setup.startingGaugePercent = 42.0F;
+  raw->setup.clubMode = true;
+  StartOptions rawOptions;
+  applyReplayPlaybackToStartOptions(rawOptions, raw);
+  if (!expect(rawOptions.replayPlayback == raw,
+              "raw replay ownership is attached to play startup") ||
+      !expect(rawOptions.replayData == nullptr,
+              "raw playback does not manufacture judged replay data") ||
+      !expect(rawOptions.gaugeType == GaugeType::ExHard &&
+                  rawOptions.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
+                  rawOptions.gaugeAutoShiftLowerBound == GaugeType::Easy,
+              "raw playback restores its gauge setup") ||
+      !expect(rawOptions.playOption == "R-RANDOM" &&
+                  rawOptions.playOptionSeed == 17 &&
+                  rawOptions.playOption2 == "MIRROR" &&
+                  rawOptions.playOption2Seed == 29,
+              "raw playback restores chart randomization") ||
+      !expect(rawOptions.playback.percent == 125 &&
+                  rawOptions.judgeWindowScalePercent == 90 &&
+                  rawOptions.startingGaugePercent == 42 &&
+                  rawOptions.clubMode,
+              "raw playback restores timing and audio setup") ||
+      !expect(rawOptions.ruleset == GameplayRuleset::Beatoraja &&
+                  rawOptions.requiredRulesetDescriptor ==
+                      RulesetDescriptor::For(GameplayRuleset::Beatoraja),
+              "raw playback restores its ruleset identity")) {
+    return 1;
+  }
+
   return 0;
 }

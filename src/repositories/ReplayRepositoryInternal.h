@@ -44,6 +44,8 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
     const ReplayFileReference &replayFile,
     std::span<const ir::IrOutboxDraft> irDrafts);
 ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId);
+CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
+                                                     int resultId);
 ir::IrSubmissionSnapshotReadOutcome
 LoadIrSubmissionSnapshotOnConnection(sqlite3 *database,
                                      std::string_view attemptId);

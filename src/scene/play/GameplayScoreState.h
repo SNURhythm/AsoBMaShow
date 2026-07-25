@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -787,6 +788,27 @@ public:
   }
 
   [[nodiscard]] ClearType getClearType() const {
+    if (readOnlyResultClearTypeRank_.has_value()) {
+      switch (*readOnlyResultClearTypeRank_) {
+      case kClearTypeAssistedEasyClearRank:
+        return ClearType::AssistedEasyClear;
+      case kClearTypeLightAssistedEasyClearRank:
+        return ClearType::LightAssistedEasyClear;
+      case kClearTypeEasyClearRank:
+        return ClearType::EasyClear;
+      case kClearTypeNormalClearRank:
+        return ClearType::NormalClear;
+      case kClearTypeHardClearRank:
+        return ClearType::HardClear;
+      case kClearTypeExHardClearRank:
+        return ClearType::ExHardClear;
+      case kClearTypeFullComboRank:
+        return ClearType::FullCombo;
+      case kClearTypeFailedRank:
+      default:
+        return ClearType::Failed;
+      }
+    }
     const ClearType gaugeClearType = getGaugeClearType();
     if (assistClearMark) {
       return gaugeClearType == ClearType::Failed
@@ -797,11 +819,21 @@ public:
   }
 
   [[nodiscard]] int getClearTypeRank() const {
+    if (readOnlyResultClearTypeRank_.has_value()) {
+      return *readOnlyResultClearTypeRank_;
+    }
     return clearTypeToRank(getClearType());
   }
 
   [[nodiscard]] const char *getClearTypeLabel() const {
+    if (readOnlyResultClearTypeRank_.has_value()) {
+      return clearTypeRankToLabel(*readOnlyResultClearTypeRank_);
+    }
     return clearTypeToLabel(getClearType());
+  }
+
+  void restoreReadOnlyResultClearType(int clearTypeRank) {
+    readOnlyResultClearTypeRank_ = clearTypeRank;
   }
 
   [[nodiscard]] bool activeGaugeFailed() const {
@@ -816,6 +848,8 @@ public:
   ~GameplayScoreState() {}
 
 private:
+  std::optional<int> readOnlyResultClearTypeRank_;
+
   [[nodiscard]] const CompiledGaugeDefinition &
   gaugeDefinition(GaugeType type) const noexcept {
     return gaugeRules_.gauges[gaugeTypeIndex(type)];

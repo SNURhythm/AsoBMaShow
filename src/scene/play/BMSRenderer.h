@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../../ReplayData.h"
+#include "../../replay/ReplayPlaybackData.h"
 #include "../../ReplayGhostUtils.h"
 #include "../../AppSettings.h"
 #include "../../audio/PlaybackRate.h"
@@ -446,6 +447,8 @@ public:
   void setPacemakerStatus(const pacemaker::Snapshot &snapshot);
   void setPlayOptionStatus(const std::string &label);
   void setReplayData(const ReplayData *replayData);
+  void setReplayTouchSamples(
+      const std::vector<replay::ReplayTouchSample> &samples);
   void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);

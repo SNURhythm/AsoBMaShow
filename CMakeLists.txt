@@ -1211,6 +1211,36 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_file_migration_tests PRIVATE SDL2)
     endif()
 
+    add_executable(replay_playback_driver_tests
+        tests/replay_playback_driver_tests.cpp
+        src/MinizBridge.c
+        src/replay/GzipCodec.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/Judge.cpp
+    )
+    target_include_directories(replay_playback_driver_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
+    )
+    target_compile_definitions(replay_playback_driver_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_compile_features(replay_playback_driver_tests PRIVATE cxx_std_23)
+    target_link_libraries(replay_playback_driver_tests PRIVATE
+        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+    )
+
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
         src/ArchiveFile.cpp
@@ -2957,6 +2987,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(repository_boundary_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(replay_file_migration_tests)
+    asobmashow_register_test(replay_playback_driver_tests)
 
     add_test(NAME foundation_av_settings
         COMMAND $<TARGET_FILE:audio_video_settings_tests>)

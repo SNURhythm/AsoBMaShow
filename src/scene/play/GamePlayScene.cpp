@@ -1621,6 +1621,9 @@ void GamePlayScene::init() {
       context.settings.judgementCounterPosition);
   renderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
   renderer->setReplayData(options.replayData.get());
+  if (options.replayPlayback != nullptr) {
+    renderer->setReplayTouchSamples(options.replayPlayback->touchSamples);
+  }
   renderer->setShowInvisibleNotes(context.settings.showInvisibleNotes);
   renderer->setTouchVisualizationEnabled(
       options.touchVisualizationEnabled.value_or(
@@ -1675,6 +1678,7 @@ void GamePlayScene::init() {
       options.longNoteMode,
       practiceNoteRange());
   laneInputController = ownedLaneInputController.get();
+  initializeRawReplayPlayback();
 
   (void)startRealtimeGameplayAuthority();
 
@@ -1864,6 +1868,7 @@ void GamePlayScene::init() {
 
 bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
+  replayPlaybackDriver.reset();
   playbackInitializationFailed = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   ownedState.reset();
@@ -1962,19 +1967,29 @@ bool GamePlayScene::reset() {
   const bool courseReplayPlayback = isReplayPlayback() && isCoursePlayback() &&
                                     options.courseSession != nullptr &&
                                     options.courseSession->courseReplayPlayback;
+  const auto *rawSetup = options.replayPlayback != nullptr
+                             ? &options.replayPlayback->setup
+                             : nullptr;
   const GaugeType initialGaugeType =
       courseReplayPlayback
           ? options.gaugeType
-          : (isReplayPlayback() ? options.replayData->initialGaugeType
-                                : options.gaugeType);
-  const GaugeProfile gaugeProfile = isReplayPlayback() && !isCoursePlayback()
-                                        ? GaugeProfile::Standard
-                                        : options.gaugeProfile;
+          : (options.replayData != nullptr
+                 ? options.replayData->initialGaugeType
+                 : (rawSetup != nullptr ? rawSetup->initialGaugeType
+                                        : options.gaugeType));
+  const GaugeProfile gaugeProfile =
+      rawSetup != nullptr
+          ? rawSetup->gaugeProfile
+          : (options.replayData != nullptr && !isCoursePlayback()
+                 ? GaugeProfile::Standard
+                 : options.gaugeProfile);
   const GaugeAutoShiftMode gaugeAutoShift =
       courseReplayPlayback
           ? options.gaugeAutoShift
-          : (isReplayPlayback() ? options.replayData->gaugeAutoShift
-                                : options.gaugeAutoShift);
+          : (options.replayData != nullptr
+                 ? options.replayData->gaugeAutoShift
+                 : (rawSetup != nullptr ? rawSetup->gaugeAutoShift
+                                        : options.gaugeAutoShift));
   state->configureGauge(initialGaugeType, gaugeAutoShift, gaugeProfile,
                         options.gaugeAutoShiftLowerBound);
   if (options.startingGaugePercent.has_value()) {
@@ -1990,9 +2005,11 @@ bool GamePlayScene::reset() {
     state->combo = options.courseSession->carriedCombo;
     state->maxCombo = options.courseSession->maxCombo;
   }
-  const std::string assistOption = isReplayPlayback()
-                                       ? options.replayData->assistOption
-                                       : options.assistOption;
+  const std::string assistOption =
+      options.replayData != nullptr
+          ? options.replayData->assistOption
+          : (rawSetup != nullptr ? rawSetup->assistOption
+                                 : options.assistOption);
   state->setAssistClearMark(
       assist_options::isEnabled(assistOption) ||
       clear_policy::assistClearRequired(options.playback));
@@ -2030,6 +2047,7 @@ bool GamePlayScene::reset() {
           options.autoPlay)) {
     (void)startRealtimeGameplayAuthority();
   }
+  initializeRawReplayPlayback();
   return true;
 }
 
@@ -2366,7 +2384,7 @@ void GamePlayScene::retryWithNewPattern() {
 }
 
 bool GamePlayScene::isReplayPlayback() const {
-  return options.replayData != nullptr;
+  return options.replayData != nullptr || options.replayPlayback != nullptr;
 }
 
 std::optional<NoteTimeRange> GamePlayScene::practiceNoteRange() const {
@@ -2418,8 +2436,15 @@ int GamePlayScene::effectiveVisibleTimeGreenNumber() const {
 }
 
 int GamePlayScene::effectiveNoteStartPositionPercent() const {
-  return courseNoSpeed() ? AppSettings::kDefaultNoteStartPositionPercent
-                         : context.settings.noteStartPositionPercent;
+  if (courseNoSpeed()) {
+    return AppSettings::kDefaultNoteStartPositionPercent;
+  }
+  if (options.replayPlayback != nullptr) {
+    return options.replayPlayback->setup.laneCoverEnabled
+               ? options.replayPlayback->setup.initialLaneCoverPercent
+               : 0;
+  }
+  return context.settings.noteStartPositionPercent;
 }
 
 bool GamePlayScene::shouldRecordReplay() const {
@@ -3299,7 +3324,11 @@ void GamePlayScene::update(float dt) {
   }
   touchVisualizerLoaded = true;
   if (isReplayPlayback()) {
-    processReplayEvents(gameplayTimeMicros);
+    if (replayPlaybackDriver != nullptr) {
+      replayPlaybackDriver->advanceTo(gameplayTimeMicros);
+    } else {
+      processReplayEvents(gameplayTimeMicros);
+    }
     processReplayLaneCoverEvents(gameplayTimeMicros);
   }
   if (preparationIndicatorActive(rawSongTimeMicros)) {
@@ -3649,6 +3678,7 @@ void GamePlayScene::cleanupScene() {
   }
   ownedInputHandler.reset();
   inputHandler = nullptr;
+  replayPlaybackDriver.reset();
   ownedLaneInputController.reset();
   laneInputController = nullptr;
   hellChargeGaugeBalanceMicros.clear();
@@ -3708,7 +3738,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     updateLaneStateText();
     if (result.keySoundNote != nullptr &&
         result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
-        !options.autoKeySound && !isReplayPlayback()) {
+        !options.autoKeySound && options.replayData == nullptr) {
       context.jukebox.playKeySound(result.keySoundNote->Wav);
     }
     if (result.hasReplayEvent) {
@@ -3723,7 +3753,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   updateLaneStateText();
   if (result.keySoundNote != nullptr &&
       result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
-      !options.autoKeySound && !isReplayPlayback()) {
+      !options.autoKeySound && options.replayData == nullptr) {
     context.jukebox.playKeySound(result.keySoundNote->Wav);
   }
   for (const auto &transaction : result.transactions) {
@@ -3804,7 +3834,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
   const long long visualNow = nowMicros();
   const long long judgedTime = getJudgementTimeMicros(time);
   const long long poorCutoff = judgedTime - latePoorTiming;
-  const bool replayPlayback = isReplayPlayback();
+  const bool legacyReplayPlayback = options.replayData != nullptr;
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
     const auto &measure = measures[i];
@@ -3818,7 +3848,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
         if (isFirstMeasure) {
           state->passedTimelineCount++;
         }
-        if (replayPlayback) {
+        if (legacyReplayPlayback) {
           for (const auto &note : timeline->Notes) {
             if (note != nullptr && note->IsLandmineNote()) {
               expireGimmickNote(note, judgedTime);
@@ -3902,7 +3932,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           }
           if (note->IsLandmineNote()) {
             auto *landmine = static_cast<bms_parser::LandmineNote *>(note);
-            if (!replayPlayback && laneIsPressed(lanePressed, note->Lane)) {
+            if (!legacyReplayPlayback &&
+                laneIsPressed(lanePressed, note->Lane)) {
               detonateLandmine(landmine, time, judgedTime);
             } else {
               expireGimmickNote(landmine, judgedTime);
@@ -3941,7 +3972,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
               continue;
             }
           }
-          if (replayPlayback) {
+          if (legacyReplayPlayback) {
             continue;
           }
           if (options.autoPlay) // NormalNote or LongNote's head
@@ -3958,7 +3989,8 @@ void GamePlayScene::checkPassedTimeline(long long time) {
           if (note == nullptr || note->IsDead) {
             continue;
           }
-          if (!replayPlayback && laneIsPressed(lanePressed, note->Lane)) {
+          if (!legacyReplayPlayback &&
+              laneIsPressed(lanePressed, note->Lane)) {
             detonateLandmine(note, time, judgedTime);
           } else {
             expireGimmickNote(note, judgedTime);
@@ -4029,8 +4061,25 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
 }
 
 void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
-  if (!isReplayPlayback() || options.replayData == nullptr ||
-      renderer == nullptr) {
+  if (!isReplayPlayback() || renderer == nullptr) {
+    return;
+  }
+
+  if (options.replayPlayback != nullptr) {
+    const auto &events = options.replayPlayback->laneCoverEvents;
+    while (replayLaneCoverCursor < events.size() &&
+           events[replayLaneCoverCursor].songTimeMicros <=
+               gameplayTimeMicros) {
+      const auto &event = events[replayLaneCoverCursor];
+      if (practiceInputAllowed(event.songTimeMicros)) {
+        renderer->applyLaneCoverState(event.noteStartPositionPercent,
+                                      event.resetVisibleTimeReference);
+      }
+      ++replayLaneCoverCursor;
+    }
+    return;
+  }
+  if (options.replayData == nullptr) {
     return;
   }
 
@@ -4042,6 +4091,25 @@ void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
     }
     replayLaneCoverCursor++;
   }
+}
+
+void GamePlayScene::initializeRawReplayPlayback() {
+  if (options.replayPlayback == nullptr || laneInputController == nullptr) {
+    return;
+  }
+  replayPlaybackDriver = std::make_unique<replay::ReplayPlaybackDriver>(
+      *options.replayPlayback, *this,
+      [this](const replay::LogicalControl &control, bool pressed) {
+        const input::LogicalActionKind kind =
+            control.kind == replay::LogicalControlKind::Start
+                ? input::LogicalActionKind::Start
+                : input::LogicalActionKind::Select;
+        handleLogicalInputCommand({.scope = {.player = control.player,
+                                             .keyMode = chart->Meta.KeyMode},
+                                   .action = {.kind = kind, .lane = 0},
+                                   .pressed = pressed,
+                                   .steadyTimestampMicros = nowMicros()});
+      });
 }
 
 void GamePlayScene::applyReplayLaneCoverEvent(
@@ -4571,7 +4639,7 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
     return JudgeResult(None, 0);
   }
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
-      !isReplayPlayback()) {
+      options.replayData == nullptr) {
     context.jukebox.playKeySound(note->Wav);
   }
   const JudgeResult judgeResult = precomputedJudge != nullptr

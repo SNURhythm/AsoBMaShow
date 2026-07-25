@@ -2,7 +2,6 @@
 
 #include "CourseConstraintUtils.h"
 #include "PlayOptionUtils.h"
-#include "ReplayResultStateBuilder.h"
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
@@ -11,224 +10,190 @@
 namespace result_recall {
 namespace {
 
-ReplayChartLoader effectiveLoader(ReplayChartLoader loader) {
+ResultChartLoader effectiveLoader(ResultChartLoader loader) {
   if (loader) {
     return loader;
   }
-  return [](const ReplayData &replay, std::atomic_bool &cancelled) {
-    std::filesystem::path path = replay.chartMeta.BmsPath;
+  return [](const result_persistence::PersistedChartResult &result,
+            std::atomic_bool &cancelled) {
+    std::filesystem::path path = result.score.chartPath;
     chart_storage_identity::ToAbsolutePath(path);
-    return play_options::prepareReplayChart(path, replay, cancelled);
+    return play_options::parseChart(path, cancelled, "saved result");
   };
 }
 
-bool replayOutcomeMatches(const bms_parser::ChartMeta &meta,
-                          const RhythmState &state,
-                          const ReplayData &replay) {
-  const bool fullCombo = meta.TotalNotes > 0 && state.comboBreak == 0 &&
-                         state.maxCombo >= meta.TotalNotes;
-  const int reconstructedClear = clear_policy::fullComboRankForPlayback(
-      state.getClearTypeRank(), fullCombo, replay.provenance.playback);
-  return state.getScore() == replay.finalScore &&
-         state.maxCombo == replay.maxCombo &&
-         reconstructedClear == replay.clearType;
+GameplayRuleset rulesetFor(const ScoreProvenance &provenance) {
+  if (isSupportedRulesetDescriptor(provenance.ruleset)) {
+    return gameplayRulesetFromId(provenance.ruleset.id)
+        .value_or(GameplayRuleset::Beatoraja);
+  }
+  return GameplayRuleset::Beatoraja;
 }
 
-struct HistoricalIrBuildOutcome {
-  std::optional<HistoricalIrContext> value;
-  std::string diagnostic;
-};
+void applyStoredMeta(bms_parser::ChartMeta &meta,
+                     const result_persistence::PersistedChartResult &result) {
+  const auto &score = result.score;
+  meta.BmsPath = score.chartPath;
+  meta.MD5 = score.chartMd5;
+  meta.SHA256 = score.chartSha256;
+  meta.Title = score.chartTitle;
+  meta.Artist = score.chartArtist;
+  meta.KeyMode = result.keyMode;
+  meta.TotalNotes = score.maxScore / 2;
+  meta.LnMode = score.longNoteMode;
+}
 
-HistoricalIrBuildOutcome historicalIrFor(const ReplayResultRecord &record,
-                                         const bms_parser::ChartMeta &meta,
-                                         const RhythmState &state) {
-  if (!record.attemptId.has_value()) {
-    return {.diagnostic =
-                "IR verification failed because the saved result has no "
-                "attempt identity. This score cannot be uploaded safely."};
-  }
-  if (!record.attemptFingerprint.has_value() ||
-      record.attemptFingerprint->empty()) {
-    return {.diagnostic =
-                "IR verification failed because the saved result has no "
-                "integrity fingerprint. This score cannot be uploaded "
-                "safely."};
-  }
-  if (record.playedAtUnixMillis <= 0) {
-    return {.diagnostic =
-                "IR verification failed because the saved result has no play "
-                "completion time. This score cannot be uploaded safely."};
+RhythmState stateFrom(const result_persistence::PersistedChartResult &result,
+                      bms_parser::Chart &chart,
+                      GaugeProfile profile = GaugeProfile::Standard) {
+  const auto &score = result.score;
+  RhythmState state(&chart, false, rulesetFor(score.provenance), profile);
+  state.resetJudgeCounts();
+  state.judgeCount[PGreat] = score.pGreat;
+  state.judgeCount[Great] = score.great;
+  state.judgeCount[Good] = score.good;
+  state.judgeCount[Bad] = score.bad;
+  state.judgeCount[Poor] = score.poor;
+  state.judgeCount[Kpoor] = score.kPoor;
+  state.combo = score.comboBreak == 0 ? score.maxCombo : 0;
+  state.maxCombo = score.maxCombo;
+  state.comboBreak = score.comboBreak;
+  state.fastCount = score.fast;
+  state.slowCount = score.slow;
+  if (result.judgementTiming.has_value()) {
+    for (int index = 0; index < JudgementCount; ++index) {
+      state.judgementFastSlowCount[static_cast<Judgement>(index)] =
+          result.judgementTiming->byJudgement[static_cast<std::size_t>(index)];
+    }
   }
 
-  std::string diagnostic;
-  auto attempt = legacy_result_persistence::makeLegacyChartResultAttempt(
-      *record.attemptId, meta, state, record.replay.provenance,
-      record.replay.chartMeta.LnMode, record.replay, diagnostic);
-  if (!attempt.has_value()) {
-    const std::string invariant =
-        diagnostic.empty()
-            ? "canonical score attempt could not be reconstructed"
-            : diagnostic;
-    return {.diagnostic =
-                "IR verification failed: " + invariant +
-                ". The saved replay no longer reproduces the original score, "
-                "so it cannot be uploaded safely."};
-  }
-  if (attempt->payloadFingerprint != *record.attemptFingerprint) {
-    return {.diagnostic =
-                "IR verification failed because the stored fingerprint "
-                "differs from the reconstructed score. The chart or replay "
-                "metadata may have changed since the score was saved, so it "
-                "cannot be uploaded safely."};
-  }
-  result_persistence::PersistedChartResult persisted{
-      .attemptId = attempt->attemptId,
-      .score = attempt->score,
-      .keyMode = meta.KeyMode,
-      .adoptedGaugeHistory = attempt->adoptedGaugeHistory,
-      .judgementTiming = attempt->judgementTiming,
-      .playedAtUnixMillis = record.playedAtUnixMillis,
+  const GaugeType recordedGauge = score.provenance.gaugeType;
+  state.gaugeType = recordedGauge;
+  state.selectedGaugeType = recordedGauge;
+  state.currentGauge = score.finalGauge;
+  state.gaugeValues[gaugeTypeIndex(recordedGauge)] = score.finalGauge;
+  state.gaugeHistory = result.adoptedGaugeHistory;
+  state.gaugeHistoryFor(recordedGauge) = result.adoptedGaugeHistory;
+  state.restoreReadOnlyResultClearType(score.clearType);
+  return state;
+}
+
+result_persistence::PersistedChartResult stageResultFor(
+    const result_persistence::PersistedCourseResult &course,
+    const result_persistence::PersistedCourseStageResult &stage) {
+  return {
+      .score = stage.score,
+      .keyMode = stage.keyMode,
+      .adoptedGaugeHistory = stage.adoptedGaugeHistory,
+      .judgementTiming = stage.judgementTiming,
+      .playedAtUnixMillis = course.playedAtUnixMillis,
   };
-  persisted.resultFingerprint =
-      result_persistence::resultFingerprint(persisted);
-  auto submission = ir::makeIrSubmission(persisted);
-  if (!submission.value.has_value()) {
-    const std::string invariant =
-        submission.diagnostic.empty()
-            ? "canonical submission construction failed"
-            : submission.diagnostic;
-    return {.diagnostic = "IR submission validation failed: " + invariant +
-                          ". This score cannot be uploaded safely."};
-  }
-
-  auto attemptPtr =
-      std::make_shared<
-          const legacy_result_persistence::LegacyChartResultAttempt>(
-          std::move(*attempt));
-  auto submissionPtr = std::make_shared<const ir::IrSubmission>(
-      std::move(*submission.value));
-  result_persistence::SaveOutcome saved{
-      .state = result_persistence::SaveState::Saved,
-      .receipt = result_persistence::StageReceipt{
-          .attemptId = attemptPtr->attemptId,
-          .resultId = record.replay.id,
-          .createdAt = record.replay.createdAt,
-          .scorePending = false}};
-  return {.value = HistoricalIrContext{.attempt = std::move(attemptPtr),
-                                       .submission = std::move(submissionPtr),
-                                       .saveOutcome = std::move(saved)}};
 }
 
 } // namespace
 
-ChartBuildOutcome BuildChartResult(ReplayResultRecord record,
-                                   std::atomic_bool &cancelled,
-                                   ReplayChartLoader loader) {
+ChartBuildOutcome BuildChartResult(
+    result_persistence::PersistedChartResult result,
+    std::atomic_bool &cancelled, ResultChartLoader loader) {
+  std::string diagnostic;
+  if (!result_persistence::validatePersistedChartResult(result, diagnostic) ||
+      result.resultFingerprint.empty()) {
+    return {.diagnostic =
+                "saved chart result is invalid: " +
+                (diagnostic.empty() ? std::string("fingerprint is missing")
+                                    : diagnostic)};
+  }
+  if (cancelled.load()) {
+    return {.diagnostic = "saved chart is unavailable"};
+  }
+
   try {
     auto loadChart = effectiveLoader(std::move(loader));
-    auto chart = loadChart(record.replay, cancelled);
+    auto chart = loadChart(result, cancelled);
     if (chart == nullptr || cancelled.load()) {
       return {.diagnostic = "saved chart is unavailable"};
     }
-
-    record.replay.chartMeta = chart->Meta;
-    RhythmState state =
-        replay_result::BuildResultState(*chart, record.replay);
-    if (!replayOutcomeMatches(chart->Meta, state, record.replay)) {
-      return {.diagnostic = "saved chart outcome does not match"};
-    }
-    auto historicalIr = historicalIrFor(record, chart->Meta, state);
+    applyStoredMeta(chart->Meta, result);
+    RhythmState state = stateFrom(result, *chart);
     return {.value = ChartResult{.chart = std::move(chart),
-                                 .replay = std::move(record.replay),
-                                 .state = std::move(state),
-                                 .historicalIr = std::move(historicalIr.value),
-                                 .historicalIrDiagnostic =
-                                     std::move(historicalIr.diagnostic)}};
+                                 .result = std::move(result),
+                                 .state = std::move(state)}};
   } catch (const std::exception &) {
-    return {.diagnostic = "saved chart result could not be reconstructed"};
+    return {.diagnostic = "saved chart result could not be loaded"};
   } catch (...) {
-    return {.diagnostic = "saved chart result could not be reconstructed"};
+    return {.diagnostic = "saved chart result could not be loaded"};
   }
 }
 
-CourseBuildOutcome BuildCourseResult(CourseReplayData replay,
-                                     std::atomic_bool &cancelled,
-                                     ReplayChartLoader loader) {
-  if (replay.stages.empty() || replay.completedCharts <= 0 ||
-      replay.totalCharts <= 0 ||
-      replay.stages.size() !=
-          static_cast<std::size_t>(replay.completedCharts) ||
-      replay.completedCharts > replay.totalCharts ||
-      replay.stages.size() > static_cast<std::size_t>(
-                                 replay_summary_scan::
-                                     kMaxCourseStagesPerCandidate)) {
-    return {.diagnostic = "saved course stage count is invalid"};
+CourseBuildOutcome BuildCourseResult(
+    result_persistence::PersistedCourseResult result,
+    std::atomic_bool &cancelled, ResultChartLoader loader) {
+  std::string diagnostic;
+  if (!result_persistence::validatePersistedCourseResult(result, diagnostic) ||
+      result.resultFingerprint.empty()) {
+    return {.diagnostic =
+                "saved course result is invalid: " +
+                (diagnostic.empty() ? std::string("fingerprint is missing")
+                                    : diagnostic)};
+  }
+  if (cancelled.load()) {
+    return {.diagnostic = "saved course stage is unavailable"};
   }
 
   try {
     auto loadChart = effectiveLoader(std::move(loader));
     auto session = std::make_shared<CoursePlaySession>();
-    session->courseId = replay.courseId;
-    session->courseKey = replay.courseKey;
-    session->courseName = replay.courseName;
-    session->courseGroupName = replay.courseGroupName;
-    session->constraintJson = replay.constraintJson;
-    session->snapshotRulesetFromReplay(replay.stages.front().replay);
+    session->courseId = result.legacyCourseId;
+    session->courseKey = result.courseKey;
+    session->courseName = result.courseName;
+    session->courseGroupName = result.courseGroupName;
+    session->constraintJson = result.constraintJson;
+    session->rulesetDescriptor = result.provenance.ruleset;
+    session->ruleset = rulesetFor(result.provenance);
     session->currentIndex = 0;
-    session->gaugeType = replay.initialGaugeType;
-    session->gaugeProfile = replay.gaugeProfile;
-    session->gaugeAutoShift = replay.gaugeAutoShift;
-    session->gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
-    session->longNoteMode = replay.longNoteMode;
+    session->gaugeType = result.initialGaugeType;
+    session->gaugeProfile = result.gaugeProfile;
+    session->gaugeAutoShift = result.gaugeAutoShift;
+    session->gaugeAutoShiftLowerBound = result.gaugeAutoShiftLowerBound;
+    session->longNoteMode = result.longNoteMode;
     session->constraints =
-        courseConstraintSettingsFromJson(replay.constraintJson).rules;
-    session->requestedPlayOption = replay.requestedPlayOption;
-    session->assistOption = replay.assistOption;
+        courseConstraintSettingsFromJson(result.constraintJson).rules;
+    session->requestedPlayOption = result.requestedPlayOption;
+    session->playOption = result.requestedPlayOption;
+    session->assistOption = result.assistOption;
     session->autoKeySound = false;
     session->courseReplayPlayback = false;
-    session->courseReplaySaved = true;
+    session->courseReplaySaved = false;
     session->courseScoreSaved = true;
-    session->savedCourseReplayId = replay.id;
-    session->entries.reserve(replay.stages.size());
-    session->completedResults.reserve(replay.stages.size());
-    session->ownedResultBrowseCharts.reserve(replay.stages.size());
-    session->replayStages.reserve(replay.stages.size());
+    session->savedCourseReplayId = result.resultId;
+    session->entries.reserve(result.stages.size());
+    session->completedResults.reserve(result.stages.size());
+    session->ownedResultBrowseCharts.reserve(result.stages.size());
 
-    std::optional<GaugeStateSnapshot> carriedGauge;
-    for (std::size_t index = 0; index < replay.stages.size(); ++index) {
-      ReplayData &stageReplay = replay.stages[index].replay;
-      auto loadedChart = loadChart(stageReplay, cancelled);
+    for (const auto &stage : result.stages) {
+      auto persistedStage = stageResultFor(result, stage);
+      auto loadedChart = loadChart(persistedStage, cancelled);
       if (loadedChart == nullptr || cancelled.load()) {
         return {.diagnostic = "saved course stage is unavailable"};
       }
-      stageReplay.chartMeta.BmsPath = loadedChart->Meta.BmsPath;
+      applyStoredMeta(loadedChart->Meta, persistedStage);
       auto chart = std::shared_ptr<bms_parser::Chart>(std::move(loadedChart));
-      RhythmState state = replay_result::BuildResultState(
-          *chart, stageReplay, replay.gaugeProfile,
-          carriedGauge.has_value() ? &*carriedGauge : nullptr,
-          session->carriedCombo, session->maxCombo);
-      if (!replayOutcomeMatches(chart->Meta, state, stageReplay)) {
-        return {.diagnostic = "saved course stage outcome does not match"};
-      }
-
+      RhythmState state = stateFrom(persistedStage, *chart,
+                                    result.gaugeProfile);
       session->entries.push_back({.meta = chart->Meta});
       session->completedResults.emplace_back(chart->Meta, state);
-      session->recordStageProvenance(index, stageReplay.provenance);
-      session->replayStages.push_back(replay.stages[index]);
-      carriedGauge = state.gaugeSnapshot();
-      session->carriedGauge = carriedGauge;
-      session->carriedCombo = state.combo;
-      session->maxCombo = std::max(session->maxCombo, state.maxCombo);
+      session->recordStageProvenance(
+          static_cast<std::size_t>(stage.stageIndex), stage.score.provenance);
+      session->maxCombo = std::max(session->maxCombo, stage.score.maxCombo);
       session->ownedResultBrowseCharts.push_back(std::move(chart));
     }
 
-    session->courseReplayData =
-        std::make_shared<CourseReplayData>(std::move(replay));
-    return {.value = CourseResult{.session = std::move(session)}};
+    return {.value = CourseResult{.session = std::move(session),
+                                  .result = std::move(result)}};
   } catch (const std::exception &) {
-    return {.diagnostic = "saved course result could not be reconstructed"};
+    return {.diagnostic = "saved course result could not be loaded"};
   } catch (...) {
-    return {.diagnostic = "saved course result could not be reconstructed"};
+    return {.diagnostic = "saved course result could not be loaded"};
   }
 }
 
