@@ -662,7 +662,11 @@ void testExactFolderQuery() {
         "('packs/pack.zip/A/no-folder.bms','md5-archive-no-folder',"
         "'sha-archive-no-folder','Archive No Folder','','','','','',10,0,0),"
         "('packs/pack.zip/B/seven.bms','md5-seven','sha-seven','Seven','','',"
-        "'','','packs/pack.zip/B',7,0,0)"));
+        "'','','packs/pack.zip/B',7,0,0),"
+        "('C:\\library\\A\\windows.bms','md5-windows','sha-windows',"
+        "'Windows','','','','','',11,0,0),"
+        "('C:\\library\\A\\nested\\deep.bms','md5-windows-nested',"
+        "'sha-windows-nested','Windows Nested','','','','','',12,0,0)"));
   }
 
   auto session = charts.OpenSession();
@@ -725,6 +729,19 @@ void testExactFolderQuery() {
                                    "packs/pack.zip/A/no-folder.bms"}));
   assert(session->FindChartMetaIndex(query,
                                      "packs/pack.zip/A/five.bms") == 1);
+
+  query = {};
+  query.exactFolder = std::filesystem::path(R"(C:\library\A)");
+  assert(queryPaths(query) ==
+         std::vector<std::string>({R"(C:\library\A\windows.bms)"}));
+  assert(session->CountChartMeta(query) == 1);
+  assert(session->FindChartMetaIndex(
+             query, std::filesystem::path(R"(C:\library\A\windows.bms)")) ==
+         0);
+  assert(session->FindChartMetaIndex(
+             query,
+             std::filesystem::path(R"(C:\library\A\nested\deep.bms)")) ==
+         -1);
 }
 
 void testChartMigrationCompatibilityMatrix() {

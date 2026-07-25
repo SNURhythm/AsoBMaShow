@@ -1,6 +1,7 @@
 #pragma once
 
 #include "OverlayPortal.h"
+#include "ScrollView.h"
 #include "View.h"
 
 #include <functional>
@@ -34,7 +35,8 @@ private:
   Callbacks callbacks;
   OverlayAnchor anchor;
   std::vector<Action> actions;
-  View *panel = nullptr;
+  ScrollView *panel = nullptr;
+  View *actionList = nullptr;
   int viewportWidth = 0;
   int viewportHeight = 0;
   int requestedMenuWidth = 210;

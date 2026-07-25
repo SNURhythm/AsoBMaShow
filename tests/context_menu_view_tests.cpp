@@ -106,9 +106,41 @@ int main() {
     menu.show({.x = 100, .y = 100, .width = 90, .height = 58},
               {{.id = "reveal", .label = "Reveal File"}}, 210);
     assert(portal.isPresented(&menu));
+    menu.dismiss();
+
+    selections.clear();
+    menu.setViewportSize(240, 180);
+    menu.show({.x = 80, .y = 70, .width = 80, .height = 30},
+              {{.id = "action-0", .label = "Action 0"},
+               {.id = "action-1", .label = "Action 1"},
+               {.id = "action-2", .label = "Action 2"},
+               {.id = "action-3", .label = "Action 3"},
+               {.id = "action-4", .label = "Action 4"},
+               {.id = "action-5", .label = "Action 5"}},
+              180);
+    assert(menu.panel->getY() + menu.panel->getHeight() <= 170);
+
+    const auto sendFinger = [&](Uint32 type, SDL_FingerID fingerId, float x,
+                                float y) {
+      SDL_Event event{};
+      event.type = type;
+      event.tfinger.fingerId = fingerId;
+      event.tfinger.x = x / static_cast<float>(rendering::window_width);
+      event.tfinger.y = y / static_cast<float>(rendering::window_height);
+      assert(!menu.handleEvents(event));
+    };
+    for (SDL_FingerID fingerId = 1; fingerId <= 5; ++fingerId) {
+      sendFinger(SDL_FINGERDOWN, fingerId, 100.0F, 160.0F);
+      sendFinger(SDL_FINGERMOTION, fingerId, 100.0F, 110.0F);
+      sendFinger(SDL_FINGERUP, fingerId, 100.0F, 110.0F);
+    }
+    sendFinger(SDL_FINGERDOWN, 6, 100.0F, 144.0F);
+    sendFinger(SDL_FINGERUP, 6, 100.0F, 144.0F);
+    assert(selections == std::vector<std::string>{"action-5"});
+    assert(!menu.isOpen());
   }
   assert(!portal.isPresented(identity));
-  assert(openChanges.back() == true);
+  assert(openChanges.back() == false);
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
 }

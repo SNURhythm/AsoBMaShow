@@ -1,6 +1,7 @@
 #include "ContextMenuView.h"
 
 #include "Button.h"
+#include "ScrollView.h"
 #include "TextView.h"
 #include "UiTheme.h"
 
@@ -62,17 +63,20 @@ ContextMenuView::ContextMenuView(OverlayPortal *portalValue,
   viewportWidth = rendering::window_width;
   viewportHeight = rendering::window_height;
 
-  panel = new View();
+  panel = new ScrollView();
   panel->setPositionType(YGPositionTypeAbsolute);
-  panel->setFlexDirection(FlexDirection::Column);
-  panel->setAlignItems(YGAlignStretch);
-  panel->setPadding(Edge::All, kPanelPadding);
-  panel->setGap(kActionGap);
+  panel->setContentPadding(Edge::All, kPanelPadding);
   panel->setThemedBackgroundColor(ui_theme::panelStrong);
   panel->setThemedBorderColor(ui_theme::hairlineStrong);
   panel->setBorderWidth(1);
   panel->setCornerRadius(ui_theme::controlRadius());
   panel->setThemedShadow(ui_theme::backdrop, ui_theme::kPanelShadow);
+
+  actionList = new View();
+  actionList->setFlexDirection(FlexDirection::Column);
+  actionList->setAlignItems(YGAlignStretch);
+  actionList->setGap(kActionGap);
+  panel->setContentView(actionList);
   addView(panel);
 }
 
@@ -127,7 +131,7 @@ void ContextMenuView::setViewportSize(int width, int height) {
 }
 
 void ContextMenuView::rebuildActions() {
-  panel->clearChildren();
+  actionList->clearChildren();
   for (const auto &action : actions) {
     auto *button = new Button(0, 0, requestedMenuWidth, kActionHeight);
     button->setWidthPercent(100.0F);
@@ -154,8 +158,10 @@ void ContextMenuView::rebuildActions() {
     button->setContentView(text);
     button->setOnClickListener(
         [this, id = action.id]() { dispatchAction(id); });
-    panel->addView(button);
+    actionList->addView(button);
   }
+  panel->setScrollOffset(0.0F);
+  panel->refreshContentLayout();
 }
 
 void ContextMenuView::updatePlacement() {
@@ -173,6 +179,7 @@ void ContextMenuView::updatePlacement() {
   panel->setPositionNoLayout(placement.x, placement.y,
                              YGPositionTypeAbsolute);
   panel->setSize(placement.width, placement.height);
+  panel->refreshContentLayout();
 }
 
 void ContextMenuView::dispatchAction(const std::string &id) {

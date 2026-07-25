@@ -1648,9 +1648,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/context_menu_view_tests.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/ContextMenuView.cpp
+        src/view/ScrollView.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
