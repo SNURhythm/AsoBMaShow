@@ -30,7 +30,7 @@ int main() {
   }
 
   session.beginAttempt();
-  ReplayData completedReplay;
+  JudgedPlaybackData completedReplay;
   completedReplay.events.push_back({.action = ReplayEventAction::Press,
                                     .lane = 1,
                                     .noteTimeMicros = 1'000'000,
@@ -61,7 +61,7 @@ int main() {
   practice::Session ghostSession(configuration);
   std::vector<std::size_t> publishedEventCounts;
   std::optional<std::size_t> visibleGhostEventCount;
-  auto applyGhostUpdate = [&](const ReplayData *completedAttempt) {
+  auto applyGhostUpdate = [&](const JudgedPlaybackData *completedAttempt) {
     if (completedAttempt != nullptr) {
       publishedEventCounts.push_back(completedAttempt->events.size());
       if (completedAttempt->events.empty()) {
@@ -73,22 +73,22 @@ int main() {
   };
 
   ghostSession.beginAttempt();
-  ReplayData nonEmptyGhost;
+  JudgedPlaybackData nonEmptyGhost;
   nonEmptyGhost.events.push_back({.action = ReplayEventAction::Press,
                                   .lane = 2,
                                   .noteTimeMicros = 2'000'000});
   ghostSession.completeAttempt(std::move(nonEmptyGhost));
   applyGhostUpdate(practice::completedAttemptForGhost(
-      &ghostSession, ReplayData{}, true));
+      &ghostSession, JudgedPlaybackData{}, true));
   if (!expect(visibleGhostEventCount == 1,
               "non-empty completion installs visible ghost")) {
     return 1;
   }
 
   ghostSession.beginAttempt();
-  ghostSession.completeAttempt(ReplayData{});
+  ghostSession.completeAttempt(JudgedPlaybackData{});
   applyGhostUpdate(practice::completedAttemptForGhost(
-      &ghostSession, ReplayData{}, true));
+      &ghostSession, JudgedPlaybackData{}, true));
   if (!expect(!visibleGhostEventCount.has_value(),
               "empty completion clears visible ghost")) {
     return 1;
@@ -97,7 +97,7 @@ int main() {
   ghostSession.beginAttempt();
   ghostSession.abandonAttempt();
   applyGhostUpdate(practice::completedAttemptForGhost(
-      &ghostSession, ReplayData{}, false));
+      &ghostSession, JudgedPlaybackData{}, false));
 
   if (!expect(publishedEventCounts.size() == 2,
               "abandoned attempt publishes no ghost update") ||
@@ -112,7 +112,7 @@ int main() {
 
   visibleGhostEventCount = 7;
   applyGhostUpdate(practice::completedAttemptForGhost(
-      nullptr, ReplayData{}, true));
+      nullptr, JudgedPlaybackData{}, true));
   if (!expect(visibleGhostEventCount == 7,
               "sessionless autoplay empty completion preserves ghost") ||
       !expect(publishedEventCounts.size() == 2,

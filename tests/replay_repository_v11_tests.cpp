@@ -171,7 +171,7 @@ ReplayFileReference referenceFor(const ReplayFileReservation &reservation,
           .relativePath = reservation.relativePath,
           .contentSha256 = repeated(hash, 64),
           .compressedSize = 1234,
-          .codecVersion = 1};
+          .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion};
 }
 
 replay::ReplayPlaybackData samplePlayback() {
@@ -438,7 +438,7 @@ void testCompactStageAndIndependentReads() {
                   "compressed_size,codec_version) VALUES(" +
                       std::to_string(resultId) + ",NULL,'" + repeated('d', 64) +
                       "',77,'replay/association-conflict.brd','" +
-                      repeated('e', 64) + "',1,1)"),
+                      repeated('e', 64) + "',1,2)"),
          "one compact result cannot acquire a second replay association");
 }
 

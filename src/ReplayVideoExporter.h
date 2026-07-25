@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "ResultPersistenceModel.h"
 #include "replay/ReplayPlaybackData.h"
 #include "context.h"
@@ -41,7 +41,7 @@ class ReplayVideoExporter {
 public:
   static ReplayVideoExportResult
   Export(ApplicationContext &context, bms_parser::Chart *chart,
-         const ReplayData &replay,
+         const JudgedPlaybackData &replay,
          const ReplayVideoExportOptions &options = {});
   static ReplayVideoExportResult Export(
       ApplicationContext &context, bms_parser::Chart *chart,
@@ -49,7 +49,7 @@ public:
       const result_persistence::PersistedChartResult &result,
       const ReplayVideoExportOptions &options = {});
   static ReplayVideoExportResult
-  ExportCourseReplay(ApplicationContext &context, const CourseReplayData &replay,
+  ExportCourseReplay(ApplicationContext &context, const JudgedCoursePlaybackData &replay,
                      const ReplayVideoExportOptions &options = {});
   static ReplayVideoExportResult ExportCourseReplay(
       ApplicationContext &context,

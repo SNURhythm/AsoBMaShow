@@ -75,7 +75,7 @@ bms_parser::Chart makeChart() {
   return chart;
 }
 
-std::vector<JudgeWindowProvenance> windows(long long pGreatEarly = -10'000) {
+std::vector<analysis::JudgedWindow> windows(long long pGreatEarly = -10'000) {
   return {
       {.judgement = PGreat,
        .earlyMicros = pGreatEarly,
@@ -89,9 +89,9 @@ std::vector<JudgeWindowProvenance> windows(long long pGreatEarly = -10'000) {
   };
 }
 
-ScoreStageProvenance
-provenanceStage(std::string sha256, std::string md5,
-                std::vector<JudgeWindowProvenance> effectiveWindows) {
+analysis::PlaybackPolicySnapshot
+policySnapshot(std::string sha256, std::string md5,
+               std::vector<analysis::JudgedWindow> effectiveWindows) {
   return {
       .chartMd5 = std::move(md5),
       .chartSha256 = std::move(sha256),
@@ -99,16 +99,17 @@ provenanceStage(std::string sha256, std::string md5,
   };
 }
 
-ReplayData makeReplay() {
-  ReplayData replay;
-  replay.provenance.playback = {.percent = 75,
+JudgedPlaybackData makeReplay() {
+  JudgedPlaybackData replay;
+  replay.context.playback = {.percent = 75,
                                 .mode = audio::PlaybackMode::PitchShift};
-  replay.provenance.judgeWindowScalePercent = 80;
-  replay.provenance.stages = {{
+  replay.context.judgeWindowScalePercent = 80;
+  replay.context.ruleset = RulesetDescriptor::Current();
+  replay.context.policy = analysis::PlaybackPolicySnapshot{
       .chartMd5 = std::string(32, 'b'),
       .chartSha256 = std::string(64, 'a'),
       .effectiveJudgeWindows = windows(),
-  }};
+  };
   return replay;
 }
 
@@ -239,7 +240,7 @@ void testEmptyAnalysisHasNullStatistics() {
 void testHistogramUsesSparseStableBins() {
   auto chart = makeChart();
   auto replay = makeReplay();
-  replay.provenance.playback.percent = 100;
+  replay.context.playback.percent = 100;
   replay.events = {
       event(ReplayEventAction::Press, 3, 0, Great, -1'000'000),
       event(ReplayEventAction::Press, 3, 0, Great, -1),
@@ -270,7 +271,7 @@ void testHistogramSeparatesOverflowFromFiniteEndpointBins() {
 
   auto chart = makeChart();
   auto replay = makeReplay();
-  replay.provenance.playback.percent = 100;
+  replay.context.playback.percent = 100;
   replay.events = {
       event(ReplayEventAction::Press, 3, 0, Great,
             std::numeric_limits<long long>::min()),
@@ -305,16 +306,16 @@ void testCompatibleAttemptGroups() {
   auto compatible = first;
   compatible.events.front().diffMicros = 7'500;
   auto differentRate = first;
-  differentRate.provenance.playback.percent = 100;
+  differentRate.context.playback.percent = 100;
   auto differentScale = first;
-  differentScale.provenance.judgeWindowScalePercent = 100;
+  differentScale.context.judgeWindowScalePercent = 100;
   auto differentWindows = first;
-  differentWindows.provenance.stages.front().effectiveJudgeWindows =
+  differentWindows.context.policy->effectiveJudgeWindows =
       windows(-10'001);
   auto differentMode = first;
-  differentMode.provenance.playback.mode = audio::PlaybackMode::TimeStretch;
+  differentMode.context.playback.mode = audio::PlaybackMode::TimeStretch;
 
-  const std::vector<ReplayData> attempts = {
+  const std::vector<JudgedPlaybackData> attempts = {
       first,          compatible,       differentRate,
       differentScale, differentWindows, differentMode};
   const auto groups = practice::analyzeCompatibleAttempts(chart, attempts);
@@ -339,13 +340,10 @@ void testCompatibleAttemptGroups() {
 void testTimingConditionsUseStrictDurableStageIdentity() {
   auto chart = makeChart();
   auto caseVariant = makeReplay();
-  caseVariant.provenance.stages = {
-      provenanceStage(std::string(64, 'A'), std::string(32, 'B'),
-                      windows(-11'000)),
-      provenanceStage(std::string(64, 'c'), std::string(32, 'd'),
-                      windows(-12'000)),
-  };
-  const std::vector<ReplayData> caseAttempts = {caseVariant};
+  caseVariant.context.policy =
+      policySnapshot(std::string(64, 'A'), std::string(32, 'B'),
+                     windows(-11'000));
+  const std::vector<JudgedPlaybackData> caseAttempts = {caseVariant};
   const auto caseGroups =
       practice::analyzeCompatibleAttempts(chart, caseAttempts);
   require(caseGroups.size() == 1 &&
@@ -356,13 +354,10 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
           "durable stage hashes match case-insensitively");
 
   auto conflictingSha = makeReplay();
-  conflictingSha.provenance.stages = {
-      provenanceStage(std::string(64, 'c'), std::string(32, 'b'),
-                      windows(-13'000)),
-      provenanceStage(std::string(64, 'd'), std::string(32, 'e'),
-                      windows(-14'000)),
-  };
-  const std::vector<ReplayData> conflictAttempts = {conflictingSha};
+  conflictingSha.context.policy =
+      policySnapshot(std::string(64, 'c'), std::string(32, 'b'),
+                     windows(-13'000));
+  const std::vector<JudgedPlaybackData> conflictAttempts = {conflictingSha};
   const auto conflictGroups =
       practice::analyzeCompatibleAttempts(chart, conflictAttempts);
   require(conflictGroups.front().conditions.windowResolution ==
@@ -373,11 +368,9 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
   auto md5Chart = makeChart();
   md5Chart.Meta.SHA256.clear();
   auto md5Fallback = makeReplay();
-  md5Fallback.provenance.stages = {
-      provenanceStage({}, std::string(32, 'B'), windows(-15'000)),
-      provenanceStage({}, std::string(32, 'c'), windows(-16'000)),
-  };
-  const std::vector<ReplayData> md5Attempts = {md5Fallback};
+  md5Fallback.context.policy =
+      policySnapshot({}, std::string(32, 'B'), windows(-15'000));
+  const std::vector<JudgedPlaybackData> md5Attempts = {md5Fallback};
   const auto md5Groups =
       practice::analyzeCompatibleAttempts(md5Chart, md5Attempts);
   require(md5Groups.front().conditions.windowResolution ==
@@ -386,48 +379,38 @@ void testTimingConditionsUseStrictDurableStageIdentity() {
                   windows(-15'000),
           "MD5 is used when durable SHA-256 is unavailable");
 
-  auto ambiguous = makeReplay();
-  ambiguous.provenance.stages = {
-      provenanceStage(std::string(64, 'a'), std::string(32, 'b'),
-                      windows(-17'000)),
-      provenanceStage(std::string(64, 'A'), std::string(32, 'B'),
-                      windows(-18'000)),
-  };
-  const std::vector<ReplayData> ambiguousAttempts = {ambiguous};
-  const auto ambiguousGroups =
-      practice::analyzeCompatibleAttempts(chart, ambiguousAttempts);
-  require(ambiguousGroups.front().conditions.windowResolution ==
+  auto mismatched = makeReplay();
+  mismatched.context.policy =
+      policySnapshot(std::string(64, 'c'), std::string(32, 'd'),
+                     windows(-17'000));
+  const std::vector<JudgedPlaybackData> mismatchedAttempts = {mismatched};
+  const auto mismatchedGroups =
+      practice::analyzeCompatibleAttempts(chart, mismatchedAttempts);
+  require(mismatchedGroups.front().conditions.windowResolution ==
                   practice::TimingWindowResolution::Unresolved &&
-              ambiguousGroups.front().conditions.effectiveJudgeWindows.empty(),
-          "ambiguous durable stage identity selects no conditions");
+              mismatchedGroups.front().conditions.effectiveJudgeWindows.empty(),
+          "a mismatched analysis policy selects no timing conditions");
 }
 
 void testUnresolvedTimingConditionsAlwaysUseSingletonGroups() {
   auto chart = makeChart();
-  const auto useNeutralConditions = [](ReplayData &replay) {
-    replay.provenance.playback = {};
-    replay.provenance.judgeWindowScalePercent = 100;
+  const auto useNeutralConditions = [](JudgedPlaybackData &replay) {
+    replay.context.playback = {};
+    replay.context.judgeWindowScalePercent = 100;
   };
 
   auto ambiguousA = makeReplay();
   useNeutralConditions(ambiguousA);
-  ambiguousA.provenance.stages = {
-      provenanceStage(std::string(64, 'a'), std::string(32, 'b'),
-                      windows(-20'000)),
-      provenanceStage(std::string(64, 'A'), std::string(32, 'B'),
-                      windows(-21'000)),
-  };
+  ambiguousA.context.policy.reset();
   auto ambiguousB = ambiguousA;
-  ambiguousB.provenance.stages[0].effectiveJudgeWindows = windows(-22'000);
-  ambiguousB.provenance.stages[1].effectiveJudgeWindows = windows(-23'000);
   auto sameAmbiguousData = ambiguousA;
-  for (ReplayData *replay : {&ambiguousA, &ambiguousB, &sameAmbiguousData}) {
+  for (JudgedPlaybackData *replay : {&ambiguousA, &ambiguousB, &sameAmbiguousData}) {
     replay->events.push_back(
         event(ReplayEventAction::Press, 3, 0, Great, -1'000));
   }
 
-  ReplayData legacyA;
-  ReplayData legacyB;
+  JudgedPlaybackData legacyA;
+  JudgedPlaybackData legacyB;
 
   auto resolvedA = makeReplay();
   useNeutralConditions(resolvedA);
@@ -435,21 +418,21 @@ void testUnresolvedTimingConditionsAlwaysUseSingletonGroups() {
 
   auto unmatchedA = makeReplay();
   useNeutralConditions(unmatchedA);
-  unmatchedA.provenance.stages = {provenanceStage(
-      std::string(64, 'c'), std::string(32, 'd'), windows(-24'000))};
+  unmatchedA.context.policy = policySnapshot(
+      std::string(64, 'c'), std::string(32, 'd'), windows(-24'000));
   auto unmatchedB = unmatchedA;
   unmatchedA.events.push_back(
       event(ReplayEventAction::Press, 3, 0, Great, -2'000));
   unmatchedB.events = unmatchedA.events;
 
-  ReplayData currentWithoutStagesA;
-  currentWithoutStagesA.provenance.ruleset = RulesetDescriptor::Current();
+  JudgedPlaybackData currentWithoutStagesA;
+  currentWithoutStagesA.context.ruleset = RulesetDescriptor::Current();
   auto currentWithoutStagesB = currentWithoutStagesA;
   currentWithoutStagesA.events.push_back(
       event(ReplayEventAction::Press, 3, 0, Great, -3'000));
   currentWithoutStagesB.events = currentWithoutStagesA.events;
 
-  const std::vector<ReplayData> attempts = {
+  const std::vector<JudgedPlaybackData> attempts = {
       ambiguousA,
       ambiguousB,
       sameAmbiguousData,

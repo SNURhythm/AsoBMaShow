@@ -623,7 +623,7 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
       .compressedSize = static_cast<std::uint64_t>(integer(
           database.get(),
           "SELECT compressed_size FROM replay_files WHERE chart_result_id=42")),
-      .codecVersion = 1,
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
   };
   const auto decoded = store.load(metadata, codec);
   expect(decoded.chart.has_value(), "migrated BRD decodes as a chart replay");
@@ -702,7 +702,7 @@ void testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles() {
       .compressedSize = static_cast<std::uint64_t>(integer(
           database.get(),
           "SELECT compressed_size FROM replay_files WHERE course_result_id=77")),
-      .codecVersion = 1,
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
   };
   const auto decoded = store.load(metadata, codec);
   expect(decoded.course.has_value() && decoded.course->stages.size() == 1 &&

@@ -21,7 +21,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 using Bytes = std::vector<std::byte>;
 
-constexpr int kAsoSchemaVersion = 1;
+constexpr int kAsoSchemaVersion = 2;
 constexpr std::size_t kKeyRecordSize = 9;
 constexpr std::array<std::string_view, 10> kStockOptions = {
     "NORMAL", "MIRROR",   "RANDOM",  "R-RANDOM",  "S-RANDOM",
@@ -359,7 +359,9 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
       setup.initialLaneCoverPercent > 100) {
     return fail(diagnostic, "Replay initial lane cover is out of range");
   }
-  if (setup.playbackRatePercent <= 0 || setup.playbackRatePercent > 1000 ||
+  if (!audio::PlaybackRate{.percent = setup.playbackRatePercent,
+                           .mode = setup.playbackMode}
+           .valid() ||
       setup.judgeWindowScalePercent <= 0 ||
       setup.judgeWindowScalePercent > 1000 ||
       !std::isfinite(setup.startingGaugePercent) ||
@@ -369,10 +371,15 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   }
   const int gaugeProfile = static_cast<int>(setup.gaugeProfile);
   const int gaugeAutoShift = static_cast<int>(setup.gaugeAutoShift);
+  const int candidateSelection = static_cast<int>(setup.candidateSelection);
   if (gaugeProfile < static_cast<int>(GaugeProfile::Standard) ||
       gaugeProfile > static_cast<int>(GaugeProfile::Standard24Keys) ||
       gaugeAutoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
-      gaugeAutoShift > static_cast<int>(GaugeAutoShiftMode::BestClear)) {
+      gaugeAutoShift > static_cast<int>(GaugeAutoShiftMode::BestClear) ||
+      candidateSelection <
+          static_cast<int>(gameplay::CandidateSelectionMode::LR2) ||
+      candidateSelection >
+          static_cast<int>(gameplay::CandidateSelectionMode::Score)) {
     return fail(diagnostic, "Replay gauge setup is invalid");
   }
   return true;
@@ -401,6 +408,8 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
       {"playbackRulesetId", setup.playbackRulesetId},
       {"playbackRulesetRevision", setup.playbackRulesetRevision},
       {"playbackRatePercent", setup.playbackRatePercent},
+      {"playbackMode", static_cast<int>(setup.playbackMode)},
+      {"candidateSelection", static_cast<int>(setup.candidateSelection)},
       {"judgeWindowScalePercent", setup.judgeWindowScalePercent},
       {"startingGaugePercent", setup.startingGaugePercent},
       {"clubMode", setup.clubMode},
@@ -626,6 +635,8 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
   int profile = 0;
   int autoShift = 0;
   int lowerBound = 0;
+  int playbackMode = 0;
+  int candidateSelection = 0;
   if (!readRequired(source, "chartMd5", setup.chartMd5, diagnostic) ||
       !readRequired(source, "keyMode", setup.keyMode, diagnostic) ||
       !readRequired(source, "hasUndefinedLongNotes",
@@ -649,6 +660,9 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
                     setup.playbackRulesetRevision, diagnostic) ||
       !readRequired(source, "playbackRatePercent", setup.playbackRatePercent,
                     diagnostic) ||
+      !readRequired(source, "playbackMode", playbackMode, diagnostic) ||
+      !readRequired(source, "candidateSelection", candidateSelection,
+                    diagnostic) ||
       !readRequired(source, "judgeWindowScalePercent",
                     setup.judgeWindowScalePercent, diagnostic) ||
       !readRequired(source, "startingGaugePercent", setup.startingGaugePercent,
@@ -660,12 +674,21 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
       profile > static_cast<int>(GaugeProfile::Standard24Keys) ||
       autoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
       autoShift > static_cast<int>(GaugeAutoShiftMode::BestClear) ||
-      lowerBound < 0 || lowerBound >= static_cast<int>(kGaugeTypeCount)) {
-    return fail(diagnostic, "Replay extension gauge enum is out of range");
+      lowerBound < 0 || lowerBound >= static_cast<int>(kGaugeTypeCount) ||
+      playbackMode < static_cast<int>(audio::PlaybackMode::PitchShift) ||
+      playbackMode > static_cast<int>(audio::PlaybackMode::TimeStretch) ||
+      candidateSelection <
+          static_cast<int>(gameplay::CandidateSelectionMode::LR2) ||
+      candidateSelection >
+          static_cast<int>(gameplay::CandidateSelectionMode::Score)) {
+    return fail(diagnostic, "Replay extension setup enum is out of range");
   }
   setup.gaugeProfile = static_cast<GaugeProfile>(profile);
   setup.gaugeAutoShift = static_cast<GaugeAutoShiftMode>(autoShift);
   setup.gaugeAutoShiftLowerBound = gaugeTypeAtIndex(lowerBound);
+  setup.playbackMode = static_cast<audio::PlaybackMode>(playbackMode);
+  setup.candidateSelection =
+      static_cast<gameplay::CandidateSelectionMode>(candidateSelection);
   return validateSetup(setup, diagnostic);
 }
 
@@ -854,6 +877,11 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
                 "Replay stock setup contains an invalid identity or enum");
   }
   setup.initialGaugeType = gaugeTypeAtIndex(gauge);
+  setup.playbackRulesetId = "beatoraja";
+  setup.playbackRulesetRevision =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja).version;
+  setup.playbackMode = audio::PlaybackMode::PitchShift;
+  setup.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
 
   const auto rand = stage.find("rand");
   if (rand != stage.end()) {

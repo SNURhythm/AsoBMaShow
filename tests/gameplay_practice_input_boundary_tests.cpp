@@ -375,7 +375,7 @@ void testPressedCrossingClassicReplayAnalyticsStream() {
               lanePressed[1],
           "crossing classic tail is unavailable outside practice range");
 
-  ReplayData replay;
+  JudgedPlaybackData replay;
   replay.events.push_back({
       .action = press.replayEvent.action,
       .lane = press.replayEvent.lane,

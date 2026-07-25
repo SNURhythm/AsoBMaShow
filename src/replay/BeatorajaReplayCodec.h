@@ -31,6 +31,8 @@ struct ReplayDecodeOutcome {
 
 class BeatorajaReplayCodec {
 public:
+  static constexpr int kCodecVersion = 2;
+
   explicit BeatorajaReplayCodec(ReplayCodecLimits limits = {});
 
   [[nodiscard]] std::optional<std::vector<std::byte>>

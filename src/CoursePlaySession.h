@@ -1,7 +1,8 @@
 #pragma once
 
 #include "LongNoteModeUtils.h"
-#include "ReplayData.h"
+#include "ScoreProvenance.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
@@ -284,7 +285,7 @@ struct CoursePlaySession {
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
-  std::vector<CourseReplayStageData> replayStages;
+  std::vector<JudgedCoursePlaybackStage> replayStages;
   replay::CourseReplayPlaybackData recordedReplayPlayback;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   RulesetDescriptor rulesetDescriptor = RulesetDescriptor::Current();
@@ -311,7 +312,7 @@ struct CoursePlaySession {
   bool courseReplaySaved = false;
   std::string coursePersistenceAttemptId;
   int savedCourseReplayId = 0;
-  std::shared_ptr<CourseReplayData> courseReplayData = nullptr;
+  std::shared_ptr<JudgedCoursePlaybackData> courseReplayData = nullptr;
   std::shared_ptr<replay::CourseReplayPlaybackData> courseReplayPlaybackData =
       nullptr;
   std::optional<bool> replayTouchVisualizationEnabled;
@@ -321,29 +322,36 @@ struct CoursePlaySession {
     return currentIndex < entries.size();
   }
 
-  void snapshotRulesetFromReplay(const ReplayData &replay) {
-    if (replay.provenance.ruleset == RulesetDescriptor::Legacy()) {
+  void snapshotRulesetFromReplay(const JudgedPlaybackData &replay) {
+    if (replay.context.ruleset == RulesetDescriptor::Legacy()) {
       ruleset = GameplayRuleset::Beatoraja;
       rulesetDescriptor =
           RulesetDescriptor::For(GameplayRuleset::Beatoraja);
       return;
     }
-    rulesetDescriptor = replay.provenance.ruleset;
+    rulesetDescriptor = replay.context.ruleset;
     if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
       ruleset = *recorded;
     }
   }
 
-  void snapshotRulesetFromProvenance(const ScoreProvenance &provenance) {
-    if (provenance.ruleset == RulesetDescriptor::Legacy()) {
+  void snapshotRulesetFromPlayback(
+      const replay::ReplayPlaybackData &playback) {
+    const auto recorded =
+        gameplayRulesetFromId(playback.setup.playbackRulesetId);
+    if (!recorded.has_value()) {
       ruleset = GameplayRuleset::Beatoraja;
       rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
       return;
     }
-    rulesetDescriptor = provenance.ruleset;
-    if (const auto recorded = gameplayRulesetFromId(rulesetDescriptor.id)) {
+    const auto descriptor = RulesetDescriptor::For(*recorded);
+    if (descriptor.version != playback.setup.playbackRulesetRevision) {
       ruleset = *recorded;
+      rulesetDescriptor = RulesetDescriptor::Legacy();
+      return;
     }
+    ruleset = *recorded;
+    rulesetDescriptor = descriptor;
   }
 
   [[nodiscard]] bool hasNextChart() const {
@@ -377,21 +385,21 @@ struct CoursePlaySession {
         courseReplayPlaybackData, &courseReplayPlaybackData->stages[currentIndex]);
   }
 
-  [[nodiscard]] const CourseReplayStageData *
+  [[nodiscard]] const JudgedCoursePlaybackStage *
   courseReplayStage(std::size_t index) const {
     return courseReplayData != nullptr && index < courseReplayData->stages.size()
                ? &courseReplayData->stages[index]
                : nullptr;
   }
 
-  [[nodiscard]] std::shared_ptr<ReplayData>
+  [[nodiscard]] std::shared_ptr<JudgedPlaybackData>
   currentCourseReplayStageReplay() const {
     const auto *stage = courseReplayStage(currentIndex);
     return stage == nullptr ? nullptr
-                            : std::make_shared<ReplayData>(stage->replay);
+                            : std::make_shared<JudgedPlaybackData>(stage->replay);
   }
 
-  void applyReplayStagePlayOptions(const ReplayData &replay) {
+  void applyReplayStagePlayOptions(const JudgedPlaybackData &replay) {
     playOption = replay.playOption;
     playOptionSeed = replay.playOptionSeed;
     playOption2 = replay.playOption2;
@@ -406,7 +414,7 @@ struct CoursePlaySession {
     playOption2Seed = replay.setup.playOption2Seed;
   }
 
-  CourseReplayStageData &ensureReplayStage(std::size_t index) {
+  JudgedCoursePlaybackStage &ensureReplayStage(std::size_t index) {
     while (replayStages.size() <= index) {
       replayStages.emplace_back();
     }
@@ -441,7 +449,7 @@ struct CoursePlaySession {
     completedResults.emplace_back(meta, state);
   }
 
-  void recordReplayStage(const ReplayData &replay) {
+  void recordReplayStage(const JudgedPlaybackData &replay) {
     ensureReplayStage(currentIndex).replay = replay;
   }
 

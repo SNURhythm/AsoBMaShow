@@ -267,7 +267,7 @@ void testLocalNormalParity() {
 
   bms_parser::Chart chart;
   chart.Meta = meta;
-  const std::span<const ReplayData> noAttempts;
+  const std::span<const JudgedPlaybackData> noAttempts;
   options.timingAnalytics.emplace(chart, noAttempts, 2);
 
   const ResultPresentationModel model =
@@ -799,7 +799,7 @@ void testDefaultSkinLocalPresentationContract() {
   auto options = localOptions();
   bms_parser::Chart chart;
   chart.Meta = localMeta();
-  const std::span<const ReplayData> noAttempts;
+  const std::span<const JudgedPlaybackData> noAttempts;
   options.timingAnalytics.emplace(chart, noAttempts, 2);
   const auto model = makeLocalResultPresentation(localMeta(), localState(),
                                                  std::move(options));

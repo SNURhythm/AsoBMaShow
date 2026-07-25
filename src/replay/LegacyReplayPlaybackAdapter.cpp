@@ -1,11 +1,12 @@
 #include "LegacyReplayPlaybackAdapter.h"
+#include "../analysis/JudgedPlaybackContext.h"
 
 #include <utility>
 
 namespace replay {
 namespace {
 
-ReplayData makeAdapterBase(
+JudgedPlaybackData makeAdapterBase(
     const ReplayPlaybackData &playback,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta) {
@@ -20,8 +21,7 @@ ReplayData makeAdapterBase(
   chartMeta.TotalNotes = score.maxScore / 2;
   chartMeta.LnMode = score.longNoteMode;
 
-  ReplayData adapted;
-  adapted.id = result.resultId;
+  JudgedPlaybackData adapted;
   adapted.chartMeta = std::move(chartMeta);
   adapted.randomSeed = setup.randomSeed;
   adapted.randomPrng = setup.randomPrng;
@@ -32,17 +32,18 @@ ReplayData makeAdapterBase(
   adapted.playOption2Seed = setup.playOption2Seed;
   adapted.assistOption = setup.assistOption;
   adapted.initialGaugeType = setup.initialGaugeType;
+  adapted.gaugeProfile = setup.gaugeProfile;
   adapted.gaugeAutoShift = setup.gaugeAutoShift;
   adapted.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
   adapted.touchSamples = playback.touchSamples;
   adapted.laneCoverEvents = playback.laneCoverEvents;
-  adapted.provenance = score.provenance;
+  adapted.context = analysis::playbackContextFrom(setup);
   return adapted;
 }
 
 } // namespace
 
-std::optional<ReplayData> makeLegacyPlaybackAdapter(
+std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta) {
@@ -50,13 +51,11 @@ std::optional<ReplayData> makeLegacyPlaybackAdapter(
     return std::nullopt;
   }
   const auto &score = result.score;
-  ReplayData adapted = makeAdapterBase(playback, result, std::move(chartMeta));
+  JudgedPlaybackData adapted = makeAdapterBase(playback, result, std::move(chartMeta));
   adapted.finalScore = score.score;
   adapted.maxCombo = score.maxCombo;
   adapted.finalGauge = score.finalGauge;
   adapted.clearType = score.clearType;
-  adapted.provenance = score.provenance;
-
   adapted.events.reserve(playback.legacy->events.size());
   for (const auto &event : playback.legacy->events) {
     adapted.events.push_back(
@@ -75,12 +74,15 @@ std::optional<ReplayData> makeLegacyPlaybackAdapter(
   return adapted;
 }
 
-ReplayData makeMaterializedPlaybackAdapter(
+JudgedPlaybackData makeMaterializedPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const MaterializedReplay &materialized,
+    const gameplay::GameplayRulesetPolicy &policy,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta) {
-  ReplayData adapted = makeAdapterBase(playback, result, std::move(chartMeta));
+  JudgedPlaybackData adapted = makeAdapterBase(playback, result, std::move(chartMeta));
+  adapted.context =
+      analysis::playbackContextFrom(playback.setup, policy, adapted.chartMeta);
   adapted.finalScore = materialized.attempt.score;
   adapted.maxCombo = materialized.attempt.maxCombo;
   adapted.finalGauge = materialized.attempt.gauge;

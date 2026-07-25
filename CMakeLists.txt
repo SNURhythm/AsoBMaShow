@@ -703,7 +703,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_summary_list_tests
         tests/replay_summary_list_tests.cpp
-        src/ReplayResultStateBuilder.cpp
+        src/analysis/JudgedPlaybackResultState.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -1019,7 +1019,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayFileStore.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/ScoreProvenance.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -1156,7 +1156,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/replay/BeatorajaReplayPath.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -1172,6 +1172,46 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(replay_repository_tests PRIVATE SDL2::SDL2-static)
     elseif(TARGET SDL2)
         target_link_libraries(replay_repository_tests PRIVATE SDL2)
+    endif()
+
+    add_executable(replay_decoupling_audit_tests
+        tests/replay_decoupling_audit_tests.cpp
+        src/AtomicFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ResultPersistenceModel.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayFileStore.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryReplayFileMigration.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(replay_decoupling_audit_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/yoga/lib
+    )
+    target_compile_features(replay_decoupling_audit_tests PRIVATE cxx_std_23)
+    target_compile_definitions(replay_decoupling_audit_tests PRIVATE
+        ASOBMASHOW_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+    )
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(replay_decoupling_audit_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(replay_decoupling_audit_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(replay_decoupling_audit_tests PRIVATE SDL2)
     endif()
 
     add_executable(replay_file_migration_tests
@@ -1446,9 +1486,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/ResultRecallBuilder.cpp
-        src/ReplayResultStateBuilder.cpp
+        src/analysis/JudgedPlaybackResultState.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/ir/IrSubmission.cpp
         src/ir/IrOutboxModels.cpp
         src/FileChecksum.cpp
@@ -1536,7 +1576,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ReplayFileActionService.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/ir/IrSubmissionSnapshot.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
@@ -2051,8 +2091,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
         src/ScoreProvenance.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/Judge.cpp
     )
     target_include_directories(score_provenance_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -2359,6 +2401,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_practice_input_boundary_tests
         tests/gameplay_practice_input_boundary_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
@@ -2489,6 +2533,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(practice_analytics_tests
         tests/practice_analytics_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
@@ -2500,6 +2546,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(practice_result_model_tests
         tests/practice_result_model_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
@@ -2514,6 +2562,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(practice_result_flow_tests
         tests/practice_result_flow_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/practice/PracticeAnalytics.cpp
@@ -2568,6 +2618,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(result_presentation_model_tests
         tests/result_presentation_model_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/bms_parser.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/rendering/Color.cpp
@@ -2596,6 +2648,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(remote_result_scene_tests
         tests/remote_result_scene_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/bms_parser.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
@@ -2622,6 +2676,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(result_image_exporter_partial_tests
         tests/result_image_exporter_partial_tests.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
         src/bms_parser.cpp
         src/ir/IrRemoteScoreModels.cpp
         src/rendering/Color.cpp
@@ -2718,7 +2774,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2790,7 +2846,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -2856,7 +2912,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrSubmission.cpp
         src/ir/IrSubmissionSnapshot.cpp
         src/ResultPersistenceModel.cpp
-        src/LegacyChartResultAttempt.cpp
+
         src/ScoreProvenance.cpp
         src/Utils.cpp
         src/path.cpp
@@ -3066,6 +3122,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_saved_result_batch_upload_tests
         ir_ranking_modal_tests
         replay_repository_tests
+        replay_decoupling_audit_tests
         music_playlist_repository_tests
         chart_repository_tests
         chart_library_scanner_tests

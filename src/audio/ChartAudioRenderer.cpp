@@ -628,7 +628,7 @@ CollectChartTimedAudioEvents(const bms_parser::Chart &chart) {
 
 std::vector<AudioEvent>
 CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
-                              const ReplayData &replay,
+                              const JudgedPlaybackData &replay,
                               long long keySoundOffsetMicros) {
   std::vector<AudioEvent> events = CollectBackgroundAudioEvents(chart);
 

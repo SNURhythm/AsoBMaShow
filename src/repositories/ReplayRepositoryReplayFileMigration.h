@@ -35,6 +35,11 @@ struct ReplayMigrationOutcome {
   std::string diagnostic;
 };
 
+// Kept with the schema-10 migration so normal runtime sources never depend on
+// the retired row-per-event table names.
+[[nodiscard]] bool compactReplaySchemaHasNoLegacyPayloadTables(
+    sqlite3 *database);
+
 ReplayMigrationOutcome migrateReplaySchema10To11(
     sqlite3 *database, const std::filesystem::path &profileRoot,
     const replay::BeatorajaReplayCodec &codec,

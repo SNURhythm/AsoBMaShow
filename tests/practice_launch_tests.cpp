@@ -145,7 +145,7 @@ void testReplayMetadataCannotReplaceTheCurrentPlayedChartIdentityOrPath() {
   current.BmsPath = std::filesystem::path("BMS/current/chart.bms");
   current.Title = "Current parsed chart";
 
-  ReplayData staleReplay;
+  JudgedPlaybackData staleReplay;
   staleReplay.chartMeta.SHA256 = std::string(64, 'b');
   staleReplay.chartMeta.BmsPath = std::filesystem::path("BMS/stale/chart.bms");
   staleReplay.chartMeta.Title = "Stale replay chart";
@@ -222,7 +222,7 @@ void testParsedChartIdentityGatesLaunchApplication() {
 }
 
 void testReplayPlayOptionsAreCarriedIntoSectionLaunch() {
-  ReplayData replay;
+  JudgedPlaybackData replay;
   replay.playOption = "RANDOM";
   replay.playOptionSeed = 1234;
   replay.playOption2 = "MIRROR";

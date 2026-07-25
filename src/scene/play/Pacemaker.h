@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../CoursePlaySession.h"
-#include "../../ReplayData.h"
+#include "../../analysis/JudgedPlaybackData.h"
 #include "../../repositories/ScoreRepository.h"
 #include "RhythmState.h"
 
@@ -193,7 +193,7 @@ inline int playedNotesForState(const RhythmState &state, int totalNotes) {
   return std::clamp(played, 0, std::max(0, totalNotes));
 }
 
-inline std::vector<int> buildReplayScoreProgression(const ReplayData &replay,
+inline std::vector<int> buildReplayScoreProgression(const JudgedPlaybackData &replay,
                                                     int totalNotes) {
   if (totalNotes <= 0) {
     return {};
@@ -220,7 +220,7 @@ inline std::vector<int> buildReplayScoreProgression(const ReplayData &replay,
 }
 
 inline std::vector<int> buildReplayScoreProgression(bms_parser::Chart &chart,
-                                                    const ReplayData &replay) {
+                                                    const JudgedPlaybackData &replay) {
   const int totalNotes = std::max(0, chart.Meta.TotalNotes);
   if (totalNotes <= 0) {
     return {};
@@ -249,7 +249,7 @@ inline std::vector<int> buildReplayScoreProgression(bms_parser::Chart &chart,
 
 inline Target targetFromBestSnapshot(const bms_parser::ChartMeta &meta,
                                      const ScoreBestSnapshot &best,
-                                     const ReplayData *replay = nullptr) {
+                                     const JudgedPlaybackData *replay = nullptr) {
   (void)replay;
   const int totalNotes = std::max(0, meta.TotalNotes);
   const int fallbackMaxScore = totalNotes * 2;
@@ -264,7 +264,7 @@ inline Target targetFromBestSnapshot(const bms_parser::ChartMeta &meta,
 
 inline Target targetFromBestSnapshot(bms_parser::Chart &chart,
                                      const ScoreBestSnapshot &best,
-                                     const ReplayData *replay = nullptr) {
+                                     const JudgedPlaybackData *replay = nullptr) {
   Target target = targetFromBestSnapshot(chart.Meta, best);
   if (!target.enabled || replay == nullptr || replay->finalScore != best.score) {
     return target;
@@ -328,7 +328,7 @@ inline Target targetFromGrade(const bms_parser::ChartMeta &meta,
 inline Target targetFromSelection(const bms_parser::ChartMeta &meta,
                                   const std::string &targetId,
                                   const std::optional<ScoreBestSnapshot> &best,
-                                  const ReplayData *bestReplay = nullptr) {
+                                  const JudgedPlaybackData *bestReplay = nullptr) {
   const std::string normalized = normalizeTargetId(targetId);
   if (normalized == kTargetOff) {
     return {};
@@ -345,7 +345,7 @@ inline Target targetFromSelection(const bms_parser::ChartMeta &meta,
 inline Target targetFromSelection(bms_parser::Chart &chart,
                                   const std::string &targetId,
                                   const std::optional<ScoreBestSnapshot> &best,
-                                  const ReplayData *bestReplay = nullptr) {
+                                  const JudgedPlaybackData *bestReplay = nullptr) {
   const std::string normalized = normalizeTargetId(targetId);
   if (normalized == kTargetOff) {
     return {};

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
@@ -37,7 +37,7 @@ inline bool hasTimelineAt(
 }
 
 inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
-    const ReplayData &replayData,
+    const JudgedPlaybackData &replayData,
     const std::vector<const bms_parser::TimeLine *> &timelines,
     const std::unordered_map<int, size_t> &laneToOrderIndex,
     const std::function<double(long long)> &positionAtTime) {
@@ -88,7 +88,7 @@ inline std::vector<ReplayGhostEvent> buildReplayGhostEvents(
 }
 
 inline std::vector<ReplayMissMarker> buildReplayMissMarkers(
-    const ReplayData &replayData,
+    const JudgedPlaybackData &replayData,
     const std::vector<const bms_parser::TimeLine *> &timelines,
     const std::unordered_map<int, size_t> &laneToOrderIndex,
     const std::function<double(long long)> &positionAtTime) {

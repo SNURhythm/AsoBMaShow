@@ -2,7 +2,7 @@
 #include "ir/IrHttpClient.h"
 #include "ir/IrRankingModels.h"
 #include "ir/IrSubmission.h"
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 
 #include <iostream>
 #include <limits>
@@ -29,7 +29,7 @@ std::string repeated(char value, std::size_t count) {
 }
 
 struct SubmissionFixture : result_persistence::PersistedChartResult {
-  ReplayData replay;
+  JudgedPlaybackData replay;
 };
 
 SubmissionFixture validAttempt() {

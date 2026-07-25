@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 
 namespace practice {
 
@@ -22,9 +22,9 @@ struct ResultCapturePolicy {
 [[nodiscard]] ResultCapturePolicy
 resultCapturePolicy(const ResultCaptureContext &context) noexcept;
 
-[[nodiscard]] const ReplayData *
-selectResultAnalyticsSource(const ReplayData *capturedAnalytics,
-                            const ReplayData *replayToSave,
-                            const ReplayData *retrySource) noexcept;
+[[nodiscard]] const JudgedPlaybackData *
+selectResultAnalyticsSource(const JudgedPlaybackData *capturedAnalytics,
+                            const JudgedPlaybackData *replayToSave,
+                            const JudgedPlaybackData *retrySource) noexcept;
 
 } // namespace practice

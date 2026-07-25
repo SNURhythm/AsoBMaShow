@@ -5,7 +5,7 @@
 #pragma once
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
-#include "../../ReplayData.h"
+#include "../../analysis/JudgedPlaybackData.h"
 #include "../../replay/ReplayInputRecorder.h"
 #include "../../replay/ReplayPlaybackDriver.h"
 #include "../../math/Vector3.h"
@@ -218,12 +218,12 @@ private:
   std::unique_ptr<RealtimeGameplaySession> realtimeGameplaySession;
   std::uint64_t realtimeGameplayEpoch = 0;
   std::unordered_map<int, bool> lanePressed;
-  ReplayData recordedReplay;
+  JudgedPlaybackData recordedReplay;
   replay::ReplayPlaybackData recordedPlaybackReplay;
   std::unique_ptr<replay::ReplayInputRecorder> replayInputRecorder;
   std::unique_ptr<replay::ReplayPlaybackDriver> replayPlaybackDriver;
   std::vector<replay::InputTransition> pendingReplayInput;
-  ReplayData analyticsReplay;
+  JudgedPlaybackData analyticsReplay;
   ResultPersistenceOptions resultPersistenceOptions;
   std::string resultPersistenceAttemptId;
   std::unordered_map<long long, ReplayTouchSample> lastRecordedTouchSamples;

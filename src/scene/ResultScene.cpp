@@ -153,8 +153,8 @@ private:
 
 play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
     const bms_parser::ChartMeta &meta,
-    const std::optional<ReplayData> &presentationReplay,
-    const std::optional<ReplayData> &retryData,
+    const std::optional<JudgedPlaybackData> &presentationReplay,
+    const std::optional<JudgedPlaybackData> &retryData,
     const ResultPracticeOptions &practiceOptions) {
   if (practiceOptions.enabled) {
     return play_options::formatPlayModeDisplayLabel(
@@ -259,30 +259,34 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
 ResultScene::ResultScene(
     ApplicationContext &context, const bms_parser::ChartMeta &meta,
     const RhythmState &state, const ScoreProvenance &attemptProvenance,
-    const ReplayData *replay, ResultPersistenceOptions persistenceOptions,
-    const ReplayData *retrySource, ResultPracticeOptions practiceOptions,
+    const JudgedPlaybackData *replay, ResultPersistenceOptions persistenceOptions,
+    const JudgedPlaybackData *retrySource, ResultPracticeOptions practiceOptions,
     bool autoPlayResult, ResultCourseOptions courseOptions,
     std::string pacemakerTarget,
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
     bms_parser::Chart *reusableRetryChart,
     std::optional<ResultPacemakerData> pacemakerOverride,
-    const ReplayData *analyticsSource)
+    const JudgedPlaybackData *analyticsSource)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
           .resultState = state,
           .attemptProvenance = attemptProvenance,
           .presentationReplay =
-              replay != nullptr ? std::optional<ReplayData>(*replay)
+              replay != nullptr ? std::optional<JudgedPlaybackData>(*replay)
                                 : std::nullopt,
           .retryData =
               retrySource != nullptr
-                  ? std::optional<ReplayData>(*retrySource)
-                  : (replay != nullptr ? std::optional<ReplayData>(*replay)
+                  ? std::optional<JudgedPlaybackData>(*retrySource)
+                  : (replay != nullptr ? std::optional<JudgedPlaybackData>(*replay)
                                        : std::nullopt),
           .analyticsData =
               analyticsSource != nullptr
-                  ? std::optional<ReplayData>(*analyticsSource)
+                  ? std::optional<JudgedPlaybackData>(*analyticsSource)
+                  : std::nullopt,
+          .persistedResultId =
+              persistenceOptions.result != nullptr
+                  ? std::optional<int>(persistenceOptions.result->resultId)
                   : std::nullopt,
           .persistenceOptions = std::move(persistenceOptions),
           .practiceOptions = std::move(practiceOptions),
@@ -631,12 +635,12 @@ void ResultScene::applyResultPersistenceReceipt() {
   if (receipt == nullptr) {
     return;
   }
+  local->persistedResultId = receipt->resultId;
 
-  const auto applyReceipt = [receipt](std::optional<ReplayData> &replay) {
+  const auto applyReceipt = [receipt](std::optional<JudgedPlaybackData> &replay) {
     if (!replay.has_value()) {
       return;
     }
-    replay->id = receipt->resultId;
     replay->createdAt = receipt->createdAt;
   };
   applyReceipt(local->presentationReplay);
@@ -659,9 +663,9 @@ ResultScene::makeTimingAnalyticsModel() const {
       isCourseFinalResult()) {
     return std::nullopt;
   }
-  std::span<const ReplayData> completedAttempts;
+  std::span<const JudgedPlaybackData> completedAttempts;
   std::size_t abandonedAttempts = 0;
-  std::array<ReplayData, 1> singleAttempt;
+  std::array<JudgedPlaybackData, 1> singleAttempt;
   if (local->practiceOptions.session != nullptr) {
     completedAttempts = local->practiceOptions.session->completedAttempts();
     abandonedAttempts =
@@ -2144,7 +2148,7 @@ void ResultScene::startRetry(bool samePattern) {
       resultRetryPlayback(local->attemptProvenance, practiceConfiguration);
   const auto retryPracticeSession =
       freshPracticeSessionForRetry(local->practiceOptions.session);
-  ReplayData retrySource;
+  JudgedPlaybackData retrySource;
   if (local->retryData.has_value()) {
     retrySource = *local->retryData;
   } else {
@@ -2360,7 +2364,7 @@ void ResultScene::startReplay() {
     return;
   }
 
-  const ReplayData replaySource = *local->retryData;
+  const JudgedPlaybackData replaySource = *local->retryData;
   const std::filesystem::path chartPath = local->meta.BmsPath;
   context.jukebox.stop();
   defer(
@@ -2378,7 +2382,7 @@ void ResultScene::startReplay() {
           return true;
         }
 
-        auto replayData = std::make_shared<ReplayData>(replaySource);
+        auto replayData = std::make_shared<JudgedPlaybackData>(replaySource);
         StartOptions replayOptions{
             .startPosition = 0,
             .autoKeySound = false,
@@ -2388,7 +2392,7 @@ void ResultScene::startReplay() {
             .replayData = replayData,
             .ownsChart = true,
         };
-        applyReplayProvenanceToStartOptions(replayOptions, *replayData);
+        applyJudgedPlaybackContextToStartOptions(replayOptions, *replayData);
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(
                 context, std::move(replayChart), std::move(replayOptions)),
@@ -2421,11 +2425,7 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
       .endMicros = endMicros,
       .source = source,
   };
-  const ScoreProvenance &rulesetSource =
-      source == practice::LaunchSource::ReplayResult &&
-              local->retryData.has_value()
-          ? local->retryData->provenance
-          : local->attemptProvenance;
+  const ScoreProvenance &rulesetSource = local->attemptProvenance;
   request.requiredRulesetDescriptor = rulesetSource.ruleset;
   if (const auto selectedRuleset =
           gameplayRulesetFromId(rulesetSource.ruleset.id)) {
@@ -2439,7 +2439,7 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
   }
   if (source == practice::LaunchSource::ReplayResult &&
       local->retryData.has_value()) {
-    request.replayId = local->retryData->id;
+    request.replayId = local->persistedResultId;
     request.replayPlayOptions =
         practice::launchPlayOptionsFromReplay(*local->retryData);
   }
@@ -2557,15 +2557,15 @@ void ResultScene::startCourseReplay() {
     replaySession->courseGroupName = sourceSession->courseGroupName;
     replaySession->constraintJson = sourceSession->constraintJson;
     replaySession->entries = sourceSession->entries;
-    replaySession->ruleset = sourceSession->ruleset;
-    replaySession->rulesetDescriptor = sourceSession->rulesetDescriptor;
-    replaySession->stageProvenance = sourceSession->stageProvenance;
+    const auto &firstPlayback =
+        sourceSession->courseReplayPlaybackData->stages.front();
+    replaySession->snapshotRulesetFromPlayback(firstPlayback);
     replaySession->currentIndex = 0;
-    replaySession->gaugeType = sourceSession->gaugeType;
-    replaySession->gaugeProfile = sourceSession->gaugeProfile;
-    replaySession->gaugeAutoShift = sourceSession->gaugeAutoShift;
+    replaySession->gaugeType = firstPlayback.setup.initialGaugeType;
+    replaySession->gaugeProfile = firstPlayback.setup.gaugeProfile;
+    replaySession->gaugeAutoShift = firstPlayback.setup.gaugeAutoShift;
     replaySession->gaugeAutoShiftLowerBound =
-        sourceSession->gaugeAutoShiftLowerBound;
+        firstPlayback.setup.gaugeAutoShiftLowerBound;
     replaySession->longNoteMode = sourceSession->longNoteMode;
     replaySession->constraints = sourceSession->constraints;
     replaySession->requestedPlayOption = sourceSession->requestedPlayOption;
@@ -2584,7 +2584,7 @@ void ResultScene::startCourseReplay() {
   }
 
   auto source = sourceSession->courseReplayData;
-  auto replayData = std::make_shared<CourseReplayData>(*source);
+  auto replayData = std::make_shared<JudgedCoursePlaybackData>(*source);
   auto replaySession = std::make_shared<CoursePlaySession>();
   replaySession->courseId = replayData->courseId;
   replaySession->courseKey = replayData->courseKey;
@@ -2645,8 +2645,8 @@ void ResultScene::startCourseReplayStage(
       context.sceneManager->changeScene("MainMenu");
       return;
     }
-    StartOptions options = makeCourseReplayStageStartOptions(
-        session, stagePlayback, replayChart->Meta);
+    StartOptions options =
+        makeCourseReplayStageStartOptions(session, stagePlayback);
     context.sceneManager->changeScene(
         std::make_unique<GamePlayScene>(context, std::move(replayChart),
                                         std::move(options)),

@@ -2,25 +2,26 @@
 
 #include "ReplayPlaybackData.h"
 #include "ReplayPlaybackMaterializer.h"
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 #include "../ResultPersistenceModel.h"
 
 #include <optional>
 
 namespace replay {
 
-// Migration-only visual playback adapter. The returned ReplayData must never
+// Migration-only visual playback adapter. The returned JudgedPlaybackData must never
 // be used to construct persisted results or IR submissions.
-[[nodiscard]] std::optional<ReplayData> makeLegacyPlaybackAdapter(
+[[nodiscard]] std::optional<JudgedPlaybackData> makeLegacyPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta);
 
-// Compatibility bridge for consumers that still render judged ReplayData.
+// Compatibility bridge for consumers that still render judged JudgedPlaybackData.
 // This derived value must never be persisted or used for IR.
-[[nodiscard]] ReplayData makeMaterializedPlaybackAdapter(
+[[nodiscard]] JudgedPlaybackData makeMaterializedPlaybackAdapter(
     const ReplayPlaybackData &playback,
     const MaterializedReplay &materialized,
+    const gameplay::GameplayRulesetPolicy &policy,
     const result_persistence::PersistedChartResult &result,
     bms_parser::ChartMeta chartMeta);
 

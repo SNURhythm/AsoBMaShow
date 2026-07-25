@@ -83,6 +83,44 @@ std::int64_t scalar(const std::filesystem::path &databasePath,
   return complete ? value : -1;
 }
 
+std::map<std::string, std::int64_t>
+tableRowCounts(const std::filesystem::path &databasePath) {
+  std::map<std::string, std::int64_t> result;
+  sqlite3 *database = nullptr;
+  if (sqlite3_open_v2(databasePath.string().c_str(), &database,
+                      SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+    sqlite3_close(database);
+    return result;
+  }
+  sqlite3_stmt *tables = nullptr;
+  if (sqlite3_prepare_v2(
+          database,
+          "SELECT name FROM sqlite_master WHERE type='table' AND "
+          "name NOT LIKE 'sqlite_%' ORDER BY name",
+          -1, &tables, nullptr) != SQLITE_OK) {
+    sqlite3_close(database);
+    return result;
+  }
+  while (sqlite3_step(tables) == SQLITE_ROW) {
+    const auto *nameText = sqlite3_column_text(tables, 0);
+    if (nameText == nullptr) {
+      continue;
+    }
+    const std::string name(reinterpret_cast<const char *>(nameText));
+    sqlite3_stmt *count = nullptr;
+    const std::string query = "SELECT count(*) FROM \"" + name + "\"";
+    if (sqlite3_prepare_v2(database, query.c_str(), -1, &count, nullptr) ==
+            SQLITE_OK &&
+        sqlite3_step(count) == SQLITE_ROW) {
+      result.emplace(name, sqlite3_column_int64(count, 0));
+    }
+    sqlite3_finalize(count);
+  }
+  sqlite3_finalize(tables);
+  sqlite3_close(database);
+  return result;
+}
+
 CompletedChartAttempt validAttempt(std::string attemptId, int salt = 0) {
   CompletedChartAttempt attempt;
   auto &result = attempt.result;
@@ -597,6 +635,78 @@ void testCoursePipelineUsesOneBeatorajaArrayFile() {
          "deleted course replay disables playback without deleting result facts");
 }
 
+void testReplayVolumeOnlyGrowsTheBrdFile() {
+  TemporaryDirectory smallRoot("size-small");
+  TemporaryDirectory largeRoot("size-large");
+  Environment small(smallRoot.path());
+  Environment large(largeRoot.path());
+
+  auto makeAttempt = [](std::size_t transitionCount) {
+    auto attempt =
+        validAttempt("123e4567-e89b-42d3-a456-426614174020");
+    attempt.replay.input.clear();
+    attempt.replay.input.reserve(transitionCount);
+    for (std::size_t index = 0; index < transitionCount; ++index) {
+      attempt.replay.input.push_back(
+          {.songTimeMicros =
+               1'000 + static_cast<std::int64_t>(index) * 100,
+           .control = {.kind = replay::LogicalControlKind::Lane,
+                       .player = 1,
+                       .lane = static_cast<int>((index / 2) % 7)},
+           .pressed = index % 2 == 0});
+    }
+    return attempt;
+  };
+
+  const auto smallSaved = small.coordinator.persist(makeAttempt(100));
+  const auto largeSaved = large.coordinator.persist(makeAttempt(100'000));
+  if (!smallSaved.saved()) {
+    std::cerr << "small replay volume state="
+              << static_cast<int>(smallSaved.state)
+              << " diagnostic=" << smallSaved.diagnostic << '\n';
+  }
+  if (!largeSaved.saved()) {
+    std::cerr << "large replay volume state="
+              << static_cast<int>(largeSaved.state)
+              << " diagnostic=" << largeSaved.diagnostic << '\n';
+  }
+  expect(smallSaved.saved() && smallSaved.receipt && largeSaved.saved() &&
+             largeSaved.receipt,
+         "100 and 100,000 transition attempts both persist");
+  if (!smallSaved.receipt || !largeSaved.receipt) {
+    return;
+  }
+
+  const auto smallResult = small.replayRepository.loadChartResult(
+      smallSaved.receipt->resultId);
+  const auto largeResult = large.replayRepository.loadChartResult(
+      largeSaved.receipt->resultId);
+  expect(smallResult.record && smallResult.record->replayFile &&
+             largeResult.record && largeResult.record->replayFile,
+         "both volume fixtures expose replay-file references");
+  if (!smallResult.record || !smallResult.record->replayFile ||
+      !largeResult.record || !largeResult.record->replayFile) {
+    return;
+  }
+
+  const auto smallReplaySize = std::filesystem::file_size(
+      smallRoot.path() / smallResult.record->replayFile->relativePath);
+  const auto largeReplaySize = std::filesystem::file_size(
+      largeRoot.path() / largeResult.record->replayFile->relativePath);
+  expect(largeReplaySize > smallReplaySize,
+         "additional transitions grow the .brd file");
+  expect(tableRowCounts(small.replayDatabase) ==
+             tableRowCounts(large.replayDatabase) &&
+             tableRowCounts(small.scoreDatabase) ==
+                 tableRowCounts(large.scoreDatabase),
+         "transition volume does not change SQLite row cardinality");
+  expect(std::filesystem::file_size(small.replayDatabase) ==
+             std::filesystem::file_size(large.replayDatabase) &&
+             std::filesystem::file_size(small.scoreDatabase) ==
+                 std::filesystem::file_size(large.scoreDatabase),
+         "transition-volume growth is confined to standalone .brd bytes");
+}
+
 } // namespace
 
 int main() {
@@ -604,6 +714,7 @@ int main() {
   testFilesystemFailuresNeverStageDatabaseRows();
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
   testCoursePipelineUsesOneBeatorajaArrayFile();
+  testReplayVolumeOnlyGrowsTheBrdFile();
   if (failures != 0) {
     std::cerr << failures << " result persistence integration test(s) failed\n";
     return 1;

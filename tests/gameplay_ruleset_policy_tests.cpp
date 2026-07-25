@@ -222,31 +222,30 @@ void testCanonicalReplaySnapshotStaysCanonical() {
           "an exact canonical replay snapshot remains verified");
 }
 
-void testReplayStartRequiresValidatedSnapshot() {
+void testReplayStartRebuildsCanonicalPolicyWithoutSnapshot() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
-  auto replay = std::make_shared<ReplayData>();
+  auto replay = std::make_shared<JudgedPlaybackData>();
   replay->chartMeta = meta;
-  replay->provenance.ruleset =
+  replay->context.ruleset =
       RulesetDescriptor::For(GameplayRuleset::LR2);
   StartOptions options{.replayData = replay};
-  applyReplayProvenanceToStartOptions(options, *replay);
+  applyJudgedPlaybackContextToStartOptions(options, *replay);
   const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
       options, meta, AppSettings::NotePriorityMode::Lowest);
-  require(outcome.status ==
-                  gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot &&
-              !outcome.policy.has_value(),
-          "a replay start never falls back when its snapshot is incomplete");
+  require(outcome.built() && outcome.policy->canonical &&
+              outcome.policy->id == GameplayRuleset::LR2,
+          "a stock replay setup rebuilds its canonical policy from chart metadata");
 }
 
 void testLegacyReplayUsesBeatorajaFallback() {
   auto meta = chartMeta(GameplayRuleset::Beatoraja);
   meta.MD5 = std::string(32, 'b');
   meta.SHA256 = std::string(64, 'a');
-  auto replay = std::make_shared<ReplayData>();
+  auto replay = std::make_shared<JudgedPlaybackData>();
   replay->chartMeta = meta;
-  replay->provenance = ScoreProvenance::Legacy();
+  replay->context.ruleset = RulesetDescriptor::Legacy();
   StartOptions options{.replayData = replay};
-  applyReplayProvenanceToStartOptions(options, *replay);
+  applyJudgedPlaybackContextToStartOptions(options, *replay);
 
   const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
       options, meta, AppSettings::NotePriorityMode::Lowest);
@@ -257,9 +256,12 @@ void testLegacyReplayUsesBeatorajaFallback() {
               outcome.policy->id == GameplayRuleset::Beatoraja,
           "a migrated legacy replay remains playable with Beatoraja rules");
 
-  replay->provenance.stages = {completeReplaySnapshot(meta)};
+  auto legacyProvenanceWithStage = ScoreProvenance::Legacy();
+  legacyProvenanceWithStage.stages = {completeReplaySnapshot(meta)};
+  replay->context =
+      analysis::playbackContextFrom(legacyProvenanceWithStage, meta);
   StartOptions legacyWithStage{.replayData = replay};
-  applyReplayProvenanceToStartOptions(legacyWithStage, *replay);
+  applyJudgedPlaybackContextToStartOptions(legacyWithStage, *replay);
   const auto stagedLegacyOutcome = buildGameplayRulesetPolicyAtPlayStart(
       legacyWithStage, meta, AppSettings::NotePriorityMode::Lowest);
   require(!legacyWithStage.replayRulesetOverride.has_value() &&
@@ -288,7 +290,7 @@ int main() {
   testInvalidInputsDoNotFallBack();
   testValidatedReplayAndCourseConsistency();
   testCanonicalReplaySnapshotStaysCanonical();
-  testReplayStartRequiresValidatedSnapshot();
+  testReplayStartRebuildsCanonicalPolicyWithoutSnapshot();
   testLegacyReplayUsesBeatorajaFallback();
   return 0;
 }

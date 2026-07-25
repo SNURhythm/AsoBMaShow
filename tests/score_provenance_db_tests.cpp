@@ -751,7 +751,7 @@ samplePendingScore(const std::filesystem::path &root, const std::string &name,
   const ScoreProvenance provenance = sampleProvenance(name);
   return {
       .attemptId = scoreAttemptId(suffix),
-      .replayId = suffix + 1,
+      .resultId = suffix + 1,
       .createdAt = std::move(createdAt),
       .score = result_persistence::captureChartScoreWrite(
           meta, state, provenance, scoreLongNoteModeForClearLamp(meta)),
@@ -1290,7 +1290,7 @@ void testUnrelatedScoreConstraintIsStorageFailure(
       root, "projected-score-unrelated-constraint", 10, "2026-07-14 07:08:09");
   auto second = first;
   second.attemptId = scoreAttemptId(11);
-  second.replayId = 12;
+  second.resultId = 12;
   assert(helper.SaveProjectedScore(first).status ==
          result_persistence::ProjectionStatus::Inserted);
   const std::uint64_t revisionAfterInsert = helper.GetRevision();
@@ -1327,7 +1327,7 @@ void testAttemptIdentityShadowConstraintIsStorageFailure(
 
   auto second = first;
   second.attemptId = scoreAttemptId(14);
-  second.replayId = 15;
+  second.resultId = 15;
   const auto outcome = helper.SaveProjectedScore(second);
   assert(outcome.status ==
          result_persistence::ProjectionStatus::StorageFailure);

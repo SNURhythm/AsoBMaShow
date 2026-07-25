@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../AppSettings.h"
-#include "../../ReplayData.h"
+#include "../../analysis/JudgedPlaybackData.h"
 #include "../../bms_parser.hpp"
 #include "CompiledGameplayJudge.h"
 #include "GameplayCandidateRules.h"

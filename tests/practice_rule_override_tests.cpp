@@ -179,11 +179,12 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
   assert(error.empty());
   assert(persisted.has_value());
 
-  ReplayData replay;
+  JudgedPlaybackData replay;
+  replay.chartMeta = meta;
   replay.initialGaugeType = GaugeType::Hard;
-  replay.provenance = *persisted;
+  replay.context = analysis::playbackContextFrom(*persisted, meta);
   StartOptions replayOptions;
-  applyReplayProvenanceToStartOptions(replayOptions, replay);
+  applyJudgedPlaybackContextToStartOptions(replayOptions, replay);
 
   const Judge restoredJudge =
       makeEffectiveJudgeAtPlayStart(replayOptions, meta);

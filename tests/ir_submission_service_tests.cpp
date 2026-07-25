@@ -1,5 +1,6 @@
 #include "ir/IrSubmissionService.h"
 
+#include "CompletedAttempt.h"
 #include "FileChecksum.h"
 #include "Utils.h"
 #include "ir/IrHttpClient.h"
@@ -536,72 +537,54 @@ profile(bool enabled = true, bool autoSubmit = true,
   return result;
 }
 
-legacy_result_persistence::LegacyChartResultAttempt
+result_persistence::CompletedChartAttempt
 canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
                  const std::filesystem::path &root) {
-  ReplayData replay;
-  replay.chartMeta.BmsPath =
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.BmsPath =
       root / "BMS" / (outboxDraft.attemptId + ".bms");
-  replay.chartMeta.MD5 = outboxDraft.chartMd5;
-  replay.chartMeta.SHA256 = outboxDraft.chartSha256;
-  replay.chartMeta.Title = "IR service fixture";
-  replay.chartMeta.Artist = "Test";
-  replay.chartMeta.Rank = 2;
-  replay.chartMeta.TotalNotes = 50;
-  replay.chartMeta.TotalLongNotes = 1;
-  replay.chartMeta.LnMode = 2;
-  replay.initialGaugeType = GaugeType::Hard;
-  replay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
-  replay.finalScore = 91;
-  replay.maxCombo = 45;
-  replay.finalGauge = 82.5f;
-  replay.clearType = kClearTypeHardClearRank;
-  replay.playOption = "RANDOM";
-  replay.playOptionSeed = 1234;
-  replay.events.push_back({.action = ReplayEventAction::Press,
-                           .lane = 3,
-                           .noteTimeMicros = 100'000,
-                           .songTimeMicros = 100'100,
-                           .judgeTimeMicros = 100'050,
-                           .judgement = PGreat,
-                           .diffMicros = -50,
-                           .gauge = 82.5f,
-                           .gaugeType = GaugeType::Hard,
-                           .combo = 1,
-                           .score = 2});
+  chartMeta.MD5 = outboxDraft.chartMd5;
+  chartMeta.SHA256 = outboxDraft.chartSha256;
+  chartMeta.Title = "IR service fixture";
+  chartMeta.Artist = "Test";
+  chartMeta.Rank = 2;
+  chartMeta.TotalNotes = 50;
+  chartMeta.TotalLongNotes = 1;
+  chartMeta.LnMode = 2;
+  chartMeta.KeyMode = 7;
 
   ScoreProvenanceBuildInput provenanceInput;
-  provenanceInput.chartMeta = replay.chartMeta;
-  provenanceInput.longNoteMode = replay.chartMeta.LnMode;
+  provenanceInput.chartMeta = chartMeta;
+  provenanceInput.longNoteMode = chartMeta.LnMode;
   provenanceInput.judgeRankSource = JudgeRankSource::Chart;
-  provenanceInput.sourceJudgeRank = replay.chartMeta.Rank;
+  provenanceInput.sourceJudgeRank = chartMeta.Rank;
   provenanceInput.effectiveJudgeWindows = {
       {PGreat, {-10'000, 10'000}}, {Great, {-30'000, 30'000}},
       {Good, {-75'000, 75'000}},   {Bad, {-200'000, 200'000}},
       {Kpoor, {-1'000'000, 0}},
   };
-  provenanceInput.totalNotes = replay.chartMeta.TotalNotes;
+  provenanceInput.totalNotes = chartMeta.TotalNotes;
   provenanceInput.effectiveGaugeTotal = 176.0;
   provenanceInput.candidateSelection = gameplay::CandidateSelectionMode::LR2;
-  provenanceInput.gaugeType = replay.initialGaugeType;
-  provenanceInput.gaugeAutoShift = replay.gaugeAutoShift;
+  provenanceInput.gaugeType = GaugeType::Hard;
+  provenanceInput.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
   provenanceInput.player1 = {.option = "RANDOM", .seed = 1234};
   provenanceInput.inputDevices = {InputDeviceCategory::Keyboard};
   provenanceInput.ruleset = RulesetDescriptor::Current();
-  replay.provenance = makeScoreProvenance(provenanceInput);
-  replay.provenance.eligibility = ScoreEligibility::Verified;
+  auto provenance = makeScoreProvenance(provenanceInput);
+  provenance.eligibility = ScoreEligibility::Verified;
 
   result_persistence::ChartScoreWrite score{
       .chartPath = Utils::GetStoragePathUtf8RelativeToDocuments(
-          replay.chartMeta.BmsPath, "BMS/"),
+          chartMeta.BmsPath, "BMS/"),
       .chartMd5 = outboxDraft.chartMd5,
       .chartSha256 = outboxDraft.chartSha256,
-      .chartTitle = replay.chartMeta.Title,
-      .chartArtist = replay.chartMeta.Artist,
-      .longNoteMode = replay.chartMeta.LnMode,
-      .score = replay.finalScore,
-      .maxScore = replay.chartMeta.TotalNotes * 2,
-      .maxCombo = replay.maxCombo,
+      .chartTitle = chartMeta.Title,
+      .chartArtist = chartMeta.Artist,
+      .longNoteMode = chartMeta.LnMode,
+      .score = 91,
+      .maxScore = chartMeta.TotalNotes * 2,
+      .maxCombo = 45,
       .comboBreak = 5,
       .pGreat = 40,
       .great = 11,
@@ -611,17 +594,73 @@ canonicalAttempt(const ir::IrOutboxDraft &outboxDraft,
       .kPoor = 4,
       .fast = 7,
       .slow = 8,
-      .finalGauge = replay.finalGauge,
-      .clearType = replay.clearType,
-      .provenance = replay.provenance,
+      .finalGauge = 82.5F,
+      .clearType = kClearTypeHardClearRank,
+      .provenance = provenance,
   };
-  return {
+  result_persistence::PersistedChartResult result{
       .attemptId = outboxDraft.attemptId,
-      .replay = replay,
-      .score = score,
-      .payloadFingerprint =
-          legacy_result_persistence::legacyPayloadFingerprint(replay, score),
+      .score = std::move(score),
+      .keyMode = chartMeta.KeyMode,
+      .adoptedGaugeHistory = {82.5F},
+      .playedAtUnixMillis = 1'000'000'000'000LL,
   };
+  result.resultFingerprint = result_persistence::resultFingerprint(result);
+
+  replay::ReplayPlaybackData replay;
+  replay.setup.chartMd5 = chartMeta.MD5;
+  replay.setup.chartSha256 = chartMeta.SHA256;
+  replay.setup.keyMode = chartMeta.KeyMode;
+  replay.setup.longNoteMode = chartMeta.LnMode;
+  replay.setup.playOption = "RANDOM";
+  replay.setup.playOptionSeed = 1234;
+  replay.setup.initialGaugeType = GaugeType::Hard;
+  replay.setup.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+  replay.setup.playbackRulesetId = provenance.ruleset.id;
+  replay.setup.playbackRulesetRevision = provenance.ruleset.version;
+  replay.input = {
+      {.songTimeMicros = 100'000,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 3},
+       .pressed = true},
+      {.songTimeMicros = 100'100,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 3},
+       .pressed = false},
+  };
+
+  std::string diagnostic;
+  auto snapshot = ir::captureIrSubmissionSnapshot(result, diagnostic);
+  expect(snapshot.has_value(), "service fixture captures an IR snapshot");
+  return {.result = std::move(result),
+          .replay = std::move(replay),
+          .irSnapshot = snapshot.value_or(ir::IrSubmissionSnapshot{})};
+}
+
+result_persistence::StageOutcome stageCanonicalAttempt(
+    ReplayRepository &repository,
+    const result_persistence::CompletedChartAttempt &attempt) {
+  const auto reservation = repository.reserveReplayFile(
+      *attempt.result.attemptId, attempt.result.score.chartSha256);
+  expect(reservation.reservation.has_value(),
+         "service fixture reserves a replay-file identity");
+  if (!reservation.reservation.has_value()) {
+    return {.status = result_persistence::StageStatus::StorageFailure,
+            .diagnostic = reservation.diagnostic};
+  }
+  const auto &reserved = *reservation.reservation;
+  const ReplayFileReference replayFile{
+      .stem = reserved.stem,
+      .historyIndex = reserved.historyIndex,
+      .relativePath = reserved.relativePath,
+      .contentSha256 = file_checksum::sha256(*attempt.result.attemptId),
+      .compressedSize = 1,
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  return repository.stageCompletedChartAttempt(
+      attempt.result, attempt.irSnapshot, replayFile, {});
 }
 
 class Harness {
@@ -745,7 +784,7 @@ public:
   ir::IrOutboxInsertOutcome enqueueReady(const ir::IrOutboxDraft &value,
                                          bool userIntent) {
     const auto attempt = canonicalAttempt(value, temp.path());
-    const auto staged = repository.StageChartResult(attempt, {});
+    const auto staged = stageCanonicalAttempt(repository, attempt);
     if (staged.status != result_persistence::StageStatus::Staged &&
         staged.status != result_persistence::StageStatus::AlreadyStaged) {
       std::cerr << "FAIL: canonical replay staging: " << staged.diagnostic
@@ -1324,8 +1363,8 @@ void testTachiMalformedLaterRowDoesNotDiscardOrStarveValidWork() {
       tachiDraft(229, now), tachiDraft(230, now), tachiDraft(231, now)};
   drafts[1].rulesetProof.validationFingerprint = std::string(64, 'e');
   for (const auto &value : drafts) {
-    const auto staged = repository.StageChartResult(
-        canonicalAttempt(value, temp.path()), {});
+    const auto staged = stageCanonicalAttempt(
+        repository, canonicalAttempt(value, temp.path()));
     expect(staged.status == result_persistence::StageStatus::Staged,
            "Tachi service integration stages a canonical attempt");
     expect(repository.EnqueueReadyIrOutboxDraft(value, false).entry.has_value(),

@@ -16,14 +16,14 @@ bool expect(bool condition, const char *message) {
 } // namespace
 
 int main() {
-  ReplayData replay;
-  replay.provenance.playback = {
+  JudgedPlaybackData replay;
+  replay.context.playback = {
       .percent = 75,
       .mode = audio::PlaybackMode::TimeStretch,
   };
-  replay.provenance.clubMode = true;
-  StartOptions replayOptions{.replayData = std::make_shared<ReplayData>(replay)};
-  applyReplayProvenanceToStartOptions(replayOptions, replay);
+  replay.context.clubMode = true;
+  StartOptions replayOptions{.replayData = std::make_shared<JudgedPlaybackData>(replay)};
+  applyJudgedPlaybackContextToStartOptions(replayOptions, replay);
 
   const auto failure = gameplay_startup::playbackInitializationResult(
       false, "TimeStretch playback mode is not supported");
@@ -73,6 +73,8 @@ int main() {
   raw->setup.playbackRulesetId = "beatoraja";
   raw->setup.playbackRulesetRevision = 2;
   raw->setup.playbackRatePercent = 125;
+  raw->setup.playbackMode = audio::PlaybackMode::TimeStretch;
+  raw->setup.candidateSelection = gameplay::CandidateSelectionMode::Score;
   raw->setup.judgeWindowScalePercent = 90;
   raw->setup.startingGaugePercent = 42.0F;
   raw->setup.clubMode = true;
@@ -92,6 +94,7 @@ int main() {
                   rawOptions.playOption2Seed == 29,
               "raw playback restores chart randomization") ||
       !expect(rawOptions.playback.percent == 125 &&
+                  rawOptions.playback.mode == audio::PlaybackMode::TimeStretch &&
                   rawOptions.judgeWindowScalePercent == 90 &&
                   rawOptions.startingGaugePercent == 42 &&
                   rawOptions.clubMode,
@@ -100,6 +103,12 @@ int main() {
                   rawOptions.requiredRulesetDescriptor ==
                       RulesetDescriptor::For(GameplayRuleset::Beatoraja),
               "raw playback restores its ruleset identity")) {
+    return 1;
+  }
+  if (!expect(effectiveNotePriorityModeAtPlayStart(
+                  rawOptions, AppSettings::NotePriorityMode::Duration) ==
+                  AppSettings::NotePriorityMode::Score,
+              "raw playback candidate selection overrides current settings")) {
     return 1;
   }
 

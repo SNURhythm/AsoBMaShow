@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "scene/play/Pacemaker.h"
 #include "skin/SkinTypes.h"
 
@@ -13,7 +13,7 @@ namespace gbattle {
 inline constexpr const char *kTargetLabel = "G-BATTLE";
 
 inline pacemaker::Target targetFromRecord(bms_parser::Chart &chart,
-                                          const ReplayData &record) {
+                                          const JudgedPlaybackData &record) {
   if (record.autoPlay || chart.Meta.TotalNotes <= 0) {
     return {};
   }
@@ -39,7 +39,7 @@ inline pacemaker::Target targetFromRecord(bms_parser::Chart &chart,
 inline std::optional<ResultPacemakerData>
 resultPacemakerDataFromRecord(bms_parser::Chart &chart,
                               const RhythmState &state,
-                              const ReplayData &record) {
+                              const JudgedPlaybackData &record) {
   pacemaker::Target target = targetFromRecord(chart, record);
   if (!target.enabled) {
     return std::nullopt;

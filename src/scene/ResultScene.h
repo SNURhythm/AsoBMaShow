@@ -1,6 +1,5 @@
 #pragma once
-#include "../LegacyChartResultAttempt.h"
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 #include "../ResultPersistenceCoordinator.h"
 #include "../ir/IrSubmission.h"
 #include "../ir/IrSubmissionSnapshot.h"
@@ -45,7 +44,7 @@ struct ResultPracticeOptions {
   std::string assistOption = assist_options::kOff;
   unsigned long long leadInMicros = 0;
   Scene *returnScene = nullptr;
-  std::function<void(const ReplayData &)> practiceGhostCallback;
+  std::function<void(const JudgedPlaybackData &)> practiceGhostCallback;
 };
 
 [[nodiscard]] inline std::shared_ptr<practice::Session>
@@ -144,10 +143,11 @@ struct LocalResultSource {
   bms_parser::ChartMeta meta;
   RhythmState resultState;
   ScoreProvenance attemptProvenance;
-  std::optional<ReplayData> presentationReplay;
-  std::optional<ReplayData> retryData;
-  std::optional<ReplayData> analyticsData;
+  std::optional<JudgedPlaybackData> presentationReplay;
+  std::optional<JudgedPlaybackData> retryData;
+  std::optional<JudgedPlaybackData> analyticsData;
   std::optional<ResultPreviousBestData> previousBest;
+  std::optional<int> persistedResultId;
   ResultPersistenceOptions persistenceOptions;
   ResultPracticeOptions practiceOptions;
   ResultCourseOptions courseOptions;
@@ -218,15 +218,15 @@ public:
   ResultScene(
       ApplicationContext &context, const bms_parser::ChartMeta &meta,
       const RhythmState &state, const ScoreProvenance &attemptProvenance,
-      const ReplayData *replay = nullptr,
+      const JudgedPlaybackData *replay = nullptr,
       ResultPersistenceOptions persistenceOptions = {},
-      const ReplayData *retrySource = nullptr,
+      const JudgedPlaybackData *retrySource = nullptr,
       ResultPracticeOptions practiceOptions = {}, bool autoPlayResult = false,
       ResultCourseOptions courseOptions = {}, std::string pacemakerTarget = {},
       std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
       bms_parser::Chart *reusableRetryChart = nullptr,
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
-      const ReplayData *analyticsSource = nullptr);
+      const JudgedPlaybackData *analyticsSource = nullptr);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override = default;
 

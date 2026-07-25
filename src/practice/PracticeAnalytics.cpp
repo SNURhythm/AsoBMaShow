@@ -190,38 +190,39 @@ std::optional<std::size_t> sectionForEvent(const ChartLayout &layout,
 }
 
 TimingConditions conditionsFor(const bms_parser::Chart &chart,
-                               const ReplayData &replay) {
+                               const JudgedPlaybackData &replay) {
   TimingConditions result{
-      .playback = replay.provenance.playback,
-      .judgeWindowScalePercent = replay.provenance.judgeWindowScalePercent,
+      .playback = replay.context.playback,
+      .judgeWindowScalePercent = replay.context.judgeWindowScalePercent,
   };
-  if (replay.provenance.stages.empty()) {
-    if (replay.provenance.ruleset.version > 0) {
+  if (!replay.context.policy.has_value()) {
+    if (replay.context.ruleset.version > 0) {
       result.windowResolution = TimingWindowResolution::Unresolved;
     }
     return result;
   }
 
-  const ScoreStageProvenance *matching =
-      score_provenance::uniqueStageForChart(replay.provenance, chart.Meta);
-  if (matching == nullptr) {
+  const auto &policy = *replay.context.policy;
+  if (!course_identity::sameChart(
+          {.sha256 = policy.chartSha256, .md5 = policy.chartMd5},
+          {.sha256 = chart.Meta.SHA256, .md5 = chart.Meta.MD5})) {
     result.windowResolution = TimingWindowResolution::Unresolved;
     return result;
   }
   result.windowResolution = TimingWindowResolution::Resolved;
-  result.effectiveJudgeWindows = matching->effectiveJudgeWindows;
+  result.effectiveJudgeWindows = policy.effectiveJudgeWindows;
   return result;
 }
 
 Analysis analyzeAttempts(const bms_parser::Chart &chart,
-                         std::span<const ReplayData *const> attempts,
+                         std::span<const JudgedPlaybackData *const> attempts,
                          const audio::PlaybackRate &playback) {
   const ChartLayout layout = buildChartLayout(chart);
   Accumulator overall;
   std::map<int, Accumulator> lanes;
   std::vector<Accumulator> sections(layout.sections.size());
 
-  for (const ReplayData *replay : attempts) {
+  for (const JudgedPlaybackData *replay : attempts) {
     if (replay == nullptr) {
       continue;
     }
@@ -303,17 +304,17 @@ Analysis analyzeAttempts(const bms_parser::Chart &chart,
 
 } // namespace
 
-Analysis analyze(const bms_parser::Chart &chart, const ReplayData &replay) {
-  const ReplayData *attempt = &replay;
+Analysis analyze(const bms_parser::Chart &chart, const JudgedPlaybackData &replay) {
+  const JudgedPlaybackData *attempt = &replay;
   return analyzeAttempts(chart, std::span(&attempt, 1),
-                         replay.provenance.playback);
+                         replay.context.playback);
 }
 
 std::vector<AnalysisGroup>
 analyzeCompatibleAttempts(const bms_parser::Chart &chart,
-                          std::span<const ReplayData> attempts) {
+                          std::span<const JudgedPlaybackData> attempts) {
   std::vector<AnalysisGroup> result;
-  std::vector<std::vector<const ReplayData *>> groupedAttempts;
+  std::vector<std::vector<const JudgedPlaybackData *>> groupedAttempts;
   for (std::size_t index = 0; index < attempts.size(); ++index) {
     const TimingConditions conditions = conditionsFor(chart, attempts[index]);
     const auto found =

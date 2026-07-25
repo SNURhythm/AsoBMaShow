@@ -9,7 +9,7 @@ Session::Session(Configuration configuration)
 
 void Session::beginAttempt() { attemptActive_ = true; }
 
-void Session::completeAttempt(ReplayData replay) {
+void Session::completeAttempt(JudgedPlaybackData replay) {
   if (!attemptActive_) {
     return;
   }
@@ -31,7 +31,7 @@ int Session::loopNumber() const {
   return static_cast<int>(completedAttempts_.size()) + 1;
 }
 
-const std::vector<ReplayData> &Session::completedAttempts() const {
+const std::vector<JudgedPlaybackData> &Session::completedAttempts() const {
   return completedAttempts_;
 }
 
@@ -41,9 +41,9 @@ std::size_t Session::abandonedAttemptCount() const {
 
 const Configuration &Session::configuration() const { return configuration_; }
 
-const ReplayData *
+const JudgedPlaybackData *
 completedAttemptForGhost(const Session *session,
-                         const ReplayData &sessionlessAttempt,
+                         const JudgedPlaybackData &sessionlessAttempt,
                          bool attemptCompleted) noexcept {
   if (!attemptCompleted) {
     return nullptr;

@@ -22,7 +22,7 @@ struct ResultCompatibilityGroup {
 class ResultModel {
 public:
   ResultModel(const bms_parser::Chart &chart,
-              std::span<const ReplayData> completedAttempts,
+              std::span<const JudgedPlaybackData> completedAttempts,
               std::size_t abandonedAttempts);
 
   void selectAttempt(std::optional<std::size_t> attemptIndex);

@@ -530,24 +530,6 @@ void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {
   assert(migrated->stages.front().effectiveJudgeWindows.size() == 20);
   assert(migrated->stages.front().totalNotes == 0);
   assert(migrated->stages.front().effectiveGaugeTotal == 0.0);
-
-  ReplayData replay;
-  replay.chartMeta = input.chartMeta;
-  replay.provenance = *migrated;
-  StartOptions options;
-  applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.replayRulesetOverride.has_value());
-  assert(options.replayRulesetOverride->totalNotes ==
-         input.chartMeta.TotalNotes);
-  assert(options.replayRulesetOverride->authoredGaugeTotal ==
-         input.chartMeta.Total);
-  assert(options.replayRulesetOverride->effectiveGaugeTotal ==
-         input.chartMeta.Total);
-
-  replay.provenance.stages.front().totalNotes = 1;
-  StartOptions partialProof;
-  applyReplayProvenanceToStartOptions(partialProof, replay);
-  assert(!partialProof.replayRulesetOverride.has_value());
 }
 
 void testCourseMergePreservesStagesAndWorstEligibility() {
@@ -583,8 +565,8 @@ void testCourseMergePreservesStagesAndWorstEligibility() {
 
 void testPlayStartCaptureIsImmutableAndShared() {
   bms_parser::ChartMeta meta;
-  meta.MD5 = "attempt-md5";
-  meta.SHA256 = "attempt-sha256";
+  meta.MD5 = std::string(32, 'a');
+  meta.SHA256 = std::string(64, 'b');
   meta.Rank = 1;
   meta.TotalNotes = 1000;
   meta.HasTotal = true;
@@ -625,7 +607,7 @@ void testPlayStartCaptureIsImmutableAndShared() {
 
   assert(serializeScoreProvenance(captured) == capturedJson);
   assert(captured.stages.size() == 1);
-  assert(captured.stages.front().chartSha256 == "attempt-sha256");
+  assert(captured.stages.front().chartSha256 == std::string(64, 'b'));
   assert(captured.stages.front().longNoteMode == 2);
   assert(captured.player1 ==
          PlayerOptionProvenance("RANDOM", std::int64_t{1234}));
@@ -636,23 +618,27 @@ void testPlayStartCaptureIsImmutableAndShared() {
   assert(captured.eligibility == ScoreEligibility::Modified);
 
   const ScoreProvenance scoreProvenance = captured;
-  ReplayData replay;
-  replay.provenance = captured;
-  assert(scoreProvenance == replay.provenance);
+  JudgedPlaybackData replay;
+  bms_parser::ChartMeta recordedMeta;
+  recordedMeta.MD5 = std::string(32, 'a');
+  recordedMeta.SHA256 = std::string(64, 'b');
+  replay.context = analysis::playbackContextFrom(captured, recordedMeta);
+  assert(replay.context.ruleset == scoreProvenance.ruleset);
+  assert(replay.context.playback == scoreProvenance.playback);
+  assert(replay.context.policy.has_value());
 }
 
 void testReplayStartRestoresPracticeProvenance() {
-  ReplayData replay;
-  replay.provenance = sampleVerifiedProvenance("replay-start");
-  replay.provenance.playback = {.percent = 75,
+  JudgedPlaybackData replay;
+  replay.context.playback = {.percent = 75,
                                 .mode = audio::PlaybackMode::PitchShift};
-  replay.provenance.judgeWindowScalePercent = 80;
-  replay.provenance.startingGaugePercent = 37;
+  replay.context.judgeWindowScalePercent = 80;
+  replay.context.startingGaugePercent = 37;
 
   StartOptions options;
   options.playback = {.percent = 150, .mode = audio::PlaybackMode::PitchShift};
-  applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.playback == replay.provenance.playback);
+  applyJudgedPlaybackContextToStartOptions(options, replay);
+  assert(options.playback == replay.context.playback);
   assert(options.judgeWindowScalePercent == 80);
   assert(options.startingGaugePercent == 37);
 }
@@ -737,21 +723,21 @@ void testReplayUsesPersistedJudgeWindowsAsAuthority() {
       {Kpoor, {-77777, 88888}},
   };
 
-  ReplayData replay;
+  JudgedPlaybackData replay;
   replay.chartMeta.SHA256 = sha;
   replay.chartMeta.MD5 = md5;
   replay.chartMeta.Rank = 0;
-  replay.provenance = sampleVerifiedProvenance("replay-authority");
-  replay.provenance.stages = {replayStage(sha, md5, persisted)};
+  auto provenance = sampleVerifiedProvenance("replay-authority");
+  provenance.stages = {replayStage(sha, md5, persisted)};
   std::string error;
   const auto decoded = deserializeScoreProvenance(
-      serializeScoreProvenance(replay.provenance), error);
+      serializeScoreProvenance(provenance), error);
   assert(error.empty());
   assert(decoded.has_value());
-  replay.provenance = *decoded;
+  replay.context = analysis::playbackContextFrom(*decoded, replay.chartMeta);
 
   StartOptions options;
-  applyReplayProvenanceToStartOptions(options, replay);
+  applyJudgedPlaybackContextToStartOptions(options, replay);
   assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta currentMeta = replay.chartMeta;
@@ -765,14 +751,19 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   const std::string sha(64, 'c');
   const std::string md5(32, 'd');
   const auto persisted = sampleWindows();
-  ReplayData replay;
+  JudgedPlaybackData replay;
   replay.chartMeta.SHA256 = sha;
   replay.chartMeta.MD5 = md5;
-  replay.provenance = sampleVerifiedProvenance("replay-validation");
-  replay.provenance.stages = {replayStage(sha, md5, persisted)};
+  replay.chartMeta.TotalNotes = 1000;
+  replay.chartMeta.HasTotal = true;
+  replay.chartMeta.Total = 200.0;
+  replay.chartMeta.KeyMode = 7;
+  auto provenance = sampleVerifiedProvenance("replay-validation");
+  provenance.stages = {replayStage(sha, md5, persisted)};
+  replay.context = analysis::playbackContextFrom(provenance, replay.chartMeta);
 
   StartOptions options;
-  applyReplayProvenanceToStartOptions(options, replay);
+  applyJudgedPlaybackContextToStartOptions(options, replay);
   assert(options.replayRulesetOverride.has_value());
 
   bms_parser::ChartMeta differentChart = replay.chartMeta;
@@ -782,18 +773,21 @@ void testReplayJudgeOverrideValidatesChartAndWindows() {
   const Judge fallback = makeEffectiveJudgeAtPlayStart(options, differentChart);
   assert(fallback.timingWindows == Judge(differentChart.Rank).timingWindows);
 
-  replay.provenance.stages.front().effectiveJudgeWindows.pop_back();
+  provenance.stages.front().effectiveJudgeWindows.pop_back();
+  replay.context = analysis::playbackContextFrom(provenance, replay.chartMeta);
   StartOptions incompleteOptions;
-  applyReplayProvenanceToStartOptions(incompleteOptions, replay);
-  assert(!incompleteOptions.replayRulesetOverride.has_value());
-  const Judge incompleteFallback =
-      makeEffectiveJudgeAtPlayStart(incompleteOptions, replay.chartMeta);
-  assert(incompleteFallback.timingWindows ==
-         Judge(replay.chartMeta.Rank).timingWindows);
+  applyJudgedPlaybackContextToStartOptions(incompleteOptions, replay);
+  assert(incompleteOptions.replayRulesetOverride.has_value());
+  const auto incompletePolicy = buildGameplayRulesetPolicyAtPlayStart(
+      incompleteOptions, replay.chartMeta,
+      AppSettings::NotePriorityMode::Lowest);
+  assert(incompletePolicy.status ==
+         gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot);
+  assert(!incompletePolicy.policy.has_value());
 
-  replay.provenance = ScoreProvenance::Legacy();
+  replay.context = {};
   StartOptions legacyOptions;
-  applyReplayProvenanceToStartOptions(legacyOptions, replay);
+  applyJudgedPlaybackContextToStartOptions(legacyOptions, replay);
   assert(!legacyOptions.replayRulesetOverride.has_value());
 }
 
@@ -808,15 +802,17 @@ void testCourseReplaySelectsMatchingStageJudgeWindows() {
       {Bad, {-401, 402}},    {Kpoor, {-501, 502}},
   };
 
-  auto stageReplay = std::make_shared<ReplayData>();
+  auto stageReplay = std::make_shared<JudgedPlaybackData>();
   stageReplay->chartMeta.SHA256 = secondSha;
   stageReplay->chartMeta.MD5 = secondMd5;
   stageReplay->chartMeta.Rank = 3;
-  stageReplay->provenance = sampleVerifiedProvenance("course-replay-stage");
-  stageReplay->provenance.stages = {
+  auto provenance = sampleVerifiedProvenance("course-replay-stage");
+  provenance.stages = {
       replayStage(firstSha, firstMd5, firstWindows),
       replayStage(secondSha, secondMd5, secondWindows),
   };
+  stageReplay->context =
+      analysis::playbackContextFrom(provenance, stageReplay->chartMeta);
 
   auto session = std::make_shared<CoursePlaySession>();
   session->constraints.judgement = CourseJudgementConstraint::NoGood;

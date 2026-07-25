@@ -42,7 +42,7 @@ bms_parser::Chart makeChart() {
   return chart;
 }
 
-std::vector<JudgeWindowProvenance> windows(long long early = -10'000) {
+std::vector<analysis::JudgedWindow> windows(long long early = -10'000) {
   return {{.judgement = PGreat,
            .earlyMicros = early,
            .lateMicros = 10'000},
@@ -51,17 +51,18 @@ std::vector<JudgeWindowProvenance> windows(long long early = -10'000) {
            .lateMicros = 30'000}};
 }
 
-ReplayData makeAttempt(int lane, long long noteMicros, long long diffMicros,
+JudgedPlaybackData makeAttempt(int lane, long long noteMicros, long long diffMicros,
                        int playbackPercent = 100, bool autoPlay = false) {
-  ReplayData replay;
+  JudgedPlaybackData replay;
   replay.autoPlay = autoPlay;
-  replay.provenance.playback.percent = playbackPercent;
-  replay.provenance.judgeWindowScalePercent = 100;
-  replay.provenance.stages = {{
+  replay.context.playback.percent = playbackPercent;
+  replay.context.judgeWindowScalePercent = 100;
+  replay.context.ruleset = RulesetDescriptor::Current();
+  replay.context.policy = analysis::PlaybackPolicySnapshot{
       .chartMd5 = std::string(32, 'b'),
       .chartSha256 = std::string(64, 'a'),
       .effectiveJudgeWindows = windows(),
-  }};
+  };
   replay.events.push_back({.action = ReplayEventAction::Press,
                            .lane = lane,
                            .noteTimeMicros = noteMicros,
@@ -72,7 +73,7 @@ ReplayData makeAttempt(int lane, long long noteMicros, long long diffMicros,
 
 void testAggregatesOnlyCompatibleCompletedAttempts() {
   auto chart = makeChart();
-  std::vector<ReplayData> attempts = {
+  std::vector<JudgedPlaybackData> attempts = {
       makeAttempt(1, 0, -5'000),
       makeAttempt(2, 1'000'000, 5'000),
       makeAttempt(3, 2'000'000, 10'000, 75),
@@ -100,7 +101,7 @@ void testAggregatesOnlyCompatibleCompletedAttempts() {
 
 void testAttemptSelectionAndAutoLabels() {
   auto chart = makeChart();
-  std::vector<ReplayData> attempts = {
+  std::vector<JudgedPlaybackData> attempts = {
       makeAttempt(1, 0, -5'000),
       makeAttempt(2, 1'000'000, 7'000, 100, true),
   };
@@ -124,7 +125,7 @@ void testAttemptSelectionAndAutoLabels() {
 
 void testSectionSelectionUsesExactMeasureBoundaries() {
   auto chart = makeChart();
-  std::vector<ReplayData> attempts = {makeAttempt(1, 0, -5'000)};
+  std::vector<JudgedPlaybackData> attempts = {makeAttempt(1, 0, -5'000)};
   practice::ResultModel model(chart, attempts, 0);
 
   model.selectSection(2, 1);

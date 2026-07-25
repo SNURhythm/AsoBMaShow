@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../PrepMetronome.h"
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 #include "../bms_parser.hpp"
 
 #include <atomic>
@@ -59,7 +59,7 @@ using LogCallback = std::function<void(const std::string &)>;
 
 struct RenderOptions {
   KeySoundMode keySoundMode = KeySoundMode::ChartTiming;
-  const ReplayData *replay = nullptr;
+  const JudgedPlaybackData *replay = nullptr;
   audio::PlaybackRate playback;
   bool clubMode = false;
   long long keySoundOffsetMicros = 0;
@@ -85,7 +85,7 @@ CollectChartTimedAudioEvents(const bms_parser::Chart &chart);
 
 std::vector<AudioEvent>
 CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
-                              const ReplayData &replay,
+                              const JudgedPlaybackData &replay,
                               long long keySoundOffsetMicros = 0);
 
 RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,

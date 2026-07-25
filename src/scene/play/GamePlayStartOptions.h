@@ -1,7 +1,8 @@
 #pragma once
 
 #include "../../CoursePlaySession.h"
-#include "../../ReplayData.h"
+#include "../../analysis/JudgedPlaybackData.h"
+#include "../../analysis/JudgedPlaybackContext.h"
 #include "../../AppSettings.h"
 #include "../../input/InputTypes.h"
 #include "../../practice/PracticeSession.h"
@@ -73,9 +74,9 @@ struct StartOptions {
   GaugeProfile gaugeProfile = GaugeProfile::Standard;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
-  std::shared_ptr<ReplayData> replayData = nullptr;
+  std::shared_ptr<JudgedPlaybackData> replayData = nullptr;
   std::shared_ptr<const replay::ReplayPlaybackData> replayPlayback = nullptr;
-  std::shared_ptr<ReplayData> gbattleRecordData = nullptr;
+  std::shared_ptr<JudgedPlaybackData> gbattleRecordData = nullptr;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
@@ -96,54 +97,15 @@ struct StartOptions {
   Scene *returnScene = nullptr;
   std::optional<bool> touchVisualizationEnabled;
   std::optional<bool> replayGhostRenderingEnabled;
-  std::function<void(const ReplayData &)> practiceGhostCallback;
+  std::function<void(const JudgedPlaybackData &)> practiceGhostCallback;
   std::vector<InputDeviceCategory> inputDeviceCategories;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   std::optional<RulesetDescriptor> requiredRulesetDescriptor;
   std::optional<ScoreStageProvenance> replayRulesetOverride;
+  std::optional<gameplay::CandidateSelectionMode> replayCandidateSelection;
 };
 
 namespace play_start_detail {
-[[nodiscard]] inline std::optional<
-    std::array<gameplay::JudgeWindowSet, 4>>
-validatedJudgeContexts(const ScoreStageProvenance &stage) {
-  constexpr std::array contexts{
-      gameplay::JudgeWindowContext::Normal,
-      gameplay::JudgeWindowContext::Scratch,
-      gameplay::JudgeWindowContext::LongNoteTail,
-      gameplay::JudgeWindowContext::LongScratchTail,
-  };
-  constexpr std::array judgements{PGreat, Great, Good, Bad, Kpoor};
-  std::array<gameplay::JudgeWindowSet, 4> result{};
-  std::array<bool, contexts.size() * judgements.size()> found{};
-  for (const auto &window : stage.effectiveJudgeWindows) {
-    const auto context = std::ranges::find(contexts, window.context);
-    const auto judgement = std::ranges::find(judgements, window.judgement);
-    if (context == contexts.end() || judgement == judgements.end() ||
-        window.earlyMicros > 0 || window.lateMicros < 0 ||
-        window.earlyMicros > window.lateMicros ||
-        window.earlyMicros < -2'000'000 || window.lateMicros > 2'000'000) {
-      return std::nullopt;
-    }
-    const std::size_t contextIndex = static_cast<std::size_t>(
-        std::distance(contexts.begin(), context));
-    const std::size_t judgementIndex = static_cast<std::size_t>(
-        std::distance(judgements.begin(), judgement));
-    const std::size_t index =
-        contextIndex * judgements.size() + judgementIndex;
-    if (found[index]) {
-      return std::nullopt;
-    }
-    found[index] = true;
-    result[contextIndex].windows[judgementIndex] = {
-        window.judgement, window.earlyMicros, window.lateMicros};
-  }
-  if (!std::ranges::all_of(found, [](bool value) { return value; })) {
-    return std::nullopt;
-  }
-  return result;
-}
-
 [[nodiscard]] inline std::optional<
     std::map<Judgement, std::pair<long long, long long>>>
 validatedJudgeWindows(const ScoreStageProvenance &stage) {
@@ -170,36 +132,6 @@ validatedJudgeWindows(const ScoreStageProvenance &stage) {
   return result;
 }
 
-[[nodiscard]] inline std::optional<ScoreStageProvenance>
-replayJudgeOverrideForChart(const ScoreProvenance &provenance,
-                            const bms_parser::ChartMeta &chartMeta) {
-  const ScoreStageProvenance *matching =
-      score_provenance::uniqueStageForChart(provenance, chartMeta);
-  if (matching == nullptr) {
-    return std::nullopt;
-  }
-  ScoreStageProvenance result = *matching;
-  const bool missingLegacyGaugeProof =
-      result.totalNotes == 0 && result.effectiveGaugeTotal == 0.0;
-  if (missingLegacyGaugeProof &&
-      provenance.ruleset ==
-          RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
-    result.totalNotes = chartMeta.TotalNotes;
-    result.authoredGaugeTotal =
-        chartMeta.HasTotal ? std::optional<double>(chartMeta.Total)
-                           : std::nullopt;
-    result.effectiveGaugeTotal =
-        resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja, chartMeta);
-    result.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
-  }
-  if (result.totalNotes <= 0 ||
-      !std::isfinite(result.effectiveGaugeTotal) ||
-      result.effectiveGaugeTotal <= 0.0 ||
-      !validatedJudgeContexts(result).has_value()) {
-    return std::nullopt;
-  }
-  return result;
-}
 } // namespace play_start_detail
 
 inline void applyPracticeConfigurationToStartOptions(
@@ -261,37 +193,34 @@ makeEffectiveJudgeAtPlayStart(const StartOptions &options,
   return judge;
 }
 
-inline void applyScoreProvenanceToStartOptions(
-    StartOptions &options, const ScoreProvenance &provenance,
-    const bms_parser::ChartMeta &chartMeta) {
-  options.playback = provenance.playback;
-  options.clubMode = provenance.clubMode;
-  options.judgeWindowScalePercent = provenance.judgeWindowScalePercent;
-  options.startingGaugePercent = provenance.startingGaugePercent;
-  options.gaugeType = provenance.gaugeType;
-  options.gaugeProfile = provenance.gaugeProfile;
-  options.gaugeAutoShift = provenance.gaugeAutoShift;
-  options.gaugeAutoShiftLowerBound = provenance.gaugeAutoShiftLowerBound;
-  if (provenance.ruleset == RulesetDescriptor::Legacy()) {
+inline void applyJudgedPlaybackContextToStartOptions(
+    StartOptions &options, const JudgedPlaybackData &replay) {
+  options.playback = replay.context.playback;
+  options.replayCandidateSelection = replay.context.candidateSelection;
+  options.judgeWindowScalePercent = replay.context.judgeWindowScalePercent;
+  options.startingGaugePercent = replay.context.startingGaugePercent;
+  options.clubMode = replay.context.clubMode;
+  options.gaugeType = replay.initialGaugeType;
+  options.gaugeProfile = replay.gaugeProfile;
+  options.gaugeAutoShift = replay.gaugeAutoShift;
+  options.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
+  if (replay.context.ruleset == RulesetDescriptor::Legacy()) {
     options.ruleset = GameplayRuleset::Beatoraja;
     options.requiredRulesetDescriptor =
         RulesetDescriptor::For(GameplayRuleset::Beatoraja);
     options.replayRulesetOverride.reset();
   } else {
-    options.requiredRulesetDescriptor = provenance.ruleset;
+    options.requiredRulesetDescriptor = replay.context.ruleset;
     if (const auto recordedRuleset =
-            gameplayRulesetFromId(provenance.ruleset.id)) {
+            gameplayRulesetFromId(replay.context.ruleset.id)) {
       options.ruleset = *recordedRuleset;
     }
     options.replayRulesetOverride =
-        play_start_detail::replayJudgeOverrideForChart(provenance, chartMeta);
+        replay.context.policy.has_value()
+            ? std::optional<ScoreStageProvenance>(
+                  analysis::scoreStageFrom(*replay.context.policy))
+            : std::nullopt;
   }
-}
-
-inline void applyReplayProvenanceToStartOptions(StartOptions &options,
-                                                const ReplayData &replay) {
-  applyScoreProvenanceToStartOptions(options, replay.provenance,
-                                     replay.chartMeta);
 }
 
 inline void applyReplayPlaybackToStartOptions(
@@ -313,6 +242,8 @@ inline void applyReplayPlaybackToStartOptions(
   options.longNoteMode = setup.longNoteMode;
   options.assistOption = setup.assistOption;
   options.playback.percent = setup.playbackRatePercent;
+  options.playback.mode = setup.playbackMode;
+  options.replayCandidateSelection = setup.candidateSelection;
   options.clubMode = setup.clubMode;
   options.judgeWindowScalePercent = setup.judgeWindowScalePercent;
   options.startingGaugePercent =
@@ -342,6 +273,31 @@ candidateSelectionForNotePriority(AppSettings::NotePriorityMode mode) {
   }
 }
 
+[[nodiscard]] inline AppSettings::NotePriorityMode
+notePriorityForCandidateSelection(gameplay::CandidateSelectionMode mode) {
+  switch (mode) {
+  case gameplay::CandidateSelectionMode::Combo:
+    return AppSettings::NotePriorityMode::Combo;
+  case gameplay::CandidateSelectionMode::Duration:
+    return AppSettings::NotePriorityMode::Duration;
+  case gameplay::CandidateSelectionMode::Score:
+    return AppSettings::NotePriorityMode::Score;
+  case gameplay::CandidateSelectionMode::LR2:
+  case gameplay::CandidateSelectionMode::Lowest:
+    return AppSettings::NotePriorityMode::Lowest;
+  }
+  return AppSettings::NotePriorityMode::Lowest;
+}
+
+[[nodiscard]] inline AppSettings::NotePriorityMode
+effectiveNotePriorityModeAtPlayStart(
+    const StartOptions &options, AppSettings::NotePriorityMode fallback) {
+  return options.replayCandidateSelection.has_value()
+             ? notePriorityForCandidateSelection(
+                   *options.replayCandidateSelection)
+             : fallback;
+}
+
 [[nodiscard]] inline gameplay::GameplayPolicyBuildOutcome
 buildGameplayRulesetPolicyAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
@@ -368,20 +324,10 @@ buildGameplayRulesetPolicyAtPlayStart(
        .judgeScalePercent = options.judgeWindowScalePercent,
        .courseJudgement = options.courseConstraints.judgement,
        .beatorajaCandidateSelection =
-           candidateSelectionForNotePriority(notePriorityMode),
+           options.replayCandidateSelection.value_or(
+               candidateSelectionForNotePriority(notePriorityMode)),
        .requiredDescriptor = std::move(requiredDescriptor),
        .replaySnapshot = options.replayRulesetOverride});
-  const bool legacyReplayFallback =
-      options.replayData != nullptr &&
-      options.replayData->provenance.ruleset == RulesetDescriptor::Legacy();
-  if (outcome.built() && options.replayData != nullptr &&
-      !options.replayRulesetOverride.has_value() && !legacyReplayFallback) {
-    outcome.status =
-        gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot;
-    outcome.policy.reset();
-    outcome.diagnostic =
-        "The replay does not contain a complete gameplay policy snapshot.";
-  }
   if (outcome.policy.has_value() && options.courseSession != nullptr &&
       !gameplay::courseSessionAcceptsPolicy(*options.courseSession,
                                             *outcome.policy)) {
@@ -500,7 +446,7 @@ enforceCoursePlaybackRules(StartOptions options) {
 
 inline StartOptions makeCourseReplayStageStartOptions(
     const std::shared_ptr<CoursePlaySession> &session,
-    const std::shared_ptr<ReplayData> &stageReplay) {
+    const std::shared_ptr<JudgedPlaybackData> &stageReplay) {
   StartOptions options;
   options.startPosition = 0;
   options.autoKeySound = false;
@@ -528,15 +474,14 @@ inline StartOptions makeCourseReplayStageStartOptions(
     options.longNoteMode =
         normalizeChartLongNoteModeValue(stageReplay->chartMeta.LnMode);
     options.assistOption = stageReplay->assistOption;
-    applyReplayProvenanceToStartOptions(options, *stageReplay);
+    applyJudgedPlaybackContextToStartOptions(options, *stageReplay);
   }
   return enforceCoursePlaybackRules(std::move(options));
 }
 
 inline StartOptions makeCourseReplayStageStartOptions(
     const std::shared_ptr<CoursePlaySession> &session,
-    const std::shared_ptr<const replay::ReplayPlaybackData> &stagePlayback,
-    const bms_parser::ChartMeta &chartMeta) {
+    const std::shared_ptr<const replay::ReplayPlaybackData> &stagePlayback) {
   StartOptions options;
   options.startPosition = 0;
   options.autoKeySound = false;
@@ -546,11 +491,6 @@ inline StartOptions makeCourseReplayStageStartOptions(
     applyReplayPlaybackToStartOptions(options, stagePlayback);
   }
   if (session != nullptr) {
-    if (session->currentIndex < session->stageProvenance.size() &&
-        session->stageProvenance[session->currentIndex].has_value()) {
-      applyScoreProvenanceToStartOptions(
-          options, *session->stageProvenance[session->currentIndex], chartMeta);
-    }
     options.gaugeType = session->gaugeType;
     options.gaugeProfile = session->gaugeProfile;
     options.gaugeAutoShift = session->gaugeAutoShift;

@@ -8,6 +8,7 @@
 #include "PracticeNoteFinalizer.h"
 #include "../../GBattleMode.h"
 #include "../../PlayOptionUtils.h"
+#include "../../analysis/JudgedPlaybackContext.h"
 #include "../../PrepMetronome.h"
 #include "../../repositories/ReplayRepository.h"
 #include "../../ResultPresentationUtils.h"
@@ -1020,7 +1021,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   gameplay::GameplaySimulationConfig simulationConfig{
       .judge = rulesetPolicyBuild.policy->judge,
       .gaugeRules = rulesetPolicyBuild.policy->gauge,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = effectiveNotePriorityModeAtPlayStart(
+          options, context.settings.notePriorityMode),
       .attempt =
           {
               .initialGaugeType = state->selectedGaugeType,
@@ -1522,7 +1524,8 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
           std::move(options), context.inputProfile, chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, this->chart->Meta,
-          context.settings.notePriorityMode)),
+          effectiveNotePriorityModeAtPlayStart(
+              this->options, context.settings.notePriorityMode))),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
@@ -1545,7 +1548,8 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
                                        this->chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
           this->options, this->chart->Meta,
-          context.settings.notePriorityMode)),
+          effectiveNotePriorityModeAtPlayStart(
+              this->options, context.settings.notePriorityMode))),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
@@ -2506,7 +2510,7 @@ void GamePlayScene::configurePacemakerTarget() {
   }
 
   std::optional<ScoreBestSnapshot> best;
-  std::optional<ReplayData> bestReplay;
+  std::optional<JudgedPlaybackData> bestReplay;
   if (selected == pacemaker::kTargetBest) {
     best = context.scoreRepository.LoadBestScore(chart->Meta);
     if (best.has_value() && best->score > 0) {
@@ -2514,20 +2518,23 @@ void GamePlayScene::configurePacemakerTarget() {
           context.replayRepository.ListReplays(chart->Meta, 100);
       for (const ReplaySummary &summary : summaries) {
         if (summary.courseReplay || summary.autoPlay ||
-            summary.finalScore != best->score || summary.eventCount <= 0) {
+            summary.finalScore != best->score ||
+            summary.replayFileState !=
+                ReplaySummary::ReplayFileState::Available) {
           continue;
         }
 
-        auto replay =
-            context.replayRepository.LoadReplay(summary.id, chart->Meta);
-        if (!replay.has_value() || replay->finalScore != best->score) {
+        auto loadedReplay = replay::loadJudgedPlaybackForAnalysis(
+            context.replayRepository, summary.id, chart->Meta);
+        if (!loadedReplay.has_value() ||
+            loadedReplay->finalScore != best->score) {
           continue;
         }
 
         const std::vector<int> progression =
-            pacemaker::buildReplayScoreProgression(*chart, *replay);
+            pacemaker::buildReplayScoreProgression(*chart, *loadedReplay);
         if (!progression.empty() && progression.back() == best->score) {
-          bestReplay = std::move(*replay);
+          bestReplay = std::move(*loadedReplay);
           break;
         }
       }
@@ -2572,8 +2579,8 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
     if (parseCancelled) {
       return false;
     }
-    StartOptions nextOptions = makeCourseReplayStageStartOptions(
-        session, stagePlayback, replayChart->Meta);
+    StartOptions nextOptions =
+        makeCourseReplayStageStartOptions(session, stagePlayback);
     context.sceneManager->changeScene(
         std::make_unique<GamePlayScene>(context, std::move(replayChart),
                                         std::move(nextOptions)),
@@ -2709,7 +2716,8 @@ void GamePlayScene::beginReplayRecording() {
   if (capturePolicy.captureAnalytics) {
     analyticsReplay.autoPlay = options.autoPlay;
     analyticsReplay.chartMeta = chart->Meta;
-    analyticsReplay.provenance = attemptProvenance;
+    analyticsReplay.context =
+        analysis::playbackContextFrom(attemptProvenance, chart->Meta);
     analyticsReplay.events.reserve(
         static_cast<size_t>(std::max(0, chart->Meta.TotalNotes)) * 2);
   }
@@ -2728,8 +2736,10 @@ void GamePlayScene::beginReplayRecording() {
   recordedReplay.playOption2 = options.playOption2;
   recordedReplay.playOption2Seed = options.playOption2Seed;
   recordedReplay.assistOption = assist_options::normalize(options.assistOption);
-  recordedReplay.provenance = attemptProvenance;
+  recordedReplay.context =
+      analysis::playbackContextFrom(attemptProvenance, chart->Meta);
   recordedReplay.initialGaugeType = options.gaugeType;
+  recordedReplay.gaugeProfile = options.gaugeProfile;
   recordedReplay.gaugeAutoShift = options.gaugeAutoShift;
   recordedReplay.gaugeAutoShiftLowerBound = options.gaugeAutoShiftLowerBound;
   recordedReplay.finalScore = 0;
@@ -2770,6 +2780,11 @@ void GamePlayScene::beginReplayRecording() {
   setup.playbackRulesetId = attemptProvenance.ruleset.id;
   setup.playbackRulesetRevision = attemptProvenance.ruleset.version;
   setup.playbackRatePercent = options.playback.percent;
+  setup.playbackMode = options.playback.mode;
+  if (rulesetPolicyBuild.policy.has_value()) {
+    setup.candidateSelection =
+        rulesetPolicyBuild.policy->judge.rules().candidateSelection;
+  }
   setup.judgeWindowScalePercent = options.judgeWindowScalePercent;
   setup.startingGaugePercent =
       state != nullptr ? state->currentGauge
@@ -2878,7 +2893,7 @@ void GamePlayScene::publishPracticeGhost() {
     return;
   }
 
-  const ReplayData *completedReplay = practice::completedAttemptForGhost(
+  const JudgedPlaybackData *completedReplay = practice::completedAttemptForGhost(
       options.practiceSession.get(), recordedReplay, recordedAttemptCompleted);
   if (completedReplay == nullptr) {
     return;
@@ -3189,7 +3204,6 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
             : resultPersistenceOptions.outcome.validatedReceiptFor(
                   *resultPersistenceOptions.attempt);
     if (receipt != nullptr) {
-      recordedReplay.id = receipt->resultId;
       recordedReplay.createdAt = receipt->createdAt;
     }
     SDL_Log("Result persistence state=%s diagnostic=%s",
@@ -3202,14 +3216,14 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
 
   defer(
       [this, capturePolicy]() {
-        const ReplayData *presentationReplay =
+        const JudgedPlaybackData *presentationReplay =
             shouldPersistRecordedReplay() ? &recordedReplay : nullptr;
-        const ReplayData *retrySource =
+        const JudgedPlaybackData *retrySource =
             presentationReplay != nullptr
                 ? presentationReplay
                 : (options.replayData != nullptr ? options.replayData.get()
                                                  : nullptr);
-        const ReplayData *analyticsSource =
+        const JudgedPlaybackData *analyticsSource =
             practice::selectResultAnalyticsSource(
                 capturePolicy.captureAnalytics ? &analyticsReplay : nullptr,
                 presentationReplay, retrySource);
@@ -3756,7 +3770,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
       .laneBeamTimeMicros = nowMicros(),
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = effectiveNotePriorityModeAtPlayStart(
+          options, context.settings.notePriorityMode),
   };
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
@@ -3823,7 +3838,8 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       .songTimeMicros = getGameplayTimeMicros(rawSongTimeMicros),
       .laneBeamTimeMicros = nowMicros(),
       .inputDelay = inputDelay,
-      .notePriorityMode = context.settings.notePriorityMode,
+      .notePriorityMode = effectiveNotePriorityModeAtPlayStart(
+          options, context.settings.notePriorityMode),
   };
   const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),

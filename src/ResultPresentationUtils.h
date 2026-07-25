@@ -2,9 +2,10 @@
 
 #include "repositories/ChartRepository.h"
 #include "repositories/ReplayRepository.h"
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "repositories/ScoreRepository.h"
 #include "scene/play/Pacemaker.h"
+#include "analysis/JudgedPlaybackAnalysis.h"
 #include "skin/SkinTypes.h"
 
 #include <algorithm>
@@ -43,7 +44,7 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
           .createdAt = previousBest.createdAt};
 }
 
-inline std::optional<ReplayData> bestReplayForSnapshot(
+inline std::optional<JudgedPlaybackData> bestReplayForSnapshot(
     ReplayRepository &replays, bms_parser::Chart &chart,
     const ScoreBestSnapshot &best,
     const std::optional<std::string> &beforeCreatedAt = std::nullopt) {
@@ -54,7 +55,8 @@ inline std::optional<ReplayData> bestReplayForSnapshot(
   const auto summaries = replays.ListReplays(chart.Meta, 100);
   for (const ReplaySummary &summary : summaries) {
     if (summary.courseReplay || summary.autoPlay ||
-        summary.finalScore != best.score || summary.eventCount <= 0) {
+        summary.finalScore != best.score ||
+        summary.replayFileState != ReplaySummary::ReplayFileState::Available) {
       continue;
     }
     if (beforeCreatedAt.has_value() && !beforeCreatedAt->empty() &&
@@ -62,15 +64,16 @@ inline std::optional<ReplayData> bestReplayForSnapshot(
       continue;
     }
 
-    auto replay = replays.LoadReplay(summary.id, chart.Meta);
-    if (!replay.has_value() || replay->finalScore != best.score) {
+    auto loadedReplay = replay::loadJudgedPlaybackForAnalysis(
+        replays, summary.id, chart.Meta);
+    if (!loadedReplay.has_value() || loadedReplay->finalScore != best.score) {
       continue;
     }
 
     const std::vector<int> progression =
-        pacemaker::buildReplayScoreProgression(chart, *replay);
+        pacemaker::buildReplayScoreProgression(chart, *loadedReplay);
     if (!progression.empty() && progression.back() == best.score) {
-      return replay;
+      return loadedReplay;
     }
   }
   return std::nullopt;
@@ -80,7 +83,7 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
     const bms_parser::ChartMeta &meta, const RhythmState &state,
     const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest,
-    const ReplayData *bestReplay = nullptr) {
+    const JudgedPlaybackData *bestReplay = nullptr) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (normalized == pacemaker::kTargetOff) {
     return std::nullopt;
@@ -107,7 +110,7 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
 
 inline pacemaker::Target pacemakerTargetForReplay(
     ReplayRepository &replays, bms_parser::Chart &chart,
-    const ReplayData &replay,
+    const JudgedPlaybackData &replay,
     const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
@@ -116,7 +119,7 @@ inline pacemaker::Target pacemakerTargetForReplay(
   }
 
   std::optional<ScoreBestSnapshot> best;
-  std::optional<ReplayData> bestReplay;
+  std::optional<JudgedPlaybackData> bestReplay;
   if (previousBest.has_value()) {
     best = scoreBestSnapshotFromPreviousBest(*previousBest);
   }
@@ -136,7 +139,7 @@ inline pacemaker::Target pacemakerTargetForReplay(
 inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
     ReplayRepository &replays, bms_parser::Chart &chart,
     const RhythmState &state,
-    const ReplayData &replay, const std::string &targetId,
+    const JudgedPlaybackData &replay, const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest) {
   const pacemaker::Target target =
       pacemakerTargetForReplay(replays, chart, replay, targetId, previousBest);
@@ -155,7 +158,7 @@ inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
 inline std::optional<ResultPreviousBestData>
 previousBestForReplayChart(ScoreRepository &scores,
                            const bms_parser::ChartMeta &meta,
-                           const ReplayData &replay) {
+                           const JudgedPlaybackData &replay) {
   std::optional<std::string> beforeCreatedAt;
   if (!replay.autoPlay && !replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;

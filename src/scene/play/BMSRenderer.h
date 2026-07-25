@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "../../ReplayData.h"
+#include "../../analysis/JudgedPlaybackData.h"
 #include "../../replay/ReplayPlaybackData.h"
 #include "../../ReplayGhostUtils.h"
 #include "../../AppSettings.h"
@@ -446,7 +446,7 @@ public:
   void setPacemakerTarget(const pacemaker::Target &target);
   void setPacemakerStatus(const pacemaker::Snapshot &snapshot);
   void setPlayOptionStatus(const std::string &label);
-  void setReplayData(const ReplayData *replayData);
+  void setReplayData(const JudgedPlaybackData *replayData);
   void setReplayTouchSamples(
       const std::vector<replay::ReplayTouchSample> &samples);
   void setAutoPlayMarkVisible(bool visible);

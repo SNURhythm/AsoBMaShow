@@ -2,7 +2,7 @@
 
 #include "PlayOptionUtils.h"
 #include "RAII.h"
-#include "ReplayResultStateBuilder.h"
+#include "analysis/JudgedPlaybackResultState.h"
 #include "ResultPresentationUtils.h"
 #include "Utils.h"
 #include "path.h"
@@ -439,7 +439,7 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 }
 
 bms_parser::ChartMeta courseResultMetaForReplay(
-    const CourseReplayData &replay,
+    const JudgedCoursePlaybackData &replay,
     const std::vector<std::unique_ptr<bms_parser::Chart>> &charts) {
   int totalNotes = 0;
   long long playLength = 0;
@@ -456,7 +456,7 @@ bms_parser::ChartMeta courseResultMetaForReplay(
 }
 
 RhythmState courseResultStateForReplay(
-    const CourseReplayData &replay,
+    const JudgedCoursePlaybackData &replay,
     const std::vector<RhythmState> &stageStates) {
   RhythmState aggregate(nullptr, false);
   aggregate.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
@@ -825,9 +825,9 @@ ResultImageExporter::Export(ApplicationContext &context,
 ResultImageExportResult
 ResultImageExporter::ExportReplay(ApplicationContext &context,
                                   bms_parser::Chart &chart,
-                                  const ReplayData &replay,
+                                  const JudgedPlaybackData &replay,
                                   const std::string &pacemakerTarget) {
-  RhythmState state = replay_result::BuildResultState(chart, replay);
+  RhythmState state = analysis::BuildResultState(chart, replay);
   std::optional<ResultPreviousBestData> previousBest =
       result_presentation::previousBestForReplayChart(
           context.scoreRepository, chart.Meta, replay);
@@ -844,7 +844,7 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
                                                     chart.Meta);
   const play_options::PlayModeDisplayLabel display =
       play_options::formatPlayModeDisplayLabel(replay);
-  const std::span<const ReplayData> attempts(&replay, 1);
+  const std::span<const JudgedPlaybackData> attempts(&replay, 1);
   const std::optional<practice::ResultModel> analyticsModel(
       std::in_place, chart, attempts, 0);
   return Export(context, chart.Meta, state, display.mode, display.laneOrder,
@@ -854,7 +854,7 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
 
 ResultImageExportResult
 ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
-                                        const CourseReplayData &replay) {
+                                        const JudgedCoursePlaybackData &replay) {
   if (replay.stages.empty()) {
     return {.success = false, .message = "No Course Replay"};
   }
@@ -890,7 +890,7 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   charts.reserve(replay.stages.size());
   stageStates.reserve(replay.stages.size());
   for (size_t i = 0; i < replay.stages.size(); ++i) {
-    const ReplayData &stageReplay = replay.stages[i].replay;
+    const JudgedPlaybackData &stageReplay = replay.stages[i].replay;
     std::atomic_bool parseCancelled = false;
     auto chart = play_options::prepareReplayChart(stageReplay.chartMeta.BmsPath,
                                                   stageReplay, parseCancelled);
@@ -900,14 +900,14 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
               .message = "Failed to load course replay stage"};
     }
 
-    RhythmState state = replay_result::BuildResultState(
+    RhythmState state = analysis::BuildResultState(
         *chart, stageReplay, replay.gaugeProfile);
     const play_options::PlayModeDisplayLabel display =
         play_options::formatPlayModeDisplayLabel(stageReplay);
     const std::string filename =
         "stage_" + std::to_string(i + 1) + "_" +
         sanitizeFileNamePart(chart->Meta.Title) + ".png";
-    const std::span<const ReplayData> attempts(&stageReplay, 1);
+    const std::span<const JudgedPlaybackData> attempts(&stageReplay, 1);
     const std::optional<practice::ResultModel> analyticsModel(
         std::in_place, *chart, attempts, 0);
     const auto result = renderResultImage(
@@ -939,7 +939,7 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
       replay.completedCharts, replay.totalCharts, replay.stages.size(),
       courseState, courseMeta);
   const int clearRank = clear_policy::fullComboRankForPlayback(
-      replay.clearType, fullCombo, replay.provenance.playback);
+      replay.clearType, fullCombo, replay.context.playback);
   clearLabelOverride = clearTypeRankToLabel(clearRank);
   clearRankOverride = clearRank;
   const auto courseResult = renderResultImage(

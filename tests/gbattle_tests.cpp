@@ -35,8 +35,8 @@ bms_parser::Chart makeTwoNoteChart() {
   return chart;
 }
 
-ReplayData makeRecordReplay() {
-  ReplayData replay;
+JudgedPlaybackData makeRecordReplay() {
+  JudgedPlaybackData replay;
   replay.finalScore = 3;
   replay.events.push_back({
       .action = ReplayEventAction::Press,
@@ -62,7 +62,7 @@ ReplayData makeRecordReplay() {
 
 int main() {
   auto chart = makeTwoNoteChart();
-  ReplayData replay = makeRecordReplay();
+  JudgedPlaybackData replay = makeRecordReplay();
 
   const pacemaker::Target target = gbattle::targetFromRecord(chart, replay);
   ASSERT_TRUE(target.enabled, "target enabled");

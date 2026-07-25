@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../AssistOptionUtils.h"
+#include "../audio/PlaybackRate.h"
+#include "../scene/play/GameplayJudgeRules.h"
 #include "../scene/play/GameplayGaugeTypes.h"
 #include "../scene/play/Judgement.h"
 
@@ -56,6 +58,9 @@ struct ChartPlaybackSetup {
   std::string playbackRulesetId;
   int playbackRulesetRevision = 0;
   int playbackRatePercent = 100;
+  audio::PlaybackMode playbackMode = audio::PlaybackMode::PitchShift;
+  gameplay::CandidateSelectionMode candidateSelection =
+      gameplay::CandidateSelectionMode::Lowest;
   int judgeWindowScalePercent = 100;
   float startingGaugePercent = 20.0F;
   bool clubMode = false;

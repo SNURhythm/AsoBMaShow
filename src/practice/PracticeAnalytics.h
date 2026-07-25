@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -62,7 +62,7 @@ struct TimingConditions {
   int judgeWindowScalePercent = 100;
   TimingWindowResolution windowResolution =
       TimingWindowResolution::LegacyAbsent;
-  std::vector<JudgeWindowProvenance> effectiveJudgeWindows;
+  std::vector<analysis::JudgedWindow> effectiveJudgeWindows;
 
   bool operator==(const TimingConditions &) const = default;
 };
@@ -74,10 +74,10 @@ struct AnalysisGroup {
 };
 
 [[nodiscard]] Analysis analyze(const bms_parser::Chart &chart,
-                               const ReplayData &replay);
+                               const JudgedPlaybackData &replay);
 
 [[nodiscard]] std::vector<AnalysisGroup>
 analyzeCompatibleAttempts(const bms_parser::Chart &chart,
-                          std::span<const ReplayData> attempts);
+                          std::span<const JudgedPlaybackData> attempts);
 
 } // namespace practice

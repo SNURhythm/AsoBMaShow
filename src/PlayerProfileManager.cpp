@@ -794,21 +794,28 @@ bool replayRowsPreserved(const SqliteRowCounts &before, int beforeVersion,
       {"course_replays", "course_results"},
       {"course_replay_stages", "course_result_stages"},
   };
-  const std::set<std::string> filePayloadTables{
-      "replay_events", "replay_touch_samples", "replay_lane_cover_events"};
+  std::size_t migratedAwayTableCount = 0;
   for (const auto &[sourceTable, count] : before) {
-    if (filePayloadTables.contains(sourceTable)) {
-      continue;
-    }
     const auto mapping = transformed.find(sourceTable);
     const std::string &destinationTable =
         mapping == transformed.end() ? sourceTable : mapping->second;
     const auto found = after.find(destinationTable);
+    if (found == after.end() && mapping == transformed.end()) {
+      ++migratedAwayTableCount;
+      continue;
+    }
     if (found == after.end() || found->second != count) {
       errorMessage = "row count mismatch for migrated SQLite table '" +
                      sourceTable + "' -> '" + destinationTable + "'";
       return false;
     }
+  }
+  // Schema 10 has exactly three row-per-event payload tables. Their contents
+  // move into replay files, so no table-level row-count counterpart exists in
+  // schema 11. The migration itself validates the exact source schema.
+  if (migratedAwayTableCount != 3) {
+    errorMessage = "unexpected set of migrated-away replay payload tables";
+    return false;
   }
   const auto replayCount = before.contains("replays") ? before.at("replays") : 0;
   const auto courseCount =

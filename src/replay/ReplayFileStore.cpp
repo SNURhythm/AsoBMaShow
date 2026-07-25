@@ -410,7 +410,7 @@ FinalizeOutcome validateFinal(const std::filesystem::path &finalPath,
       .relativePath = relativePath,
       .sha256 = *hash,
       .compressedSize = static_cast<std::uint64_t>(read.bytes.size()),
-      .codecVersion = 1,
+      .codecVersion = BeatorajaReplayCodec::kCodecVersion,
   };
   outcome.existingIdenticalFile = existing;
   return outcome;
@@ -509,7 +509,8 @@ FinalizeOutcome ReplayFileStore::finalize(
 ReplayFileInspection
 ReplayFileStore::inspect(const ReplayFileMetadata &metadata) const {
   ReplayFileInspection inspection;
-  if (!canonicalLowerHex(metadata.sha256, 64) || metadata.codecVersion != 1) {
+  if (!canonicalLowerHex(metadata.sha256, 64) ||
+      metadata.codecVersion != BeatorajaReplayCodec::kCodecVersion) {
     inspection.state = ReplayFileState::Corrupt;
     inspection.diagnostic =
         "Replay metadata checksum or codec version is invalid";

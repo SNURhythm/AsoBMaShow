@@ -3578,7 +3578,7 @@ void BMSRenderer::setPlayOptionStatus(const std::string &label) {
   playOptionText->setText(label);
 }
 
-void BMSRenderer::setReplayData(const ReplayData *replayData) {
+void BMSRenderer::setReplayData(const JudgedPlaybackData *replayData) {
   replayGhostEvents.clear();
   replayMissMarkers.clear();
   replayTouchSamples.clear();

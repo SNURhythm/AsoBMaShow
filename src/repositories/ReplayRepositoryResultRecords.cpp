@@ -159,7 +159,7 @@ bool validateReplayReference(const ReplayFileReference &reference,
       reference.compressedSize >
           static_cast<std::uint64_t>(
               std::numeric_limits<sqlite3_int64>::max()) ||
-      reference.codecVersion != 1) {
+      reference.codecVersion != replay::BeatorajaReplayCodec::kCodecVersion) {
     diagnostic = "replay file reference is malformed";
     return false;
   }

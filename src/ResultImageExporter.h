@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "bms_parser.hpp"
 #include "context.h"
 #include "practice/PracticeResultModel.h"
@@ -152,10 +152,10 @@ public:
                                             &analyticsModel = std::nullopt);
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
-                                              const ReplayData &replay,
+                                              const JudgedPlaybackData &replay,
                                               const std::string
                                                   &pacemakerTarget = {});
   static ResultImageExportResult
   ExportCourseReplay(ApplicationContext &context,
-                     const CourseReplayData &replay);
+                     const JudgedCoursePlaybackData &replay);
 };

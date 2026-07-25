@@ -55,24 +55,18 @@ reject(
     "enqueueManual(" in uploads_scene,
     "the page must not queue selections one by one",
 )
+snapshot_position = uploads_scene.find("loadIrSubmissionSnapshot")
+enqueue_position = uploads_scene.find("enqueueManualBatch", snapshot_position)
 require(
-    "historicalIrDiagnostic" in uploads_scene,
-    "IR Uploads forwards historical proof rejection analysis",
+    snapshot_position >= 0
+    and enqueue_position > snapshot_position
+    and uploads_scene.count("enqueueManualBatch") == 1,
+    "independent IR snapshot loading must precede exactly one batch enqueue",
 )
 reject(
-    "This saved result has no verifiable IR proof." in uploads_scene,
-    "IR Uploads must not replace proof analysis with a generic rejection",
-)
-
-load_position = uploads_scene.find("LoadReplayResult")
-rebuild_position = uploads_scene.find("result_recall::BuildChartResult", load_position)
-enqueue_position = uploads_scene.find("enqueueManualBatch", rebuild_position)
-require(
-    load_position >= 0
-    and rebuild_position > load_position
-    and enqueue_position > rebuild_position
-    and uploads_scene.count("enqueueManualBatch") == 1,
-    "saved-result reconstruction must precede exactly one batch enqueue",
+    "LoadReplayResult" in uploads_scene
+    or "result_recall::BuildChartResult" in uploads_scene,
+    "IR Uploads must not reconstruct submissions from replay data",
 )
 require(
     "openIrSettingsButton->setOnClickListener" in uploads_scene

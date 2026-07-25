@@ -439,7 +439,7 @@ void testReplacementChartReloadUsesNewEndBeforeStateIsConsumed() {
       .namedPresets = named,
       .selectedPresetId = selected,
       .pendingLaunchRequest = practice::LaunchRequest{},
-      .ghostReplay = ReplayData{.provenance = ScoreProvenance{}},
+      .ghostReplay = JudgedPlaybackData{},
       .loadedGhostReplayId = 42,
       .playOption = "RANDOM",
       .playOptionSeed = 1234,

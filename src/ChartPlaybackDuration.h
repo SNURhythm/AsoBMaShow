@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
@@ -59,7 +59,7 @@ inline long long GameplayResultTransitionMicros(
 }
 
 inline long long ReplayTimelineEndMicros(const bms_parser::Chart &chart,
-                                         const ReplayData &replay) {
+                                         const JudgedPlaybackData &replay) {
   long long endMicros = ChartTimelineEndMicros(chart);
   for (const auto &event : replay.events) {
     endMicros = std::max(endMicros, event.songTimeMicros);

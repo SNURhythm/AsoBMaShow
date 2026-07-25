@@ -83,8 +83,6 @@ inline ReplaySummary BuildSummary(
   summary.clearType = clear_policy::fullComboRankForPlayback(
       kClearTypeFullComboRank, true, playback);
   summary.createdAt = kLabel;
-  summary.eventCount = std::max(0, meta.TotalNotes);
-  summary.touchSampleCount = 0;
   summary.chartMeta = meta;
   summary.playOption = playOption;
   summary.playOptionSeed = playOptionSeed;
@@ -95,7 +93,7 @@ inline ReplaySummary BuildSummary(
   return summary;
 }
 
-inline ReplayData BuildReplayData(
+inline JudgedPlaybackData BuildReplayData(
     bms_parser::Chart &chart, GaugeType gaugeType,
     GaugeAutoShiftMode gaugeAutoShift, audio::PlaybackRate playback = {},
     const std::optional<std::string> &playOption = std::nullopt,
@@ -106,8 +104,7 @@ inline ReplayData BuildReplayData(
     bool clubMode = false,
     GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy,
     GameplayRuleset ruleset = kDefaultGameplayRuleset) {
-  ReplayData replay;
-  replay.id = kReplayId;
+  JudgedPlaybackData replay;
   replay.autoPlay = true;
   replay.chartMeta = chart.Meta;
   replay.randomSeed = chart.Meta.RandomSeed;
@@ -121,10 +118,9 @@ inline ReplayData BuildReplayData(
   replay.initialGaugeType = gaugeType;
   replay.gaugeAutoShift = gaugeAutoShift;
   replay.gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound;
-  replay.provenance.playback = playback;
-  replay.provenance.ruleset = RulesetDescriptor::For(ruleset);
-  replay.provenance.autoPlay = true;
-  replay.provenance.clubMode = clubMode;
+  replay.context.playback = playback;
+  replay.context.ruleset = RulesetDescriptor::For(ruleset);
+  replay.context.clubMode = clubMode;
   replay.createdAt = kLabel;
   replay.events.reserve(static_cast<size_t>(std::max(0, chart.Meta.TotalNotes)) *
                         2U);
@@ -181,7 +177,7 @@ inline ReplayData BuildReplayData(
   replay.finalGauge = state.currentGauge;
   replay.clearType = clear_policy::fullComboRankForPlayback(
       state.getClearTypeRank(), state.comboBreak == 0,
-      replay.provenance.playback);
+      replay.context.playback);
   return replay;
 }
 } // namespace replay_autoplay

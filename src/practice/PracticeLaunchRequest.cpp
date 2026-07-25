@@ -36,7 +36,7 @@ std::string normalizedSha256(std::string value) {
 
 bms_parser::ChartMeta
 mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
-                           const ReplayData &replay) {
+                           const JudgedPlaybackData &replay) {
   bms_parser::ChartMeta result = authoritative;
   if (!result.RandomSeed.has_value()) {
     result.RandomSeed = replay.randomSeed;
@@ -50,7 +50,7 @@ mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
   return result;
 }
 
-ReplayPlayOptions launchPlayOptionsFromReplay(const ReplayData &replay) {
+ReplayPlayOptions launchPlayOptionsFromReplay(const JudgedPlaybackData &replay) {
   return {
       .playOption = replay.playOption,
       .playOptionSeed = replay.playOptionSeed,

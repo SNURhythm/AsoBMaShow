@@ -1,7 +1,7 @@
 #pragma once
 
 #include "GameplaySimulation.h"
-#include "../../ReplayData.h"
+#include "../../analysis/JudgedPlaybackData.h"
 #include "../../audio/Jukebox.h"
 
 #include <optional>

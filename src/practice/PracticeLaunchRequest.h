@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
+#include "../ScoreProvenance.h"
 #include "../bms_parser.hpp"
 #include "PracticeConfiguration.h"
 
@@ -44,10 +45,10 @@ struct ParsedLaunchApplication {
 
 [[nodiscard]] bms_parser::ChartMeta
 mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
-                           const ReplayData &replay);
+                           const JudgedPlaybackData &replay);
 
 [[nodiscard]] ReplayPlayOptions
-launchPlayOptionsFromReplay(const ReplayData &replay);
+launchPlayOptionsFromReplay(const JudgedPlaybackData &replay);
 
 [[nodiscard]] std::optional<std::string>
 validateLaunchRequest(const LaunchRequest &request);

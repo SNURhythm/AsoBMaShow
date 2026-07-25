@@ -31,8 +31,8 @@ bms_parser::Chart makeChart() {
   return chart;
 }
 
-ReplayData makeAutoAnalytics() {
-  ReplayData replay;
+JudgedPlaybackData makeAutoAnalytics() {
+  JudgedPlaybackData replay;
   replay.autoPlay = true;
   replay.events.push_back({.action = ReplayEventAction::Press,
                            .lane = 1,
@@ -56,20 +56,20 @@ void testChartViewerPracticeAutoCapturesAnalyticsOnly() {
 
 void testAnalyticsSourceDoesNotChangeRetryOrPersistenceSources() {
   auto analytics = makeAutoAnalytics();
-  ReplayData retry;
-  retry.id = 73;
-  ReplayData persisted;
-  persisted.id = 91;
+  JudgedPlaybackData retry;
+  retry.finalScore = 73;
+  JudgedPlaybackData persisted;
+  persisted.finalScore = 91;
 
-  const ReplayData *selected =
+  const JudgedPlaybackData *selected =
       practice::selectResultAnalyticsSource(&analytics, &persisted, &retry);
   require(selected == &analytics && selected->autoPlay,
           "dedicated analytics source has priority at the result boundary");
-  require(retry.id == 73 && persisted.id == 91,
+  require(retry.finalScore == 73 && persisted.finalScore == 91,
           "analytics selection does not mutate retry or persistence inputs");
 
   auto chart = makeChart();
-  const std::vector<ReplayData> attempts = {*selected};
+  const std::vector<JudgedPlaybackData> attempts = {*selected};
   practice::ResultModel model(chart, attempts, 0);
   require(model.displayedAnalysis().overall.samples == 1 &&
               model.compatibilityGroups().front().containsAuto,

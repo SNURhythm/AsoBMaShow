@@ -502,6 +502,15 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   setup.playbackRulesetId = chart.provenance.ruleset.id;
   setup.playbackRulesetRevision = chart.provenance.ruleset.version;
   setup.playbackRatePercent = chart.provenance.playback.percent;
+  setup.playbackMode = chart.provenance.playback.mode;
+  bms_parser::ChartMeta chartMeta;
+  chartMeta.MD5 = chart.chartMd5;
+  chartMeta.SHA256 = chart.chartSha256;
+  if (const auto *stage =
+          score_provenance::uniqueStageForChart(chart.provenance, chartMeta);
+      stage != nullptr) {
+    setup.candidateSelection = stage->candidateSelection;
+  }
   setup.judgeWindowScalePercent = chart.provenance.judgeWindowScalePercent;
   setup.startingGaugePercent = static_cast<float>(
       chart.provenance.startingGaugePercent.value_or(20));
@@ -1323,6 +1332,19 @@ bool dropLegacyTables(sqlite3 *database, std::string &diagnostic) {
 }
 
 } // namespace
+
+bool compactReplaySchemaHasNoLegacyPayloadTables(sqlite3 *database) {
+  if (database == nullptr) {
+    return false;
+  }
+  Statement statement(
+      database,
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN "
+      "('replay_events','replay_touch_samples','replay_lane_cover_events')");
+  return statement.valid() && sqlite3_step(statement.get()) == SQLITE_ROW &&
+         sqlite3_column_int64(statement.get(), 0) == 0 &&
+         sqlite3_step(statement.get()) == SQLITE_DONE;
+}
 
 ReplayMigrationOutcome migrateReplaySchema10To11(
     sqlite3 *database, const std::filesystem::path &profileRoot,

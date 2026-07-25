@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 #include "IInputHandler.h"
 #include "../bms_parser.hpp"
 #include "IRhythmControl.h"

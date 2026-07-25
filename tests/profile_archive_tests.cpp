@@ -689,7 +689,7 @@ struct Fixture {
                    "codec_version) VALUES(last_insert_rowid(),'" +
                    std::string(kReplaySha) + "',0,'replay/" +
                    std::string(kReplayFilename) + "','" + contentHash + "'," +
-                   std::to_string(kReplayBytes.size()) + ",1)"),
+                   std::to_string(kReplayBytes.size()) + ",2)"),
            "compact result and replay reference insert");
   }
 };

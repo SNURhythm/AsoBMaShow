@@ -13,6 +13,8 @@
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticePresetStore.h"
 #include "../practice/PracticeSession.h"
+#include "../replay/LegacyReplayPlaybackAdapter.h"
+#include "../replay/ReplayPlaybackMaterializer.h"
 #include "../rendering/SimpleBatchRenderer.h"
 #include "../rendering/TexBatchRenderer.h"
 #include "../rendering/common.h"
@@ -144,7 +146,7 @@ GaugeAutoShiftMode gaugeAutoShiftFromSettingId(const std::string &id) {
   return GaugeAutoShiftMode::None;
 }
 
-ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
+ReplaySummary replaySummaryFromReplay(const JudgedPlaybackData &replay,
                                       int summaryId,
                                       const std::string &createdAt) {
   ReplaySummary summary;
@@ -157,8 +159,6 @@ ReplaySummary replaySummaryFromReplay(const ReplayData &replay,
   summary.finalGauge = replay.finalGauge;
   summary.clearType = replay.clearType;
   summary.createdAt = createdAt;
-  summary.eventCount = static_cast<int>(replay.events.size());
-  summary.touchSampleCount = static_cast<int>(replay.touchSamples.size());
   summary.chartMeta = replay.chartMeta;
   summary.playOption = replay.playOption;
   summary.playOptionSeed = replay.playOptionSeed;
@@ -531,7 +531,7 @@ public:
 
   void clearPlaybackTime() { playbackActive = false; }
 
-  void setGhostReplay(const ReplayData &replayData) {
+  void setGhostReplay(const JudgedPlaybackData &replayData) {
     replayGhostEvents = replay_ghost::buildReplayGhostEvents(
         replayData, orderedTimelines, laneToOrderIndex,
         [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
@@ -2527,7 +2527,7 @@ void ChartViewerScene::cleanupScene() {
   practiceChartEndMicros = 0;
 }
 
-void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
+void ChartViewerScene::setPracticeGhostReplay(const JudgedPlaybackData &replayData) {
   if (replayData.events.empty()) {
     practiceGhostReplay.reset();
     clearGhostReplay();
@@ -2535,7 +2535,6 @@ void ChartViewerScene::setPracticeGhostReplay(const ReplayData &replayData) {
   }
 
   practiceGhostReplay = replayData;
-  practiceGhostReplay->id = kPracticeGhostReplayId;
   practiceGhostReplay->createdAt = "Practice Ghost";
   loadedGhostReplayId = kPracticeGhostReplayId;
   selectedGhostReplayIndex = -1;
@@ -3426,7 +3425,7 @@ void ChartViewerScene::loadPracticeGhostReplay() {
   if (statusText != nullptr) {
     statusText->setText("Loading practice ghost...");
   }
-  const ReplayData replay = *practiceGhostReplay;
+  const JudgedPlaybackData replay = *practiceGhostReplay;
   defer(
       [this, replay]() {
         applyGhostReplayData(replay, kPracticeGhostReplayId,
@@ -3436,7 +3435,7 @@ void ChartViewerScene::loadPracticeGhostReplay() {
       0, true);
 }
 
-bool ChartViewerScene::applyGhostReplayData(const ReplayData &replayData,
+bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData,
                                             int loadedReplayId,
                                             const std::string &successText) {
   if (canvasView == nullptr) {
@@ -3519,17 +3518,56 @@ void ChartViewerScene::loadSelectedGhostReplay() {
 
         const bms_parser::ChartMeta &loadMeta =
             chart != nullptr ? chart->Meta : record.meta;
-        auto replay =
-            context.replayRepository.LoadReplay(replayId, loadMeta);
-        if (!replay.has_value()) {
+        auto loaded =
+            context.replayRepository.loadChartReplayPlayback(replayId);
+        if (loaded.status != ChartReplayPlaybackReadOutcome::Status::Loaded ||
+            !loaded.result.has_value() || !loaded.playback.has_value()) {
           if (statusText != nullptr) {
             statusText->setText("Ghost load failed");
           }
           return true;
         }
-
-        applyGhostReplayData(*replay, replay->id,
-                             "Ghost #" + std::to_string(replay->id) +
+        auto playback = std::make_shared<replay::ReplayPlaybackData>(
+            std::move(*loaded.playback));
+        std::atomic_bool parseCancelled = false;
+        std::unique_ptr<bms_parser::Chart> replayChart;
+        std::optional<JudgedPlaybackData> judged;
+        if (playback->legacy.has_value()) {
+          judged = replay::makeLegacyPlaybackAdapter(
+              *playback, *loaded.result, loadMeta);
+          if (judged.has_value()) {
+            replayChart = play_options::prepareReplayChart(
+                loadMeta.BmsPath, *judged, parseCancelled);
+          }
+        } else {
+          replayChart = play_options::prepareReplayChart(
+              loadMeta.BmsPath, *playback, parseCancelled);
+          if (replayChart != nullptr && !parseCancelled) {
+            StartOptions replayOptions;
+            applyReplayPlaybackToStartOptions(replayOptions, playback);
+            const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+                replayOptions, replayChart->Meta,
+                context.settings.notePriorityMode);
+            if (policy.built()) {
+              const auto materialized = replay::materializeReplay(
+                  *playback, *replayChart, *policy.policy);
+              if (materialized.materialized()) {
+                judged = replay::makeMaterializedPlaybackAdapter(
+                    *playback, *materialized.value, *policy.policy,
+                    *loaded.result,
+                    replayChart->Meta);
+              }
+            }
+          }
+        }
+        if (!judged.has_value() || replayChart == nullptr || parseCancelled) {
+          if (statusText != nullptr) {
+            statusText->setText("Ghost load failed");
+          }
+          return true;
+        }
+        applyGhostReplayData(*judged, replayId,
+                             "Ghost #" + std::to_string(replayId) +
                                  " loaded");
         return true;
       },
@@ -4546,7 +4584,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .replayGhostRenderingEnabled =
                         autoPlay ? std::optional<bool>(false) : std::nullopt,
                     .practiceGhostCallback =
-                        [this](const ReplayData &replayData) {
+                        [this](const JudgedPlaybackData &replayData) {
                           setPracticeGhostReplay(replayData);
                         },
                     .ruleset = practiceRuleset,

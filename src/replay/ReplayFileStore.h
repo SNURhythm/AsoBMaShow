@@ -22,7 +22,7 @@ struct ReplayFileMetadata {
   std::filesystem::path relativePath;
   std::string sha256;
   std::uint64_t compressedSize = 0;
-  int codecVersion = 1;
+  int codecVersion = BeatorajaReplayCodec::kCodecVersion;
 
   bool operator==(const ReplayFileMetadata &) const = default;
 };

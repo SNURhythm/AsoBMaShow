@@ -17,10 +17,10 @@ resultCapturePolicy(const ResultCaptureContext &context) noexcept {
   };
 }
 
-const ReplayData *
-selectResultAnalyticsSource(const ReplayData *capturedAnalytics,
-                            const ReplayData *replayToSave,
-                            const ReplayData *retrySource) noexcept {
+const JudgedPlaybackData *
+selectResultAnalyticsSource(const JudgedPlaybackData *capturedAnalytics,
+                            const JudgedPlaybackData *replayToSave,
+                            const JudgedPlaybackData *retrySource) noexcept {
   if (capturedAnalytics != nullptr) {
     return capturedAnalytics;
   }

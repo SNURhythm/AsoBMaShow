@@ -1,6 +1,6 @@
 #include "scene/play/ReplayKeysoundSchedule.h"
 
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "bms_parser.hpp"
 #include "scene/play/GameplayDefinition.h"
 

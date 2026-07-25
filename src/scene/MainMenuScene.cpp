@@ -1,6 +1,7 @@
 #include "MainMenuScene.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
+#include "../analysis/JudgedPlaybackContext.h"
 #include "../BmsChartFile.h"
 #include "../DifficultyTableImporter.h"
 #include "../CourseConstraintUtils.h"
@@ -4340,13 +4341,6 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
   if (!scoreRecovery.ok()) {
     SDL_Log("SQL error while recovering course scores: %s",
             scoreRecovery.errorMessage.c_str());
-  }
-
-  std::string replayRecoveryError;
-  if (!context.replayRepository.RecoverCourseRecords(
-          definitions, scoreRecovery.evidence, replayRecoveryError)) {
-    SDL_Log("SQL error while recovering course replays: %s",
-            replayRecoveryError.c_str());
   }
 
   auto prepared =
@@ -9512,7 +9506,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
             std::move(*replayRead.playback));
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> replayChart;
-        std::shared_ptr<ReplayData> legacyReplay;
+        std::shared_ptr<JudgedPlaybackData> legacyReplay;
         if (playback->legacy.has_value()) {
           auto adapted = replay::makeLegacyPlaybackAdapter(
               *playback, *replayRead.result, record.meta);
@@ -9520,7 +9514,7 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
             return failReplayLoad();
           }
           legacyReplay =
-              std::make_shared<ReplayData>(std::move(*adapted));
+              std::make_shared<JudgedPlaybackData>(std::move(*adapted));
           replayChart = play_options::prepareReplayChart(
               record.meta.BmsPath, *legacyReplay, parseCancelled);
         } else {
@@ -9553,11 +9547,9 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
                 legacyReplay != nullptr && selectedReplayRenderGhosts,
         };
         if (legacyReplay != nullptr) {
-          applyReplayProvenanceToStartOptions(replayOptions, *legacyReplay);
+          applyJudgedPlaybackContextToStartOptions(replayOptions, *legacyReplay);
         } else {
           applyReplayPlaybackToStartOptions(replayOptions, playback);
-          applyScoreProvenanceToStartOptions(
-              replayOptions, replayRead.result->score.provenance, chart->Meta);
         }
         context.jukebox.stop();
         hideReplayModal();
@@ -9638,16 +9630,13 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
           return failGBattleLoad();
         }
 
-        std::optional<ReplayData> adapted;
+        std::optional<JudgedPlaybackData> adapted;
         if (replayPlayback->legacy.has_value()) {
           adapted = replay::makeLegacyPlaybackAdapter(
               *replayPlayback, *replayRead.result, chart->Meta);
         } else {
           StartOptions recordedOptions;
           applyReplayPlaybackToStartOptions(recordedOptions, replayPlayback);
-          applyScoreProvenanceToStartOptions(
-              recordedOptions, replayRead.result->score.provenance,
-              chart->Meta);
           const auto policy = buildGameplayRulesetPolicyAtPlayStart(
               recordedOptions, chart->Meta, context.settings.notePriorityMode);
           if (!policy.built()) {
@@ -9663,14 +9652,14 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
             return failGBattleLoad();
           }
           adapted = replay::makeMaterializedPlaybackAdapter(
-              *replayPlayback, *materialized.value, *replayRead.result,
-              chart->Meta);
+              *replayPlayback, *materialized.value, *policy.policy,
+              *replayRead.result, chart->Meta);
         }
         if (!adapted.has_value()) {
           return failGBattleLoad();
         }
         auto recordData =
-            std::make_shared<ReplayData>(std::move(*adapted));
+            std::make_shared<JudgedPlaybackData>(std::move(*adapted));
         context.jukebox.stop();
         hideReplayModal();
         changeToGameplayScene(
@@ -9758,19 +9747,17 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
           meta.TotalNotes = stage.score.maxScore / 2;
           meta.LnMode = stage.score.longNoteMode;
           session->entries.push_back({.meta = std::move(meta)});
-          session->recordStageProvenance(
-              static_cast<std::size_t>(stage.stageIndex),
-              stage.score.provenance);
         }
-        session->snapshotRulesetFromProvenance(persisted.provenance);
+        session->snapshotRulesetFromPlayback(playback->stages.front());
         const CourseConstraintSettings constraintSettings =
             courseConstraintSettingsFromJson(persisted.constraintJson);
         session->currentIndex = 0;
-        session->gaugeType = persisted.initialGaugeType;
-        session->gaugeProfile = persisted.gaugeProfile;
-        session->gaugeAutoShift = persisted.gaugeAutoShift;
+        const auto &initialSetup = playback->stages.front().setup;
+        session->gaugeType = initialSetup.initialGaugeType;
+        session->gaugeProfile = initialSetup.gaugeProfile;
+        session->gaugeAutoShift = initialSetup.gaugeAutoShift;
         session->gaugeAutoShiftLowerBound =
-            persisted.gaugeAutoShiftLowerBound;
+            initialSetup.gaugeAutoShiftLowerBound;
         session->longNoteMode = persisted.longNoteMode;
         session->constraints = constraintSettings.rules;
         session->requestedPlayOption = persisted.requestedPlayOption;
@@ -9782,8 +9769,7 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
               return stage.legacy.has_value();
             });
         if (migrated) {
-          auto legacyCourse = std::make_shared<CourseReplayData>();
-          legacyCourse->id = persisted.resultId;
+          auto legacyCourse = std::make_shared<JudgedCoursePlaybackData>();
           legacyCourse->courseId = persisted.legacyCourseId;
           legacyCourse->courseKey = persisted.courseKey;
           legacyCourse->courseName = persisted.courseName;
@@ -9803,7 +9789,8 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
           legacyCourse->clearType = persisted.clearType;
           legacyCourse->completedCharts = persisted.completedCharts;
           legacyCourse->totalCharts = persisted.totalCharts;
-          legacyCourse->provenance = persisted.provenance;
+          legacyCourse->context =
+              analysis::playbackContextFrom(initialSetup);
           for (std::size_t index = 0; index < persisted.stages.size(); ++index) {
             result_persistence::PersistedChartResult stageResult{
                 .resultId = persisted.resultId,
@@ -9870,8 +9857,8 @@ void MainMenuScene::startCourseReplayDirect(
       resetReplayWatchLoadingUi();
       return;
     }
-    StartOptions options = makeCourseReplayStageStartOptions(
-        session, stagePlayback, replayChart->Meta);
+    StartOptions options =
+        makeCourseReplayStageStartOptions(session, stagePlayback);
     context.sceneManager->changeScene(
         std::make_unique<GamePlayScene>(context, std::move(replayChart),
                                         std::move(options)),
@@ -10455,7 +10442,7 @@ void MainMenuScene::startReplayVideoExport(const ChartMetaRecord &record,
         play_options::PlayOptionReplayInfo playInfo =
             play_options::applySelectedPlayOptions(*chart, autoPlayOption);
         applyEffectiveLongNoteModeToChart(*chart, autoPlayLongNoteMode);
-        ReplayData replay = replay_autoplay::BuildReplayData(
+        JudgedPlaybackData replay = replay_autoplay::BuildReplayData(
             *chart, autoPlayGaugeType, autoPlayGaugeAutoShift,
             autoPlayPlayback, playInfo.option, playInfo.seed, playInfo.option2,
             playInfo.seed2, autoPlayAssistOption, autoPlayClubMode,

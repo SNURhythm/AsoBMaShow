@@ -32,7 +32,7 @@ struct GhostRefreshState {
   std::vector<practice::NamedPreset> namedPresets;
   std::optional<std::string> selectedPresetId;
   std::optional<practice::LaunchRequest> pendingLaunchRequest;
-  std::optional<ReplayData> ghostReplay;
+  std::optional<JudgedPlaybackData> ghostReplay;
   int loadedGhostReplayId = -1;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
@@ -73,7 +73,7 @@ public:
   void renderScene() override;
   void cleanupScene() override;
 
-  void setPracticeGhostReplay(const ReplayData &replayData);
+  void setPracticeGhostReplay(const JudgedPlaybackData &replayData);
   void setPracticeLaunchRequest(practice::LaunchRequest request);
 
 private:
@@ -141,7 +141,7 @@ private:
   bool listenAudioLoaded = false;
   bool retainedListenResourcesForReload = false;
   long long listenEndMicros = 0;
-  std::optional<ReplayData> practiceGhostReplay;
+  std::optional<JudgedPlaybackData> practiceGhostReplay;
   std::vector<ReplaySummary> ghostReplaySummaries;
   int selectedGhostReplayIndex = -1;
   int loadedGhostReplayId = -1;
@@ -170,7 +170,7 @@ private:
   void updatePracticeGhostReplayButton();
   void loadPracticeGhostReplay();
   void loadSelectedGhostReplay();
-  bool applyGhostReplayData(const ReplayData &replayData, int loadedReplayId,
+  bool applyGhostReplayData(const JudgedPlaybackData &replayData, int loadedReplayId,
                             const std::string &successText);
   void clearGhostReplay();
   void rebuildOptionsDrawer();

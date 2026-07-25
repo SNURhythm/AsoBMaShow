@@ -1,5 +1,5 @@
 #include "../src/ReplaySummaryFormatting.h"
-#include "../src/ReplayResultStateBuilder.h"
+#include "../src/analysis/JudgedPlaybackResultState.h"
 #include "../src/ReplayAutoPlay.h"
 #include "../src/scene/play/Pacemaker.h"
 
@@ -53,8 +53,6 @@ int main() {
   ReplaySummary summary;
   summary.initialGaugeType = GaugeType::Hard;
   summary.finalGauge = 78.25f;
-  summary.eventCount = 1234;
-  summary.touchSampleCount = 5678;
   summary.playOption = "MIRROR";
   summary.chartMeta = makeSevenKeyMeta();
 
@@ -78,23 +76,23 @@ int main() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 1;
   chart.Meta.Total = 100.0;
-  ReplayData practiceGaugeReplay;
+  JudgedPlaybackData practiceGaugeReplay;
   practiceGaugeReplay.initialGaugeType = GaugeType::Normal;
-  practiceGaugeReplay.provenance.startingGaugePercent = 37;
+  practiceGaugeReplay.context.startingGaugePercent = 37;
   const RhythmState practiceGaugeState =
-      replay_result::BuildResultState(chart, practiceGaugeReplay);
+      analysis::BuildResultState(chart, practiceGaugeReplay);
   if (practiceGaugeState.currentGauge != 37.0f) {
     std::cerr << "export result state must restore the recorded starting gauge"
               << std::endl;
     return 1;
   }
 
-  ReplayData bestClearReplay;
+  JudgedPlaybackData bestClearReplay;
   bestClearReplay.initialGaugeType = GaugeType::Normal;
   bestClearReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
-  bestClearReplay.provenance.startingGaugePercent = 37;
+  bestClearReplay.context.startingGaugePercent = 37;
   const RhythmState bestClearInitial =
-      replay_result::BuildInitialGaugeState(chart, bestClearReplay);
+      analysis::BuildInitialGaugeState(chart, bestClearReplay);
   if (bestClearInitial.gaugeType != GaugeType::Hazard ||
       bestClearInitial.currentGauge != 37.0f) {
     std::cerr << "export HUD must use the effective Best Clear start state"
@@ -102,7 +100,7 @@ int main() {
     return 1;
   }
 
-  ReplayData gasHistoryReplay = bestClearReplay;
+  JudgedPlaybackData gasHistoryReplay = bestClearReplay;
   gasHistoryReplay.events = {
       {.action = ReplayEventAction::Gauge,
        .songTimeMicros = 500,
@@ -116,7 +114,7 @@ int main() {
        .gaugeType = GaugeType::Hard},
   };
   const RhythmState gasHistoryResult =
-      replay_result::BuildResultState(chart, gasHistoryReplay);
+      analysis::BuildResultState(chart, gasHistoryReplay);
   if (gasHistoryResult.gaugeHistoryFor(GaugeType::Hard).size() != 2 ||
       gasHistoryResult.gaugeHistoryFor(GaugeType::Hard).back() != 50.0f ||
       gasHistoryResult.gaugeHistoryFor(GaugeType::ExHard).size() != 2 ||
@@ -126,17 +124,17 @@ int main() {
     return 1;
   }
 
-  ReplayData lr2RulesetReplay;
+  JudgedPlaybackData lr2RulesetReplay;
   lr2RulesetReplay.initialGaugeType = GaugeType::Normal;
   lr2RulesetReplay.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
-  lr2RulesetReplay.provenance.ruleset =
+  lr2RulesetReplay.context.ruleset =
       RulesetDescriptor::For(GameplayRuleset::LR2);
   lr2RulesetReplay.events.push_back({.action = ReplayEventAction::Release,
                                      .judgement = Bad,
                                      .gauge = 40.0f,
                                      .gaugeType = GaugeType::Hard});
   const RhythmState lr2RulesetResult =
-      replay_result::BuildResultState(chart, lr2RulesetReplay);
+      analysis::BuildResultState(chart, lr2RulesetReplay);
   RhythmState directlySimulatedLr2(&chart, false, GameplayRuleset::LR2);
   directlySimulatedLr2.configureGauge(GaugeType::Normal,
                                       GaugeAutoShiftMode::BestClear);
@@ -157,7 +155,7 @@ int main() {
   bms_parser::Chart multiBadChart;
   multiBadChart.Meta.TotalNotes = 2;
   multiBadChart.Meta.Total = 100.0;
-  ReplayData multiBadReplay;
+  JudgedPlaybackData multiBadReplay;
   multiBadReplay.initialGaugeType = GaugeType::Normal;
   multiBadReplay.events = {
       {.action = ReplayEventAction::MultiBad,
@@ -184,7 +182,7 @@ int main() {
        .score = 0},
   };
   const RhythmState multiBadResult =
-      replay_result::BuildResultState(multiBadChart, multiBadReplay);
+      analysis::BuildResultState(multiBadChart, multiBadReplay);
   const auto multiBadProgression =
       pacemaker::buildReplayScoreProgression(multiBadReplay, 2);
   if (multiBadResult.judgeCount.at(Bad) != 1 ||
@@ -196,10 +194,10 @@ int main() {
     return 1;
   }
 
-  ReplayData legacyRulesetReplay = lr2RulesetReplay;
-  legacyRulesetReplay.provenance = ScoreProvenance::Legacy();
+  JudgedPlaybackData legacyRulesetReplay = lr2RulesetReplay;
+  legacyRulesetReplay.context.ruleset = RulesetDescriptor::Legacy();
   const RhythmState legacyRulesetResult =
-      replay_result::BuildResultState(chart, legacyRulesetReplay);
+      analysis::BuildResultState(chart, legacyRulesetReplay);
   if (legacyRulesetResult.gaugeRules().ruleset !=
       GameplayRuleset::Beatoraja) {
     std::cerr << "legacy replay result gauge reconstruction remains Beatoraja"
@@ -213,8 +211,8 @@ int main() {
   terminalLongHeadChart.Meta.TotalNotes = 1;
   terminalLongHeadChart.Meta.TotalLongNotes = 1;
   addClassicLongNote(terminalLongHeadChart, 1'000'000, 2'000'000, 1);
-  ReplayData terminalLongHeadReplay;
-  terminalLongHeadReplay.provenance.ruleset =
+  JudgedPlaybackData terminalLongHeadReplay;
+  terminalLongHeadReplay.context.ruleset =
       RulesetDescriptor::For(GameplayRuleset::LR2);
   terminalLongHeadReplay.events.push_back({
       .action = ReplayEventAction::Press,
@@ -229,7 +227,7 @@ int main() {
       .combo = 0,
       .score = 0,
   });
-  const RhythmState terminalLongHeadResult = replay_result::BuildResultState(
+  const RhythmState terminalLongHeadResult = analysis::BuildResultState(
       terminalLongHeadChart, terminalLongHeadReplay);
   if (terminalLongHeadResult.judgeCount.at(Bad) != 1 ||
       terminalLongHeadResult.comboBreak != 1 ||
@@ -246,10 +244,10 @@ int main() {
   deferredLongHeadChart.Meta.TotalNotes = 1;
   deferredLongHeadChart.Meta.TotalLongNotes = 1;
   addClassicLongNote(deferredLongHeadChart, 1'000'000, 2'000'000, 1);
-  ReplayData deferredLongHeadReplay = terminalLongHeadReplay;
+  JudgedPlaybackData deferredLongHeadReplay = terminalLongHeadReplay;
   deferredLongHeadReplay.events.front().judgement = Good;
   deferredLongHeadReplay.events.front().diffMicros = -50'000;
-  const RhythmState deferredLongHeadResult = replay_result::BuildResultState(
+  const RhythmState deferredLongHeadResult = analysis::BuildResultState(
       deferredLongHeadChart, deferredLongHeadReplay);
   if (deferredLongHeadResult.judgeCount.at(Good) != 0 ||
       deferredLongHeadResult.comboBreak != 0 ||
@@ -266,7 +264,7 @@ int main() {
   releasedLongNoteChart.Meta.TotalNotes = 1;
   releasedLongNoteChart.Meta.TotalLongNotes = 1;
   addClassicLongNote(releasedLongNoteChart, 1'000'000, 2'000'000, 1);
-  ReplayData releasedLongNoteReplay = terminalLongHeadReplay;
+  JudgedPlaybackData releasedLongNoteReplay = terminalLongHeadReplay;
   releasedLongNoteReplay.events.push_back({
       .action = ReplayEventAction::Release,
       .lane = 1,
@@ -281,7 +279,7 @@ int main() {
       .score = 0,
   });
   const RhythmState releasedLongNoteResult =
-      replay_result::BuildResultState(releasedLongNoteChart,
+      analysis::BuildResultState(releasedLongNoteChart,
                                       releasedLongNoteReplay);
   if (releasedLongNoteResult.judgeCount.at(Bad) != 1 ||
       releasedLongNoteResult.comboBreak != 1 ||
@@ -292,19 +290,19 @@ int main() {
     return 1;
   }
 
-  ReplayData firstCourseStage;
+  JudgedPlaybackData firstCourseStage;
   firstCourseStage.initialGaugeType = GaugeType::Hard;
   firstCourseStage.events.push_back({.action = ReplayEventAction::Gauge,
                                      .songTimeMicros = 500,
                                      .gauge = 42.0f,
                                      .gaugeType = GaugeType::Hard});
   const RhythmState firstCourseResult =
-      replay_result::BuildResultState(chart, firstCourseStage);
+      analysis::BuildResultState(chart, firstCourseStage);
   const GaugeStateSnapshot carriedGauge = firstCourseResult.gaugeSnapshot();
-  ReplayData secondCourseStage;
+  JudgedPlaybackData secondCourseStage;
   secondCourseStage.initialGaugeType = GaugeType::Hard;
   const RhythmState secondCourseInitial =
-      replay_result::BuildInitialGaugeState(
+      analysis::BuildInitialGaugeState(
           chart, secondCourseStage, GaugeProfile::Standard, &carriedGauge);
   if (secondCourseInitial.gaugeType != GaugeType::Hard ||
       secondCourseInitial.currentGauge != 42.0f) {
@@ -313,53 +311,52 @@ int main() {
     return 1;
   }
 
-  ReplayData failedReplay;
+  JudgedPlaybackData failedReplay;
   failedReplay.initialGaugeType = GaugeType::Hard;
   failedReplay.events.push_back({.action = ReplayEventAction::Gauge,
                                  .songTimeMicros = 500,
                                  .gauge = 0.0f,
                                  .gaugeType = GaugeType::Hard});
   const RhythmState failedResult =
-      replay_result::BuildResultState(chart, failedReplay);
+      analysis::BuildResultState(chart, failedReplay);
   const GaugeStateSnapshot failedCarry = failedResult.gaugeSnapshot();
   if (!failedCarry.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] ||
-      replay_result::FindGaugeFailureMicros(
+      analysis::FindGaugeFailureMicros(
           chart, failedReplay, GaugeProfile::Standard, &failedCarry) != 0) {
     std::cerr << "course export must carry terminal survival gauge state"
               << std::endl;
     return 1;
   }
 
-  ReplayData continuedReplay;
+  JudgedPlaybackData continuedReplay;
   continuedReplay.initialGaugeType = GaugeType::Hard;
   continuedReplay.gaugeAutoShift = GaugeAutoShiftMode::Continue;
-  continuedReplay.provenance.startingGaugePercent = 0;
-  if (replay_result::FindGaugeFailureMicros(chart, continuedReplay)
+  continuedReplay.context.startingGaugePercent = 0;
+  if (analysis::FindGaugeFailureMicros(chart, continuedReplay)
           .has_value()) {
     std::cerr << "Continue export must not stop at a zero percent start"
               << std::endl;
     return 1;
   }
 
-  ReplayData survivalOnlyReplay;
+  JudgedPlaybackData survivalOnlyReplay;
   survivalOnlyReplay.initialGaugeType = GaugeType::ExHard;
   survivalOnlyReplay.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
   survivalOnlyReplay.gaugeAutoShiftLowerBound = GaugeType::Hard;
-  survivalOnlyReplay.provenance.startingGaugePercent = 0;
-  if (replay_result::FindGaugeFailureMicros(chart, survivalOnlyReplay) != 0) {
+  survivalOnlyReplay.context.startingGaugePercent = 0;
+  if (analysis::FindGaugeFailureMicros(chart, survivalOnlyReplay) != 0) {
     std::cerr << "survival-only GAS export must fail at a zero percent start"
               << std::endl;
     return 1;
   }
 
-  ReplayData assistedReplay;
+  JudgedPlaybackData assistedReplay;
   assistedReplay.initialGaugeType = GaugeType::Hard;
   assistedReplay.maxCombo = 1;
   assistedReplay.finalGauge = 100.0f;
   assistedReplay.clearType = kClearTypeFullComboRank;
-  assistedReplay.provenance.playback = {
+  assistedReplay.context.playback = {
       .percent = 75, .mode = audio::PlaybackMode::PitchShift};
-  assistedReplay.provenance.eligibility = ScoreEligibility::Modified;
   assistedReplay.events.push_back({.action = ReplayEventAction::Release,
                                    .judgement = PGreat,
                                    .gauge = 100.0f,
@@ -367,33 +364,33 @@ int main() {
                                    .combo = 1,
                                    .score = 2});
   const RhythmState assistedState =
-      replay_result::BuildResultState(chart, assistedReplay);
+      analysis::BuildResultState(chart, assistedReplay);
   if (assistedState.getClearTypeRank() != kClearTypeAssistedEasyClearRank) {
     std::cerr << "export result state must retain playback assist cap"
               << std::endl;
     return 1;
   }
 
-  ReplayData neutralReplay = assistedReplay;
-  neutralReplay.provenance = ScoreProvenance::Legacy();
+  JudgedPlaybackData neutralReplay = assistedReplay;
+  neutralReplay.context.playback = {};
   const RhythmState neutralState =
-      replay_result::BuildResultState(chart, neutralReplay);
+      analysis::BuildResultState(chart, neutralReplay);
   if (neutralState.getClearTypeRank() != kClearTypeHardClearRank) {
     std::cerr << "legacy neutral export result state remains unassisted"
               << std::endl;
     return 1;
   }
 
-  const ReplayData autoExport = replay_autoplay::BuildReplayData(
+  const JudgedPlaybackData autoExport = replay_autoplay::BuildReplayData(
       chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
       std::nullopt, std::nullopt, std::nullopt, std::nullopt,
       assist_options::kOff, true, GaugeType::Hard);
-  if (autoExport.provenance.playback.percent != 200) {
+  if (autoExport.context.playback.percent != 200) {
     std::cerr << "synthetic Auto export retains the selected playback rate"
               << std::endl;
     return 1;
   }
-  if (!autoExport.provenance.clubMode) {
+  if (!autoExport.context.clubMode) {
     std::cerr << "synthetic Auto export retains Club Beat" << std::endl;
     return 1;
   }
@@ -402,17 +399,17 @@ int main() {
               << std::endl;
     return 1;
   }
-  if (autoExport.provenance.ruleset !=
+  if (autoExport.context.ruleset !=
       RulesetDescriptor::For(GameplayRuleset::LR2)) {
     std::cerr << "synthetic Auto export defaults to LR2 provenance"
               << std::endl;
     return 1;
   }
-  const ReplayData beatorajaAutoExport = replay_autoplay::BuildReplayData(
+  const JudgedPlaybackData beatorajaAutoExport = replay_autoplay::BuildReplayData(
       chart, GaugeType::Normal, GaugeAutoShiftMode::None, {}, std::nullopt,
       std::nullopt, std::nullopt, std::nullopt, assist_options::kOff, false,
       GaugeType::AssistedEasy, GameplayRuleset::Beatoraja);
-  if (beatorajaAutoExport.provenance.ruleset !=
+  if (beatorajaAutoExport.context.ruleset !=
       RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
     std::cerr << "synthetic Auto export retains a selected Beatoraja ruleset"
               << std::endl;

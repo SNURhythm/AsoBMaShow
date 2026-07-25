@@ -3,7 +3,9 @@ import sys
 
 root = (Path(sys.argv[1]) if len(sys.argv) > 1
         else Path(__file__).resolve().parents[1])
-repository = (root / "src/repositories/ReplayRepositoryRecords.cpp").read_text()
+repository = (
+    root / "src/repositories/ReplayRepositoryResultRecords.cpp"
+).read_text()
 header = (root / "src/scene/MainMenuScene.h").read_text()
 menu = (root / "src/scene/MainMenuScene.cpp").read_text()
 view = (root / "src/view/ReplaySummaryListView.h").read_text()

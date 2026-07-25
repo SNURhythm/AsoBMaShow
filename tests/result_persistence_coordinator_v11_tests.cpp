@@ -26,6 +26,12 @@ result_persistence::StageOutcome ReplayRepository::stageCompletedChartAttempt(
   return {};
 }
 
+result_persistence::StageOutcome ReplayRepository::stageCompletedCourseAttempt(
+    const result_persistence::PersistedCourseResult &,
+    const ReplayFileReference &) {
+  return {};
+}
+
 result_persistence::PendingReadOutcome
 ReplayRepository::LoadPendingChartScore(std::string_view) {
   return {};
@@ -60,6 +66,11 @@ BeatorajaReplayCodec::BeatorajaReplayCodec(ReplayCodecLimits limits)
 
 std::optional<std::vector<std::byte>> BeatorajaReplayCodec::encodeChart(
     const ReplayPlaybackData &, std::int64_t, std::string &) const {
+  return std::nullopt;
+}
+
+std::optional<std::vector<std::byte>> BeatorajaReplayCodec::encodeCourse(
+    const CourseReplayPlaybackData &, std::int64_t, std::string &) const {
   return std::nullopt;
 }
 
@@ -175,7 +186,7 @@ struct Harness {
             .relativePath = reservation.reservation->relativePath,
             .sha256 = repeated('c', 64),
             .compressedSize = 123,
-            .codecVersion = 1,
+            .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
         },
     };
     staged = {

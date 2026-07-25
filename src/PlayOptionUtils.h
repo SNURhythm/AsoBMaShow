@@ -2,7 +2,7 @@
 
 #include "ArchiveFile.h"
 #include "CoursePlaySession.h"
-#include "ReplayData.h"
+#include "analysis/JudgedPlaybackData.h"
 #include "replay/ReplayPlaybackData.h"
 #include "bms_parser.hpp"
 #include "path.h"
@@ -305,7 +305,7 @@ inline bool hasSamePatternRandomization(
          usesRandomizer(option2);
 }
 
-inline bool hasSamePatternRandomization(const ReplayData &replay) {
+inline bool hasSamePatternRandomization(const JudgedPlaybackData &replay) {
   return !replay.randomValues.empty() ||
          hasSamePatternRandomization(replay.chartMeta, replay.playOption,
                                      replay.playOption2);
@@ -376,7 +376,7 @@ inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
 }
 
 inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
-    const ReplayData &replay) {
+    const JudgedPlaybackData &replay) {
   return formatPlayModeDisplayLabel(
       replay.chartMeta, replay.playOption, replay.playOptionSeed,
       replay.playOption2, replay.playOption2Seed);
@@ -393,7 +393,7 @@ inline std::string formatPlayModeLabel(
                                    : display.mode + " Lane " + display.laneOrder;
 }
 
-inline std::string formatPlayModeLabel(const ReplayData &replay) {
+inline std::string formatPlayModeLabel(const JudgedPlaybackData &replay) {
   const PlayModeDisplayLabel display = formatPlayModeDisplayLabel(replay);
   return display.laneOrder.empty() ? display.mode
                                    : display.mode + " Lane " + display.laneOrder;
@@ -441,7 +441,7 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
 }
 
 inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
-                                   const ReplayData &replay) {
+                                   const JudgedPlaybackData &replay) {
   std::optional<std::string> ignoredOption;
   std::optional<long long> ignoredSeed;
   if (replay.playOption.has_value() &&
@@ -646,7 +646,7 @@ parseChart(const bms_parser::ChartMeta &meta, std::atomic_bool &cancelled,
 }
 
 inline std::unique_ptr<bms_parser::Chart>
-parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
+parseChartForReplay(const std::filesystem::path &path, const JudgedPlaybackData &replay,
                     std::atomic_bool &cancelled) {
   return parseChart(path, replay.randomSeed, replay.randomPrng,
                     randomValuesOrNull(replay.randomValues), cancelled,
@@ -654,7 +654,7 @@ parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
 }
 
 inline std::unique_ptr<bms_parser::Chart>
-prepareReplayChart(const std::filesystem::path &path, const ReplayData &replay,
+prepareReplayChart(const std::filesystem::path &path, const JudgedPlaybackData &replay,
                    std::atomic_bool &cancelled) {
   auto chart = parseChartForReplay(path, replay, cancelled);
   if (chart == nullptr || cancelled || !applyReplayPlayOptions(*chart, replay)) {
@@ -681,7 +681,7 @@ inline std::unique_ptr<bms_parser::Chart> prepareReplayChart(
 }
 
 inline std::unique_ptr<bms_parser::Chart>
-parseChartForRetry(const ReplayData &retrySource,
+parseChartForRetry(const JudgedPlaybackData &retrySource,
                    const bms_parser::ChartMeta &fallbackMeta,
                    std::atomic_bool &cancelled, bool samePattern) {
   const bms_parser::ChartMeta &chartMeta = retrySource.chartMeta.BmsPath.empty()

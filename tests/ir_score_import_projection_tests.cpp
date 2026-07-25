@@ -241,7 +241,7 @@ void testLocalProjectedScoreKeepsLocalSourceAndFullComboInference() {
 
   result_persistence::PendingChartScoreWrite pending;
   pending.attemptId = "123e4567-e89b-42d3-a456-426614174000";
-  pending.replayId = 1;
+  pending.resultId = 1;
   pending.createdAt = "2026-07-19 12:00:00.000";
   pending.score.chartSha256 = std::string(64, '9');
   pending.score.chartMd5 = std::string(32, '9');

@@ -10,7 +10,8 @@ required = [
     "replayResultRecallInProgress",
     "startReplayResultRecall",
     'makeModalButton("View Result"',
-    "LoadReplayResult",
+    "loadChartResult",
+    "loadCourseResult",
     "BuildChartResult",
     "BuildCourseResult",
     ".savedResultBrowsing = true",
@@ -53,14 +54,21 @@ if "void MainMenuScene::startReplayIrUpload" in source:
                               upload_start)
     upload_source = source[upload_start:upload_end]
     missing += ["upload:" + token for token in [
-        "LoadReplayResult",
-        "BuildChartResult",
-        "historicalIr",
+        "loadIrSubmissionSnapshot",
+        "independently stored IR snapshot",
         "loadOutbox",
         "buildDraft",
         "enqueueManual",
         "retry",
     ] if token not in upload_source]
+    forbidden_upload = [
+        "LoadReplayResult",
+        "loadChartReplayPlayback",
+        "BuildChartResult",
+        "historicalIr",
+    ]
+    missing += ["upload:forbidden:" + token for token in forbidden_upload
+                if token in upload_source]
 else:
     missing.append("upload:startReplayIrUpload definition")
 

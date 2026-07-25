@@ -8,7 +8,7 @@ namespace practice {
 namespace {
 
 std::string groupLabel(std::size_t index, const AnalysisGroup &group,
-                       std::span<const ReplayData> attempts) {
+                       std::span<const JudgedPlaybackData> attempts) {
   const char *mode =
       group.conditions.playback.mode == audio::PlaybackMode::TimeStretch
           ? "Time Stretch"
@@ -43,7 +43,7 @@ std::string groupLabel(std::size_t index, const AnalysisGroup &group,
 } // namespace
 
 ResultModel::ResultModel(const bms_parser::Chart &chart,
-                         std::span<const ReplayData> completedAttempts,
+                         std::span<const JudgedPlaybackData> completedAttempts,
                          std::size_t abandonedAttempts)
     : abandonedCount(abandonedAttempts) {
   attemptAnalyses.reserve(completedAttempts.size());

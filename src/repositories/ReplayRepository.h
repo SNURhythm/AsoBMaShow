@@ -1,12 +1,12 @@
 #pragma once
 
 #include "../CourseIdentity.h"
-#include "../LegacyChartResultAttempt.h"
-#include "../ReplayData.h"
+#include "../analysis/JudgedPlaybackData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
 #include "../ir/IrSubmissionSnapshot.h"
 #include "../replay/BeatorajaReplayPath.h"
+#include "../replay/BeatorajaReplayCodec.h"
 #include "../replay/ReplayPlaybackData.h"
 #include "../ir/IrRemoteScoreModels.h"
 #include "../ir/IrScoreReconciliation.h"
@@ -108,7 +108,7 @@ struct ReplayFileReference {
   std::filesystem::path relativePath;
   std::string contentSha256;
   std::uint64_t compressedSize = 0;
-  int codecVersion = 1;
+  int codecVersion = replay::BeatorajaReplayCodec::kCodecVersion;
 
   bool operator==(const ReplayFileReference &) const = default;
 };
@@ -317,9 +317,6 @@ struct ReplaySummary {
   };
   ReplayFileState replayFileState = ReplayFileState::Missing;
   std::optional<std::uint64_t> replayFileSize;
-  // Temporary v10 read compatibility; removed with legacy playback reads.
-  int eventCount = 0;
-  int touchSampleCount = 0;
   std::optional<bms_parser::ChartMeta> chartMeta;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
@@ -361,13 +358,6 @@ struct IrUploadReplayReadOutcome {
 
 inline constexpr std::size_t kMaximumIrUploadCandidateRows = 16384;
 
-struct ReplayResultRecord {
-  ReplayData replay;
-  std::optional<std::string> attemptId;
-  std::optional<std::string> attemptFingerprint;
-  std::int64_t playedAtUnixMillis = 0;
-};
-
 struct CourseReplayLookup {
   std::string courseKey;
   int legacyCourseId = 0;
@@ -408,11 +398,6 @@ public:
   CourseReplayPlaybackReadOutcome loadCourseReplayPlayback(int resultId);
   ir::IrSubmissionSnapshotReadOutcome
   loadIrSubmissionSnapshot(std::string_view attemptId);
-  std::optional<int> SaveReplay(const ReplayData &replay);
-  std::optional<int> SaveCourseReplay(const CourseReplayData &replay);
-  result_persistence::StageOutcome StageChartResult(
-      const legacy_result_persistence::LegacyChartResultAttempt &attempt,
-      std::span<const ir::IrOutboxDraft> irDrafts);
   result_persistence::PendingReadOutcome
   LoadPendingChartScore(std::string_view attemptId);
   result_persistence::PendingBatchOutcome
@@ -517,18 +502,6 @@ public:
                                          std::string_view irServerOrigin = {});
   std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
                                                int limit = 100);
-  std::optional<ReplayData> LoadReplay(int replayId,
-                                       const bms_parser::ChartMeta &chartMeta);
-  std::optional<ReplayResultRecord>
-  LoadReplayResult(int replayId, const bms_parser::ChartMeta &chartMeta);
-  std::optional<CourseReplayData> LoadCourseReplay(int replayId);
-  bool
-  RecoverCourseRecords(std::span<const course_identity::Definition> definitions,
-                       std::span<const CourseScoreEvidence> scoreEvidence,
-                       std::string &errorMessage);
-  std::optional<ReplayData>
-  LoadLatestReplay(const bms_parser::ChartMeta &chartMeta);
-
 private:
   struct Impl;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;

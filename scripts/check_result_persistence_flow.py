@@ -155,7 +155,7 @@ require(
 )
 require(
     "struct ResultPersistenceOptions" in result_header
-    and "std::shared_ptr<const result_persistence::ChartResultAttempt> attempt"
+    and "std::shared_ptr<const result_persistence::CompletedChartAttempt> attempt"
     in result_header
     and "result_persistence::SaveOutcome outcome" in result_header,
     "ResultPersistenceOptions must retain one shared immutable attempt and outcome",
@@ -210,7 +210,9 @@ require(
         schedule_body,
         "finishReplayRecording();",
         "resultPersistenceAttemptCreationTried = true",
-        "makeChartResultAttempt(",
+        "capturePersistedChartResult(",
+        "captureIrSubmissionSnapshot(",
+        "CompletedChartAttempt attempt",
         "context.resultPersistence.persist(",
         "delayMillis = 0",
         "defer(",
@@ -218,9 +220,11 @@ require(
     "finish, attempt creation, persistence, and non-saved zero-delay must occur before defer",
 )
 require(
-    schedule_body.count("makeChartResultAttempt(") == 1
+    schedule_body.count("capturePersistedChartResult(") == 1
+    and schedule_body.count("captureIrSubmissionSnapshot(") == 1
+    and schedule_body.count("CompletedChartAttempt attempt") == 1
     and schedule_body.count("context.resultPersistence.persist(") == 1,
-    "scheduleResultTransition must contain one attempt factory and one persistence call",
+    "scheduleResultTransition must capture one compact attempt and persist it once",
 )
 require(
     "if (resultPersistenceAttemptId.empty())" in schedule_body
@@ -292,14 +296,14 @@ require(
 )
 require(
     course_replay_span is not None
-    and "SaveCourseReplay("
+    and "context.resultPersistence.persistCourse(attempt)"
     in result_source[course_replay_span[0] : course_replay_span[1]],
-    "course replay persistence must remain in its course-only method",
+    "course result and replay-file persistence must remain in its course-only method",
 )
 require(
     "SaveCourseScore(" not in masked_source
-    and "SaveCourseReplay(" not in masked_source,
-    "SaveCourse* calls are allowed only inside course-only persistence methods",
+    and "context.resultPersistence.persistCourse(" not in masked_source,
+    "course persistence calls are allowed only inside course-only methods",
 )
 
 require(result_source.count('"Retry Save"') == 1, "missing exact Retry Save action")
@@ -375,18 +379,19 @@ receipt_body = function_body(
 )
 require(
     "validatedReceiptFor(" in receipt_body
-    and "receipt->replayId" in receipt_body
+    and "receipt->resultId" in receipt_body
     and "receipt->createdAt" in receipt_body
+    and "persistedResultId" in receipt_body
     and "presentationReplay" in receipt_body
     and "retryData" in receipt_body,
-    "receipt replay ID and createdAt must reach presentation and retry replay copies",
+    "receipt result ID and createdAt must reach result and analysis presentation state",
 )
 
 previous_body = function_body(result_source, "ResultScene", "loadPreviousBest")
 require(
     "excludeAttemptId" in previous_body
     and "validatedReceiptFor(" in previous_body
-    and "persistenceOptions.attempt->attemptId" in previous_body,
+    and "persistenceOptions.attempt->result.attemptId" in previous_body,
     "previous best must exclude only a receipt-proven staged live attempt",
 )
 

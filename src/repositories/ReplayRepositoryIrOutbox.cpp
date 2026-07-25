@@ -410,43 +410,6 @@ ir::IrOutboxMutationOutcome applyDeliveryOnConnection(
 } // namespace
 
 replay_repository_detail::IrDraftStageOutcome
-replay_repository_detail::ValidateIrDraftsForAttempt(
-    const legacy_result_persistence::LegacyChartResultAttempt &attempt,
-    std::span<const ir::IrOutboxDraft> drafts) {
-  using replay_repository_detail::IrDraftStageStatus;
-  std::vector<const ir::IrOutboxDraft *> sorted;
-  sorted.reserve(drafts.size());
-  for (const ir::IrOutboxDraft &draft : drafts) {
-    std::string diagnostic;
-    if (!ir::validateIrOutboxDraft(draft, diagnostic)) {
-      return {.status = IrDraftStageStatus::IntegrityConflict,
-              .diagnostic = std::move(diagnostic)};
-    }
-    if (draft.attemptId != attempt.attemptId) {
-      return {.status = IrDraftStageStatus::IntegrityConflict,
-              .diagnostic = "IR draft attempt identity does not match the "
-                            "chart result"};
-    }
-    if (draft.chartMd5 != attempt.score.chartMd5 ||
-        draft.chartSha256 != attempt.score.chartSha256) {
-      return {.status = IrDraftStageStatus::IntegrityConflict,
-              .diagnostic =
-                  "IR draft chart identity does not match the chart result"};
-    }
-    sorted.push_back(&draft);
-  }
-  std::ranges::sort(sorted, {}, &ir::IrOutboxDraft::providerId);
-  for (std::size_t index = 1; index < sorted.size(); ++index) {
-    if (sorted[index - 1]->providerId == sorted[index]->providerId) {
-      return {.status = IrDraftStageStatus::IntegrityConflict,
-              .diagnostic =
-                  "automatic IR drafts contain a duplicate provider ID"};
-    }
-  }
-  return {.status = IrDraftStageStatus::Succeeded};
-}
-
-replay_repository_detail::IrDraftStageOutcome
 replay_repository_detail::InsertInactiveIrDraftsOnConnection(
     sqlite3 *database, std::span<const ir::IrOutboxDraft> drafts) {
   using replay_repository_detail::IrDraftStageStatus;
