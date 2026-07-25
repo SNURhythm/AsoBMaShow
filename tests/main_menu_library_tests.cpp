@@ -238,6 +238,17 @@ int main() {
             static_cast<int>(sameFolderQuery.sortDirection),
             "same-folder query preserves sort direction");
 
+  ChartMetaRecord retainedSelection;
+  retainedSelection.meta.BmsPath = "/library/A/selected.bms";
+  ASSERT_EQ(std::filesystem::path("/library/A/selected.bms"),
+            main_menu_library::chartSelectionPathForReload(
+                {}, retainedSelection),
+            "reload falls back to retained chart after list selection reset");
+  ASSERT_EQ(std::filesystem::path("/library/B/visible.bms"),
+            main_menu_library::chartSelectionPathForReload(
+                "/library/B/visible.bms", retainedSelection),
+            "visible list selection takes priority during reload");
+
   ASSERT_EQ(70.0f,
             main_menu_library::centeredScrollOffsetForItem(2, 100, 108, 400),
             "selected chart is centered in a long list");

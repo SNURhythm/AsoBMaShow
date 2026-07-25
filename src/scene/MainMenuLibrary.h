@@ -50,6 +50,10 @@ ChartMetaQuery chartQueryForSameFolder(
     const std::filesystem::path &folder, const std::string &keyword,
     const ChartRecordFilters &filters, int selectedLongNoteMode);
 
+std::filesystem::path chartSelectionPathForReload(
+    const std::filesystem::path &visibleSelectionPath,
+    const std::optional<ChartMetaRecord> &retainedSelection);
+
 float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
                                   int itemHeight,
                                   int viewportHeight) noexcept;

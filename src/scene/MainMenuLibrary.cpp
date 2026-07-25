@@ -73,6 +73,18 @@ ChartMetaQuery chartQueryForSameFolder(
   return query;
 }
 
+std::filesystem::path chartSelectionPathForReload(
+    const std::filesystem::path &visibleSelectionPath,
+    const std::optional<ChartMetaRecord> &retainedSelection) {
+  if (!visibleSelectionPath.empty()) {
+    return visibleSelectionPath;
+  }
+  if (retainedSelection.has_value()) {
+    return retainedSelection->meta.BmsPath;
+  }
+  return {};
+}
+
 float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
                                   int itemHeight,
                                   int viewportHeight) noexcept {

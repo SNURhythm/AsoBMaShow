@@ -4192,12 +4192,17 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       preserveViewState ? recyclerView->scrollOffset : 0.0f;
   const int previousSelectedIndex =
       preserveViewState ? recyclerView->selectedIndex : -1;
-  path_t previousSelectedPath;
+  std::filesystem::path visibleSelectedPath;
   if (preserveViewState && previousSelectedIndex >= 0 &&
       previousSelectedIndex < recyclerView->size()) {
-    previousSelectedPath =
-        fspath_to_path_t(recyclerView->get(previousSelectedIndex).meta.BmsPath);
+    visibleSelectedPath =
+        recyclerView->get(previousSelectedIndex).meta.BmsPath;
   }
+  const path_t previousSelectedPath =
+      preserveViewState
+          ? fspath_to_path_t(main_menu_library::chartSelectionPathForReload(
+                visibleSelectedPath, selectedChartRecord))
+          : path_t{};
   int previousTopIndex = -1;
   float previousTopItemOffset = 0.0f;
   path_t previousTopPath;
