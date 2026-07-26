@@ -320,7 +320,9 @@ bool createCompactReplaySchema11(sqlite3 *database) {
   return setDatabaseUserVersion(database, kReplayDatabaseSchemaVersion);
 }
 
-bool migrateReplayDatabaseSchema(sqlite3 *database) {
+bool migrateReplayDatabaseSchema(
+    sqlite3 *database,
+    const std::filesystem::path &chartDatabasePath = {}) {
   std::string versionError;
   const auto version = readSqliteUserVersion(database, versionError);
   if (!version.has_value()) {
@@ -344,8 +346,10 @@ bool migrateReplayDatabaseSchema(sqlite3 *database) {
       std::filesystem::path(filename).parent_path();
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore fileStore(profileRoot);
+  const auto resolveKeyMode = replay_repository_detail::
+      makeChartDatabaseReplayKeyModeResolver(chartDatabasePath);
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database, profileRoot, codec, fileStore);
+      database, profileRoot, codec, fileStore, {}, resolveKeyMode);
   if (outcome.status !=
           replay_repository_detail::ReplayMigrationOutcome::Status::Migrated &&
       outcome.status != replay_repository_detail::ReplayMigrationOutcome::
@@ -425,7 +429,7 @@ bool replay_repository_detail::CreateCompactReplaySchema11OnConnection(
 }
 
 bool replay_repository_detail::CreateReplayTablesOnConnection(
-    sqlite3 *database) {
+    sqlite3 *database, const std::filesystem::path &chartDatabasePath) {
   if (database == nullptr || rejectFutureReplayDatabase(database)) {
     return false;
   }
@@ -436,7 +440,7 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(
     return false;
   }
   if (*version != 0) {
-    return migrateReplayDatabaseSchema(database);
+    return migrateReplayDatabaseSchema(database, chartDatabasePath);
   }
 
   bool hasTables = false;
@@ -492,6 +496,8 @@ bool replay_repository_detail::EquivalentDatabasePaths(
   return equivalentReplayDatabasePaths(first, second);
 }
 
-bool replay_repository_detail::MigrateSchema(sqlite3 *database) {
-  return migrateReplayDatabaseSchema(database);
+bool replay_repository_detail::MigrateSchema(
+    sqlite3 *database,
+    const std::filesystem::path &chartDatabasePath) {
+  return migrateReplayDatabaseSchema(database, chartDatabasePath);
 }

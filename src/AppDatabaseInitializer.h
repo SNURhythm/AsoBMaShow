@@ -71,7 +71,10 @@ initializeApplicationDatabases(ChartRepository &charts,
         scores.SetChartDatabasePath(charts.DatabasePath());
         return initializeScoreDatabase(scores);
       },
-      [&] { return initializeReplayDatabase(replays); },
+      [&] {
+        replays.SetChartDatabasePath(charts.DatabasePath());
+        return initializeReplayDatabase(replays);
+      },
       [&] { return initializeMusicDatabase(music); });
 }
 

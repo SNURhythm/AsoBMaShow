@@ -11,6 +11,7 @@ struct ReplayRepository::Impl {
 
   mutable std::mutex sessionMutex;
   std::filesystem::path databasePath;
+  std::filesystem::path chartDatabasePath;
   sqlite3 *sessionDatabase = nullptr;
 };
 
@@ -33,7 +34,8 @@ std::filesystem::path
 ResolvedDatabasePath(const std::filesystem::path &databasePath);
 bool EquivalentDatabasePaths(const std::filesystem::path &first,
                              const std::filesystem::path &second);
-bool MigrateSchema(sqlite3 *database);
+bool MigrateSchema(sqlite3 *database,
+                   const std::filesystem::path &chartDatabasePath = {});
 
 ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
                                                  std::string_view attemptId,
@@ -59,7 +61,9 @@ ir::IrSubmissionSnapshotReadOutcome
 LoadIrSubmissionSnapshotOnConnection(sqlite3 *database,
                                      std::string_view attemptId);
 
-bool CreateReplayTablesOnConnection(sqlite3 *database);
+bool CreateReplayTablesOnConnection(
+    sqlite3 *database,
+    const std::filesystem::path &chartDatabasePath = {});
 bool CreateCompactReplaySchema11OnConnection(sqlite3 *database);
 std::vector<ReplaySummary> ListReplaysOnConnection(
     sqlite3 *database, const bms_parser::ChartMeta &chartMeta, int limit,

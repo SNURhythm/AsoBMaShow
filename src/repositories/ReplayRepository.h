@@ -374,6 +374,7 @@ public:
   ReplayRepository &operator=(const ReplayRepository &) = delete;
 
   void SetDatabasePath(std::filesystem::path databasePath);
+  void SetChartDatabasePath(std::filesystem::path chartDatabasePath);
   [[nodiscard]] std::filesystem::path GetDatabasePath() const;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePath() const;
   bool BindDatabasePath(std::filesystem::path databasePath,

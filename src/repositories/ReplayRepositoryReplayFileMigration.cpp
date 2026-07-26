@@ -10,6 +10,7 @@
 #include "../replay/BeatorajaReplayPath.h"
 #include "../replay/LegacyReplayIdentity.h"
 #include "../replay/ReplayFileStore.h"
+#include "../path.h"
 
 #include "nlohmann/json.hpp"
 
@@ -247,6 +248,21 @@ int inferredKeyMode(const LegacyChart &chart) {
   return maximumLane > 7 ? 14 : 7;
 }
 
+bool supportedKeyMode(int keyMode) noexcept {
+  switch (keyMode) {
+  case 5:
+  case 7:
+  case 9:
+  case 10:
+  case 14:
+  case 24:
+  case 48:
+    return true;
+  default:
+    return false;
+  }
+}
+
 GaugeProfile gaugeProfileFromInt(int value) {
   if (value < static_cast<int>(GaugeProfile::Standard) ||
       value > static_cast<int>(GaugeProfile::Standard24Keys)) {
@@ -388,7 +404,7 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
   return true;
 }
 
-bool readPendingResult(sqlite3 *database, LegacyChart &chart,
+bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
                        std::string &diagnostic) {
   Statement statement(
       database,
@@ -406,7 +422,7 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart,
   auto &persisted = chart.result;
   persisted.resultId = static_cast<int>(chart.id);
   persisted.attemptId = chart.attemptId;
-  persisted.keyMode = inferredKeyMode(chart);
+  persisted.keyMode = keyMode;
   persisted.playedAtUnixMillis = chart.playedAtUnixMillis;
   if (result == SQLITE_ROW) {
     persisted.attemptId = columnText(statement.get(), 0);
@@ -674,6 +690,7 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
 }
 
 bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
+                const ReplayMigrationKeyModeResolver &resolveKeyMode,
                 std::string &diagnostic) {
   Statement statement(
       database,
@@ -764,8 +781,20 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
     return false;
   }
   for (auto &chart : charts) {
-    if (!readEvents(database, chart, diagnostic) ||
-        !readPendingResult(database, chart, diagnostic) ||
+    if (!readEvents(database, chart, diagnostic)) {
+      return false;
+    }
+    int keyMode = inferredKeyMode(chart);
+    if (resolveKeyMode) {
+      const auto resolved = resolveKeyMode(
+          {.chartPath = chart.chartPath,
+           .chartMd5 = chart.chartMd5,
+           .chartSha256 = chart.chartSha256});
+      if (resolved.has_value() && supportedKeyMode(*resolved)) {
+        keyMode = *resolved;
+      }
+    }
+    if (!readPendingResult(database, chart, keyMode, diagnostic) ||
         !buildPlayback(chart, diagnostic)) {
       return false;
     }
@@ -1437,6 +1466,62 @@ bool dropLegacyTables(sqlite3 *database, std::string &diagnostic) {
 
 } // namespace
 
+ReplayMigrationKeyModeResolver makeChartDatabaseReplayKeyModeResolver(
+    const std::filesystem::path &chartDatabasePath) {
+  if (chartDatabasePath.empty()) {
+    return {};
+  }
+  return [chartDatabasePath](const ReplayMigrationChartIdentity &identity)
+             -> std::optional<int> {
+    sqlite3 *rawDatabase = nullptr;
+    const std::string pathText = fspath_to_utf8(chartDatabasePath);
+    const int openResult = sqlite3_open_v2(
+        pathText.c_str(), &rawDatabase,
+        SQLITE_OPEN_READONLY | SQLITE_OPEN_PRIVATECACHE, nullptr);
+    SqliteConnectionHandle database(rawDatabase);
+    if (openResult != SQLITE_OK || !database) {
+      return std::nullopt;
+    }
+
+    Statement statement(
+        database.get(),
+        "SELECT path,lower(trim(md5)),lower(trim(sha256)),keys FROM "
+        "chart_meta WHERE path=?1 OR (?2<>'' AND lower(trim(md5))=?2) OR "
+        "(?3<>'' AND lower(trim(sha256))=?3)");
+    if (!statement.valid() ||
+        !bindText(statement.get(), 1, identity.chartPath) ||
+        !bindText(statement.get(), 2, identity.chartMd5) ||
+        !bindText(statement.get(), 3, identity.chartSha256)) {
+      return std::nullopt;
+    }
+
+    std::optional<int> resolved;
+    int stepResult = SQLITE_OK;
+    while ((stepResult = sqlite3_step(statement.get())) == SQLITE_ROW) {
+      const std::string rowPath = columnText(statement.get(), 0);
+      const std::string rowMd5 = columnText(statement.get(), 1);
+      const std::string rowSha256 = columnText(statement.get(), 2);
+      const bool identityMatches =
+          !identity.chartSha256.empty()
+              ? rowSha256 == identity.chartSha256 &&
+                    (identity.chartMd5.empty() || rowMd5 == identity.chartMd5)
+              : !identity.chartMd5.empty()
+                    ? rowMd5 == identity.chartMd5
+                    : rowPath == identity.chartPath;
+      if (!identityMatches) {
+        continue;
+      }
+      const int keyMode = sqlite3_column_int(statement.get(), 3);
+      if (!supportedKeyMode(keyMode) ||
+          (resolved.has_value() && *resolved != keyMode)) {
+        return std::nullopt;
+      }
+      resolved = keyMode;
+    }
+    return stepResult == SQLITE_DONE ? resolved : std::nullopt;
+  };
+}
+
 bool compactReplaySchemaHasNoLegacyPayloadTables(sqlite3 *database) {
   if (database == nullptr) {
     return false;
@@ -1453,7 +1538,8 @@ bool compactReplaySchemaHasNoLegacyPayloadTables(sqlite3 *database) {
 ReplayMigrationOutcome migrateReplaySchema10To11(
     sqlite3 *database, const std::filesystem::path &profileRoot,
     const replay::BeatorajaReplayCodec &codec,
-    replay::ReplayFileStore &fileStore, ReplayMigrationFaults faults) {
+    replay::ReplayFileStore &fileStore, ReplayMigrationFaults faults,
+    ReplayMigrationKeyModeResolver resolveKeyMode) {
   if (database == nullptr || profileRoot.empty()) {
     return failure(MigrationStatus::StorageFailure,
                    "replay migration database or profile root is missing");
@@ -1486,7 +1572,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
   std::vector<LegacyChart> charts;
   std::vector<LegacyCourse> courses;
   std::string diagnostic;
-  if (!readCharts(database, charts, diagnostic) ||
+  if (!readCharts(database, charts, resolveKeyMode, diagnostic) ||
       !readCourses(database, charts, courses, diagnostic)) {
     return failure(MigrationStatus::InvalidLegacyData,
                    diagnostic.empty() ? "legacy replay rows are invalid"

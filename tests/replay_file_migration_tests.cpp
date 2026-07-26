@@ -451,6 +451,18 @@ FixtureFacts insertChartFixture(sqlite3 *database) {
   return facts;
 }
 
+void createChartMetadataDatabase(sqlite3 *database,
+                                 const FixtureFacts &chart, int keyMode) {
+  executeOrThrow(
+      database,
+      "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,md5 TEXT NOT NULL,"
+      "sha256 TEXT NOT NULL,keys INTEGER);"
+      "INSERT INTO chart_meta(path,md5,sha256,keys) VALUES("
+      "'BMS/chart.bms','" +
+          chart.md5 + "','" + chart.sha256 + "'," +
+          std::to_string(keyMode) + ")");
+}
+
 std::string insertCourseFixture(sqlite3 *database, const FixtureFacts &chart) {
   const std::array identities{
       course_identity::ChartIdentity{.sha256 = chart.sha256, .md5 = chart.md5}};
@@ -635,6 +647,47 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
                decoded.chart->legacy->events.size() == 2,
            "migration-only legacy playback annotations remain in extension");
   }
+}
+
+void testChartMetadataPreservesSparseFourteenKeyMode() {
+  TemporaryDirectory temporary;
+  Database replayDatabase(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(replayDatabase.get());
+  const FixtureFacts chart = insertChartFixture(replayDatabase.get());
+
+  Database chartDatabase(temporary.path() / "chart.db");
+  createChartMetadataDatabase(chartDatabase.get(), chart, 14);
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto resolver =
+      replay_repository_detail::makeChartDatabaseReplayKeyModeResolver(
+          temporary.path() / "chart.db");
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      replayDatabase.get(), temporary.path(), codec, store, {}, resolver);
+
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "sparse 14-key replay migrates with chart metadata");
+  expect(integer(replayDatabase.get(),
+                 "SELECT key_mode FROM chart_results WHERE id=42") == 14,
+         "chart metadata, not observed lanes, owns migrated key mode");
+
+  const std::filesystem::path relative =
+      std::filesystem::path("replay") / ("C" + chart.sha256 + ".brd");
+  replay::ReplayFileMetadata metadata{
+      .relativePath = relative,
+      .sha256 = text(replayDatabase.get(),
+                     "SELECT content_sha256 FROM replay_files WHERE "
+                     "chart_result_id=42"),
+      .compressedSize = static_cast<std::uint64_t>(integer(
+          replayDatabase.get(),
+          "SELECT compressed_size FROM replay_files WHERE "
+          "chart_result_id=42")),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  const auto decoded = store.load(metadata, codec);
+  expect(decoded.chart.has_value() && decoded.chart->setup.keyMode == 14,
+         "metadata-selected key mode is encoded into the migrated BRD");
 }
 
 void testMigratesMd5OnlyChartWithDeterministicReplayStem() {
@@ -1103,6 +1156,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
+  testChartMetadataPreservesSparseFourteenKeyMode();
   testMigratesMd5OnlyChartWithDeterministicReplayStem();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();
   testMigratesOutdatedProvenanceAsLegacyUnverified();

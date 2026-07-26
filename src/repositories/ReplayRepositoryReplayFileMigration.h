@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -19,6 +20,19 @@ namespace replay_repository_detail {
 struct ReplayMigrationFaults {
   std::function<bool(std::string_view phase, std::int64_t publicId)> failAt;
 };
+
+struct ReplayMigrationChartIdentity {
+  std::string_view chartPath;
+  std::string_view chartMd5;
+  std::string_view chartSha256;
+};
+
+using ReplayMigrationKeyModeResolver =
+    std::function<std::optional<int>(const ReplayMigrationChartIdentity &)>;
+
+[[nodiscard]] ReplayMigrationKeyModeResolver
+makeChartDatabaseReplayKeyModeResolver(
+    const std::filesystem::path &chartDatabasePath);
 
 struct ReplayMigrationOutcome {
   enum class Status {
@@ -43,6 +57,7 @@ struct ReplayMigrationOutcome {
 ReplayMigrationOutcome migrateReplaySchema10To11(
     sqlite3 *database, const std::filesystem::path &profileRoot,
     const replay::BeatorajaReplayCodec &codec,
-    replay::ReplayFileStore &fileStore, ReplayMigrationFaults faults = {});
+    replay::ReplayFileStore &fileStore, ReplayMigrationFaults faults = {},
+    ReplayMigrationKeyModeResolver resolveKeyMode = {});
 
 } // namespace replay_repository_detail

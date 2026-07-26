@@ -50,7 +50,8 @@ void removeStaleReplayTemporaryFiles(
 } // namespace
 
 ReplayRepository::Impl::Impl(std::filesystem::path path)
-    : databasePath(std::move(path)) {}
+    : databasePath(std::move(path)),
+      chartDatabasePath(Utils::GetDocumentsPath("db") / "chart.db") {}
 
 ReplayRepository::ReplayRepository() : impl_(std::make_unique<Impl>()) {}
 
@@ -71,6 +72,12 @@ void ReplayRepository::SetDatabasePath(std::filesystem::path databasePath) {
   }
   impl_->databasePath = std::move(databasePath);
   removeStaleReplayTemporaryFiles(GetResolvedDatabasePathLocked());
+}
+
+void ReplayRepository::SetChartDatabasePath(
+    std::filesystem::path chartDatabasePath) {
+  std::lock_guard lock(impl_->sessionMutex);
+  impl_->chartDatabasePath = std::move(chartDatabasePath);
 }
 
 std::filesystem::path ReplayRepository::GetDatabasePath() const {
@@ -105,7 +112,8 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
       replay_repository_detail::EquivalentDatabasePaths(impl_->databasePath,
                                                         databasePath)) {
     impl_->databasePath = std::move(databasePath);
-    if (replay_repository_detail::MigrateSchema(impl_->sessionDatabase)) {
+    if (replay_repository_detail::MigrateSchema(
+            impl_->sessionDatabase, impl_->chartDatabasePath)) {
       removeStaleReplayTemporaryFiles(GetResolvedDatabasePathLocked());
       errorMessage.clear();
       return true;
@@ -126,7 +134,7 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
     return false;
   }
   if (!replay_repository_detail::CreateReplayTablesOnConnection(
-          candidate.get())) {
+          candidate.get(), impl_->chartDatabasePath)) {
     errorMessage = "replay database validation failed";
     return false;
   }
@@ -163,7 +171,8 @@ void ReplayRepository::ShutdownLocked() {
 bool ReplayRepository::EnsureSessionDatabaseLocked() {
   if (impl_->sessionDatabase != nullptr) {
     if (sqlite3_get_autocommit(impl_->sessionDatabase) != 0) {
-      return replay_repository_detail::MigrateSchema(impl_->sessionDatabase);
+      return replay_repository_detail::MigrateSchema(
+          impl_->sessionDatabase, impl_->chartDatabasePath);
     }
     SDL_Log("Discarding replay database with an unfinished transaction");
     ShutdownLocked();
@@ -179,7 +188,7 @@ bool ReplayRepository::EnsureSessionDatabaseLocked() {
     return false;
   }
   if (!replay_repository_detail::CreateReplayTablesOnConnection(
-          candidate.get())) {
+          candidate.get(), impl_->chartDatabasePath)) {
     return false;
   }
   impl_->sessionDatabase = candidate.release();
