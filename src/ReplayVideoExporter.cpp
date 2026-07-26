@@ -1298,18 +1298,19 @@ long long courseResultDurationMicrosForReplayVideo(
 bms_parser::ChartMeta courseResultMetaForReplayVideo(
     const JudgedCoursePlaybackData &replay,
     const std::vector<CourseReplayVideoStage> &stages) {
-  int totalNotes = 0;
-  long long playLength = 0;
+  std::vector<analysis::JudgedCourseEntryFacts> playedEntryFacts;
+  playedEntryFacts.reserve(stages.size());
   for (const auto &stage : stages) {
     if (stage.chart == nullptr) {
       continue;
     }
-    totalNotes += std::max(0, stage.chart->Meta.TotalNotes);
-    playLength += std::max(0LL, stage.chart->Meta.PlayLength);
+    playedEntryFacts.push_back(
+        {.totalNotes = stage.chart->Meta.TotalNotes,
+         .playLengthMicros = stage.chart->Meta.PlayLength});
   }
-  return result_presentation::courseResultMeta(
-      replay.courseName, replay.courseGroupName, stages.size(), totalNotes,
-      playLength);
+  return result_presentation::courseResultMetaFromReplayFacts(
+      replay.courseName, replay.courseGroupName, replay.entryFacts,
+      playedEntryFacts);
 }
 
 RhythmState courseResultStateForReplayVideo(
@@ -1328,22 +1329,17 @@ RhythmState courseResultStateForReplayVideo(
 
   for (const auto &stage : stages) {
     const RhythmState &state = stage.resultState;
-    for (int i = 0; i < JudgementCount; ++i) {
-      aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
-    }
-    aggregate.comboBreak += state.comboBreak;
-    aggregate.fastCount += state.fastCount;
-    aggregate.slowCount += state.slowCount;
-    aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);
-    aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
-                                  state.gaugeHistory.begin(),
-                                  state.gaugeHistory.end());
+    result_presentation::appendCourseResultCounters(aggregate, state);
+    result_presentation::appendCourseGaugeHistorySamples(aggregate.gaugeHistory,
+                                                         state.gaugeHistory);
     aggregate.combo = state.combo;
     aggregate.currentGauge = state.currentGauge;
     aggregate.gaugeType = state.gaugeType;
     aggregate.gaugeValues = state.gaugeValues;
     aggregate.gaugeSurvivalFailed = state.gaugeSurvivalFailed;
   }
+  result_presentation::appendMissingCourseGaugeHistorySamples(
+      aggregate.gaugeHistory, replay.entryFacts, stages.size());
 
   aggregate.currentGauge = replay.finalGauge;
   aggregate.gaugeType = stages.empty() ? replay.initialGaugeType
@@ -4234,6 +4230,12 @@ ReplayVideoExporter::ExportCourseReplay(
   adaptedCourse.clearType = result.clearType;
   adaptedCourse.completedCharts = result.completedCharts;
   adaptedCourse.totalCharts = result.totalCharts;
+  adaptedCourse.entryFacts.reserve(result.entryFacts.size());
+  for (const auto &facts : result.entryFacts) {
+    adaptedCourse.entryFacts.push_back(
+        {.totalNotes = facts.totalNotes,
+         .playLengthMicros = facts.playLengthMicros});
+  }
   adaptedCourse.context =
       analysis::playbackContextFrom(playback.stages.front().setup);
   adaptedCourse.stages.reserve(playback.stages.size());

@@ -591,6 +591,34 @@ void testPreRollInputEncodesForChartsAndCourses() {
          "input before the recorder pre-roll remains invalid");
 }
 
+void testStockProjectionCarriesPreRollHoldsAcrossTimeZero() {
+  replay::BeatorajaReplayCodec codec;
+  auto source = extensionReplay();
+  source.input = {
+      {.songTimeMicros = -2'000'000, .control = lane(1, 0), .pressed = true},
+      {.songTimeMicros = 1'000, .control = lane(1, 0), .pressed = false},
+  };
+  std::string diagnostic;
+
+  const auto encoded =
+      codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
+  expect(encoded.has_value(), "pre-roll hold replay encodes");
+  if (!encoded) {
+    return;
+  }
+
+  Bytes expectedStock;
+  appendRecord(expectedStock, 1, 0);
+  appendRecord(expectedStock, -1, 1'000);
+  expectEqual(stockKeyRecords(outerJson(*encoded)),
+              std::optional<Bytes>(expectedStock),
+              "stock replay starts controls held across time zero");
+
+  const auto decoded = codec.decode(*encoded, 7);
+  expect(decoded.chart.has_value() && decoded.chart->input == source.input,
+         "Aso extension keeps the exact negative pre-roll transition");
+}
+
 void testAllMissReplayRoundTripsWithEmptyInput() {
   replay::BeatorajaReplayCodec codec;
   auto source = extensionReplay();
@@ -820,6 +848,17 @@ void testMalformedAndBoundedInputs() {
   expectDecodeRejected(codec, encodeJson(deep),
                        "excessive JSON depth is rejected");
 
+  Json excessiveCourse = Json::array();
+  const Json stockStage = outerJson(readFixture("beatoraja-chart.brd"));
+  for (int index = 0; index < 257; ++index) {
+    excessiveCourse.push_back(stockStage);
+  }
+  const auto excessiveCourseDecoded =
+      codec.decode(encodeJson(excessiveCourse), 7);
+  expect(!excessiveCourseDecoded.course.has_value() &&
+             !excessiveCourseDecoded.diagnostic.empty(),
+         "course decode rejects more than 256 stages");
+
   auto source = extensionReplay();
   std::string diagnostic;
   auto encoded = codec.encodeChart(source, 1000, diagnostic);
@@ -943,6 +982,12 @@ void testMalformedAndBoundedInputs() {
   expect(!codec.encodeCourse(badCourse, 1000, diagnostic),
          "course stage/rest envelope mismatch is rejected on encode");
 
+  replay::CourseReplayPlaybackData excessiveCourseReplay;
+  excessiveCourseReplay.stages.assign(257, source);
+  excessiveCourseReplay.restMicrosAfterStage.assign(257, 0);
+  expect(!codec.encodeCourse(excessiveCourseReplay, 1000, diagnostic),
+         "course encode rejects more than 256 stages");
+
   replay::ReplayCodecLimits noTouch;
   noTouch.maxTouchSamples = 1;
   replay::BeatorajaReplayCodec noTouchCodec(noTouch);
@@ -966,6 +1011,7 @@ int main() {
   testPrimitiveCodecs();
   testAsoExtensionRoundTripsWithoutBreakingStock();
   testPreRollInputEncodesForChartsAndCourses();
+  testStockProjectionCarriesPreRollHoldsAcrossTimeZero();
   testAllMissReplayRoundTripsWithEmptyInput();
   testManualAssignmentProjectsToStockNormal();
   testMalformedAndBoundedInputs();

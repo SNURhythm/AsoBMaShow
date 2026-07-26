@@ -4,6 +4,7 @@
 #include "../src/FileChecksum.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileArchive.h"
+#include "../src/ProfileDatabaseActivity.h"
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/practice/PracticePresetStore.h"
 #include "../src/repositories/ReplayRepository.h"
@@ -18,17 +19,20 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -840,6 +844,47 @@ void testExportOmitsDeletedReplayAttachment() {
   expect(findMember(members, "replay/" + std::string(kReplayFilename)) ==
              nullptr,
          "deleted replay bytes are absent from the archive");
+}
+
+void testExportHoldsProfileActivityExclusionAcrossSnapshotAndFiles() {
+  Fixture fixture;
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool temporaryWritten = false;
+  bool releaseExport = false;
+  ProfileArchiveDependencies dependencies;
+  dependencies.beforeExportPhase = [&](ProfileArchiveExportPhase,
+                                       std::string &) {
+    std::unique_lock lock(mutex);
+    temporaryWritten = true;
+    condition.notify_all();
+    condition.wait(lock, [&] { return releaseExport; });
+    return true;
+  };
+  ProfileArchiveService service(fixture.manager, std::move(dependencies));
+  const auto destination = fixture.exchange.path() / "guarded-export.zip";
+  ProfileArchiveResult exported;
+  std::thread worker(
+      [&] { exported = service.Export(fixture.sourceId, destination); });
+  {
+    std::unique_lock lock(mutex);
+    condition.wait(lock, [&] { return temporaryWritten; });
+  }
+  bool competingOperationEntered = false;
+  {
+    profile_database_activity::SwitchGuard competingOperation;
+    competingOperationEntered = competingOperation.ownsLock();
+  }
+  expect(!competingOperationEntered,
+         "export excludes profile mutations until its database and replay "
+         "file snapshot is complete");
+  {
+    std::lock_guard lock(mutex);
+    releaseExport = true;
+  }
+  condition.notify_all();
+  worker.join();
+  expect(exported.ok(), "guarded profile export still succeeds");
 }
 
 void testIrOperationalStateIsNotProfilePortable() {
@@ -2122,6 +2167,122 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
   expect(true, "pre-v10 replay archive migration remains dropped");
 }
 
+void testSchema13ArchiveMigratesAndPreservesRows() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "schema13-source.zip");
+  std::string error;
+  auto members = readArchive(source, error);
+  expect(error.empty(), "schema-13 source archive reads: " + error);
+  if (!error.empty()) {
+    return;
+  }
+
+  const auto databasePath = fixture.temp.path() / "schema13-replays.db";
+  auto *databaseMember = findMember(members, "replays.db");
+  auto *manifestMember = findMember(members, "manifest.json");
+  expect(databaseMember != nullptr && manifestMember != nullptr,
+         "schema-13 source members exist");
+  if (databaseMember == nullptr || manifestMember == nullptr) {
+    return;
+  }
+  writeFile(databasePath, databaseMember->contents);
+  {
+    Database database = openDatabase(databasePath);
+    expect(database != nullptr &&
+               execute(database.get(),
+                       "ALTER TABLE course_results DROP COLUMN "
+                       "entry_facts_json;PRAGMA user_version=13"),
+           "schema-13 replay database fixture is created");
+  }
+  databaseMember->contents = readFile(databasePath);
+  Json manifest = Json::parse(manifestMember->contents);
+  manifest["replaySchemaVersion"] = 13;
+  manifestMember->contents = manifest.dump(2) + "\n";
+  refreshChecksums(members);
+
+  const auto archive = fixture.temp.path() / "schema13-import.zip";
+  expect(writeArchive(archive, members, error),
+         "schema-13 archive writes: " + error);
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(imported.ok() && imported.profile.has_value(),
+         "supported compact schema 13 migrates during profile import: " +
+             imported.message);
+}
+
+void testImportRejectsMalformedReplayReferenceRows() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "unsafe-reference-source.zip");
+  std::string error;
+  auto members = readArchive(source, error);
+  expect(error.empty(), "unsafe-reference source archive reads: " + error);
+  if (!error.empty()) {
+    return;
+  }
+
+  const auto databasePath = fixture.temp.path() / "unsafe-reference.db";
+  auto *databaseMember = findMember(members, "replays.db");
+  expect(databaseMember != nullptr, "unsafe-reference database member exists");
+  if (databaseMember == nullptr) {
+    return;
+  }
+  writeFile(databasePath, databaseMember->contents);
+  {
+    Database database = openDatabase(databasePath);
+    expect(database != nullptr &&
+               execute(database.get(),
+                       "UPDATE replay_files SET relative_path='../escape.brd'"),
+           "unsafe replay reference is injected into the archive database");
+  }
+  databaseMember->contents = readFile(databasePath);
+  refreshChecksums(members);
+  const auto archive = fixture.temp.path() / "unsafe-reference-import.zip";
+  expect(writeArchive(archive, members, error),
+         "unsafe-reference archive writes: " + error);
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(!imported.ok() && imported.error == ProfileError::IntegrityFailure,
+         "profile import rejects malformed replay reference rows");
+}
+
+void testImportRejectsOrphanReplayReferenceRows() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "orphan-reference-source.zip");
+  std::string error;
+  auto members = readArchive(source, error);
+  expect(error.empty(), "orphan-reference source archive reads: " + error);
+  if (!error.empty()) {
+    return;
+  }
+
+  const auto databasePath = fixture.temp.path() / "orphan-reference.db";
+  auto *databaseMember = findMember(members, "replays.db");
+  expect(databaseMember != nullptr, "orphan-reference database member exists");
+  if (databaseMember == nullptr) {
+    return;
+  }
+  writeFile(databasePath, databaseMember->contents);
+  {
+    Database database = openDatabase(databasePath);
+    expect(database != nullptr &&
+               execute(database.get(),
+                       "UPDATE replay_files SET chart_result_id=999999999,"
+                       "course_result_id=NULL"),
+           "replay reference is detached from its owning result");
+  }
+  databaseMember->contents = readFile(databasePath);
+  refreshChecksums(members);
+  const auto archive = fixture.temp.path() / "orphan-reference-import.zip";
+  expect(writeArchive(archive, members, error),
+         "orphan-reference archive writes: " + error);
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(!imported.ok() && imported.error == ProfileError::IntegrityFailure,
+         "profile import rejects replay references without an owning result");
+}
+
 void testFutureDatabaseAndCorruptionAreRejected() {
   Fixture fixture;
   const auto validPath = exportFixture(fixture, "database-source.zip");
@@ -2916,6 +3077,7 @@ int main() {
   testExportIgnoresPrivateReplayTemporary();
   testExportRejectsReplayBytesThatDoNotMatchReference();
   testExportOmitsDeletedReplayAttachment();
+  testExportHoldsProfileActivityExclusionAcrossSnapshotAndFiles();
   testIrOperationalStateIsNotProfilePortable();
   testExportRejectsSupportedOlderSourceBeforeWritingArchive();
   testPresetStoreSidecarRemainsProfilePortable();
@@ -2935,6 +3097,9 @@ int main() {
   testSizePolicyBoundariesWithoutLargeAllocations();
   testZipParserEnforcesDeclaredAndStreamedSizeLimits();
   testSupportedOlderSchemasMigrateAndPreserveRows();
+  testSchema13ArchiveMigratesAndPreservesRows();
+  testImportRejectsMalformedReplayReferenceRows();
+  testImportRejectsOrphanReplayReferenceRows();
   testFutureDatabaseAndCorruptionAreRejected();
   testExportFailurePreservesDestinationAndCleansTemps();
   testExportRejectsManagedApplicationDestinations();

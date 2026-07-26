@@ -117,6 +117,13 @@ struct JudgedCoursePlaybackStage {
   long long restMicrosAfterStage = 0;
 };
 
+struct JudgedCourseEntryFacts {
+  int totalNotes = 0;
+  std::int64_t playLengthMicros = 0;
+
+  bool operator==(const JudgedCourseEntryFacts &) const = default;
+};
+
 struct JudgedCoursePlaybackData {
   int courseId = 0;
   std::string courseKey;
@@ -137,6 +144,7 @@ struct JudgedCoursePlaybackData {
   int completedCharts = 0;
   int totalCharts = 0;
   std::string createdAt;
+  std::vector<JudgedCourseEntryFacts> entryFacts;
   std::vector<JudgedCoursePlaybackStage> stages;
   PlaybackAnalysisContext context;
 };

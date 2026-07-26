@@ -236,6 +236,29 @@ void testCaptureBufferBoundsPendingSamplesAndPropagatesClockFailure() {
           "an unmappable gameplay timestamp invalidates replay capture");
 }
 
+void testCaptureBufferFiltersRedundantStateAtFinish() {
+  std::string diagnostic;
+  replay::ReplayInputCaptureBuffer buffered;
+  require(buffered.capture(
+              {.songTimeMicros = 0, .control = lane(), .pressed = false},
+              diagnostic) &&
+              buffered.capture(
+                  {.songTimeMicros = 1, .control = lane(), .pressed = true},
+                  diagnostic) &&
+              buffered.capture(
+                  {.songTimeMicros = 2, .control = lane(), .pressed = true},
+                  diagnostic) &&
+              buffered.capture(
+                  {.songTimeMicros = 3, .control = lane(), .pressed = false},
+                  diagnostic),
+          "capture buffer accepts noisy ordered device samples");
+
+  const auto result = buffered.finish(diagnostic);
+  require(result.has_value() && result->size() == 2 && (*result)[0].pressed &&
+              !(*result)[1].pressed && diagnostic.empty(),
+          "capture buffer filters redundant state without invalidating replay");
+}
+
 } // namespace
 
 int main() {
@@ -246,5 +269,6 @@ int main() {
   testRedundantStateDoesNotInvalidateCapture();
   testCaptureBufferSortsAcrossControlsButRejectsPerControlReversal();
   testCaptureBufferBoundsPendingSamplesAndPropagatesClockFailure();
+  testCaptureBufferFiltersRedundantStateAtFinish();
   return 0;
 }

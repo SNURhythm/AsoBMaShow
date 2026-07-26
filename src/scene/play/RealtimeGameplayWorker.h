@@ -66,6 +66,7 @@ enum class RealtimeGameplayFault : std::uint8_t {
   ClockUnavailable,
   AudioCapacityUnavailable,
   AudioCommitFailed,
+  ReplayCapacityExceeded,
   InternalConsistency,
 };
 
@@ -75,6 +76,7 @@ struct RealtimeGameplayWorkerConfig {
   RealtimeGameplayClock clock;
   RealtimeGameplayAudioSink audio;
   bool inputTriggeredKeysounds = true;
+  std::size_t maximumReplayInputTransitions = 1'000'000;
   std::optional<std::int64_t> activationSongTimeMicros;
   std::optional<std::int64_t> practiceCompletionSongTimeMicros;
 };
@@ -228,8 +230,8 @@ private:
   void run();
   void signal() noexcept;
   void processInput(const RealtimeGameplayInput &input);
-  void recordAcceptedReplayInput(const RealtimeGameplayInput &,
-                                 std::int64_t songTimeMicros);
+  bool recordAcceptedReplayInput(const RealtimeGameplayInput &,
+                                 std::int64_t songTimeMicros) noexcept;
   bool advanceAutomatic();
   bool commitAutomaticTransactions(
       std::span<const GameplayInputResult> transactions);

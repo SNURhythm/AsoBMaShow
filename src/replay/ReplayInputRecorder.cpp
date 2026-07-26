@@ -228,6 +228,8 @@ ReplayInputCaptureBuffer::finish(std::string &diagnostic) noexcept {
                      });
     ReplayInputRecorder recorder({}, limits_);
     for (const auto &transition : pending_) {
+      // Redundant device samples are benign false returns. Fatal recorder
+      // failures remain sticky and are reported by finish().
       (void)recorder.recordSongTime(transition.songTimeMicros,
                                     transition.control, transition.pressed,
                                     diagnostic);

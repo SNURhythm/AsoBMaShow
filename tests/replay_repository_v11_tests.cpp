@@ -585,6 +585,111 @@ void testMalformedCurrentSchemaColumnFailsClosed() {
          "same-version schema with a missing ordinary column fails closed");
 }
 
+void testMalformedCurrentSchemaIndexDefinitionFailsClosed() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "current index-definition validation fixture is created");
+  repository.Shutdown();
+  {
+    Database database(databasePath);
+    expect(execute(database.get(),
+                   "DROP INDEX idx_chart_results_sha256_played;") &&
+               execute(database.get(),
+                       "CREATE INDEX idx_chart_results_sha256_played ON "
+                       "chart_results(chart_md5)"),
+           "required index name is recreated with the wrong definition");
+  }
+  expect(!repository.EnsureSchema(),
+         "same-version schema with a counterfeit index fails closed");
+}
+
+void testEquivalentReformattedNamedIndexIsAccepted() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "reformatted index validation fixture is created");
+  repository.Shutdown();
+  {
+    Database database(databasePath);
+    expect(execute(database.get(),
+                   "DROP INDEX idx_chart_results_sha256_played;") &&
+               execute(database.get(),
+                       "create index \"idx_chart_results_sha256_played\" on "
+                       "\"chart_results\" ( \"chart_sha256\" , "
+                       "\"played_at_unix_ms\" desc , \"id\" desc )"),
+           "required named index is recreated with equivalent quoted SQL");
+  }
+  expect(repository.EnsureSchema(),
+         "semantically equivalent named-index formatting is accepted");
+}
+
+void testEquivalentReformattedCriticalChecksAreAccepted() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "reformatted CHECK validation fixture is created");
+  repository.Shutdown();
+  {
+    Database database(databasePath);
+    expect(execute(database.get(), "PRAGMA writable_schema=ON") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(replace(sql,"
+                       "'CHECK(local_result_ready IN (0,1))',"
+                       "'check ( \"local_result_ready\" in ( 0 , 1 ) )'),"
+                       "'CHECK(next_request_user_intent IN (0,1))',"
+                       "'check ( \"next_request_user_intent\" in "
+                       "( 0 , 1 ) )') WHERE type='table' AND "
+                       "name='ir_outbox'") &&
+               execute(database.get(), "PRAGMA writable_schema=OFF"),
+           "critical CHECK constraints are reformatted without changing "
+           "their meaning");
+  }
+  expect(repository.EnsureSchema(),
+         "semantically equivalent CHECK formatting is accepted");
+}
+
+void testPartialCounterfeitUniqueConstraintFailsClosed() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "partial UNIQUE validation fixture is created");
+  repository.Shutdown();
+  {
+    Database database(databasePath);
+    expect(
+        execute(database.get(),
+                "ALTER TABLE replay_file_reservations RENAME TO "
+                "replay_file_reservations_old;"
+                "DROP INDEX idx_replay_reservations_stem_index;"
+                "CREATE TABLE replay_file_reservations("
+                "attempt_id TEXT PRIMARY KEY,stem TEXT NOT NULL,"
+                "history_index INTEGER NOT NULL,"
+                "relative_path TEXT UNIQUE NOT NULL,"
+                "created_at_unix_ms INTEGER NOT NULL,"
+                "finalized_content_sha256 TEXT,"
+                "finalized_compressed_size INTEGER,"
+                "CHECK(history_index>=0),"
+                "CHECK((finalized_content_sha256 IS NULL AND "
+                "finalized_compressed_size IS NULL) OR "
+                "(length(finalized_content_sha256)=64 AND "
+                "finalized_compressed_size>0)));"
+                "CREATE UNIQUE INDEX counterfeit_reservation_stem_history ON "
+                "replay_file_reservations(stem,history_index) "
+                "WHERE history_index>0;"
+                "CREATE INDEX idx_replay_reservations_stem_index ON "
+                "replay_file_reservations(stem,history_index);"
+                "DROP TABLE replay_file_reservations_old;"),
+        "required composite UNIQUE is replaced by a partial index");
+  }
+  expect(!repository.EnsureSchema(),
+         "partial counterfeit UNIQUE constraint fails closed");
+}
+
 void testCompactStageAndIndependentReads() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -972,6 +1077,10 @@ int main() {
   testProfileBindingCleansStaleReplayTemporaries();
   testMalformedVersion11FailsClosed();
   testMalformedCurrentSchemaColumnFailsClosed();
+  testMalformedCurrentSchemaIndexDefinitionFailsClosed();
+  testEquivalentReformattedNamedIndexIsAccepted();
+  testEquivalentReformattedCriticalChecksAreAccepted();
+  testPartialCounterfeitUniqueConstraintFailsClosed();
   testCompactStageAndIndependentReads();
   testReplayFileReadIsIndependentFromResultAndIr();
   testChartReplayRejectsLongNoteModeMismatch();

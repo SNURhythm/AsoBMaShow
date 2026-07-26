@@ -197,47 +197,13 @@ play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
   return play_options::formatPlayModeDisplayLabel(meta, std::nullopt);
 }
 
-int totalNotesForCourse(const CoursePlaySession &session) {
-  int total = 0;
-  const size_t count =
-      std::max(session.entries.size(), session.completedResults.size());
-  for (size_t i = 0; i < count; ++i) {
-    if (i < session.completedResults.size()) {
-      total += std::max(0, session.completedResults[i].meta.TotalNotes);
-    } else {
-      total += std::max(0, session.entries[i].meta.TotalNotes);
-    }
-  }
-  return total;
-}
-
-long long totalPlayLengthForCourse(const CoursePlaySession &session) {
-  long long total = 0;
-  for (const auto &entry : session.entries) {
-    total += std::max(0LL, entry.meta.PlayLength);
-  }
-  return total;
-}
-
-bms_parser::ChartMeta courseResultMetaForSession(
-    const CoursePlaySession &session) {
-  return result_presentation::courseResultMeta(
-      session.courseName, session.courseGroupName, session.entries.size(),
-      totalNotesForCourse(session), totalPlayLengthForCourse(session));
-}
-
 void appendMissingCourseGaugeHistory(RhythmState &state,
                                      const CoursePlaySession &session,
                                      std::size_t startIndex) {
-  for (std::size_t i = startIndex; i < session.entries.size(); ++i) {
-    const long long playLength =
-        std::max(0LL, session.entries[i].meta.PlayLength);
-    const int samples =
-        std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
-    for (int sample = 0; sample < samples; ++sample) {
-      state.gaugeHistory.push_back(0.0f);
-    }
-  }
+  const auto entryFacts =
+      result_scene_detail::effectiveCourseEntryFacts(session);
+  result_presentation::appendMissingCourseGaugeHistorySamples(
+      state.gaugeHistory, entryFacts, startIndex);
 }
 
 RhythmState courseResultStateForSession(const CoursePlaySession &session) {
@@ -257,15 +223,9 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   aggregate.gaugeHistory.clear();
 
   for (const auto &result : session.completedResults) {
-    for (int i = 0; i < JudgementCount; ++i) {
-      aggregate.addJudgeCountFrom(result.state, static_cast<Judgement>(i));
-    }
-    aggregate.comboBreak += result.state.comboBreak;
-    aggregate.fastCount += result.state.fastCount;
-    aggregate.slowCount += result.state.slowCount;
-    aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
-                                  result.state.gaugeHistory.begin(),
-                                  result.state.gaugeHistory.end());
+    result_presentation::appendCourseResultCounters(aggregate, result.state);
+    result_presentation::appendCourseGaugeHistorySamples(
+        aggregate.gaugeHistory, result.state.gaugeHistory);
   }
   appendMissingCourseGaugeHistory(aggregate, session,
                                   session.completedResults.size());
@@ -362,7 +322,8 @@ ResultScene::ResultScene(
   } else if (isCourseFinalResult()) {
     local.headerDifficultyLabelOverride = "COURSE";
     const auto &session = *local.courseOptions.session;
-    const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(session);
+    const bms_parser::ChartMeta courseMeta =
+        result_scene_detail::courseResultMetaForSession(session);
     const bool fullCombo = result_presentation::isFullComboCourseResult(
         static_cast<int>(session.completedResults.size()),
         static_cast<int>(session.entries.size()), session.entries.size(),
@@ -602,12 +563,8 @@ void ResultScene::saveCourseReplay() {
   result.provenance = local->attemptProvenance;
   result.playedAtUnixMillis = nowUnixMillis();
   result.stages.reserve(completedCharts);
-  result.entryFacts.reserve(totalCharts);
-  for (const auto &entry : session->entries) {
-    result.entryFacts.push_back(
-        {.totalNotes = std::max(0, entry.meta.TotalNotes),
-         .playLengthMicros = std::max<std::int64_t>(0, entry.meta.PlayLength)});
-  }
+  result.entryFacts =
+      result_scene_detail::courseEntryFactsForPersistence(*session);
 
   for (std::size_t index = 0; index < completedCharts; ++index) {
     if (!session->stageProvenance[index].has_value()) {
@@ -625,7 +582,8 @@ void ResultScene::saveCourseReplay() {
     result.stages.push_back(std::move(stage));
   }
 
-  const bms_parser::ChartMeta courseMeta = courseResultMetaForSession(*session);
+  const bms_parser::ChartMeta courseMeta =
+      result_scene_detail::courseResultMetaForSession(*session);
   const bool fullCombo = result_presentation::isFullComboCourseResult(
       result.completedCharts, result.totalCharts, session->entries.size(),
       local->resultState, courseMeta);
@@ -2186,7 +2144,8 @@ void ResultScene::showCourseResult() {
     return;
   }
 
-  bms_parser::ChartMeta courseMeta = courseResultMetaForSession(*session);
+  bms_parser::ChartMeta courseMeta =
+      result_scene_detail::courseResultMetaForSession(*session);
   RhythmState courseState = courseResultStateForSession(*session);
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
@@ -2657,10 +2616,8 @@ void ResultScene::startCourseReplay() {
   replaySession->courseName = replayData->courseName;
   replaySession->courseGroupName = replayData->courseGroupName;
   replaySession->constraintJson = replayData->constraintJson;
-  replaySession->entries.reserve(replayData->stages.size());
-  for (const auto &stage : replayData->stages) {
-    replaySession->entries.push_back(CoursePlayEntry{.meta = stage.replay.chartMeta});
-  }
+  replaySession->entries = result_scene_detail::legacyReplayEntriesForSession(
+      *sourceSession, *replayData);
   replaySession->snapshotRulesetFromReplay(replayData->stages.front().replay);
   const CourseConstraintSettings constraintSettings =
       courseConstraintSettingsFromJson(replayData->constraintJson);

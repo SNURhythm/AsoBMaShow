@@ -4,6 +4,7 @@
 #include "ArchiveRAII.h"
 #include "AtomicFile.h"
 #include "FileChecksum.h"
+#include "ProfileDatabaseActivity.h"
 #include "ProfileDatabaseTools.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
@@ -1530,6 +1531,11 @@ ProfileArchiveService::ProfileArchiveService(
 ProfileArchiveResult
 ProfileArchiveService::Export(std::string_view profileId,
                               const std::filesystem::path &destination) {
+  profile_database_activity::SwitchGuard profileLease;
+  if (!profileLease.ownsLock()) {
+    return failure(ProfileError::SwitchBlocked,
+                   "a profile database operation is active");
+  }
   const ProfileResult validated = manager_.validateProfile(profileId);
   if (!validated.ok() || !validated.profile) {
     return {.error = validated.error,

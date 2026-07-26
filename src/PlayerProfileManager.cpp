@@ -3,6 +3,7 @@
 #include "AppDatabaseInitializer.h"
 #include "AppSettingsStore.h"
 #include "AtomicFile.h"
+#include "ProfileDatabaseActivity.h"
 #include "ProfileDatabaseTools.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
@@ -781,6 +782,11 @@ bool replayRowsPreserved(const SqliteRowCounts &before, int beforeVersion,
                          const SqliteRowCounts &after, int afterVersion,
                          std::string &errorMessage) {
   if (beforeVersion == afterVersion) {
+    return rowsPreserved(before, after, errorMessage);
+  }
+  if (beforeVersion >= 11 &&
+      beforeVersion < ReplayRepository::kCurrentSchemaVersion &&
+      afterVersion == ReplayRepository::kCurrentSchemaVersion) {
     return rowsPreserved(before, after, errorMessage);
   }
   if (beforeVersion != 10 ||
@@ -2056,6 +2062,11 @@ ProfileResult PlayerProfileManager::createProfile(std::string displayName) {
 
 ProfileResult PlayerProfileManager::duplicateProfile(std::string_view sourceId,
                                                      std::string displayName) {
+  profile_database_activity::SwitchGuard profileLease;
+  if (!profileLease.ownsLock()) {
+    return failure(ProfileError::SwitchBlocked,
+                   "a profile database operation is active");
+  }
   if (!activeProfile_) {
     return failure(ProfileError::SwitchBlocked,
                    "profile manager is not initialized");
@@ -2511,6 +2522,13 @@ ProfileResult PlayerProfileManager::installProfile(
     return cleanStagingAndFail(
         ProfileError::IntegrityFailure,
         "database migration changed imported row counts: " + errorMessage);
+  }
+  std::vector<ReplayFileReference> replayReferences;
+  if (!ReplayRepository::ListReplayFileReferencesSnapshot(
+          staging.replaysDb, replayReferences, errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IntegrityFailure,
+                               "imported replay references are invalid: " +
+                                   errorMessage);
   }
   ProfileResult staged = validateProfileFiles(
       applicationDataRoot_, staging, sourceProfile.id,

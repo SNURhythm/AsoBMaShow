@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "ResultPresentationUtils.h"
 
 #include "rendering/UniformCache.h"
 #include "scene/ResultGaugeHistory.h"
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1059,6 +1061,127 @@ void testDefaultSkinExplicitZerosAndMobileMetadataWrap() {
              textView(root.get(), "resultInfoLabel:gauge-type"),
          "remote metadata labels have deterministic semantic names");
 }
+
+void testPartialCourseMetadataIncludesUnplayedEntryFacts() {
+  const std::vector<analysis::JudgedCourseEntryFacts> entries = {
+      {.totalNotes = 100, .playLengthMicros = 10'000'000},
+      {.totalNotes = 200, .playLengthMicros = 20'000'000},
+      {.totalNotes = 300, .playLengthMicros = 30'000'000},
+  };
+  const auto meta = result_presentation::courseResultMetaFromEntryFacts(
+      "Course", "Group", entries);
+  expect(meta.TotalNotes == 600 && meta.PlayLength == 60'000'000 &&
+             meta.TotalLength == 60'000'000,
+         "partial course result metadata includes every persisted entry");
+}
+
+void testMissingCourseGaugeSamplesPreserveIntervalsWithinBounds() {
+  const std::vector<analysis::JudgedCourseEntryFacts> ordinary = {
+      {.playLengthMicros = 0},
+      {.playLengthMicros = 500'000},
+      {.playLengthMicros = 500'001},
+      {.playLengthMicros = 1'000'000},
+  };
+  expect(result_presentation::missingCourseGaugeSampleCount(ordinary, 0) == 8,
+         "missing course gauges retain an initial sample plus one per elapsed "
+         "interval");
+  expect(result_presentation::missingCourseGaugeSampleCount(ordinary, 1) == 7,
+         "missing course gauge synthesis starts at the first unplayed entry");
+
+  const std::vector<analysis::JudgedCourseEntryFacts> extreme = {
+      {.playLengthMicros = std::numeric_limits<std::int64_t>::max()},
+      {.playLengthMicros = std::numeric_limits<std::int64_t>::max()},
+  };
+  const std::size_t bounded =
+      result_presentation::missingCourseGaugeSampleCount(extreme, 0);
+  expect(bounded == result_presentation::kMaximumSynthesizedCourseGaugeSamples,
+         "extreme missing course durations saturate at the sample cap");
+}
+
+void testCourseReplayMetadataPrefersCompleteFactsAndSaturatesFallback() {
+  const std::vector<analysis::JudgedCourseEntryFacts> complete = {
+      {.totalNotes = 100, .playLengthMicros = 10'000'000},
+      {.totalNotes = 200, .playLengthMicros = 20'000'000},
+      {.totalNotes = 300, .playLengthMicros = 30'000'000},
+  };
+  const std::vector<analysis::JudgedCourseEntryFacts> playedOnly = {
+      {.totalNotes = 100, .playLengthMicros = 10'000'000},
+  };
+  const auto completeMeta =
+      result_presentation::courseResultMetaFromReplayFacts(
+          "Course", "Group", complete, playedOnly);
+  expect(completeMeta.TotalNotes == 600 &&
+             completeMeta.PlayLength == 60'000'000 &&
+             completeMeta.PlayLevel == 3.0,
+         "course replay metadata includes unplayed complete entry facts");
+
+  const std::vector<analysis::JudgedCourseEntryFacts> extremePlayed = {
+      {.totalNotes = std::numeric_limits<int>::max(),
+       .playLengthMicros = std::numeric_limits<std::int64_t>::max()},
+      {.totalNotes = std::numeric_limits<int>::max(), .playLengthMicros = 1},
+  };
+  const auto fallbackMeta =
+      result_presentation::courseResultMetaFromReplayFacts("Legacy", "Group",
+                                                           {}, extremePlayed);
+  expect(fallbackMeta.TotalNotes == std::numeric_limits<int>::max() &&
+             fallbackMeta.PlayLength ==
+                 std::numeric_limits<std::int64_t>::max(),
+         "legacy course replay metadata fallback saturates extreme played "
+         "facts");
+}
+
+void testCourseReplayGaugeHistoryIsCompleteAndGloballyBounded() {
+  std::vector<float> history = {20.0F};
+  const std::vector<float> played = {40.0F, 60.0F};
+  result_presentation::appendCourseGaugeHistorySamples(history, played);
+  const std::vector<analysis::JudgedCourseEntryFacts> entries = {
+      {.playLengthMicros = 1'000'000},
+      {.playLengthMicros = 500'001},
+  };
+  result_presentation::appendMissingCourseGaugeHistorySamples(history, entries,
+                                                              1);
+  expect(history.size() == 5 && history[0] == 20.0F && history[1] == 40.0F &&
+             history[2] == 60.0F && history[3] == 0.0F && history[4] == 0.0F,
+         "course replay gauge history appends played and unplayed samples");
+
+  history.assign(result_presentation::kMaximumSynthesizedCourseGaugeSamples - 1,
+                 50.0F);
+  result_presentation::appendCourseGaugeHistorySamples(history, played);
+  const std::vector<analysis::JudgedCourseEntryFacts> extreme = {
+      {.playLengthMicros = std::numeric_limits<std::int64_t>::max()},
+  };
+  result_presentation::appendMissingCourseGaugeHistorySamples(history, extreme,
+                                                              0);
+  expect(history.size() ==
+                 result_presentation::kMaximumSynthesizedCourseGaugeSamples &&
+             history.back() == 40.0F,
+         "combined course replay gauge history never exceeds its global cap");
+}
+
+void testCourseReplayCountersSaturateExtremeStageTotals() {
+  RhythmState aggregate(nullptr, false);
+  aggregate.resetJudgeCounts();
+  aggregate.judgeCount[PGreat] = std::numeric_limits<int>::max();
+  aggregate.judgementFastSlowCount[PGreat].fast =
+      std::numeric_limits<int>::max();
+  aggregate.comboBreak = std::numeric_limits<int>::max();
+  aggregate.fastCount = std::numeric_limits<int>::max();
+
+  RhythmState stage(nullptr, false);
+  stage.resetJudgeCounts();
+  stage.judgeCount[PGreat] = 1;
+  stage.judgementFastSlowCount[PGreat].fast = 1;
+  stage.comboBreak = 1;
+  stage.fastCount = 1;
+  result_presentation::appendCourseResultCounters(aggregate, stage);
+
+  expect(aggregate.judgeCount[PGreat] == std::numeric_limits<int>::max() &&
+             aggregate.judgementFastSlowCount[PGreat].fast ==
+                 std::numeric_limits<int>::max() &&
+             aggregate.comboBreak == std::numeric_limits<int>::max() &&
+             aggregate.fastCount == std::numeric_limits<int>::max(),
+         "course replay stage counters saturate instead of overflowing");
+}
 } // namespace
 
 int main() {
@@ -1089,6 +1212,11 @@ int main() {
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();
+  testPartialCourseMetadataIncludesUnplayedEntryFacts();
+  testMissingCourseGaugeSamplesPreserveIntervalsWithinBounds();
+  testCourseReplayMetadataPrefersCompleteFactsAndSaturatesFallback();
+  testCourseReplayGaugeHistoryIsCompleteAndGloballyBounded();
+  testCourseReplayCountersSaturateExtremeStageTotals();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

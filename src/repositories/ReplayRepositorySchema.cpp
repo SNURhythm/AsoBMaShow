@@ -13,7 +13,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <compare>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -180,7 +183,460 @@ bool validateCompactReplayColumnShapes(sqlite3 *database, int version) {
   return valid;
 }
 
-bool validateCompactReplaySchemaObjects(sqlite3 *database) {
+std::optional<std::string> schemaObjectSql(sqlite3 *database,
+                                           std::string_view type,
+                                           std::string_view name) {
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          database, "SELECT sql FROM sqlite_master WHERE type=? AND name=?",
+          statement, "inspecting compact replay schema definitions",
+          logSqlErrorText) ||
+      !bindSqliteText(statement.get(), 1, std::string(type)) ||
+      !bindSqliteText(statement.get(), 2, std::string(name)) ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      sqlite3_column_type(statement.get(), 0) != SQLITE_TEXT) {
+    return std::nullopt;
+  }
+  const std::string sql = sqliteColumnString(statement.get(), 0);
+  return sqlite3_step(statement.get()) == SQLITE_DONE
+             ? std::optional<std::string>(sql)
+             : std::nullopt;
+}
+
+std::string sqliteIdentifierFold(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (const unsigned char character : value) {
+    result.push_back(character >= 'A' && character <= 'Z'
+                         ? static_cast<char>(character + ('a' - 'A'))
+                         : static_cast<char>(character));
+  }
+  return result;
+}
+
+struct IndexColumnShape {
+  int sequence = 0;
+  std::optional<std::string> name;
+  bool descending = false;
+  std::string collation;
+  bool key = false;
+
+  auto operator<=>(const IndexColumnShape &) const = default;
+};
+
+struct IndexShape {
+  std::string table;
+  bool unique = false;
+  std::string origin;
+  bool partial = false;
+  std::vector<IndexColumnShape> columns;
+
+  auto operator<=>(const IndexShape &) const = default;
+};
+
+std::optional<IndexShape> indexShape(sqlite3 *database, std::string_view table,
+                                     std::string_view indexName) {
+  SqliteStatementHandle index;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT \"unique\",origin,partial FROM pragma_index_list(?) "
+          "WHERE name=?",
+          index) != SQLITE_OK ||
+      !bindSqliteText(index.get(), 1, std::string(table)) ||
+      !bindSqliteText(index.get(), 2, std::string(indexName)) ||
+      sqlite3_step(index.get()) != SQLITE_ROW ||
+      sqlite3_column_type(index.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_type(index.get(), 1) != SQLITE_TEXT ||
+      sqlite3_column_type(index.get(), 2) != SQLITE_INTEGER) {
+    return std::nullopt;
+  }
+  IndexShape result{
+      .table = sqliteIdentifierFold(table),
+      .unique = sqlite3_column_int(index.get(), 0) != 0,
+      .origin = sqliteIdentifierFold(sqliteColumnString(index.get(), 1)),
+      .partial = sqlite3_column_int(index.get(), 2) != 0,
+  };
+  if (sqlite3_step(index.get()) != SQLITE_DONE) {
+    return std::nullopt;
+  }
+
+  SqliteStatementHandle columns;
+  if (prepareSqliteStatement(database,
+                             "SELECT seqno,cid,name,\"desc\",coll,\"key\" FROM "
+                             "pragma_index_xinfo(?) ORDER BY seqno",
+                             columns) != SQLITE_OK ||
+      !bindSqliteText(columns.get(), 1, std::string(indexName))) {
+    return std::nullopt;
+  }
+  int step = SQLITE_OK;
+  while ((step = sqlite3_step(columns.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(columns.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(columns.get(), 1) != SQLITE_INTEGER ||
+        (sqlite3_column_type(columns.get(), 2) != SQLITE_TEXT &&
+         sqlite3_column_type(columns.get(), 2) != SQLITE_NULL) ||
+        sqlite3_column_type(columns.get(), 3) != SQLITE_INTEGER ||
+        sqlite3_column_type(columns.get(), 4) != SQLITE_TEXT ||
+        sqlite3_column_type(columns.get(), 5) != SQLITE_INTEGER) {
+      return std::nullopt;
+    }
+    std::optional<std::string> name;
+    if (sqlite3_column_type(columns.get(), 2) == SQLITE_TEXT) {
+      name = sqliteIdentifierFold(sqliteColumnString(columns.get(), 2));
+    }
+    result.columns.push_back(
+        {.sequence = sqlite3_column_int(columns.get(), 0),
+         .name = std::move(name),
+         .descending = sqlite3_column_int(columns.get(), 3) != 0,
+         .collation =
+             sqliteIdentifierFold(sqliteColumnString(columns.get(), 4)),
+         .key = sqlite3_column_int(columns.get(), 5) != 0});
+  }
+  if (step != SQLITE_DONE || result.columns.empty()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+std::optional<IndexShape> namedIndexShape(sqlite3 *database,
+                                          std::string_view indexName) {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?",
+          statement) != SQLITE_OK ||
+      !bindSqliteText(statement.get(), 1, std::string(indexName)) ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      sqlite3_column_type(statement.get(), 0) != SQLITE_TEXT) {
+    return std::nullopt;
+  }
+  const std::string table = sqliteColumnString(statement.get(), 0);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return std::nullopt;
+  }
+  return indexShape(database, table, indexName);
+}
+
+std::optional<std::vector<IndexShape>> uniqueKeyShapes(sqlite3 *database,
+                                                       std::string_view table) {
+  SqliteStatementHandle indexes;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT name FROM pragma_index_list(?) WHERE \"unique\"=1 "
+          "ORDER BY name",
+          indexes) != SQLITE_OK ||
+      !bindSqliteText(indexes.get(), 1, std::string(table))) {
+    return std::nullopt;
+  }
+  std::vector<IndexShape> result;
+  int step = SQLITE_OK;
+  while ((step = sqlite3_step(indexes.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(indexes.get(), 0) != SQLITE_TEXT) {
+      return std::nullopt;
+    }
+    const std::string indexName = sqliteColumnString(indexes.get(), 0);
+    auto shape = indexShape(database, table, indexName);
+    if (!shape.has_value()) {
+      return std::nullopt;
+    }
+    result.push_back(std::move(*shape));
+  }
+  if (step != SQLITE_DONE) {
+    return std::nullopt;
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
+std::optional<std::vector<std::string>>
+foreignKeyShapes(sqlite3 *database, std::string_view table) {
+  SqliteStatementHandle statement;
+  const std::string query =
+      "SELECT id,seq,\"table\",\"from\",\"to\",on_update,on_delete,match "
+      "FROM pragma_foreign_key_list('" +
+      std::string(table) + "') ORDER BY id,seq";
+  if (prepareSqliteStatement(database, query.c_str(), statement) != SQLITE_OK) {
+    return std::nullopt;
+  }
+  std::vector<std::string> result;
+  int step = SQLITE_OK;
+  while ((step = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER) {
+      return std::nullopt;
+    }
+    std::string shape = std::to_string(sqlite3_column_int(statement.get(), 0));
+    shape += ":" + std::to_string(sqlite3_column_int(statement.get(), 1));
+    for (int column = 2; column < 8; ++column) {
+      if (sqlite3_column_type(statement.get(), column) != SQLITE_TEXT) {
+        return std::nullopt;
+      }
+      shape += ":" + sqliteColumnString(statement.get(), column);
+    }
+    result.push_back(std::move(shape));
+  }
+  return step == SQLITE_DONE
+             ? std::optional<std::vector<std::string>>(std::move(result))
+             : std::nullopt;
+}
+
+enum class SchemaTokenKind { Word, QuotedIdentifier, Number, String, Symbol };
+
+struct SchemaToken {
+  SchemaTokenKind kind = SchemaTokenKind::Symbol;
+  std::string text;
+};
+
+std::optional<std::vector<SchemaToken>>
+tokenizeSchemaSql(std::string_view sql) {
+  std::vector<SchemaToken> result;
+  for (std::size_t index = 0; index < sql.size();) {
+    const unsigned char character = static_cast<unsigned char>(sql[index]);
+    if (std::isspace(character) != 0) {
+      ++index;
+      continue;
+    }
+    if (character == '-' && index + 1 < sql.size() && sql[index + 1] == '-') {
+      index += 2;
+      while (index < sql.size() && sql[index] != '\n' && sql[index] != '\r') {
+        ++index;
+      }
+      continue;
+    }
+    if (character == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
+      index += 2;
+      const std::size_t closing = sql.find("*/", index);
+      if (closing == std::string_view::npos) {
+        return std::nullopt;
+      }
+      index = closing + 2;
+      continue;
+    }
+    if (character == '"' || character == '`' || character == '[') {
+      const char opening = static_cast<char>(character);
+      const char closing = opening == '[' ? ']' : opening;
+      std::string identifier;
+      bool closed = false;
+      for (++index; index < sql.size(); ++index) {
+        if (sql[index] == closing) {
+          if (opening != '[' && index + 1 < sql.size() &&
+              sql[index + 1] == closing) {
+            identifier.push_back(closing);
+            ++index;
+            continue;
+          }
+          ++index;
+          closed = true;
+          break;
+        }
+        identifier.push_back(sql[index]);
+      }
+      if (!closed) {
+        return std::nullopt;
+      }
+      result.push_back({.kind = SchemaTokenKind::QuotedIdentifier,
+                        .text = sqliteIdentifierFold(identifier)});
+      continue;
+    }
+    if (character == '\'') {
+      std::string value;
+      bool closed = false;
+      for (++index; index < sql.size(); ++index) {
+        if (sql[index] == '\'') {
+          if (index + 1 < sql.size() && sql[index + 1] == '\'') {
+            value.push_back('\'');
+            ++index;
+            continue;
+          }
+          ++index;
+          closed = true;
+          break;
+        }
+        value.push_back(sql[index]);
+      }
+      if (!closed) {
+        return std::nullopt;
+      }
+      result.push_back(
+          {.kind = SchemaTokenKind::String, .text = std::move(value)});
+      continue;
+    }
+    if (std::isdigit(character) != 0) {
+      const std::size_t begin = index++;
+      while (index < sql.size() &&
+             std::isdigit(static_cast<unsigned char>(sql[index])) != 0) {
+        ++index;
+      }
+      result.push_back({.kind = SchemaTokenKind::Number,
+                        .text = std::string(sql.substr(begin, index - begin))});
+      continue;
+    }
+    if (std::isalpha(character) != 0 || character == '_' || character == '$') {
+      const std::size_t begin = index++;
+      while (index < sql.size() &&
+             (std::isalnum(static_cast<unsigned char>(sql[index])) != 0 ||
+              sql[index] == '_' || sql[index] == '$')) {
+        ++index;
+      }
+      result.push_back(
+          {.kind = SchemaTokenKind::Word,
+           .text = sqliteIdentifierFold(sql.substr(begin, index - begin))});
+      continue;
+    }
+    result.push_back({.kind = SchemaTokenKind::Symbol,
+                      .text = std::string(1, static_cast<char>(character))});
+    ++index;
+  }
+  return result;
+}
+
+bool schemaTokensEquivalent(const SchemaToken &actual,
+                            const SchemaToken &expected) {
+  if (actual.text != expected.text) {
+    return false;
+  }
+  if (actual.kind == expected.kind) {
+    return true;
+  }
+  return expected.kind == SchemaTokenKind::Word &&
+         actual.kind == SchemaTokenKind::QuotedIdentifier &&
+         sqlite3_keyword_check(expected.text.c_str(),
+                               static_cast<int>(expected.text.size())) == 0;
+}
+
+bool schemaSqlContainsEquivalent(std::string_view sql,
+                                 std::string_view fragment) {
+  const auto sqlTokens = tokenizeSchemaSql(sql);
+  const auto fragmentTokens = tokenizeSchemaSql(fragment);
+  if (!sqlTokens.has_value() || !fragmentTokens.has_value() ||
+      fragmentTokens->empty() || fragmentTokens->size() > sqlTokens->size()) {
+    return false;
+  }
+  for (std::size_t begin = 0;
+       begin + fragmentTokens->size() <= sqlTokens->size(); ++begin) {
+    bool matches = true;
+    for (std::size_t offset = 0; offset < fragmentTokens->size(); ++offset) {
+      if (!schemaTokensEquivalent((*sqlTokens)[begin + offset],
+                                  (*fragmentTokens)[offset])) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool tableSqlContains(sqlite3 *database, std::string_view table,
+                      std::string_view fragment) {
+  const auto sql = schemaObjectSql(database, "table", table);
+  return sql.has_value() && schemaSqlContainsEquivalent(*sql, fragment);
+}
+
+bool validateCompactReplayCriticalChecks(sqlite3 *database, int version) {
+  const std::array<std::pair<std::string_view, std::string_view>, 9> required{
+      std::pair{"replay_files",
+                "CHECK((chart_result_id IS NOT NULL)!=(course_result_id IS "
+                "NOT NULL))"},
+      std::pair{"replay_files", "CHECK(history_index>=0)"},
+      std::pair{"replay_files", "CHECK(length(content_sha256)=64)"},
+      std::pair{"replay_files", "CHECK(compressed_size>0)"},
+      std::pair{"replay_files", "CHECK(codec_version=2)"},
+      std::pair{"replay_file_reservations", "CHECK(history_index>=0)"},
+      std::pair{"replay_stem_sequences", "CHECK(last_history_index>=0)"},
+      std::pair{"ir_outbox", "CHECK(local_result_ready IN (0,1))"},
+      std::pair{"ir_outbox", "CHECK(next_request_user_intent IN (0,1))"},
+  };
+  if (!std::ranges::all_of(required, [&](const auto &entry) {
+        return tableSqlContains(database, entry.first, entry.second);
+      })) {
+    return false;
+  }
+  if (version >= 12 &&
+      (!tableSqlContains(database, "chart_results",
+                         "CHECK(adopted_gauge_type BETWEEN 0 AND 5)") ||
+       !tableSqlContains(database, "course_result_stages",
+                         "CHECK(adopted_gauge_type BETWEEN 0 AND 5)"))) {
+    return false;
+  }
+  return version < 13 ||
+         (tableSqlContains(database, "replay_file_reservations",
+                           "length(finalized_content_sha256)=64") &&
+          tableSqlContains(database, "replay_file_reservations",
+                           "finalized_compressed_size>0"));
+}
+
+bool validateCompactReplayRelationalShapes(sqlite3 *database, int version) {
+  sqlite3 *templateDatabase = nullptr;
+  if (sqlite3_open(":memory:", &templateDatabase) != SQLITE_OK ||
+      templateDatabase == nullptr) {
+    if (templateDatabase != nullptr) {
+      sqlite3_close(templateDatabase);
+    }
+    return false;
+  }
+  const bool templateCreated = createCompactReplaySchema11(templateDatabase);
+  constexpr std::array<std::string_view, 11> tables{
+      "chart_results",
+      "course_results",
+      "course_result_stages",
+      "replay_files",
+      "replay_file_reservations",
+      "replay_stem_sequences",
+      "ir_submission_snapshots",
+      "pending_chart_score_writes",
+      "ir_outbox",
+      "ir_submission_receipts",
+      "ir_remote_scores",
+  };
+  constexpr std::array<std::string_view, 15> indexes{
+      "idx_chart_results_sha256_played",
+      "idx_chart_results_md5_played",
+      "idx_course_results_key_played",
+      "idx_course_result_stages_sha256",
+      "idx_replay_files_chart_result",
+      "idx_replay_files_course_result",
+      "idx_replay_reservations_stem_index",
+      "idx_ir_submission_snapshots_fingerprint",
+      "idx_pending_chart_score_created",
+      "idx_ir_outbox_due",
+      "idx_ir_outbox_attempt",
+      "idx_ir_submission_receipts_attempt",
+      "idx_ir_submission_receipts_remote_score",
+      "idx_ir_remote_scores_chart_sha256",
+      "idx_ir_remote_scores_remote_chart_id",
+  };
+  bool valid = templateCreated;
+  for (std::string_view table : tables) {
+    if (!valid) {
+      break;
+    }
+    const auto actualUnique = uniqueKeyShapes(database, table);
+    const auto expectedUnique = uniqueKeyShapes(templateDatabase, table);
+    const auto actualForeignKeys = foreignKeyShapes(database, table);
+    const auto expectedForeignKeys = foreignKeyShapes(templateDatabase, table);
+    valid = actualUnique && expectedUnique &&
+            *actualUnique == *expectedUnique && actualForeignKeys &&
+            expectedForeignKeys && *actualForeignKeys == *expectedForeignKeys;
+  }
+  for (std::string_view index : indexes) {
+    if (!valid) {
+      break;
+    }
+    const auto actual = namedIndexShape(database, index);
+    const auto expected = namedIndexShape(templateDatabase, index);
+    valid = actual && expected && *actual == *expected;
+  }
+  valid = valid && validateCompactReplayCriticalChecks(database, version);
+  sqlite3_close(templateDatabase);
+  if (!valid) {
+    SDL_Log("Refusing replay database with incompatible relational schema");
+  }
+  return valid;
+}
+
+bool validateCompactReplaySchemaObjects(sqlite3 *database, int version) {
   constexpr std::array<std::string_view, 11> requiredTables{
       "chart_results",
       "course_results",
@@ -231,16 +687,16 @@ bool validateCompactReplaySchemaObjects(sqlite3 *database) {
     SDL_Log("Refusing version 11 replay database with incomplete indexes");
     return false;
   }
-  return true;
+  return validateCompactReplayRelationalShapes(database, version);
 }
 
 bool validateCompactReplaySchema11(sqlite3 *database) {
-  return validateCompactReplaySchemaObjects(database) &&
+  return validateCompactReplaySchemaObjects(database, 11) &&
          validateCompactReplayColumnShapes(database, 11);
 }
 
 bool validateCompactReplaySchema12(sqlite3 *database) {
-  return validateCompactReplaySchemaObjects(database) &&
+  return validateCompactReplaySchemaObjects(database, 12) &&
          validateCompactReplayColumnShapes(database, 12) &&
          namedTableColumnExists(database, "chart_results",
                                 "adopted_gauge_type") &&
@@ -249,7 +705,7 @@ bool validateCompactReplaySchema12(sqlite3 *database) {
 }
 
 bool validateCompactReplaySchema13(sqlite3 *database) {
-  return validateCompactReplaySchemaObjects(database) &&
+  return validateCompactReplaySchemaObjects(database, 13) &&
          validateCompactReplayColumnShapes(database, 13) &&
          namedTableColumnExists(database, "replay_file_reservations",
                                 "finalized_content_sha256") &&
@@ -258,10 +714,9 @@ bool validateCompactReplaySchema13(sqlite3 *database) {
 }
 
 bool validateCompactReplaySchema14(sqlite3 *database) {
-  return validateCompactReplaySchemaObjects(database) &&
+  return validateCompactReplaySchemaObjects(database, 14) &&
          validateCompactReplayColumnShapes(database, 14) &&
-         namedTableColumnExists(database, "course_results",
-                                "entry_facts_json");
+         namedTableColumnExists(database, "course_results", "entry_facts_json");
 }
 
 bool backfillAdoptedGaugeTypes(sqlite3 *database, std::string_view table) {

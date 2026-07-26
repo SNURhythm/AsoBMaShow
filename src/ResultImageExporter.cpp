@@ -441,18 +441,18 @@ void drawResultGaugeGraph(rendering::SimpleBatchRenderer &batch,
 bms_parser::ChartMeta courseResultMetaForReplay(
     const JudgedCoursePlaybackData &replay,
     const std::vector<std::unique_ptr<bms_parser::Chart>> &charts) {
-  int totalNotes = 0;
-  long long playLength = 0;
+  std::vector<analysis::JudgedCourseEntryFacts> playedEntryFacts;
+  playedEntryFacts.reserve(charts.size());
   for (const auto &chart : charts) {
     if (chart == nullptr) {
       continue;
     }
-    totalNotes += std::max(0, chart->Meta.TotalNotes);
-    playLength += std::max(0LL, chart->Meta.PlayLength);
+    playedEntryFacts.push_back({.totalNotes = chart->Meta.TotalNotes,
+                                .playLengthMicros = chart->Meta.PlayLength});
   }
-  return result_presentation::courseResultMeta(
-      replay.courseName, replay.courseGroupName, replay.stages.size(),
-      totalNotes, playLength);
+  return result_presentation::courseResultMetaFromReplayFacts(
+      replay.courseName, replay.courseGroupName, replay.entryFacts,
+      playedEntryFacts);
 }
 
 RhythmState courseResultStateForReplay(
@@ -470,22 +470,17 @@ RhythmState courseResultStateForReplay(
   aggregate.gaugeHistory.clear();
 
   for (const auto &state : stageStates) {
-    for (int i = 0; i < JudgementCount; ++i) {
-      aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
-    }
-    aggregate.comboBreak += state.comboBreak;
-    aggregate.fastCount += state.fastCount;
-    aggregate.slowCount += state.slowCount;
-    aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);
-    aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
-                                  state.gaugeHistory.begin(),
-                                  state.gaugeHistory.end());
+    result_presentation::appendCourseResultCounters(aggregate, state);
+    result_presentation::appendCourseGaugeHistorySamples(aggregate.gaugeHistory,
+                                                         state.gaugeHistory);
     aggregate.combo = state.combo;
     aggregate.currentGauge = state.currentGauge;
     aggregate.gaugeType = state.gaugeType;
     aggregate.gaugeValues = state.gaugeValues;
     aggregate.gaugeSurvivalFailed = state.gaugeSurvivalFailed;
   }
+  result_presentation::appendMissingCourseGaugeHistorySamples(
+      aggregate.gaugeHistory, replay.entryFacts, stageStates.size());
   aggregate.currentGauge = replay.finalGauge;
   aggregate.gaugeType = replay.initialGaugeType;
   if (!stageStates.empty()) {

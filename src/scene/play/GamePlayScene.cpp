@@ -1051,6 +1051,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
                 .commit = &RealtimeGameplaySession::commitAudio,
                 .cancel = &RealtimeGameplaySession::cancelAudio},
       .inputTriggeredKeysounds = !options.autoKeySound,
+      .maximumReplayInputTransitions =
+          replay::ReplayInputRecorderLimits{}.maximumTransitions,
       .activationSongTimeMicros = policy.activationSongTimeMicros,
       .practiceCompletionSongTimeMicros =
           policy.practiceCompletionSongTimeMicros,

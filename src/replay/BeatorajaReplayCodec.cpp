@@ -2,6 +2,7 @@
 
 #include "Base64Url.h"
 #include "BeatorajaLongNoteMode.h"
+#include "BeatorajaReplayPath.h"
 #include "GzipCodec.h"
 #include "../scene/play/GameplayScoreState.h"
 
@@ -445,13 +446,39 @@ projectStockInput(const ReplayPlaybackData &replay,
   std::vector<InputTransition> projected;
   projected.reserve(effective.size());
   std::unordered_map<int, bool> stockStates;
-  for (const auto &transition : effective) {
-    // Beatoraja rejects KeyInputLog timestamps before zero. The exact pre-roll
-    // stream remains in the Aso extension; stock playback begins from a clean
-    // state at chart time zero.
-    if (transition.songTimeMicros < 0) {
-      continue;
+  bool emittedInitialState = false;
+  const auto appendProjected = [&](int keyCode, std::int64_t songTimeMicros,
+                                   bool pressed) -> bool {
+    const auto stockControl =
+        BeatorajaReplayCodec::logicalControl(keyCode, replay.setup.keyMode);
+    if (!stockControl) {
+      return fail(diagnostic, "Replay stock input projection is invalid");
     }
+    projected.push_back({.songTimeMicros = songTimeMicros,
+                         .control = *stockControl,
+                         .pressed = pressed});
+    return true;
+  };
+  const auto emitInitialState = [&]() -> bool {
+    if (emittedInitialState) {
+      return true;
+    }
+    emittedInitialState = true;
+    std::vector<int> heldKeys;
+    for (const auto &[keyCode, pressed] : stockStates) {
+      if (pressed) {
+        heldKeys.push_back(keyCode);
+      }
+    }
+    std::ranges::sort(heldKeys);
+    for (const int keyCode : heldKeys) {
+      if (!appendProjected(keyCode, 0, true)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  for (const auto &transition : effective) {
     auto projectedControl = std::optional<LogicalControl>(transition.control);
     if (options->manualAssignment) {
       projectedControl =
@@ -471,16 +498,20 @@ projectStockInput(const ReplayPlaybackData &replay,
     if (current == transition.pressed) {
       continue;
     }
-    stockStates[*keyCode] = transition.pressed;
-    const auto stockControl =
-        BeatorajaReplayCodec::logicalControl(*keyCode, replay.setup.keyMode);
-    if (!stockControl) {
-      fail(diagnostic, "Replay stock input projection is invalid");
+    if (transition.songTimeMicros >= 0 && !emitInitialState()) {
       return std::nullopt;
     }
-    projected.push_back({.songTimeMicros = transition.songTimeMicros,
-                         .control = *stockControl,
-                         .pressed = transition.pressed});
+    stockStates[*keyCode] = transition.pressed;
+    if (transition.songTimeMicros < 0) {
+      continue;
+    }
+    if (!appendProjected(*keyCode, transition.songTimeMicros,
+                         transition.pressed)) {
+      return std::nullopt;
+    }
+  }
+  if (!emitInitialState()) {
+    return std::nullopt;
   }
   return projected;
 }
@@ -1562,6 +1593,7 @@ BeatorajaReplayCodec::encodeCourse(const CourseReplayPlaybackData &replay,
   diagnostic.clear();
   if (replay.stages.empty() ||
       replay.stages.size() != replay.restMicrosAfterStage.size() ||
+      replay.stages.size() > kMaximumCourseReplayStages ||
       replay.stages.size() >
           static_cast<std::size_t>(std::numeric_limits<int>::max())) {
     diagnostic = "Replay course stage/rest envelope is invalid";
@@ -1636,6 +1668,10 @@ BeatorajaReplayCodec::decode(
 
   std::vector<StageDecode> stages;
   const std::size_t stageCount = courseEnvelope ? document.size() : 1;
+  if (courseEnvelope && stageCount > kMaximumCourseReplayStages) {
+    outcome.diagnostic = "Replay course stage count exceeds the limit";
+    return outcome;
+  }
   if (expectedStageKeyModes.size() > 1 &&
       expectedStageKeyModes.size() != stageCount) {
     outcome.diagnostic =

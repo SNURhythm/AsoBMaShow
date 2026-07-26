@@ -425,6 +425,11 @@ void testMissingHashMismatchCorruptAndIdentityMismatch() {
                 replay::ReplayFileState::Corrupt,
                 "oversized replay inspects as corrupt without allocation");
     std::string diagnostic;
+    expect(!store.removeIfMatches(*installed.metadata, diagnostic),
+           "ownership cleanup rejects changed replay bytes");
+    expectEqual(readBytes(profile.path / installed.metadata->relativePath),
+                changed,
+                "ownership cleanup restores changed replay bytes in place");
     expect(store.remove(*installed.metadata, diagnostic),
            "user can delete a corrupt but safely contained replay file");
     expect(!std::filesystem::exists(profile.path /
@@ -448,6 +453,39 @@ void testMissingHashMismatchCorruptAndIdentityMismatch() {
       chartPath(), wrongChart, codec, chartIdentity(), "identity");
   expect(!identityOutcome.metadata,
          "decoded chart identity mismatch is rejected");
+}
+
+void testOwnedCleanupDoesNotDeleteConcurrentReplacement() {
+  TempDirectory profile("cleanup-replacement");
+  replay::BeatorajaReplayCodec codec;
+  const Bytes encoded = encode(sampleReplay(), 1000);
+  replay::ReplayFileStore installer(profile.path);
+  const auto installed = installer.finalize(chartPath(), encoded, codec,
+                                            chartIdentity(), "cleanup_fixture");
+  expect(installed.metadata.has_value(), "cleanup race fixture installs");
+  if (!installed.metadata) {
+    return;
+  }
+
+  const auto finalPath = profile.path / installed.metadata->relativePath;
+  const Bytes replacement = encode(sampleReplay(), 2000);
+  bool replacementInstalled = false;
+  replay::ReplayFileStore cleanup(profile.path,
+                                  {.failAt = [&](std::string_view point) {
+                                    if (point == "remove-after-quarantine") {
+                                      writeBytes(finalPath, replacement);
+                                      replacementInstalled = true;
+                                    }
+                                    return false;
+                                  }});
+
+  std::string diagnostic;
+  expect(cleanup.removeIfMatches(*installed.metadata, diagnostic),
+         "owned replay cleanup succeeds after quarantining its exact bytes");
+  expect(replacementInstalled,
+         "cleanup test replaces the public path after quarantine");
+  expectEqual(readBytes(finalPath), replacement,
+              "owned replay cleanup preserves a concurrent replacement");
 }
 
 void testStaleTemporaryCleanup() {
@@ -483,6 +521,7 @@ int main() {
   testInjectedDurabilityFaults();
   testUnsafePathsAndLinks();
   testMissingHashMismatchCorruptAndIdentityMismatch();
+  testOwnedCleanupDoesNotDeleteConcurrentReplacement();
   testStaleTemporaryCleanup();
   if (failures != 0) {
     std::cerr << failures << " replay file store test(s) failed\n";

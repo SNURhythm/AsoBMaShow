@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cctype>
 #include <chrono>
@@ -352,6 +353,16 @@ std::filesystem::path temporaryPathFor(const std::filesystem::path &finalPath,
                                     std::string(attemptToken) + ".tmp");
 }
 
+std::filesystem::path
+removalQuarantinePathFor(const std::filesystem::path &finalPath) {
+  static std::atomic<unsigned long long> counter = 0;
+  const auto clock = static_cast<unsigned long long>(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  const std::string token = "remove-" + std::to_string(clock) + "-" +
+                            std::to_string(counter.fetch_add(1));
+  return temporaryPathFor(finalPath, token);
+}
+
 void removePrivateTemporary(const std::filesystem::path &temporary) {
   std::error_code ignored;
   std::filesystem::remove(temporary, ignored);
@@ -675,18 +686,91 @@ bool ReplayFileStore::remove(const ReplayFileMetadata &metadata,
 
 bool ReplayFileStore::removeIfMatches(const ReplayFileMetadata &metadata,
                                       std::string &diagnostic) {
-  const auto inspection = inspect(metadata);
-  if (inspection.state == ReplayFileState::Missing) {
+  if (!canonicalLowerHex(metadata.sha256, 64) ||
+      metadata.codecVersion != BeatorajaReplayCodec::kCodecVersion) {
+    diagnostic = "Replay ownership marker is invalid";
+    return false;
+  }
+  std::filesystem::path path;
+  if (!resolveContained(profileRoot_, metadata.relativePath, path,
+                        diagnostic)) {
+    return false;
+  }
+  bool missing = false;
+  if (!privateRegularPath(path, missing, diagnostic)) {
+    return false;
+  }
+  if (missing) {
     diagnostic.clear();
     return true;
   }
-  if (inspection.state != ReplayFileState::Available) {
-    diagnostic = inspection.diagnostic.empty()
-                     ? "Replay file no longer matches its ownership marker"
-                     : inspection.diagnostic;
+
+  const auto quarantine = removalQuarantinePathFor(path);
+  const auto renamed =
+      atomic_file::renameNoReplaceDurably(path, quarantine, diagnostic);
+  if (renamed != atomic_file::RenameNoReplaceResult::Renamed) {
+    if (renamed == atomic_file::RenameNoReplaceResult::DestinationExists) {
+      diagnostic = "Could not reserve a private replay cleanup path";
+    }
     return false;
   }
-  return remove(metadata, diagnostic);
+
+  const bool injectedFailure = failAt(faults_, "remove-after-quarantine");
+  const auto read = readRegularNoLinks(quarantine, metadata.compressedSize);
+  const bool matches = !injectedFailure && read.state == ReadState::Success &&
+                       read.bytes.size() == metadata.compressedSize &&
+                       bytesHash(read.bytes) == metadata.sha256;
+  if (!matches) {
+    std::string restoreDiagnostic;
+    const auto restored = atomic_file::renameNoReplaceDurably(
+        quarantine, path, restoreDiagnostic);
+    if (restored == atomic_file::RenameNoReplaceResult::Renamed) {
+      std::string syncDiagnostic;
+      if (!atomic_file::syncDirectory(path.parent_path(), syncDiagnostic)) {
+        diagnostic = std::move(syncDiagnostic);
+        return false;
+      }
+    } else if (restored ==
+               atomic_file::RenameNoReplaceResult::DestinationExists) {
+      const auto recovered = quarantine.parent_path() /
+                             (quarantine.filename().string() + ".recovered");
+      std::string recoveryDiagnostic;
+      const auto recoveredResult = atomic_file::renameNoReplaceDurably(
+          quarantine, recovered, recoveryDiagnostic);
+      if (recoveredResult == atomic_file::RenameNoReplaceResult::Renamed) {
+        std::string syncDiagnostic;
+        if (!atomic_file::syncDirectory(path.parent_path(), syncDiagnostic)) {
+          diagnostic = std::move(syncDiagnostic);
+          return false;
+        }
+        diagnostic = "Replay cleanup target changed; preserved the displaced "
+                     "file as " +
+                     recovered.filename().string();
+        return false;
+      }
+      diagnostic = "Replay cleanup target changed and could not be restored: " +
+                   recoveryDiagnostic;
+      return false;
+    } else {
+      diagnostic = "Replay cleanup target changed and could not be restored: " +
+                   restoreDiagnostic;
+      return false;
+    }
+    diagnostic = injectedFailure
+                     ? "Injected replay cleanup failure"
+                     : (read.diagnostic.empty()
+                            ? "Replay file no longer matches its ownership "
+                              "marker"
+                            : read.diagnostic);
+    return false;
+  }
+
+  std::error_code error;
+  if (!std::filesystem::remove(quarantine, error) || error) {
+    diagnostic = "Could not remove quarantined replay file: " + error.message();
+    return false;
+  }
+  return atomic_file::syncDirectory(path.parent_path(), diagnostic);
 }
 
 bool ReplayFileStore::copyToBeatorajaSlot(const ReplayFileMetadata &source,

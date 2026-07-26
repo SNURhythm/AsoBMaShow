@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -329,6 +330,73 @@ void testCourseReplayActionAcceptsRawAndLegacyData() {
           "legacy course replay data still exposes replay");
 }
 
+void testCoursePersistenceFactsUsePlayedStageMetadata() {
+  CoursePlaySession session;
+  session.entries.resize(3);
+  session.entries[0].meta.TotalNotes = 40;
+  session.entries[0].meta.PlayLength = 4'000'000;
+  session.entries[1].meta.TotalNotes = 50;
+  session.entries[1].meta.PlayLength = 5'000'000;
+  session.entries[2].meta.TotalNotes = 60;
+  session.entries[2].meta.PlayLength = 6'000'000;
+
+  bms_parser::ChartMeta played;
+  played.TotalNotes = 45;
+  played.PlayLength = 4'500'000;
+  session.completedResults.emplace_back(played, RhythmState(nullptr, false));
+
+  const auto facts =
+      result_scene_detail::courseEntryFactsForPersistence(session);
+  require(facts.size() == 3 && facts[0].totalNotes == 45 &&
+              facts[0].playLengthMicros == 4'500'000 &&
+              facts[1].totalNotes == 50 &&
+              facts[2].playLengthMicros == 6'000'000,
+          "played course stages use their effective metadata while missing "
+          "stages retain stored presentation facts");
+}
+
+void testEffectiveCourseFactsSaturateResultMetadata() {
+  CoursePlaySession session;
+  session.courseName = "Overflow Course";
+  session.courseGroupName = "Bounds";
+  session.entries.resize(2);
+  session.entries[0].meta.TotalNotes = std::numeric_limits<int>::max();
+  session.entries[0].meta.PlayLength = std::numeric_limits<std::int64_t>::max();
+  session.entries[1].meta.TotalNotes = std::numeric_limits<int>::max();
+  session.entries[1].meta.PlayLength = 1;
+
+  const auto facts = result_scene_detail::effectiveCourseEntryFacts(session);
+  const auto meta = result_scene_detail::courseResultMetaForSession(session);
+  require(facts.size() == 2 &&
+              facts[0].totalNotes == std::numeric_limits<int>::max() &&
+              facts[0].playLengthMicros ==
+                  std::numeric_limits<std::int64_t>::max() &&
+              meta.TotalNotes == std::numeric_limits<int>::max() &&
+              meta.PlayLength == std::numeric_limits<std::int64_t>::max(),
+          "effective course facts saturate result metadata without signed "
+          "overflow");
+}
+
+void testLegacyPartialCourseReplayPreservesEveryEntry() {
+  CoursePlaySession source;
+  source.entries.resize(3);
+  source.entries[0].meta.Title = "Played";
+  source.entries[1].meta.TotalNotes = 200;
+  source.entries[2].meta.PlayLength = 30'000'000;
+  JudgedCoursePlaybackData replay;
+  replay.totalCharts = 3;
+  replay.completedCharts = 1;
+  replay.stages.emplace_back();
+  replay.stages.front().replay.chartMeta.Title = "Played replay";
+
+  const auto entries =
+      result_scene_detail::legacyReplayEntriesForSession(source, replay);
+  require(entries.size() == 3 && entries[0].meta.Title == "Played replay" &&
+              entries[1].meta.TotalNotes == 200 &&
+              entries[2].meta.PlayLength == 30'000'000,
+          "replaying a migrated partial course retains unplayed entry facts");
+}
+
 ResultRecordSummary
 remoteRecordSummary(std::string origin = "https://ir.example.test:8443") {
   return makeRemoteResultRecord(ir::kTachiProviderId, origin, remoteScore());
@@ -538,6 +606,9 @@ int main() {
   testRecalledResultExcludesItselfFromPreviousBest();
   testCoursePersistenceAttemptParticipatesInRetryPolicy();
   testCourseReplayActionAcceptsRawAndLegacyData();
+  testCoursePersistenceFactsUsePlayedStageMetadata();
+  testEffectiveCourseFactsSaturateResultMetadata();
+  testLegacyPartialCourseReplayPreservesEveryEntry();
   testRemoteRecordViewResultActionIsPresentedEnabled();
   testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle();
   testRemoteRecallFailsClosedForConcurrentDeletion();

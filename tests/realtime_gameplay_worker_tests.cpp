@@ -737,6 +737,37 @@ void testStoppedWorkerTransfersEveryAcceptedDirectedInput() {
           "stopped worker retains the full accepted directed input stream");
 }
 
+void testReplayInputCapacityFailsClosed() {
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.inputTriggeredKeysounds = false;
+  config.activationSongTimeMicros = 10'000'000;
+  config.maximumReplayInputTransitions = 2;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                          std::move(config));
+  for (int index = 0; index < 3; ++index) {
+    require(worker.enqueueInput(
+                {.epoch = 7,
+                 .type = index % 2 == 0
+                             ? gameplay::RealtimeGameplayInputType::Press
+                             : gameplay::RealtimeGameplayInputType::Release,
+                 .lane = 1,
+                 .compensateLane = 1,
+                 .steadyTimestampMicros = 1'000 + index}),
+            "bounded replay input enters ingress before the worker faults");
+  }
+  require(worker.start(), "bounded replay-input fixture starts");
+  require(waitUntil([&] {
+            return worker.fault() ==
+                   gameplay::RealtimeGameplayFault::ReplayCapacityExceeded;
+          }),
+          "accepted raw replay input latches a capacity fault at its bound");
+  worker.stop();
+  require(worker.copyAcceptedReplayInputAfterStop().size() == 2,
+          "the worker never stores input beyond the replay transition cap");
+}
+
 void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
   FakeClock clock;
   FakeAudio audio;
@@ -807,6 +838,7 @@ int main() {
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
   testStoppedWorkerTransfersEveryAcceptedDirectedInput();
+  testReplayInputCapacityFailsClosed();
   testLr2MultiBadPublishesEveryTransactionWithOneKeysound();
   return 0;
 }

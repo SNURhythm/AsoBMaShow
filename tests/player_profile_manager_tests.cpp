@@ -2,6 +2,7 @@
 #include "../src/AtomicFile.h"
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileDatabaseTools.h"
+#include "../src/ProfileDatabaseActivity.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/input/InputProfileStore.h"
@@ -13,15 +14,18 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -2361,6 +2365,95 @@ void testSupportedOlderActiveProfileWaitsForSchemaOwners() {
          "strict validation succeeds after owned migration");
 }
 
+void testDuplicateMigratesCompactSchema13AndPreservesRows() {
+  TempDirectory temp("profile-duplicate-schema13");
+  auto dependencies = dependenciesFor();
+  int uuidIndex = 0;
+  dependencies.generateUuid = [&] {
+    return uuidIndex++ == 0 ? "11111111-1111-4111-8111-111111111111"
+                            : "22222222-2222-4222-8222-222222222222";
+  };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "schema-13 duplicate fixture initializes");
+  const auto sourcePaths = manager.activePaths();
+  {
+    Database database = openDatabase(sourcePaths.replaysDb);
+    expect(database != nullptr &&
+               execute(database.get(),
+                       "ALTER TABLE course_results DROP COLUMN "
+                       "entry_facts_json;PRAGMA user_version=13"),
+           "duplicate source is downgraded to compact schema 13");
+  }
+
+  const auto duplicated =
+      manager.duplicateProfile(manager.activeProfile().id, "Schema 13 Copy");
+  expect(duplicated.ok() && duplicated.profile.has_value(),
+         "supported compact schema 13 duplicates through migration: " +
+             duplicated.message);
+  if (!duplicated.profile) {
+    return;
+  }
+  std::string versionError;
+  const auto duplicatePaths = manager.pathsFor(duplicated.profile->id);
+  expect(sqliteDatabaseUserVersion(duplicatePaths.replaysDb, versionError) ==
+             ReplayRepository::kCurrentSchemaVersion,
+         "schema-13 duplicate is stored at the current replay schema");
+}
+
+void testDuplicateHoldsProfileActivityExclusionAcrossSnapshotAndFiles() {
+  TempDirectory temp("profile-duplicate-guard");
+  auto dependencies = dependenciesFor();
+  int uuidIndex = 0;
+  dependencies.generateUuid = [&] {
+    return uuidIndex++ == 0 ? "11111111-1111-4111-8111-111111111111"
+                            : "22222222-2222-4222-8222-222222222222";
+  };
+  std::filesystem::path replaySource;
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool replaySnapshotReached = false;
+  bool releaseDuplicate = false;
+  dependencies.snapshotDatabase = [&](const std::filesystem::path &source,
+                                      const std::filesystem::path &destination,
+                                      std::string &errorMessage) {
+    if (!replaySource.empty() && source == replaySource) {
+      std::unique_lock lock(mutex);
+      replaySnapshotReached = true;
+      condition.notify_all();
+      condition.wait(lock, [&] { return releaseDuplicate; });
+    }
+    return snapshotSqliteDatabase(source, destination, errorMessage);
+  };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "guarded duplicate fixture initializes");
+  replaySource = manager.activePaths().replaysDb;
+
+  ProfileResult duplicated;
+  std::thread worker([&] {
+    duplicated =
+        manager.duplicateProfile(manager.activeProfile().id, "Guarded Copy");
+  });
+  {
+    std::unique_lock lock(mutex);
+    condition.wait(lock, [&] { return replaySnapshotReached; });
+  }
+  bool competingOperationEntered = false;
+  {
+    profile_database_activity::SwitchGuard competingOperation;
+    competingOperationEntered = competingOperation.ownsLock();
+  }
+  expect(!competingOperationEntered,
+         "duplicate excludes profile mutations across replay file and database "
+         "copying");
+  {
+    std::lock_guard lock(mutex);
+    releaseDuplicate = true;
+  }
+  condition.notify_all();
+  worker.join();
+  expect(duplicated.ok(), "guarded duplicate still succeeds");
+}
+
 void testUnsupportedPreV10ReplayProfileFailsActivationPreflight() {
   TempDirectory temp("profile-unsupported-pre-v10-replay");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -2733,6 +2826,8 @@ int main() {
   testSupportedOlderDeleteRollbackRestoresManageableSource();
   testFutureDatabaseProfileIsNeverManageable();
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
+  testDuplicateMigratesCompactSchema13AndPreservesRows();
+  testDuplicateHoldsProfileActivityExclusionAcrossSnapshotAndFiles();
   testUnsupportedPreV10ReplayProfileFailsActivationPreflight();
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();

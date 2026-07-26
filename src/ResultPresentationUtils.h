@@ -10,11 +10,17 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace result_presentation {
+inline constexpr std::size_t kMaximumSynthesizedCourseGaugeSamples = 1'000'000U;
+inline constexpr std::int64_t kCourseGaugeSampleIntervalMicros = 500'000;
+
 inline std::optional<ResultPreviousBestData>
 previousBestDataFromSnapshot(const ScoreBestSnapshot &snapshot) {
   if (snapshot.source != ScoreBestSource::Local ||
@@ -191,6 +197,118 @@ inline bms_parser::ChartMeta courseResultMeta(
   meta.MinBpm = 0.0;
   meta.MaxBpm = 0.0;
   return meta;
+}
+
+inline bms_parser::ChartMeta courseResultMetaFromEntryFacts(
+    const std::string &courseName, const std::string &courseGroupName,
+    std::span<const analysis::JudgedCourseEntryFacts> entryFacts) {
+  std::int64_t totalNotes = 0;
+  std::int64_t playLengthMicros = 0;
+  for (const auto &facts : entryFacts) {
+    const std::int64_t notes = std::max<std::int64_t>(0, facts.totalNotes);
+    totalNotes = std::min<std::int64_t>(std::numeric_limits<int>::max(),
+                                        totalNotes + notes);
+
+    const std::int64_t duration =
+        std::max<std::int64_t>(0, facts.playLengthMicros);
+    if (duration >
+        std::numeric_limits<std::int64_t>::max() - playLengthMicros) {
+      playLengthMicros = std::numeric_limits<std::int64_t>::max();
+    } else {
+      playLengthMicros += duration;
+    }
+  }
+  return courseResultMeta(courseName, courseGroupName, entryFacts.size(),
+                          static_cast<int>(totalNotes), playLengthMicros);
+}
+
+inline bms_parser::ChartMeta courseResultMetaFromReplayFacts(
+    const std::string &courseName, const std::string &courseGroupName,
+    std::span<const analysis::JudgedCourseEntryFacts> completeEntryFacts,
+    std::span<const analysis::JudgedCourseEntryFacts> playedEntryFacts) {
+  return courseResultMetaFromEntryFacts(
+      courseName, courseGroupName,
+      completeEntryFacts.empty() ? playedEntryFacts : completeEntryFacts);
+}
+
+inline std::size_t missingCourseGaugeSampleCount(
+    std::span<const analysis::JudgedCourseEntryFacts> entryFacts,
+    std::size_t startIndex) noexcept {
+  std::size_t total = 0;
+  for (std::size_t index = std::min(startIndex, entryFacts.size());
+       index < entryFacts.size() &&
+       total < kMaximumSynthesizedCourseGaugeSamples;
+       ++index) {
+    const std::int64_t duration =
+        std::max<std::int64_t>(0, entryFacts[index].playLengthMicros);
+    const std::uint64_t samples =
+        static_cast<std::uint64_t>(duration /
+                                   kCourseGaugeSampleIntervalMicros) +
+        1U;
+    const std::size_t remaining = kMaximumSynthesizedCourseGaugeSamples - total;
+    total += samples >= static_cast<std::uint64_t>(remaining)
+                 ? remaining
+                 : static_cast<std::size_t>(samples);
+  }
+  return total;
+}
+
+inline void appendCourseGaugeHistorySamples(std::vector<float> &destination,
+                                            std::span<const float> samples) {
+  if (destination.size() >= kMaximumSynthesizedCourseGaugeSamples) {
+    return;
+  }
+  const std::size_t count =
+      std::min(samples.size(),
+               kMaximumSynthesizedCourseGaugeSamples - destination.size());
+  destination.insert(destination.end(), samples.begin(),
+                     samples.begin() + static_cast<std::ptrdiff_t>(count));
+}
+
+inline void appendMissingCourseGaugeHistorySamples(
+    std::vector<float> &destination,
+    std::span<const analysis::JudgedCourseEntryFacts> entryFacts,
+    std::size_t startIndex) {
+  if (destination.size() >= kMaximumSynthesizedCourseGaugeSamples) {
+    return;
+  }
+  const std::size_t count =
+      std::min(missingCourseGaugeSampleCount(entryFacts, startIndex),
+               kMaximumSynthesizedCourseGaugeSamples - destination.size());
+  destination.insert(destination.end(), count, 0.0F);
+}
+
+inline int saturatingCourseCounterSum(int left, int right) noexcept {
+  return static_cast<int>(std::clamp<std::int64_t>(
+      static_cast<std::int64_t>(left) + right, std::numeric_limits<int>::min(),
+      std::numeric_limits<int>::max()));
+}
+
+inline void appendCourseResultCounters(RhythmState &destination,
+                                       const RhythmState &stage) {
+  for (int index = 0; index < JudgementCount; ++index) {
+    const auto judgement = static_cast<Judgement>(index);
+    if (const auto count = stage.judgeCount.find(judgement);
+        count != stage.judgeCount.end()) {
+      destination.judgeCount[judgement] = saturatingCourseCounterSum(
+          destination.judgeCount[judgement], count->second);
+    }
+    if (const auto timing = stage.judgementFastSlowCount.find(judgement);
+        timing != stage.judgementFastSlowCount.end()) {
+      auto &aggregate = destination.judgementFastSlowCount[judgement];
+      aggregate.fast =
+          saturatingCourseCounterSum(aggregate.fast, timing->second.fast);
+      aggregate.slow =
+          saturatingCourseCounterSum(aggregate.slow, timing->second.slow);
+    }
+  }
+  destination.comboBreak =
+      saturatingCourseCounterSum(destination.comboBreak, stage.comboBreak);
+  destination.fastCount =
+      saturatingCourseCounterSum(destination.fastCount, stage.fastCount);
+  destination.slowCount =
+      saturatingCourseCounterSum(destination.slowCount, stage.slowCount);
+  destination.maxCombo = std::max(destination.maxCombo, stage.maxCombo);
 }
 
 inline bool isFullComboCourseResult(int completedCharts, int totalCharts,

@@ -2634,8 +2634,12 @@ bool ReplayRepository::ListReplayFileReferencesSnapshot(
   if (prepareSqliteStatement(
           snapshot.impl_->sessionDatabase,
           "SELECT id,chart_result_id,course_result_id,stem,history_index,"
-          "relative_path,content_sha256,compressed_size,codec_version FROM "
-          "replay_files ORDER BY relative_path",
+          "relative_path,content_sha256,compressed_size,codec_version,"
+          "CASE WHEN chart_result_id IS NOT NULL THEN EXISTS(SELECT 1 FROM "
+          "chart_results WHERE id=replay_files.chart_result_id) ELSE "
+          "EXISTS(SELECT 1 FROM course_results WHERE "
+          "id=replay_files.course_result_id) END FROM replay_files ORDER BY "
+          "relative_path",
           statement) != SQLITE_OK) {
     errorMessage = "could not read replay reference snapshot";
     return false;
@@ -2661,10 +2665,12 @@ bool ReplayRepository::ListReplayFileReferencesSnapshot(
         sqlite3_column_type(statement.get(), 6) != SQLITE_TEXT ||
         sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
         sqlite3_column_type(statement.get(), 8) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 9) != SQLITE_INTEGER ||
         sqlite3_column_int64(statement.get(), 0) <= 0 || recordId <= 0 ||
         recordId > std::numeric_limits<int>::max() || compressedSize <= 0 ||
         sqlite3_column_int64(statement.get(), 8) !=
-            replay::BeatorajaReplayCodec::kCodecVersion) {
+            replay::BeatorajaReplayCodec::kCodecVersion ||
+        sqlite3_column_int(statement.get(), 9) != 1) {
       references.clear();
       errorMessage = "replay reference snapshot contains an invalid row";
       return false;

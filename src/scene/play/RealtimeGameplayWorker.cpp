@@ -322,7 +322,7 @@ void RealtimeGameplayWorker::processInput(
         recordTransaction(transaction);
       }
     }
-    recordAcceptedReplayInput(input, *songTime);
+    (void)recordAcceptedReplayInput(input, *songTime);
     return;
   }
 
@@ -367,7 +367,13 @@ void RealtimeGameplayWorker::processInput(
       recordTransaction(transaction);
     }
   }
-  recordAcceptedReplayInput(input, *songTime);
+  if (!recordAcceptedReplayInput(input, *songTime)) {
+    if (requiresSound && reservation.requiresCommit &&
+        config_.audio.cancel != nullptr) {
+      config_.audio.cancel(config_.audio.context, reservation, preview);
+    }
+    return;
+  }
   if (!requiresSound) {
     return;
   }
@@ -390,48 +396,58 @@ void RealtimeGameplayWorker::processInput(
   }
 }
 
-void RealtimeGameplayWorker::recordAcceptedReplayInput(
-    const RealtimeGameplayInput &input, std::int64_t songTimeMicros) {
-  const int keyMode = definition_.metadata().keyMode;
-  replay::LogicalControl control;
-  control.player = 1;
-  control.lane = -1;
-  switch (input.replayControl) {
-  case RealtimeLogicalControlKind::ScratchClockwise:
-  case RealtimeLogicalControlKind::ScratchCounterClockwise:
-    control.kind = input.replayControl ==
-                           RealtimeLogicalControlKind::ScratchClockwise
-                       ? replay::LogicalControlKind::ScratchClockwise
-                       : replay::LogicalControlKind::ScratchCounterClockwise;
-    control.player = input.lane == 15 ? 2 : 1;
-    break;
-  case RealtimeLogicalControlKind::Lane: {
-    const bool digitalScratch =
-        (keyMode == 5 || keyMode == 7 || keyMode == 10 || keyMode == 14) &&
-        (input.lane == 7 || ((keyMode == 10 || keyMode == 14) &&
-                             input.lane == 15));
-    if (digitalScratch) {
-      control.kind = replay::LogicalControlKind::ScratchClockwise;
+bool RealtimeGameplayWorker::recordAcceptedReplayInput(
+    const RealtimeGameplayInput &input, std::int64_t songTimeMicros) noexcept {
+  if (acceptedReplayInput_.size() >= config_.maximumReplayInputTransitions) {
+    latchFault(RealtimeGameplayFault::ReplayCapacityExceeded);
+    return false;
+  }
+  try {
+    const int keyMode = definition_.metadata().keyMode;
+    replay::LogicalControl control;
+    control.player = 1;
+    control.lane = -1;
+    switch (input.replayControl) {
+    case RealtimeLogicalControlKind::ScratchClockwise:
+    case RealtimeLogicalControlKind::ScratchCounterClockwise:
+      control.kind =
+          input.replayControl == RealtimeLogicalControlKind::ScratchClockwise
+              ? replay::LogicalControlKind::ScratchClockwise
+              : replay::LogicalControlKind::ScratchCounterClockwise;
       control.player = input.lane == 15 ? 2 : 1;
       break;
+    case RealtimeLogicalControlKind::Lane: {
+      const bool digitalScratch =
+          (keyMode == 5 || keyMode == 7 || keyMode == 10 || keyMode == 14) &&
+          (input.lane == 7 ||
+           ((keyMode == 10 || keyMode == 14) && input.lane == 15));
+      if (digitalScratch) {
+        control.kind = replay::LogicalControlKind::ScratchClockwise;
+        control.player = input.lane == 15 ? 2 : 1;
+        break;
+      }
+      control.kind = replay::LogicalControlKind::Lane;
+      if ((keyMode == 10 || keyMode == 14) && input.lane >= 8) {
+        control.player = 2;
+        control.lane = input.lane - 8;
+      } else if (keyMode == 48 && input.lane >= 26) {
+        control.player = 2;
+        control.lane = input.lane - 26;
+      } else {
+        control.lane = input.lane;
+      }
+      break;
     }
-    control.kind = replay::LogicalControlKind::Lane;
-    if ((keyMode == 10 || keyMode == 14) && input.lane >= 8) {
-      control.player = 2;
-      control.lane = input.lane - 8;
-    } else if (keyMode == 48 && input.lane >= 26) {
-      control.player = 2;
-      control.lane = input.lane - 26;
-    } else {
-      control.lane = input.lane;
     }
-    break;
+    acceptedReplayInput_.push_back(
+        {.songTimeMicros = songTimeMicros,
+         .control = control,
+         .pressed = input.type == RealtimeGameplayInputType::Press});
+    return true;
+  } catch (...) {
+    latchFault(RealtimeGameplayFault::InternalConsistency);
+    return false;
   }
-  }
-  acceptedReplayInput_.push_back({.songTimeMicros = songTimeMicros,
-                                  .control = control,
-                                  .pressed = input.type ==
-                                             RealtimeGameplayInputType::Press});
 }
 
 bool RealtimeGameplayWorker::commitAutomaticTransactions(

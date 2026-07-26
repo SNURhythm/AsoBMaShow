@@ -12,6 +12,9 @@
 #include <Windows.h>
 #else
 #include <fcntl.h>
+#ifdef __APPLE__
+#include <sys/stdio.h>
+#endif
 #ifdef __linux__
 #include <sys/syscall.h>
 #endif
@@ -361,7 +364,19 @@ RenameNoReplaceResult renameNoReplaceDurably(const std::filesystem::path &from,
   errorMessage = "MoveFileEx no-replace failed: " + std::to_string(error);
   return RenameNoReplaceResult::Failed;
 #else
-#if defined(__linux__) && defined(SYS_renameat2)
+#if defined(__APPLE__)
+  if (::renamex_np(from.c_str(), to.c_str(), RENAME_EXCL) == 0) {
+    return RenameNoReplaceResult::Renamed;
+  }
+  const int renameError = errno;
+  if (renameError == EEXIST) {
+    errorMessage = "no-replace destination already exists";
+    return RenameNoReplaceResult::DestinationExists;
+  }
+  errorMessage = "renamex_np no-replace failed: " +
+                 std::string(std::strerror(renameError));
+  return RenameNoReplaceResult::Failed;
+#elif defined(__linux__) && defined(SYS_renameat2)
 #ifndef RENAME_NOREPLACE
 #define RENAME_NOREPLACE (1U << 0)
 #endif
@@ -374,30 +389,15 @@ RenameNoReplaceResult renameNoReplaceDurably(const std::filesystem::path &from,
     errorMessage = "no-replace destination already exists";
     return RenameNoReplaceResult::DestinationExists;
   }
-  if (renameError != ENOSYS && renameError != EINVAL) {
-    errorMessage = "renameat2 no-replace failed: " +
-                   std::string(std::strerror(renameError));
-    return RenameNoReplaceResult::Failed;
-  }
+  errorMessage =
+      "renameat2 no-replace failed: " + std::string(std::strerror(renameError));
+  return RenameNoReplaceResult::Failed;
+#else
+  (void)from;
+  (void)to;
+  errorMessage = "atomic no-replace rename is unavailable on this platform";
+  return RenameNoReplaceResult::Failed;
 #endif
-  if (::link(from.c_str(), to.c_str()) != 0) {
-    const int linkError = errno;
-    if (linkError == EEXIST) {
-      errorMessage = "no-replace destination already exists";
-      return RenameNoReplaceResult::DestinationExists;
-    }
-    errorMessage =
-        "link no-replace failed: " + std::string(std::strerror(linkError));
-    return RenameNoReplaceResult::Failed;
-  }
-  if (::unlink(from.c_str()) != 0) {
-    const int unlinkError = errno;
-    errorMessage = "installed no-replace destination but could not remove "
-                   "source name: " +
-                   std::string(std::strerror(unlinkError));
-    return RenameNoReplaceResult::Failed;
-  }
-  return RenameNoReplaceResult::Renamed;
 #endif
 }
 
