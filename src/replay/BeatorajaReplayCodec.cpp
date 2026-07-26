@@ -198,17 +198,19 @@ bool validateInput(const std::vector<InputTransition> &input, int keyMode,
   }
   std::unordered_map<int, bool> stockStates;
   std::unordered_map<std::string, bool> extensionStates;
-  std::int64_t previousTime = -1;
+  std::int64_t previousTime = 0;
+  bool hasPreviousTime = false;
   if (effective != nullptr) {
     effective->clear();
     effective->reserve(input.size());
   }
   for (const auto &transition : input) {
-    if (transition.songTimeMicros < 0 ||
-        transition.songTimeMicros < previousTime) {
+    if (transition.songTimeMicros < kMinimumReplaySongTimeMicros ||
+        (hasPreviousTime && transition.songTimeMicros < previousTime)) {
       return fail(diagnostic, "Replay input timestamps are invalid");
     }
     previousTime = transition.songTimeMicros;
+    hasPreviousTime = true;
     if (!validateLogicalControl(transition.control, keyMode)) {
       return fail(diagnostic,
                   "Replay input control is invalid for its key mode");
@@ -491,9 +493,11 @@ bool validateSupplementalTracks(const ReplayPlaybackData &replay,
     return fail(diagnostic,
                 "Replay extension array exceeds its configured limit");
   }
-  std::int64_t previousTouch = -1;
+  std::int64_t previousTouch = 0;
+  bool hasPreviousTouch = false;
   for (const auto &sample : replay.touchSamples) {
-    if (sample.songTimeMicros < previousTouch || sample.songTimeMicros < 0 ||
+    if ((hasPreviousTouch && sample.songTimeMicros < previousTouch) ||
+        sample.songTimeMicros < kMinimumReplaySongTimeMicros ||
         !std::isfinite(sample.x) || !std::isfinite(sample.y) ||
         sample.x < 0.0F || sample.x > 1.0F || sample.y < 0.0F ||
         sample.y > 1.0F ||
@@ -504,15 +508,19 @@ bool validateSupplementalTracks(const ReplayPlaybackData &replay,
       return fail(diagnostic, "Replay touch sample is invalid");
     }
     previousTouch = sample.songTimeMicros;
+    hasPreviousTouch = true;
   }
-  std::int64_t previousCover = -1;
+  std::int64_t previousCover = 0;
+  bool hasPreviousCover = false;
   for (const auto &event : replay.laneCoverEvents) {
-    if (event.songTimeMicros < previousCover || event.songTimeMicros < 0 ||
+    if ((hasPreviousCover && event.songTimeMicros < previousCover) ||
+        event.songTimeMicros < kMinimumReplaySongTimeMicros ||
         event.noteStartPositionPercent < 0 ||
         event.noteStartPositionPercent > 100) {
       return fail(diagnostic, "Replay timed lane-cover event is invalid");
     }
     previousCover = event.songTimeMicros;
+    hasPreviousCover = true;
   }
   if (replay.legacy) {
     for (const auto &event : replay.legacy->events) {

@@ -13,6 +13,8 @@
 
 namespace replay {
 
+inline constexpr std::int64_t kMinimumReplaySongTimeMicros = -30'000'000;
+
 enum class LogicalControlKind : std::uint8_t {
   Lane,
   ScratchClockwise,

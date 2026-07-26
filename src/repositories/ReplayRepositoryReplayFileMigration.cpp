@@ -132,15 +132,14 @@ std::string columnText(sqlite3_stmt *statement, int column) {
 }
 
 bool bindText(sqlite3_stmt *statement, int column, std::string_view value) {
-  return value.size() <= static_cast<std::size_t>(
-                             std::numeric_limits<int>::max()) &&
+  return value.size() <=
+             static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
          sqlite3_bind_text(statement, column, value.data(),
-                           static_cast<int>(value.size()), SQLITE_TRANSIENT) ==
-             SQLITE_OK;
+                           static_cast<int>(value.size()),
+                           SQLITE_TRANSIENT) == SQLITE_OK;
 }
 
-bool execute(sqlite3 *database, std::string_view sql,
-             std::string &diagnostic) {
+bool execute(sqlite3 *database, std::string_view sql, std::string &diagnostic) {
   char *message = nullptr;
   const int result = sqlite3_exec(database, std::string(sql).c_str(), nullptr,
                                   nullptr, &message);
@@ -173,14 +172,52 @@ std::string lowerHex(std::string value) {
   return value;
 }
 
+bool normalizeResultProvenance(ScoreProvenance &provenance,
+                               std::string &storedJson,
+                               std::string &diagnostic) {
+  std::string validationError;
+  if (const auto canonical =
+          serializeValidatedScoreProvenance(provenance, validationError)) {
+    storedJson = *canonical;
+    return true;
+  }
+
+  int sourceSchemaVersion = -1;
+  try {
+    const auto source = nlohmann::ordered_json::parse(storedJson);
+    sourceSchemaVersion = source.value("schemaVersion", -1);
+  } catch (...) {
+    diagnostic = "legacy result provenance JSON is malformed";
+    return false;
+  }
+  if (sourceSchemaVersion < 1 ||
+      sourceSchemaVersion >= ScoreProvenance::kSchemaVersion) {
+    diagnostic = validationError.empty() ? "legacy result provenance is invalid"
+                                         : std::move(validationError);
+    return false;
+  }
+
+  provenance = ScoreProvenance::Legacy();
+  const auto legacy =
+      serializeValidatedScoreProvenance(provenance, validationError);
+  if (!legacy.has_value()) {
+    diagnostic = validationError.empty()
+                     ? "could not normalize outdated result provenance"
+                     : std::move(validationError);
+    return false;
+  }
+  storedJson = *legacy;
+  return true;
+}
+
 std::vector<int> parseIntegers(std::string_view source) {
   std::vector<int> values;
   std::size_t begin = 0;
   while (begin <= source.size()) {
     const std::size_t end = source.find(',', begin);
-    const std::string token(source.substr(
-        begin, end == std::string_view::npos ? source.size() - begin
-                                             : end - begin));
+    const std::string token(source.substr(begin, end == std::string_view::npos
+                                                     ? source.size() - begin
+                                                     : end - begin));
     if (!token.empty()) {
       char *tail = nullptr;
       const long value = std::strtol(token.c_str(), &tail, 10);
@@ -222,9 +259,8 @@ std::optional<replay::LogicalControl> legacyControl(int lane, int keyMode,
   scratch = false;
   if (keyMode == 7) {
     if (lane >= 0 && lane < 7) {
-      return replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
-                                    .player = 1,
-                                    .lane = lane};
+      return replay::LogicalControl{
+          .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = lane};
     }
     if (lane == 7 || lane == 8) {
       scratch = true;
@@ -236,9 +272,8 @@ std::optional<replay::LogicalControl> legacyControl(int lane, int keyMode,
     return std::nullopt;
   }
   if (lane >= 0 && lane < 7) {
-    return replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
-                                  .player = 1,
-                                  .lane = lane};
+    return replay::LogicalControl{
+        .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = lane};
   }
   if (lane == 7 || lane == 8) {
     scratch = true;
@@ -285,10 +320,9 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     entry.event.songTimeMicros = sqlite3_column_int64(statement.get(), 4);
     entry.event.judgeTimeMicros = sqlite3_column_int64(statement.get(), 5);
     const int judgement = sqlite3_column_int(statement.get(), 6);
-    entry.event.judgement =
-        judgement >= PGreat && judgement <= None
-            ? static_cast<Judgement>(judgement)
-            : None;
+    entry.event.judgement = judgement >= PGreat && judgement <= None
+                                ? static_cast<Judgement>(judgement)
+                                : None;
     entry.event.diffMicros = sqlite3_column_int64(statement.get(), 7);
     entry.event.gauge =
         static_cast<float>(sqlite3_column_double(statement.get(), 8));
@@ -325,6 +359,8 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     diagnostic = touch.error();
     return false;
   }
+  std::ranges::stable_sort(chart.touchSamples, {},
+                           &replay::ReplayTouchSample::songTimeMicros);
 
   Statement cover(
       database,
@@ -340,13 +376,14 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     chart.laneCoverEvents.push_back(
         {.songTimeMicros = sqlite3_column_int64(cover.get(), 0),
          .noteStartPositionPercent = sqlite3_column_int(cover.get(), 1),
-         .resetVisibleTimeReference =
-             sqlite3_column_int(cover.get(), 2) != 0});
+         .resetVisibleTimeReference = sqlite3_column_int(cover.get(), 2) != 0});
   }
   if (result != SQLITE_DONE) {
     diagnostic = cover.error();
     return false;
   }
+  std::ranges::stable_sort(chart.laneCoverEvents, {},
+                           &replay::ReplayLaneCoverEvent::songTimeMicros);
   return true;
 }
 
@@ -421,18 +458,25 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart,
     score.finalGauge = chart.finalGauge;
     score.clearType = chart.clearType;
     score.provenance = chart.provenance;
+    int previousScore = 0;
     for (const auto &entry : chart.events) {
       const auto &event = entry.event;
-      if (event.action == replay::LegacyPlaybackAction::Release ||
+      const int scoreDelta = event.score - previousScore;
+      previousScore = event.score;
+      if (event.action == replay::LegacyPlaybackAction::Gauge ||
+          event.action == replay::LegacyPlaybackAction::Mine ||
           event.judgement == None) {
         continue;
       }
+      bool countsInResult = true;
       switch (event.judgement) {
       case PGreat:
-        ++score.pGreat;
+        countsInResult = scoreDelta == 2;
+        score.pGreat += countsInResult ? 1 : 0;
         break;
       case Great:
-        ++score.great;
+        countsInResult = scoreDelta == 1;
+        score.great += countsInResult ? 1 : 0;
         break;
       case Good:
         ++score.good;
@@ -450,17 +494,29 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart,
         break;
       case None:
       case JudgementCount:
+        countsInResult = false;
         break;
       }
-      if (event.diffMicros < 0) {
+      if (countsInResult && event.diffMicros < 0) {
         ++score.fast;
-      } else if (event.diffMicros > 0) {
+      } else if (countsInResult && event.diffMicros > 0) {
         ++score.slow;
       }
     }
     const int judged = score.pGreat + score.great + score.good + score.bad +
                        score.poor + score.kPoor;
-    score.maxScore = std::max({1, score.score, judged * 2});
+    const std::int64_t minimumMaxScore =
+        std::max({2LL, static_cast<std::int64_t>(score.score),
+                  static_cast<std::int64_t>(score.maxCombo) * 2,
+                  static_cast<std::int64_t>(judged) * 2});
+    if (minimumMaxScore > std::numeric_limits<int>::max() - 1LL) {
+      diagnostic = "legacy replay result counters exceed the supported range";
+      return false;
+    }
+    score.maxScore = static_cast<int>(minimumMaxScore);
+    if ((score.maxScore % 2) != 0) {
+      ++score.maxScore;
+    }
   } else {
     diagnostic = statement.error();
     return false;
@@ -471,7 +527,12 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart,
       persisted.adoptedGaugeHistory.push_back(entry.event.gauge);
     }
   }
-  persisted.resultFingerprint = result_persistence::resultFingerprint(persisted);
+  if (!normalizeResultProvenance(persisted.score.provenance,
+                                 chart.provenanceJson, diagnostic)) {
+    return false;
+  }
+  persisted.resultFingerprint =
+      result_persistence::resultFingerprint(persisted);
   if (!result_persistence::validatePersistedChartResult(persisted,
                                                         diagnostic)) {
     return false;
@@ -497,8 +558,7 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   setup.initialGaugeType = chart.initialGaugeType;
   setup.gaugeProfile = chart.provenance.gaugeProfile;
   setup.gaugeAutoShift = chart.gaugeAutoShift;
-  setup.gaugeAutoShiftLowerBound =
-      chart.provenance.gaugeAutoShiftLowerBound;
+  setup.gaugeAutoShiftLowerBound = chart.provenance.gaugeAutoShiftLowerBound;
   setup.playbackRulesetId = chart.provenance.ruleset.id;
   setup.playbackRulesetRevision = chart.provenance.ruleset.version;
   setup.playbackRatePercent = chart.provenance.playback.percent;
@@ -512,8 +572,8 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
     setup.candidateSelection = stage->candidateSelection;
   }
   setup.judgeWindowScalePercent = chart.provenance.judgeWindowScalePercent;
-  setup.startingGaugePercent = static_cast<float>(
-      chart.provenance.startingGaugePercent.value_or(20));
+  setup.startingGaugePercent =
+      static_cast<float>(chart.provenance.startingGaugePercent.value_or(20));
   setup.clubMode = chart.provenance.clubMode;
   for (const auto &cover : chart.laneCoverEvents) {
     if (cover.songTimeMicros <= 0) {
@@ -522,7 +582,8 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
     }
   }
 
-  std::map<std::tuple<int, int, int>, bool> states;
+  std::vector<replay::InputTransition> candidates;
+  candidates.reserve(chart.events.size());
   bool scratchBestEffort = false;
   for (const auto &entry : chart.events) {
     const auto action = entry.event.action;
@@ -531,24 +592,33 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
       continue;
     }
     bool scratch = false;
-    const auto control = legacyControl(entry.event.lane, setup.keyMode, scratch);
-    if (!control.has_value() || entry.event.songTimeMicros < 0) {
+    const auto control =
+        legacyControl(entry.event.lane, setup.keyMode, scratch);
+    if (!control.has_value() ||
+        entry.event.songTimeMicros < replay::kMinimumReplaySongTimeMicros) {
       continue;
     }
     scratchBestEffort |= scratch;
-    const auto key = std::tuple(static_cast<int>(control->kind),
-                                control->player, control->lane);
-    const bool pressed = action == replay::LegacyPlaybackAction::Press;
+    candidates.push_back({
+        .songTimeMicros = entry.event.songTimeMicros,
+        .control = *control,
+        .pressed = action == replay::LegacyPlaybackAction::Press,
+    });
+  }
+  std::ranges::stable_sort(candidates, {},
+                           &replay::InputTransition::songTimeMicros);
+  std::map<std::tuple<int, int, int>, bool> states;
+  for (const auto &transition : candidates) {
+    const auto key =
+        std::tuple(static_cast<int>(transition.control.kind),
+                   transition.control.player, transition.control.lane);
+    const bool pressed = transition.pressed;
     if (states[key] == pressed) {
       continue;
     }
     states[key] = pressed;
-    chart.playback.input.push_back({.songTimeMicros = entry.event.songTimeMicros,
-                                    .control = *control,
-                                    .pressed = pressed});
+    chart.playback.input.push_back(transition);
   }
-  std::ranges::stable_sort(chart.playback.input, {},
-                           &replay::InputTransition::songTimeMicros);
   if (chart.playback.input.empty()) {
     chart.playback.input = {
         {.songTimeMicros = 0,
@@ -616,8 +686,8 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
     chart.longNoteMode = sqlite3_column_int(statement.get(), 6);
     chart.initialGaugeType =
         gaugeTypeAtIndex(sqlite3_column_int(statement.get(), 7));
-    chart.gaugeAutoShift = gaugeAutoShiftModeFromValue(
-        sqlite3_column_int(statement.get(), 8));
+    chart.gaugeAutoShift =
+        gaugeAutoShiftModeFromValue(sqlite3_column_int(statement.get(), 8));
     chart.finalScore = sqlite3_column_int(statement.get(), 9);
     chart.maxCombo = sqlite3_column_int(statement.get(), 10);
     chart.finalGauge =
@@ -649,10 +719,11 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
     chart.createdAt = columnText(statement.get(), 21);
     chart.provenanceJson = columnText(statement.get(), 24);
     std::string provenanceError;
-    auto provenance = deserializeScoreProvenance(chart.provenanceJson,
-                                                  provenanceError);
+    auto provenance =
+        deserializeScoreProvenance(chart.provenanceJson, provenanceError);
     if (!provenance.has_value() ||
-        provenance->ruleset.version != sqlite3_column_int(statement.get(), 22) ||
+        provenance->ruleset.version !=
+            sqlite3_column_int(statement.get(), 22) ||
         static_cast<int>(provenance->eligibility) !=
             sqlite3_column_int(statement.get(), 23)) {
       diagnostic = provenanceError.empty()
@@ -757,8 +828,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
   for (std::size_t stageIndex = 0; stageIndex < course.chartIndexes.size();
        ++stageIndex) {
     const LegacyChart &chart = charts[course.chartIndexes[stageIndex]];
-    identities.push_back(
-        {.sha256 = chart.chartSha256, .md5 = chart.chartMd5});
+    identities.push_back({.sha256 = chart.chartSha256, .md5 = chart.chartMd5});
     pathInput.stageSha256.push_back(chart.chartSha256);
     persisted.stages.push_back(
         {.stageIndex = static_cast<int>(stageIndex),
@@ -770,6 +840,10 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
     course.playback.stages.push_back(chart.playback);
     course.playback.restMicrosAfterStage.push_back(
         course.restMicrosAfterStage[stageIndex]);
+  }
+  if (!normalizeResultProvenance(persisted.provenance, course.provenanceJson,
+                                 diagnostic)) {
+    return false;
   }
   if (persisted.courseKey.empty()) {
     persisted.courseKey =
@@ -791,8 +865,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
 }
 
 bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
-                 std::vector<LegacyCourse> &courses,
-                 std::string &diagnostic) {
+                 std::vector<LegacyCourse> &courses, std::string &diagnostic) {
   std::map<std::int64_t, std::size_t> chartById;
   for (std::size_t index = 0; index < charts.size(); ++index) {
     chartById.emplace(charts[index].id, index);
@@ -829,8 +902,8 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
         gaugeTypeAtIndex(sqlite3_column_int(statement.get(), 6));
     course.gaugeProfile =
         gaugeProfileFromInt(sqlite3_column_int(statement.get(), 7));
-    course.gaugeAutoShift = gaugeAutoShiftModeFromValue(
-        sqlite3_column_int(statement.get(), 8));
+    course.gaugeAutoShift =
+        gaugeAutoShiftModeFromValue(sqlite3_column_int(statement.get(), 8));
     course.longNoteMode = sqlite3_column_int(statement.get(), 9);
     course.requestedPlayOption = columnText(statement.get(), 10);
     course.assistOption = columnText(statement.get(), 11);
@@ -844,10 +917,11 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
     course.createdAt = columnText(statement.get(), 18);
     course.provenanceJson = columnText(statement.get(), 21);
     std::string provenanceError;
-    auto provenance = deserializeScoreProvenance(course.provenanceJson,
-                                                  provenanceError);
+    auto provenance =
+        deserializeScoreProvenance(course.provenanceJson, provenanceError);
     if (!provenance.has_value() ||
-        provenance->ruleset.version != sqlite3_column_int(statement.get(), 19) ||
+        provenance->ruleset.version !=
+            sqlite3_column_int(statement.get(), 19) ||
         static_cast<int>(provenance->eligibility) !=
             sqlite3_column_int(statement.get(), 20)) {
       diagnostic = provenanceError.empty()
@@ -873,18 +947,17 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
 }
 
 void assignPaths(std::vector<LegacyChart> &charts,
-                 std::vector<LegacyCourse> &courses,
-                 std::string &diagnostic) {
+                 std::vector<LegacyCourse> &courses, std::string &diagnostic) {
   std::vector<LegacyChart *> order;
   order.reserve(charts.size());
   for (auto &chart : charts) {
     order.push_back(&chart);
   }
-  std::ranges::sort(order, [](const LegacyChart *left,
-                             const LegacyChart *right) {
-    return std::tie(left->path.stem, left->playedAtUnixMillis, left->id) <
-           std::tie(right->path.stem, right->playedAtUnixMillis, right->id);
-  });
+  std::ranges::sort(
+      order, [](const LegacyChart *left, const LegacyChart *right) {
+        return std::tie(left->path.stem, left->playedAtUnixMillis, left->id) <
+               std::tie(right->path.stem, right->playedAtUnixMillis, right->id);
+      });
   std::string previous;
   std::int64_t index = -1;
   for (LegacyChart *chart : order) {
@@ -902,11 +975,11 @@ void assignPaths(std::vector<LegacyChart> &charts,
   for (auto &course : courses) {
     courseOrder.push_back(&course);
   }
-  std::ranges::sort(courseOrder, [](const LegacyCourse *left,
-                                   const LegacyCourse *right) {
-    return std::tie(left->path.stem, left->playedAtUnixMillis, left->id) <
-           std::tie(right->path.stem, right->playedAtUnixMillis, right->id);
-  });
+  std::ranges::sort(
+      courseOrder, [](const LegacyCourse *left, const LegacyCourse *right) {
+        return std::tie(left->path.stem, left->playedAtUnixMillis, left->id) <
+               std::tie(right->path.stem, right->playedAtUnixMillis, right->id);
+      });
   previous.clear();
   index = -1;
   for (LegacyCourse *course : courseOrder) {
@@ -936,10 +1009,10 @@ bool finalizeFiles(std::vector<LegacyChart> &charts,
     if (!bytes.has_value()) {
       return false;
     }
-    const auto finalized = store.finalize(
-        chart.path, *bytes, codec,
-        {.stageSha256 = {chart.chartSha256}, .course = false},
-        "migration-chart-" + std::to_string(chart.id));
+    const auto finalized =
+        store.finalize(chart.path, *bytes, codec,
+                       {.stageSha256 = {chart.chartSha256}, .course = false},
+                       "migration-chart-" + std::to_string(chart.id));
     if (!finalized.metadata.has_value()) {
       diagnostic = finalized.diagnostic.empty()
                        ? "could not finalize migrated replay file"
@@ -953,9 +1026,8 @@ bool finalizeFiles(std::vector<LegacyChart> &charts,
       diagnostic = "injected course replay encode failure";
       return false;
     }
-    const auto bytes = codec.encodeCourse(course.playback,
-                                          course.playedAtUnixMillis,
-                                          diagnostic);
+    const auto bytes = codec.encodeCourse(
+        course.playback, course.playedAtUnixMillis, diagnostic);
     if (!bytes.has_value()) {
       return false;
     }
@@ -964,10 +1036,10 @@ bool finalizeFiles(std::vector<LegacyChart> &charts,
     for (const auto &stage : course.playback.stages) {
       stageSha256.push_back(stage.setup.chartSha256);
     }
-    const auto finalized = store.finalize(
-        course.path, *bytes, codec,
-        {.stageSha256 = std::move(stageSha256), .course = true},
-        "migration-course-" + std::to_string(course.id));
+    const auto finalized =
+        store.finalize(course.path, *bytes, codec,
+                       {.stageSha256 = std::move(stageSha256), .course = true},
+                       "migration-course-" + std::to_string(course.id));
     if (!finalized.metadata.has_value()) {
       diagnostic = finalized.diagnostic.empty()
                        ? "could not finalize migrated course replay file"
@@ -1046,25 +1118,27 @@ bool insertChart(sqlite3 *database, const LegacyChart &chart,
          bindText(result.get(), column++, score.chartSha256) &&
          bindText(result.get(), column++, score.chartTitle) &&
          bindText(result.get(), column++, score.chartArtist);
-  const int values[] = {
-      persisted.keyMode, score.longNoteMode, score.score, score.maxScore,
-      score.maxCombo, score.comboBreak, score.pGreat, score.great, score.good,
-      score.bad, score.poor, score.kPoor, score.fast, score.slow};
+  const int values[] = {persisted.keyMode, score.longNoteMode, score.score,
+                        score.maxScore,    score.maxCombo,     score.comboBreak,
+                        score.pGreat,      score.great,        score.good,
+                        score.bad,         score.poor,         score.kPoor,
+                        score.fast,        score.slow};
   for (const int value : values) {
     okay = okay && sqlite3_bind_int(result.get(), column++, value) == SQLITE_OK;
   }
   const std::string history =
       nlohmann::ordered_json(persisted.adoptedGaugeHistory).dump();
-  okay = okay &&
-         sqlite3_bind_double(result.get(), column++, score.finalGauge) ==
-             SQLITE_OK &&
-         sqlite3_bind_int(result.get(), column++, score.clearType) == SQLITE_OK &&
-         bindText(result.get(), column++, history) &&
-         bindText(result.get(), column++, chart.provenanceJson) &&
-         bindText(result.get(), column++, persisted.resultFingerprint) &&
-         sqlite3_bind_int64(result.get(), column++,
-                            persisted.playedAtUnixMillis) == SQLITE_OK &&
-         bindText(result.get(), column++, chart.createdAt);
+  okay =
+      okay &&
+      sqlite3_bind_double(result.get(), column++, score.finalGauge) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, score.clearType) == SQLITE_OK &&
+      bindText(result.get(), column++, history) &&
+      bindText(result.get(), column++, chart.provenanceJson) &&
+      bindText(result.get(), column++, persisted.resultFingerprint) &&
+      sqlite3_bind_int64(result.get(), column++,
+                         persisted.playedAtUnixMillis) == SQLITE_OK &&
+      bindText(result.get(), column++, chart.createdAt);
   if (!okay || column != 29 || sqlite3_step(result.get()) != SQLITE_DONE) {
     diagnostic = result.error();
     return false;
@@ -1082,9 +1156,9 @@ bool insertChart(sqlite3 *database, const LegacyChart &chart,
       sqlite3_bind_int64(file.get(), 3, chart.path.historyIndex) != SQLITE_OK ||
       !bindText(file.get(), 4, relative) ||
       !bindText(file.get(), 5, chart.file.sha256) ||
-      sqlite3_bind_int64(file.get(), 6,
-                         static_cast<sqlite3_int64>(chart.file.compressedSize)) !=
-          SQLITE_OK ||
+      sqlite3_bind_int64(
+          file.get(), 6,
+          static_cast<sqlite3_int64>(chart.file.compressedSize)) != SQLITE_OK ||
       sqlite3_bind_int(file.get(), 7, chart.file.codecVersion) != SQLITE_OK ||
       sqlite3_step(file.get()) != SQLITE_DONE) {
     diagnostic = file.error();
@@ -1110,50 +1184,49 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
   }
   const auto &persisted = course.result;
   int column = 1;
-  bool okay = sqlite3_bind_int64(result.get(), column++, course.id) == SQLITE_OK &&
-              sqlite3_bind_null(result.get(), column++) == SQLITE_OK &&
-              bindText(result.get(), column++, persisted.courseKey) &&
-              sqlite3_bind_int(result.get(), column++,
-                               persisted.legacyCourseId) == SQLITE_OK &&
-              bindText(result.get(), column++, persisted.courseName) &&
-              bindText(result.get(), column++, persisted.courseGroupName) &&
-              bindText(result.get(), column++, persisted.constraintJson) &&
-              sqlite3_bind_int(result.get(), column++,
-                               persisted.completedCharts) == SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++, persisted.totalCharts) ==
-                  SQLITE_OK &&
-              bindText(result.get(), column++, persisted.requestedPlayOption) &&
-              bindText(result.get(), column++, persisted.assistOption) &&
-              sqlite3_bind_int(result.get(), column++,
-                               gaugeTypeIndex(persisted.initialGaugeType)) ==
-                  SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++,
-                               static_cast<int>(persisted.gaugeProfile)) ==
-                  SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++,
-                               gaugeAutoShiftModeValue(
-                                   persisted.gaugeAutoShift)) == SQLITE_OK &&
-              sqlite3_bind_int(
-                  result.get(), column++,
-                  gaugeTypeIndex(persisted.gaugeAutoShiftLowerBound)) ==
-                  SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++,
-                               persisted.longNoteMode) == SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++, persisted.finalScore) ==
-                  SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++, persisted.maxScore) ==
-                  SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++, persisted.maxCombo) ==
-                  SQLITE_OK &&
-              sqlite3_bind_double(result.get(), column++,
-                                  persisted.finalGauge) == SQLITE_OK &&
-              sqlite3_bind_int(result.get(), column++, persisted.clearType) ==
-                  SQLITE_OK &&
-              bindText(result.get(), column++, course.provenanceJson) &&
-              bindText(result.get(), column++, persisted.resultFingerprint) &&
-              sqlite3_bind_int64(result.get(), column++,
-                                 persisted.playedAtUnixMillis) == SQLITE_OK &&
-              bindText(result.get(), column++, course.createdAt);
+  bool okay =
+      sqlite3_bind_int64(result.get(), column++, course.id) == SQLITE_OK &&
+      sqlite3_bind_null(result.get(), column++) == SQLITE_OK &&
+      bindText(result.get(), column++, persisted.courseKey) &&
+      sqlite3_bind_int(result.get(), column++, persisted.legacyCourseId) ==
+          SQLITE_OK &&
+      bindText(result.get(), column++, persisted.courseName) &&
+      bindText(result.get(), column++, persisted.courseGroupName) &&
+      bindText(result.get(), column++, persisted.constraintJson) &&
+      sqlite3_bind_int(result.get(), column++, persisted.completedCharts) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, persisted.totalCharts) ==
+          SQLITE_OK &&
+      bindText(result.get(), column++, persisted.requestedPlayOption) &&
+      bindText(result.get(), column++, persisted.assistOption) &&
+      sqlite3_bind_int(result.get(), column++,
+                       gaugeTypeIndex(persisted.initialGaugeType)) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++,
+                       static_cast<int>(persisted.gaugeProfile)) == SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++,
+                       gaugeAutoShiftModeValue(persisted.gaugeAutoShift)) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++,
+                       gaugeTypeIndex(persisted.gaugeAutoShiftLowerBound)) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, persisted.longNoteMode) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, persisted.finalScore) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, persisted.maxScore) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, persisted.maxCombo) ==
+          SQLITE_OK &&
+      sqlite3_bind_double(result.get(), column++, persisted.finalGauge) ==
+          SQLITE_OK &&
+      sqlite3_bind_int(result.get(), column++, persisted.clearType) ==
+          SQLITE_OK &&
+      bindText(result.get(), column++, course.provenanceJson) &&
+      bindText(result.get(), column++, persisted.resultFingerprint) &&
+      sqlite3_bind_int64(result.get(), column++,
+                         persisted.playedAtUnixMillis) == SQLITE_OK &&
+      bindText(result.get(), column++, course.createdAt);
   if (!okay || column != 26 || sqlite3_step(result.get()) != SQLITE_DONE) {
     diagnostic = result.error();
     return false;
@@ -1187,22 +1260,32 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
            bindText(stage.get(), column++, score.chartSha256) &&
            bindText(stage.get(), column++, score.chartTitle) &&
            bindText(stage.get(), column++, score.chartArtist);
-    const int values[] = {
-        persistedStage.keyMode, score.longNoteMode, score.score, score.maxScore,
-        score.maxCombo, score.comboBreak, score.pGreat, score.great, score.good,
-        score.bad, score.poor, score.kPoor, score.fast, score.slow};
+    const int values[] = {persistedStage.keyMode,
+                          score.longNoteMode,
+                          score.score,
+                          score.maxScore,
+                          score.maxCombo,
+                          score.comboBreak,
+                          score.pGreat,
+                          score.great,
+                          score.good,
+                          score.bad,
+                          score.poor,
+                          score.kPoor,
+                          score.fast,
+                          score.slow};
     for (const int value : values) {
-      okay = okay &&
-             sqlite3_bind_int(stage.get(), column++, value) == SQLITE_OK;
+      okay =
+          okay && sqlite3_bind_int(stage.get(), column++, value) == SQLITE_OK;
     }
-    okay = okay &&
-           sqlite3_bind_double(stage.get(), column++, score.finalGauge) ==
-               SQLITE_OK &&
-           sqlite3_bind_int(stage.get(), column++, score.clearType) ==
-               SQLITE_OK &&
-           bindText(stage.get(), column++, history) &&
-           sqlite3_bind_null(stage.get(), column++) == SQLITE_OK &&
-           bindText(stage.get(), column++, provenance);
+    okay =
+        okay &&
+        sqlite3_bind_double(stage.get(), column++, score.finalGauge) ==
+            SQLITE_OK &&
+        sqlite3_bind_int(stage.get(), column++, score.clearType) == SQLITE_OK &&
+        bindText(stage.get(), column++, history) &&
+        sqlite3_bind_null(stage.get(), column++) == SQLITE_OK &&
+        bindText(stage.get(), column++, provenance);
     if (!okay || column != 27 || sqlite3_step(stage.get()) != SQLITE_DONE) {
       diagnostic = stage.error();
       return false;
@@ -1218,12 +1301,13 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
   if (!file.valid() ||
       sqlite3_bind_int64(file.get(), 1, course.id) != SQLITE_OK ||
       !bindText(file.get(), 2, course.path.stem) ||
-      sqlite3_bind_int64(file.get(), 3, course.path.historyIndex) != SQLITE_OK ||
+      sqlite3_bind_int64(file.get(), 3, course.path.historyIndex) !=
+          SQLITE_OK ||
       !bindText(file.get(), 4, relative) ||
       !bindText(file.get(), 5, course.file.sha256) ||
-      sqlite3_bind_int64(
-          file.get(), 6,
-          static_cast<sqlite3_int64>(course.file.compressedSize)) != SQLITE_OK ||
+      sqlite3_bind_int64(file.get(), 6,
+                         static_cast<sqlite3_int64>(
+                             course.file.compressedSize)) != SQLITE_OK ||
       sqlite3_bind_int(file.get(), 7, course.file.codecVersion) != SQLITE_OK ||
       sqlite3_step(file.get()) != SQLITE_DONE) {
     diagnostic = file.error();
@@ -1263,19 +1347,18 @@ bool verifyCounts(sqlite3 *database, std::size_t chartCount,
                   std::size_t courseCount, std::size_t courseStageCount,
                   std::string &diagnostic) {
   Statement statement(
-      database,
-      "SELECT (SELECT count(*) FROM chart_results),"
-      "(SELECT count(*) FROM course_results),"
-      "(SELECT count(*) FROM replay_files),"
-      "(SELECT count(*) FROM course_result_stages),"
-      "(SELECT count(*) FROM legacy_v10_pending_chart_score_writes),"
-      "(SELECT count(*) FROM pending_chart_score_writes),"
-      "(SELECT count(*) FROM legacy_v10_ir_outbox),"
-      "(SELECT count(*) FROM ir_outbox),"
-      "(SELECT count(*) FROM legacy_v10_ir_submission_receipts),"
-      "(SELECT count(*) FROM ir_submission_receipts),"
-      "(SELECT count(*) FROM legacy_v10_ir_remote_scores),"
-      "(SELECT count(*) FROM ir_remote_scores)");
+      database, "SELECT (SELECT count(*) FROM chart_results),"
+                "(SELECT count(*) FROM course_results),"
+                "(SELECT count(*) FROM replay_files),"
+                "(SELECT count(*) FROM course_result_stages),"
+                "(SELECT count(*) FROM legacy_v10_pending_chart_score_writes),"
+                "(SELECT count(*) FROM pending_chart_score_writes),"
+                "(SELECT count(*) FROM legacy_v10_ir_outbox),"
+                "(SELECT count(*) FROM ir_outbox),"
+                "(SELECT count(*) FROM legacy_v10_ir_submission_receipts),"
+                "(SELECT count(*) FROM ir_submission_receipts),"
+                "(SELECT count(*) FROM legacy_v10_ir_remote_scores),"
+                "(SELECT count(*) FROM ir_remote_scores)");
   if (!statement.valid() || sqlite3_step(statement.get()) != SQLITE_ROW) {
     diagnostic = statement.error();
     return false;
@@ -1407,8 +1490,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
   for (const auto &chart : charts) {
     const auto inspected = fileStore.inspect(chart.file);
     if (inspected.state != replay::ReplayFileState::Available ||
-        !inspected.metadata.has_value() ||
-        *inspected.metadata != chart.file) {
+        !inspected.metadata.has_value() || *inspected.metadata != chart.file) {
       return failure(MigrationStatus::FileFailure,
                      inspected.diagnostic.empty()
                          ? "migrated replay changed before cutover"
@@ -1496,8 +1578,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                                       : std::move(diagnostic),
                    charts.size(), courses.size());
   }
-  if (fault(faults, "legacy-drop") ||
-      !dropLegacyTables(database, diagnostic)) {
+  if (fault(faults, "legacy-drop") || !dropLegacyTables(database, diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    diagnostic.empty() ? "could not drop legacy replay rows"
                                       : std::move(diagnostic),

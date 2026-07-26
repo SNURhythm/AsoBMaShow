@@ -11,7 +11,7 @@
 namespace replay {
 
 struct ReplayInputRecorderLimits {
-  std::int64_t minimumSongTimeMicros = -30'000'000;
+  std::int64_t minimumSongTimeMicros = kMinimumReplaySongTimeMicros;
   std::size_t maximumTransitions = 1'000'000;
 };
 
