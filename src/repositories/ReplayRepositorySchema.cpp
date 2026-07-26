@@ -346,10 +346,10 @@ bool migrateReplayDatabaseSchema(
       std::filesystem::path(filename).parent_path();
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore fileStore(profileRoot);
-  const auto resolveKeyMode = replay_repository_detail::
-      makeChartDatabaseReplayKeyModeResolver(chartDatabasePath);
+  const auto resolveMetadata = replay_repository_detail::
+      makeChartDatabaseReplayMetadataResolver(chartDatabasePath);
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database, profileRoot, codec, fileStore, {}, resolveKeyMode);
+      database, profileRoot, codec, fileStore, {}, resolveMetadata);
   if (outcome.status !=
           replay_repository_detail::ReplayMigrationOutcome::Status::Migrated &&
       outcome.status != replay_repository_detail::ReplayMigrationOutcome::

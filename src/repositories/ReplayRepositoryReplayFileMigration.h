@@ -29,11 +29,19 @@ struct ReplayMigrationChartIdentity {
   std::string_view chartSha256;
 };
 
-using ReplayMigrationKeyModeResolver =
-    std::function<std::optional<int>(const ReplayMigrationChartIdentity &)>;
+struct ReplayMigrationChartMetadata {
+  int keyMode = 0;
+  bool hasUndefinedLongNotes = false;
 
-[[nodiscard]] ReplayMigrationKeyModeResolver
-makeChartDatabaseReplayKeyModeResolver(
+  bool operator==(const ReplayMigrationChartMetadata &) const = default;
+};
+
+using ReplayMigrationChartMetadataResolver = std::function<
+    std::optional<ReplayMigrationChartMetadata>(
+        const ReplayMigrationChartIdentity &)>;
+
+[[nodiscard]] ReplayMigrationChartMetadataResolver
+makeChartDatabaseReplayMetadataResolver(
     const std::filesystem::path &chartDatabasePath);
 
 [[nodiscard]] std::optional<replay::LogicalControl>
@@ -63,6 +71,6 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
     sqlite3 *database, const std::filesystem::path &profileRoot,
     const replay::BeatorajaReplayCodec &codec,
     replay::ReplayFileStore &fileStore, ReplayMigrationFaults faults = {},
-    ReplayMigrationKeyModeResolver resolveKeyMode = {});
+    ReplayMigrationChartMetadataResolver resolveMetadata = {});
 
 } // namespace replay_repository_detail

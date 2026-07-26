@@ -452,15 +452,22 @@ FixtureFacts insertChartFixture(sqlite3 *database) {
 }
 
 void createChartMetadataDatabase(sqlite3 *database,
-                                 const FixtureFacts &chart, int keyMode) {
+                                 const FixtureFacts &chart, int keyMode,
+                                 int longNoteMode = 0,
+                                 int totalLongNotes = 1,
+                                 int totalBackspinNotes = 0) {
   executeOrThrow(
       database,
       "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,md5 TEXT NOT NULL,"
-      "sha256 TEXT NOT NULL,keys INTEGER);"
-      "INSERT INTO chart_meta(path,md5,sha256,keys) VALUES("
+      "sha256 TEXT NOT NULL,keys INTEGER,ln_mode INTEGER,"
+      "total_long_notes INTEGER,total_backspin_notes INTEGER);"
+      "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+      "total_long_notes,total_backspin_notes) VALUES("
       "'BMS/chart.bms','" +
           chart.md5 + "','" + chart.sha256 + "'," +
-          std::to_string(keyMode) + ")");
+          std::to_string(keyMode) + "," + std::to_string(longNoteMode) +
+          "," + std::to_string(totalLongNotes) + "," +
+          std::to_string(totalBackspinNotes) + ")");
 }
 
 std::string insertCourseFixture(sqlite3 *database, const FixtureFacts &chart) {
@@ -693,12 +700,19 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
   const FixtureFacts chart = insertChartFixture(replayDatabase.get());
 
   Database chartDatabase(temporary.path() / "chart.db");
-  createChartMetadataDatabase(chartDatabase.get(), chart, 14);
+  createChartMetadataDatabase(chartDatabase.get(), chart, 14, 1, 1, 0);
+  insertCourseFixture(replayDatabase.get(), chart);
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto resolver =
-      replay_repository_detail::makeChartDatabaseReplayKeyModeResolver(
+      replay_repository_detail::makeChartDatabaseReplayMetadataResolver(
           temporary.path() / "chart.db");
+  const auto resolved = resolver({.chartPath = "BMS/chart.bms",
+                                  .chartMd5 = chart.md5,
+                                  .chartSha256 = chart.sha256});
+  expect(resolved.has_value() && resolved->keyMode == 14 &&
+             !resolved->hasUndefinedLongNotes,
+         "chart resolver returns coherent key and defined-LN metadata");
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
       replayDatabase.get(), temporary.path(), codec, store, {}, resolver);
 
@@ -710,7 +724,7 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
          "chart metadata, not observed lanes, owns migrated key mode");
 
   const std::filesystem::path relative =
-      std::filesystem::path("replay") / ("C" + chart.sha256 + ".brd");
+      std::filesystem::path("replay") / (chart.sha256 + ".brd");
   replay::ReplayFileMetadata metadata{
       .relativePath = relative,
       .sha256 = text(replayDatabase.get(),
@@ -723,8 +737,53 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
       .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
   };
   const auto decoded = store.load(metadata, codec);
-  expect(decoded.chart.has_value() && decoded.chart->setup.keyMode == 14,
-         "metadata-selected key mode is encoded into the migrated BRD");
+  expect(decoded.chart.has_value() && decoded.chart->setup.keyMode == 14 &&
+             !decoded.chart->setup.hasUndefinedLongNotes,
+         "metadata-selected key mode and defined-LN fact reach the BRD");
+  const std::string coursePath =
+      text(replayDatabase.get(),
+           "SELECT relative_path FROM replay_files WHERE course_result_id=77");
+  expect(coursePath.starts_with("replay/") &&
+             !coursePath.starts_with("replay/C"),
+         "defined-LN course migration aggregates stage metadata without C");
+}
+
+void testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes() {
+  TemporaryDirectory temporary;
+  FixtureFacts chart;
+  Database chartDatabase(temporary.path() / "chart.db");
+  createChartMetadataDatabase(chartDatabase.get(), chart, 7, 0, 1, 0);
+  auto resolver =
+      replay_repository_detail::makeChartDatabaseReplayMetadataResolver(
+          temporary.path() / "chart.db");
+  auto resolved = resolver({.chartPath = "BMS/chart.bms",
+                            .chartMd5 = chart.md5,
+                            .chartSha256 = chart.sha256});
+  expect(resolved.has_value() && resolved->keyMode == 7 &&
+             resolved->hasUndefinedLongNotes,
+         "positive undefined-LN count resolves true");
+
+  executeOrThrow(chartDatabase.get(),
+                 "UPDATE chart_meta SET total_long_notes=0,"
+                 "total_backspin_notes=0");
+  resolved = resolver({.chartPath = "BMS/chart.bms",
+                       .chartMd5 = chart.md5,
+                       .chartSha256 = chart.sha256});
+  expect(resolved.has_value() && !resolved->hasUndefinedLongNotes,
+         "chart without long notes does not receive an undefined-LN prefix");
+
+  executeOrThrow(chartDatabase.get(),
+                 "UPDATE chart_meta SET total_long_notes=1;"
+                 "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+                 "total_long_notes,total_backspin_notes) VALUES("
+                 "'BMS/copy.bms','" +
+                     chart.md5 + "','" + chart.sha256 +
+                     "',14,1,1,0)");
+  resolved = resolver({.chartPath = "BMS/chart.bms",
+                       .chartMd5 = chart.md5,
+                       .chartSha256 = chart.sha256});
+  expect(!resolved.has_value(),
+         "conflicting chart metadata matches fail closed");
 }
 
 void testMapsLegacyPhysicalLanesForEverySupportedMode() {
@@ -1229,6 +1288,7 @@ int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
   testPreservesEmptyLegacyReplayInput();
   testChartMetadataPreservesSparseFourteenKeyMode();
+  testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
   testMigratesMd5OnlyChartWithDeterministicReplayStem();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();

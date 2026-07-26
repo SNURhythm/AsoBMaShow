@@ -44,6 +44,7 @@ struct LegacyChart {
   std::string chartTitle;
   std::string chartArtist;
   int longNoteMode = 0;
+  bool hasUndefinedLongNotes = true;
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
   int finalScore = 0;
@@ -540,7 +541,7 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   setup.chartSha256 = chart.chartSha256;
   setup.keyMode = chart.result.keyMode;
   setup.longNoteMode = std::clamp(chart.longNoteMode, 0, 2);
-  setup.hasUndefinedLongNotes = true;
+  setup.hasUndefinedLongNotes = chart.hasUndefinedLongNotes;
   setup.randomSeed = chart.randomSeed;
   setup.randomPrng = chart.randomPrng;
   setup.randomValues = chart.randomValues;
@@ -634,7 +635,7 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
 }
 
 bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
-                const ReplayMigrationKeyModeResolver &resolveKeyMode,
+                const ReplayMigrationChartMetadataResolver &resolveMetadata,
                 std::string &diagnostic) {
   Statement statement(
       database,
@@ -729,13 +730,14 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
       return false;
     }
     int keyMode = inferredKeyMode(chart);
-    if (resolveKeyMode) {
-      const auto resolved = resolveKeyMode(
+    if (resolveMetadata) {
+      const auto resolved = resolveMetadata(
           {.chartPath = chart.chartPath,
            .chartMd5 = chart.chartMd5,
            .chartSha256 = chart.chartSha256});
-      if (resolved.has_value() && supportedKeyMode(*resolved)) {
-        keyMode = *resolved;
+      if (resolved.has_value()) {
+        keyMode = resolved->keyMode;
+        chart.hasUndefinedLongNotes = resolved->hasUndefinedLongNotes;
       }
     }
     if (!readPendingResult(database, chart, keyMode, diagnostic) ||
@@ -816,7 +818,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
   identities.reserve(course.chartIndexes.size());
   replay::CoursePathInput pathInput;
   pathInput.longNoteMode = std::clamp(course.longNoteMode, 0, 2);
-  pathInput.hasUndefinedLongNotes = true;
+  pathInput.hasUndefinedLongNotes = false;
   pathInput.beatorajaConstraintIds =
       beatorajaCourseConstraintIds(course.constraintJson);
   for (std::size_t stageIndex = 0; stageIndex < course.chartIndexes.size();
@@ -824,6 +826,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
     const LegacyChart &chart = charts[course.chartIndexes[stageIndex]];
     identities.push_back({.sha256 = chart.chartSha256, .md5 = chart.chartMd5});
     pathInput.stageSha256.push_back(chart.chartSha256);
+    pathInput.hasUndefinedLongNotes |= chart.hasUndefinedLongNotes;
     persisted.stages.push_back(
         {.stageIndex = static_cast<int>(stageIndex),
          .score = chart.result.score,
@@ -1488,13 +1491,13 @@ legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept {
   }
 }
 
-ReplayMigrationKeyModeResolver makeChartDatabaseReplayKeyModeResolver(
+ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(
     const std::filesystem::path &chartDatabasePath) {
   if (chartDatabasePath.empty()) {
     return {};
   }
   return [chartDatabasePath](const ReplayMigrationChartIdentity &identity)
-             -> std::optional<int> {
+             -> std::optional<ReplayMigrationChartMetadata> {
     sqlite3 *rawDatabase = nullptr;
     const std::string pathText = fspath_to_utf8(chartDatabasePath);
     const int openResult = sqlite3_open_v2(
@@ -1507,8 +1510,9 @@ ReplayMigrationKeyModeResolver makeChartDatabaseReplayKeyModeResolver(
 
     Statement statement(
         database.get(),
-        "SELECT path,lower(trim(md5)),lower(trim(sha256)),keys FROM "
-        "chart_meta WHERE path=?1 OR (?2<>'' AND lower(trim(md5))=?2) OR "
+        "SELECT path,lower(trim(md5)),lower(trim(sha256)),keys,ln_mode,"
+        "total_long_notes,total_backspin_notes FROM chart_meta WHERE path=?1 "
+        "OR (?2<>'' AND lower(trim(md5))=?2) OR "
         "(?3<>'' AND lower(trim(sha256))=?3)");
     if (!statement.valid() ||
         !bindText(statement.get(), 1, identity.chartPath) ||
@@ -1517,7 +1521,7 @@ ReplayMigrationKeyModeResolver makeChartDatabaseReplayKeyModeResolver(
       return std::nullopt;
     }
 
-    std::optional<int> resolved;
+    std::optional<ReplayMigrationChartMetadata> resolved;
     int stepResult = SQLITE_OK;
     while ((stepResult = sqlite3_step(statement.get())) == SQLITE_ROW) {
       const std::string rowPath = columnText(statement.get(), 0);
@@ -1533,12 +1537,30 @@ ReplayMigrationKeyModeResolver makeChartDatabaseReplayKeyModeResolver(
       if (!identityMatches) {
         continue;
       }
-      const int keyMode = sqlite3_column_int(statement.get(), 3);
-      if (!supportedKeyMode(keyMode) ||
-          (resolved.has_value() && *resolved != keyMode)) {
+      if (sqlite3_column_type(statement.get(), 3) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 5) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER) {
         return std::nullopt;
       }
-      resolved = keyMode;
+      const int keyMode = sqlite3_column_int(statement.get(), 3);
+      const int longNoteMode = sqlite3_column_int(statement.get(), 4);
+      const int totalLongNotes = sqlite3_column_int(statement.get(), 5);
+      const int totalBackspinNotes = sqlite3_column_int(statement.get(), 6);
+      if (!supportedKeyMode(keyMode) || longNoteMode < 0 ||
+          longNoteMode > 3 || totalLongNotes < 0 || totalBackspinNotes < 0) {
+        return std::nullopt;
+      }
+      const ReplayMigrationChartMetadata metadata{
+          .keyMode = keyMode,
+          .hasUndefinedLongNotes =
+              (totalLongNotes > 0 || totalBackspinNotes > 0) &&
+              longNoteMode == 0,
+      };
+      if (resolved.has_value() && *resolved != metadata) {
+        return std::nullopt;
+      }
+      resolved = metadata;
     }
     return stepResult == SQLITE_DONE ? resolved : std::nullopt;
   };
@@ -1561,7 +1583,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
     sqlite3 *database, const std::filesystem::path &profileRoot,
     const replay::BeatorajaReplayCodec &codec,
     replay::ReplayFileStore &fileStore, ReplayMigrationFaults faults,
-    ReplayMigrationKeyModeResolver resolveKeyMode) {
+    ReplayMigrationChartMetadataResolver resolveMetadata) {
   if (database == nullptr || profileRoot.empty()) {
     return failure(MigrationStatus::StorageFailure,
                    "replay migration database or profile root is missing");
@@ -1594,7 +1616,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
   std::vector<LegacyChart> charts;
   std::vector<LegacyCourse> courses;
   std::string diagnostic;
-  if (!readCharts(database, charts, resolveKeyMode, diagnostic) ||
+  if (!readCharts(database, charts, resolveMetadata, diagnostic) ||
       !readCourses(database, charts, courses, diagnostic)) {
     return failure(MigrationStatus::InvalidLegacyData,
                    diagnostic.empty() ? "legacy replay rows are invalid"
