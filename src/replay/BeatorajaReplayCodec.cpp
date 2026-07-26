@@ -429,9 +429,9 @@ bool validateInput(const std::vector<InputTransition> &input, int keyMode,
   return true;
 }
 
-std::optional<Bytes> stockKeyRecords(const ReplayPlaybackData &replay,
-                                     const ReplayCodecLimits &limits,
-                                     std::string &diagnostic) {
+std::optional<std::vector<InputTransition>>
+projectStockInput(const ReplayPlaybackData &replay,
+                  const ReplayCodecLimits &limits, std::string &diagnostic) {
   std::vector<InputTransition> effective;
   if (!validateInput(replay.input, replay.setup.keyMode,
                      limits.maxInputTransitions, false, &effective,
@@ -442,14 +442,16 @@ std::optional<Bytes> stockKeyRecords(const ReplayPlaybackData &replay,
   if (!options) {
     return std::nullopt;
   }
-  Bytes records;
-  if (effective.size() > limits.maxKeyInputBytes / kKeyRecordSize) {
-    fail(diagnostic, "Replay keyinput exceeds the configured limit");
-    return std::nullopt;
-  }
-  records.reserve(effective.size() * kKeyRecordSize);
+  std::vector<InputTransition> projected;
+  projected.reserve(effective.size());
   std::unordered_map<int, bool> stockStates;
   for (const auto &transition : effective) {
+    // Beatoraja rejects KeyInputLog timestamps before zero. The exact pre-roll
+    // stream remains in the Aso extension; stock playback begins from a clean
+    // state at chart time zero.
+    if (transition.songTimeMicros < 0) {
+      continue;
+    }
     auto projectedControl = std::optional<LogicalControl>(transition.control);
     if (options->manualAssignment) {
       projectedControl =
@@ -470,10 +472,52 @@ std::optional<Bytes> stockKeyRecords(const ReplayPlaybackData &replay,
       continue;
     }
     stockStates[*keyCode] = transition.pressed;
+    const auto stockControl =
+        BeatorajaReplayCodec::logicalControl(*keyCode, replay.setup.keyMode);
+    if (!stockControl) {
+      fail(diagnostic, "Replay stock input projection is invalid");
+      return std::nullopt;
+    }
+    projected.push_back({.songTimeMicros = transition.songTimeMicros,
+                         .control = *stockControl,
+                         .pressed = transition.pressed});
+  }
+  return projected;
+}
+
+std::optional<Bytes> stockKeyRecords(const ReplayPlaybackData &replay,
+                                     const ReplayCodecLimits &limits,
+                                     std::string &diagnostic) {
+  const auto projected = projectStockInput(replay, limits, diagnostic);
+  if (!projected) {
+    return std::nullopt;
+  }
+  const std::size_t recordCount = std::max<std::size_t>(projected->size(), 1);
+  if (recordCount > limits.maxInputTransitions ||
+      recordCount > limits.maxKeyInputBytes / kKeyRecordSize) {
+    fail(diagnostic, "Replay keyinput exceeds the configured limit");
+    return std::nullopt;
+  }
+  Bytes records;
+  records.reserve(recordCount * kKeyRecordSize);
+  for (const auto &transition : *projected) {
+    const auto keyCode = BeatorajaReplayCodec::beatorajaKeyCode(
+        transition.control, replay.setup.keyMode);
+    if (!keyCode) {
+      fail(diagnostic, "Replay stock input projection is invalid");
+      return std::nullopt;
+    }
     const int signedCode = (*keyCode + 1) * (transition.pressed ? 1 : -1);
     records.push_back(static_cast<std::byte>(
         static_cast<std::uint8_t>(static_cast<std::int8_t>(signedCode))));
     appendLittleEndianInt64(records, transition.songTimeMicros);
+  }
+  if (records.empty()) {
+    // ReplayData.validate() in Beatoraja requires at least one key record.
+    // An unmatched release is accepted by Beatoraja but cannot hit a note;
+    // Aso's tolerant stock decoder also collapses it back to empty input.
+    records.push_back(static_cast<std::byte>(static_cast<std::uint8_t>(-1)));
+    appendLittleEndianInt64(records, 0);
   }
   return records;
 }
@@ -656,12 +700,14 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
       {"hasUndefinedLongNotes", setup.hasUndefinedLongNotes},
       {"randomSeed", optionalJson(setup.randomSeed)},
       {"randomPrng", optionalJson(setup.randomPrng)},
+      {"randomValues", setup.randomValues},
       {"playOption", optionalJson(setup.playOption)},
       {"playOptionSeed", optionalJson(setup.playOptionSeed)},
       {"playOption2", optionalJson(setup.playOption2)},
       {"playOption2Seed", optionalJson(setup.playOption2Seed)},
       {"doublePlayOption", static_cast<int>(setup.doublePlayOption)},
       {"assistOption", setup.assistOption},
+      {"initialGaugeType", gaugeTypeIndex(setup.initialGaugeType)},
       {"gaugeProfile", static_cast<int>(setup.gaugeProfile)},
       {"gaugeAutoShift", static_cast<int>(setup.gaugeAutoShift)},
       {"gaugeAutoShiftLowerBound",
@@ -675,6 +721,8 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
       {"startingGaugePercent", setup.startingGaugePercent},
       {"startingGaugeState", std::move(startingGaugeState)},
       {"clubMode", setup.clubMode},
+      {"initialLaneCoverPercent", setup.initialLaneCoverPercent},
+      {"laneCoverEnabled", setup.laneCoverEnabled},
   };
 }
 
@@ -907,6 +955,7 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
   int profile = 0;
   int autoShift = 0;
   int lowerBound = 0;
+  int initialGaugeType = 0;
   int playbackMode = 0;
   int candidateSelection = 0;
   if (!readRequired(source, "chartSha256", setup.chartSha256, diagnostic) ||
@@ -917,6 +966,7 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
                     setup.hasUndefinedLongNotes, diagnostic) ||
       !readOptional(source, "randomSeed", setup.randomSeed, diagnostic) ||
       !readOptional(source, "randomPrng", setup.randomPrng, diagnostic) ||
+      !readRequired(source, "randomValues", setup.randomValues, diagnostic) ||
       !readOptional(source, "playOption", setup.playOption, diagnostic) ||
       !readOptional(source, "playOptionSeed", setup.playOptionSeed,
                     diagnostic) ||
@@ -924,6 +974,8 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
       !readOptional(source, "playOption2Seed", setup.playOption2Seed,
                     diagnostic) ||
       !readRequired(source, "assistOption", setup.assistOption, diagnostic) ||
+      !readRequired(source, "initialGaugeType", initialGaugeType,
+                    diagnostic) ||
       !readRequired(source, "gaugeProfile", profile, diagnostic) ||
       !readRequired(source, "gaugeAutoShift", autoShift, diagnostic) ||
       !readRequired(source, "gaugeAutoShiftLowerBound", lowerBound,
@@ -941,7 +993,11 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
                     setup.judgeWindowScalePercent, diagnostic) ||
       !readRequired(source, "startingGaugePercent", setup.startingGaugePercent,
                     diagnostic) ||
-      !readRequired(source, "clubMode", setup.clubMode, diagnostic)) {
+      !readRequired(source, "clubMode", setup.clubMode, diagnostic) ||
+      !readRequired(source, "initialLaneCoverPercent",
+                    setup.initialLaneCoverPercent, diagnostic) ||
+      !readRequired(source, "laneCoverEnabled", setup.laneCoverEnabled,
+                    diagnostic)) {
     return false;
   }
   const auto doublePlayOption = source.find("doublePlayOption");
@@ -1013,6 +1069,9 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
       autoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
       autoShift > static_cast<int>(GaugeAutoShiftMode::BestClear) ||
       lowerBound < 0 || lowerBound >= static_cast<int>(kGaugeTypeCount) ||
+      initialGaugeType < 0 ||
+      initialGaugeType >= static_cast<int>(kGaugeTypeCount) ||
+      setup.randomValues.size() > 100'000 ||
       playbackMode < static_cast<int>(audio::PlaybackMode::PitchShift) ||
       playbackMode > static_cast<int>(audio::PlaybackMode::TimeStretch) ||
       candidateSelection <
@@ -1022,6 +1081,7 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
     return fail(diagnostic, "Replay extension setup enum is out of range");
   }
   setup.gaugeProfile = static_cast<GaugeProfile>(profile);
+  setup.initialGaugeType = gaugeTypeAtIndex(initialGaugeType);
   setup.gaugeAutoShift = static_cast<GaugeAutoShiftMode>(autoShift);
   setup.gaugeAutoShiftLowerBound = gaugeTypeAtIndex(lowerBound);
   setup.playbackMode = static_cast<audio::PlaybackMode>(playbackMode);
@@ -1305,6 +1365,38 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
   return true;
 }
 
+bool validateStockProjection(const ChartPlaybackSetup &stock,
+                             const ReplayPlaybackData &extension,
+                             const ReplayCodecLimits &limits,
+                             const std::vector<InputTransition> &stockInput,
+                             std::string &diagnostic) {
+  const auto options = projectSetupOptions(extension.setup, diagnostic);
+  if (!options) {
+    return false;
+  }
+  if (stock.playOption != optionName(options->option1) ||
+      stock.playOption2 != optionName(options->option2) ||
+      stock.playOptionSeed != extension.setup.playOptionSeed ||
+      stock.playOption2Seed != extension.setup.playOption2Seed ||
+      stock.randomValues != extension.setup.randomValues ||
+      stock.initialGaugeType != extension.setup.initialGaugeType ||
+      stock.initialLaneCoverPercent !=
+          extension.setup.initialLaneCoverPercent ||
+      stock.laneCoverEnabled != extension.setup.laneCoverEnabled) {
+    return fail(diagnostic,
+                "Replay stock and extension playback setup fields differ");
+  }
+  const auto expectedInput = projectStockInput(extension, limits, diagnostic);
+  if (!expectedInput) {
+    return false;
+  }
+  if (*expectedInput != stockInput) {
+    return fail(diagnostic,
+                "Replay stock and extension input projections differ");
+  }
+  return true;
+}
+
 bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
                  std::optional<int> expectedKeyMode,
                  const ReplayCodecLimits &limits, StageDecode &result,
@@ -1312,6 +1404,7 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
   if (!decodeStockSetup(stage, result.data.setup, diagnostic)) {
     return false;
   }
+  const ChartPlaybackSetup stockSetup = result.data.setup;
   const std::string stockChartSha256 = result.data.setup.chartSha256;
   const auto stockMode = stockLongNoteMode(result.data.setup.longNoteMode);
   const DoublePlayOption stockDoublePlayOption =
@@ -1421,7 +1514,8 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
       !decodeLegacyExtension(*legacy, limits, result.data.legacy, diagnostic)) {
     return false;
   }
-  return true;
+  return validateStockProjection(stockSetup, result.data, limits, *stockInput,
+                                 diagnostic);
 }
 
 std::optional<Bytes> encodeDocument(const Json &document,

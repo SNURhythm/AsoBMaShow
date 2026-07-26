@@ -18,6 +18,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -89,6 +90,16 @@ replay::LogicalControl control(replay::LogicalControlKind kind, int player) {
 }
 
 void appendRecord(Bytes &records, std::int8_t signedCode, std::int64_t time);
+
+std::optional<Bytes> stockKeyRecords(const Json &stock) {
+  std::string diagnostic;
+  const auto compressed = replay::base64UrlDecodeBounded(
+      stock.at("keyinput").get<std::string>(), 4U * 1024U * 1024U,
+      diagnostic);
+  return compressed ? replay::gzipDecompressBounded(
+                          *compressed, 16U * 1024U * 1024U, diagnostic)
+                    : std::nullopt;
+}
 
 replay::ReplayPlaybackData extensionReplay() {
   replay::ReplayPlaybackData value;
@@ -537,6 +548,21 @@ void testPreRollInputEncodesForChartsAndCourses() {
   const auto chart = codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
   expect(chart.has_value(), "chart replay accepts recorder pre-roll input");
   if (chart.has_value()) {
+    const auto stockRecords = stockKeyRecords(outerJson(*chart));
+    bool stockTimesAreNonnegative = stockRecords.has_value();
+    if (stockRecords) {
+      for (std::size_t offset = 0; offset < stockRecords->size(); offset += 9) {
+        std::uint64_t rawTime = 0;
+        for (int shift = 0; shift < 64; shift += 8) {
+          rawTime |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(
+                         (*stockRecords)[offset + 1 + shift / 8]))
+                     << shift;
+        }
+        stockTimesAreNonnegative &= static_cast<std::int64_t>(rawTime) >= 0;
+      }
+    }
+    expect(stockTimesAreNonnegative,
+           "Beatoraja stock key records exclude negative pre-roll times");
     const auto decoded = codec.decode(*chart, 7);
     expect(decoded.chart.has_value() &&
                decoded.chart->input[0].songTimeMicros == -2'000'000 &&
@@ -574,6 +600,11 @@ void testAllMissReplayRoundTripsWithEmptyInput() {
   const auto chart = codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
   expect(chart.has_value(), "all-miss chart replay encodes with empty input");
   if (chart.has_value()) {
+    Bytes sentinel;
+    appendRecord(sentinel, -1, 0);
+    expectEqual(stockKeyRecords(outerJson(*chart)),
+                std::optional<Bytes>(sentinel),
+                "all-miss stock replay contains a harmless release sentinel");
     const auto decoded = codec.decode(*chart, 7);
     expect(decoded.chart.has_value() && decoded.chart->input.empty(),
            "all-miss chart replay decodes with empty input");
@@ -842,6 +873,44 @@ void testMalformedAndBoundedInputs() {
   stockLongNoteMismatch["mode"] = 2;
   expectDecodeRejected(codec, encodeJson(stockLongNoteMismatch),
                        "stock and extension LN mode mismatch is rejected",
+                       std::nullopt);
+
+  for (auto [field, replacement, message] :
+       std::array<std::tuple<std::string_view, Json, std::string_view>, 4>{
+           std::tuple{"randomoption", Json(2),
+                      "stock and extension random option mismatch is rejected"},
+           std::tuple{"randomoptionseed", Json(123),
+                      "stock and extension random seed mismatch is rejected"},
+           std::tuple{"gauge", Json(0),
+                      "stock and extension gauge mismatch is rejected"},
+           std::tuple{"rand", Json::array({9, 8, 7}),
+                      "stock and extension random sequence mismatch is rejected"},
+       }) {
+    Json mismatch = outerJson(*encoded);
+    mismatch[std::string(field)] = std::move(replacement);
+    expectDecodeRejected(codec, encodeJson(mismatch), message, std::nullopt);
+  }
+
+  Json stockCoverMismatch = outerJson(*encoded);
+  stockCoverMismatch["config"]["lanecover"] = 0.25;
+  expectDecodeRejected(codec, encodeJson(stockCoverMismatch),
+                       "stock and extension lane-cover mismatch is rejected",
+                       std::nullopt);
+
+  Json stockCoverEnabledMismatch = outerJson(*encoded);
+  stockCoverEnabledMismatch["config"]["enablelanecover"] = false;
+  expectDecodeRejected(
+      codec, encodeJson(stockCoverEnabledMismatch),
+      "stock and extension lane-cover enable mismatch is rejected",
+      std::nullopt);
+
+  Bytes otherInput;
+  appendRecord(otherInput, 2, 1000);
+  appendRecord(otherInput, -2, 1500);
+  Json stockInputMismatch = outerJson(*encoded);
+  stockInputMismatch["keyinput"] = encodedInner(otherInput);
+  expectDecodeRejected(codec, encodeJson(stockInputMismatch),
+                       "stock and extension input mismatch is rejected",
                        std::nullopt);
 
   replay::CourseReplayPlaybackData badCourse;
