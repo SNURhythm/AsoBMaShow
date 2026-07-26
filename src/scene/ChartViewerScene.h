@@ -38,6 +38,8 @@ struct GhostRefreshState {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  replay::DoublePlayOption doublePlayOption =
+      replay::DoublePlayOption::Normal;
   std::string visibleStatus;
 };
 
@@ -149,6 +151,8 @@ private:
   std::optional<long long> viewerPlayOptionSeed;
   std::optional<std::string> viewerPlayOption2;
   std::optional<long long> viewerPlayOption2Seed;
+  replay::DoublePlayOption viewerDoublePlayOption =
+      replay::DoublePlayOption::Normal;
   std::optional<std::string> viewerLaneOrderSummary;
   std::string viewerAssistOption = assist_options::kOff;
 

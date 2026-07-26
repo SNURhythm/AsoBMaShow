@@ -234,6 +234,22 @@ void testReplayPlayOptionsAreCarriedIntoSectionLaunch() {
               options.playOption2 == replay.playOption2 &&
               options.playOption2Seed == replay.playOption2Seed,
           "replay section launch retains both players' options and seeds");
+
+  replay::ChartPlaybackSetup rawSetup;
+  rawSetup.playOption = "R-RANDOM";
+  rawSetup.playOptionSeed = 9012;
+  rawSetup.playOption2 = "MIRROR";
+  rawSetup.playOption2Seed = 3456;
+  rawSetup.doublePlayOption = replay::DoublePlayOption::Flip;
+
+  const auto rawOptions = practice::launchPlayOptionsFromReplay(rawSetup);
+  require(rawOptions.playOption == rawSetup.playOption &&
+              rawOptions.playOptionSeed == rawSetup.playOptionSeed &&
+              rawOptions.playOption2 == rawSetup.playOption2 &&
+              rawOptions.playOption2Seed == rawSetup.playOption2Seed &&
+              rawOptions.doublePlayOption == replay::DoublePlayOption::Flip,
+          "raw replay section launch retains DP FLIP and both players' "
+          "options");
 }
 
 } // namespace

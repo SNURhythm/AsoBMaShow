@@ -189,6 +189,22 @@ std::optional<std::string> readCreatedAt(sqlite3 *database, int resultId) {
              : std::nullopt;
 }
 
+bool hasIrSubmissionSnapshot(sqlite3 *database, std::string_view attemptId) {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT EXISTS(SELECT 1 FROM ir_submission_snapshots WHERE "
+          "attempt_id=?)",
+          statement) != SQLITE_OK ||
+      !bindText(statement.get(), 1, attemptId) ||
+      sqlite3_step(statement.get()) != SQLITE_ROW ||
+      sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
+    return false;
+  }
+  const bool result = sqlite3_column_int(statement.get(), 0) == 1;
+  return sqlite3_step(statement.get()) == SQLITE_DONE && result;
+}
+
 std::optional<std::string> readCourseCreatedAt(sqlite3 *database,
                                                int resultId) {
   SqliteStatementHandle statement;
@@ -2028,7 +2044,9 @@ std::vector<ReplaySummary> ListCompactChartResultsOnConnection(
       summary.attemptId = result.attemptId;
       summary.hasCanonicalAttemptFingerprint =
           result.attemptId.has_value() && !result.resultFingerprint.empty();
-
+      summary.hasIrSubmissionSnapshot =
+          result.attemptId.has_value() &&
+          hasIrSubmissionSnapshot(database, *result.attemptId);
       if (!irProviderId.empty() && result.attemptId.has_value()) {
         SqliteStatementHandle outbox;
         if (prepareSqliteStatement(

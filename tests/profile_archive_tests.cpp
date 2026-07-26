@@ -2356,10 +2356,10 @@ void testSchema10ArchiveUsesAuthoritativeLocalChartMetadata() {
         "20000000-0000-4000-8000-000000000010";
     replay_schema10_fixture::insertSimpleChart(
         database.get(), 1, "0123456789abcdef0123456789abcdef", kReplaySha,
-        "2026-07-11 01:23:45", 2, provenance, attemptId, 1);
+        "2026-07-11 01:23:45", 2, provenance, attemptId, 0);
     replay_schema10_fixture::insertSimplePendingChart(
         database.get(), 1, "0123456789abcdef0123456789abcdef", kReplaySha,
-        "2026-07-11 01:23:45", 2, provenance, attemptId, 1);
+        "2026-07-11 01:23:45", 2, provenance, attemptId, 0);
   }
   databaseMember->contents = readFile(replayDatabasePath);
   Json manifest = Json::parse(manifestMember->contents);
@@ -2386,7 +2386,7 @@ void testSchema10ArchiveUsesAuthoritativeLocalChartMetadata() {
                    "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
                    "total_long_notes,total_backspin_notes,total_notes) VALUES("
                    "'chart.bms','0123456789abcdef0123456789abcdef','" +
-                       std::string(kReplaySha) + "',7,1,1,0,1)"),
+                       std::string(kReplaySha) + "',7,0,0,0,1)"),
            "schema-10 authoritative chart metadata is seeded");
   }
 

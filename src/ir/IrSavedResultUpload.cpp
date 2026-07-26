@@ -37,12 +37,22 @@ IrSavedResultUploadResult retryExisting(
 IrSavedResultUploadResult executeIrSavedResultUpload(
     std::string_view providerId, const IrSubmission &submission,
     const IrSavedResultUploadDependencies &dependencies) noexcept {
+  return executeIrSavedResultUpload(providerId, submission.attemptId,
+                                    &submission, dependencies);
+}
+
+IrSavedResultUploadResult executeIrSavedResultUpload(
+    std::string_view providerId, std::string_view attemptId,
+    const IrSubmission *submission,
+    const IrSavedResultUploadDependencies &dependencies) noexcept {
   try {
+    if (submission != nullptr && submission->attemptId != attemptId) {
+      return failure({}, "IR snapshot attempt identity is inconsistent.");
+    }
     if (!dependencies.loadOutbox) {
       return failure({}, "IR outbox is unavailable.");
     }
-    const auto loaded =
-        dependencies.loadOutbox(providerId, submission.attemptId);
+    const auto loaded = dependencies.loadOutbox(providerId, attemptId);
     if (loaded.status == IrOutboxReadStatus::Found) {
       if (!loaded.entry.has_value()) {
         return failure({}, "IR outbox entry is invalid.");
@@ -67,10 +77,15 @@ IrSavedResultUploadResult executeIrSavedResultUpload(
       return failure(loaded.diagnostic, "IR outbox could not be read.");
     }
 
+    if (submission == nullptr) {
+      return failure(
+          {}, "This saved result has no independently stored IR snapshot.");
+    }
+
     if (!dependencies.buildDraft || !dependencies.enqueue) {
       return failure({}, "IR upload is unavailable.");
     }
-    auto built = dependencies.buildDraft(submission);
+    auto built = dependencies.buildDraft(*submission);
     if (built.status != BuildDraftStatus::Built || !built.draft.has_value()) {
       return failure(built.diagnostic,
                      "This score is not eligible for IR upload.");

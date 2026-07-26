@@ -116,6 +116,38 @@ std::optional<std::int64_t> rowCount(sqlite3 *database, std::string_view table,
   return count;
 }
 
+std::optional<std::int64_t>
+standaloneLegacyReplayRowCount(sqlite3 *database, std::string &errorMessage) {
+  constexpr const char *query =
+      "SELECT COUNT(*) FROM replays AS replay "
+      "WHERE NOT EXISTS(SELECT 1 FROM course_replay_stages AS stage "
+      "WHERE stage.replay_id=replay.id)";
+  sqlite3_stmt *rawStatement = nullptr;
+  int result =
+      sqlite3_prepare_v2(database, query, -1, &rawStatement, nullptr);
+  std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> statement(
+      rawStatement, sqlite3_finalize);
+  if (result != SQLITE_OK) {
+    setError(errorMessage, database,
+             "preparing standalone legacy replay row count", result);
+    return std::nullopt;
+  }
+  result = sqlite3_step(statement.get());
+  if (result != SQLITE_ROW) {
+    setError(errorMessage, database,
+             "reading standalone legacy replay row count", result);
+    return std::nullopt;
+  }
+  const std::int64_t count = sqlite3_column_int64(statement.get(), 0);
+  result = sqlite3_step(statement.get());
+  if (result != SQLITE_DONE) {
+    setError(errorMessage, database,
+             "finishing standalone legacy replay row count", result);
+    return std::nullopt;
+  }
+  return count;
+}
+
 std::optional<std::map<std::string, std::int64_t>>
 userTableRowCounts(sqlite3 *database, std::string &errorMessage) {
   constexpr const char *query =
@@ -366,6 +398,17 @@ sqliteTableRowCount(const std::filesystem::path &database,
     return std::nullopt;
   }
   return rowCount(connection.get(), table, errorMessage);
+}
+
+std::optional<std::int64_t> sqliteStandaloneLegacyReplayRowCount(
+    const std::filesystem::path &database, std::string &errorMessage) {
+  errorMessage.clear();
+  Connection connection = openDatabase(
+      database, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, errorMessage);
+  if (!connection) {
+    return std::nullopt;
+  }
+  return standaloneLegacyReplayRowCount(connection.get(), errorMessage);
 }
 
 std::optional<std::map<std::string, std::int64_t>>

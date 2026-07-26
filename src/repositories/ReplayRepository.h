@@ -365,6 +365,7 @@ struct ReplaySummary {
   std::shared_ptr<const ScoreProvenance> provenance;
   std::optional<std::string> attemptId;
   bool hasCanonicalAttemptFingerprint = false;
+  bool hasIrSubmissionSnapshot = false;
   std::optional<ir::IrOutboxState> requestedIrOutboxState;
   std::string requestedIrOutboxDiagnostic;
   bool irSubmissionEligible = false;

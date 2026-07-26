@@ -11,6 +11,7 @@
 #include "../practice/PracticeSession.h"
 #include "Scene.h"
 #include "play/RhythmState.h"
+#include "play/ReplayResultContext.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
 #include "../skin/SkinTypes.h"
@@ -42,6 +43,8 @@ struct ResultPracticeOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  replay::DoublePlayOption doublePlayOption =
+      replay::DoublePlayOption::Normal;
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   unsigned long long leadInMicros = 0;
@@ -202,7 +205,7 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
 
 [[nodiscard]] inline ResultPreviousBestQuery previousBestQueryFor(
     const ResultPersistenceOptions &persistence, bool replayResult,
-    const JudgedPlaybackData *retryData) {
+    const ReplayResultContext *replayContext) {
   ResultPreviousBestQuery query;
   if (persistence.attempt != nullptr &&
       persistence.attempt->result.attemptId.has_value()) {
@@ -219,11 +222,35 @@ cleanupAllowsContinueWithoutSaving(bool cleanupRequired, bool retryAvailable,
     query.beforeCreatedAt = persistence.previousBestBeforeCreatedAt;
     return query;
   }
-  if (replayResult && retryData != nullptr && !retryData->autoPlay &&
-      !retryData->createdAt.empty()) {
-    query.beforeCreatedAt = retryData->createdAt;
+  if (replayResult && replayContext != nullptr) {
+    if (replayContext->attemptId.has_value() &&
+        !replayContext->attemptId->empty()) {
+      query.excludeAttemptId = replayContext->attemptId;
+    }
+    if (!replayContext->createdAt.empty()) {
+      query.beforeCreatedAt = replayContext->createdAt;
+    }
   }
   return query;
+}
+
+[[nodiscard]] inline std::optional<int> resultIdForPractice(
+    const ResultPersistenceOptions &persistence,
+    const ReplayResultContext *replayContext) noexcept {
+  if (persistence.result != nullptr && persistence.result->resultId > 0) {
+    return persistence.result->resultId;
+  }
+  return replayContext != nullptr && replayContext->resultId > 0
+             ? std::optional<int>(replayContext->resultId)
+             : std::nullopt;
+}
+
+[[nodiscard]] inline bool isReplayResultSource(
+    const JudgedPlaybackData *presentationReplay,
+    const JudgedPlaybackData *judgedReplay,
+    const replay::ReplayPlaybackData *rawReplay) noexcept {
+  return presentationReplay == nullptr &&
+         (judgedReplay != nullptr || rawReplay != nullptr);
 }
 } // namespace result_scene_detail
 
@@ -256,6 +283,8 @@ struct LocalResultSource {
   ScoreProvenance attemptProvenance;
   std::optional<JudgedPlaybackData> presentationReplay;
   std::optional<JudgedPlaybackData> retryData;
+  std::shared_ptr<const replay::ReplayPlaybackData> rawReplayPlayback;
+  std::optional<ReplayResultContext> replayResultContext;
   std::optional<JudgedPlaybackData> analyticsData;
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<int> persistedResultId;
@@ -337,7 +366,10 @@ public:
       std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart = nullptr,
       bms_parser::Chart *reusableRetryChart = nullptr,
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
-      const JudgedPlaybackData *analyticsSource = nullptr);
+      const JudgedPlaybackData *analyticsSource = nullptr,
+      std::shared_ptr<const replay::ReplayPlaybackData> rawReplayPlayback =
+          nullptr,
+      std::optional<ReplayResultContext> replayResultContext = std::nullopt);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override = default;
 

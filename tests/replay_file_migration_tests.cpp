@@ -421,7 +421,7 @@ FixtureFacts insertChartFixture(sqlite3 *database) {
       "VALUES('" +
           facts.attemptId + "',42,'BMS/chart.bms','" + facts.md5 + "','" +
           facts.sha256 +
-          "','Migration Chart','Artist',1,3,4,2,0,1,1,0,0,0,0,2,0,64.5,"
+          "','Migration Chart','Artist',1,3,4,2,0,1,1,0,0,0,0,0,2,64.5,"
           "300,0,2," +
           provenance + ",'2026-07-25 01:02:03',2,'2026-07-25 01:05:00')");
   executeOrThrow(
@@ -458,10 +458,9 @@ FixtureFacts insertChartFixture(sqlite3 *database) {
   return facts;
 }
 
-void createChartMetadataDatabase(sqlite3 *database,
-                                 const FixtureFacts &chart, int keyMode,
-                                 int longNoteMode = 0,
-                                 int totalLongNotes = 1,
+void createChartMetadataDatabase(sqlite3 *database, const FixtureFacts &chart,
+                                 int keyMode, int longNoteMode = 0,
+                                 int totalLongNotes = 0,
                                  int totalBackspinNotes = 0,
                                  int totalNotes = 2) {
   executeOrThrow(
@@ -473,27 +472,77 @@ void createChartMetadataDatabase(sqlite3 *database,
       "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
       "total_long_notes,total_backspin_notes,total_notes) VALUES("
       "'BMS/chart.bms','" +
-          chart.md5 + "','" + chart.sha256 + "'," +
-          std::to_string(keyMode) + "," + std::to_string(longNoteMode) +
-          "," + std::to_string(totalLongNotes) + "," +
+          chart.md5 + "','" + chart.sha256 + "'," + std::to_string(keyMode) +
+          "," + std::to_string(longNoteMode) + "," +
+          std::to_string(totalLongNotes) + "," +
           std::to_string(totalBackspinNotes) + "," +
           std::to_string(totalNotes) + ")");
 }
 
 replay_repository_detail::ReplayMigrationChartMetadataResolver
-fixedChartMetadata(int totalNotes) {
-  return [totalNotes](const auto &)
+fixedChartMetadata(
+    int totalNotes,
+    std::vector<replay_repository_detail::ReplayMigrationClassicLongNote>
+        classicLongNotes = {}) {
+  return
+      [totalNotes, classicLongNotes = std::move(classicLongNotes)](const auto &)
              -> std::optional<
                  replay_repository_detail::ReplayMigrationChartMetadata> {
     return replay_repository_detail::ReplayMigrationChartMetadata{
         .keyMode = 7,
         .hasUndefinedLongNotes = true,
         .totalNotes = totalNotes,
+            .resultEventTopologyComplete = true,
+            .classicLongNotes = classicLongNotes,
     };
   };
 }
 
+constexpr int kCourseStageReplayId = 43;
+
+void ensureCourseStageReplayFixture(sqlite3 *database) {
+  if (integer(database, "SELECT count(*) FROM replays WHERE id=" +
+                            std::to_string(kCourseStageReplayId)) != 0) {
+    return;
+  }
+  executeOrThrow(
+      database,
+      "INSERT INTO replays(id,chart_path,chart_md5,chart_sha256,chart_title,"
+      "chart_artist,ln_mode,gauge_type,gauge_auto_shift,final_score,max_combo,"
+      "final_gauge,clear_type,random_seed,random_prng,random_values,"
+      "play_option,play_option_seed,play_option2,play_option2_seed,"
+      "assist_option,created_at,ruleset_version,eligibility,provenance_json,"
+      "attempt_id,attempt_fingerprint) SELECT " +
+          std::to_string(kCourseStageReplayId) +
+          ",chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+          "gauge_type,gauge_auto_shift,final_score,max_combo,final_gauge,"
+          "clear_type,random_seed,random_prng,random_values,play_option,"
+          "play_option_seed,play_option2,play_option2_seed,assist_option,"
+          "created_at,ruleset_version,eligibility,provenance_json,NULL,NULL "
+          "FROM replays WHERE id=42;"
+          "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+          "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+          "diff_micros,gauge,gauge_type,combo,score) SELECT " +
+          std::to_string(kCourseStageReplayId) +
+          ",event_index,action,lane,note_time_micros,song_time_micros,"
+          "judge_time_micros,judgement,diff_micros,gauge,gauge_type,combo,"
+          "score FROM replay_events WHERE replay_id=42;"
+          "INSERT INTO replay_touch_samples(replay_id,sample_index,action,"
+          "finger_id,song_time_micros,x,y) SELECT " +
+          std::to_string(kCourseStageReplayId) +
+          ",sample_index,action,finger_id,song_time_micros,x,y FROM "
+          "replay_touch_samples WHERE replay_id=42;"
+          "INSERT INTO replay_lane_cover_events(replay_id,event_index,"
+          "song_time_micros,note_start_position_percent,"
+          "reset_visible_time_reference) SELECT " +
+          std::to_string(kCourseStageReplayId) +
+          ",event_index,song_time_micros,note_start_position_percent,"
+          "reset_visible_time_reference FROM replay_lane_cover_events WHERE "
+          "replay_id=42;");
+}
+
 std::string insertCourseFixture(sqlite3 *database, const FixtureFacts &chart) {
+  ensureCourseStageReplayFixture(database);
   const std::array identities{
       course_identity::ChartIdentity{.sha256 = chart.sha256, .md5 = chart.md5}};
   constexpr std::string_view constraints =
@@ -516,7 +565,8 @@ std::string insertCourseFixture(sqlite3 *database, const FixtureFacts &chart) {
   executeOrThrow(
       database,
       "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
-      "replay_id,rest_micros_after_stage) VALUES(88,77,0,42,250000)");
+      "replay_id,rest_micros_after_stage) VALUES(88,77,0," +
+          std::to_string(kCourseStageReplayId) + ",250000)");
   return courseKey;
 }
 
@@ -539,11 +589,13 @@ void insertPartialCourseFixture(sqlite3 *database, const FixtureFacts &chart,
   executeOrThrow(
       database,
       "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
-      "replay_id,rest_micros_after_stage) VALUES(89,78,0,42,500000)");
+      "replay_id,rest_micros_after_stage) VALUES(89,78,0," +
+          std::to_string(kCourseStageReplayId) + ",500000)");
 }
 
 void insertCanonicalCoursePathAliasFixtures(sqlite3 *database,
                                             const FixtureFacts &chart) {
+  ensureCourseStageReplayFixture(database);
   const std::array identities{
       course_identity::ChartIdentity{.sha256 = chart.sha256, .md5 = chart.md5}};
   const auto insertCourse = [&](int id, std::string_view constraints,
@@ -567,7 +619,8 @@ void insertCanonicalCoursePathAliasFixtures(sqlite3 *database,
         database,
         "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
         "replay_id,rest_micros_after_stage) VALUES(" +
-            std::to_string(1000 + id) + "," + std::to_string(id) + ",0,42,0)");
+            std::to_string(1000 + id) + "," + std::to_string(id) + ",0," +
+            std::to_string(kCourseStageReplayId) + ",0)");
   };
 
   for (int index = 0; index <= 12; ++index) {
@@ -609,7 +662,7 @@ std::string insertEarlierSameStemFixture(sqlite3 *database,
       "provenance_json,created_at,recovery_attempts) VALUES('" +
           attemptId + "',5,'BMS/earlier.bms','" + chart.md5 + "','" +
           chart.sha256 +
-          "','Earlier','Artist',1,2,2,1,0,1,0,0,0,0,0,1,0,50.0,300,0,2," +
+          "','Earlier','Artist',1,2,2,1,0,1,0,0,0,0,0,0,1,50.0,300,0,2," +
           sqlQuote(chart.provenance) + ",'2026-07-24 01:02:03',0)");
   return attemptId;
 }
@@ -722,13 +775,21 @@ void testPreservesEmptyLegacyReplayInput() {
   replay_schema10_fixture::createExactSchema(database.get());
   insertChartFixture(database.get());
   executeOrThrow(database.get(),
-                 "DELETE FROM replay_events WHERE replay_id=42");
+                 "DELETE FROM pending_chart_score_writes WHERE replay_id=42;"
+                 "DELETE FROM replay_events WHERE replay_id=42;"
+                 "UPDATE replays SET final_score=0,max_combo=0,final_gauge=0,"
+                 "clear_type=0 WHERE id=42");
 
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
       database.get(), temporary.path(), codec, store, {},
       fixedChartMetadata(2));
+  if (outcome.status !=
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    std::cerr << "all-miss migration diagnostic: " << outcome.diagnostic
+              << '\n';
+  }
   expect(outcome.status ==
              replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
          "all-miss legacy replay migrates successfully");
@@ -738,11 +799,11 @@ void testPreservesEmptyLegacyReplayInput() {
   }
 
   replay::ReplayFileMetadata metadata{
-      .relativePath = text(database.get(),
-                           "SELECT relative_path FROM replay_files WHERE "
+      .relativePath =
+          text(database.get(), "SELECT relative_path FROM replay_files WHERE "
                            "chart_result_id=42"),
-      .sha256 = text(database.get(),
-                     "SELECT content_sha256 FROM replay_files WHERE "
+      .sha256 =
+          text(database.get(), "SELECT content_sha256 FROM replay_files WHERE "
                      "chart_result_id=42"),
       .compressedSize = static_cast<std::uint64_t>(integer(
           database.get(),
@@ -783,7 +844,7 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
   const FixtureFacts chart = insertChartFixture(replayDatabase.get());
 
   Database chartDatabase(temporary.path() / "chart.db");
-  createChartMetadataDatabase(chartDatabase.get(), chart, 14, 1, 1, 0);
+  createChartMetadataDatabase(chartDatabase.get(), chart, 14, 1, 0, 0);
   insertCourseFixture(replayDatabase.get(), chart);
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
@@ -794,8 +855,7 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
                                   .chartMd5 = chart.md5,
                                   .chartSha256 = chart.sha256});
   expect(resolved.has_value() && resolved->keyMode == 14 &&
-             resolved->totalNotes == 2 &&
-             !resolved->hasUndefinedLongNotes,
+             resolved->totalNotes == 2 && !resolved->hasUndefinedLongNotes,
          "chart resolver returns coherent key and defined-LN metadata");
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
       replayDatabase.get(), temporary.path(), codec, store, {}, resolver);
@@ -814,8 +874,8 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
       .sha256 = text(replayDatabase.get(),
                      "SELECT content_sha256 FROM replay_files WHERE "
                      "chart_result_id=42"),
-      .compressedSize = static_cast<std::uint64_t>(integer(
-          replayDatabase.get(),
+      .compressedSize = static_cast<std::uint64_t>(
+          integer(replayDatabase.get(),
           "SELECT compressed_size FROM replay_files WHERE "
           "chart_result_id=42")),
       .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
@@ -844,8 +904,7 @@ void testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes() {
                             .chartMd5 = chart.md5,
                             .chartSha256 = chart.sha256});
   expect(resolved.has_value() && resolved->keyMode == 7 &&
-             resolved->totalNotes == 2 &&
-             resolved->hasUndefinedLongNotes,
+             resolved->totalNotes == 2 && resolved->hasUndefinedLongNotes,
          "positive undefined-LN count resolves true");
 
   executeOrThrow(chartDatabase.get(),
@@ -862,13 +921,65 @@ void testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes() {
                  "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
                  "total_long_notes,total_backspin_notes,total_notes) VALUES("
                  "'BMS/copy.bms','" +
-                     chart.md5 + "','" + chart.sha256 +
-                     "',14,1,1,0,2)");
+                     chart.md5 + "','" + chart.sha256 + "',14,1,1,0,2)");
   resolved = resolver({.chartPath = "BMS/chart.bms",
                        .chartMd5 = chart.md5,
                        .chartSha256 = chart.sha256});
   expect(!resolved.has_value(),
          "conflicting chart metadata matches fail closed");
+}
+
+void testLongNoteMigrationRequiresAndUsesParsedTopology() {
+  TemporaryDirectory temporary;
+  Database replayDatabase(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(replayDatabase.get());
+  const FixtureFacts chart = insertChartFixture(replayDatabase.get());
+  Database chartDatabase(temporary.path() / "chart.db");
+  createChartMetadataDatabase(chartDatabase.get(), chart, 7, 1, 1, 0);
+  executeOrThrow(chartDatabase.get(),
+                 "UPDATE chart_meta SET path='canonical/chart.bms'");
+
+  replay_repository_detail::setReplayMigrationChartTopologyResolver({});
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  auto resolver =
+      replay_repository_detail::makeChartDatabaseReplayMetadataResolver(
+          temporary.path() / "chart.db");
+  const auto rejected = replay_repository_detail::migrateReplaySchema10To11(
+      replayDatabase.get(), temporary.path(), codec, store, {}, resolver);
+  expect(rejected.status == replay_repository_detail::ReplayMigrationOutcome::
+                                Status::InvalidLegacyData &&
+             integer(replayDatabase.get(), "PRAGMA user_version") == 10,
+         "long-note migration without parsed topology fails atomically");
+
+  bool receivedReplaySetup = false;
+  replay_repository_detail::setReplayMigrationChartTopologyResolver(
+      [&](const auto &identity)
+          -> std::optional<std::vector<
+              replay_repository_detail::ReplayMigrationClassicLongNote>> {
+        receivedReplaySetup =
+            identity.longNoteMode == 1 &&
+            identity.chartPath == "canonical/chart.bms" &&
+            identity.randomSeed == 77 &&
+            identity.randomPrng == "std::mt19937_64" &&
+            identity.randomValues.size() == 2 &&
+            identity.randomValues[0] == 3 && identity.randomValues[1] == 4 &&
+            identity.playOption == "MIRROR" && identity.playOptionSeed == 91 &&
+            identity.playOption2 == "NORMAL";
+        return std::vector<
+            replay_repository_detail::ReplayMigrationClassicLongNote>{};
+      });
+  resolver = replay_repository_detail::makeChartDatabaseReplayMetadataResolver(
+      temporary.path() / "chart.db");
+  replay::ReplayFileStore retryStore(temporary.path());
+  const auto migrated = replay_repository_detail::migrateReplaySchema10To11(
+      replayDatabase.get(), temporary.path(), codec, retryStore, {}, resolver);
+  replay_repository_detail::setReplayMigrationChartTopologyResolver({});
+  expect(receivedReplaySetup &&
+             migrated.status == replay_repository_detail::
+                                    ReplayMigrationOutcome::Status::Migrated,
+         "long-note topology is parsed with the replay's recorded random and "
+         "LN setup before migration");
 }
 
 void testMapsLegacyPhysicalLanesForEverySupportedMode() {
@@ -1126,7 +1237,8 @@ void testReconstructsAcknowledgedResultFromRecordedScoreChanges() {
 
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
-  const auto resolver = fixedChartMetadata(9);
+  const auto resolver = fixedChartMetadata(
+      9, {{.lane = 1, .headTimeMicros = 1200, .tailTimeMicros = 9999}});
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
       database.get(), temporary.path(), codec, store, {}, resolver);
 
@@ -1141,6 +1253,171 @@ void testReconstructsAcknowledgedResultFromRecordedScoreChanges() {
            "score snapshots use chart note metadata while reconstructing "
            "judgements");
   }
+}
+
+void testReconstructsClassicLongNoteHeadAndTailAsOneResult() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM pending_chart_score_writes WHERE replay_id=42;"
+                 "DELETE FROM replay_events WHERE replay_id=42;"
+                 "UPDATE replays SET final_score=0,max_combo=1,final_gauge=60 "
+                 "WHERE id=42;");
+  executeOrThrow(
+      database.get(),
+      "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+      "diff_micros,gauge,gauge_type,combo,score) VALUES"
+      "(42,0,0,1,1000,950,950,2,-50,55.0,2,0,0),"
+      "(42,1,1,1,2000,2025,2025,2,25,60.0,2,1,0)");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(
+          1, {{.lane = 1, .headTimeMicros = 1000, .tailTimeMicros = 2000}}));
+
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "classic long-note replay migrates with authoritative topology");
+  expect(integer(database.get(),
+                 "SELECT count(*) FROM chart_results WHERE id=42 AND good=1 "
+                 "AND json_array_length(gauge_history_json)=1") == 1 &&
+             text(database.get(),
+                  "SELECT judgement_timing_json FROM chart_results WHERE "
+                  "id=42") == "[[0,0],[0,0],[0,1],[0,0],[0,0],[0,0],[0,0]]",
+         "classic long-note head is deferred and only its tail contributes "
+         "result timing and gauge history");
+}
+
+void testReconstructsPerJudgementTimingForAcknowledgedResults() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM pending_chart_score_writes WHERE replay_id=42;"
+                 "DELETE FROM replay_events WHERE replay_id=42;");
+  executeOrThrow(
+      database.get(),
+      "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+      "diff_micros,gauge,gauge_type,combo,score) VALUES"
+      "(42,0,0,0,1000,1000,1000,0,-100,50.0,2,1,2),"
+      "(42,1,0,1,2000,2000,2000,1,200,55.0,2,2,3),"
+      "(42,2,0,2,3000,3000,3000,2,-300,60.0,2,3,3),"
+      "(42,3,0,3,4000,4000,4000,3,400,58.0,2,0,3),"
+      "(42,4,0,4,5000,5000,5000,5,-500,54.0,2,0,3),"
+      "(42,5,0,5,6000,6000,6000,4,600,52.0,2,0,3)");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(6));
+
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "acknowledged legacy timing breakdown migrates successfully");
+  expect(text(database.get(),
+              "SELECT judgement_timing_json FROM chart_results WHERE id=42") ==
+             "[[1,0],[0,1],[1,0],[0,1],[0,0],[1,0],[0,0]]",
+         "migration preserves fast and slow counts for each judgement");
+}
+
+void testReconstructsPerJudgementTimingForPendingResults() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM replay_events WHERE replay_id=42;");
+  executeOrThrow(
+      database.get(),
+      "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+      "diff_micros,gauge,gauge_type,combo,score) VALUES"
+      "(42,0,0,0,1000,1000,1000,0,-100,55.0,2,1,2),"
+      "(42,1,0,1,2000,2000,2000,1,200,64.5,2,2,3);"
+      "UPDATE pending_chart_score_writes SET fast=1,slow=1 WHERE replay_id=42");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "pending legacy timing breakdown migrates successfully");
+  expect(text(database.get(),
+              "SELECT judgement_timing_json FROM chart_results WHERE id=42") ==
+             "[[1,0],[0,1],[0,0],[0,0],[0,0],[0,0],[0,0]]",
+         "pending migration preserves fast and slow counts for each "
+         "judgement");
+}
+
+void testRejectsPendingTimingAggregateDisagreement() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "UPDATE pending_chart_score_writes SET fast=2,slow=0 "
+                 "WHERE replay_id=42");
+  const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+             outcome.chartFiles == 0 && outcome.courseFiles == 0 &&
+             snapshotLegacyDatabase(database.get()) == before,
+         "pending timing disagreement fails atomically before writing files");
+}
+
+void testMigratesOnlyAdoptedGaugeJudgementHistory() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM replay_events WHERE replay_id=42");
+  executeOrThrow(
+      database.get(),
+      "INSERT INTO replay_events(replay_id,event_index,action,lane,"
+      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
+      "diff_micros,gauge,gauge_type,combo,score) VALUES"
+      "(42,0,0,0,1000,1000,1000,0,-100,55.0,2,1,2),"
+      "(42,1,0,1,2000,2000,2000,1,100,64.5,3,2,3),"
+      "(42,2,1,1,2000,2100,2100,6,0,70.0,3,2,3),"
+      "(42,3,4,-1,-1,2200,2200,1,0,68.25,3,2,3);"
+      "UPDATE pending_chart_score_writes SET fast=1,slow=1 WHERE replay_id=42");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "auto-shift legacy gauge history migrates successfully");
+  expect(integer(database.get(),
+                 "SELECT adopted_gauge_type FROM chart_results WHERE id=42") ==
+                 3 &&
+             text(database.get(),
+                  "SELECT gauge_history_json FROM chart_results WHERE id=42") ==
+                 "[64.5,68.25]",
+         "migration keeps real gauge samples but omits preparation input for "
+         "the finally adopted gauge");
 }
 
 void testMissingChartMetadataBlocksResultReconstruction() {
@@ -1169,8 +1446,8 @@ void testRejectsInvalidLegacyReplayEnums() {
     std::string_view label;
   };
   constexpr std::array cases{
-      InvalidEnumCase{
-          "UPDATE replay_events SET action=99 WHERE replay_id=42", "action"},
+      InvalidEnumCase{"UPDATE replay_events SET action=99 WHERE replay_id=42",
+                      "action"},
       InvalidEnumCase{
           "UPDATE replay_events SET judgement=99 WHERE replay_id=42",
           "judgement"},
@@ -1400,6 +1677,19 @@ void testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles() {
                  "course_result_id=77 AND stage_index=0 AND score=3 AND "
                  "max_score=4") == 1,
          "course stage result is independent of replay playback rows");
+  expect(text(database.get(),
+              "SELECT judgement_timing_json FROM course_result_stages WHERE "
+              "course_result_id=77 AND stage_index=0") ==
+             "[[0,1],[0,1],[0,0],[0,0],[0,0],[0,0],[0,0]]",
+         "course migration preserves its stage judgement timing breakdown");
+  expect(
+      integer(database.get(), "SELECT count(*) FROM chart_results WHERE id=" +
+                                  std::to_string(kCourseStageReplayId)) == 0 &&
+          integer(database.get(), "SELECT count(*) FROM replay_files WHERE "
+                                  "chart_result_id=" +
+                                      std::to_string(kCourseStageReplayId)) ==
+              0,
+      "course-only replay rows stay out of standalone chart history");
 
   const std::string relative =
       "replay/C" + chart.sha256.substr(0, 10) + "_040913.brd";
@@ -1724,12 +2014,18 @@ int main() {
   testUnavailableKeyModeBlocksAllMissMigrationAtomically();
   testChartMetadataPreservesSparseFourteenKeyMode();
   testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes();
+  testLongNoteMigrationRequiresAndUsesParsedTopology();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
   testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles();
   testRejectsPendingChartIdentityDisagreementBeforeWritingFiles();
   testRejectsOutOfRangeChartLongNoteModeBeforeWritingFiles();
   testRejectsOutOfRangeCourseLongNoteModeBeforeWritingFiles();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();
+  testReconstructsClassicLongNoteHeadAndTailAsOneResult();
+  testReconstructsPerJudgementTimingForAcknowledgedResults();
+  testReconstructsPerJudgementTimingForPendingResults();
+  testRejectsPendingTimingAggregateDisagreement();
+  testMigratesOnlyAdoptedGaugeJudgementHistory();
   testMissingChartMetadataBlocksResultReconstruction();
   testRejectsInvalidLegacyReplayEnums();
   testMigratesOutdatedProvenanceAsLegacyUnverified();

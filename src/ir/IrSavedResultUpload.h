@@ -36,4 +36,9 @@ struct IrSavedResultUploadDependencies {
     std::string_view providerId, const IrSubmission &submission,
     const IrSavedResultUploadDependencies &dependencies) noexcept;
 
+[[nodiscard]] IrSavedResultUploadResult executeIrSavedResultUpload(
+    std::string_view providerId, std::string_view attemptId,
+    const IrSubmission *submission,
+    const IrSavedResultUploadDependencies &dependencies) noexcept;
+
 } // namespace ir

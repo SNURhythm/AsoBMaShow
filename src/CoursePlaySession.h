@@ -499,13 +499,20 @@ struct CoursePlaySession {
   }
 
   void recordReplayPlaybackStage(const replay::ReplayPlaybackData &replay) {
-    if (recordedReplayPlayback.stages.size() <= currentIndex) {
-      recordedReplayPlayback.stages.resize(currentIndex + 1);
+    // Raw course stages must stay a contiguous prefix. Resizing across a
+    // failed capture would manufacture a default replay for the missing
+    // stage, which could later pass the result scene's size check.
+    if (recordedReplayPlayback.stages.size() < currentIndex) {
+      return;
+    }
+    if (recordedReplayPlayback.stages.size() == currentIndex) {
+      recordedReplayPlayback.stages.push_back(replay);
+    } else {
+      recordedReplayPlayback.stages[currentIndex] = replay;
     }
     if (recordedReplayPlayback.restMicrosAfterStage.size() <= currentIndex) {
       recordedReplayPlayback.restMicrosAfterStage.resize(currentIndex + 1);
     }
-    recordedReplayPlayback.stages[currentIndex] = replay;
   }
 
   void recordStageProvenance(std::size_t index,

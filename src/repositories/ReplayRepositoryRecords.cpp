@@ -157,17 +157,23 @@ bool validateChartScoreReplaySemantics(
   }
   const ScoreStageProvenance *stage =
       score_provenance::uniqueStageForChart(score.provenance, chartMeta);
-  if (stage == nullptr) {
+  const bool unstagedLegacyResult =
+      stage == nullptr && score.provenance.stages.empty() &&
+      score.provenance.ruleset == RulesetDescriptor::Legacy() &&
+      score.provenance.eligibility == ScoreEligibility::LegacyUnverified;
+  if (stage == nullptr && !unstagedLegacyResult) {
     return reject(
         "score provenance does not identify a unique stage for the chart");
   }
-  if (long_note_mode::normalizeValue(stage->longNoteMode) !=
-      stage->longNoteMode) {
+  if (stage != nullptr &&
+      long_note_mode::normalizeValue(stage->longNoteMode) !=
+          stage->longNoteMode) {
     return reject(
         "score provenance stage long-note mode is outside the canonical "
         "range");
   }
-  if (stage->longNoteMode <= long_note_mode::kUnknownValue) {
+  if (stage != nullptr &&
+      stage->longNoteMode <= long_note_mode::kUnknownValue) {
     return reject("score provenance stage long-note mode is unspecified");
   }
   if (storedReplayChartLongNoteMode.has_value()) {
@@ -175,7 +181,7 @@ bool validateChartScoreReplaySemantics(
     if (long_note_mode::normalizeValue(replayChartLongNoteMode) !=
             replayChartLongNoteMode ||
         (score.longNoteMode > long_note_mode::kUnknownValue &&
-         (stage->longNoteMode != score.longNoteMode ||
+         ((stage != nullptr && stage->longNoteMode != score.longNoteMode) ||
           (replayChartLongNoteMode > long_note_mode::kUnknownValue &&
            replayChartLongNoteMode != score.longNoteMode)))) {
       return reject(
@@ -191,10 +197,11 @@ bool validateChartScoreReplaySemantics(
             ? long_note_mode::kUnknownValue
             : (chartLongNoteMode > long_note_mode::kUnknownValue
                    ? chartLongNoteMode
-                   : stage->longNoteMode);
+                   : stage == nullptr ? score.longNoteMode
+                                      : stage->longNoteMode);
     if (score.longNoteMode != expectedLongNoteMode ||
         (expectedLongNoteMode > long_note_mode::kUnknownValue &&
-         stage->longNoteMode != expectedLongNoteMode)) {
+         stage != nullptr && stage->longNoteMode != expectedLongNoteMode)) {
       return reject(
           "score long-note mode does not match a unique provenance stage");
     }
@@ -1107,7 +1114,9 @@ replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
       "CAST(json_extract(replay.provenance_json,'$.ruleset.version') AS "
       "INTEGER),CASE json_extract(replay.provenance_json,'$.eligibility') "
       "WHEN 'verified' THEN 0 WHEN 'modified' THEN 1 ELSE 2 END,"
-      "outbox.state,outbox.last_error_message FROM chart_results replay "
+      "outbox.state,outbox.last_error_message,"
+      "EXISTS(SELECT 1 FROM ir_submission_snapshots snapshot WHERE "
+      "snapshot.attempt_id=replay.attempt_id) FROM chart_results replay "
       "LEFT JOIN ir_outbox outbox ON outbox.provider_id = ? "
       "AND outbox.attempt_id = replay.attempt_id "
       "WHERE replay.attempt_id IS NOT NULL "
@@ -1164,7 +1173,8 @@ replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
         sqlite3_column_type(statement.get(), 14) != SQLITE_TEXT ||
         sqlite3_column_type(statement.get(), 15) != SQLITE_INTEGER ||
         sqlite3_column_type(statement.get(), 16) != SQLITE_INTEGER ||
-        !nullableInteger(17) || !nullableText(18)) {
+        !nullableInteger(17) || !nullableText(18) ||
+        sqlite3_column_type(statement.get(), 19) != SQLITE_INTEGER) {
       ++omittedRows;
       continue;
     }
@@ -1221,6 +1231,8 @@ replay_repository_detail::ListIrUploadCandidateReplaysOnConnection(
         std::make_shared<const ScoreProvenance>(std::move(*provenance));
     summary.attemptId = attemptId;
     summary.hasCanonicalAttemptFingerprint = true;
+    summary.hasIrSubmissionSnapshot =
+        sqlite3_column_int(statement.get(), 19) == 1;
     if (sqlite3_column_type(statement.get(), 17) == SQLITE_INTEGER) {
       const int outboxState = sqlite3_column_int(statement.get(), 17);
       if (!ir::isKnownIrOutboxState(outboxState)) {

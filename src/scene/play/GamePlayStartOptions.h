@@ -10,6 +10,7 @@
 #include "Pacemaker.h"
 #include "GameplayCandidateSelection.h"
 #include "GameplayRulesetPolicy.h"
+#include "ReplayResultContext.h"
 
 #include <algorithm>
 #include <array>
@@ -77,11 +78,15 @@ struct StartOptions {
   GaugeType gaugeAutoShiftLowerBound = GaugeType::AssistedEasy;
   std::shared_ptr<JudgedPlaybackData> replayData = nullptr;
   std::shared_ptr<const replay::ReplayPlaybackData> replayPlayback = nullptr;
+  std::shared_ptr<const JudgedPlaybackData> replayAnalysis = nullptr;
+  std::optional<ReplayResultContext> replayResultContext;
   std::shared_ptr<JudgedPlaybackData> gbattleRecordData = nullptr;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  replay::DoublePlayOption doublePlayOption =
+      replay::DoublePlayOption::Normal;
   int longNoteMode = 0;
   std::string assistOption = assist_options::kOff;
   std::string pacemakerTarget = pacemaker::kTargetBest;
@@ -241,6 +246,7 @@ inline void applyReplayPlaybackToStartOptions(
   options.playOptionSeed = setup.playOptionSeed;
   options.playOption2 = setup.playOption2;
   options.playOption2Seed = setup.playOption2Seed;
+  options.doublePlayOption = setup.doublePlayOption;
   options.longNoteMode = setup.longNoteMode;
   options.assistOption = setup.assistOption;
   options.playback.percent = setup.playbackRatePercent;
@@ -263,6 +269,33 @@ inline void applyReplayPlaybackToStartOptions(
     descriptor.version = setup.playbackRulesetRevision;
     options.requiredRulesetDescriptor = std::move(descriptor);
   }
+}
+
+[[nodiscard]] inline std::shared_ptr<const replay::ReplayPlaybackData>
+rawReplayResultSource(const StartOptions &options) noexcept {
+  return options.replayData == nullptr ? options.replayPlayback : nullptr;
+}
+
+[[nodiscard]] inline const JudgedPlaybackData *
+replayAnalysisSource(const StartOptions &options) noexcept {
+  return options.replayData != nullptr ? options.replayData.get()
+                                       : options.replayAnalysis.get();
+}
+
+[[nodiscard]] inline StartOptions replayResultStartOptions(
+    std::shared_ptr<const replay::ReplayPlaybackData> playback,
+    std::shared_ptr<const JudgedPlaybackData> analysis = nullptr,
+    std::optional<ReplayResultContext> resultContext = std::nullopt) {
+  StartOptions options{
+      .startPosition = 0,
+      .autoKeySound = false,
+      .autoPlay = false,
+      .replayAnalysis = std::move(analysis),
+      .replayResultContext = std::move(resultContext),
+      .ownsChart = true,
+  };
+  applyReplayPlaybackToStartOptions(options, std::move(playback));
+  return options;
 }
 
 inline void applyCourseReplayPlaybackToStartOptions(

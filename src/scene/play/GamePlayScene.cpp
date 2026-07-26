@@ -446,6 +446,11 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
     }
   }
 
+  if (!play_options::applyReplayDoublePlayOption(
+          *retryChart, sourceOptions.doublePlayOption)) {
+    return false;
+  }
+
   if (playOption.has_value() &&
       !play_options::applyPlayOptionModifier(
           *retryChart, *playOption, std::nullopt, 0, retryOptions.playOption,
@@ -1630,7 +1635,7 @@ void GamePlayScene::init() {
   renderer->setJudgementCounterPosition(
       context.settings.judgementCounterPosition);
   renderer->setGaugeBarPosition(context.settings.gaugeBarPosition);
-  renderer->setReplayData(options.replayData.get());
+  renderer->setReplayData(replayAnalysisSource(options));
   if (options.replayPlayback != nullptr) {
     renderer->setReplayTouchSamples(options.replayPlayback->touchSamples);
   }
@@ -2504,15 +2509,27 @@ void GamePlayScene::configurePacemakerTarget() {
   }
 
   if (isReplayPlayback()) {
-    if (options.replayData == nullptr || options.replayData->autoPlay) {
+    const JudgedPlaybackData *analysis = replayAnalysisSource(options);
+    if (analysis == nullptr || analysis->autoPlay) {
       renderer->setPacemakerTarget(activePacemakerTarget);
       return;
     }
 
+    std::optional<std::string> beforeCreatedAt;
+    std::optional<std::string> excludeAttemptId;
+    if (options.replayResultContext.has_value()) {
+      if (!options.replayResultContext->createdAt.empty()) {
+        beforeCreatedAt = options.replayResultContext->createdAt;
+      }
+      excludeAttemptId = options.replayResultContext->attemptId;
+    }
+
     activePacemakerTarget = result_presentation::pacemakerTargetForReplay(
-        context.replayRepository, *chart, *options.replayData, selected,
+        context.replayRepository, *chart, *analysis, selected,
         result_presentation::previousBestForReplayChart(
-            context.scoreRepository, chart->Meta, *options.replayData));
+            context.scoreRepository, chart->Meta, *analysis, beforeCreatedAt,
+            excludeAttemptId),
+        beforeCreatedAt, excludeAttemptId);
     renderer->setPacemakerTarget(activePacemakerTarget);
     return;
   }
@@ -2776,6 +2793,7 @@ void GamePlayScene::beginReplayRecording() {
   setup.playOptionSeed = options.playOptionSeed;
   setup.playOption2 = options.playOption2;
   setup.playOption2Seed = options.playOption2Seed;
+  setup.doublePlayOption = options.doublePlayOption;
   setup.assistOption = assist_options::normalize(options.assistOption);
   setup.initialGaugeType = options.gaugeType;
   setup.gaugeProfile = options.gaugeProfile;
@@ -3233,7 +3251,9 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
         const JudgedPlaybackData *analyticsSource =
             practice::selectResultAnalyticsSource(
                 capturePolicy.captureAnalytics ? &analyticsReplay : nullptr,
-                presentationReplay, retrySource);
+                presentationReplay,
+                retrySource != nullptr ? retrySource
+                                       : options.replayAnalysis.get());
         ResultPracticeOptions practiceResultOptions;
         if (options.practiceMode || options.practiceSession != nullptr) {
           practiceResultOptions.enabled = true;
@@ -3252,6 +3272,7 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
           practiceResultOptions.playOptionSeed = options.playOptionSeed;
           practiceResultOptions.playOption2 = options.playOption2;
           practiceResultOptions.playOption2Seed = options.playOption2Seed;
+          practiceResultOptions.doublePlayOption = options.doublePlayOption;
           practiceResultOptions.longNoteMode = options.longNoteMode;
           practiceResultOptions.assistOption = options.assistOption;
           practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
@@ -3271,8 +3292,8 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
         }
         const bool replayPacemakerResult =
             !options.autoPlay && !options.practiceMode && isReplayPlayback() &&
-            !isCoursePlayback() && options.replayData != nullptr &&
-            !options.replayData->autoPlay;
+            !isCoursePlayback() && replayAnalysisSource(options) != nullptr &&
+            !replayAnalysisSource(options)->autoPlay;
         const std::string resultPacemakerTarget =
             (!options.autoPlay && !options.practiceMode &&
              ((!isReplayPlayback() && !isCoursePlayback()) ||
@@ -3300,7 +3321,8 @@ void GamePlayScene::scheduleResultTransition(int delayMillis) {
                                      options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
                 std::move(ownedReusableRetryChart), reusableRetryChart,
-                gbattleResultPacemaker, analyticsSource),
+                gbattleResultPacemaker, analyticsSource,
+                rawReplayResultSource(options), options.replayResultContext),
             false);
         return false;
       },

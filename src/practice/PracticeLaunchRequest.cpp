@@ -50,12 +50,39 @@ mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
   return result;
 }
 
+bms_parser::ChartMeta mergeReplayLaunchChartMeta(
+    const bms_parser::ChartMeta &authoritative,
+    const replay::ChartPlaybackSetup &setup) {
+  bms_parser::ChartMeta result = authoritative;
+  if (!result.RandomSeed.has_value()) {
+    result.RandomSeed = setup.randomSeed;
+  }
+  if (!result.RandomPrng.has_value()) {
+    result.RandomPrng = setup.randomPrng;
+  }
+  if (result.RandomValues.empty()) {
+    result.RandomValues = setup.randomValues;
+  }
+  return result;
+}
+
 ReplayPlayOptions launchPlayOptionsFromReplay(const JudgedPlaybackData &replay) {
   return {
       .playOption = replay.playOption,
       .playOptionSeed = replay.playOptionSeed,
       .playOption2 = replay.playOption2,
       .playOption2Seed = replay.playOption2Seed,
+  };
+}
+
+ReplayPlayOptions
+launchPlayOptionsFromReplay(const replay::ChartPlaybackSetup &setup) {
+  return {
+      .playOption = setup.playOption,
+      .playOptionSeed = setup.playOptionSeed,
+      .playOption2 = setup.playOption2,
+      .playOption2Seed = setup.playOption2Seed,
+      .doublePlayOption = setup.doublePlayOption,
   };
 }
 

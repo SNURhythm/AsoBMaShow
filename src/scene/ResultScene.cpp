@@ -182,17 +182,26 @@ play_options::PlayModeDisplayLabel resultPlayModeDisplayLabel(
     const bms_parser::ChartMeta &meta,
     const std::optional<JudgedPlaybackData> &presentationReplay,
     const std::optional<JudgedPlaybackData> &retryData,
+    const std::shared_ptr<const replay::ReplayPlaybackData> &rawReplayPlayback,
     const ResultPracticeOptions &practiceOptions) {
   if (practiceOptions.enabled) {
-    return play_options::formatPlayModeDisplayLabel(
-        meta, practiceOptions.playOption, practiceOptions.playOptionSeed,
-        practiceOptions.playOption2, practiceOptions.playOption2Seed);
+    replay::ChartPlaybackSetup setup;
+    setup.playOption = practiceOptions.playOption;
+    setup.playOptionSeed = practiceOptions.playOptionSeed;
+    setup.playOption2 = practiceOptions.playOption2;
+    setup.playOption2Seed = practiceOptions.playOption2Seed;
+    setup.doublePlayOption = practiceOptions.doublePlayOption;
+    return play_options::formatReplayPlaybackModeDisplayLabel(meta, setup);
   }
   if (presentationReplay.has_value()) {
     return play_options::formatPlayModeDisplayLabel(*presentationReplay);
   }
   if (retryData.has_value()) {
     return play_options::formatPlayModeDisplayLabel(*retryData);
+  }
+  if (rawReplayPlayback != nullptr) {
+    return play_options::formatReplayPlaybackModeDisplayLabel(
+        meta, rawReplayPlayback->setup);
   }
   return play_options::formatPlayModeDisplayLabel(meta, std::nullopt);
 }
@@ -258,7 +267,9 @@ ResultScene::ResultScene(
     std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart,
     bms_parser::Chart *reusableRetryChart,
     std::optional<ResultPacemakerData> pacemakerOverride,
-    const JudgedPlaybackData *analyticsSource)
+    const JudgedPlaybackData *analyticsSource,
+    std::shared_ptr<const replay::ReplayPlaybackData> rawReplayPlayback,
+    std::optional<ReplayResultContext> replayResultContext)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -272,14 +283,16 @@ ResultScene::ResultScene(
                   ? std::optional<JudgedPlaybackData>(*retrySource)
                   : (replay != nullptr ? std::optional<JudgedPlaybackData>(*replay)
                                        : std::nullopt),
+          .rawReplayPlayback = rawReplayPlayback,
+          .replayResultContext = replayResultContext,
           .analyticsData =
               analyticsSource != nullptr
                   ? std::optional<JudgedPlaybackData>(*analyticsSource)
                   : std::nullopt,
-          .persistedResultId =
-              persistenceOptions.result != nullptr
-                  ? std::optional<int>(persistenceOptions.result->resultId)
-                  : std::nullopt,
+          .persistedResultId = result_scene_detail::resultIdForPractice(
+              persistenceOptions,
+              replayResultContext.has_value() ? &*replayResultContext
+                                              : nullptr),
           .persistenceOptions = std::move(persistenceOptions),
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
@@ -289,7 +302,8 @@ ResultScene::ResultScene(
                   ? context.settings.selectedPacemakerTarget
                   : pacemakerTarget),
           .pacemakerOverride = std::move(pacemakerOverride),
-          .replayResult = replay == nullptr && retrySource != nullptr,
+          .replayResult = result_scene_detail::isReplayResultSource(
+              replay, retrySource, rawReplayPlayback.get()),
           .autoPlayResult =
               autoPlayResult ||
               (retrySource != nullptr && retrySource->autoPlay),
@@ -303,6 +317,7 @@ ResultScene::ResultScene(
   applyResultPersistenceReceipt();
   const play_options::PlayModeDisplayLabel display = resultPlayModeDisplayLabel(
       local.meta, local.presentationReplay, local.retryData,
+      local.rawReplayPlayback,
       local.practiceOptions);
   local.playModeLabel = display.mode;
   local.laneOrderLabel = display.laneOrder;
@@ -482,7 +497,9 @@ void ResultScene::loadPreviousBest() {
   const ResultPreviousBestQuery query =
       result_scene_detail::previousBestQueryFor(
           persistenceOptions, local->replayResult,
-          local->retryData.has_value() ? &*local->retryData : nullptr);
+          local->replayResultContext.has_value()
+              ? &*local->replayResultContext
+              : nullptr);
 
   const auto best = isCourseFinalResult()
                         ? context.scoreRepository.LoadBestCourseScore(
@@ -2278,6 +2295,7 @@ void ResultScene::startRetry(bool samePattern) {
                       context.settings.selectedPacemakerTarget);
         options.playback = retryPlayback;
         options.ownsChart = true;
+        options.doublePlayOption = local->practiceOptions.doublePlayOption;
         options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
         if (const auto completedRuleset =
                 gameplayRulesetFromId(local->attemptProvenance.ruleset.id)) {
@@ -2315,6 +2333,9 @@ void ResultScene::startRetry(bool samePattern) {
             options.playOption2 = retrySource.playOption2;
             options.playOption2Seed = retrySource.playOption2Seed;
           }
+        } else if (!play_options::applyReplayDoublePlayOption(
+                       *retryChart, options.doublePlayOption)) {
+          return true;
         } else if (retrySource.playOption.has_value()) {
           if (samePattern &&
               play_options::usesRandomizer(*retrySource.playOption) &&
@@ -2397,15 +2418,52 @@ void ResultScene::exitResult() {
 
 void ResultScene::startReplay() {
   const auto *local = localSource();
-  if (local == nullptr || !local->retryData.has_value()) {
+  if (local == nullptr ||
+      (!local->retryData.has_value() && local->rawReplayPlayback == nullptr)) {
+    return;
+  }
+
+  if (local->rawReplayPlayback != nullptr) {
+    const auto replayPlayback = local->rawReplayPlayback;
+    const auto replayAnalysis =
+        local->analyticsData.has_value()
+            ? std::make_shared<const JudgedPlaybackData>(*local->analyticsData)
+            : nullptr;
+    const auto replayResultContext = local->replayResultContext;
+    const std::filesystem::path chartPath = local->meta.BmsPath;
+    context.jukebox.stop();
+    defer(
+        [this, replayPlayback, replayAnalysis, replayResultContext,
+         chartPath]() {
+          std::atomic_bool parseCancelled = false;
+          auto replayChart = play_options::prepareReplayChart(
+              chartPath, *replayPlayback, parseCancelled);
+          if (replayChart == nullptr || parseCancelled) {
+            return true;
+          }
+          context.jukebox.stop();
+          context.jukebox.loadChart(*replayChart, true, parseCancelled);
+          if (parseCancelled) {
+            return true;
+          }
+          StartOptions replayOptions = replayResultStartOptions(
+              replayPlayback, replayAnalysis, replayResultContext);
+          context.sceneManager->changeScene(
+              std::make_unique<GamePlayScene>(
+                  context, std::move(replayChart), std::move(replayOptions)),
+              false);
+          return false;
+        },
+        0, true);
     return;
   }
 
   const JudgedPlaybackData replaySource = *local->retryData;
+  const auto replayResultContext = local->replayResultContext;
   const std::filesystem::path chartPath = local->meta.BmsPath;
   context.jukebox.stop();
   defer(
-      [this, replaySource, chartPath]() {
+      [this, replaySource, replayResultContext, chartPath]() {
         std::atomic_bool parseCancelled = false;
         auto replayChart = play_options::prepareReplayChart(
             chartPath, replaySource, parseCancelled);
@@ -2427,6 +2485,7 @@ void ResultScene::startReplay() {
             .gaugeType = replayData->initialGaugeType,
             .gaugeAutoShift = replayData->gaugeAutoShift,
             .replayData = replayData,
+            .replayResultContext = replayResultContext,
             .ownsChart = true,
         };
         applyJudgedPlaybackContextToStartOptions(replayOptions, *replayData);
@@ -2451,10 +2510,19 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
           : (local->replayResult ? practice::LaunchSource::ReplayResult
                                  : practice::LaunchSource::NormalResult);
   bms_parser::ChartMeta chartMeta = local->meta;
+  const JudgedPlaybackData *replayProjection =
+      local->retryData.has_value()
+          ? &*local->retryData
+          : (local->analyticsData.has_value() ? &*local->analyticsData
+                                              : nullptr);
   if (source == practice::LaunchSource::ReplayResult &&
-      local->retryData.has_value()) {
+      local->rawReplayPlayback != nullptr) {
+    chartMeta = practice::mergeReplayLaunchChartMeta(
+        local->meta, local->rawReplayPlayback->setup);
+  } else if (source == practice::LaunchSource::ReplayResult &&
+             replayProjection != nullptr) {
     chartMeta =
-        practice::mergeReplayLaunchChartMeta(local->meta, *local->retryData);
+        practice::mergeReplayLaunchChartMeta(local->meta, *replayProjection);
   }
   practice::LaunchRequest request{
       .chartMeta = chartMeta,
@@ -2475,10 +2543,15 @@ practice::LaunchRequest ResultScene::makePracticeLaunchRequest(
     }
   }
   if (source == practice::LaunchSource::ReplayResult &&
-      local->retryData.has_value()) {
+      local->rawReplayPlayback != nullptr) {
+    request.replayId = local->persistedResultId;
+    request.replayPlayOptions = practice::launchPlayOptionsFromReplay(
+        local->rawReplayPlayback->setup);
+  } else if (source == practice::LaunchSource::ReplayResult &&
+             replayProjection != nullptr) {
     request.replayId = local->persistedResultId;
     request.replayPlayOptions =
-        practice::launchPlayOptionsFromReplay(*local->retryData);
+        practice::launchPlayOptionsFromReplay(*replayProjection);
   }
   return request;
 }

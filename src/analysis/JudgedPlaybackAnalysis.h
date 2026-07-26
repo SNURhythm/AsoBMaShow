@@ -11,6 +11,36 @@
 
 namespace replay {
 
+// Derives the judged projection for an already prepared replay chart. Raw BRD
+// input remains the playback authority; this value is only for analysis and
+// presentation consumers.
+[[nodiscard]] inline std::optional<JudgedPlaybackData>
+makeJudgedPlaybackForAnalysis(
+    const ReplayPlaybackData &playback,
+    const result_persistence::PersistedChartResult &result,
+    const bms_parser::Chart &replayChart) {
+  if (playback.legacy.has_value()) {
+    return makeLegacyPlaybackAdapter(playback, result, replayChart.Meta);
+  }
+
+  auto sharedPlayback = std::make_shared<const ReplayPlaybackData>(playback);
+  StartOptions startOptions;
+  applyReplayPlaybackToStartOptions(startOptions, sharedPlayback);
+  const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+      startOptions, replayChart.Meta, AppSettings::NotePriorityMode::Lowest);
+  if (!policy.built()) {
+    return std::nullopt;
+  }
+  const auto materialized =
+      materializeReplay(playback, replayChart, *policy.policy);
+  if (!materialized.materialized()) {
+    return std::nullopt;
+  }
+  return makeMaterializedPlaybackAdapter(playback, *materialized.value,
+                                         *policy.policy, result,
+                                         replayChart.Meta);
+}
+
 // Loads a file-backed replay and derives the narrow judged projection used by
 // ghosts, pacemakers, practice analytics, and rendering. The projection is
 // never a persistence or IR source.
@@ -36,22 +66,7 @@ loadJudgedPlaybackForAnalysis(
     return std::nullopt;
   }
 
-  auto sharedPlayback = std::make_shared<const ReplayPlaybackData>(playback);
-  StartOptions startOptions;
-  applyReplayPlaybackToStartOptions(startOptions, sharedPlayback);
-  const auto policy = buildGameplayRulesetPolicyAtPlayStart(
-      startOptions, replayChart->Meta, AppSettings::NotePriorityMode::Lowest);
-  if (!policy.built()) {
-    return std::nullopt;
-  }
-  const auto materialized =
-      materializeReplay(playback, *replayChart, *policy.policy);
-  if (!materialized.materialized()) {
-    return std::nullopt;
-  }
-  return makeMaterializedPlaybackAdapter(
-      playback, *materialized.value, *policy.policy, *loaded.result,
-      replayChart->Meta);
+  return makeJudgedPlaybackForAnalysis(playback, *loaded.result, *replayChart);
 }
 
 } // namespace replay

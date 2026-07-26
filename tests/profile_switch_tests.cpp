@@ -358,7 +358,7 @@ void seedReplayMigrationChartMetadata(const std::filesystem::path &path) {
               "total_long_notes,total_backspin_notes,total_notes) VALUES("
               "'chart.bms','" +
                   std::string(kChartMd5) + "','" + std::string(kChartSha) +
-                  "',7,1,1,0,1)"),
+                  "',7,0,0,0,1)"),
       "replay migration chart metadata is authoritative");
 }
 
@@ -460,10 +460,10 @@ void replaceWithSchema10Replays(const std::filesystem::path &path,
           "2026-07-11 00:00:0" + std::to_string(index);
       replay_schema10_fixture::insertSimpleChart(
           database.get(), static_cast<std::int64_t>(index + 1), kChartMd5,
-          kChartSha, createdAt, scores[index], provenance, attemptId, 1);
+          kChartSha, createdAt, scores[index], provenance, attemptId, 0);
       replay_schema10_fixture::insertSimplePendingChart(
           database.get(), static_cast<std::int64_t>(index + 1), kChartMd5,
-          kChartSha, createdAt, scores[index], provenance, attemptId, 1);
+          kChartSha, createdAt, scores[index], provenance, attemptId, 0);
     }
   } catch (const std::exception &exception) {
     expect(false, std::string(label) + " v10 fixture creates: " +
@@ -1135,7 +1135,7 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
              fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
          "switch commits the migrated target active after both owners bind");
   expect(fixture.currentClearRank() == kClearTypeHardClearRank &&
-             fixture.currentReplayCount(1) == 2,
+             fixture.currentReplayCount(0) == 2,
          "schema-owner migration preserves target scores and replays");
   expect(queryDatabaseString(fixture.secondPaths.scoresDb,
                              "SELECT value FROM profile_use_marker",

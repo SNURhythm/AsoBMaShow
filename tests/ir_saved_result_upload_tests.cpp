@@ -100,6 +100,96 @@ void testExistingRetryableRowsAreReused() {
   }
 }
 
+void testExistingFailureRetriesWithoutSubmissionSnapshot() {
+  int retryCalls = 0;
+  ir::IrSavedResultUploadDependencies dependencies;
+  dependencies.loadOutbox = [](std::string_view providerId,
+                               std::string_view attemptId) {
+    assert(providerId == kProviderId);
+    assert(attemptId == kAttemptId);
+    return ir::IrOutboxReadOutcome{
+        .status = ir::IrOutboxReadStatus::Found,
+        .entry = entry(ir::IrOutboxState::FailedPermanent)};
+  };
+  dependencies.buildDraft = [](const ir::IrSubmission &) {
+    assert(false);
+    return ir::BuildDraftOutcome{};
+  };
+  dependencies.enqueue = [](const ir::IrOutboxDraft &) {
+    assert(false);
+    return ir::IrOutboxInsertOutcome{};
+  };
+  dependencies.retry = [&](std::int64_t rowId) {
+    ++retryCalls;
+    assert(rowId == 19);
+    return ir::IrOutboxMutationOutcome{
+        .status = ir::IrOutboxMutationStatus::Updated, .affectedRows = 1};
+  };
+
+  const auto outcome = ir::executeIrSavedResultUpload(kProviderId, kAttemptId,
+                                                      nullptr, dependencies);
+  assert(outcome.state == ir::IrSavedResultUploadState::RetryQueued);
+  assert(outcome.accepted);
+  assert(retryCalls == 1);
+}
+
+void testFreshUploadWithoutSubmissionSnapshotFailsClosed() {
+  ir::IrSavedResultUploadDependencies dependencies;
+  dependencies.loadOutbox = [](std::string_view, std::string_view) {
+    return ir::IrOutboxReadOutcome{.status = ir::IrOutboxReadStatus::NotFound};
+  };
+  dependencies.buildDraft = [](const ir::IrSubmission &) {
+    assert(false);
+    return ir::BuildDraftOutcome{};
+  };
+  dependencies.enqueue = [](const ir::IrOutboxDraft &) {
+    assert(false);
+    return ir::IrOutboxInsertOutcome{};
+  };
+  dependencies.retry = [](std::int64_t) {
+    assert(false);
+    return ir::IrOutboxMutationOutcome{};
+  };
+
+  const auto outcome = ir::executeIrSavedResultUpload(kProviderId, kAttemptId,
+                                                      nullptr, dependencies);
+  assert(outcome.state == ir::IrSavedResultUploadState::Failed);
+  assert(!outcome.accepted);
+  assert(outcome.message ==
+         "This saved result has no independently stored IR snapshot.");
+}
+
+void testSnapshotAttemptIdentityMustMatchRequestedAttempt() {
+  int outboxReads = 0;
+  int buildCalls = 0;
+  int enqueueCalls = 0;
+  ir::IrSavedResultUploadDependencies dependencies;
+  dependencies.loadOutbox = [&](std::string_view, std::string_view) {
+    ++outboxReads;
+    return ir::IrOutboxReadOutcome{.status = ir::IrOutboxReadStatus::NotFound};
+  };
+  dependencies.buildDraft = [&](const ir::IrSubmission &) {
+    ++buildCalls;
+    return ir::BuildDraftOutcome{.status = ir::BuildDraftStatus::Built,
+                                 .draft = draft()};
+  };
+  dependencies.enqueue = [&](const ir::IrOutboxDraft &) {
+    ++enqueueCalls;
+    return ir::IrOutboxInsertOutcome{.status =
+                                         ir::IrOutboxInsertStatus::Inserted};
+  };
+
+  auto mismatched = submission();
+  mismatched.attemptId = "123e4567-e89b-42d3-a456-426614174099";
+  const auto outcome = ir::executeIrSavedResultUpload(
+      kProviderId, kAttemptId, &mismatched, dependencies);
+  assert(outcome.state == ir::IrSavedResultUploadState::Failed);
+  assert(!outcome.accepted);
+  assert(outboxReads == 0);
+  assert(buildCalls == 0);
+  assert(enqueueCalls == 0);
+}
+
 void testActiveAndSubmittedRowsDoNotMutate() {
   for (const auto state : {ir::IrOutboxState::Uploading,
                            ir::IrOutboxState::Succeeded}) {
@@ -199,6 +289,9 @@ void testFailuresAreSanitized() {
 int main() {
   testNewAttemptBuildsAndQueuesOneDraft();
   testExistingRetryableRowsAreReused();
+  testExistingFailureRetriesWithoutSubmissionSnapshot();
+  testFreshUploadWithoutSubmissionSnapshotFailsClosed();
+  testSnapshotAttemptIdentityMustMatchRequestedAttempt();
   testActiveAndSubmittedRowsDoNotMutate();
   testConcurrentInsertIsTreatedAsQueued();
   testReceiptOnlyEnqueueIsReportedAsAlreadySubmitted();

@@ -829,6 +829,7 @@ bool rowsPreserved(const SqliteRowCounts &before, const SqliteRowCounts &after,
 
 bool replayRowsPreserved(const SqliteRowCounts &before, int beforeVersion,
                          const SqliteRowCounts &after, int afterVersion,
+                         std::optional<std::int64_t> standaloneReplayCount,
                          std::string &errorMessage) {
   if (beforeVersion == afterVersion) {
     return rowsPreserved(before, after, errorMessage);
@@ -859,7 +860,9 @@ bool replayRowsPreserved(const SqliteRowCounts &before, int beforeVersion,
       ++migratedAwayTableCount;
       continue;
     }
-    if (found == after.end() || found->second != count) {
+    const std::int64_t expectedCount =
+        sourceTable == "replays" ? standaloneReplayCount.value_or(-1) : count;
+    if (found == after.end() || found->second != expectedCount) {
       errorMessage = "row count mismatch for migrated SQLite table '" +
                      sourceTable + "' -> '" + destinationTable + "'";
       return false;
@@ -872,11 +875,15 @@ bool replayRowsPreserved(const SqliteRowCounts &before, int beforeVersion,
     errorMessage = "unexpected set of migrated-away replay payload tables";
     return false;
   }
-  const auto replayCount = before.contains("replays") ? before.at("replays") : 0;
+  if (!standaloneReplayCount.has_value()) {
+    errorMessage = "standalone legacy replay count is unavailable";
+    return false;
+  }
   const auto courseCount =
       before.contains("course_replays") ? before.at("course_replays") : 0;
   const auto files = after.find("replay_files");
-  if (files == after.end() || files->second != replayCount + courseCount) {
+  if (files == after.end() ||
+      files->second != *standaloneReplayCount + courseCount) {
     errorMessage = "migrated replay file count does not match legacy records";
     return false;
   }
@@ -891,6 +898,14 @@ bool compareSourceRows(const std::filesystem::path &source,
   if (!sourceCounts || !sourceVersion) {
     return false;
   }
+  const auto standaloneReplayCount =
+      replayDatabase && *sourceVersion == 10
+          ? sqliteStandaloneLegacyReplayRowCount(source, errorMessage)
+          : std::optional<std::int64_t>{};
+  if (replayDatabase && *sourceVersion == 10 &&
+      !standaloneReplayCount.has_value()) {
+    return false;
+  }
   const auto destinationCounts =
       sqliteUserTableRowCounts(destination, errorMessage);
   const auto destinationVersion =
@@ -901,6 +916,7 @@ bool compareSourceRows(const std::filesystem::path &source,
   return replayDatabase
              ? replayRowsPreserved(*sourceCounts, *sourceVersion,
                                    *destinationCounts, *destinationVersion,
+                                   standaloneReplayCount,
                                    errorMessage)
              : rowsPreserved(*sourceCounts, *destinationCounts, errorMessage);
 }
@@ -2563,6 +2579,17 @@ ProfileResult PlayerProfileManager::installProfile(
                                "unable to inspect imported databases: " +
                                    errorMessage);
   }
+  const auto standaloneReplayCountBefore =
+      *replayVersionBefore == 10
+          ? sqliteStandaloneLegacyReplayRowCount(staging.replaysDb,
+                                                 errorMessage)
+          : std::optional<std::int64_t>{};
+  if (*replayVersionBefore == 10 &&
+      !standaloneReplayCountBefore.has_value()) {
+    return cleanStagingAndFail(ProfileError::IntegrityFailure,
+                               "unable to inspect imported replay roles: " +
+                                   errorMessage);
+  }
   if (*scoreVersionBefore > ScoreRepository::kCurrentSchemaVersion ||
       *replayVersionBefore > ReplayRepository::kCurrentSchemaVersion) {
     return cleanStagingAndFail(ProfileError::FutureVersion,
@@ -2587,6 +2614,7 @@ ProfileResult PlayerProfileManager::installProfile(
       !rowsPreserved(*scoreRowsBefore, *scoreRowsAfter, errorMessage) ||
       !replayRowsPreserved(*replayRowsBefore, *replayVersionBefore,
                            *replayRowsAfter, *replayVersionAfter,
+                           standaloneReplayCountBefore,
                            errorMessage)) {
     return cleanStagingAndFail(
         ProfileError::IntegrityFailure,

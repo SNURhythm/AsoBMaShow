@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -73,6 +74,8 @@ struct LegacyChart {
   replay::ReplayPlaybackData playback;
   replay::ReplayPathIdentity path;
   replay::ReplayFileMetadata file;
+  bool courseStage = false;
+  std::vector<ReplayMigrationClassicLongNote> classicLongNotes;
 };
 
 struct LegacyCourse {
@@ -129,6 +132,9 @@ private:
   sqlite3 *database_ = nullptr;
   sqlite3_stmt *statement_ = nullptr;
 };
+
+std::mutex topologyResolverMutex;
+ReplayMigrationChartTopologyResolver topologyResolver;
 
 std::string columnText(sqlite3_stmt *statement, int column) {
   const auto *value = sqlite3_column_text(statement, column);
@@ -377,9 +383,78 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
   return true;
 }
 
+std::vector<bool> countedLegacyResultEvents(const LegacyChart &chart) {
+  std::vector<bool> counted(chart.events.size(), false);
+  for (std::size_t index = 0; index < chart.events.size(); ++index) {
+    const auto &event = chart.events[index].event;
+    if (event.action == replay::LegacyPlaybackAction::Gauge ||
+        event.action == replay::LegacyPlaybackAction::Mine ||
+        event.judgement == None) {
+      continue;
+    }
+    if (event.action != replay::LegacyPlaybackAction::Press) {
+      counted[index] = event.judgement != JudgementCount;
+      continue;
+    }
+
+    const auto classic =
+        std::ranges::find_if(chart.classicLongNotes, [&](const auto &longNote) {
+          return longNote.lane == event.lane &&
+                 longNote.headTimeMicros == event.noteTimeMicros;
+        });
+    if (classic == chart.classicLongNotes.end() || event.judgement == Kpoor) {
+      counted[index] = event.judgement != JudgementCount;
+      continue;
+    }
+
+    const bool hasRecordedTailResult =
+        std::ranges::any_of(chart.events, [&](const LegacyEvent &candidate) {
+          return candidate.event.lane == classic->lane &&
+                 candidate.event.noteTimeMicros == classic->tailTimeMicros &&
+                 candidate.event.judgement != None &&
+                 (candidate.event.action ==
+                      replay::LegacyPlaybackAction::Release ||
+                  candidate.event.action == replay::LegacyPlaybackAction::Miss);
+        });
+    counted[index] = event.judgement == Bad && !hasRecordedTailResult;
+  }
+  return counted;
+}
+
+struct LegacyJudgementTimingFacts {
+  result_persistence::ChartJudgementTiming timing;
+  int fast = 0;
+  int slow = 0;
+};
+
+LegacyJudgementTimingFacts legacyJudgementTimingFacts(
+    const LegacyChart &chart, const std::vector<bool> &countedEvents) {
+  LegacyJudgementTimingFacts result;
+  for (std::size_t index = 0; index < chart.events.size(); ++index) {
+    const auto &event = chart.events[index].event;
+    if (!countedEvents[index] || event.judgement == Kpoor ||
+        event.judgement == None || event.judgement == JudgementCount) {
+      continue;
+    }
+    auto &timing = result.timing.byJudgement[static_cast<std::size_t>(
+        event.judgement)];
+    if (event.diffMicros < 0) {
+      ++result.fast;
+      ++timing.fast;
+    } else if (event.diffMicros > 0) {
+      ++result.slow;
+      ++timing.slow;
+    }
+  }
+  return result;
+}
+
 bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
                        std::optional<int> chartTotalNotes,
                        std::string &diagnostic) {
+  const std::vector<bool> countedEvents = countedLegacyResultEvents(chart);
+  const LegacyJudgementTimingFacts timingFacts =
+      legacyJudgementTimingFacts(chart, countedEvents);
   Statement statement(
       database,
       "SELECT attempt_id,chart_path,chart_md5,chart_sha256,chart_title,"
@@ -449,6 +524,13 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
       diagnostic = "legacy replay has duplicate pending score rows";
       return false;
     }
+    if (persisted.score.fast != timingFacts.fast ||
+        persisted.score.slow != timingFacts.slow) {
+      diagnostic =
+          "pending score fast/slow totals differ from replay judgements";
+      return false;
+    }
+    persisted.judgementTiming = timingFacts.timing;
   } else if (result == SQLITE_DONE) {
     if (!chartTotalNotes.has_value() || *chartTotalNotes <= 0 ||
         *chartTotalNotes > std::numeric_limits<int>::max() / 2) {
@@ -468,52 +550,39 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
     score.finalGauge = chart.finalGauge;
     score.clearType = chart.clearType;
     score.provenance = chart.provenance;
-    int previousScore = 0;
-    for (const auto &entry : chart.events) {
-      const auto &event = entry.event;
-      const int scoreDelta = event.score - previousScore;
-      previousScore = event.score;
-      if (event.action == replay::LegacyPlaybackAction::Gauge ||
-          event.action == replay::LegacyPlaybackAction::Mine ||
-          event.judgement == None) {
-        continue;
-      }
-      bool countsInResult = true;
+    for (std::size_t index = 0; index < chart.events.size(); ++index) {
+      const auto &event = chart.events[index].event;
+      const bool countsInResult = countedEvents[index];
       switch (event.judgement) {
       case PGreat:
-        countsInResult = scoreDelta == 2;
         score.pGreat += countsInResult ? 1 : 0;
         break;
       case Great:
-        countsInResult = scoreDelta == 1;
         score.great += countsInResult ? 1 : 0;
         break;
       case Good:
-        ++score.good;
+        score.good += countsInResult ? 1 : 0;
         break;
       case Bad:
-        ++score.bad;
-        ++score.comboBreak;
+        score.bad += countsInResult ? 1 : 0;
+        score.comboBreak += countsInResult ? 1 : 0;
         break;
       case Poor:
-        ++score.poor;
-        ++score.comboBreak;
+        score.poor += countsInResult ? 1 : 0;
+        score.comboBreak += countsInResult ? 1 : 0;
         break;
       case Kpoor:
-        ++score.kPoor;
+        score.kPoor += countsInResult ? 1 : 0;
         break;
       case None:
       case JudgementCount:
-        countsInResult = false;
         break;
       }
-      if (countsInResult && event.diffMicros < 0) {
-        ++score.fast;
-      } else if (countsInResult && event.diffMicros > 0) {
-        ++score.slow;
-      }
     }
+    score.fast = timingFacts.fast;
+    score.slow = timingFacts.slow;
     score.maxScore = *chartTotalNotes * 2;
+    persisted.judgementTiming = timingFacts.timing;
   } else {
     diagnostic = statement.error();
     return false;
@@ -521,14 +590,30 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
 
   auto &score = persisted.score;
 
-  for (const auto &entry : chart.events) {
-    if (std::isfinite(entry.event.gauge)) {
-      persisted.adoptedGaugeType = entry.event.gaugeType;
-      persisted.adoptedGaugeHistory.push_back(entry.event.gauge);
+  std::vector<bool> gaugeHistoryEvents = countedEvents;
+  for (std::size_t index = 0; index < chart.events.size(); ++index) {
+    const auto &event = chart.events[index].event;
+    gaugeHistoryEvents[index] =
+        gaugeHistoryEvents[index] ||
+        event.action == replay::LegacyPlaybackAction::Gauge ||
+        event.action == replay::LegacyPlaybackAction::Mine;
+    if (gaugeHistoryEvents[index]) {
+      persisted.adoptedGaugeType = event.gaugeType;
     }
   }
-  if (persisted.adoptedGaugeHistory.empty()) {
+  const bool hasGaugeHistoryEvent = std::ranges::any_of(
+      gaugeHistoryEvents, [](bool counted) { return counted; });
+  if (!hasGaugeHistoryEvent) {
     persisted.adoptedGaugeType = persisted.score.provenance.gaugeType;
+  } else {
+    for (std::size_t index = 0; index < chart.events.size(); ++index) {
+      const auto &event = chart.events[index].event;
+      if (gaugeHistoryEvents[index] &&
+          event.gaugeType == persisted.adoptedGaugeType &&
+          std::isfinite(event.gauge)) {
+        persisted.adoptedGaugeHistory.push_back(event.gauge);
+      }
+    }
   }
   if (!normalizeResultProvenance(persisted.score.provenance,
                                  chart.provenanceJson, diagnostic)) {
@@ -594,8 +679,8 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
         action != replay::LegacyPlaybackAction::Release) {
       continue;
     }
-    const auto control = legacyReplayControlForPhysicalLane(
-        entry.event.lane, setup.keyMode);
+    const auto control =
+        legacyReplayControlForPhysicalLane(entry.event.lane, setup.keyMode);
     if (!control.has_value() ||
         entry.event.songTimeMicros < replay::kMinimumReplaySongTimeMicros) {
       continue;
@@ -753,16 +838,32 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
       return false;
     }
     const auto resolved =
-        resolveMetadata ? resolveMetadata({.chartPath = chart.chartPath,
+        resolveMetadata
+            ? resolveMetadata({.chartPath = chart.chartPath,
                                            .chartMd5 = chart.chartMd5,
-                                           .chartSha256 = chart.chartSha256})
+                               .chartSha256 = chart.chartSha256,
+                               .longNoteMode = chart.longNoteMode,
+                               .randomSeed = chart.randomSeed,
+                               .randomPrng = chart.randomPrng,
+                               .randomValues = chart.randomValues,
+                               .playOption = chart.playOption,
+                               .playOptionSeed = chart.playOptionSeed,
+                               .playOption2 = chart.playOption2,
+                               .playOption2Seed = chart.playOption2Seed})
                         : std::nullopt;
     if (!resolved.has_value()) {
       diagnostic =
           "authoritative chart metadata is required to resolve key mode";
       return false;
     }
+    if (!resolved->resultEventTopologyComplete) {
+      diagnostic =
+          "authoritative chart topology is required to migrate long-note "
+          "result events";
+      return false;
+    }
     chart.hasUndefinedLongNotes = resolved->hasUndefinedLongNotes;
+    chart.classicLongNotes = resolved->classicLongNotes;
     if (!readPendingResult(database, chart, resolved->keyMode,
                            resolved->totalNotes, diagnostic) ||
         !buildPlayback(chart, diagnostic)) {
@@ -774,6 +875,7 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
 
 bool readCourseStages(sqlite3 *database, LegacyCourse &course,
                       const std::map<std::int64_t, std::size_t> &chartById,
+                      std::vector<LegacyChart> &charts,
                       std::string &diagnostic) {
   Statement statement(
       database,
@@ -797,6 +899,7 @@ bool readCourseStages(sqlite3 *database, LegacyCourse &course,
       return false;
     }
     course.chartIndexes.push_back(chart->second);
+    charts[chart->second].courseStage = true;
     course.restMicrosAfterStage.push_back(restMicros);
     ++expectedIndex;
   }
@@ -889,7 +992,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
   return true;
 }
 
-bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
+bool readCourses(sqlite3 *database, std::vector<LegacyChart> &charts,
                  std::vector<LegacyCourse> &courses, std::string &diagnostic) {
   std::map<std::int64_t, std::size_t> chartById;
   for (std::size_t index = 0; index < charts.size(); ++index) {
@@ -976,7 +1079,7 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
     return false;
   }
   for (auto &course : courses) {
-    if (!readCourseStages(database, course, chartById, diagnostic) ||
+    if (!readCourseStages(database, course, chartById, charts, diagnostic) ||
         !buildCourse(course, charts, diagnostic)) {
       return false;
     }
@@ -1060,7 +1163,9 @@ bool finalizeFiles(std::vector<LegacyChart> &charts,
   std::vector<LegacyChart *> chartOrder;
   chartOrder.reserve(charts.size());
   for (auto &chart : charts) {
+    if (!chart.courseStage) {
     chartOrder.push_back(&chart);
+  }
   }
   std::ranges::sort(
       chartOrder, [](const LegacyChart *left, const LegacyChart *right) {
@@ -1187,6 +1292,15 @@ bool renameLegacyTables(sqlite3 *database, std::string &diagnostic) {
   return execute(database, sql, diagnostic);
 }
 
+std::string
+judgementTimingJson(const result_persistence::ChartJudgementTiming &timing) {
+  nlohmann::ordered_json value = nlohmann::ordered_json::array();
+  for (const auto &count : timing.byJudgement) {
+    value.push_back(nlohmann::ordered_json::array({count.fast, count.slow}));
+  }
+  return value.dump();
+}
+
 bool insertChart(sqlite3 *database, const LegacyChart &chart,
                  std::string &diagnostic) {
   Statement result(
@@ -1196,8 +1310,9 @@ bool insertChart(sqlite3 *database, const LegacyChart &chart,
       "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
       "fast,slow,final_gauge,clear_type,adopted_gauge_type,gauge_history_json,"
       "judgement_timing_json,provenance_json,result_fingerprint,"
-      "played_at_unix_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-      "?,?,?,?,?,?,?,?,?,NULL,?,?,?,?)");
+      "played_at_unix_ms,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,"
+      "?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,"
+      "?25,?26,?27,?28,?29,?30)");
   if (!result.valid()) {
     diagnostic = result.error();
     return false;
@@ -1234,13 +1349,19 @@ bool insertChart(sqlite3 *database, const LegacyChart &chart,
       sqlite3_bind_int(result.get(), column++,
                        gaugeTypeIndex(persisted.adoptedGaugeType)) ==
           SQLITE_OK &&
-      bindText(result.get(), column++, history) &&
-      bindText(result.get(), column++, chart.provenanceJson) &&
+      bindText(result.get(), column++, history);
+  if (persisted.judgementTiming.has_value()) {
+    okay = okay && bindText(result.get(), column++,
+                            judgementTimingJson(*persisted.judgementTiming));
+  } else {
+    okay = okay && sqlite3_bind_null(result.get(), column++) == SQLITE_OK;
+  }
+  okay = okay && bindText(result.get(), column++, chart.provenanceJson) &&
       bindText(result.get(), column++, persisted.resultFingerprint) &&
       sqlite3_bind_int64(result.get(), column++,
                          persisted.playedAtUnixMillis) == SQLITE_OK &&
       bindText(result.get(), column++, chart.createdAt);
-  if (!okay || column != 30 || sqlite3_step(result.get()) != SQLITE_DONE) {
+  if (!okay || column != 31 || sqlite3_step(result.get()) != SQLITE_DONE) {
     diagnostic = result.error();
     return false;
   }
@@ -1287,9 +1408,8 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
   const auto &persisted = course.result;
   nlohmann::ordered_json entryFacts = nlohmann::ordered_json::array();
   for (const auto &facts : persisted.entryFacts) {
-    entryFacts.push_back(
-        nlohmann::ordered_json::array({facts.totalNotes,
-                                      facts.playLengthMicros}));
+    entryFacts.push_back(nlohmann::ordered_json::array(
+        {facts.totalNotes, facts.playLengthMicros}));
   }
   const std::string serializedEntryFacts = entryFacts.dump();
   int column = 1;
@@ -1397,9 +1517,15 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
         sqlite3_bind_int(stage.get(), column++,
                          gaugeTypeIndex(persistedStage.adoptedGaugeType)) ==
             SQLITE_OK &&
-        bindText(stage.get(), column++, history) &&
-        sqlite3_bind_null(stage.get(), column++) == SQLITE_OK &&
-        bindText(stage.get(), column++, provenance);
+        bindText(stage.get(), column++, history);
+    if (persistedStage.judgementTiming.has_value()) {
+      okay = okay &&
+             bindText(stage.get(), column++,
+                      judgementTimingJson(*persistedStage.judgementTiming));
+    } else {
+      okay = okay && sqlite3_bind_null(stage.get(), column++) == SQLITE_OK;
+    }
+    okay = okay && bindText(stage.get(), column++, provenance);
     if (!okay || column != 28 || sqlite3_step(stage.get()) != SQLITE_DONE) {
       diagnostic = stage.error();
       return false;
@@ -1437,12 +1563,16 @@ bool copyDurableWork(sqlite3 *database, std::string &diagnostic) {
       "chart_artist,ln_mode,score,max_score,max_combo,combo_break,pgreat,"
       "great,good,bad,poor,kpoor,fast,slow,final_gauge,clear_type,"
       "ruleset_version,eligibility,provenance_json,created_at,"
-      "recovery_attempts,last_recovery_at) SELECT attempt_id,replay_id,"
-      "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
-      "score,max_score,max_combo,combo_break,pgreat,great,good,bad,poor,"
-      "kpoor,fast,slow,final_gauge,clear_type,ruleset_version,eligibility,"
-      "provenance_json,created_at,recovery_attempts,last_recovery_at FROM "
-      "legacy_v10_pending_chart_score_writes;"
+      "recovery_attempts,last_recovery_at) SELECT p.attempt_id,p.replay_id,"
+      "p.chart_path,p.chart_md5,p.chart_sha256,p.chart_title,p.chart_artist,"
+      "p.ln_mode,p.score,p.max_score,p.max_combo,p.combo_break,p.pgreat,"
+      "p.great,p.good,p.bad,p.poor,p.kpoor,p.fast,p.slow,p.final_gauge,"
+      "p.clear_type,CAST(json_extract(r.provenance_json,'$.ruleset.version') "
+      "AS INTEGER),CASE json_extract(r.provenance_json,'$.eligibility') "
+      "WHEN 'verified' THEN 0 WHEN 'modified' THEN 1 ELSE 2 END,"
+      "r.provenance_json,p.created_at,p.recovery_attempts,p.last_recovery_at "
+      "FROM legacy_v10_pending_chart_score_writes p JOIN chart_results r "
+      "ON r.id=p.replay_id;"
       "INSERT INTO ir_outbox SELECT * FROM legacy_v10_ir_outbox;"
       "INSERT INTO ir_submission_receipts("
       "id,provider_id,server_origin,result_id,attempt_id,chart_md5,"
@@ -1530,6 +1660,12 @@ bool dropLegacyTables(sqlite3 *database, std::string &diagnostic) {
 
 } // namespace
 
+void setReplayMigrationChartTopologyResolver(
+    ReplayMigrationChartTopologyResolver resolver) {
+  std::lock_guard lock(topologyResolverMutex);
+  topologyResolver = std::move(resolver);
+}
+
 std::optional<replay::LogicalControl>
 legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept {
   const auto lane = [](int player, int logicalLane) {
@@ -1551,15 +1687,13 @@ legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept {
     if (physicalLane < 5) {
       return lane(1, physicalLane);
     }
-    return physicalLane == 7
-               ? std::optional<replay::LogicalControl>(scratch(1))
+    return physicalLane == 7 ? std::optional<replay::LogicalControl>(scratch(1))
                : std::nullopt;
   case 7:
     if (physicalLane < 7) {
       return lane(1, physicalLane);
     }
-    return physicalLane == 7
-               ? std::optional<replay::LogicalControl>(scratch(1))
+    return physicalLane == 7 ? std::optional<replay::LogicalControl>(scratch(1))
                : std::nullopt;
   case 9:
     return physicalLane < 9
@@ -1599,8 +1733,7 @@ legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept {
     if (physicalLane < 26) {
       return lane(1, physicalLane);
     }
-    return physicalLane < 52
-               ? std::optional<replay::LogicalControl>(
+    return physicalLane < 52 ? std::optional<replay::LogicalControl>(
                      lane(2, physicalLane - 26))
                : std::nullopt;
   default:
@@ -1649,8 +1782,7 @@ ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(
           !identity.chartSha256.empty()
               ? rowSha256 == identity.chartSha256 &&
                     (identity.chartMd5.empty() || rowMd5 == identity.chartMd5)
-              : !identity.chartMd5.empty()
-                    ? rowMd5 == identity.chartMd5
+          : !identity.chartMd5.empty() ? rowMd5 == identity.chartMd5
                     : rowPath == identity.chartPath;
       if (!identityMatches) {
         continue;
@@ -1667,19 +1799,35 @@ ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(
       const int totalLongNotes = sqlite3_column_int(statement.get(), 5);
       const int totalBackspinNotes = sqlite3_column_int(statement.get(), 6);
       const int totalNotes = sqlite3_column_int(statement.get(), 7);
-      if (!supportedKeyMode(keyMode) || longNoteMode < 0 ||
-          longNoteMode > 3 || totalLongNotes < 0 || totalBackspinNotes < 0 ||
-          totalNotes <= 0 ||
+      if (!supportedKeyMode(keyMode) || longNoteMode < 0 || longNoteMode > 3 ||
+          totalLongNotes < 0 || totalBackspinNotes < 0 || totalNotes <= 0 ||
           totalNotes > std::numeric_limits<int>::max() / 2) {
         return std::nullopt;
       }
-      const ReplayMigrationChartMetadata metadata{
+      ReplayMigrationChartMetadata metadata{
           .keyMode = keyMode,
           .hasUndefinedLongNotes =
               (totalLongNotes > 0 || totalBackspinNotes > 0) &&
               longNoteMode == 0,
           .totalNotes = totalNotes,
+          .resultEventTopologyComplete =
+              totalLongNotes == 0 && totalBackspinNotes == 0,
       };
+      if (totalLongNotes > 0 || totalBackspinNotes > 0) {
+        ReplayMigrationChartTopologyResolver resolveTopology;
+        {
+          std::lock_guard lock(topologyResolverMutex);
+          resolveTopology = topologyResolver;
+        }
+        ReplayMigrationChartIdentity topologyIdentity = identity;
+        topologyIdentity.chartPath = rowPath;
+        const auto classicLongNotes =
+            resolveTopology ? resolveTopology(topologyIdentity) : std::nullopt;
+        metadata.resultEventTopologyComplete = classicLongNotes.has_value();
+        if (classicLongNotes.has_value()) {
+          metadata.classicLongNotes = *classicLongNotes;
+        }
+      }
       if (resolved.has_value() && *resolved != metadata) {
         return std::nullopt;
       }
@@ -1758,19 +1906,25 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                    diagnostic.empty() ? "legacy replay rows are invalid"
                                       : std::move(diagnostic));
   }
+  const std::size_t standaloneChartCount =
+      static_cast<std::size_t>(std::ranges::count_if(
+          charts, [](const LegacyChart &chart) { return !chart.courseStage; }));
   if (!finalizeFiles(charts, courses, codec, fileStore, faults, diagnostic)) {
     return failure(MigrationStatus::FileFailure,
                    diagnostic.empty() ? "could not finalize replay files"
                                       : std::move(diagnostic),
-                   charts.size(), courses.size());
+                   standaloneChartCount, courses.size());
   }
 
   if (fault(faults, "pre-cutover-revalidation")) {
     return failure(MigrationStatus::StorageFailure,
-                   "injected pre-cutover validation failure", charts.size(),
-                   courses.size());
+                   "injected pre-cutover validation failure",
+                   standaloneChartCount, courses.size());
   }
   for (const auto &chart : charts) {
+    if (chart.courseStage) {
+      continue;
+    }
     const auto inspected = fileStore.inspect(chart.file);
     if (inspected.state != replay::ReplayFileState::Available ||
         !inspected.metadata.has_value() || *inspected.metadata != chart.file) {
@@ -1778,7 +1932,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                      inspected.diagnostic.empty()
                          ? "migrated replay changed before cutover"
                          : inspected.diagnostic,
-                     charts.size());
+                     standaloneChartCount);
     }
   }
   for (const auto &course : courses) {
@@ -1789,32 +1943,35 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                      inspected.diagnostic.empty()
                          ? "migrated course replay changed before cutover"
                          : inspected.diagnostic,
-                     charts.size(), courses.size());
+                     standaloneChartCount, courses.size());
     }
   }
 
   if (fault(faults, "begin")) {
     return failure(MigrationStatus::StorageFailure,
-                   "injected migration transaction failure", charts.size(),
-                   courses.size());
+                   "injected migration transaction failure",
+                   standaloneChartCount, courses.size());
   }
   if (!renameLegacyTables(database, diagnostic)) {
     return failure(MigrationStatus::StorageFailure, std::move(diagnostic),
-                   charts.size(), courses.size());
+                   standaloneChartCount, courses.size());
   }
   if (fault(faults, "schema-create") ||
       !CreateCompactReplaySchema11OnConnection(database)) {
     return failure(MigrationStatus::StorageFailure,
-                   "could not create compact replay schema", charts.size(),
-                   courses.size());
+                   "could not create compact replay schema",
+                   standaloneChartCount, courses.size());
   }
   for (const auto &chart : charts) {
+    if (chart.courseStage) {
+      continue;
+    }
     if (fault(faults, "copy-chart", chart.id) ||
         !insertChart(database, chart, diagnostic)) {
       return failure(MigrationStatus::StorageFailure,
                      diagnostic.empty() ? "could not copy chart result"
                                         : std::move(diagnostic),
-                     charts.size(), courses.size());
+                     standaloneChartCount, courses.size());
     }
   }
   for (const auto &course : courses) {
@@ -1823,7 +1980,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
       return failure(MigrationStatus::StorageFailure,
                      diagnostic.empty() ? "could not copy course result"
                                         : std::move(diagnostic),
-                     charts.size(), courses.size());
+                     standaloneChartCount, courses.size());
     }
   }
   if (fault(faults, "copy-durable-work") ||
@@ -1831,46 +1988,46 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
     return failure(MigrationStatus::StorageFailure,
                    diagnostic.empty() ? "could not copy durable work"
                                       : std::move(diagnostic),
-                   charts.size(), courses.size());
+                   standaloneChartCount, courses.size());
   }
   std::size_t courseStageCount = 0;
   for (const auto &course : courses) {
     courseStageCount += course.result.stages.size();
   }
   if (fault(faults, "count-verification") ||
-      !verifyCounts(database, charts.size(), courses.size(), courseStageCount,
-                    diagnostic)) {
+      !verifyCounts(database, standaloneChartCount, courses.size(),
+                    courseStageCount, diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    diagnostic.empty() ? "migrated counts are invalid"
                                       : std::move(diagnostic),
-                   charts.size(), courses.size());
+                   standaloneChartCount, courses.size());
   }
   if (fault(faults, "foreign-key-verification") ||
       !foreignKeysClean(database, diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    diagnostic.empty() ? "migrated foreign keys are invalid"
                                       : std::move(diagnostic),
-                   charts.size(), courses.size());
+                   standaloneChartCount, courses.size());
   }
   if (fault(faults, "legacy-drop") || !dropLegacyTables(database, diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    diagnostic.empty() ? "could not drop legacy replay rows"
                                       : std::move(diagnostic),
-                   charts.size(), courses.size());
+                   standaloneChartCount, courses.size());
   }
   if (fault(faults, "version-update") ||
       !execute(database, "PRAGMA user_version=14", diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
-                   "could not advance replay schema version", charts.size(),
-                   courses.size());
+                   "could not advance replay schema version",
+                   standaloneChartCount, courses.size());
   }
   if (fault(faults, "commit") || !transaction.commit(transactionError)) {
     return failure(MigrationStatus::StorageFailure,
-                   "could not commit replay schema cutover", charts.size(),
-                   courses.size());
+                   "could not commit replay schema cutover",
+                   standaloneChartCount, courses.size());
   }
   return {.status = MigrationStatus::Migrated,
-          .chartFiles = charts.size(),
+          .chartFiles = standaloneChartCount,
           .courseFiles = courses.size()};
 }
 

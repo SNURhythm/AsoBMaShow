@@ -7,7 +7,8 @@ namespace ir {
 void resolveReplayIrRecordState(ReplaySummary &summary,
                                 IrRecordActivity activity) noexcept {
   summary.irSubmissionEligible =
-      summary.attemptId.has_value() && summary.chartMeta.has_value() &&
+      summary.hasIrSubmissionSnapshot && summary.attemptId.has_value() &&
+      summary.chartMeta.has_value() &&
       summary.provenance != nullptr &&
       tachi::isReplayEligibleForBokutachi(
           *summary.attemptId, summary.hasCanonicalAttemptFingerprint,

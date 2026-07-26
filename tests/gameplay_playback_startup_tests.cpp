@@ -1,3 +1,4 @@
+#include "PlayOptionUtils.h"
 #include "scene/play/GamePlayStartup.h"
 #include "scene/play/GamePlayStartOptions.h"
 
@@ -65,6 +66,7 @@ int main() {
   raw->setup.playOptionSeed = 17;
   raw->setup.playOption2 = "MIRROR";
   raw->setup.playOption2Seed = 29;
+  raw->setup.doublePlayOption = replay::DoublePlayOption::Flip;
   raw->setup.assistOption = "AUTO-SCRATCH";
   raw->setup.initialGaugeType = GaugeType::ExHard;
   raw->setup.gaugeProfile = GaugeProfile::Standard;
@@ -91,10 +93,21 @@ int main() {
   raw->setup.clubMode = true;
   StartOptions rawOptions;
   applyReplayPlaybackToStartOptions(rawOptions, raw);
+  auto rawAnalysis = std::make_shared<JudgedPlaybackData>();
+  rawAnalysis->finalScore = 1234;
+  rawOptions.replayAnalysis = rawAnalysis;
+  rawOptions.replayResultContext = ReplayResultContext{
+      .resultId = 73,
+      .attemptId = "123e4567-e89b-42d3-a456-426614174073",
+      .createdAt = "2026-07-25 01:02:03",
+  };
   if (!expect(rawOptions.replayPlayback == raw,
               "raw replay ownership is attached to play startup") ||
       !expect(rawOptions.replayData == nullptr,
               "raw playback does not manufacture judged replay data") ||
+      !expect(replayAnalysisSource(rawOptions) == rawAnalysis.get(),
+              "raw playback exposes its separate non-authoritative analysis "
+              "projection") ||
       !expect(rawOptions.gaugeType == GaugeType::ExHard &&
                   rawOptions.gaugeAutoShift == GaugeAutoShiftMode::BestClear &&
                   rawOptions.gaugeAutoShiftLowerBound == GaugeType::Easy,
@@ -102,8 +115,10 @@ int main() {
       !expect(rawOptions.playOption == "R-RANDOM" &&
                   rawOptions.playOptionSeed == 17 &&
                   rawOptions.playOption2 == "MIRROR" &&
-                  rawOptions.playOption2Seed == 29,
-              "raw playback restores chart randomization") ||
+                  rawOptions.playOption2Seed == 29 &&
+                  rawOptions.doublePlayOption ==
+                      replay::DoublePlayOption::Flip,
+              "raw playback restores DP FLIP and chart randomization") ||
       !expect(rawOptions.playback.percent == 125 &&
                   rawOptions.playback.mode == audio::PlaybackMode::TimeStretch &&
                   rawOptions.judgeWindowScalePercent == 90 &&
@@ -120,6 +135,47 @@ int main() {
                   rawOptions.requiredRulesetDescriptor ==
                       RulesetDescriptor::For(GameplayRuleset::Beatoraja),
               "raw playback restores its ruleset identity")) {
+    return 1;
+  }
+  if (!expect(rawReplayResultSource(rawOptions) == raw,
+              "raw BRD playback remains available to the result scene") ||
+      !expect(rawReplayResultSource(replayOptions) == nullptr,
+              "legacy judged playback is not duplicated as a raw result "
+              "source")) {
+    return 1;
+  }
+  bms_parser::ChartMeta doublePlayMeta;
+  doublePlayMeta.KeyMode = 14;
+  doublePlayMeta.IsDP = true;
+  const auto rawDisplay =
+      play_options::formatReplayPlaybackModeDisplayLabel(doublePlayMeta,
+                                                         raw->setup);
+  if (!expect(rawDisplay.mode ==
+                  "FLIP + R-RANDOM #17 / MIRROR #29" &&
+                  rawDisplay.laneOrder.empty(),
+              "raw replay result labels DP FLIP and recorded player options")) {
+    return 1;
+  }
+  const StartOptions resultReplayOptions =
+      replayResultStartOptions(rawReplayResultSource(rawOptions), rawAnalysis,
+                               rawOptions.replayResultContext);
+  if (!expect(resultReplayOptions.replayPlayback == raw &&
+                  resultReplayOptions.replayData == nullptr &&
+                  resultReplayOptions.replayAnalysis == rawAnalysis &&
+                  resultReplayOptions.replayResultContext ==
+                      rawOptions.replayResultContext &&
+                  resultReplayOptions.ownsChart &&
+                  resultReplayOptions.gaugeType == GaugeType::ExHard &&
+                  resultReplayOptions.playOption == "R-RANDOM" &&
+                  resultReplayOptions.playOptionSeed == 17 &&
+                  resultReplayOptions.playOption2 == "MIRROR" &&
+                  resultReplayOptions.playOption2Seed == 29 &&
+                  resultReplayOptions.doublePlayOption ==
+                      replay::DoublePlayOption::Flip &&
+                  resultReplayOptions.startingGaugeState ==
+                      raw->setup.startingGaugeState,
+              "raw replay result relaunch rebuilds startup from the retained "
+              "BRD setup without promoting analysis to playback authority")) {
     return 1;
   }
   if (!expect(effectiveNotePriorityModeAtPlayStart(

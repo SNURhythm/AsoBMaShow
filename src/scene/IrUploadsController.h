@@ -27,6 +27,7 @@ eraseQueuedReplayIds(std::vector<int> &failedReplayIds,
 
 struct VerificationOutcome {
   std::optional<ir::IrSubmission> submission;
+  std::optional<std::string> retryAttemptId;
   std::string diagnostic;
 };
 
@@ -37,6 +38,9 @@ struct PreparationDependencies {
   std::function<ir::IrSavedResultBatchUploadResult(
       std::span<const ir::IrSubmission>)>
       enqueueBatch;
+  std::function<ir::IrSavedResultBatchUploadResult(
+      std::span<const std::string>)>
+      retryBatch;
   std::function<void(std::size_t completed, std::size_t total)> progress;
 };
 
@@ -56,10 +60,9 @@ class DurableEnqueueGate {
 public:
   void requestCancellation() noexcept;
   [[nodiscard]] std::optional<ir::IrSavedResultBatchUploadResult>
-  enqueueUnlessCancelled(const std::stop_token &stopToken,
-                         std::span<const ir::IrSubmission> submissions,
-                         const std::function<ir::IrSavedResultBatchUploadResult(
-                             std::span<const ir::IrSubmission>)> &enqueueBatch);
+  executeUnlessCancelled(
+      const std::stop_token &stopToken,
+      const std::function<ir::IrSavedResultBatchUploadResult()> &execute);
 
 private:
   std::mutex mutex_;

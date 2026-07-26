@@ -321,6 +321,7 @@ bool migrateSchema10PartialCourse(const std::filesystem::path &databasePath,
             .keyMode = 7,
             .hasUndefinedLongNotes = true,
             .totalNotes = 1,
+            .resultEventTopologyComplete = true,
         };
       });
   if (migrated.status !=
@@ -331,7 +332,7 @@ bool migrateSchema10PartialCourse(const std::filesystem::path &databasePath,
   sqlite3_close(database);
   return migrated.status == replay_repository_detail::ReplayMigrationOutcome::
                                 Status::Migrated &&
-         migrated.chartFiles == 1 && migrated.courseFiles == 1;
+         migrated.chartFiles == 0 && migrated.courseFiles == 1;
 }
 
 void testMigratedPartialCourseRemainsVisibleByLegacyId() {
@@ -355,6 +356,65 @@ void testMigratedPartialCourseRemainsVisibleByLegacyId() {
   expect(records.size() == 1 && records.front().id == 77,
          "Records uses the legacy course ID for a migrated partial course "
          "whose synthesized prefix key differs from the current full key");
+}
+
+void testMigrationCanonicalizesOutdatedPendingProvenance() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  constexpr std::string_view attemptId = "123e4567-e89b-42d3-a456-426614174090";
+  constexpr std::string_view md5 = "0123456789abcdef0123456789abcdef";
+  constexpr std::string_view sha256 =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  constexpr std::string_view createdAt = "2026-07-25 01:04:04";
+  constexpr std::string_view outdatedProvenance =
+      R"({"schemaVersion":2,"ruleset":{"version":1},"stages":[],"eligibility":"verified"})";
+
+  sqlite3 *database = nullptr;
+  expect(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK,
+         "outdated pending migration fixture opens");
+  replay_schema10_fixture::createExactSchema(database);
+  replay_schema10_fixture::insertSimpleChart(database, 42, md5, sha256,
+                                             createdAt, 2, outdatedProvenance,
+                                             attemptId, 1);
+  replay_schema10_fixture::insertSimplePendingChart(
+      database, 42, md5, sha256, createdAt, 2, outdatedProvenance, attemptId,
+      1);
+  replay_schema10_fixture::execute(
+      database,
+      "UPDATE replays SET ruleset_version=1,eligibility=0 WHERE id=42;"
+      "UPDATE pending_chart_score_writes SET ruleset_version=1,eligibility=0 "
+      "WHERE replay_id=42;"
+      "UPDATE pending_chart_score_writes SET combo_break=1 WHERE "
+      "replay_id=42;");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto migrated = replay_repository_detail::migrateReplaySchema10To11(
+      database, temporary.path(), codec, store, {},
+      [](const auto &)
+          -> std::optional<
+              replay_repository_detail::ReplayMigrationChartMetadata> {
+        return replay_repository_detail::ReplayMigrationChartMetadata{
+            .keyMode = 7,
+            .hasUndefinedLongNotes = true,
+            .totalNotes = 1,
+            .resultEventTopologyComplete = true,
+        };
+      });
+  sqlite3_close(database);
+  expect(migrated.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "outdated pending provenance migrates as legacy-unverified");
+
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "repository opens after outdated pending migration");
+  const auto pending = repository.LoadPendingChartScore(attemptId);
+  expect(pending.status == result_persistence::PendingReadStatus::Found &&
+             pending.value.has_value() &&
+             pending.value->score.provenance == ScoreProvenance::Legacy(),
+         "migrated pending recovery reads the same canonical provenance as "
+         "its compact result");
 }
 
 void testCanonicalAttemptsDoNotFallBackToLegacyCourseId() {
@@ -1124,8 +1184,16 @@ void testCompactStageAndIndependentReads() {
   const auto summaries = repository.ListReplays(lookup, 0);
   expect(summaries.size() == 1 &&
              summaries.front().replayFileState ==
-                 ReplaySummary::ReplayFileState::Unchecked,
-         "record summaries defer replay-file inspection until selection");
+                 ReplaySummary::ReplayFileState::Unchecked &&
+             summaries.front().hasIrSubmissionSnapshot,
+         "record summaries expose their independent IR snapshot while "
+         "deferring replay-file inspection until selection");
+  const auto irCandidates =
+      repository.ListIrUploadCandidateReplays("tachi", "https://boku.tachi.ac");
+  expect(irCandidates.status == IrUploadReplayReadStatus::Loaded &&
+             irCandidates.replays.size() == 1 &&
+             irCandidates.replays.front().hasIrSubmissionSnapshot,
+         "IR upload candidate reads expose the independently stored snapshot");
   if (loaded.record && loaded.record->replayFile) {
     auto expectedReference = replayFile;
     expectedReference.id = loaded.record->replayFile->id;
@@ -1667,6 +1735,7 @@ int main() {
   testPartialCounterfeitUniqueConstraintFailsClosed();
   testCompactStageAndIndependentReads();
   testMigratedPartialCourseRemainsVisibleByLegacyId();
+  testMigrationCanonicalizesOutdatedPendingProvenance();
   testCanonicalAttemptsDoNotFallBackToLegacyCourseId();
   testCompletedMigratedCoursesDoNotFallBackToLegacyCourseId();
   testReplayFileReadIsIndependentFromResultAndIr();

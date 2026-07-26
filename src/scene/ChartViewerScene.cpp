@@ -2352,6 +2352,7 @@ ChartViewerScene::ChartViewerScene(
       pendingPracticeLaunchRequest->replayPlayOptions.has_value()) {
     const auto &replayOptions =
         *pendingPracticeLaunchRequest->replayPlayOptions;
+    viewerDoublePlayOption = replayOptions.doublePlayOption;
     setViewerPlayOptions(
         replayOptions.playOption, replayOptions.playOptionSeed,
         replayOptions.playOption2, replayOptions.playOption2Seed);
@@ -3464,6 +3465,8 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
   const auto previousPlayOptionSeed = viewerPlayOptionSeed;
   const auto previousPlayOption2 = viewerPlayOption2;
   const auto previousPlayOption2Seed = viewerPlayOption2Seed;
+  const auto previousDoublePlayOption = viewerDoublePlayOption;
+  viewerDoublePlayOption = replay::DoublePlayOption::Normal;
   setViewerPlayOptions(replayData.playOption, replayData.playOptionSeed,
                        replayData.playOption2, replayData.playOption2Seed);
   if (!applyViewerPlayOptions(*replayChart, "ghost replay")) {
@@ -3471,6 +3474,7 @@ bool ChartViewerScene::applyGhostReplayData(const JudgedPlaybackData &replayData
     viewerPlayOptionSeed = previousPlayOptionSeed;
     viewerPlayOption2 = previousPlayOption2;
     viewerPlayOption2Seed = previousPlayOption2Seed;
+    viewerDoublePlayOption = previousDoublePlayOption;
     if (statusText != nullptr) {
       statusText->setText("Ghost play option failed");
     }
@@ -3891,7 +3895,12 @@ void ChartViewerScene::setViewerPlayOptions(
 bool ChartViewerScene::applyViewerPlayOptions(bms_parser::Chart &target,
                                               const char *logContext) {
   viewerLaneOrderSummary.reset();
+  if (!play_options::applyReplayDoublePlayOption(target,
+                                                 viewerDoublePlayOption)) {
+    return false;
+  }
   if (!target.Meta.IsDP) {
+    viewerDoublePlayOption = replay::DoublePlayOption::Normal;
     viewerPlayOption2.reset();
     viewerPlayOption2Seed.reset();
   }
@@ -4123,7 +4132,8 @@ void ChartViewerScene::loadPracticeConfiguration(
         .playOption = std::move(viewerPlayOption),
         .playOptionSeed = std::move(viewerPlayOptionSeed),
         .playOption2 = std::move(viewerPlayOption2),
-        .playOption2Seed = std::move(viewerPlayOption2Seed)};
+        .playOption2Seed = std::move(viewerPlayOption2Seed),
+        .doublePlayOption = viewerDoublePlayOption};
     (void)chart_viewer_practice::installGhostRefreshState(
         std::move(state), newChartEndMicros, std::move(loaded),
         *chartReplacementSuccessText,
@@ -4141,6 +4151,7 @@ void ChartViewerScene::loadPracticeConfiguration(
           viewerPlayOptionSeed = std::move(installed.playOptionSeed);
           viewerPlayOption2 = std::move(installed.playOption2);
           viewerPlayOption2Seed = std::move(installed.playOption2Seed);
+          viewerDoublePlayOption = installed.doublePlayOption;
           refreshInstalledState();
           if (statusText != nullptr) {
             statusText->setText(installed.visibleStatus);
@@ -4563,6 +4574,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
                     .playOptionSeed = viewerPlayOptionSeed,
                     .playOption2 = viewerPlayOption2,
                     .playOption2Seed = viewerPlayOption2Seed,
+                    .doublePlayOption = viewerDoublePlayOption,
                     .longNoteMode = selectedLongNoteMode,
                     .assistOption = assistOption,
                     .pacemakerTarget = pacemaker::kTargetOff,

@@ -2,6 +2,11 @@
 #include "AppDatabaseInitializer.h"
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
+#include "BmsMetadataText.h"
+#include "PlayOptionUtils.h"
+#include "replay/LegacyReplayIdentity.h"
+#include "repositories/ChartStorageIdentity.h"
+#include "repositories/ReplayRepositoryReplayFileMigration.h"
 #include "bgfx_helper.h"
 #include "rendering/BgfxInitLimits.h"
 #include "rendering/ShaderManager.h"
@@ -1461,6 +1466,76 @@ static void runReadyApplication(ApplicationContext &context) {
 }
 
 int run() {
+  replay_repository_detail::setReplayMigrationChartTopologyResolver(
+      [](const replay_repository_detail::ReplayMigrationChartIdentity &identity)
+          -> std::optional<std::vector<
+              replay_repository_detail::ReplayMigrationClassicLongNote>> {
+        std::atomic_bool cancelled{false};
+        const std::optional<std::string> randomPrng =
+            identity.randomPrng.has_value()
+                ? std::optional<std::string>(*identity.randomPrng)
+                : std::nullopt;
+        std::optional<std::vector<int>> randomValues;
+        if (!identity.randomValues.empty()) {
+          randomValues.emplace(identity.randomValues.begin(),
+                               identity.randomValues.end());
+        }
+        std::filesystem::path chartPath =
+            utf8_to_path_t(std::string(identity.chartPath));
+        chart_storage_identity::ToAbsolutePath(chartPath);
+        auto chart = play_options::parseChart(
+            chartPath, identity.randomSeed, randomPrng, randomValues,
+            cancelled, "replay migration");
+        if (chart == nullptr || cancelled.load()) {
+          return std::nullopt;
+        }
+        if (!replay::storedChartIdentityMatches(
+                identity.chartSha256, identity.chartMd5,
+                asobmshow::bms_metadata::normalizedHash(chart->Meta.SHA256),
+                asobmshow::bms_metadata::normalizedHash(chart->Meta.MD5))) {
+          return std::nullopt;
+        }
+        std::optional<std::string> ignoredOption;
+        std::optional<long long> ignoredSeed;
+        if (identity.playOption.has_value() &&
+            !play_options::applyPlayOptionModifier(
+                *chart, std::string(*identity.playOption),
+                identity.playOptionSeed, 0, ignoredOption, ignoredSeed,
+                "replay migration")) {
+          return std::nullopt;
+        }
+        if (chart->Meta.IsDP && identity.playOption2.has_value() &&
+            !play_options::applyPlayOptionModifier(
+                *chart, std::string(*identity.playOption2),
+                identity.playOption2Seed, 1, ignoredOption, ignoredSeed,
+                "replay migration")) {
+          return std::nullopt;
+        }
+
+        std::vector<replay_repository_detail::ReplayMigrationClassicLongNote>
+            classicLongNotes;
+        for (const auto &measure : chart->Measures) {
+          for (const auto &timeline : measure->TimeLines) {
+            for (auto *note : timeline->Notes) {
+              if (note == nullptr || !note->IsLongNote()) {
+                continue;
+              }
+              auto *longNote = static_cast<bms_parser::LongNote *>(note);
+              if (longNote->IsTail() || longNote->Tail == nullptr ||
+                  longNote->Tail->Timeline == nullptr ||
+                  !effectiveLongNoteIsClassic(longNote, chart.get(),
+                                              identity.longNoteMode)) {
+                continue;
+              }
+              classicLongNotes.push_back(
+                  {.lane = note->Lane,
+                   .headTimeMicros = timeline->Timing,
+                   .tailTimeMicros = longNote->Tail->Timeline->Timing});
+            }
+          }
+        }
+        return classicLongNotes;
+      });
   ApplicationContext context;
   return application_startup::execute(
       context.profileReady(),

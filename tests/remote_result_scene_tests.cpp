@@ -209,6 +209,22 @@ void testRecalledResultExcludesItselfFromPreviousBest() {
                   persistence.previousBestBeforeCreatedAt,
           "legacy recalled result uses its selected replay timestamp as the "
           "previous-best cutoff");
+
+  persistence = {};
+  const ReplayResultContext watched{
+      .resultId = 73,
+      .attemptId = "123e4567-e89b-42d3-a456-426614174073",
+      .createdAt = "2026-07-25 01:02:03",
+  };
+  const auto watchedReplay = result_scene_detail::previousBestQueryFor(
+      persistence, true, &watched);
+  require(watchedReplay.excludeAttemptId == watched.attemptId &&
+              watchedReplay.beforeCreatedAt == watched.createdAt,
+          "watched replay keeps both exact attempt identity and its "
+          "historical previous-best cutoff");
+  require(result_scene_detail::resultIdForPractice(persistence, &watched) ==
+              watched.resultId,
+          "watched replay keeps its repository result identity for practice");
 }
 
 void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
@@ -371,6 +387,26 @@ void testCourseReplayActionAcceptsRawAndLegacyData() {
   session.courseReplayData->stages.emplace_back();
   require(result_scene_detail::courseReplayActionAvailable(session),
           "legacy course replay data still exposes replay");
+}
+
+void testCourseReplayCaptureDoesNotFillFailedStageHole() {
+  CoursePlaySession session;
+  session.entries.resize(2);
+
+  RhythmState stageState(nullptr, false);
+  session.currentIndex = 0;
+  session.recordResult(session.entries[0].meta, stageState);
+  session.recordRestMicrosAfterCurrentStage(1'000'000);
+
+  session.currentIndex = 1;
+  session.recordResult(session.entries[1].meta, stageState);
+  session.recordReplayPlaybackStage(replay::ReplayPlaybackData{});
+  session.recordRestMicrosAfterCurrentStage(0);
+
+  require(session.completedResults.size() == 2 &&
+              session.recordedReplayPlayback.stages.empty(),
+          "a later successful capture cannot fill an earlier failed course "
+          "stage with a default replay");
 }
 
 void testCoursePersistenceFactsUseAuthoritativeEntrySnapshot() {
@@ -684,6 +720,19 @@ void testLocalRegressionContractsRemainPresent() {
   }
 }
 
+void testRawAndLegacyPlaybackAreClassifiedAsReplayResults() {
+  JudgedPlaybackData judged;
+  replay::ReplayPlaybackData raw;
+  require(!result_scene_detail::isReplayResultSource(nullptr, nullptr, nullptr),
+          "normal result is not classified as replay playback");
+  require(!result_scene_detail::isReplayResultSource(&judged, &judged, nullptr),
+          "a newly recorded presentation is not classified as replay playback");
+  require(result_scene_detail::isReplayResultSource(nullptr, &judged, nullptr),
+          "legacy judged playback is classified as a replay result");
+  require(result_scene_detail::isReplayResultSource(nullptr, nullptr, &raw),
+          "raw BRD playback is classified as a replay result");
+}
+
 } // namespace
 
 int main() {
@@ -694,6 +743,7 @@ int main() {
   testCoursePersistenceAttemptParticipatesInRetryPolicy();
   testContinueWithoutSavingRequiresSuccessfulCleanup();
   testCourseReplayActionAcceptsRawAndLegacyData();
+  testCourseReplayCaptureDoesNotFillFailedStageHole();
   testCoursePersistenceFactsUseAuthoritativeEntrySnapshot();
   testEffectiveCourseFactsSaturateResultMetadata();
   testLegacyPartialCourseReplayPreservesEveryEntry();
@@ -702,6 +752,7 @@ int main() {
   testRemoteRecallFailsClosedForConcurrentDeletion();
   testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
   testLocalRegressionContractsRemainPresent();
+  testRawAndLegacyPlaybackAreClassifiedAsReplayResults();
   std::cout << "remote result scene tests passed\n";
   return 0;
 }

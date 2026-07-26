@@ -159,6 +159,47 @@ void testPreparationContinuesAfterFailureAndBatchesOnce() {
          "preparation reports deterministic per-result progress");
 }
 
+void testExistingOutboxRetriesWithoutSnapshotSubmission() {
+  auto failed = candidate(13);
+  failed.state = ir::IrRecordState::Failed;
+  failed.replay.hasIrSubmissionSnapshot = false;
+  failed.replay.requestedIrOutboxState = ir::IrOutboxState::FailedPermanent;
+  const std::vector candidates{failed};
+  int retryBatchCalls = 0;
+  int freshBatchCalls = 0;
+
+  ir_uploads::PreparationDependencies dependencies;
+  dependencies.verify = [](const ir::IrUploadCandidate &value,
+                           const std::stop_token &) {
+    return ir_uploads::VerificationOutcome{.retryAttemptId =
+                                               *value.replay.attemptId};
+  };
+  dependencies.retryBatch = [&](std::span<const std::string> attemptIds) {
+    ++retryBatchCalls;
+    expect(attemptIds.size() == 1 && attemptIds.front() == attemptId(13),
+           "bulk retry uses only the persisted outbox attempt identity");
+    ir::IrSavedResultBatchUploadResult result;
+    result.items = {
+        {.attemptId = attemptId(13),
+         .status = ir::IrManualBatchItemStatus::RetryQueued},
+    };
+    return result;
+  };
+  dependencies.enqueueBatch = [&](std::span<const ir::IrSubmission>) {
+    ++freshBatchCalls;
+    return ir::IrSavedResultBatchUploadResult{};
+  };
+
+  std::stop_source stop;
+  const auto outcome = ir_uploads::prepareSelectedCandidates(
+      candidates, stop.get_token(), dependencies);
+  expect(retryBatchCalls == 1 && freshBatchCalls == 0,
+         "a persisted outbox retry bypasses fresh draft enqueue");
+  expect(outcome.queuedReplayIds == std::vector<int>{13} &&
+             outcome.failedReplayIds.empty() && outcome.failureReasons.empty(),
+         "a no-snapshot persisted outbox retry completes as queued");
+}
+
 void testCancellationStopsBeforeBatchAndRetainsUntouchedRows() {
   const std::vector candidates{candidate(20), candidate(21), candidate(22)};
   std::stop_source stop;
@@ -461,6 +502,7 @@ int main() {
   testSelectionSnapshotLockAndFinalSummary();
   testFailedRefreshPreservesPublishedCandidatesAndSelection();
   testPreparationContinuesAfterFailureAndBatchesOnce();
+  testExistingOutboxRetriesWithoutSnapshotSubmission();
   testCancellationStopsBeforeBatchAndRetainsUntouchedRows();
   testCancellationAfterFinalVerificationStopsBeforeBatch();
   testThrowingVerifierDoesNotAbortOtherCandidates();

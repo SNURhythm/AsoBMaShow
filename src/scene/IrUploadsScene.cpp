@@ -2,6 +2,7 @@
 
 #include "../ir/IrCredentialStore.h"
 #include "../ir/IrProfileSettings.h"
+#include "../ir/IrSavedResultUpload.h"
 #include "../ir/IrSubmissionService.h"
 #include "../rendering/common.h"
 #include "../targets.h"
@@ -577,6 +578,17 @@ void IrUploadsScene::startUpload() {
         return ir_uploads::VerificationOutcome{
             .diagnostic = "This saved result has no IR snapshot identity."};
       }
+      if (candidate.state == ir::IrRecordState::Failed &&
+          candidate.replay.requestedIrOutboxState ==
+              ir::IrOutboxState::FailedPermanent) {
+        return ir_uploads::VerificationOutcome{.retryAttemptId =
+                                                   *candidate.replay.attemptId};
+      }
+      if (!candidate.replay.hasIrSubmissionSnapshot) {
+        return ir_uploads::VerificationOutcome{
+            .diagnostic =
+                "This saved result has no independently stored IR snapshot."};
+      }
       auto snapshot = context.replayRepository.loadIrSubmissionSnapshot(
           *candidate.replay.attemptId);
       if (snapshot.status !=
@@ -607,6 +619,43 @@ void IrUploadsScene::startUpload() {
                          drafts);
                    }});
         };
+    dependencies.retryBatch = [this](std::span<const std::string> attemptIds) {
+      ir::IrSavedResultBatchUploadResult result;
+      result.items.reserve(attemptIds.size());
+      const ir::IrSavedResultUploadDependencies retryDependencies{
+          .loadOutbox =
+              [this](std::string_view provider, std::string_view attempt) {
+                return context.replayRepository.LoadIrOutbox(provider, attempt);
+              },
+          .retry =
+              [this](std::int64_t rowId) {
+                return context.irSubmissionService->retry(rowId);
+              },
+      };
+      for (const std::string &attemptId : attemptIds) {
+        const auto retried = ir::executeIrSavedResultUpload(
+            ir::kTachiProviderId, attemptId, nullptr, retryDependencies);
+        ir::IrManualBatchItemOutcome item{.attemptId = attemptId};
+        switch (retried.state) {
+        case ir::IrSavedResultUploadState::RetryQueued:
+          item.status = ir::IrManualBatchItemStatus::RetryQueued;
+          break;
+        case ir::IrSavedResultUploadState::AlreadyActive:
+          item.status = ir::IrManualBatchItemStatus::AlreadyQueued;
+          break;
+        case ir::IrSavedResultUploadState::AlreadySubmitted:
+          item.status = ir::IrManualBatchItemStatus::AlreadySubmitted;
+          break;
+        case ir::IrSavedResultUploadState::Queued:
+        case ir::IrSavedResultUploadState::Failed:
+          item.status = ir::IrManualBatchItemStatus::Failed;
+          item.diagnostic = retried.message;
+          break;
+        }
+        result.items.push_back(std::move(item));
+      }
+      return result;
+    };
     dependencies.progress = [workerMailbox](std::size_t completed,
                                             std::size_t total) {
       std::lock_guard lock(workerMailbox->mutex);

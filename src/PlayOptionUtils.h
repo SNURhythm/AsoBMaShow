@@ -383,6 +383,23 @@ inline PlayModeDisplayLabel formatPlayModeDisplayLabel(
       replay.playOption2, replay.playOption2Seed);
 }
 
+inline PlayModeDisplayLabel formatReplayPlaybackModeDisplayLabel(
+    const bms_parser::ChartMeta &meta,
+    const replay::ChartPlaybackSetup &setup) {
+  PlayModeDisplayLabel display = formatPlayModeDisplayLabel(
+      meta, setup.playOption, setup.playOptionSeed, setup.playOption2,
+      setup.playOption2Seed);
+  if (setup.doublePlayOption != replay::DoublePlayOption::Flip) {
+    return display;
+  }
+  if (display.mode == "ASSIGN" && !display.laneOrder.empty()) {
+    display.mode += " " + display.laneOrder;
+  }
+  display.mode = display.mode == "NORMAL" ? "FLIP" : "FLIP + " + display.mode;
+  display.laneOrder.clear();
+  return display;
+}
+
 inline std::string formatPlayModeLabel(
     const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
     const std::optional<long long> &seed = std::nullopt,

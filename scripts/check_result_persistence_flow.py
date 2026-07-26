@@ -439,8 +439,9 @@ require(
 )
 require(
     "replayResult" in previous_query_body
-    and "retryData->createdAt" in previous_query_body,
-    "legacy replay results must preserve the beforeCreatedAt boundary",
+    and "replayContext->createdAt" in previous_query_body
+    and "replayContext->attemptId" in previous_query_body,
+    "replay results must preserve their exact-attempt or beforeCreatedAt boundary",
 )
 
 exit_body = function_body(result_source, "ResultScene", "exitResult")

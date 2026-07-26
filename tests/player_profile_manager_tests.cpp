@@ -165,7 +165,7 @@ void seedReplayMigrationChartMetadata(const std::filesystem::path &path) {
           "total_long_notes,total_backspin_notes,total_notes) VALUES("
           "'chart.bms','0123456789abcdef0123456789abcdef',"
           "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-          "7,1,1,0,1)"),
+          "7,0,0,0,1)"),
       "replay migration chart metadata is authoritative");
 }
 
@@ -275,12 +275,12 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
         result.replayConnection.get(), 1,
         "0123456789abcdef0123456789abcdef",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "2026-07-10 12:34:56", 2, replayProvenance, replayAttempt, 1);
+        "2026-07-10 12:34:56", 2, replayProvenance, replayAttempt, 0);
     replay_schema10_fixture::insertSimplePendingChart(
         result.replayConnection.get(), 1,
         "0123456789abcdef0123456789abcdef",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "2026-07-10 12:34:56", 2, replayProvenance, replayAttempt, 1);
+        "2026-07-10 12:34:56", 2, replayProvenance, replayAttempt, 0);
   } catch (const std::exception &exception) {
     expect(false, "WAL-backed replay rows insert: " +
                       std::string(exception.what()));
@@ -503,6 +503,25 @@ void seedSupportedOlderProfile(const PlayerProfilePaths &paths,
   }
   try {
     replay_schema10_fixture::createExactSchema(replays.get());
+    const std::string provenance =
+        serializeScoreProvenance(ScoreProvenance::Legacy());
+    replay_schema10_fixture::insertSimpleChart(
+        replays.get(), 1, "0123456789abcdef0123456789abcdef",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "2026-07-10 12:34:56", 2, provenance);
+    replay_schema10_fixture::execute(
+        replays.get(),
+        "INSERT INTO course_replays(id,course_id,course_key,course_name,"
+        "course_group_name,constraint_json,gauge_type,gauge_profile,"
+        "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+        "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+        "total_charts,created_at,ruleset_version,eligibility,provenance_json) "
+        "VALUES(7,7,'','Course','Group','[]',0,0,0,0,'NORMAL','OFF',2,1,"
+        "75.0,300,1,1,'2026-07-10 12:34:56',0,2," +
+            replay_schema10_fixture::quote(provenance) +
+            ");"
+            "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
+            "replay_id,rest_micros_after_stage) VALUES(8,7,0,1,0)");
   } catch (const std::exception &exception) {
     expect(false, std::string(label) + " replay v10 schema creates: " +
                       exception.what());
@@ -526,6 +545,10 @@ void expectSupportedOlderPayload(const PlayerProfilePaths &paths,
          std::string(label) + " keeps the score marker row");
   expect(rowCount(paths.replaysDb, "validation_policy_marker") == 1,
          std::string(label) + " keeps the replay marker row");
+  expect(rowCount(paths.replaysDb, "replays") == 1 &&
+             rowCount(paths.replaysDb, "course_replays") == 1 &&
+             rowCount(paths.replaysDb, "course_replay_stages") == 1,
+         std::string(label) + " keeps the course-only stage replay");
 }
 
 std::vector<std::filesystem::path>
@@ -2132,6 +2155,7 @@ void testSupportedOlderInactiveProfileUsesManagePolicy() {
 
   const PlayerProfilePaths olderPaths = manager.pathsFor(olderId);
   seedSupportedOlderProfile(olderPaths, "supported-older management target");
+  seedReplayMigrationChartMetadata(temp.path() / "db" / "chart.db");
   const std::string settingsBefore = readFile(olderPaths.settingsJson);
   const std::string inputBefore = readFile(olderPaths.inputJson);
   const std::string metadataBeforeCommit = readFile(olderPaths.profileJson);
@@ -2182,6 +2206,12 @@ void testSupportedOlderInactiveProfileUsesManagePolicy() {
     expect(rowCount(copyPaths.scoresDb, "validation_policy_marker") == 1 &&
                rowCount(copyPaths.replaysDb, "validation_policy_marker") == 1,
            "supported-older duplicate preserves both marker rows");
+    expect(rowCount(copyPaths.replaysDb, "chart_results") == 0 &&
+               rowCount(copyPaths.replaysDb, "course_results") == 1 &&
+               rowCount(copyPaths.replaysDb, "course_result_stages") == 1 &&
+               rowCount(copyPaths.replaysDb, "replay_files") == 1,
+           "course-only stage replay migrates into one course result and one "
+           "course BRD without a standalone chart result");
     expect(manager.validateProfile(duplicateId).ok(),
            "migrated supported-older duplicate is runtime ready");
     expect(manager.deleteProfile(duplicateId).ok(),

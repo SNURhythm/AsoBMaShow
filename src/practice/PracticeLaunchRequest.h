@@ -3,6 +3,7 @@
 #include "../analysis/JudgedPlaybackData.h"
 #include "../ScoreProvenance.h"
 #include "../bms_parser.hpp"
+#include "../replay/ReplayPlaybackData.h"
 #include "PracticeConfiguration.h"
 
 #include <optional>
@@ -22,6 +23,8 @@ struct ReplayPlayOptions {
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<long long> playOption2Seed;
+  replay::DoublePlayOption doublePlayOption =
+      replay::DoublePlayOption::Normal;
 };
 
 struct LaunchRequest {
@@ -47,8 +50,15 @@ struct ParsedLaunchApplication {
 mergeReplayLaunchChartMeta(const bms_parser::ChartMeta &authoritative,
                            const JudgedPlaybackData &replay);
 
+[[nodiscard]] bms_parser::ChartMeta mergeReplayLaunchChartMeta(
+    const bms_parser::ChartMeta &authoritative,
+    const replay::ChartPlaybackSetup &setup);
+
 [[nodiscard]] ReplayPlayOptions
 launchPlayOptionsFromReplay(const JudgedPlaybackData &replay);
+
+[[nodiscard]] ReplayPlayOptions
+launchPlayOptionsFromReplay(const replay::ChartPlaybackSetup &setup);
 
 [[nodiscard]] std::optional<std::string>
 validateLaunchRequest(const LaunchRequest &request);

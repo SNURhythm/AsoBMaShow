@@ -72,6 +72,7 @@ ReplaySummary replay(int id, const ChartMetaRecord &chart) {
   value.hasCanonicalAttemptFingerprint = true;
   value.chartMeta = chart.meta;
   value.provenance = verifiedLr2Provenance(chart.meta);
+  value.hasIrSubmissionSnapshot = true;
   return value;
 }
 
@@ -168,6 +169,34 @@ void testProjectsOnlyCanonicalActionableAttempts() {
          "refresh retains only still-published replay IDs");
 }
 
+void testFreshUploadRequiresSnapshotButExistingFailureDoesNot() {
+  const ChartMetaRecord chart = complete7kChart("library/snapshot/chart.bms");
+  ReplaySummary freshWithoutSnapshot = replay(17, chart);
+  freshWithoutSnapshot.hasIrSubmissionSnapshot = false;
+  ReplaySummary failedWithoutSnapshot = replay(18, chart);
+  failedWithoutSnapshot.hasIrSubmissionSnapshot = false;
+  failedWithoutSnapshot.requestedIrOutboxState =
+      ir::IrOutboxState::FailedPermanent;
+
+  const std::array withoutSnapshot{freshWithoutSnapshot, failedWithoutSnapshot};
+  auto projected = ir::projectIrUploadCandidates(withoutSnapshot, {&chart, 1});
+  expect(projected.candidates.size() == 1 &&
+             projected.candidates.front().replayId() ==
+                 failedWithoutSnapshot.id &&
+             projected.candidates.front().state == ir::IrRecordState::Failed,
+         "a missing snapshot hides only fresh upload while preserving an "
+         "existing outbox retry");
+
+  freshWithoutSnapshot.hasIrSubmissionSnapshot = true;
+  const std::array withSnapshot{freshWithoutSnapshot, failedWithoutSnapshot};
+  projected = ir::projectIrUploadCandidates(withSnapshot, {&chart, 1});
+  expect(projected.candidates.size() == 2 &&
+             projected.candidates.front().replayId() ==
+                 freshWithoutSnapshot.id &&
+             projected.candidates.front().state == ir::IrRecordState::Eligible,
+         "an independently stored snapshot enables a fresh upload");
+}
+
 void testFailsClosedForAmbiguousAndInvalidHydration() {
   const ChartMetaRecord chart = complete7kChart("private/chart-path.bms");
   ChartMetaRecord duplicatePath = chart;
@@ -260,6 +289,7 @@ void testProjectsBulkHydratedChartsAndOmitsMissingPaths() {
 int main() {
   testSelectionIndexesTheSupportedCandidateBoundOnce();
   testProjectsOnlyCanonicalActionableAttempts();
+  testFreshUploadRequiresSnapshotButExistingFailureDoesNot();
   testFailsClosedForAmbiguousAndInvalidHydration();
   testProjectsBulkHydratedChartsAndOmitsMissingPaths();
   return failures == 0 ? 0 : 1;

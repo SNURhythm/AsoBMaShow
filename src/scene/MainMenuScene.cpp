@@ -2,6 +2,7 @@
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
 #include "../analysis/JudgedPlaybackContext.h"
+#include "../analysis/JudgedPlaybackAnalysis.h"
 #include "../BmsChartFile.h"
 #include "../DifficultyTableImporter.h"
 #include "../CourseConstraintUtils.h"
@@ -9471,9 +9472,15 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
       .mode = context.settings.selectedPlaybackMode,
   };
   const GameplayRuleset autoPlayRuleset = profileSelections.ruleset;
+  const std::optional<ReplaySummary> watchedReplaySummary =
+      selectedReplaySummary.has_value() &&
+              selectedReplaySummary->id == replayId &&
+              !selectedReplaySummary->courseReplay
+          ? selectedReplaySummary
+          : std::nullopt;
   defer(
       [this, record, replayId, pacemakerTarget, autoPlayPlayback,
-       autoPlayRuleset]() {
+       autoPlayRuleset, watchedReplaySummary]() {
         auto failReplayLoad = [this]() {
           resetReplayWatchLoadingUi();
           return true;
@@ -9566,6 +9573,17 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
           return failReplayLoad();
         }
 
+        std::shared_ptr<const JudgedPlaybackData> replayAnalysis;
+        if (legacyReplay == nullptr) {
+          auto analysis = replay::makeJudgedPlaybackForAnalysis(
+              *playback, *replayRead.result, *replayChart);
+          if (!analysis.has_value()) {
+            return failReplayLoad();
+          }
+          replayAnalysis = std::make_shared<const JudgedPlaybackData>(
+              std::move(*analysis));
+        }
+
         context.jukebox.stop();
         context.jukebox.loadChart(*replayChart, true, parseCancelled);
         if (parseCancelled) {
@@ -9582,10 +9600,19 @@ void MainMenuScene::startReplayPlayback(const ChartMetaRecord &record,
             .autoKeySound = false,
             .autoPlay = false,
             .replayData = legacyReplay,
+            .replayAnalysis = replayAnalysis,
+            .replayResultContext = ReplayResultContext{
+                .resultId = replayId,
+                .attemptId = replayRead.result->attemptId,
+                .createdAt = watchedReplaySummary.has_value()
+                                 ? watchedReplaySummary->createdAt
+                                 : std::string{},
+            },
             .pacemakerTarget = pacemakerTarget,
             .touchVisualizationEnabled = selectedReplayRenderTouchPoints,
             .replayGhostRenderingEnabled =
-                legacyReplay != nullptr && selectedReplayRenderGhosts,
+                (legacyReplay != nullptr || replayAnalysis != nullptr) &&
+                selectedReplayRenderGhosts,
         };
         if (legacyReplay != nullptr) {
           applyJudgedPlaybackContextToStartOptions(replayOptions, *legacyReplay);
@@ -10702,15 +10729,19 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
                 "This saved result has no IR snapshot identity.");
             return true;
           }
-          auto snapshot = context.replayRepository.loadIrSubmissionSnapshot(
-              *summary.attemptId);
-          if (snapshot.status !=
-                  ir::IrSubmissionSnapshotReadOutcome::Status::Loaded ||
-              !snapshot.snapshot.has_value()) {
-            finishReplayIrUpload(
-                summary.id,
-                "This saved result has no independently stored IR snapshot.");
-            return true;
+          std::optional<ir::IrSubmission> submission;
+          if (summary.hasIrSubmissionSnapshot) {
+            auto snapshot = context.replayRepository.loadIrSubmissionSnapshot(
+                *summary.attemptId);
+            if (snapshot.status !=
+                    ir::IrSubmissionSnapshotReadOutcome::Status::Loaded ||
+                !snapshot.snapshot.has_value()) {
+              finishReplayIrUpload(
+                  summary.id,
+                  "This saved result has no independently stored IR snapshot.");
+              return true;
+            }
+            submission = std::move(snapshot.snapshot->submission);
           }
 
           const ir::IrSavedResultUploadDependencies dependencies{
@@ -10732,8 +10763,8 @@ void MainMenuScene::startReplayIrUpload(const ChartMetaRecord &record,
               },
           };
           const auto action = ir::executeIrSavedResultUpload(
-              ir::kTachiProviderId,
-              snapshot.snapshot->submission, dependencies);
+              ir::kTachiProviderId, *summary.attemptId,
+              submission.has_value() ? &*submission : nullptr, dependencies);
           finishReplayIrUpload(summary.id, action.message);
         } catch (const std::exception &) {
           finishReplayIrUpload(summary.id,

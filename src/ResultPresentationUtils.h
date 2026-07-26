@@ -53,7 +53,8 @@ scoreBestSnapshotFromPreviousBest(const ResultPreviousBestData &previousBest) {
 inline std::optional<JudgedPlaybackData> bestReplayForSnapshot(
     ReplayRepository &replays, bms_parser::Chart &chart,
     const ScoreBestSnapshot &best,
-    const std::optional<std::string> &beforeCreatedAt = std::nullopt) {
+    const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+    const std::optional<std::string> &excludeAttemptId = std::nullopt) {
   if (best.score <= 0 || chart.Meta.TotalNotes <= 0) {
     return std::nullopt;
   }
@@ -66,6 +67,9 @@ inline std::optional<JudgedPlaybackData> bestReplayForSnapshot(
     }
     if (beforeCreatedAt.has_value() && !beforeCreatedAt->empty() &&
         !summary.createdAt.empty() && summary.createdAt >= *beforeCreatedAt) {
+      continue;
+    }
+    if (excludeAttemptId.has_value() && summary.attemptId == excludeAttemptId) {
       continue;
     }
 
@@ -117,7 +121,9 @@ inline pacemaker::Target pacemakerTargetForReplay(
     ReplayRepository &replays, bms_parser::Chart &chart,
     const JudgedPlaybackData &replay,
     const std::string &targetId,
-    const std::optional<ResultPreviousBestData> &previousBest) {
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+    const std::optional<std::string> &excludeAttemptId = std::nullopt) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (replay.autoPlay || normalized == pacemaker::kTargetOff) {
     return {};
@@ -130,11 +136,13 @@ inline pacemaker::Target pacemakerTargetForReplay(
   }
 
   if (normalized == pacemaker::kTargetBest && best.has_value()) {
-    std::optional<std::string> beforeCreatedAt;
-    if (!replay.createdAt.empty()) {
-      beforeCreatedAt = replay.createdAt;
+    std::optional<std::string> effectiveBeforeCreatedAt = beforeCreatedAt;
+    if (!effectiveBeforeCreatedAt.has_value() && !replay.createdAt.empty()) {
+      effectiveBeforeCreatedAt = replay.createdAt;
     }
-    bestReplay = bestReplayForSnapshot(replays, chart, *best, beforeCreatedAt);
+    bestReplay = bestReplayForSnapshot(replays, chart, *best,
+                                       effectiveBeforeCreatedAt,
+                                       excludeAttemptId);
   }
 
   return pacemaker::targetFromSelection(
@@ -163,12 +171,17 @@ inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
 inline std::optional<ResultPreviousBestData>
 previousBestForReplayChart(ScoreRepository &scores,
                            const bms_parser::ChartMeta &meta,
-                           const JudgedPlaybackData &replay) {
-  std::optional<std::string> beforeCreatedAt;
-  if (!replay.autoPlay && !replay.createdAt.empty()) {
+                           const JudgedPlaybackData &replay,
+                           std::optional<std::string> beforeCreatedAt =
+                               std::nullopt,
+                           std::optional<std::string> excludeAttemptId =
+                               std::nullopt) {
+  if (!beforeCreatedAt.has_value() && !replay.autoPlay &&
+      !replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;
   }
-  if (const auto best = scores.LoadBestScore(meta, beforeCreatedAt);
+  if (const auto best =
+          scores.LoadBestScore(meta, beforeCreatedAt, excludeAttemptId);
       best.has_value()) {
     return previousBestDataFromSnapshot(*best);
   }
