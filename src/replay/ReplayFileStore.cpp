@@ -623,7 +623,8 @@ ReplayFileStore::inspect(const ReplayFileMetadata &metadata) const {
 
 ReplayDecodeOutcome
 ReplayFileStore::load(const ReplayFileMetadata &metadata,
-                      const BeatorajaReplayCodec &codec) const {
+                      const BeatorajaReplayCodec &codec,
+                      std::span<const int> expectedStageKeyModes) const {
   ReplayDecodeOutcome outcome;
   const auto inspection = inspect(metadata);
   if (inspection.state != ReplayFileState::Available) {
@@ -647,7 +648,7 @@ ReplayFileStore::load(const ReplayFileMetadata &metadata,
     outcome.diagnostic = "Replay changed after checksum inspection";
     return outcome;
   }
-  return codec.decode(read.bytes);
+  return codec.decode(read.bytes, expectedStageKeyModes);
 }
 
 bool ReplayFileStore::remove(const ReplayFileMetadata &metadata,

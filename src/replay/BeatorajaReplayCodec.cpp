@@ -1584,12 +1584,23 @@ BeatorajaReplayCodec::encodeCourse(const CourseReplayPlaybackData &replay,
 ReplayDecodeOutcome
 BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
                              std::optional<int> expectedKeyMode) const {
+  if (!expectedKeyMode) {
+    return decode(encoded, std::span<const int>{});
+  }
+  return decode(encoded, std::span<const int>(&*expectedKeyMode, 1));
+}
+
+ReplayDecodeOutcome
+BeatorajaReplayCodec::decode(
+    std::span<const std::byte> encoded,
+    std::span<const int> expectedStageKeyModes) const {
   ReplayDecodeOutcome outcome;
   if (encoded.size() > limits_.maxCompressedBytes) {
     outcome.diagnostic = "Compressed replay exceeds the configured limit";
     return outcome;
   }
-  if (expectedKeyMode && !isKeyModeSupported(*expectedKeyMode)) {
+  if (std::ranges::any_of(expectedStageKeyModes,
+                          [](int mode) { return !isKeyModeSupported(mode); })) {
     outcome.diagnostic = "Chart context has an unsupported replay key mode";
     return outcome;
   }
@@ -1625,10 +1636,22 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
 
   std::vector<StageDecode> stages;
   const std::size_t stageCount = courseEnvelope ? document.size() : 1;
+  if (expectedStageKeyModes.size() > 1 &&
+      expectedStageKeyModes.size() != stageCount) {
+    outcome.diagnostic =
+        "Replay stage count differs from the chart key-mode context";
+    return outcome;
+  }
   stages.reserve(stageCount);
   for (std::size_t i = 0; i < stageCount; ++i) {
     StageDecode stage;
     const Json &stageJson = courseEnvelope ? document[i] : document;
+    const std::optional<int> expectedKeyMode =
+        expectedStageKeyModes.empty()
+            ? std::nullopt
+            : std::optional<int>(expectedStageKeyModes.size() == 1
+                                     ? expectedStageKeyModes.front()
+                                     : expectedStageKeyModes[i]);
     if (!decodeStage(stageJson, courseEnvelope ? "course-stage" : "chart",
                      expectedKeyMode, limits_, stage, outcome.diagnostic)) {
       return outcome;

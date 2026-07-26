@@ -68,7 +68,8 @@ public:
 
   [[nodiscard]] ReplayDecodeOutcome
   load(const ReplayFileMetadata &metadata,
-       const BeatorajaReplayCodec &codec) const;
+       const BeatorajaReplayCodec &codec,
+       std::span<const int> expectedStageKeyModes = {}) const;
 
   bool remove(const ReplayFileMetadata &metadata, std::string &diagnostic);
   bool removeIfMatches(const ReplayFileMetadata &metadata,

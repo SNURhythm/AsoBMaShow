@@ -844,6 +844,30 @@ void testMalformedAndBoundedInputs() {
   expect(unsupported.stockOnly,
          "unknown Aso extension is treated as stock-only playback");
 
+  replay::CourseReplayPlaybackData futureCourse;
+  futureCourse.stages = {source, source};
+  futureCourse.stages[1].setup.chartSha256 = std::string(64, 'b');
+  futureCourse.stages[1].setup.keyMode = 14;
+  futureCourse.restMicrosAfterStage = {1000, 0};
+  const auto futureCourseEncoded =
+      codec.encodeCourse(futureCourse, 1000, diagnostic);
+  expect(futureCourseEncoded.has_value(),
+         "mixed-key-mode course fixture encodes");
+  if (futureCourseEncoded) {
+    Json futureDocument = outerJson(*futureCourseEncoded);
+    for (auto &stage : futureDocument) {
+      stage["asobmashow"]["schemaVersion"] = 999;
+    }
+    const std::array expectedModes{7, 14};
+    const auto futureDecoded = codec.decode(
+        encodeJson(futureDocument), std::span<const int>(expectedModes));
+    expect(futureDecoded.course.has_value() &&
+               futureDecoded.course->stages[0].setup.keyMode == 7 &&
+               futureDecoded.course->stages[1].setup.keyMode == 14 &&
+               futureDecoded.unsupportedAsoExtension,
+           "future course extension falls back with per-stage chart key modes");
+  }
+
   Json badCover = outerJson(*encoded);
   badCover["asobmashow"]["laneCoverEvents"][0]["noteStartPositionPercent"] =
       101;

@@ -47,6 +47,10 @@ public:
   decode(std::span<const std::byte> encoded,
          std::optional<int> expectedKeyMode = std::nullopt) const;
 
+  [[nodiscard]] ReplayDecodeOutcome
+  decode(std::span<const std::byte> encoded,
+         std::span<const int> expectedStageKeyModes) const;
+
   [[nodiscard]] static std::optional<int>
   beatorajaKeyCode(const LogicalControl &control, int keyMode) noexcept;
 

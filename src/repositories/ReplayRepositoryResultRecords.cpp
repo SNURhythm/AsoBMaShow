@@ -12,6 +12,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -2364,7 +2365,8 @@ ReplayRepository::loadChartReplayPlayback(int resultId) {
   }
 
   replay::BeatorajaReplayCodec codec;
-  auto decoded = store.load(metadata, codec);
+  const std::array expectedKeyModes{result.keyMode};
+  auto decoded = store.load(metadata, codec, expectedKeyModes);
   if (!decoded.chart.has_value() || decoded.course.has_value()) {
     return {.status = ReadStatus::Invalid,
             .result = std::move(result),
@@ -2453,7 +2455,12 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
                     : inspection.diagnostic};
   }
   replay::BeatorajaReplayCodec codec;
-  auto decoded = store.load(metadata, codec);
+  std::vector<int> expectedKeyModes;
+  expectedKeyModes.reserve(result.stages.size());
+  for (const auto &stage : result.stages) {
+    expectedKeyModes.push_back(stage.keyMode);
+  }
+  auto decoded = store.load(metadata, codec, expectedKeyModes);
   if (!decoded.course.has_value() || decoded.chart.has_value()) {
     return {.status = ReadStatus::Invalid,
             .result = std::move(result),
