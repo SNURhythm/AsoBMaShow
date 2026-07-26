@@ -215,6 +215,18 @@ bool knownGaugeType(GaugeType value) noexcept {
   return index >= 0 && index < static_cast<int>(kGaugeTypeCount);
 }
 
+bool knownGaugeProfile(GaugeProfile value) noexcept {
+  const int index = static_cast<int>(value);
+  return index >= static_cast<int>(GaugeProfile::Standard) &&
+         index <= static_cast<int>(GaugeProfile::Standard24Keys);
+}
+
+bool knownGaugeAutoShiftMode(GaugeAutoShiftMode value) noexcept {
+  const int index = static_cast<int>(value);
+  return index >= static_cast<int>(GaugeAutoShiftMode::None) &&
+         index <= static_cast<int>(GaugeAutoShiftMode::BestClear);
+}
+
 std::string legacyResultFingerprintV2(const PersistedChartResult &result) {
   CanonicalEncoder encoder;
   encoder.string("asobmashow-chart-result-v2");
@@ -615,10 +627,18 @@ bool validatePersistedCourseResult(const PersistedCourseResult &result,
         return false;
       }
     }
-    if (result.longNoteMode < 0 || result.finalScore < 0 ||
-        result.maxScore <= 0 || result.finalScore > result.maxScore ||
-        result.maxCombo < 0 || !std::isfinite(result.finalGauge) ||
-        result.finalGauge < 0.0F || !knownClearRank(result.clearType)) {
+    if (!knownGaugeType(result.initialGaugeType) ||
+        !knownGaugeProfile(result.gaugeProfile) ||
+        !knownGaugeAutoShiftMode(result.gaugeAutoShift) ||
+        !knownGaugeType(result.gaugeAutoShiftLowerBound)) {
+      diagnostic = "course gauge configuration is invalid";
+      return false;
+    }
+    if (result.longNoteMode < 0 || result.longNoteMode > 3 ||
+        result.finalScore < 0 || result.maxScore <= 0 ||
+        result.finalScore > result.maxScore || result.maxCombo < 0 ||
+        !std::isfinite(result.finalGauge) || result.finalGauge < 0.0F ||
+        !knownClearRank(result.clearType)) {
       diagnostic = "course result facts are invalid";
       return false;
     }

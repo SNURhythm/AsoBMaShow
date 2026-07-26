@@ -1085,12 +1085,18 @@ exportDocument(std::uint64_t operationToken,
       request.suggestedName, request.maxBytes, &cancellationRequested,
       [commitGate] { return commitGate && commitGate([] { return true; }); });
 #else
-  const char *filters[] = {"*.asobprofile", "*.zip"};
+  const char *profileFilters[] = {"*.asobprofile", "*.zip"};
+  const char *replayFilters[] = {"*.brd"};
+  const bool replay =
+      detail::ClassifyDesktopExportName(request.suggestedName) ==
+      detail::DesktopExportKind::BeatorajaReplay;
   const std::string suggestedName =
-      detail::PreferredProfileExportName(request.suggestedName);
-  const char *selected =
-      tinyfd_saveFileDialog("Export player profile", suggestedName.c_str(), 2,
-                            filters, "Player profile archive");
+      replay ? request.suggestedName
+             : detail::PreferredProfileExportName(request.suggestedName);
+  const char *selected = tinyfd_saveFileDialog(
+      replay ? "Export replay" : "Export player profile", suggestedName.c_str(),
+      replay ? 1 : 2, replay ? replayFilters : profileFilters,
+      replay ? "Beatoraja replay" : "Player profile archive");
   if (selected == nullptr) {
     bridgeResult = std::string(kCancelled);
   } else if (cancellationRequested.load(std::memory_order_acquire)) {
@@ -1135,6 +1141,12 @@ bool SecurePrivateDocumentPath(const std::filesystem::path &path,
 std::string PreferredProfileExportName(const std::string &suggestedName) {
   const std::filesystem::path name = PathFromUtf8(suggestedName);
   return name.has_extension() ? suggestedName : suggestedName + ".asobprofile";
+}
+
+DesktopExportKind ClassifyDesktopExportName(const std::string &suggestedName) {
+  return PathFromUtf8(suggestedName).extension() == ".brd"
+             ? DesktopExportKind::BeatorajaReplay
+             : DesktopExportKind::PlayerProfile;
 }
 
 std::filesystem::path PathFromUtf8(std::string_view value) {

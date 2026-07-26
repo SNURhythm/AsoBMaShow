@@ -155,6 +155,7 @@ void LogicalGameplayInputAdapter::reset() {
   heldLaneScopes_.clear();
   scratchLaneStates_.clear();
   recordedScratchControls_.clear();
+  pendingPhysicalEdges_.clear();
 }
 
 int LogicalGameplayInputAdapter::scratchLane(input::InputScope scope) {
@@ -166,6 +167,16 @@ bool LogicalGameplayInputAdapter::isLaneHeld(int lane) const {
   return heldLaneScopes_.contains(lane) ||
          (scratch != scratchLaneStates_.end() &&
           scratch->second.activeDirection.has_value());
+}
+
+void LogicalGameplayInputAdapter::pressPhysicalLane(int lane) {
+  ++pendingPhysicalEdges_[lane];
+  control_.pressLane(lane);
+}
+
+void LogicalGameplayInputAdapter::releasePhysicalLane(int lane, bool backSpin) {
+  ++pendingPhysicalEdges_[lane];
+  control_.releaseLane(lane, 0.0, backSpin);
 }
 
 void LogicalGameplayInputAdapter::applyLane(
@@ -181,7 +192,7 @@ void LogicalGameplayInputAdapter::applyLane(
     const bool inserted = heldLaneScopes_[lane].insert(transition.scope).second;
     if (inserted) {
       if (!wasHeld) {
-        control_.pressLane(lane);
+        pressPhysicalLane(lane);
       }
       if (digitalScratch) {
         synchronizeScratchReplayControl(transition, lane);
@@ -199,8 +210,9 @@ void LogicalGameplayInputAdapter::applyLane(
   if (held->second.empty()) {
     heldLaneScopes_.erase(held);
   }
-  if (!isLaneHeld(lane)) {
-    control_.releaseLane(lane, 0.0, false);
+  const bool releasedPhysicalLane = !isLaneHeld(lane);
+  if (releasedPhysicalLane) {
+    releasePhysicalLane(lane, false);
     if (!digitalScratch) {
       notifyApplied(transition, logicalControl, false);
     }
@@ -234,8 +246,8 @@ void LogicalGameplayInputAdapter::applyScratch(
       if (oppositeReleasedInBatch) {
         return;
       }
-      control_.releaseLane(lane, 0.0, true);
-      control_.pressLane(lane);
+      releasePhysicalLane(lane, true);
+      pressPhysicalLane(lane);
       synchronizeScratchReplayControl(transition, lane);
       return;
     }
@@ -243,9 +255,9 @@ void LogicalGameplayInputAdapter::applyScratch(
     state.activeDirection.reset();
     const bool digitalLaneHeld = heldLaneScopes_.contains(lane);
     if (reversing || !digitalLaneHeld) {
-      control_.releaseLane(lane, 0.0, reversing);
+      releasePhysicalLane(lane, reversing);
       if (reversing && digitalLaneHeld) {
-        control_.pressLane(lane);
+        pressPhysicalLane(lane);
       }
     }
     scratchLaneStates_.erase(found);
@@ -260,15 +272,15 @@ void LogicalGameplayInputAdapter::applyScratch(
     return;
   }
   if (state.activeDirection.has_value()) {
-    control_.releaseLane(lane, 0.0, true);
-    control_.pressLane(lane);
+    releasePhysicalLane(lane, true);
+    pressPhysicalLane(lane);
     state.activeDirection = direction;
     synchronizeScratchReplayControl(transition, lane);
     return;
   }
   state.activeDirection = direction;
   if (!wasHeld) {
-    control_.pressLane(lane);
+    pressPhysicalLane(lane);
   }
   synchronizeScratchReplayControl(transition, lane);
 }
@@ -346,9 +358,18 @@ void LogicalGameplayInputAdapter::synchronizeScratchReplayControl(
 void LogicalGameplayInputAdapter::notifyApplied(
     const input::LogicalInputTransition &source,
     replay::LogicalControl control, bool pressed) {
+  const int lane = isScratchControl(control) ? scratchLane(source.scope)
+                                             : source.action.lane;
+  const auto pending = pendingPhysicalEdges_.find(lane);
+  const bool replayOnly = pending == pendingPhysicalEdges_.end();
+  if (!replayOnly && --pending->second == 0) {
+    pendingPhysicalEdges_.erase(pending);
+  }
   if (appliedTransitionCallback_) {
-    appliedTransitionCallback_(
-        {.source = source, .control = control, .pressed = pressed});
+    appliedTransitionCallback_({.source = source,
+                                .control = control,
+                                .pressed = pressed,
+                                .replayOnly = replayOnly});
   }
 }
 

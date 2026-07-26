@@ -940,6 +940,19 @@ void testPreferredProfileExportNameUsesProfileExtension() {
          "extensions");
 }
 
+void testDesktopReplayExportUsesReplayDialogKind() {
+  using platform_document_handoff::detail::ClassifyDesktopExportName;
+  using platform_document_handoff::detail::DesktopExportKind;
+  expect(ClassifyDesktopExportName("sha256.brd") ==
+             DesktopExportKind::BeatorajaReplay,
+         "desktop BRD export selects the Beatoraja replay dialog");
+  expect(ClassifyDesktopExportName("player-profile.asobprofile") ==
+                 DesktopExportKind::PlayerProfile &&
+             ClassifyDesktopExportName("player-profile") ==
+                 DesktopExportKind::PlayerProfile,
+         "desktop profile exports retain the profile archive dialog");
+}
+
 void testUnicodeDesktopPathsRoundTripAsUtf8() {
   const std::string unicodeUtf8 =
       "\xed\x94\x84\xeb\xa1\x9c\xed\x95\x84-\xf0\x9f\x8e\xb5.asobprofile";
@@ -995,6 +1008,7 @@ int main() {
   testTemporaryOwnershipRequiresExactPrivateShapeAndModes();
   testPrivateImportRootRejectsPreplantedLinks();
   testPreferredProfileExportNameUsesProfileExtension();
+  testDesktopReplayExportUsesReplayDialogKind();
   testUnicodeDesktopPathsRoundTripAsUtf8();
 
   if (failures != 0) {

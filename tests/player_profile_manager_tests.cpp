@@ -409,6 +409,47 @@ void seedImportedIrScore(const std::filesystem::path &path,
       std::string(label) + " imported IR score projection seeds");
 }
 
+constexpr std::string_view kReferencedReplayFilename =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.brd";
+
+void seedReferencedReplay(const PlayerProfilePaths &paths,
+                          std::string_view label) {
+  Database database = openDatabase(paths.replaysDb);
+  expect(database != nullptr, std::string(label) + " replay database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
+          "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
+          "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
+          "fast,slow,final_gauge,clear_type,adopted_gauge_type,"
+          "gauge_history_json,judgement_timing_json,provenance_json,"
+          "result_fingerprint,played_at_unix_ms) VALUES("
+          "'10000000-0000-4000-8000-000000000005','owned.bms',"
+          "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'Owned Replay','Artist',7,0,1,2,1,0,0,1,0,0,0,0,0,0,0.0,0,2,'[]',"
+          "NULL,'{\"ruleset\":{\"version\":0},\"eligibility\":2,"
+          "\"source\":{\"kind\":\"legacy\"}}',lower(hex(zeroblob(32))),"
+          "5000);"
+          "INSERT INTO replay_files(chart_result_id,course_result_id,stem,"
+          "history_index,relative_path,content_sha256,compressed_size,"
+          "codec_version) VALUES(last_insert_rowid(),NULL,"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "0,'replay/"
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa."
+          "brd',"
+          "'32e5fa06f7003f7aff6ffe68451a942cad17c55c64d6c671ea2cc2a1181ab987',"
+          "19,2);"
+          "INSERT INTO replay_stem_sequences(stem,last_history_index) VALUES("
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "0)"),
+      std::string(label) + " replay result and file reference seed");
+}
+
 bool directoryContains(const std::filesystem::path &root,
                        std::string_view needle) {
   std::error_code error;
@@ -2492,6 +2533,56 @@ void testDuplicateHoldsProfileActivityExclusionAcrossSnapshotAndFiles() {
   expect(duplicated.ok(), "guarded duplicate still succeeds");
 }
 
+void testDuplicateRejectsReferencedReplayChecksumMismatch() {
+  TempDirectory temp("profile-duplicate-replay-checksum");
+  auto dependencies = dependenciesFor();
+  int uuidIndex = 0;
+  dependencies.generateUuid = [&] {
+    return uuidIndex++ == 0 ? "11111111-1111-4111-8111-111111111111"
+                            : "22222222-2222-4222-8222-222222222222";
+  };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "checksum duplicate fixture initializes");
+  const auto source = manager.activePaths();
+  seedReferencedReplay(source, "checksum duplicate source");
+  writeFile(source.replayDirectory / kReferencedReplayFilename,
+            "OWNED replay bytes\n");
+
+  const auto duplicated = manager.duplicateProfile(manager.activeProfile().id,
+                                                   "Checksum Mismatch Copy");
+  expect(!duplicated.ok() && duplicated.error == ProfileError::IntegrityFailure,
+         "duplicate rejects referenced replay bytes that differ from the "
+         "database checksum: " +
+             duplicated.message);
+}
+
+void testDuplicatePreservesDeletedReferencedReplayAsMissing() {
+  TempDirectory temp("profile-duplicate-missing-replay");
+  auto dependencies = dependenciesFor();
+  int uuidIndex = 0;
+  dependencies.generateUuid = [&] {
+    return uuidIndex++ == 0 ? "11111111-1111-4111-8111-111111111111"
+                            : "22222222-2222-4222-8222-222222222222";
+  };
+  PlayerProfileManager manager(temp.path(), std::move(dependencies));
+  expect(manager.Initialize().ok(), "missing-replay duplicate initializes");
+  const auto source = manager.activePaths();
+  seedReferencedReplay(source, "missing-replay duplicate source");
+
+  const auto duplicated = manager.duplicateProfile(manager.activeProfile().id,
+                                                   "Missing Replay Copy");
+  expect(duplicated.ok() && duplicated.profile.has_value(),
+         "duplicate accepts a replay reference whose user-deleted file is "
+         "missing: " +
+             duplicated.message);
+  if (duplicated.profile) {
+    expect(!std::filesystem::exists(
+               manager.pathsFor(duplicated.profile->id).replayDirectory /
+               kReferencedReplayFilename),
+           "duplicate keeps the user-deleted replay unavailable");
+  }
+}
+
 void testUnsupportedPreV10ReplayProfileFailsActivationPreflight() {
   TempDirectory temp("profile-unsupported-pre-v10-replay");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -2795,6 +2886,57 @@ void testPracticeDirectoryLifecycleAndValidation() {
   }
 }
 
+void testReplayDirectoryLifecycleAndValidation() {
+  TempDirectory temp("profile-replay-validation");
+  TempDirectory external("profile-replay-validation-external");
+  PlayerProfileManager manager(temp.path(), dependenciesFor());
+  expect(manager.Initialize().ok(), "replay validation test initializes");
+
+  const std::string profileId = manager.activeProfile().id;
+  const PlayerProfilePaths paths = manager.activePaths();
+  std::error_code error;
+  std::filesystem::remove(paths.replayDirectory, error);
+  expect(!error, "replay directory is removed for missing-directory fixture");
+  expect(manager.validateProfile(profileId).ok() &&
+             manager.validateProfileForActivation(profileId).ok(),
+         "missing optional replay directory remains valid and activatable");
+
+  error.clear();
+  std::filesystem::create_directory_symlink(external.path(),
+                                            paths.replayDirectory, error);
+  expect(!error, "replay-directory symlink fixture creates");
+  if (!error) {
+    expect(manager.validateProfile(profileId).error ==
+                   ProfileError::IntegrityFailure &&
+               manager.validateProfileForActivation(profileId).error ==
+                   ProfileError::IntegrityFailure,
+           "public validation and activation reject a linked replay "
+           "directory");
+    error.clear();
+    std::filesystem::remove(paths.replayDirectory, error);
+    expect(!error, "replay-directory symlink fixture is removed");
+  }
+
+  error.clear();
+  std::filesystem::create_directory(paths.replayDirectory, error);
+  expect(!error, "replay directory is recreated for child-link fixture");
+  const auto externalReplay = external.path() / "outside.brd";
+  writeFile(externalReplay, "external replay\n");
+  error.clear();
+  std::filesystem::create_symlink(externalReplay,
+                                  paths.replayDirectory / "linked.brd", error);
+  expect(!error, "replay child symlink fixture creates");
+  if (!error) {
+    expect(manager.validateProfile(profileId).error ==
+                   ProfileError::IntegrityFailure &&
+               manager.validateProfileForActivation(profileId).error ==
+                   ProfileError::IntegrityFailure,
+           "public validation and activation reject a linked replay child");
+    expect(readFile(externalReplay) == "external replay\n",
+           "replay child validation leaves the link target untouched");
+  }
+}
+
 void testFutureVersionsFailClosed() {
   TempDirectory temp("profile-future");
   PlayerProfileManager manager(temp.path(), dependenciesFor());
@@ -2866,10 +3008,13 @@ int main() {
   testSupportedOlderActiveProfileWaitsForSchemaOwners();
   testDuplicateMigratesCompactSchema13AndPreservesRows();
   testDuplicateHoldsProfileActivityExclusionAcrossSnapshotAndFiles();
+  testDuplicateRejectsReferencedReplayChecksumMismatch();
+  testDuplicatePreservesDeletedReferencedReplayAsMissing();
   testUnsupportedPreV10ReplayProfileFailsActivationPreflight();
   testProfileCrudConstraintsAndDataIsolation();
   testOptionalOperationalFilesRejectLinksWithoutTouchingTargets();
   testPracticeDirectoryLifecycleAndValidation();
+  testReplayDirectoryLifecycleAndValidation();
   testFutureVersionsFailClosed();
 
   if (failures != 0) {

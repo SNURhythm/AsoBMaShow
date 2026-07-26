@@ -10256,7 +10256,7 @@ void MainMenuScene::startReplayFileShare() {
   replay::ReplayFileStore fileStore(
       context.replayRepository.GetResolvedDatabasePath().parent_path());
   ReplayFileActionService actions(context.replayRepository, fileStore);
-  const auto inspected = actions.inspect(*record);
+  const auto inspected = actions.prepareShare(*record);
   if (inspected.availability != ReplayAvailability::Available ||
       !inspected.sourcePath.has_value() || inspected.suggestedFilename.empty()) {
     if (replayModalTitleText != nullptr) {
@@ -10285,6 +10285,7 @@ void MainMenuScene::startReplayFileShare() {
         .mimeType = "application/octet-stream",
         .suggestedName = inspected.suggestedFilename,
         .maxBytes = size,
+        .sourceLifetime = inspected.sourceLifetime,
     });
     if (!replayDocumentHandoff) {
       throw std::runtime_error("Replay share picker did not start");

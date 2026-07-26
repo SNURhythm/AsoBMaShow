@@ -1223,7 +1223,7 @@ void testArchiveUsesNativeUnicodeFilesystemPaths() {
       [&](const std::filesystem::path &workspace) {
         observedWorkspace = workspace;
       };
-  dependencies.validation.declaredSizeAllowed = [&](std::string_view name,
+  dependencies.validation.streamedSizeAllowed = [&](std::string_view name,
                                                     std::uint64_t currentMember,
                                                     std::uint64_t currentTotal,
                                                     std::uint64_t additional) {
@@ -1946,6 +1946,14 @@ void testSizePolicyBoundariesWithoutLargeAllocations() {
           !Policy::memberSizeAllowed("scores.db",
                                      Policy::kMaximumDatabaseBytes + 1),
       "database declared-size boundary is enforced");
+  const std::string replayMember = "replay/" + std::string(64, 'a') + ".brd";
+  expect(
+      Policy::memberSizeAllowed(
+          replayMember, replay::ReplayCodecLimits::kMaximumCompressedBytes) &&
+          !Policy::memberSizeAllowed(
+              replayMember,
+              replay::ReplayCodecLimits::kMaximumCompressedBytes + 1),
+      "compressed replay boundary matches the production codec limit");
   expect(Policy::additionAllowed("scores.db", Policy::kMaximumDatabaseBytes, 0,
                                  0) &&
              !Policy::additionAllowed("scores.db",
@@ -1959,6 +1967,90 @@ void testSizePolicyBoundariesWithoutLargeAllocations() {
   expect(Policy::totalSizeAllowed(Policy::kMaximumTotalBytes) &&
              !Policy::totalSizeAllowed(Policy::kMaximumTotalBytes + 1),
          "aggregate declared-size boundary is enforced");
+  expect(Policy::archiveSizeAllowed(Policy::kMaximumArchiveBytes) &&
+             !Policy::archiveSizeAllowed(Policy::kMaximumArchiveBytes + 1),
+         "physical archive-size boundary is enforced");
+  expect(Policy::memberCountAllowed(Policy::kMaximumMemberCount) &&
+             !Policy::memberCountAllowed(Policy::kMaximumMemberCount + 1),
+         "archive member-count boundary is enforced");
+  expect(Policy::memberNameAllowed(std::string(512, 'a')) &&
+             !Policy::memberNameAllowed(std::string(513, 'a')) &&
+             Policy::memberNameAllowed("replay/" + std::string(251, 'a') +
+                                       ".brd") &&
+             !Policy::memberNameAllowed("replay/" + std::string(252, 'a') +
+                                        ".brd"),
+         "archive and replay member-name boundaries are enforced");
+}
+
+void testArchiveParserRejectsContainerAndMemberResourceAbuse() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "resource-abuse-source.zip");
+  std::string error;
+  const auto valid = readArchive(source, error);
+  expect(error.empty() && valid.size() == kExpectedMembers.size(),
+         "resource-abuse source archive reads");
+  if (!error.empty() || valid.size() != kExpectedMembers.size()) {
+    return;
+  }
+
+  auto emptyReplay = valid;
+  emptyReplay.push_back({
+      .name = "replay/" + std::string(64, 'c') + ".brd",
+      .contents = {},
+  });
+  refreshChecksums(emptyReplay);
+  expectRejectedWithoutMutation(fixture, emptyReplay, "empty-replay-member",
+                                ProfileError::IntegrityFailure, "empty replay");
+
+  auto oversizedName = valid;
+  oversizedName.push_back({
+      .name = "replay/" + std::string(252, 'a') + ".brd",
+      .contents = "x",
+  });
+  refreshChecksums(oversizedName);
+  expectRejectedWithoutMutation(
+      fixture, oversizedName, "oversized-replay-member-name",
+      ProfileError::IntegrityFailure, "member name exceeds");
+
+  auto extraReplay = valid;
+  extraReplay.push_back({
+      .name = "replay/" + std::string(64, 'b') + ".brd",
+      .contents = "x",
+  });
+  refreshChecksums(extraReplay);
+  const auto memberCountArchive =
+      fixture.temp.path() / "member-count-limited.zip";
+  expect(writeArchive(memberCountArchive, extraReplay, error),
+         "member-count fixture writes: " + error);
+  ProfileArchiveDependencies countDependencies;
+  countDependencies.validation.memberCountAllowed =
+      [maximum = valid.size()](std::size_t count) { return count <= maximum; };
+  ProfileArchiveService countLimited(fixture.manager, countDependencies);
+  const auto countResult = countLimited.Import(memberCountArchive);
+  expect(countResult.error == ProfileError::IntegrityFailure &&
+             countResult.message.find("member count exceeds") !=
+                 std::string::npos,
+         "full parser rejects archives beyond its member-count limit: " +
+             countResult.message);
+
+  const auto oversizedArchive =
+      fixture.temp.path() / "oversized-physical-container.zip";
+  writeFile(oversizedArchive, "");
+  std::error_code resizeError;
+  std::filesystem::resize_file(
+      oversizedArchive,
+      ProfileArchiveSizePolicy::kMaximumExistingArchiveBytes + 1, resizeError);
+  expect(!resizeError, "oversized sparse import container creates");
+  const std::size_t profilesBefore = fixture.manager.listProfiles().size();
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(oversizedArchive);
+  expect(imported.error == ProfileError::IntegrityFailure &&
+             imported.message.find("archive file exceeds") != std::string::npos,
+         "import rejects a physical archive beyond its container limit: " +
+             imported.message);
+  expect(fixture.manager.listProfiles().size() == profilesBefore &&
+             transactionArtifacts(fixture.temp.path()).empty(),
+         "oversized physical archive rejection leaves profiles unchanged");
 }
 
 void testZipParserEnforcesDeclaredAndStreamedSizeLimits() {
@@ -2002,7 +2094,7 @@ void testZipParserEnforcesDeclaredAndStreamedSizeLimits() {
     validDeclaredTotal += member.contents.size();
   }
   ProfileArchiveDependencies aggregateDependencies;
-  aggregateDependencies.validation.declaredSizeAllowed =
+  aggregateDependencies.validation.streamedSizeAllowed =
       [maximumTotal = validDeclaredTotal -
                       1](std::string_view name, std::uint64_t currentMember,
                          std::uint64_t currentTotal, std::uint64_t additional) {
@@ -2015,8 +2107,9 @@ void testZipParserEnforcesDeclaredAndStreamedSizeLimits() {
                                          aggregateDependencies);
   const auto aggregateResult = aggregateLimited.Import(source);
   expect(aggregateResult.error == ProfileError::IntegrityFailure &&
-             aggregateResult.message.find("declared size") != std::string::npos,
-         "injectable small aggregate limit exercises full declared-size "
+             aggregateResult.message.find("stream exceeds") !=
+                 std::string::npos,
+         "injectable small aggregate limit exercises full streamed-size "
          "parser enforcement");
 
   ProfileArchiveDependencies streamDependencies;
@@ -3223,6 +3316,7 @@ int main() {
   testPracticeMembersAreValidatedBeforeInstall();
   testChecksumsVersionsValidatorsAndLimits();
   testSizePolicyBoundariesWithoutLargeAllocations();
+  testArchiveParserRejectsContainerAndMemberResourceAbuse();
   testZipParserEnforcesDeclaredAndStreamedSizeLimits();
   testSupportedOlderSchemasMigrateAndPreserveRows();
   testSchema10ArchiveUsesAuthoritativeLocalChartMetadata();

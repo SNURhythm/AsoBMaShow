@@ -8,6 +8,7 @@
 #include "ProfileDatabaseTools.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
+#include "replay/BeatorajaReplayCodec.h"
 #include "Uuid.h"
 #include "VersionedJson.h"
 #include "input/InputProfileStore.h"
@@ -43,7 +44,7 @@ namespace {
 using Json = nlohmann::json;
 constexpr std::uintmax_t kMaximumPracticeFileBytes = 1U * 1024U * 1024U;
 constexpr std::uintmax_t kMaximumReplayFileBytes =
-    2ULL * 1024ULL * 1024ULL * 1024ULL;
+    replay::ReplayCodecLimits::kMaximumCompressedBytes;
 
 enum class BuildMode { Migration, Create, Duplicate };
 
@@ -1662,6 +1663,20 @@ ProfileResult buildProfile(
     return fail(ProfileError::IntegrityFailure,
                 "unable to clear duplicated IR data: " + errorMessage);
   }
+  if (mode == BuildMode::Duplicate) {
+    std::vector<ReplayFileReference> replayReferences;
+    if (!ReplayRepository::ListReplayFileReferencesSnapshot(
+            staging.replaysDb, replayReferences, errorMessage)) {
+      return fail(ProfileError::IntegrityFailure,
+                  "unable to validate duplicated replay references: " +
+                      errorMessage);
+    }
+    if (!validatePresentReplayFilesAgainstReferences(
+            applicationRoot, staging, replayReferences, errorMessage)) {
+      return fail(ProfileError::IntegrityFailure,
+                  "duplicated replay file is invalid: " + errorMessage);
+    }
+  }
 
   if (!migrationPhase(ProfileMigrationPhase::WriteMetadata)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
@@ -2272,6 +2287,10 @@ PlayerProfileManager::validateProfile(std::string_view id,
 
   if (!validatePracticeDirectory(applicationDataRoot_, paths, nullptr,
                                  safetyError)) {
+    return failure(ProfileError::IntegrityFailure, safetyError);
+  }
+  if (!validateReplayDirectory(applicationDataRoot_, paths, nullptr,
+                               safetyError)) {
     return failure(ProfileError::IntegrityFailure, safetyError);
   }
 

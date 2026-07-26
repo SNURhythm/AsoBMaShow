@@ -2,6 +2,7 @@
 
 #include "PlayerProfileManager.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -45,12 +46,21 @@ struct ProfileArchiveSizePolicy {
   static constexpr std::uint64_t kMaximumDatabaseBytes =
       2ULL * 1024 * 1024 * 1024;
   static constexpr std::uint64_t kMaximumTotalBytes = 4ULL * 1024 * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumArchiveOverheadBytes =
+      128ULL * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumArchiveBytes =
+      kMaximumTotalBytes + kMaximumArchiveOverheadBytes;
   static constexpr std::uint64_t kMaximumExistingArchiveBytes =
-      kMaximumTotalBytes + kMaximumMetadataBytes;
+      kMaximumArchiveBytes;
+  static constexpr std::size_t kMaximumMemberCount = 65'536;
+  static constexpr std::size_t kMaximumMemberNameBytes = 512;
 
   [[nodiscard]] static bool memberSizeAllowed(std::string_view memberName,
                                               std::uint64_t bytes);
   [[nodiscard]] static bool totalSizeAllowed(std::uint64_t bytes);
+  [[nodiscard]] static bool archiveSizeAllowed(std::uint64_t bytes);
+  [[nodiscard]] static bool memberCountAllowed(std::size_t count);
+  [[nodiscard]] static bool memberNameAllowed(std::string_view memberName);
   [[nodiscard]] static bool additionAllowed(std::string_view memberName,
                                             std::uint64_t currentMemberBytes,
                                             std::uint64_t currentTotalBytes,
@@ -78,6 +88,9 @@ struct ProfileArchiveValidationOperations {
   // production caps are always enforced first.
   ProfileArchiveSizeCheck declaredSizeAllowed;
   ProfileArchiveSizeCheck streamedSizeAllowed;
+  std::function<bool(std::uint64_t)> archiveSizeAllowed;
+  std::function<bool(std::size_t)> memberCountAllowed;
+  std::function<bool(std::string_view)> memberNameAllowed;
 };
 
 struct ProfileArchiveDependencies {

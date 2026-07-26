@@ -4,6 +4,9 @@
 #include "input/InputBindingResolver.h"
 #include "input/InputNormalizer.h"
 #include "input/InputProfile.h"
+#include "replay/BeatorajaReplayCodec.h"
+#include "replay/ReplayInputRecorder.h"
+#include "replay/ReplayPlaybackDriver.h"
 #include "scene/play/RhythmState.h"
 
 #include <SDL2/SDL_scancode.h>
@@ -129,14 +132,14 @@ void testAppliedReplayTransitionsContainOnlyEffectiveLogicalEdges() {
   adapter.apply(std::vector{clockwise});
   adapter.apply(std::vector{transition(
       {2, 14}, input::LogicalActionKind::ScratchCounterClockwise, true)});
-  require(applied.size() == 3 && applied[0].pressed &&
+  require(applied.size() == 3 && applied[0].pressed && !applied[0].replayOnly &&
               applied[0].source.steadyTimestampMicros == 123'456 &&
               applied[0].control.kind ==
                   replay::LogicalControlKind::ScratchClockwise &&
-              !applied[1].pressed &&
+              !applied[1].pressed && !applied[1].replayOnly &&
               applied[1].control.kind ==
                   replay::LogicalControlKind::ScratchClockwise &&
-              applied[2].pressed &&
+              applied[2].pressed && !applied[2].replayOnly &&
               applied[2].control.kind ==
                   replay::LogicalControlKind::ScratchCounterClockwise &&
               applied[2].control.player == 2,
@@ -755,20 +758,19 @@ void testDirectionalScratchHandsReplayOwnershipToDigitalHold() {
                    .backSpin = false},
               },
           "directional-to-digital replay handoff keeps one physical hold");
-  require(
-      applied.size() == 4 && applied[0].pressed &&
-          applied[0].control.kind ==
-              replay::LogicalControlKind::ScratchCounterClockwise &&
-          !applied[1].pressed &&
-          applied[1].control.kind ==
-              replay::LogicalControlKind::ScratchCounterClockwise &&
-          applied[2].pressed &&
-          applied[2].control.kind ==
-              replay::LogicalControlKind::ScratchClockwise &&
-          !applied[3].pressed &&
-          applied[3].control.kind ==
-              replay::LogicalControlKind::ScratchClockwise,
-      "directional-to-digital replay handoff balances both logical owners");
+  require(applied.size() == 4 && applied[0].pressed && !applied[0].replayOnly &&
+              applied[0].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              !applied[1].pressed && applied[1].replayOnly &&
+              applied[1].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              applied[2].pressed && applied[2].replayOnly &&
+              applied[2].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              !applied[3].pressed && !applied[3].replayOnly &&
+              applied[3].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise,
+          "directional-to-digital replay handoff balances both logical owners");
 }
 
 void testDigitalScratchHandsReplayOwnershipToDirectionalHold() {
@@ -795,20 +797,116 @@ void testDigitalScratchHandsReplayOwnershipToDirectionalHold() {
                    .backSpin = false},
               },
           "digital-to-directional replay handoff keeps one physical hold");
+  require(applied.size() == 4 && applied[0].pressed && !applied[0].replayOnly &&
+              applied[0].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              !applied[1].pressed && applied[1].replayOnly &&
+              applied[1].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied[2].pressed && applied[2].replayOnly &&
+              applied[2].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              !applied[3].pressed && !applied[3].replayOnly &&
+              applied[3].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
+          "digital-to-directional replay handoff balances both logical owners");
+}
+
+void testNonRealtimeScratchHandoffRoundTripsWithoutPhysicalBackspin() {
+  RecordingControl liveControl;
+  replay::ReplayPlaybackData recorded;
+  recorded.setup.chartSha256 = std::string(64, 'a');
+  recorded.setup.keyMode = 7;
+  replay::ReplayInputCaptureBuffer capture;
+  std::string diagnostic;
+  LogicalGameplayInputAdapter adapter(
+      liveControl, {}, [&](const auto &applied) {
+        require(capture.capture(
+                    {.songTimeMicros = applied.source.steadyTimestampMicros,
+                     .control = applied.control,
+                     .pressed = applied.pressed,
+                     .replayOnly = applied.replayOnly},
+                    diagnostic),
+                "non-realtime applied transition enters replay capture");
+      });
+
+  auto directionalPress = transition(
+      {1, 7}, input::LogicalActionKind::ScratchCounterClockwise, true);
+  directionalPress.steadyTimestampMicros = 100;
+  adapter.apply(std::vector{directionalPress});
+
+  auto digitalPress =
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 7);
+  digitalPress.steadyTimestampMicros = 150;
+  adapter.apply(std::vector{digitalPress});
+
+  auto directionalRelease =
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 false, 0, 0.0F);
+  directionalRelease.steadyTimestampMicros = 200;
+  adapter.apply(std::vector{directionalRelease});
+
+  auto digitalRelease =
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 7, 0.0F);
+  digitalRelease.steadyTimestampMicros = 300;
+  adapter.apply(std::vector{digitalRelease});
+
+  auto captured = capture.finish(diagnostic);
+  require(captured.has_value(),
+          "non-realtime replay capture finalizes its input stream");
+  recorded.input = std::move(*captured);
+
+  replay::BeatorajaReplayCodec codec;
+  const auto encoded = codec.encodeChart(recorded, 1'000, diagnostic);
+  require(encoded.has_value(),
+          "non-realtime scratch handoff encodes as a BRD replay");
+  const auto decoded = codec.decode(*encoded, 7);
+  require(decoded.chart.has_value(),
+          "non-realtime scratch handoff decodes from BRD");
+
+  RecordingControl playbackControl;
+  replay::ReplayPlaybackDriver driver(*decoded.chart, playbackControl);
+  driver.advanceTo(300);
+  require(playbackControl.calls == liveControl.calls,
+          "non-realtime BRD playback reproduces the live continuous scratch "
+          "hold without a physical backspin");
+}
+
+void testOverlappingDigitalScratchReversalRetainsPhysicalMarkers() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+
+  adapter.apply(
+      std::vector{transition({1, 7}, input::LogicalActionKind::Lane, true, 7)});
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, true)});
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::ScratchClockwise, false, 0,
+                 0.0F),
+      transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+                 true),
+  });
+
   require(
-      applied.size() == 4 && applied[0].pressed &&
-          applied[0].control.kind ==
-              replay::LogicalControlKind::ScratchClockwise &&
-          !applied[1].pressed &&
-          applied[1].control.kind ==
-              replay::LogicalControlKind::ScratchClockwise &&
-          applied[2].pressed &&
-          applied[2].control.kind ==
-              replay::LogicalControlKind::ScratchCounterClockwise &&
-          !applied[3].pressed &&
-          applied[3].control.kind ==
-              replay::LogicalControlKind::ScratchCounterClockwise,
-      "digital-to-directional replay handoff balances both logical owners");
+      control.calls ==
+          std::vector<ControlCall>{
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+              {.kind = ControlCall::Kind::Release, .lane = 7, .backSpin = true},
+              {.kind = ControlCall::Kind::Press, .lane = 7},
+          },
+      "overlapping scratch reversal performs a physical backspin");
+  require(applied.size() == 3 && !applied[0].replayOnly &&
+              !applied[1].replayOnly && !applied[2].replayOnly &&
+              !applied[1].pressed &&
+              applied[1].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              applied[2].pressed &&
+              applied[2].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise,
+          "logical owner notifications consume the physical reversal even "
+          "when they arrive on the following transition");
 }
 
 void testSameLaneAcrossScopesUsesReferenceSemantics() {
@@ -1350,6 +1448,84 @@ void testRealtimePhysicalInputPublishesOrderedScratchReversal() {
       "direction press");
 }
 
+void testRealtimePhysicalInputKeepsDelayedScratchEdgesOnTheirLane() {
+  InputProfile profile;
+  const input::PhysicalControl positiveAxis{
+      .deviceId = "pad:shared-axis",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Axis,
+      .index = 0,
+      .direction = input::ControlDirection::Positive};
+  const input::PhysicalControl negativeAxis{
+      .deviceId = "pad:shared-axis",
+      .deviceClass = input::DeviceClass::GameController,
+      .kind = input::ControlKind::Axis,
+      .index = 0,
+      .direction = input::ControlDirection::Negative};
+  profile.bindings = {
+      {.id = "shared-axis-cw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::ScratchClockwise},
+       .control = positiveAxis},
+      {.id = "shared-axis-lane",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 0},
+       .control = negativeAxis},
+      {.id = "shared-axis-ccw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::ScratchCounterClockwise},
+       .control = negativeAxis},
+      {.id = "shared-axis-digital-scratch",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+       .control = {.deviceId = "pad:shared-axis",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}},
+  };
+
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(profile, makeGameplayInputScopes(7),
+                                            [&](const auto &value) {
+                                              output.push_back(value);
+                                              return true;
+                                            });
+  router.setGameplayEnabled(true, 100);
+  router.consume({.control = {.deviceId = "pad:shared-axis",
+                              .deviceClass = input::DeviceClass::GameController,
+                              .kind = input::ControlKind::Button,
+                              .index = SDL_CONTROLLER_BUTTON_A},
+                  .rawValue = 1.0,
+                  .normalizedValue = 1.0F},
+                 150);
+  router.consume(
+      {.control = positiveAxis, .rawValue = 1.0, .normalizedValue = 1.0F}, 200);
+  router.consume(
+      {.control = negativeAxis, .rawValue = -1.0, .normalizedValue = -1.0F},
+      300);
+
+  require(
+      output.size() == 4 && output[0].lane == 7 &&
+          output[0].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[0].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          output[1].lane == 0 &&
+          output[1].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[1].replayControl == replay::LogicalControlKind::Lane &&
+          output[2].lane == 7 &&
+          output[2].type ==
+              input::RealtimePhysicalInputTransitionType::Release &&
+          output[2].backSpin &&
+          output[2].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          output[3].lane == 7 &&
+          output[3].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[3].replayControl ==
+              replay::LogicalControlKind::ScratchCounterClockwise,
+      "delayed scratch reversal markers cannot consume another lane's "
+      "physical transition");
+}
+
 void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
   const audio::PlaybackRate assistedRate{75};
   require(clear_policy::assistClearRequired(assistedRate),
@@ -1411,6 +1587,8 @@ int main() {
   testLaneAndDirectionalScratchShareOneEffectiveLaneHold();
   testDirectionalScratchHandsReplayOwnershipToDigitalHold();
   testDigitalScratchHandsReplayOwnershipToDirectionalHold();
+  testNonRealtimeScratchHandoffRoundTripsWithoutPhysicalBackspin();
+  testOverlappingDigitalScratchReversalRetainsPhysicalMarkers();
   testSameLaneAcrossScopesUsesReferenceSemantics();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();
@@ -1423,6 +1601,7 @@ int main() {
   testRealtimePhysicalInputForwardsLogicalOnlyScratchHandoff();
   testRealtimePhysicalInputDefersScratchHandoffUntilResume();
   testRealtimePhysicalInputPublishesOrderedScratchReversal();
+  testRealtimePhysicalInputKeepsDelayedScratchEdgesOnTheirLane();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;
 }

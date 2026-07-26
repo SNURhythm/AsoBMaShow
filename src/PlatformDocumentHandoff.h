@@ -88,6 +88,8 @@ CreatePrivateImportDirectoryUnder(const std::filesystem::path &temporaryRoot,
 bool SecurePrivateDocumentPath(const std::filesystem::path &path,
                                bool directory, std::string &errorMessage);
 std::string PreferredProfileExportName(const std::string &suggestedName);
+enum class DesktopExportKind { PlayerProfile, BeatorajaReplay };
+DesktopExportKind ClassifyDesktopExportName(const std::string &suggestedName);
 std::filesystem::path PathFromUtf8(std::string_view value);
 std::string PathToUtf8(const std::filesystem::path &path);
 bool LockInterruptibly(std::timed_mutex &mutex,

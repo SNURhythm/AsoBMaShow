@@ -2981,11 +2981,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(logical_gameplay_input_tests
         tests/logical_gameplay_input_tests.cpp
+        src/MinizBridge.c
         src/input/LogicalGameplayInputAdapter.cpp
         src/input/InputBindingResolver.cpp
         src/input/InputDefaults.cpp
         src/input/InputNormalizer.cpp
         src/input/RealtimePhysicalInputRouter.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayInputRecorder.cpp
+        src/replay/ReplayPlaybackDriver.cpp
         src/scene/play/GameplayGaugeRules.cpp
     )
     target_include_directories(logical_gameplay_input_tests PRIVATE

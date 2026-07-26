@@ -1,6 +1,7 @@
 #include "replay/Base64Url.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/GzipCodec.h"
+#include "bms_parser.hpp"
 
 #include "nlohmann/json.hpp"
 
@@ -110,7 +111,7 @@ replay::ReplayPlaybackData extensionReplay() {
   value.setup.longNoteMode = 2;
   value.setup.hasUndefinedLongNotes = true;
   value.setup.randomSeed = 17;
-  value.setup.randomPrng = "mt19937";
+  value.setup.randomPrng = bms_parser::Parser::RandomPrngId;
   value.setup.randomValues = {3, 1, 4};
   value.setup.playOption = "R-RANDOM";
   value.setup.playOptionSeed = 0x123456;
@@ -722,6 +723,79 @@ void testStockProjectionCarriesPreRollHoldsAcrossTimeZero() {
          "Aso extension keeps the exact negative pre-roll transition");
 }
 
+void testEncodeValidatesRandomAndGaugeEnums() {
+  replay::BeatorajaReplayCodec codec;
+  std::string diagnostic;
+  const auto rejected = [&](replay::ReplayPlaybackData candidate,
+                            std::string_view message) {
+    diagnostic.clear();
+    expect(!codec.encodeChart(candidate, 1'000, diagnostic), message);
+    expect(!diagnostic.empty(),
+           "invalid random or gauge setup reports an encode diagnostic");
+  };
+
+  auto supportedPrng = extensionReplay();
+  expect(codec.encodeChart(supportedPrng, 1'000, diagnostic).has_value(),
+         "the parser-declared replay PRNG remains encodable");
+
+  auto maximumRandomValues = extensionReplay();
+  maximumRandomValues.setup.randomValues.assign(100'000, 0);
+  expect(codec.encodeChart(maximumRandomValues, 1'000, diagnostic).has_value(),
+         "encode accepts exactly one hundred thousand RANDOM values");
+
+  auto excessiveRandomValues = extensionReplay();
+  excessiveRandomValues.setup.randomValues.assign(100'001, 0);
+  rejected(excessiveRandomValues,
+           "encode rejects more than one hundred thousand RANDOM values");
+
+  auto unsupportedPrng = extensionReplay();
+  unsupportedPrng.setup.randomPrng = "unsupported-prng";
+  rejected(unsupportedPrng,
+           "encode rejects a present PRNG unsupported by the parser");
+
+  auto invalidInitialGauge = extensionReplay();
+  invalidInitialGauge.setup.startingGaugeState.reset();
+  invalidInitialGauge.setup.initialGaugeType = static_cast<GaugeType>(99);
+  rejected(invalidInitialGauge,
+           "encode rejects an out-of-range initial gauge type");
+
+  auto invalidGaugeLowerBound = extensionReplay();
+  invalidGaugeLowerBound.setup.startingGaugeState.reset();
+  invalidGaugeLowerBound.setup.gaugeAutoShiftLowerBound =
+      static_cast<GaugeType>(99);
+  rejected(invalidGaugeLowerBound,
+           "encode rejects an out-of-range gauge auto-shift lower bound");
+
+  auto invalidStartingGauge = extensionReplay();
+  invalidStartingGauge.setup.startingGaugeState->gaugeType =
+      static_cast<GaugeType>(99);
+  invalidStartingGauge.setup.startingGaugeState->currentGauge = 20.0F;
+  rejected(invalidStartingGauge,
+           "encode rejects an out-of-range active starting gauge type");
+
+  auto invalidLegacyGauge = extensionReplay();
+  invalidLegacyGauge.legacy = replay::LegacyPlaybackTrack{
+      .events = {{.action = replay::LegacyPlaybackAction::Gauge,
+                  .songTimeMicros = 1'000,
+                  .gauge = 20.0F,
+                  .gaugeType = static_cast<GaugeType>(99)}}};
+  rejected(invalidLegacyGauge,
+           "encode rejects an out-of-range legacy gauge type");
+}
+
+void testCourseEncodeRejectsNegativeRestDuration() {
+  replay::BeatorajaReplayCodec codec;
+  replay::CourseReplayPlaybackData course;
+  course.stages = {extensionReplay()};
+  course.restMicrosAfterStage = {-1};
+  std::string diagnostic;
+
+  expect(!codec.encodeCourse(course, 1'000, diagnostic),
+         "course encode rejects a negative post-stage rest duration");
+  expect(!diagnostic.empty(),
+         "negative post-stage rest reports an encode diagnostic");
+}
+
 void testAllMissReplayRoundTripsWithEmptyInput() {
   replay::BeatorajaReplayCodec codec;
   auto source = extensionReplay();
@@ -867,6 +941,13 @@ void expectDecodeRejected(replay::BeatorajaReplayCodec &codec,
   expect(!outcome.diagnostic.empty(), "rejected replay reports diagnostic");
 }
 
+void testStockDecodeRejectsZeroKeyRecords() {
+  replay::BeatorajaReplayCodec codec;
+  expectDecodeRejected(
+      codec, encodeJson(minimalStock(encodedInner(Bytes{}))),
+      "stock replay with zero nine-byte key records is rejected");
+}
+
 void testMalformedAndBoundedInputs() {
   replay::BeatorajaReplayCodec codec;
   expectDecodeRejected(codec, bytes("not gzip"),
@@ -903,6 +984,32 @@ void testMalformedAndBoundedInputs() {
   expectDecodeRejected(codec,
                        encodeJson(minimalStock(encodedInner(decreasing))),
                        "decreasing key timestamps are rejected");
+
+  auto equalTimeLegacy = extensionReplay();
+  equalTimeLegacy.legacy = replay::LegacyPlaybackTrack{
+      .events =
+          {
+              {.action = replay::LegacyPlaybackAction::Press,
+               .lane = 1,
+               .songTimeMicros = 1'000,
+               .gauge = 20.0F},
+              {.action = replay::LegacyPlaybackAction::Gauge,
+               .songTimeMicros = 1'000,
+               .gauge = 21.0F},
+          },
+  };
+  std::string legacyDiagnostic;
+  const auto equalTimeLegacyBytes =
+      codec.encodeChart(equalTimeLegacy, 1'000, legacyDiagnostic);
+  expect(equalTimeLegacyBytes.has_value(),
+         "equal-time legacy playback events remain valid");
+  if (equalTimeLegacyBytes) {
+    Json decreasingLegacy = outerJson(*equalTimeLegacyBytes);
+    decreasingLegacy["asobmashow"]["legacy"]["events"][1]["songTimeMicros"] =
+        999;
+    expectDecodeRejected(codec, encodeJson(decreasingLegacy),
+                         "decreasing legacy playback timestamps are rejected");
+  }
 
   Bytes redundant;
   appendRecord(redundant, 1, 1000);
@@ -1116,8 +1223,11 @@ int main() {
   testReplayOnlyScratchHandoffExtensionIsStrictAndStockCompatible();
   testPreRollInputEncodesForChartsAndCourses();
   testStockProjectionCarriesPreRollHoldsAcrossTimeZero();
+  testEncodeValidatesRandomAndGaugeEnums();
+  testCourseEncodeRejectsNegativeRestDuration();
   testAllMissReplayRoundTripsWithEmptyInput();
   testManualAssignmentProjectsToStockNormal();
+  testStockDecodeRejectsZeroKeyRecords();
   testMalformedAndBoundedInputs();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

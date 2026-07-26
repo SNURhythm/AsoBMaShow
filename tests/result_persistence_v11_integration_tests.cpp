@@ -1,6 +1,7 @@
 #include "ResultPersistenceCoordinator.h"
 
 #include "CourseIdentity.h"
+#include "FileChecksum.h"
 #include "ir/IrSubmissionSnapshot.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileStore.h"
@@ -15,6 +16,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -103,6 +105,14 @@ std::vector<char> readBytes(const std::filesystem::path &path) {
   std::ifstream input(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(input),
           std::istreambuf_iterator<char>()};
+}
+
+bool writeBytes(const std::filesystem::path &path,
+                std::span<const std::byte> bytes) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(reinterpret_cast<const char *>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  return static_cast<bool>(output);
 }
 
 std::map<std::string, std::int64_t>
@@ -524,6 +534,169 @@ void testCompleteFileAndDatabasePipeline() {
          "snapshot");
 }
 
+void testFileActionsRejectReplayFromDifferentChartContext() {
+  TemporaryDirectory temporary("action-semantic-validation");
+  Environment environment(temporary.path());
+  auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174030");
+  const auto saved = environment.coordinator.persist(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "semantic action fixture persists");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+
+  auto incompatible = attempt.replay;
+  incompatible.setup.keyMode = 14;
+  std::string diagnostic;
+  const auto encoded = environment.codec.encodeChart(
+      incompatible, attempt.result.playedAtUnixMillis, diagnostic);
+  expect(encoded.has_value(),
+         "different-context replay remains a valid BRD document");
+  if (!encoded.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      environment.replayRepository.loadChartResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value(),
+         "semantic action fixture reference loads");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+  const auto replayPath =
+      temporary.path() / loaded.record->replayFile->relativePath;
+  expect(writeBytes(replayPath, *encoded),
+         "different-context BRD replaces the saved replay bytes");
+  const auto sha256 =
+      file_checksum::sha256File(replayPath, diagnostic, encoded->size());
+  expect(sha256.has_value() &&
+             executeSql(
+                 environment.replayDatabase,
+                 "UPDATE replay_files SET content_sha256='" + *sha256 +
+                     "',compressed_size=" + std::to_string(encoded->size()) +
+                     " WHERE chart_result_id=" +
+                     std::to_string(saved.receipt->resultId)),
+         "database digest is updated to trust the replacement bytes");
+  if (!sha256.has_value()) {
+    return;
+  }
+
+  const replay::ReplayFileMetadata replacementMetadata{
+      .relativePath = loaded.record->replayFile->relativePath,
+      .sha256 = *sha256,
+      .compressedSize = encoded->size(),
+      .codecVersion = loaded.record->replayFile->codecVersion,
+  };
+  expect(environment.fileStore.inspect(replacementMetadata).state ==
+             replay::ReplayFileState::Available,
+         "digest-only inspection accepts the internally valid replacement");
+
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto inspected = actions.inspect({
+      .kind = ReplayFileReference::RecordKind::ChartResult,
+      .resultId = saved.receipt->resultId,
+  });
+  expect(inspected.availability == ReplayAvailability::Corrupt &&
+             !inspected.sourcePath.has_value(),
+         "file actions reject a BRD that disagrees with result chart context");
+}
+
+void testReplayShareUsesVerifiedSnapshotAfterSourceReplacement() {
+  TemporaryDirectory temporary("share-snapshot");
+  Environment environment(temporary.path());
+  auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174090");
+  const auto saved = environment.coordinator.persist(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "share snapshot fixture persists");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      environment.replayRepository.loadChartResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value(),
+         "share snapshot fixture exposes replay metadata");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+  const auto &reference = *loaded.record->replayFile;
+  const auto replayPath = temporary.path() / reference.relativePath;
+  const auto original = readBytes(replayPath);
+
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  auto prepared = actions.prepareShare({.resultId = saved.receipt->resultId});
+  expect(prepared.availability == ReplayAvailability::Available &&
+             prepared.sourcePath.has_value() &&
+             prepared.sourceLifetime != nullptr,
+         "share preparation retains a verified private source");
+  if (!prepared.sourcePath.has_value()) {
+    return;
+  }
+
+  std::vector<std::byte> replacement(original.size(), std::byte{'x'});
+  expect(writeBytes(replayPath, replacement),
+         "share snapshot fixture replaces the live replay with equal-size "
+         "bytes");
+  expect(actions.inspect({.resultId = saved.receipt->resultId}).availability ==
+             ReplayAvailability::Corrupt,
+         "equal-size source replacement invalidates the live replay");
+  expect(readBytes(*prepared.sourcePath) == original,
+         "the path handed to replay export remains the verified original "
+         "after live source replacement");
+}
+
+void testFileActionsRejectReplayUnderDifferentChartStem() {
+  TemporaryDirectory temporary("action-stem-validation");
+  Environment environment(temporary.path());
+  auto attempt = validAttempt("123e4567-e89b-42d3-a456-426614174031");
+  const auto saved = environment.coordinator.persist(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "stem action fixture persists");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      environment.replayRepository.loadChartResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value(),
+         "stem action fixture reference loads");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+
+  const std::string wrongStem = repeated('d', 64);
+  const auto wrongRelativePath =
+      std::filesystem::path("replay") / (wrongStem + ".brd");
+  std::error_code renameError;
+  std::filesystem::rename(temporary.path() /
+                              loaded.record->replayFile->relativePath,
+                          temporary.path() / wrongRelativePath, renameError);
+  expect(!renameError &&
+             executeSql(environment.replayDatabase,
+                        "UPDATE replay_files SET stem='" + wrongStem +
+                            "',relative_path='" +
+                            wrongRelativePath.generic_string() +
+                            "' WHERE chart_result_id=" +
+                            std::to_string(saved.receipt->resultId)),
+         "stem action fixture moves the valid replay under another canonical "
+         "chart stem");
+  if (renameError) {
+    return;
+  }
+
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto inspected = actions.inspect({
+      .kind = ReplayFileReference::RecordKind::ChartResult,
+      .resultId = saved.receipt->resultId,
+  });
+  expect(inspected.availability == ReplayAvailability::Corrupt &&
+             !inspected.sourcePath.has_value(),
+         "file actions reject a valid BRD stored under the wrong chart stem");
+}
+
 void testOccupiedSlotReplacementRelocatesDisplacedReference() {
   TemporaryDirectory temporary("occupied-slot-relocation");
   Environment environment(temporary.path());
@@ -763,6 +936,63 @@ void testCoursePipelineUsesOneBeatorajaArrayFile() {
       "deleted course replay disables playback without deleting result facts");
 }
 
+void testCoursePlaybackAndActionsRejectDifferentCourseStem() {
+  TemporaryDirectory temporary("course-stem-validation");
+  Environment environment(temporary.path());
+  const auto attempt =
+      validCourseAttempt("123e4567-e89b-42d3-a456-426614174014");
+  const auto saved = environment.coordinator.persistCourse(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "course stem fixture persists");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      environment.replayRepository.loadCourseResult(saved.receipt->resultId);
+  expect(loaded.record.has_value() && loaded.record->replayFile.has_value(),
+         "course stem fixture reference loads");
+  if (!loaded.record.has_value() || !loaded.record->replayFile.has_value()) {
+    return;
+  }
+
+  const std::string wrongStem = repeated('d', 10);
+  const auto wrongRelativePath =
+      std::filesystem::path("replay") / (wrongStem + ".brd");
+  std::error_code renameError;
+  std::filesystem::rename(temporary.path() /
+                              loaded.record->replayFile->relativePath,
+                          temporary.path() / wrongRelativePath, renameError);
+  expect(!renameError &&
+             executeSql(environment.replayDatabase,
+                        "UPDATE replay_files SET stem='" + wrongStem +
+                            "',relative_path='" +
+                            wrongRelativePath.generic_string() +
+                            "' WHERE course_result_id=" +
+                            std::to_string(saved.receipt->resultId)),
+         "course stem fixture moves the valid replay under another canonical "
+         "stem");
+  if (renameError) {
+    return;
+  }
+
+  const auto playback = environment.replayRepository.loadCourseReplayPlayback(
+      saved.receipt->resultId);
+  expect(playback.status ==
+             CourseReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "course playback rejects a filename stem unrelated to decoded setup");
+
+  ReplayFileActionService actions(environment.replayRepository,
+                                  environment.fileStore);
+  const auto inspected = actions.inspect({
+      .kind = ReplayFileReference::RecordKind::CourseResult,
+      .resultId = saved.receipt->resultId,
+  });
+  expect(inspected.availability == ReplayAvailability::Corrupt &&
+             !inspected.sourcePath.has_value(),
+         "course actions reject a valid BRD under the wrong course stem");
+}
+
 void testVersion13CourseEntryFactsMigration() {
   TemporaryDirectory temporary("course-entry-facts-migration");
   auto attempt =
@@ -992,10 +1222,14 @@ void testSummaryCorruptionAllowanceIsBounded() {
 
 int main() {
   testCompleteFileAndDatabasePipeline();
+  testFileActionsRejectReplayFromDifferentChartContext();
+  testReplayShareUsesVerifiedSnapshotAfterSourceReplacement();
+  testFileActionsRejectReplayUnderDifferentChartStem();
   testOccupiedSlotReplacementRelocatesDisplacedReference();
   testFilesystemFailuresNeverStageDatabaseRows();
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
   testCoursePipelineUsesOneBeatorajaArrayFile();
+  testCoursePlaybackAndActionsRejectDifferentCourseStem();
   testVersion13CourseEntryFactsMigration();
   testReplayVolumeOnlyGrowsTheBrdFile();
   testSummaryLimitsCountOnlyValidatedRows();

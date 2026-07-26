@@ -474,6 +474,33 @@ void testMissingHashMismatchCorruptAndIdentityMismatch() {
          "decoded chart identity mismatch is rejected");
 }
 
+void testOversizedMetadataIsRejectedBeforeFileAccess() {
+  TempDirectory profile("oversized-metadata");
+  replay::ReplayFileStore store(profile.path);
+  const replay::ReplayFileMetadata oversized{
+      .relativePath = chartPath().relativePath,
+      .sha256 = std::string(64, 'a'),
+      .compressedSize = replay::ReplayCodecLimits::kMaximumCompressedBytes + 1,
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+
+  expectEqual(store.inspect(oversized).state, replay::ReplayFileState::Corrupt,
+              "oversized replay metadata is corrupt even when its file is "
+              "missing");
+  replay::BeatorajaReplayCodec codec;
+  const auto loaded = store.load(oversized, codec);
+  expect(!loaded.chart && !loaded.course &&
+             loaded.diagnostic.find("size limit") != std::string::npos,
+         "oversized replay metadata is rejected before allocation");
+  const auto staged = store.stageVerifiedSnapshot(oversized);
+  expectEqual(staged.state, replay::ReplayFileState::Corrupt,
+              "oversized replay metadata cannot be staged for sharing");
+  std::string diagnostic;
+  expect(!store.removeIfMatches(oversized, diagnostic) &&
+             diagnostic.find("invalid") != std::string::npos,
+         "oversized replay metadata cannot enter ownership cleanup");
+}
+
 void testOwnedCleanupDoesNotDeleteConcurrentReplacement() {
   TempDirectory profile("cleanup-replacement");
   replay::BeatorajaReplayCodec codec;
@@ -512,8 +539,12 @@ void testStaleTemporaryCleanup() {
   std::filesystem::create_directory(profile.path / "replay");
   const auto stale =
       profile.path / "replay" / ("." + std::string(kShaA) + ".brd.old.tmp");
+  const auto staleShare =
+      profile.path / "replay" /
+      ("." + std::string(kShaA) + ".brd.share-deadbeef-7.tmp");
   const auto unrelated = profile.path / "replay" / "keep.tmp";
   writeBytes(stale, Bytes{std::byte{0x01}});
+  writeBytes(staleShare, Bytes{std::byte{0x02}});
   writeBytes(unrelated, Bytes{std::byte{0x02}});
   std::error_code error;
   std::filesystem::last_write_time(
@@ -521,13 +552,75 @@ void testStaleTemporaryCleanup() {
       std::filesystem::file_time_type::clock::now() - std::chrono::hours(2),
       error);
   expect(!error, "stale test file timestamp is set");
+  std::filesystem::last_write_time(
+      staleShare,
+      std::filesystem::file_time_type::clock::now() - std::chrono::hours(2),
+      error);
+  expect(!error, "stale share snapshot timestamp is set");
+  expect(
+      replay::isPrivateReplayTemporaryFilename(staleShare.filename().string()),
+      "share snapshots use the recognized private replay temporary shape");
   replay::ReplayFileStore store(profile.path);
   store.removeStaleTemporaryFiles(std::chrono::system_clock::now() -
                                   std::chrono::hours(1));
   expect(!std::filesystem::exists(stale),
          "stale private replay temporary file is removed");
+  expect(!std::filesystem::exists(staleShare),
+         "stale private replay share snapshot is removed at startup");
   expect(std::filesystem::exists(unrelated),
          "unrelated temporary-looking file is retained");
+}
+
+void testVerifiedShareSnapshotLifecycleAndTokenFailure() {
+  TempDirectory profile("share-snapshot");
+  replay::BeatorajaReplayCodec codec;
+  const Bytes encoded = encode(sampleReplay());
+  replay::ReplayFileStore store(profile.path);
+  const auto installed = store.finalize(chartPath(), encoded, codec,
+                                        chartIdentity(), "share_fixture");
+  expect(installed.metadata.has_value(), "share snapshot fixture installs");
+  if (!installed.metadata.has_value()) {
+    return;
+  }
+
+  auto staged = store.stageVerifiedSnapshot(*installed.metadata);
+  expectEqual(staged.state, replay::ReplayFileState::Available,
+              "verified share snapshot stages");
+  expect(staged.snapshot.has_value() &&
+             staged.snapshot->sourceLifetime != nullptr,
+         "verified share snapshot retains an ownership lifetime");
+  if (staged.snapshot.has_value()) {
+    const auto snapshotPath = staged.snapshot->sourcePath;
+    expect(std::filesystem::exists(snapshotPath),
+           "verified share snapshot exists while its owner is retained");
+    staged.snapshot.reset();
+    expect(!std::filesystem::exists(snapshotPath),
+           "verified share snapshot is deleted when its owner is released");
+  }
+
+  auto replaced = store.stageVerifiedSnapshot(*installed.metadata);
+  expect(replaced.snapshot.has_value(),
+         "replacement-preservation share snapshot stages");
+  if (replaced.snapshot.has_value()) {
+    const auto snapshotPath = replaced.snapshot->sourcePath;
+    const Bytes replacement{std::byte{0x61}, std::byte{0x62}};
+    writeBytes(snapshotPath, replacement);
+    replaced.snapshot.reset();
+    expect(std::filesystem::exists(snapshotPath) &&
+               readBytes(snapshotPath) == replacement,
+           "share lifetime cleanup preserves a replaced snapshot path");
+  }
+
+  replay::ReplayFileStore failingStore(
+      profile.path, {.failAt = [](std::string_view point) {
+        return point == "share-token-generation";
+      }});
+  const auto failed = failingStore.stageVerifiedSnapshot(*installed.metadata);
+  expectEqual(failed.state, replay::ReplayFileState::IoFailure,
+              "share token generation failure is reported as I/O failure");
+  expect(!failed.snapshot.has_value() && !failed.diagnostic.empty(),
+         "share token generation failure returns no export source and a "
+         "diagnostic");
 }
 
 } // namespace
@@ -540,8 +633,10 @@ int main() {
   testInjectedDurabilityFaults();
   testUnsafePathsAndLinks();
   testMissingHashMismatchCorruptAndIdentityMismatch();
+  testOversizedMetadataIsRejectedBeforeFileAccess();
   testOwnedCleanupDoesNotDeleteConcurrentReplacement();
   testStaleTemporaryCleanup();
+  testVerifiedShareSnapshotLifecycleAndTokenFailure();
   if (failures != 0) {
     std::cerr << failures << " replay file store test(s) failed\n";
     return 1;

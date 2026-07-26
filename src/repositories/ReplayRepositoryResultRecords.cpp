@@ -1,11 +1,13 @@
 #include "ReplayRepositoryInternal.h"
 
 #include "../BmsMetadataText.h"
+#include "../CourseConstraintUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../Uuid.h"
 #include "../ir/IrProfileSettings.h"
 #include "../ir/IrSubmissionSnapshot.h"
 #include "../replay/BeatorajaReplayCodec.h"
+#include "../replay/BeatorajaReplayPath.h"
 #include "../replay/ReplayFileStore.h"
 #include "SqliteRAII.h"
 
@@ -212,8 +214,7 @@ bool validateReplayReference(const ReplayFileReference &reference,
       reference.recordKind != expectedKind ||
       !lowerHex(reference.contentSha256, 64) || reference.compressedSize == 0 ||
       reference.compressedSize >
-          static_cast<std::uint64_t>(
-              std::numeric_limits<sqlite3_int64>::max()) ||
+          replay::ReplayCodecLimits::kMaximumCompressedBytes ||
       reference.codecVersion != replay::BeatorajaReplayCodec::kCodecVersion) {
     diagnostic = "replay file reference is malformed";
     return false;
@@ -683,7 +684,7 @@ bool MarkReplayFileReservationFinalizedOnConnection(
       metadata.relativePath != reservation.relativePath ||
       !lowerHex(metadata.sha256, 64) || metadata.compressedSize == 0 ||
       metadata.compressedSize >
-          static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max()) ||
+          replay::ReplayCodecLimits::kMaximumCompressedBytes ||
       metadata.codecVersion != replay::BeatorajaReplayCodec::kCodecVersion) {
     diagnostic = pathDiagnostic.empty()
                      ? "finalized replay ownership metadata is invalid"
@@ -2492,9 +2493,14 @@ ReplayRepository::loadChartReplayPlayback(int resultId) {
                               ? "The replay file is not a chart replay."
                               : std::move(decoded.diagnostic)};
   }
+  std::string stemDiagnostic;
+  const auto expectedStem = replay::chartStem(
+      decoded.chart->setup.chartSha256, decoded.chart->setup.longNoteMode,
+      decoded.chart->setup.hasUndefinedLongNotes, stemDiagnostic);
   if (decoded.chart->setup.chartSha256 != result.score.chartSha256 ||
       decoded.chart->setup.keyMode != result.keyMode ||
-      decoded.chart->setup.longNoteMode != result.score.longNoteMode) {
+      decoded.chart->setup.longNoteMode != result.score.longNoteMode ||
+      !expectedStem.has_value() || reference.stem != *expectedStem) {
     return {.status = ReadStatus::IntegrityConflict,
             .result = std::move(result),
             .diagnostic =
@@ -2604,6 +2610,25 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
               .diagnostic =
                   "A course replay stage differs from its saved result."};
     }
+  }
+  replay::CoursePathInput pathInput{
+      .longNoteMode = result.longNoteMode,
+      .beatorajaConstraintIds =
+          beatorajaCourseConstraintIds(result.constraintJson),
+  };
+  pathInput.stageSha256.reserve(decoded.course->stages.size());
+  for (const auto &stage : decoded.course->stages) {
+    pathInput.stageSha256.push_back(stage.setup.chartSha256);
+    pathInput.hasUndefinedLongNotes =
+        pathInput.hasUndefinedLongNotes || stage.setup.hasUndefinedLongNotes;
+  }
+  std::string stemDiagnostic;
+  const auto expectedStem = replay::courseStem(pathInput, stemDiagnostic);
+  if (!expectedStem.has_value() || reference.stem != *expectedStem) {
+    return {.status = ReadStatus::IntegrityConflict,
+            .result = std::move(result),
+            .diagnostic =
+                "The course replay filename differs from its saved result."};
   }
   return {.status = ReadStatus::Loaded,
           .result = std::move(result),

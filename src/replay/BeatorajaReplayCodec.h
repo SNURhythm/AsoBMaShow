@@ -12,7 +12,9 @@
 namespace replay {
 
 struct ReplayCodecLimits {
-  std::size_t maxCompressedBytes = 64U * 1024U * 1024U;
+  static constexpr std::size_t kMaximumCompressedBytes = 64U * 1024U * 1024U;
+
+  std::size_t maxCompressedBytes = kMaximumCompressedBytes;
   std::size_t maxJsonBytes = 256U * 1024U * 1024U;
   std::size_t maxKeyInputBytes = 9U * 1'000'000U;
   std::size_t maxInputTransitions = 1'000'000U;

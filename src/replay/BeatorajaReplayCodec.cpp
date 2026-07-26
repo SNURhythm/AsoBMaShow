@@ -5,6 +5,7 @@
 #include "BeatorajaLongNoteMode.h"
 #include "BeatorajaReplayPath.h"
 #include "GzipCodec.h"
+#include "../bms_parser.hpp"
 #include "../scene/play/GameplayScoreState.h"
 
 #include "nlohmann/json.hpp"
@@ -84,6 +85,12 @@ bool isKeyModeSupported(int keyMode) {
   default:
     return false;
   }
+}
+
+bool isGaugeTypeSupported(GaugeType gaugeType) {
+  const int value = static_cast<int>(gaugeType);
+  return value >= static_cast<int>(GaugeType::AssistedEasy) &&
+         value <= static_cast<int>(GaugeType::Hazard);
 }
 
 int playerCount(int keyMode) {
@@ -583,6 +590,10 @@ decodeStockInput(const Json &stage, int keyMode,
     return std::nullopt;
   }
   const std::size_t recordCount = records->size() / kKeyRecordSize;
+  if (recordCount == 0) {
+    fail(diagnostic, "Replay keyinput contains no key records");
+    return std::nullopt;
+  }
   if (recordCount > limits.maxInputTransitions) {
     fail(diagnostic, "Replay keyinput record count exceeds the limit");
     return std::nullopt;
@@ -628,6 +639,13 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   if (!isKeyModeSupported(setup.keyMode)) {
     return fail(diagnostic, "Replay key mode is unsupported");
   }
+  if (setup.randomValues.size() > 100'000) {
+    return fail(diagnostic, "Replay RANDOM sequence is too large");
+  }
+  if (setup.randomPrng.has_value() &&
+      *setup.randomPrng != bms_parser::Parser::RandomPrngId) {
+    return fail(diagnostic, "Replay random PRNG is unsupported");
+  }
   if (!stockLongNoteMode(setup.longNoteMode)) {
     return fail(diagnostic, "Replay long-note mode is invalid");
   }
@@ -658,7 +676,9 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   const int gaugeProfile = static_cast<int>(setup.gaugeProfile);
   const int gaugeAutoShift = static_cast<int>(setup.gaugeAutoShift);
   const int candidateSelection = static_cast<int>(setup.candidateSelection);
-  if (gaugeProfile < static_cast<int>(GaugeProfile::Standard) ||
+  if (!isGaugeTypeSupported(setup.initialGaugeType) ||
+      !isGaugeTypeSupported(setup.gaugeAutoShiftLowerBound) ||
+      gaugeProfile < static_cast<int>(GaugeProfile::Standard) ||
       gaugeProfile > static_cast<int>(GaugeProfile::Standard24Keys) ||
       gaugeAutoShift < static_cast<int>(GaugeAutoShiftMode::None) ||
       gaugeAutoShift > static_cast<int>(GaugeAutoShiftMode::BestClear) ||
@@ -675,7 +695,10 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
     const int lowerBound = gaugeTypeIndex(state.gaugeAutoShiftLowerBound);
     const int stateProfile = static_cast<int>(state.gaugeProfile);
     const int stateAutoShift = static_cast<int>(state.gaugeAutoShift);
-    if (gaugeType < 0 || gaugeType >= static_cast<int>(kGaugeTypeCount) ||
+    if (!isGaugeTypeSupported(state.gaugeType) ||
+        !isGaugeTypeSupported(state.selectedGaugeType) ||
+        !isGaugeTypeSupported(state.gaugeAutoShiftLowerBound) ||
+        gaugeType < 0 || gaugeType >= static_cast<int>(kGaugeTypeCount) ||
         selectedGaugeType < 0 ||
         selectedGaugeType >= static_cast<int>(kGaugeTypeCount) ||
         lowerBound < 0 || lowerBound >= static_cast<int>(kGaugeTypeCount) ||
@@ -688,8 +711,9 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
         state.gaugeAutoShift != setup.gaugeAutoShift ||
         state.gaugeAutoShiftLowerBound != setup.gaugeAutoShiftLowerBound ||
         !std::isfinite(state.currentGauge) ||
-        std::ranges::any_of(state.gaugeValues,
-                            [](float value) { return !std::isfinite(value); })) {
+        std::ranges::any_of(
+            state.gaugeValues,
+            [](float value) { return !std::isfinite(value); })) {
       return fail(diagnostic, "Replay starting gauge state is invalid");
     }
     for (int index = 0; index < static_cast<int>(kGaugeTypeCount); ++index) {
@@ -870,14 +894,21 @@ bool validateSupplementalTracks(const ReplayPlaybackData &replay,
     hasPreviousCover = true;
   }
   if (replay.legacy) {
+    std::int64_t previousLegacy = 0;
+    bool hasPreviousLegacy = false;
     for (const auto &event : replay.legacy->events) {
-      if (!std::isfinite(event.gauge) || static_cast<int>(event.action) < 0 ||
+      if ((hasPreviousLegacy && event.songTimeMicros < previousLegacy) ||
+          !std::isfinite(event.gauge) ||
+          !isGaugeTypeSupported(event.gaugeType) ||
+          static_cast<int>(event.action) < 0 ||
           static_cast<int>(event.action) >
               static_cast<int>(LegacyPlaybackAction::MultiBad) ||
           static_cast<int>(event.judgement) < 0 ||
           static_cast<int>(event.judgement) >= JudgementCount) {
         return fail(diagnostic, "Replay legacy playback annotation is invalid");
       }
+      previousLegacy = event.songTimeMicros;
+      hasPreviousLegacy = true;
     }
   }
   return true;
@@ -1618,6 +1649,8 @@ BeatorajaReplayCodec::encodeCourse(const CourseReplayPlaybackData &replay,
   diagnostic.clear();
   if (replay.stages.empty() ||
       replay.stages.size() != replay.restMicrosAfterStage.size() ||
+      std::ranges::any_of(replay.restMicrosAfterStage,
+                          [](std::int64_t rest) { return rest < 0; }) ||
       replay.stages.size() > kMaximumCourseReplayStages ||
       replay.stages.size() >
           static_cast<std::size_t>(std::numeric_limits<int>::max())) {

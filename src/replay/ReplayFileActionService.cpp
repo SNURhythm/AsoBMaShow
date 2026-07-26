@@ -1,7 +1,9 @@
 #include "ReplayFileActionService.h"
 
+#include "../CourseConstraintUtils.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../Uuid.h"
+#include "BeatorajaReplayPath.h"
 
 #include <utility>
 
@@ -39,7 +41,12 @@ ReplayFileActionService::resolve(LocalResultRecordId record,
   }
 
   std::optional<ReplayFileReference> reference;
-  if (record.kind == ReplayFileReference::RecordKind::CourseResult) {
+  std::vector<StageContext> stages;
+  int courseLongNoteMode = 0;
+  std::vector<int> courseConstraintIds;
+  const bool course =
+      record.kind == ReplayFileReference::RecordKind::CourseResult;
+  if (course) {
     auto loaded = repository_.loadCourseResult(record.resultId);
     if (loaded.status != CourseResultReadOutcome::Status::Loaded ||
         !loaded.record.has_value()) {
@@ -50,6 +57,15 @@ ReplayFileActionService::resolve(LocalResultRecordId record,
       return std::nullopt;
     }
     reference = loaded.record->replayFile;
+    courseLongNoteMode = loaded.record->result.longNoteMode;
+    courseConstraintIds =
+        beatorajaCourseConstraintIds(loaded.record->result.constraintJson);
+    stages.reserve(loaded.record->result.stages.size());
+    for (const auto &stage : loaded.record->result.stages) {
+      stages.push_back({.chartSha256 = stage.score.chartSha256,
+                        .keyMode = stage.keyMode,
+                        .longNoteMode = stage.score.longNoteMode});
+    }
   } else {
     auto loaded = repository_.loadChartResult(record.resultId);
     if (loaded.status != ResultReadOutcome::Status::Loaded ||
@@ -61,6 +77,10 @@ ReplayFileActionService::resolve(LocalResultRecordId record,
       return std::nullopt;
     }
     reference = loaded.record->replayFile;
+    stages.push_back(
+        {.chartSha256 = loaded.record->result.score.chartSha256,
+         .keyMode = loaded.record->result.keyMode,
+         .longNoteMode = loaded.record->result.score.longNoteMode});
   }
   if (!reference.has_value()) {
     outcome.availability = ReplayAvailability::Missing;
@@ -77,6 +97,10 @@ ReplayFileActionService::resolve(LocalResultRecordId record,
               .compressedSize = reference->compressedSize,
               .codecVersion = reference->codecVersion,
           },
+      .course = course,
+      .stages = std::move(stages),
+      .courseLongNoteMode = courseLongNoteMode,
+      .courseConstraintIds = std::move(courseConstraintIds),
   };
 }
 
@@ -88,6 +112,95 @@ ReplayFileActionOutcome ReplayFileActionService::inspectResolved(
       .diagnostic = inspection.diagnostic,
   };
   if (inspection.state == replay::ReplayFileState::Available) {
+    std::vector<int> expectedKeyModes;
+    expectedKeyModes.reserve(resolved.stages.size());
+    for (const auto &stage : resolved.stages) {
+      expectedKeyModes.push_back(stage.keyMode);
+    }
+    replay::BeatorajaReplayCodec codec;
+    const auto decoded =
+        fileStore_.load(resolved.metadata, codec, expectedKeyModes);
+    const auto semanticFailure = [&](std::string diagnostic) {
+      const auto current = fileStore_.inspect(resolved.metadata);
+      if (current.state != replay::ReplayFileState::Available) {
+        return ReplayFileActionOutcome{
+            .availability = availabilityFor(current.state),
+            .diagnostic = current.diagnostic.empty() ? std::move(diagnostic)
+                                                     : current.diagnostic,
+        };
+      }
+      return ReplayFileActionOutcome{
+          .availability = ReplayAvailability::Corrupt,
+          .diagnostic = diagnostic.empty()
+                            ? "Replay contents do not match the saved result"
+                            : std::move(diagnostic),
+      };
+    };
+    if ((resolved.course &&
+         (!decoded.course.has_value() || decoded.chart.has_value())) ||
+        (!resolved.course &&
+         (!decoded.chart.has_value() || decoded.course.has_value()))) {
+      return semanticFailure(decoded.diagnostic);
+    }
+    if (resolved.course) {
+      if (decoded.course->stages.size() != resolved.stages.size() ||
+          decoded.course->restMicrosAfterStage.size() !=
+              resolved.stages.size()) {
+        return semanticFailure(
+            "Course replay stage count does not match the saved result");
+      }
+      for (std::size_t index = 0; index < resolved.stages.size(); ++index) {
+        const auto &actual = decoded.course->stages[index].setup;
+        const auto &expected = resolved.stages[index];
+        if (actual.chartSha256 != expected.chartSha256 ||
+            actual.keyMode != expected.keyMode ||
+            actual.longNoteMode != expected.longNoteMode) {
+          return semanticFailure(
+              "Course replay stage does not match the saved result");
+        }
+      }
+      replay::CoursePathInput pathInput{
+          .longNoteMode = resolved.courseLongNoteMode,
+          .beatorajaConstraintIds = resolved.courseConstraintIds,
+      };
+      pathInput.stageSha256.reserve(decoded.course->stages.size());
+      for (const auto &stage : decoded.course->stages) {
+        pathInput.stageSha256.push_back(stage.setup.chartSha256);
+        pathInput.hasUndefinedLongNotes = pathInput.hasUndefinedLongNotes ||
+                                          stage.setup.hasUndefinedLongNotes;
+      }
+      std::string stemDiagnostic;
+      const auto expectedStem = replay::courseStem(pathInput, stemDiagnostic);
+      if (!expectedStem.has_value() ||
+          resolved.reference.stem != *expectedStem) {
+        return semanticFailure(
+            stemDiagnostic.empty()
+                ? "Course replay filename does not match its decoded setup"
+                : std::move(stemDiagnostic));
+      }
+    } else {
+      if (resolved.stages.size() != 1) {
+        return semanticFailure("Chart replay context is invalid");
+      }
+      const auto &actual = decoded.chart->setup;
+      const auto &expected = resolved.stages.front();
+      if (actual.chartSha256 != expected.chartSha256 ||
+          actual.keyMode != expected.keyMode ||
+          actual.longNoteMode != expected.longNoteMode) {
+        return semanticFailure("Chart replay does not match the saved result");
+      }
+      std::string stemDiagnostic;
+      const auto expectedStem =
+          replay::chartStem(actual.chartSha256, actual.longNoteMode,
+                            actual.hasUndefinedLongNotes, stemDiagnostic);
+      if (!expectedStem.has_value() ||
+          resolved.reference.stem != *expectedStem) {
+        return semanticFailure(
+            stemDiagnostic.empty()
+                ? "Chart replay filename does not match its decoded setup"
+                : std::move(stemDiagnostic));
+      }
+    }
     outcome.sourcePath = repository_.GetResolvedDatabasePath().parent_path() /
                          resolved.metadata.relativePath;
     outcome.suggestedFilename =
@@ -102,6 +215,31 @@ ReplayFileActionService::inspect(LocalResultRecordId record) {
   ReplayFileActionOutcome outcome;
   const auto resolved = resolve(record, outcome);
   return resolved.has_value() ? inspectResolved(*resolved) : outcome;
+}
+
+ReplayFileActionOutcome
+ReplayFileActionService::prepareShare(LocalResultRecordId record) {
+  profile_database_activity::ReadGuard operation;
+  ReplayFileActionOutcome outcome;
+  const auto resolved = resolve(record, outcome);
+  if (!resolved.has_value()) {
+    return outcome;
+  }
+  outcome = inspectResolved(*resolved);
+  if (outcome.availability != ReplayAvailability::Available) {
+    return outcome;
+  }
+  auto staged = fileStore_.stageVerifiedSnapshot(resolved->metadata);
+  if (!staged.snapshot.has_value()) {
+    outcome.availability = availabilityFor(staged.state);
+    outcome.sourcePath.reset();
+    outcome.sourceLifetime.reset();
+    outcome.diagnostic = std::move(staged.diagnostic);
+    return outcome;
+  }
+  outcome.sourcePath = std::move(staged.snapshot->sourcePath);
+  outcome.sourceLifetime = std::move(staged.snapshot->sourceLifetime);
+  return outcome;
 }
 
 ReplayFileActionOutcome

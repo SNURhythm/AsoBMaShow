@@ -2847,12 +2847,12 @@ void GamePlayScene::finishReplayRecording() {
 void GamePlayScene::captureReplayAppliedTransition(
     const LogicalGameplayInputAdapter::AppliedTransition &applied) {
   captureReplayControl(applied.source.steadyTimestampMicros, applied.control,
-                       applied.pressed);
+                       applied.pressed, applied.replayOnly);
 }
 
-void GamePlayScene::captureReplayControl(
-  std::int64_t steadyTimestampMicros, replay::LogicalControl control,
-    bool pressed) {
+void GamePlayScene::captureReplayControl(std::int64_t steadyTimestampMicros,
+                                         replay::LogicalControl control,
+                                         bool pressed, bool replayOnly) {
   if (!shouldRecordReplay() || replayInputCapture == nullptr ||
       rawReplayFinished) {
     return;
@@ -2871,8 +2871,8 @@ void GamePlayScene::captureReplayControl(
     rawReplayCaptureFailed = true;
     return;
   }
-  captureReplayControlAtSongTime(*rawSongTime + getAudioOffsetMicros(),
-                                 control, pressed);
+  captureReplayControlAtSongTime(*rawSongTime + getAudioOffsetMicros(), control,
+                                 pressed, replayOnly);
 }
 
 void GamePlayScene::captureReplayControlAtSongTime(

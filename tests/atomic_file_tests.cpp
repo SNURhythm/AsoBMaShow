@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef _WIN32
 #include <sys/stat.h>
@@ -90,6 +92,28 @@ void testNoReplaceRenameMissingSource() {
   expect(!diagnostic.empty(), "missing-source failure has a diagnostic");
 }
 
+void testPrivateNoReplaceWritePreservesExistingBytes() {
+  TempDirectory root("private-write");
+  const auto destination = root.path / "snapshot";
+  const std::vector<std::byte> first{std::byte{'n'}, std::byte{'e'},
+                                     std::byte{'w'}};
+  std::string diagnostic;
+  expect(atomic_file::writePrivateNoReplace(destination, first, diagnostic) ==
+             atomic_file::WriteNoReplaceResult::Written,
+         "private no-replace write creates a new file");
+  expect(readText(destination) == "new",
+         "private no-replace write preserves written bytes");
+
+  const std::vector<std::byte> second{std::byte{'b'}, std::byte{'a'},
+                                      std::byte{'d'}};
+  diagnostic.clear();
+  expect(atomic_file::writePrivateNoReplace(destination, second, diagnostic) ==
+             atomic_file::WriteNoReplaceResult::DestinationExists,
+         "private no-replace write reports a destination collision");
+  expect(readText(destination) == "new",
+         "private no-replace collision never overwrites existing bytes");
+}
+
 #ifndef _WIN32
 void testNoReplaceRenameCrossDeviceWhenAvailable() {
   TempDirectory root("cross-device");
@@ -125,6 +149,7 @@ void testNoReplaceRenameCrossDeviceWhenAvailable() {
 int main() {
   testNoReplaceRenameSuccessAndCollision();
   testNoReplaceRenameMissingSource();
+  testPrivateNoReplaceWritePreservesExistingBytes();
 #ifndef _WIN32
   testNoReplaceRenameCrossDeviceWhenAvailable();
 #endif

@@ -7,6 +7,7 @@
 #include "sqlite3.h"
 
 #include <algorithm>
+#include <array>
 #include <barrier>
 #include <chrono>
 #include <filesystem>
@@ -33,6 +34,18 @@ void expect(bool condition, std::string_view message) {
 
 std::string repeated(char value, std::size_t count) {
   return std::string(count, value);
+}
+
+std::string sqlQuote(std::string_view value) {
+  std::string result("'");
+  for (const char character : value) {
+    result.push_back(character);
+    if (character == '\'') {
+      result.push_back('\'');
+    }
+  }
+  result.push_back('\'');
+  return result;
 }
 
 class TemporaryDirectory {
@@ -368,6 +381,75 @@ void testChartReplayRejectsLongNoteModeMismatch() {
          "chart replay rejects a long-note mode mismatch");
 }
 
+void testChartReplayRejectsStemThatOmitsDecodedLongNotePrefix() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path() / "replay.db");
+  expect(repository.EnsureSchema(), "wrong-stem replay schema is available");
+  constexpr std::string_view attempt = "123e4567-e89b-42d3-a456-426614174003";
+  const std::string wrongStem = repeated('a', 64);
+  const auto reservation = repository.reserveReplayFile(attempt, wrongStem);
+  expect(reservation.reservation.has_value(),
+         "wrong-stem replay reserves a canonical but unrelated path");
+  if (!reservation.reservation.has_value()) {
+    return;
+  }
+
+  auto playback = samplePlayback();
+  playback.setup.longNoteMode = 2;
+  playback.setup.hasUndefinedLongNotes = true;
+  replay::BeatorajaReplayCodec codec;
+  std::string diagnostic;
+  const auto encoded =
+      codec.encodeChart(playback, 1'700'000'000'123LL, diagnostic);
+  replay::ReplayFileStore store(temporary.path());
+  const replay::ReplayPathIdentity path{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = reservation.reservation->relativePath,
+  };
+  const auto finalized =
+      encoded.has_value() ? store.finalize(path, *encoded, codec,
+                                           {.stageSha256 = {repeated('a', 64)},
+                                            .stageLongNoteModes = {2},
+                                            .course = false},
+                                           "wrong_stem")
+                          : replay::FinalizeOutcome{};
+  expect(finalized.metadata.has_value(),
+         "wrong-stem fixture installs a semantically valid replay file");
+  if (!finalized.metadata.has_value()) {
+    return;
+  }
+
+  auto result = validResult(std::string(attempt));
+  result.score.longNoteMode = 2;
+  result.resultFingerprint = result_persistence::resultFingerprint(result);
+  const auto snapshot = snapshotFor(result);
+  const ReplayFileReference reference{
+      .stem = reservation.reservation->stem,
+      .historyIndex = reservation.reservation->historyIndex,
+      .relativePath = finalized.metadata->relativePath,
+      .contentSha256 = finalized.metadata->sha256,
+      .compressedSize = finalized.metadata->compressedSize,
+      .codecVersion = finalized.metadata->codecVersion,
+  };
+  expect(repository.markReplayFileReservationFinalized(
+             *reservation.reservation, *finalized.metadata, diagnostic),
+         "wrong-stem fixture records finalized replay ownership");
+  const auto staged =
+      repository.stageCompletedChartAttempt(result, snapshot, reference, {});
+  expect(staged.receipt.has_value(),
+         "wrong-stem fixture stages its compact result");
+  if (!staged.receipt.has_value()) {
+    return;
+  }
+
+  const auto loaded =
+      repository.loadChartReplayPlayback(staged.receipt->resultId);
+  expect(loaded.status ==
+             ChartReplayPlaybackReadOutcome::Status::IntegrityConflict,
+         "chart replay rejects a filename stem missing its decoded LN prefix");
+}
+
 void testFreshCompactSchema() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -583,6 +665,67 @@ void testMalformedCurrentSchemaColumnFailsClosed() {
   }
   expect(!repository.EnsureSchema(),
          "same-version schema with a missing ordinary column fails closed");
+}
+
+void testMalformedCurrentSchemaDefaultFailsClosed() {
+  struct CounterfeitDefaultCase {
+    std::string_view replacement;
+    std::string_view label;
+  };
+  constexpr std::array cases{
+      CounterfeitDefaultCase{"created_at TEXT NOT NULL,", "missing"},
+      CounterfeitDefaultCase{
+          "created_at TEXT NOT NULL DEFAULT '1970-01-01 00:00:00',",
+          "incorrect"},
+  };
+  for (const auto &counterfeit : cases) {
+    TemporaryDirectory temporary;
+    const auto databasePath = temporary.path() / "replay.db";
+    ReplayRepository repository(databasePath);
+    expect(repository.EnsureSchema(),
+           "current default-validation fixture is created");
+    repository.Shutdown();
+    {
+      Database database(databasePath);
+      expect(
+          execute(database.get(), "PRAGMA writable_schema=ON") &&
+              execute(database.get(),
+                      "UPDATE sqlite_master SET sql=replace(sql,"
+                      "'created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,'," +
+                          sqlQuote(counterfeit.replacement) +
+                          ") WHERE type='table' AND "
+                          "name='chart_results'") &&
+              execute(database.get(), "PRAGMA writable_schema=OFF"),
+          std::string("current schema installs a ") +
+              std::string(counterfeit.label) + " created_at default");
+    }
+    expect(!repository.EnsureSchema(),
+           std::string("same-version schema with a ") +
+               std::string(counterfeit.label) +
+               " created_at default fails closed");
+  }
+}
+
+void testEquivalentReformattedColumnDefaultIsAccepted() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "reformatted default-validation fixture is created");
+  repository.Shutdown();
+  {
+    Database database(databasePath);
+    expect(execute(database.get(), "PRAGMA writable_schema=ON") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(sql,"
+                       "'created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,',"
+                       "'created_at TEXT NOT NULL DEFAULT ( current_timestamp "
+                       "),') WHERE type='table' AND name='chart_results'") &&
+               execute(database.get(), "PRAGMA writable_schema=OFF"),
+           "created_at default is reformatted without changing its meaning");
+  }
+  expect(repository.EnsureSchema(),
+         "semantically equivalent created_at default formatting is accepted");
 }
 
 void testMalformedCurrentSchemaIndexDefinitionFailsClosed() {
@@ -1130,6 +1273,8 @@ int main() {
   testProfileBindingCleansStaleReplayTemporaries();
   testMalformedVersion11FailsClosed();
   testMalformedCurrentSchemaColumnFailsClosed();
+  testMalformedCurrentSchemaDefaultFailsClosed();
+  testEquivalentReformattedColumnDefaultIsAccepted();
   testMalformedCurrentSchemaIndexDefinitionFailsClosed();
   testEquivalentReformattedNamedIndexIsAccepted();
   testEquivalentReformattedCriticalChecksAreAccepted();
@@ -1137,6 +1282,7 @@ int main() {
   testCompactStageAndIndependentReads();
   testReplayFileReadIsIndependentFromResultAndIr();
   testChartReplayRejectsLongNoteModeMismatch();
+  testChartReplayRejectsStemThatOmitsDecodedLongNotePrefix();
   testReservationIntegrityAndMonotonicity();
   testReservationSkipsExistingUntrackedReplay();
   testReservationSkipsCanonicalCrossStemPathAlias();

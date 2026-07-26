@@ -307,6 +307,36 @@ void testCourseResult() {
   expect(
       !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
       "course entry presentation facts must be nonnegative");
+  invalid = result;
+  invalid.initialGaugeType = static_cast<GaugeType>(99);
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "course initial gauge type must be recognized");
+  invalid = result;
+  invalid.gaugeProfile = static_cast<GaugeProfile>(99);
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "course gauge profile must be recognized");
+  invalid = result;
+  invalid.gaugeAutoShift = static_cast<GaugeAutoShiftMode>(99);
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "course gauge auto-shift mode must be recognized");
+  invalid = result;
+  invalid.gaugeAutoShiftLowerBound = static_cast<GaugeType>(99);
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "course gauge auto-shift lower bound must be recognized");
+  invalid = result;
+  invalid.longNoteMode = 99;
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "course long-note mode must be supported");
 }
 
 } // namespace

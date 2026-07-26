@@ -31,6 +31,7 @@ public:
     input::LogicalInputTransition source;
     replay::LogicalControl control;
     bool pressed = false;
+    bool replayOnly = false;
   };
   using AppliedTransitionCallback =
       std::function<void(const AppliedTransition &)>;
@@ -50,6 +51,8 @@ private:
 
   static int scratchLane(input::InputScope scope);
   [[nodiscard]] bool isLaneHeld(int lane) const;
+  void pressPhysicalLane(int lane);
+  void releasePhysicalLane(int lane, bool backSpin);
   void applyLane(const input::LogicalInputTransition &transition);
   void applyScratch(const input::LogicalInputTransition &transition,
                     ScratchDirection direction, bool reversing = false,
@@ -72,6 +75,7 @@ private:
   std::map<int, std::set<input::InputScope>> heldLaneScopes_;
   std::map<int, ScratchLaneState> scratchLaneStates_;
   std::map<int, replay::LogicalControl> recordedScratchControls_;
+  std::map<int, std::size_t> pendingPhysicalEdges_;
 };
 
 struct LogicalGameplayRegistryPolicy {

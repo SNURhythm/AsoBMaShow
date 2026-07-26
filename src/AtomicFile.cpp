@@ -26,14 +26,24 @@ namespace atomic_file {
 namespace {
 bool realWriteAndSyncWithMode(const std::filesystem::path &path,
                               std::span<const std::byte> contents,
-                              std::string &errorMessage,
-                              bool ownerOnly) {
+                              std::string &errorMessage, bool ownerOnly,
+                              bool exclusive = false,
+                              bool *destinationExists = nullptr) {
+  if (destinationExists != nullptr) {
+    *destinationExists = false;
+  }
 #ifdef _WIN32
   (void)ownerOnly;
   HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                              exclusive ? CREATE_NEW : CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
-    errorMessage = "CreateFile failed: " + std::to_string(GetLastError());
+    const DWORD error = GetLastError();
+    if (destinationExists != nullptr &&
+        (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)) {
+      *destinationExists = true;
+    }
+    errorMessage = "CreateFile failed: " + std::to_string(error);
     return false;
   }
   std::size_t offset = 0;
@@ -61,6 +71,9 @@ bool realWriteAndSyncWithMode(const std::filesystem::path &path,
   }
 #else
   int flags = O_WRONLY | O_CREAT | O_TRUNC;
+  if (exclusive) {
+    flags |= O_EXCL;
+  }
 #ifdef O_CLOEXEC
   flags |= O_CLOEXEC;
 #endif
@@ -71,6 +84,9 @@ bool realWriteAndSyncWithMode(const std::filesystem::path &path,
 #endif
   const int descriptor = ::open(path.c_str(), flags, ownerOnly ? 0600 : 0666);
   if (descriptor < 0) {
+    if (destinationExists != nullptr && errno == EEXIST) {
+      *destinationExists = true;
+    }
     errorMessage = "open failed: " + std::string(std::strerror(errno));
     return false;
   }
@@ -399,6 +415,32 @@ RenameNoReplaceResult renameNoReplaceDurably(const std::filesystem::path &from,
   return RenameNoReplaceResult::Failed;
 #endif
 #endif
+}
+
+WriteNoReplaceResult writePrivateNoReplace(const std::filesystem::path &path,
+                                           std::span<const std::byte> contents,
+                                           std::string &errorMessage) {
+  errorMessage.clear();
+  bool destinationExists = false;
+  if (!realWriteAndSyncWithMode(path, contents, errorMessage, true, true,
+                                &destinationExists)) {
+    if (destinationExists) {
+      return WriteNoReplaceResult::DestinationExists;
+    }
+    // The exclusive create may have succeeded before a later write or sync
+    // failed. Do not unlink by pathname: another process could have replaced
+    // that entry after our handle closed. Callers treat any remainder as a
+    // stale private temporary.
+    return WriteNoReplaceResult::Failed;
+  }
+  const auto directory = path.parent_path().empty() ? std::filesystem::path(".")
+                                                    : path.parent_path();
+  if (!syncDirectory(directory, errorMessage)) {
+    // The complete file is present but its directory entry is not known to be
+    // durable. Leave it for ownership-aware or stale-temporary cleanup.
+    return WriteNoReplaceResult::Failed;
+  }
+  return WriteNoReplaceResult::Written;
 }
 
 Operations defaultOperations() {

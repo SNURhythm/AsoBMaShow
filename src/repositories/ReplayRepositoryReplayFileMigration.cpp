@@ -405,6 +405,19 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
     persisted.score.chartTitle = columnText(statement.get(), 4);
     persisted.score.chartArtist = columnText(statement.get(), 5);
     persisted.score.longNoteMode = sqlite3_column_int(statement.get(), 6);
+    if (!replay::isCanonicalLegacyDigest(persisted.score.chartSha256, 64) ||
+        !replay::isCanonicalLegacyDigest(persisted.score.chartMd5, 32) ||
+        persisted.score.longNoteMode < 0 || persisted.score.longNoteMode > 3) {
+      diagnostic = "pending score chart identity or long-note mode is invalid";
+      return false;
+    }
+    if (persisted.score.chartSha256 != chart.chartSha256 ||
+        persisted.score.chartMd5 != chart.chartMd5 ||
+        persisted.score.longNoteMode != chart.longNoteMode) {
+      diagnostic =
+          "pending score chart identity or long-note mode differs from replay";
+      return false;
+    }
     persisted.score.score = sqlite3_column_int(statement.get(), 7);
     persisted.score.maxScore = sqlite3_column_int(statement.get(), 8);
     persisted.score.maxCombo = sqlite3_column_int(statement.get(), 9);
@@ -506,24 +519,6 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
   }
 
   auto &score = persisted.score;
-  if (chart.chartSha256.empty()) {
-    if (!score.chartSha256.empty()) {
-      chart.chartSha256 = score.chartSha256;
-    } else {
-      const auto fallback = replay::legacyReplaySha256ForMd5(chart.chartMd5);
-      if (!fallback.has_value()) {
-        diagnostic = "legacy replay has neither a valid SHA-256 nor MD5";
-        return false;
-      }
-      chart.chartSha256 = *fallback;
-    }
-  }
-  if (score.chartSha256.empty()) {
-    score.chartSha256 = chart.chartSha256;
-  }
-  if (score.chartMd5.empty()) {
-    score.chartMd5 = chart.chartMd5;
-  }
 
   for (const auto &entry : chart.events) {
     if (std::isfinite(entry.event.gauge)) {
@@ -552,7 +547,7 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   setup.chartMd5 = chart.chartMd5;
   setup.chartSha256 = chart.chartSha256;
   setup.keyMode = chart.result.keyMode;
-  setup.longNoteMode = std::clamp(chart.longNoteMode, 0, 3);
+  setup.longNoteMode = chart.longNoteMode;
   setup.hasUndefinedLongNotes = chart.hasUndefinedLongNotes;
   setup.randomSeed = chart.randomSeed;
   setup.randomPrng = chart.randomPrng;
@@ -635,6 +630,8 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   for (const auto &entry : chart.events) {
     legacy.events.push_back(entry.event);
   }
+  std::ranges::stable_sort(legacy.events, {},
+                           &replay::LegacyPlaybackEvent::songTimeMicros);
   chart.playback.legacy = std::move(legacy);
 
   const auto stem = replay::chartStem(chart.chartSha256, setup.longNoteMode,
@@ -674,11 +671,17 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
       return false;
     }
     chart.chartPath = columnText(statement.get(), 1);
-    chart.chartMd5 = columnText(statement.get(), 2);
-    chart.chartSha256 = columnText(statement.get(), 3);
+    chart.chartMd5 = lowerHex(columnText(statement.get(), 2));
+    chart.chartSha256 = lowerHex(columnText(statement.get(), 3));
     chart.chartTitle = columnText(statement.get(), 4);
     chart.chartArtist = columnText(statement.get(), 5);
     chart.longNoteMode = sqlite3_column_int(statement.get(), 6);
+    if (!replay::isCanonicalLegacyDigest(chart.chartSha256, 64) ||
+        !replay::isCanonicalLegacyDigest(chart.chartMd5, 32) ||
+        chart.longNoteMode < 0 || chart.longNoteMode > 3) {
+      diagnostic = "legacy replay chart identity or long-note mode is invalid";
+      return false;
+    }
     const int initialGaugeType = sqlite3_column_int(statement.get(), 7);
     const int gaugeAutoShift = sqlite3_column_int(statement.get(), 8);
     if (sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
@@ -838,7 +841,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
   std::vector<course_identity::ChartIdentity> identities;
   identities.reserve(course.chartIndexes.size());
   replay::CoursePathInput pathInput;
-  pathInput.longNoteMode = std::clamp(course.longNoteMode, 0, 3);
+  pathInput.longNoteMode = course.longNoteMode;
   pathInput.hasUndefinedLongNotes = false;
   pathInput.beatorajaConstraintIds =
       beatorajaCourseConstraintIds(course.constraintJson);
@@ -935,6 +938,10 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
     course.gaugeProfile = gaugeProfileFromInt(gaugeProfile);
     course.gaugeAutoShift = gaugeAutoShiftModeFromValue(gaugeAutoShift);
     course.longNoteMode = sqlite3_column_int(statement.get(), 9);
+    if (course.longNoteMode < 0 || course.longNoteMode > 3) {
+      diagnostic = "legacy course long-note mode is invalid";
+      return false;
+    }
     course.requestedPlayOption = columnText(statement.get(), 10);
     course.assistOption = columnText(statement.get(), 11);
     course.finalScore = sqlite3_column_int(statement.get(), 12);

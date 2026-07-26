@@ -46,6 +46,15 @@ bool renameDurably(const std::filesystem::path &from,
 
 enum class RenameNoReplaceResult { Renamed, DestinationExists, Failed };
 
+enum class WriteNoReplaceResult { Written, DestinationExists, Failed };
+
+// Creates and durably writes a regular file without ever replacing an existing
+// directory entry. POSIX files are owner-only; Windows inherits the parent
+// directory's ACL, matching privateFileOperations().
+WriteNoReplaceResult writePrivateNoReplace(const std::filesystem::path &path,
+                                           std::span<const std::byte> contents,
+                                           std::string &errorMessage);
+
 // Atomically installs `from` at `to` without replacing any existing entry.
 // POSIX callers must sync the destination directory after Renamed is returned.
 RenameNoReplaceResult renameNoReplaceDurably(const std::filesystem::path &from,

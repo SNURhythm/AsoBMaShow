@@ -95,20 +95,120 @@ bool namedTableColumnExists(sqlite3 *database, std::string_view table,
 
 bool createCompactReplaySchema11(sqlite3 *database);
 
+std::string normalizeColumnDefault(std::string_view value) {
+  const auto trim = [](std::string_view source) {
+    while (!source.empty() &&
+           std::isspace(static_cast<unsigned char>(source.front())) != 0) {
+      source.remove_prefix(1);
+    }
+    while (!source.empty() &&
+           std::isspace(static_cast<unsigned char>(source.back())) != 0) {
+      source.remove_suffix(1);
+    }
+    return source;
+  };
+  value = trim(value);
+  while (value.size() >= 2 && value.front() == '(' && value.back() == ')') {
+    int depth = 0;
+    char quote = 0;
+    bool wrapsWholeExpression = true;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+      const char character = value[index];
+      if (quote != 0) {
+        if (character == quote) {
+          if (index + 1 < value.size() && value[index + 1] == quote) {
+            ++index;
+          } else {
+            quote = 0;
+          }
+        }
+        continue;
+      }
+      if (character == '\'' || character == '"') {
+        quote = character;
+      } else if (character == '(') {
+        ++depth;
+      } else if (character == ')') {
+        --depth;
+        if (depth == 0 && index + 1 != value.size()) {
+          wrapsWholeExpression = false;
+          break;
+        }
+        if (depth < 0) {
+          wrapsWholeExpression = false;
+          break;
+        }
+      }
+    }
+    if (!wrapsWholeExpression || depth != 0 || quote != 0) {
+      break;
+    }
+    value = trim(value.substr(1, value.size() - 2));
+  }
+
+  std::string normalized;
+  normalized.reserve(value.size());
+  char quote = 0;
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    const unsigned char character = static_cast<unsigned char>(value[index]);
+    if (quote != 0) {
+      normalized.push_back(static_cast<char>(character));
+      if (character == static_cast<unsigned char>(quote)) {
+        if (index + 1 < value.size() && value[index + 1] == quote) {
+          normalized.push_back(value[++index]);
+        } else {
+          quote = 0;
+        }
+      }
+      continue;
+    }
+    if (character == '\'' || character == '"') {
+      quote = static_cast<char>(character);
+      normalized.push_back(static_cast<char>(character));
+    } else if (std::isspace(character) == 0) {
+      normalized.push_back(character >= 'A' && character <= 'Z'
+                               ? static_cast<char>(character + ('a' - 'A'))
+                               : static_cast<char>(character));
+    }
+  }
+  return normalized;
+}
+
 struct ColumnShape {
   std::string name;
   std::string type;
   bool notNull = false;
+  std::optional<std::string> defaultExpression;
   int primaryKeyOrder = 0;
 
   bool operator==(const ColumnShape &) const = default;
 };
 
+bool columnShapesEquivalent(const ColumnShape &actual,
+                            const ColumnShape &expected) {
+  if (actual.name != expected.name || actual.type != expected.type ||
+      actual.notNull != expected.notNull ||
+      actual.primaryKeyOrder != expected.primaryKeyOrder) {
+    return false;
+  }
+  if (actual.defaultExpression == expected.defaultExpression) {
+    return true;
+  }
+  // SQLite cannot drop defaults from columns introduced with ALTER TABLE.
+  // Accept only the exact backfill defaults used by the v12/v14 migrations;
+  // fresh schemas declare these already-populated columns without defaults.
+  return !expected.defaultExpression.has_value() &&
+         ((actual.name == "adopted_gauge_type" &&
+           actual.defaultExpression == std::optional<std::string>("2")) ||
+          (actual.name == "entry_facts_json" &&
+           actual.defaultExpression == std::optional<std::string>("'[]'")));
+}
+
 std::optional<std::vector<ColumnShape>>
 tableColumnShapes(sqlite3 *database, std::string_view table) {
   SqliteStatementHandle statement;
   const std::string query =
-      "SELECT name,type,\"notnull\",pk FROM pragma_table_info('" +
+      "SELECT name,type,\"notnull\",dflt_value,pk FROM pragma_table_info('" +
       std::string(table) + "') ORDER BY name";
   if (prepareSqliteStatement(database, query.c_str(), statement) != SQLITE_OK) {
     return std::nullopt;
@@ -119,14 +219,22 @@ tableColumnShapes(sqlite3 *database, std::string_view table) {
     if (sqlite3_column_type(statement.get(), 0) != SQLITE_TEXT ||
         sqlite3_column_type(statement.get(), 1) != SQLITE_TEXT ||
         sqlite3_column_type(statement.get(), 2) != SQLITE_INTEGER ||
-        sqlite3_column_type(statement.get(), 3) != SQLITE_INTEGER) {
+        (sqlite3_column_type(statement.get(), 3) != SQLITE_TEXT &&
+         sqlite3_column_type(statement.get(), 3) != SQLITE_NULL) ||
+        sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER) {
       return std::nullopt;
     }
-    result.push_back({.name = sqliteColumnString(statement.get(), 0),
-                      .type = sqliteColumnString(statement.get(), 1),
-                      .notNull = sqlite3_column_int(statement.get(), 2) != 0,
-                      .primaryKeyOrder =
-                          sqlite3_column_int(statement.get(), 3)});
+    std::optional<std::string> defaultExpression;
+    if (sqlite3_column_type(statement.get(), 3) == SQLITE_TEXT) {
+      defaultExpression =
+          normalizeColumnDefault(sqliteColumnString(statement.get(), 3));
+    }
+    result.push_back(
+        {.name = sqliteColumnString(statement.get(), 0),
+         .type = sqliteColumnString(statement.get(), 1),
+         .notNull = sqlite3_column_int(statement.get(), 2) != 0,
+         .defaultExpression = std::move(defaultExpression),
+         .primaryKeyOrder = sqlite3_column_int(statement.get(), 4)});
   }
   return step == SQLITE_DONE
              ? std::optional<std::vector<ColumnShape>>(std::move(result))
@@ -171,7 +279,8 @@ bool validateCompactReplayColumnShapes(sqlite3 *database, int version) {
                column.name == "finalized_compressed_size")) ||
              (version < 14 && column.name == "entry_facts_json");
     });
-    if (*actual != *expected) {
+    if (actual->size() != expected->size() ||
+        !std::ranges::equal(*actual, *expected, columnShapesEquivalent)) {
       valid = false;
       break;
     }

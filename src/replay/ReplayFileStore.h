@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -42,6 +43,18 @@ struct ReplayFileInspection {
   std::string diagnostic;
 };
 
+struct ReplayFileSnapshot {
+  std::filesystem::path sourcePath;
+  std::uint64_t compressedSize = 0;
+  std::shared_ptr<void> sourceLifetime;
+};
+
+struct ReplayFileSnapshotOutcome {
+  ReplayFileState state = ReplayFileState::IoFailure;
+  std::optional<ReplayFileSnapshot> snapshot;
+  std::string diagnostic;
+};
+
 struct ExpectedReplayIdentity {
   std::vector<std::string> stageSha256;
   std::vector<int> stageLongNoteModes;
@@ -70,6 +83,9 @@ public:
   load(const ReplayFileMetadata &metadata,
        const BeatorajaReplayCodec &codec,
        std::span<const int> expectedStageKeyModes = {}) const;
+
+  [[nodiscard]] ReplayFileSnapshotOutcome
+  stageVerifiedSnapshot(const ReplayFileMetadata &metadata) const;
 
   bool remove(const ReplayFileMetadata &metadata, std::string &diagnostic);
   bool removeIfMatches(const ReplayFileMetadata &metadata,

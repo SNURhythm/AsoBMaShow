@@ -1,6 +1,5 @@
 #include "ScoreProvenance.h"
 #include "CourseIdentity.h"
-#include "FileChecksum.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/ReplayFileStore.h"
 #include "repositories/ReplayRepositoryReplayFileMigration.h"
@@ -153,6 +152,7 @@ struct LegacySnapshot {
   std::string schema;
   std::vector<std::int64_t> counts;
   std::string replayFacts;
+  std::string courseFacts;
   std::string pendingFacts;
   std::string durableIrFacts;
 
@@ -174,15 +174,21 @@ LegacySnapshot snapshotLegacyDatabase(sqlite3 *database) {
     snapshot.counts.push_back(
         integer(database, "SELECT count(*) FROM " + std::string(table)));
   }
-  snapshot.replayFacts = text(
+  snapshot.replayFacts =
+      text(database,
+           "SELECT group_concat(value,';') FROM (SELECT id||'|'||chart_md5||'|'"
+           "||chart_sha256||'|'||ln_mode||'|'||COALESCE(attempt_id,'')||'|'"
+           "||final_score||'|'||created_at AS value FROM replays ORDER BY id)");
+  snapshot.courseFacts = text(
       database,
-      "SELECT group_concat(value,';') FROM (SELECT id||'|'||chart_sha256||'|'"
-      "||COALESCE(attempt_id,'')||'|'||final_score||'|'||created_at AS value "
-      "FROM replays ORDER BY id)");
+      "SELECT group_concat(value,';') FROM (SELECT id||'|'||course_key||'|'"
+      "||ln_mode||'|'||final_score||'|'||created_at AS value FROM "
+      "course_replays ORDER BY id)");
   snapshot.pendingFacts = text(
       database,
       "SELECT group_concat(value,';') FROM (SELECT attempt_id||'|'||replay_id"
-      "||'|'||score||'|'||recovery_attempts AS value FROM "
+      "||'|'||chart_md5||'|'||chart_sha256||'|'||ln_mode||'|'||score||'|'"
+      "||recovery_attempts AS value FROM "
       "pending_chart_score_writes ORDER BY attempt_id)");
   snapshot.durableIrFacts = text(
       database,
@@ -385,7 +391,7 @@ FixtureFacts insertChartFixture(sqlite3 *database) {
       "attempt_id,attempt_fingerprint) VALUES(42,'BMS/chart.bms','" +
           facts.md5 + "','" + facts.sha256 +
           "','Migration Chart','Artist',1,2,0,3,2,64.5,300,77,"
-          "'xorshift128','3,4','MIRROR',91,'NORMAL',NULL,'OFF',"
+          "'std::mt19937_64','3,4','MIRROR',91,'NORMAL',NULL,'OFF',"
           "'2026-07-25 01:02:03',0,2," +
           provenance + ",'" + facts.attemptId + "','" + std::string(64, 'f') +
           "')");
@@ -898,62 +904,206 @@ void testMapsLegacyPhysicalLanesForEverySupportedMode() {
          "7-key migration rejects player-two and 9-key-only lane 8");
 }
 
-void testMigratesMd5OnlyChartWithDeterministicReplayStem() {
-  TemporaryDirectory temporary;
-  Database database(temporary.path() / "replay.db");
-  replay_schema10_fixture::createExactSchema(database.get());
-  const FixtureFacts fixture = insertChartFixture(database.get());
-  executeOrThrow(database.get(),
-                 "UPDATE replays SET chart_sha256='' WHERE id=42");
-  executeOrThrow(database.get(),
-                 "UPDATE pending_chart_score_writes SET chart_sha256='' "
-                 "WHERE replay_id=42");
-
-  replay::BeatorajaReplayCodec codec;
-  replay::ReplayFileStore store(temporary.path());
-  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store, {},
-      fixedChartMetadata(2));
-  const std::string fallbackSha = file_checksum::sha256(
-      "asobmashow:legacy-md5:v1:" + fixture.md5);
-
-  expect(outcome.status ==
-             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
-         "canonical MD5-only schema-v10 replay migrates successfully");
-  if (outcome.status !=
-      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
-    return;
-  }
-  expect(text(database.get(),
-              "SELECT chart_md5 FROM chart_results WHERE id=42") ==
-             fixture.md5 &&
-             text(database.get(),
-                  "SELECT chart_sha256 FROM chart_results WHERE id=42") ==
-                 fallbackSha,
-         "MD5-only result preserves MD5 and receives the stable legacy SHA");
-  const std::filesystem::path relative =
-      std::filesystem::path("replay") / (fallbackSha + ".brd");
-  expect(text(database.get(),
-              "SELECT relative_path FROM replay_files WHERE "
-              "chart_result_id=42") == relative.generic_string() &&
-             std::filesystem::is_regular_file(temporary.path() / relative),
-         "MD5-only replay uses its deterministic Beatoraja-compatible stem");
-
-  replay::ReplayFileMetadata metadata{
-      .relativePath = relative,
-      .sha256 = text(database.get(),
-                     "SELECT content_sha256 FROM replay_files WHERE "
-                     "chart_result_id=42"),
-      .compressedSize = static_cast<std::uint64_t>(integer(
-          database.get(),
-          "SELECT compressed_size FROM replay_files WHERE chart_result_id=42")),
-      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+void testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles() {
+  struct EmptyIdentityCase {
+    std::string mutation;
+    std::string repair;
+    std::string_view label;
   };
-  const auto decoded = store.load(metadata, codec);
-  expect(decoded.chart.has_value() &&
-             decoded.chart->setup.chartMd5 == fixture.md5 &&
-             decoded.chart->setup.chartSha256 == fallbackSha,
-         "MD5-only replay file carries both its real MD5 and legacy SHA");
+  const std::array cases{
+      EmptyIdentityCase{
+          "UPDATE replays SET chart_sha256='';"
+          "UPDATE pending_chart_score_writes SET chart_sha256=''",
+          "UPDATE replays SET chart_sha256='" + std::string(64, 'a') +
+              "';"
+              "UPDATE pending_chart_score_writes SET chart_sha256='" +
+              std::string(64, 'a') + "'",
+          "SHA-256"},
+      EmptyIdentityCase{
+          "UPDATE replays SET chart_md5='';"
+          "UPDATE pending_chart_score_writes SET chart_md5=''",
+          "UPDATE replays SET chart_md5='" + std::string(32, 'b') +
+              "';"
+              "UPDATE pending_chart_score_writes SET chart_md5='" +
+              std::string(32, 'b') + "'",
+          "MD5"},
+  };
+  for (const auto &identity : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(), identity.mutation);
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto rejected = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+    const bool failedBeforeFiles =
+        rejected.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+        rejected.chartFiles == 0 && rejected.courseFiles == 0;
+    expect(failedBeforeFiles &&
+               snapshotLegacyDatabase(database.get()) == before,
+           std::string("empty legacy chart ") + std::string(identity.label) +
+               " fails before files or schema cutover");
+    if (!failedBeforeFiles) {
+      continue;
+    }
+    executeOrThrow(database.get(), identity.repair);
+    replay::ReplayFileStore retryStore(temporary.path());
+    const auto retry = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
+    expect(
+        retry.status ==
+            replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+        std::string("repaired legacy chart ") + std::string(identity.label) +
+            " retries successfully");
+  }
+}
+
+void testRejectsPendingChartIdentityDisagreementBeforeWritingFiles() {
+  struct MismatchCase {
+    std::string mutation;
+    std::string repair;
+    std::string_view label;
+  };
+  const std::array cases{
+      MismatchCase{"UPDATE pending_chart_score_writes SET chart_sha256='" +
+                       std::string(64, 'c') + "' WHERE replay_id=42",
+                   "UPDATE pending_chart_score_writes SET chart_sha256='" +
+                       std::string(64, 'a') + "' WHERE replay_id=42",
+                   "SHA-256"},
+      MismatchCase{"UPDATE pending_chart_score_writes SET chart_md5='" +
+                       std::string(32, 'c') + "' WHERE replay_id=42",
+                   "UPDATE pending_chart_score_writes SET chart_md5='" +
+                       std::string(32, 'b') + "' WHERE replay_id=42",
+                   "MD5"},
+      MismatchCase{
+          "UPDATE pending_chart_score_writes SET ln_mode=2 WHERE replay_id=42",
+          "UPDATE pending_chart_score_writes SET ln_mode=1 WHERE replay_id=42",
+          "long-note mode"},
+  };
+  for (const auto &mismatch : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(), mismatch.mutation);
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto rejected = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+    const bool failedBeforeFiles =
+        rejected.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+        rejected.chartFiles == 0 && rejected.courseFiles == 0;
+    expect(failedBeforeFiles &&
+               snapshotLegacyDatabase(database.get()) == before,
+           std::string("pending chart ") + std::string(mismatch.label) +
+               " disagreement fails before files or schema cutover");
+    if (!failedBeforeFiles) {
+      continue;
+    }
+    executeOrThrow(database.get(), mismatch.repair);
+    replay::ReplayFileStore retryStore(temporary.path());
+    const auto retry = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
+    expect(
+        retry.status ==
+            replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+        std::string("repaired pending chart ") + std::string(mismatch.label) +
+            " retries successfully");
+  }
+}
+
+void testRejectsOutOfRangeChartLongNoteModeBeforeWritingFiles() {
+  for (const int invalidMode : {-1, 4}) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(),
+                   "UPDATE replays SET ln_mode=" + std::to_string(invalidMode) +
+                       ";"
+                       "UPDATE pending_chart_score_writes SET ln_mode=" +
+                       std::to_string(invalidMode));
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto rejected = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+    const bool failedBeforeFiles =
+        rejected.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+        rejected.chartFiles == 0 && rejected.courseFiles == 0;
+    expect(failedBeforeFiles &&
+               snapshotLegacyDatabase(database.get()) == before,
+           "out-of-range chart LN mode fails before files or schema cutover");
+    if (!failedBeforeFiles) {
+      continue;
+    }
+    executeOrThrow(database.get(),
+                   "UPDATE replays SET ln_mode=1;"
+                   "UPDATE pending_chart_score_writes SET ln_mode=1");
+    replay::ReplayFileStore retryStore(temporary.path());
+    const auto retry = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
+    expect(
+        retry.status ==
+            replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+        "repaired chart LN mode retries successfully");
+  }
+}
+
+void testRejectsOutOfRangeCourseLongNoteModeBeforeWritingFiles() {
+  for (const int invalidMode : {-1, 4}) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    const FixtureFacts chart = insertChartFixture(database.get());
+    insertCourseFixture(database.get(), chart);
+    executeOrThrow(database.get(), "UPDATE course_replays SET ln_mode=" +
+                                       std::to_string(invalidMode) +
+                                       " WHERE id=77");
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto rejected = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+    const bool failedBeforeFiles =
+        rejected.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+        rejected.chartFiles == 0 && rejected.courseFiles == 0;
+    expect(failedBeforeFiles &&
+               snapshotLegacyDatabase(database.get()) == before,
+           "out-of-range course LN mode fails before files or schema cutover");
+    if (!failedBeforeFiles) {
+      continue;
+    }
+    executeOrThrow(database.get(),
+                   "UPDATE course_replays SET ln_mode=2 WHERE id=77");
+    replay::ReplayFileStore retryStore(temporary.path());
+    const auto retry = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
+    expect(
+        retry.status ==
+            replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+        "repaired course LN mode retries successfully");
+  }
 }
 
 void testReconstructsAcknowledgedResultFromRecordedScoreChanges() {
@@ -1190,8 +1340,15 @@ void testOrdersLegacyInputBeforeRemovingRedundantTransitions() {
                decoded.chart->input[0].songTimeMicros == 1000 &&
                decoded.chart->input[0].pressed &&
                decoded.chart->input[1].songTimeMicros == 3000 &&
-               !decoded.chart->input[1].pressed,
-           "chronological state changes discard redundant legacy input");
+               !decoded.chart->input[1].pressed &&
+               decoded.chart->legacy.has_value() &&
+               decoded.chart->legacy->events.size() == 4 &&
+               decoded.chart->legacy->events[0].songTimeMicros == 1000 &&
+               decoded.chart->legacy->events[1].songTimeMicros == 2000 &&
+               decoded.chart->legacy->events[2].songTimeMicros == 3000 &&
+               decoded.chart->legacy->events[3].songTimeMicros == 4000,
+           "migration chronologically orders legacy events and discards "
+           "redundant input state changes");
   }
 }
 
@@ -1530,7 +1687,10 @@ int main() {
   testChartMetadataPreservesSparseFourteenKeyMode();
   testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
-  testMigratesMd5OnlyChartWithDeterministicReplayStem();
+  testRejectsEmptyLegacyChartIdentitiesBeforeWritingFiles();
+  testRejectsPendingChartIdentityDisagreementBeforeWritingFiles();
+  testRejectsOutOfRangeChartLongNoteModeBeforeWritingFiles();
+  testRejectsOutOfRangeCourseLongNoteModeBeforeWritingFiles();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();
   testMissingChartMetadataBlocksResultReconstruction();
   testRejectsInvalidLegacyReplayEnums();

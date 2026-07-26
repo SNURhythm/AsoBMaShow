@@ -1,5 +1,6 @@
 #include "RealtimePhysicalInputRouter.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace input {
@@ -92,23 +93,30 @@ void RealtimePhysicalInputRouter::prepare(
 
 void RealtimePhysicalInputRouter::emitApplied(
     const LogicalGameplayInputAdapter::AppliedTransition &applied) {
-  if (pendingTransitions_.empty()) {
-    const int scratchLane = applied.control.player == 2 ? 15 : 7;
+  const bool scratch =
+      applied.control.kind == replay::LogicalControlKind::ScratchClockwise ||
+      applied.control.kind ==
+          replay::LogicalControlKind::ScratchCounterClockwise;
+  const int appliedLane = scratch ? (applied.control.player == 2 ? 15 : 7)
+                                  : applied.source.action.lane;
+  const auto pending = std::ranges::find(
+      pendingTransitions_, appliedLane, &RealtimePhysicalInputTransition::lane);
+  if (applied.replayOnly || pending == pendingTransitions_.end()) {
     if (applied.pressed) {
-      desiredReplayControls_[static_cast<std::size_t>(scratchLane)] =
+      desiredReplayControls_[static_cast<std::size_t>(appliedLane)] =
           applied.control.kind;
     }
     (void)emitReplayOnly(applied.pressed
                              ? RealtimePhysicalInputTransitionType::Press
                              : RealtimePhysicalInputTransitionType::Release,
-                         scratchLane, applied.control.kind);
+                         appliedLane, applied.control.kind);
     return;
   }
-  auto pending = std::move(pendingTransitions_.front());
-  pendingTransitions_.pop_front();
-  pending.replayControl = applied.control.kind;
-  (void)emit(pending.type, pending.lane, pending.backSpin,
-             pending.replayControl);
+  auto physical = std::move(*pending);
+  pendingTransitions_.erase(pending);
+  physical.replayControl = applied.control.kind;
+  (void)emit(physical.type, physical.lane, physical.backSpin,
+             physical.replayControl);
 }
 
 bool RealtimePhysicalInputRouter::emit(

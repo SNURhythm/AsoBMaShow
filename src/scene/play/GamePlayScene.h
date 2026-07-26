@@ -124,7 +124,8 @@ private:
   void captureReplayAppliedTransition(
       const LogicalGameplayInputAdapter::AppliedTransition &);
   void captureReplayControl(std::int64_t steadyTimestampMicros,
-                            replay::LogicalControl, bool pressed);
+                            replay::LogicalControl, bool pressed,
+                            bool replayOnly = false);
   void captureReplayControlAtSongTime(std::int64_t songTimeMicros,
                                       replay::LogicalControl, bool pressed,
                                       bool replayOnly = false);

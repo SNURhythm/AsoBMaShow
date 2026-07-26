@@ -8,6 +8,7 @@
 #include "ProfileDatabaseTools.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
+#include "replay/BeatorajaReplayPath.h"
 #include "replay/ReplayFileStore.h"
 #include "input/InputProfile.h"
 #include "input/InputProfileStore.h"
@@ -645,13 +646,24 @@ bool isPracticeMember(std::string_view name) {
              practice::PresetFileKind::Primary;
 }
 
+bool archiveMemberNameAllowed(std::string_view name) {
+  if (name.size() > ProfileArchiveSizePolicy::kMaximumMemberNameBytes) {
+    return false;
+  }
+  constexpr std::string_view replayPrefix = "replay/";
+  return !name.starts_with(replayPrefix) ||
+         name.size() - replayPrefix.size() <=
+             replay::kMaximumReplayFilenameBytes;
+}
+
 bool isReplayMember(std::string_view name) {
   constexpr std::string_view prefix = "replay/";
   if (!name.starts_with(prefix)) {
     return false;
   }
   const std::string_view filename = name.substr(prefix.size());
-  return !filename.empty() && filename != "." && filename != ".." &&
+  return archiveMemberNameAllowed(name) && !filename.empty() &&
+         filename != "." && filename != ".." &&
          filename.find('/') == std::string_view::npos &&
          filename.find('\\') == std::string_view::npos &&
          filename.ends_with(".brd");
@@ -1182,6 +1194,19 @@ validateArchive(const std::filesystem::path &archivePath,
     return {.error = ProfileError::IoFailure,
             .message = "profile archive is missing or is not a regular file"};
   }
+  const auto archiveSize =
+      std::filesystem::file_size(archivePath, filesystemError);
+  if (filesystemError) {
+    return {.error = ProfileError::IoFailure,
+            .message = "unable to inspect profile archive size: " +
+                       filesystemError.message()};
+  }
+  if (!ProfileArchiveSizePolicy::archiveSizeAllowed(archiveSize) ||
+      (validation.archiveSizeAllowed &&
+       !validation.archiveSizeAllowed(archiveSize))) {
+    return {.error = ProfileError::IntegrityFailure,
+            .message = "profile archive file exceeds the safety limit"};
+  }
   std::string directoryError;
   if (!createPrivateDirectory(extractDirectory, directoryError)) {
     return {.error = ProfileError::IoFailure,
@@ -1195,7 +1220,9 @@ validateArchive(const std::filesystem::path &archivePath,
             .message = "unable to allocate archive reader"};
   }
   if (archive_read_support_filter_none(reader.get()) != ARCHIVE_OK ||
-      archive_read_support_format_zip(reader.get()) != ARCHIVE_OK ||
+      // The seekable ZIP reader allocates the full central directory before
+      // exposing the first header, which would bypass our per-entry guards.
+      archive_read_support_format_zip_streamable(reader.get()) != ARCHIVE_OK ||
       openArchiveReader(reader.get(), archivePath) != ARCHIVE_OK) {
     return {.error = ProfileError::IntegrityFailure,
             .message = archiveError(reader.get(),
@@ -1206,6 +1233,7 @@ validateArchive(const std::filesystem::path &archivePath,
   std::vector<std::string> memberNames;
   std::uint64_t declaredTotal = 0;
   std::uint64_t actualTotal = 0;
+  std::size_t memberCount = 0;
   std::array<char, 64 * 1024> buffer{};
   while (true) {
     archive_entry *entry = nullptr;
@@ -1223,12 +1251,33 @@ validateArchive(const std::filesystem::path &archivePath,
       return {.error = ProfileError::IntegrityFailure,
               .message = "portable profile is not a ZIP archive"};
     }
+    ++memberCount;
+    if (!ProfileArchiveSizePolicy::memberCountAllowed(memberCount) ||
+        (validation.memberCountAllowed &&
+         !validation.memberCountAllowed(memberCount))) {
+      return {.error = ProfileError::IntegrityFailure,
+              .message = "archive member count exceeds the safety limit"};
+    }
     const char *rawName = archive_entry_pathname(entry);
     if (rawName == nullptr) {
       return {.error = ProfileError::IntegrityFailure,
               .message = "archive entry has no name"};
     }
-    const std::string name(rawName);
+    std::size_t nameLength = 0;
+    while (nameLength <= ProfileArchiveSizePolicy::kMaximumMemberNameBytes &&
+           rawName[nameLength] != '\0') {
+      ++nameLength;
+    }
+    if (nameLength > ProfileArchiveSizePolicy::kMaximumMemberNameBytes) {
+      return {.error = ProfileError::IntegrityFailure,
+              .message = "archive member name exceeds the safety limit"};
+    }
+    const std::string name(rawName, nameLength);
+    if (!ProfileArchiveSizePolicy::memberNameAllowed(name) ||
+        (validation.memberNameAllowed && !validation.memberNameAllowed(name))) {
+      return {.error = ProfileError::IntegrityFailure,
+              .message = "archive member name exceeds the safety limit"};
+    }
     if (!isValidUtf8(name) || !isKnownMember(name) ||
         !seen.insert(name).second) {
       return {.error = ProfileError::IntegrityFailure,
@@ -1244,19 +1293,26 @@ validateArchive(const std::filesystem::path &archivePath,
       return {.error = ProfileError::IntegrityFailure,
               .message = "archive members must be unencrypted regular files"};
     }
-    if (archive_entry_size_is_set(entry) == 0 ||
-        archive_entry_size(entry) < 0) {
+    const bool hasDeclaredSize = archive_entry_size_is_set(entry) != 0;
+    if (hasDeclaredSize && archive_entry_size(entry) < 0) {
       return {.error = ProfileError::IntegrityFailure,
               .message = "archive member has no valid declared size"};
     }
-    const auto declared = static_cast<std::uint64_t>(archive_entry_size(entry));
-    if (!ProfileArchiveSizePolicy::additionAllowed(name, 0, declaredTotal,
-                                                   declared) ||
-        !validation.declaredSizeAllowed(name, 0, declaredTotal, declared)) {
-      return {.error = ProfileError::IntegrityFailure,
-              .message = "archive declared size exceeds the safety limit"};
+    std::uint64_t declared = 0;
+    if (hasDeclaredSize) {
+      declared = static_cast<std::uint64_t>(archive_entry_size(entry));
+      if (isReplayMember(name) && declared == 0) {
+        return {.error = ProfileError::IntegrityFailure,
+                .message = "archive contains an empty replay member"};
+      }
+      if (!ProfileArchiveSizePolicy::additionAllowed(name, 0, declaredTotal,
+                                                     declared) ||
+          !validation.declaredSizeAllowed(name, 0, declaredTotal, declared)) {
+        return {.error = ProfileError::IntegrityFailure,
+                .message = "archive declared size exceeds the safety limit"};
+      }
+      declaredTotal += declared;
     }
-    declaredTotal += declared;
 
     const auto outputPath = extractDirectory / name;
     if (isPracticeMember(name)) {
@@ -1312,9 +1368,13 @@ validateArchive(const std::filesystem::path &archivePath,
       }
     }
     output.close();
-    if (!output || actual != declared) {
+    if (!output || (hasDeclaredSize && actual != declared)) {
       return {.error = ProfileError::IntegrityFailure,
               .message = "archive member size does not match its declaration"};
+    }
+    if (isReplayMember(name) && actual == 0) {
+      return {.error = ProfileError::IntegrityFailure,
+              .message = "archive contains an empty replay member"};
     }
   }
   for (const std::string_view name : kMemberNames) {
@@ -1477,15 +1537,29 @@ validateArchive(const std::filesystem::path &archivePath,
 
 bool ProfileArchiveSizePolicy::memberSizeAllowed(std::string_view memberName,
                                                  std::uint64_t bytes) {
-  if (memberName == "scores.db" || memberName == "replays.db" ||
-      isReplayMember(memberName)) {
+  if (memberName == "scores.db" || memberName == "replays.db") {
     return bytes <= kMaximumDatabaseBytes;
+  }
+  if (isReplayMember(memberName)) {
+    return bytes <= replay::ReplayCodecLimits::kMaximumCompressedBytes;
   }
   return isKnownMember(memberName) && bytes <= kMaximumMetadataBytes;
 }
 
 bool ProfileArchiveSizePolicy::totalSizeAllowed(std::uint64_t bytes) {
   return bytes <= kMaximumTotalBytes;
+}
+
+bool ProfileArchiveSizePolicy::archiveSizeAllowed(std::uint64_t bytes) {
+  return bytes <= kMaximumArchiveBytes;
+}
+
+bool ProfileArchiveSizePolicy::memberCountAllowed(std::size_t count) {
+  return count <= kMaximumMemberCount;
+}
+
+bool ProfileArchiveSizePolicy::memberNameAllowed(std::string_view memberName) {
+  return archiveMemberNameAllowed(memberName);
 }
 
 bool ProfileArchiveSizePolicy::additionAllowed(std::string_view memberName,
