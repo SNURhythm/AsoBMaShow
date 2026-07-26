@@ -279,6 +279,19 @@ bool validGaugeProfileValue(int value) noexcept {
          value <= static_cast<int>(GaugeProfile::Standard24Keys);
 }
 
+template <typename Range, typename Projection>
+bool validateIndexedTimestampOrder(const Range &records,
+                                   Projection songTimeMicros,
+                                   std::string_view track,
+                                   std::string &diagnostic) {
+  if (std::ranges::is_sorted(records, {}, songTimeMicros)) {
+    return true;
+  }
+  diagnostic = "legacy replay " + std::string(track) +
+               " timestamps decrease in indexed order";
+  return false;
+}
+
 bool readEvents(sqlite3 *database, LegacyChart &chart,
                 std::string &diagnostic) {
   Statement statement(
@@ -294,6 +307,11 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
   int result = SQLITE_OK;
   while ((result = sqlite3_step(statement.get())) == SQLITE_ROW) {
     LegacyEvent entry;
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER) {
+      diagnostic = "legacy replay event ordering field is invalid";
+      return false;
+    }
     entry.eventIndex = sqlite3_column_int(statement.get(), 0);
     const int action = sqlite3_column_int(statement.get(), 1);
     const int judgement = sqlite3_column_int(statement.get(), 6);
@@ -326,10 +344,16 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     diagnostic = statement.error();
     return false;
   }
+  if (!validateIndexedTimestampOrder(
+          chart.events,
+          [](const LegacyEvent &entry) { return entry.event.songTimeMicros; },
+          "event", diagnostic)) {
+    return false;
+  }
 
   Statement touch(
       database,
-      "SELECT action,finger_id,song_time_micros,x,y FROM "
+      "SELECT sample_index,action,finger_id,song_time_micros,x,y FROM "
       "replay_touch_samples WHERE replay_id=? ORDER BY sample_index,id");
   if (!touch.valid() ||
       sqlite3_bind_int64(touch.get(), 1, chart.id) != SQLITE_OK) {
@@ -337,8 +361,13 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     return false;
   }
   while ((result = sqlite3_step(touch.get())) == SQLITE_ROW) {
-    const int action = sqlite3_column_int(touch.get(), 0);
     if (sqlite3_column_type(touch.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(touch.get(), 3) != SQLITE_INTEGER) {
+      diagnostic = "legacy replay touch ordering field is invalid";
+      return false;
+    }
+    const int action = sqlite3_column_int(touch.get(), 1);
+    if (sqlite3_column_type(touch.get(), 1) != SQLITE_INTEGER ||
         action < static_cast<int>(replay::ReplayTouchAction::Down) ||
         action > static_cast<int>(replay::ReplayTouchAction::Cancel)) {
       diagnostic = "legacy replay touch action is invalid";
@@ -346,21 +375,24 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     }
     chart.touchSamples.push_back(
         {.action = static_cast<replay::ReplayTouchAction>(action),
-         .fingerId = sqlite3_column_int64(touch.get(), 1),
-         .songTimeMicros = sqlite3_column_int64(touch.get(), 2),
-         .x = static_cast<float>(sqlite3_column_double(touch.get(), 3)),
-         .y = static_cast<float>(sqlite3_column_double(touch.get(), 4))});
+         .fingerId = sqlite3_column_int64(touch.get(), 2),
+         .songTimeMicros = sqlite3_column_int64(touch.get(), 3),
+         .x = static_cast<float>(sqlite3_column_double(touch.get(), 4)),
+         .y = static_cast<float>(sqlite3_column_double(touch.get(), 5))});
   }
   if (result != SQLITE_DONE) {
     diagnostic = touch.error();
     return false;
   }
-  std::ranges::stable_sort(chart.touchSamples, {},
-                           &replay::ReplayTouchSample::songTimeMicros);
+  if (!validateIndexedTimestampOrder(chart.touchSamples,
+                                     &replay::ReplayTouchSample::songTimeMicros,
+                                     "touch sample", diagnostic)) {
+    return false;
+  }
 
   Statement cover(
       database,
-      "SELECT song_time_micros,note_start_position_percent,"
+      "SELECT event_index,song_time_micros,note_start_position_percent,"
       "reset_visible_time_reference FROM replay_lane_cover_events WHERE "
       "replay_id=? ORDER BY event_index,id");
   if (!cover.valid() ||
@@ -369,18 +401,23 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     return false;
   }
   while ((result = sqlite3_step(cover.get())) == SQLITE_ROW) {
+    if (sqlite3_column_type(cover.get(), 0) != SQLITE_INTEGER ||
+        sqlite3_column_type(cover.get(), 1) != SQLITE_INTEGER) {
+      diagnostic = "legacy replay lane-cover ordering field is invalid";
+      return false;
+    }
     chart.laneCoverEvents.push_back(
-        {.songTimeMicros = sqlite3_column_int64(cover.get(), 0),
-         .noteStartPositionPercent = sqlite3_column_int(cover.get(), 1),
-         .resetVisibleTimeReference = sqlite3_column_int(cover.get(), 2) != 0});
+        {.songTimeMicros = sqlite3_column_int64(cover.get(), 1),
+         .noteStartPositionPercent = sqlite3_column_int(cover.get(), 2),
+         .resetVisibleTimeReference = sqlite3_column_int(cover.get(), 3) != 0});
   }
   if (result != SQLITE_DONE) {
     diagnostic = cover.error();
     return false;
   }
-  std::ranges::stable_sort(chart.laneCoverEvents, {},
-                           &replay::ReplayLaneCoverEvent::songTimeMicros);
-  return true;
+  return validateIndexedTimestampOrder(
+      chart.laneCoverEvents, &replay::ReplayLaneCoverEvent::songTimeMicros,
+      "lane-cover event", diagnostic);
 }
 
 std::vector<bool> countedLegacyResultEvents(const LegacyChart &chart) {
@@ -694,8 +731,6 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
         .pressed = action == replay::LegacyPlaybackAction::Press,
     });
   }
-  std::ranges::stable_sort(candidates, {},
-                           &replay::InputTransition::songTimeMicros);
   std::map<std::tuple<int, int, int>, bool> states;
   for (const auto &transition : candidates) {
     const auto key =
@@ -716,8 +751,6 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
   for (const auto &entry : chart.events) {
     legacy.events.push_back(entry.event);
   }
-  std::ranges::stable_sort(legacy.events, {},
-                           &replay::LegacyPlaybackEvent::songTimeMicros);
   chart.playback.legacy = std::move(legacy);
 
   const auto stem = replay::chartStem(chart.chartSha256, setup.longNoteMode,

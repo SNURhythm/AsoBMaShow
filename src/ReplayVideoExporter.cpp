@@ -2763,7 +2763,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   renderer.setPlayAreaWidth(
       settings.playAreaWidthForKeyMode(chart.Meta.KeyMode));
   renderer.setLaneBeamLengthPercent(settings.laneBeamLengthPercent);
-  renderer.setNoteStartPositionPercent(settings.noteStartPositionPercent);
+  renderer.setNoteStartPositionPercent(
+      analysis::initialLaneCoverPercentForRendering(
+          replay, settings.noteStartPositionPercent));
   renderer.setLaneBeamClockUsesRenderTime(true);
   renderer.setShowInvisibleNotes(settings.showInvisibleNotes);
   const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);
@@ -3663,7 +3665,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     renderer.setPlayAreaWidth(
         settings.playAreaWidthForKeyMode(chart.Meta.KeyMode));
     renderer.setLaneBeamLengthPercent(settings.laneBeamLengthPercent);
-    renderer.setNoteStartPositionPercent(settings.noteStartPositionPercent);
+    renderer.setNoteStartPositionPercent(
+        analysis::initialLaneCoverPercentForRendering(
+            stageReplay, settings.noteStartPositionPercent));
     renderer.setLaneBeamClockUsesRenderTime(true);
     renderer.setShowInvisibleNotes(settings.showInvisibleNotes);
     const auto bpmChangeTimelines = collectBpmChangeTimelines(chart);

@@ -1523,7 +1523,7 @@ void testMigratesOutdatedProvenanceAsLegacyUnverified() {
   }
 }
 
-void testNormalizesLegacyPrerollSupplementalTimestamps() {
+void testMigratesLegacyPrerollSupplementalTimestamps() {
   TemporaryDirectory temporary;
   Database database(temporary.path() / "replay.db");
   replay_schema10_fixture::createExactSchema(database.get());
@@ -1535,7 +1535,7 @@ void testNormalizesLegacyPrerollSupplementalTimestamps() {
       database.get(),
       "INSERT INTO replay_touch_samples(replay_id,sample_index,action,"
       "finger_id,song_time_micros,x,y) VALUES"
-      "(42,1,1,9,1000,0.5,0.5),(42,2,2,9,500,0.5,0.5)");
+      "(42,1,1,9,500,0.5,0.5),(42,2,2,9,1000,0.5,0.5)");
   executeOrThrow(database.get(),
                  "UPDATE replay_lane_cover_events SET song_time_micros=-30000 "
                  "WHERE replay_id=42 AND event_index=0");
@@ -1568,65 +1568,136 @@ void testNormalizesLegacyPrerollSupplementalTimestamps() {
                decoded.chart->touchSamples[1].songTimeMicros == 500 &&
                decoded.chart->touchSamples[2].songTimeMicros == 1000 &&
                decoded.chart->laneCoverEvents.front().songTimeMicros == -30000,
-           "pre-roll samples are preserved and supplemental tracks are "
-           "ordered by their recorded time");
+           "pre-roll samples are preserved in indexed timestamp order");
   }
 }
 
-void testOrdersLegacyInputBeforeRemovingRedundantTransitions() {
-  TemporaryDirectory temporary;
-  Database database(temporary.path() / "replay.db");
-  replay_schema10_fixture::createExactSchema(database.get());
-  const FixtureFacts chart = insertChartFixture(database.get());
-  executeOrThrow(database.get(),
-                 "UPDATE replay_events SET song_time_micros=1000 WHERE "
-                 "replay_id=42 AND event_index=0");
-  executeOrThrow(database.get(),
-                 "UPDATE replay_events SET song_time_micros=3000 WHERE "
-                 "replay_id=42 AND event_index=1");
-  executeOrThrow(
-      database.get(),
-      "INSERT INTO replay_events(replay_id,event_index,action,lane,"
-      "note_time_micros,song_time_micros,judge_time_micros,judgement,"
-      "diff_micros,gauge,gauge_type,combo,score) VALUES"
-      "(42,2,0,0,-1,2000,2000,6,0,64.5,2,2,3),"
-      "(42,3,1,0,-1,4000,4000,6,0,64.5,2,2,3)");
+void testRejectsDecreasingIndexedReplayTimestampsAtomically() {
+  struct DecreasingTrackCase {
+    std::string_view mutation;
+    std::string_view retainedTimestampQuery;
+    std::int64_t retainedTimestamp = 0;
+    std::string_view label;
+  };
+  constexpr std::array cases{
+      DecreasingTrackCase{
+          "UPDATE replay_events SET song_time_micros=1000 WHERE replay_id=42 "
+          "AND event_index=1",
+          "SELECT song_time_micros FROM replay_events WHERE replay_id=42 AND "
+          "event_index=1",
+          1000, "legacy event"},
+      DecreasingTrackCase{
+          "INSERT INTO replay_touch_samples(replay_id,sample_index,action,"
+          "finger_id,song_time_micros,x,y) VALUES(42,1,1,9,800,0.5,0.5)",
+          "SELECT song_time_micros FROM replay_touch_samples WHERE "
+          "replay_id=42 "
+          "AND sample_index=1",
+          800, "touch sample"},
+      DecreasingTrackCase{
+          "UPDATE replay_lane_cover_events SET song_time_micros=-1000 WHERE "
+          "replay_id=42 AND event_index=1",
+          "SELECT song_time_micros FROM replay_lane_cover_events WHERE "
+          "replay_id=42 AND event_index=1",
+          -1000, "lane-cover event"},
+  };
 
-  replay::BeatorajaReplayCodec codec;
-  replay::ReplayFileStore store(temporary.path());
-  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store, {},
-      fixedChartMetadata(2));
+  for (const auto &malformed : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(), malformed.mutation);
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
 
-  expect(outcome.status ==
-             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
-         "out-of-order legacy input events migrate");
-  if (outcome.status ==
-      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
-    replay::ReplayFileMetadata metadata{
-        .relativePath = "replay/" + chart.sha256 + ".brd",
-        .sha256 = text(database.get(),
-                       "SELECT content_sha256 FROM replay_files WHERE "
-                       "chart_result_id=42"),
-        .compressedSize = static_cast<std::uint64_t>(integer(
-            database.get(), "SELECT compressed_size FROM replay_files WHERE "
-                            "chart_result_id=42")),
-        .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
-    };
-    const auto decoded = store.load(metadata, codec);
-    expect(decoded.chart.has_value() && decoded.chart->input.size() == 2 &&
-               decoded.chart->input[0].songTimeMicros == 1000 &&
-               decoded.chart->input[0].pressed &&
-               decoded.chart->input[1].songTimeMicros == 3000 &&
-               !decoded.chart->input[1].pressed &&
-               decoded.chart->legacy.has_value() &&
-               decoded.chart->legacy->events.size() == 4 &&
-               decoded.chart->legacy->events[0].songTimeMicros == 1000 &&
-               decoded.chart->legacy->events[1].songTimeMicros == 2000 &&
-               decoded.chart->legacy->events[2].songTimeMicros == 3000 &&
-               decoded.chart->legacy->events[3].songTimeMicros == 4000,
-           "migration chronologically orders legacy events and discards "
-           "redundant input state changes");
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+
+    expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                                 Status::InvalidLegacyData &&
+               outcome.chartFiles == 0 && outcome.courseFiles == 0 &&
+               snapshotLegacyDatabase(database.get()) == before &&
+               integer(database.get(), malformed.retainedTimestampQuery) ==
+                   malformed.retainedTimestamp &&
+               !std::filesystem::exists(temporary.path() / "replay"),
+           std::string("decreasing indexed ") + std::string(malformed.label) +
+               " timestamp fails atomically before writing files");
+  }
+}
+
+void testRejectsNonIntegerReplayOrderingFieldsAtomically() {
+  struct MalformedOrderingFieldCase {
+    std::string_view mutation;
+    std::string_view malformedCountQuery;
+    std::int64_t malformedCount = 0;
+    std::string_view label;
+  };
+  constexpr std::array cases{
+      MalformedOrderingFieldCase{
+          "UPDATE replay_events SET event_index=0.5 WHERE replay_id=42 AND "
+          "event_index=0",
+          "SELECT count(*) FROM replay_events WHERE replay_id=42 AND "
+          "typeof(event_index)='real'",
+          1, "legacy event index"},
+      MalformedOrderingFieldCase{
+          "UPDATE replay_events SET song_time_micros=1100.9 WHERE "
+          "replay_id=42 AND event_index=0; UPDATE replay_events SET "
+          "song_time_micros=1100.1 WHERE replay_id=42 AND event_index=1",
+          "SELECT count(*) FROM replay_events WHERE replay_id=42 AND "
+          "typeof(song_time_micros)='real'",
+          2, "legacy event timestamp"},
+      MalformedOrderingFieldCase{
+          "UPDATE replay_touch_samples SET sample_index=0.5 WHERE "
+          "replay_id=42 AND sample_index=0",
+          "SELECT count(*) FROM replay_touch_samples WHERE replay_id=42 AND "
+          "typeof(sample_index)='real'",
+          1, "touch sample index"},
+      MalformedOrderingFieldCase{
+          "UPDATE replay_touch_samples SET song_time_micros=900.5 WHERE "
+          "replay_id=42 AND sample_index=0",
+          "SELECT count(*) FROM replay_touch_samples WHERE replay_id=42 AND "
+          "typeof(song_time_micros)='real'",
+          1, "touch sample timestamp"},
+      MalformedOrderingFieldCase{
+          "UPDATE replay_lane_cover_events SET event_index=0.5 WHERE "
+          "replay_id=42 AND event_index=0",
+          "SELECT count(*) FROM replay_lane_cover_events WHERE replay_id=42 "
+          "AND typeof(event_index)='real'",
+          1, "lane-cover event index"},
+      MalformedOrderingFieldCase{
+          "UPDATE replay_lane_cover_events SET song_time_micros=5000.9 WHERE "
+          "replay_id=42 AND event_index=0; UPDATE replay_lane_cover_events "
+          "SET song_time_micros=5000.1 WHERE replay_id=42 AND event_index=1",
+          "SELECT count(*) FROM replay_lane_cover_events WHERE replay_id=42 "
+          "AND typeof(song_time_micros)='real'",
+          2, "lane-cover event timestamp"},
+  };
+
+  for (const auto &malformed : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(), malformed.mutation);
+    const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
+
+    expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                                 Status::InvalidLegacyData &&
+               outcome.chartFiles == 0 && outcome.courseFiles == 0 &&
+               snapshotLegacyDatabase(database.get()) == before &&
+               integer(database.get(), malformed.malformedCountQuery) ==
+                   malformed.malformedCount &&
+               !std::filesystem::exists(temporary.path() / "replay"),
+           std::string("non-integer ") + std::string(malformed.label) +
+               " fails atomically before writing files");
   }
 }
 
@@ -2029,8 +2100,9 @@ int main() {
   testMissingChartMetadataBlocksResultReconstruction();
   testRejectsInvalidLegacyReplayEnums();
   testMigratesOutdatedProvenanceAsLegacyUnverified();
-  testNormalizesLegacyPrerollSupplementalTimestamps();
-  testOrdersLegacyInputBeforeRemovingRedundantTransitions();
+  testMigratesLegacyPrerollSupplementalTimestamps();
+  testRejectsDecreasingIndexedReplayTimestampsAtomically();
+  testRejectsNonIntegerReplayOrderingFieldsAtomically();
   testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles();
   testAssignsSameStemHistoryByTimestampThenPublicId();
   testMigrationSkipsCanonicalCrossStemPathAlias();

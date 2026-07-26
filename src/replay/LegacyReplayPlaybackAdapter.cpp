@@ -36,6 +36,8 @@ JudgedPlaybackData makeAdapterBase(
   adapted.gaugeAutoShift = setup.gaugeAutoShift;
   adapted.gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound;
   adapted.touchSamples = playback.touchSamples;
+  adapted.initialLaneCoverPercent = setup.initialLaneCoverPercent;
+  adapted.laneCoverEnabled = setup.laneCoverEnabled;
   adapted.laneCoverEvents = playback.laneCoverEvents;
   adapted.context = analysis::playbackContextFrom(setup);
   return adapted;

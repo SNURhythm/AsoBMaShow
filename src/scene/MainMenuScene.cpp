@@ -9730,27 +9730,22 @@ void MainMenuScene::startGBattlePlayback(const ChartMetaRecord &record,
             std::make_shared<JudgedPlaybackData>(std::move(*adapted));
         context.jukebox.stop();
         hideReplayModal();
-        changeToGameplayScene(
-            chart, {
-                       .startPosition = 0,
-                       .autoKeySound = autoKeySound,
-                       .autoPlay = false,
-                       .gaugeType = gaugeType,
-                       .gaugeAutoShift = gaugeAutoShift,
-                       .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
-                       .gbattleRecordData = recordData,
-                       .playOption = recordData->playOption,
-                       .playOptionSeed = recordData->playOptionSeed,
-                       .playOption2 = recordData->playOption2,
-                       .playOption2Seed = recordData->playOption2Seed,
-                       .longNoteMode = normalizeChartLongNoteModeValue(
-                           recordData->chartMeta.LnMode),
-                       .assistOption = recordData->assistOption,
-                       .pacemakerTarget = pacemaker::kTargetOff,
-                       .playback = playback,
-                       .replayGhostRenderingEnabled = false,
-                       .ruleset = ruleset,
-                   });
+        StartOptions gbattleOptions{
+            .startPosition = 0,
+            .autoKeySound = autoKeySound,
+            .autoPlay = false,
+            .gaugeType = gaugeType,
+            .gaugeAutoShift = gaugeAutoShift,
+            .gaugeAutoShiftLowerBound = gaugeAutoShiftLowerBound,
+            .gbattleRecordData = recordData,
+            .pacemakerTarget = pacemaker::kTargetOff,
+            .playback = playback,
+            .replayGhostRenderingEnabled = false,
+            .ruleset = ruleset,
+        };
+        applyGBattleReplayChartSetupToStartOptions(
+            gbattleOptions, *recordData, *replayPlayback);
+        changeToGameplayScene(chart, std::move(gbattleOptions));
         willStart.store(false);
         return true;
       },

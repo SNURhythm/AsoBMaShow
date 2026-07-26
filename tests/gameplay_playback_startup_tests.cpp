@@ -91,6 +91,41 @@ int main() {
   rawStartingGauge.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] = 100.0F;
   raw->setup.startingGaugeState = rawStartingGauge;
   raw->setup.clubMode = true;
+
+  auto gbattleRecord = std::make_shared<JudgedPlaybackData>();
+  gbattleRecord->chartMeta.LnMode = 2;
+  gbattleRecord->playOption = "S-RANDOM";
+  gbattleRecord->playOptionSeed = 41;
+  gbattleRecord->playOption2 = "MIRROR";
+  gbattleRecord->playOption2Seed = 43;
+  gbattleRecord->assistOption = "AUTO-SCRATCH";
+
+  StartOptions materializedGBattleOptions;
+  applyGBattleReplayChartSetupToStartOptions(
+      materializedGBattleOptions, *gbattleRecord, *raw);
+
+  replay::ReplayPlaybackData legacyRaw = *raw;
+  legacyRaw.legacy.emplace();
+  StartOptions legacyGBattleOptions;
+  applyGBattleReplayChartSetupToStartOptions(legacyGBattleOptions,
+                                             *gbattleRecord, legacyRaw);
+
+  const bool materializedGBattlePreservesFlip = expect(
+      materializedGBattleOptions.doublePlayOption ==
+          replay::DoublePlayOption::Flip,
+      "materialized raw G-Battle preserves its recorded DP FLIP option");
+  const bool legacyGBattlePreservesFlip = expect(
+      legacyGBattleOptions.doublePlayOption == replay::DoublePlayOption::Flip,
+      "legacy-adapted raw G-Battle preserves its recorded DP FLIP option");
+  if (!materializedGBattlePreservesFlip || !legacyGBattlePreservesFlip ||
+      !expect(materializedGBattleOptions.playOption == "S-RANDOM" &&
+                  materializedGBattleOptions.playOptionSeed == 41 &&
+                  materializedGBattleOptions.playOption2 == "MIRROR" &&
+                  materializedGBattleOptions.playOption2Seed == 43,
+              "G-Battle keeps per-player options from judged playback")) {
+    return 1;
+  }
+
   if (!expect(resultRetryDoublePlayOption(
                   false, replay::DoublePlayOption::Normal, raw.get()) ==
                   replay::DoublePlayOption::Flip,

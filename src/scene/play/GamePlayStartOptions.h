@@ -281,6 +281,19 @@ inline void applyReplayPlaybackToStartOptions(
   }
 }
 
+inline void applyGBattleReplayChartSetupToStartOptions(
+    StartOptions &options, const JudgedPlaybackData &recordData,
+    const replay::ReplayPlaybackData &playback) {
+  options.playOption = recordData.playOption;
+  options.playOptionSeed = recordData.playOptionSeed;
+  options.playOption2 = recordData.playOption2;
+  options.playOption2Seed = recordData.playOption2Seed;
+  options.doublePlayOption = playback.setup.doublePlayOption;
+  options.longNoteMode =
+      normalizeChartLongNoteModeValue(recordData.chartMeta.LnMode);
+  options.assistOption = recordData.assistOption;
+}
+
 [[nodiscard]] inline std::shared_ptr<const replay::ReplayPlaybackData>
 rawReplayResultSource(const StartOptions &options) noexcept {
   return options.replayData == nullptr ? options.replayPlayback : nullptr;

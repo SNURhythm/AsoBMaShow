@@ -108,9 +108,21 @@ struct JudgedPlaybackData {
   std::string createdAt;
   std::vector<JudgedPlaybackEvent> events;
   std::vector<replay::ReplayTouchSample> touchSamples;
+  // Empty for judged projections that predate raw playback setup ownership.
+  std::optional<int> initialLaneCoverPercent;
+  bool laneCoverEnabled = false;
   std::vector<replay::ReplayLaneCoverEvent> laneCoverEvents;
   PlaybackAnalysisContext context;
 };
+
+[[nodiscard]] inline int
+initialLaneCoverPercentForRendering(const JudgedPlaybackData &playback,
+                                    int settingsFallbackPercent) noexcept {
+  if (!playback.initialLaneCoverPercent.has_value()) {
+    return settingsFallbackPercent;
+  }
+  return playback.laneCoverEnabled ? *playback.initialLaneCoverPercent : 0;
+}
 
 struct JudgedCoursePlaybackStage {
   JudgedPlaybackData replay;
