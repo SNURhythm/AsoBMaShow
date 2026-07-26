@@ -263,6 +263,17 @@ void testInjectedDurabilityFaults() {
     expect(finalExists != preRename,
            "only post-rename faults may expose a reusable final file");
     if (!preRename) {
+      if (stage == "directory-sync") {
+        replay::ReplayFileStore stillFaulty(
+            profile.path,
+            {.failAt = [](std::string_view point) {
+              return point == "directory-sync";
+            }});
+        const auto blockedRetry = stillFaulty.finalize(
+            chartPath(), encoded, codec, chartIdentity(), "blocked_retry");
+        expect(!blockedRetry.metadata,
+               "existing replay retry still requires directory durability");
+      }
       replay::ReplayFileStore retryStore(profile.path);
       const auto retry = retryStore.finalize(chartPath(), encoded, codec,
                                              chartIdentity(), "retry");

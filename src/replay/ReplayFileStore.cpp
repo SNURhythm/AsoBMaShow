@@ -416,6 +416,26 @@ FinalizeOutcome validateFinal(const std::filesystem::path &finalPath,
   return outcome;
 }
 
+FinalizeOutcome syncAndValidateExistingFinal(
+    const std::filesystem::path &finalPath,
+    const std::filesystem::path &relativePath,
+    std::span<const std::byte> expectedBytes,
+    const BeatorajaReplayCodec &codec,
+    const ExpectedReplayIdentity &expected,
+    const ReplayFileStoreFaults &faults) {
+  FinalizeOutcome outcome;
+  if (failAt(faults, "directory-sync")) {
+    outcome.diagnostic = "Injected replay directory-sync failure";
+    return outcome;
+  }
+  if (!atomic_file::syncDirectory(finalPath.parent_path(),
+                                  outcome.diagnostic)) {
+    return outcome;
+  }
+  return validateFinal(finalPath, relativePath, expectedBytes, codec, expected,
+                       faults, true);
+}
+
 } // namespace
 
 ReplayFileStore::ReplayFileStore(std::filesystem::path profileRoot,
@@ -447,8 +467,8 @@ FinalizeOutcome ReplayFileStore::finalize(
       std::filesystem::symlink_status(finalPath, statusError);
   if (!statusError &&
       existingStatus.type() != std::filesystem::file_type::not_found) {
-    return validateFinal(finalPath, identity.relativePath, encoded, codec,
-                         expected, faults_, true);
+    return syncAndValidateExistingFinal(finalPath, identity.relativePath,
+                                        encoded, codec, expected, faults_);
   }
   if (statusError && !entryMissing(statusError)) {
     outcome.diagnostic =
@@ -488,8 +508,8 @@ FinalizeOutcome ReplayFileStore::finalize(
                                                           outcome.diagnostic);
   if (rename == atomic_file::RenameNoReplaceResult::DestinationExists) {
     removePrivateTemporary(temporary);
-    return validateFinal(finalPath, identity.relativePath, encoded, codec,
-                         expected, faults_, true);
+    return syncAndValidateExistingFinal(finalPath, identity.relativePath,
+                                        encoded, codec, expected, faults_);
   }
   if (rename != atomic_file::RenameNoReplaceResult::Renamed) {
     return outcome;
