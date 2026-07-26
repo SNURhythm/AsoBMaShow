@@ -374,6 +374,7 @@ git commit -m "fix: map legacy replay lanes by key mode"
 - Produces: `ResultPersistenceOptions::courseAttempt` as `std::shared_ptr<const result_persistence::CompletedCourseAttempt>`.
 - Produces: `result_scene_detail::hasPersistenceAttempt(const ResultPersistenceOptions &) noexcept`.
 - Produces: `result_scene_detail::persistenceAttemptId(const ResultPersistenceOptions &) noexcept`.
+- Produces: `result_scene_detail::persistCourseAttempt(ResultPersistenceOptions &, CompletedCourseAttempt, const CoursePersistenceCallback &)`.
 - Produces: `result_scene_detail::retryPersistenceAttempt(ResultPersistenceOptions &, std::span<const ir::IrOutboxDraft>, const ResultPersistenceRetryCallbacks &)`.
 - Produces: `result_scene_detail::applyCoursePersistenceReceipt(const std::shared_ptr<const CompletedCourseAttempt> &, const SaveOutcome &, CoursePlaySession &) noexcept` in the focused course-persistence header.
 - Consumes: `result_persistence::Coordinator::persistCourse(const CompletedCourseAttempt &)`, with no IR drafts.
@@ -384,17 +385,27 @@ Add a focused behavior test to `remote_result_scene_tests.cpp`. The two callback
 
 ```cpp
 void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
+  constexpr std::string_view attemptId =
+      "123e4567-e89b-42d3-a456-426614174099";
   result_persistence::CompletedCourseAttempt course;
-  course.result.attemptId = "123e4567-e89b-42d3-a456-426614174099";
+  course.result.attemptId = std::string(attemptId);
   ResultPersistenceOptions persistence;
-  persistence.courseAttempt =
-      std::make_shared<const result_persistence::CompletedCourseAttempt>(
-          course);
+  require(result_scene_detail::persistCourseAttempt(
+              persistence, std::move(course),
+              [](const result_persistence::CompletedCourseAttempt &) {
+                return result_persistence::SaveOutcome{
+                    .state = result_persistence::SaveState::Unstaged,
+                    .userMessage = "Course replay was not saved.",
+                };
+              }) &&
+              persistence.outcome.state ==
+                  result_persistence::SaveState::Unstaged,
+          "failed first course save retains its retryable attempt and outcome");
 
   require(result_scene_detail::hasPersistenceAttempt(persistence),
           "completed course attempt is available to persistence retry");
   require(result_scene_detail::persistenceAttemptId(persistence) ==
-              *course.result.attemptId,
+              attemptId,
           "course retry diagnostics use the retained course attempt ID");
 
   const ResultPersistenceRetryCallbacks callbacks{
@@ -476,23 +487,24 @@ Use these helpers in `persistenceDecisionRequired`, status creation, Retry Save 
 
 Add `ResultPersistenceRetryCallbacks` with one chart callback taking the attempt and automatic drafts, and one course callback taking only the course attempt. Implement `retryPersistenceAttempt` to fail closed unless exactly one attempt and its callback exist, invoke only that callback, and replace `persistence.outcome` with the returned value.
 
+Add `CoursePersistenceCallback` and implement `persistCourseAttempt` to fail closed when a chart or course attempt is already attached, move the completed course attempt into `courseAttempt`, invoke the callback once, and retain both the attempt and returned outcome even when saving fails.
+
 Create `ResultCoursePersistence.h` and implement `applyCoursePersistenceReceipt` there so `ResultScene.h` can retain its lightweight `CoursePlaySession` forward declaration. The helper requires a retained course attempt, `SaveState::Saved`, a positive receipt result ID, a non-empty created time, and an exact receipt/attempt ID match. On success it sets `courseReplaySaved`, `savedCourseReplayId`, and a copy of the retained `CourseReplayPlaybackData`; otherwise it leaves the session unchanged and returns false.
 
 - [ ] **Step 4: Retain the first course attempt and apply successful receipts**
 
-In `saveCourseReplay`, move the completed attempt into a shared pointer before persistence:
+In `saveCourseReplay`, pass the completed attempt through `persistCourseAttempt`:
 
 ```cpp
-auto courseAttempt =
-    std::make_shared<const result_persistence::CompletedCourseAttempt>(
-        result_persistence::CompletedCourseAttempt{
-            .result = std::move(result),
-            .replay = session->recordedReplayPlayback,
-        });
 auto &persistenceOptions = local->persistenceOptions;
-persistenceOptions.courseAttempt = courseAttempt;
-persistenceOptions.outcome =
-    context.resultPersistence.persistCourse(*courseAttempt);
+result_scene_detail::persistCourseAttempt(
+    persistenceOptions,
+    {.result = std::move(result),
+     .replay = session->recordedReplayPlayback},
+    [this](const result_persistence::CompletedCourseAttempt &attempt) {
+      return context.resultPersistence.persistCourse(attempt);
+    });
+const auto &courseAttempt = persistenceOptions.courseAttempt;
 ```
 
 On a saved outcome with a receipt whose attempt ID matches `courseAttempt->result.attemptId`, set:
