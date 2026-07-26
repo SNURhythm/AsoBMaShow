@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../replay/ReplayPlaybackData.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -33,6 +35,9 @@ using ReplayMigrationKeyModeResolver =
 [[nodiscard]] ReplayMigrationKeyModeResolver
 makeChartDatabaseReplayKeyModeResolver(
     const std::filesystem::path &chartDatabasePath);
+
+[[nodiscard]] std::optional<replay::LogicalControl>
+legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept;
 
 struct ReplayMigrationOutcome {
   enum class Status {

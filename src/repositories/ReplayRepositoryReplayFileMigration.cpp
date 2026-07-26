@@ -271,49 +271,6 @@ GaugeProfile gaugeProfileFromInt(int value) {
   return static_cast<GaugeProfile>(value);
 }
 
-std::optional<replay::LogicalControl> legacyControl(int lane, int keyMode,
-                                                    bool &scratch) {
-  scratch = false;
-  if (keyMode == 7) {
-    if (lane >= 0 && lane < 7) {
-      return replay::LogicalControl{
-          .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = lane};
-    }
-    if (lane == 7 || lane == 8) {
-      scratch = true;
-      return replay::LogicalControl{
-          .kind = replay::LogicalControlKind::ScratchClockwise,
-          .player = 1,
-          .lane = -1};
-    }
-    return std::nullopt;
-  }
-  if (lane >= 0 && lane < 7) {
-    return replay::LogicalControl{
-        .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = lane};
-  }
-  if (lane == 7 || lane == 8) {
-    scratch = true;
-    return replay::LogicalControl{
-        .kind = replay::LogicalControlKind::ScratchClockwise,
-        .player = 1,
-        .lane = -1};
-  }
-  if (lane >= 9 && lane < 16) {
-    return replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
-                                  .player = 2,
-                                  .lane = lane - 9};
-  }
-  if (lane == 16 || lane == 17) {
-    scratch = true;
-    return replay::LogicalControl{
-        .kind = replay::LogicalControlKind::ScratchClockwise,
-        .player = 2,
-        .lane = -1};
-  }
-  return std::nullopt;
-}
-
 bool readEvents(sqlite3 *database, LegacyChart &chart,
                 std::string &diagnostic) {
   Statement statement(
@@ -628,14 +585,15 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
         action != replay::LegacyPlaybackAction::Release) {
       continue;
     }
-    bool scratch = false;
-    const auto control =
-        legacyControl(entry.event.lane, setup.keyMode, scratch);
+    const auto control = legacyReplayControlForPhysicalLane(
+        entry.event.lane, setup.keyMode);
     if (!control.has_value() ||
         entry.event.songTimeMicros < replay::kMinimumReplaySongTimeMicros) {
       continue;
     }
-    scratchBestEffort |= scratch;
+    scratchBestEffort |=
+        control->kind == replay::LogicalControlKind::ScratchClockwise ||
+        control->kind == replay::LogicalControlKind::ScratchCounterClockwise;
     candidates.push_back({
         .songTimeMicros = entry.event.songTimeMicros,
         .control = *control,
@@ -1465,6 +1423,84 @@ bool dropLegacyTables(sqlite3 *database, std::string &diagnostic) {
 }
 
 } // namespace
+
+std::optional<replay::LogicalControl>
+legacyReplayControlForPhysicalLane(int physicalLane, int keyMode) noexcept {
+  const auto lane = [](int player, int logicalLane) {
+    return replay::LogicalControl{.kind = replay::LogicalControlKind::Lane,
+                                  .player = player,
+                                  .lane = logicalLane};
+  };
+  const auto scratch = [](int player) {
+    return replay::LogicalControl{
+        .kind = replay::LogicalControlKind::ScratchClockwise,
+        .player = player,
+        .lane = -1};
+  };
+  if (physicalLane < 0) {
+    return std::nullopt;
+  }
+  switch (keyMode) {
+  case 5:
+    if (physicalLane < 5) {
+      return lane(1, physicalLane);
+    }
+    return physicalLane == 7
+               ? std::optional<replay::LogicalControl>(scratch(1))
+               : std::nullopt;
+  case 7:
+    if (physicalLane < 7) {
+      return lane(1, physicalLane);
+    }
+    return physicalLane == 7
+               ? std::optional<replay::LogicalControl>(scratch(1))
+               : std::nullopt;
+  case 9:
+    return physicalLane < 9
+               ? std::optional<replay::LogicalControl>(lane(1, physicalLane))
+               : std::nullopt;
+  case 10:
+    if (physicalLane < 5) {
+      return lane(1, physicalLane);
+    }
+    if (physicalLane == 7) {
+      return scratch(1);
+    }
+    if (physicalLane >= 8 && physicalLane < 13) {
+      return lane(2, physicalLane - 8);
+    }
+    return physicalLane == 15
+               ? std::optional<replay::LogicalControl>(scratch(2))
+               : std::nullopt;
+  case 14:
+    if (physicalLane < 7) {
+      return lane(1, physicalLane);
+    }
+    if (physicalLane == 7) {
+      return scratch(1);
+    }
+    if (physicalLane >= 8 && physicalLane < 15) {
+      return lane(2, physicalLane - 8);
+    }
+    return physicalLane == 15
+               ? std::optional<replay::LogicalControl>(scratch(2))
+               : std::nullopt;
+  case 24:
+    return physicalLane < 26
+               ? std::optional<replay::LogicalControl>(lane(1, physicalLane))
+               : std::nullopt;
+  case 48:
+    if (physicalLane < 26) {
+      return lane(1, physicalLane);
+    }
+    return physicalLane < 52
+               ? std::optional<replay::LogicalControl>(
+                     lane(2, physicalLane - 26))
+               : std::nullopt;
+  default:
+    return std::nullopt;
+  }
+}
 
 ReplayMigrationKeyModeResolver makeChartDatabaseReplayKeyModeResolver(
     const std::filesystem::path &chartDatabasePath) {

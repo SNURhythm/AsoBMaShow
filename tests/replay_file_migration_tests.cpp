@@ -690,6 +690,40 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
          "metadata-selected key mode is encoded into the migrated BRD");
 }
 
+void testMapsLegacyPhysicalLanesForEverySupportedMode() {
+  using replay::LogicalControlKind;
+  struct Case {
+    int keyMode;
+    int physicalLane;
+    LogicalControlKind kind;
+    int player;
+    int logicalLane;
+  };
+  constexpr std::array cases{
+      Case{5, 4, LogicalControlKind::Lane, 1, 4},
+      Case{5, 7, LogicalControlKind::ScratchClockwise, 1, -1},
+      Case{7, 6, LogicalControlKind::Lane, 1, 6},
+      Case{9, 8, LogicalControlKind::Lane, 1, 8},
+      Case{10, 8, LogicalControlKind::Lane, 2, 0},
+      Case{10, 15, LogicalControlKind::ScratchClockwise, 2, -1},
+      Case{14, 14, LogicalControlKind::Lane, 2, 6},
+      Case{14, 15, LogicalControlKind::ScratchClockwise, 2, -1},
+      Case{24, 25, LogicalControlKind::Lane, 1, 25},
+      Case{48, 51, LogicalControlKind::Lane, 2, 25},
+  };
+  for (const auto &expected : cases) {
+    const auto control =
+        replay_repository_detail::legacyReplayControlForPhysicalLane(
+            expected.physicalLane, expected.keyMode);
+    expect(control.has_value() && control->kind == expected.kind &&
+               control->player == expected.player &&
+               control->lane == expected.logicalLane,
+           "legacy physical lane maps for its exact key mode");
+  }
+  expect(!replay_repository_detail::legacyReplayControlForPhysicalLane(8, 7),
+         "7-key migration rejects player-two and 9-key-only lane 8");
+}
+
 void testMigratesMd5OnlyChartWithDeterministicReplayStem() {
   TemporaryDirectory temporary;
   Database database(temporary.path() / "replay.db");
@@ -1157,6 +1191,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
   testChartMetadataPreservesSparseFourteenKeyMode();
+  testMapsLegacyPhysicalLanesForEverySupportedMode();
   testMigratesMd5OnlyChartWithDeterministicReplayStem();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();
   testMigratesOutdatedProvenanceAsLegacyUnverified();
