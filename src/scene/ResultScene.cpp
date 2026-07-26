@@ -1771,8 +1771,8 @@ void ResultScene::addCourseButtons() {
   }
 
   if (isCourseFinalResult() && courseOptions.session != nullptr &&
-      courseOptions.session->courseReplayData != nullptr &&
-      !courseOptions.session->courseReplayData->stages.empty()) {
+      result_scene_detail::courseReplayActionAvailable(
+          *courseOptions.session)) {
     auto [replayButton, ignoredText] = makeButton(
         "Replay", ui_theme::infoAction(), ui_theme::infoActionHover(),
         ui_theme::infoActionPressed(), ui_theme::cyan(),

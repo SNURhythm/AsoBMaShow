@@ -311,6 +311,24 @@ void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
           "chart retry reuses the retained chart attempt and automatic drafts");
 }
 
+void testCourseReplayActionAcceptsRawAndLegacyData() {
+  CoursePlaySession session;
+  require(!result_scene_detail::courseReplayActionAvailable(session),
+          "empty course sessions hide replay");
+
+  session.courseReplayPlaybackData =
+      std::make_shared<replay::CourseReplayPlaybackData>();
+  session.courseReplayPlaybackData->stages.emplace_back();
+  require(result_scene_detail::courseReplayActionAvailable(session),
+          "raw course replay data exposes replay");
+
+  session.courseReplayPlaybackData.reset();
+  session.courseReplayData = std::make_shared<JudgedCoursePlaybackData>();
+  session.courseReplayData->stages.emplace_back();
+  require(result_scene_detail::courseReplayActionAvailable(session),
+          "legacy course replay data still exposes replay");
+}
+
 ResultRecordSummary
 remoteRecordSummary(std::string origin = "https://ir.example.test:8443") {
   return makeRemoteResultRecord(ir::kTachiProviderId, origin, remoteScore());
@@ -519,6 +537,7 @@ int main() {
   testRemoteActionMatrixIsReadOnly();
   testRecalledResultExcludesItselfFromPreviousBest();
   testCoursePersistenceAttemptParticipatesInRetryPolicy();
+  testCourseReplayActionAcceptsRawAndLegacyData();
   testRemoteRecordViewResultActionIsPresentedEnabled();
   testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle();
   testRemoteRecallFailsClosedForConcurrentDeletion();

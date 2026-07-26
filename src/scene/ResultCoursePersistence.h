@@ -7,6 +7,11 @@
 
 namespace result_scene_detail {
 
+[[nodiscard]] inline bool
+courseReplayActionAvailable(const CoursePlaySession &session) noexcept {
+  return session.hasCourseReplayStage(0);
+}
+
 [[nodiscard]] inline bool applyCoursePersistenceReceipt(
     const std::shared_ptr<const result_persistence::CompletedCourseAttempt>
         &attempt,
