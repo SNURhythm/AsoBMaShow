@@ -93,7 +93,9 @@ MaterializeOutcome materializeReplay(
                 playback.setup.gaugeAutoShiftLowerBound,
             .startingGaugePercent = static_cast<int>(
                 std::lround(playback.setup.startingGaugePercent)),
-            .carriedGauge = playback.setup.startingGaugeState,
+            .carriedGauge = seed.carriedGauge.has_value()
+                                ? seed.carriedGauge
+                                : playback.setup.startingGaugeState,
             .carriedCombo = carriedCombo,
             .carriedMaxCombo = carriedMaxCombo,
             .assistClearMark =
@@ -134,6 +136,7 @@ MaterializeOutcome materializeReplay(
           .value = MaterializedReplay{
               .judgedEvents = {judged.begin(), judged.end()},
               .attempt = simulation.snapshot(),
+              .gaugeState = simulation.scoreState().gaugeSnapshot(),
               .gaugeHistory = simulation.scoreState().gaugeHistory}};
 }
 

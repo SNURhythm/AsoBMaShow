@@ -217,17 +217,32 @@ void testMaterializesRawInputsThroughGameplaySimulation() {
          "materialization exposes judged annotations for derived consumers");
   expect(!outcome.value->gaugeHistory.empty(),
          "materialization exposes derived gauge history");
+  expect(outcome.value->gaugeState.currentGauge ==
+             outcome.value->attempt.gauge &&
+             outcome.value->gaugeState.gaugeType ==
+                 outcome.value->attempt.gaugeType,
+         "materialization exposes the complete terminal gauge snapshot");
 
+  auto carriedGauge = outcome.value->gaugeState;
+  carriedGauge.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hazard)] = true;
   const auto nextStage = replay::materializeReplay(
       playback, chart, policy,
-      {.carriedCombo = outcome.value->attempt.combo,
+      {.carriedGauge = carriedGauge,
+       .carriedCombo = outcome.value->attempt.combo,
        .carriedMaxCombo = outcome.value->attempt.maxCombo});
   expect(nextStage.materialized() &&
              !nextStage.value->judgedEvents.empty() &&
              nextStage.value->judgedEvents.front().combo == 2 &&
              nextStage.value->attempt.combo == 2 &&
-             nextStage.value->attempt.maxCombo == 2,
-         "sequential course materialization carries combo and maximum");
+             nextStage.value->attempt.maxCombo == 2 &&
+             nextStage.value->attempt.gauge >= outcome.value->attempt.gauge &&
+             nextStage.value->gaugeState.gaugeValues
+                     [gaugeTypeIndex(GaugeType::Normal)] ==
+                 nextStage.value->attempt.gauge &&
+             nextStage.value->gaugeState.gaugeSurvivalFailed
+                 [gaugeTypeIndex(GaugeType::Hazard)],
+         "sequential course materialization carries gauge, combo, and "
+         "maximum");
 
   playback.legacy.emplace();
   const auto legacyOutcome =

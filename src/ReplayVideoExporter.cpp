@@ -4238,6 +4238,7 @@ ReplayVideoExporter::ExportCourseReplay(
         .resultId = result.resultId,
         .score = stage.score,
         .keyMode = stage.keyMode,
+        .adoptedGaugeType = stage.adoptedGaugeType,
         .adoptedGaugeHistory = stage.adoptedGaugeHistory,
         .judgementTiming = stage.judgementTiming,
         .playedAtUnixMillis = result.playedAtUnixMillis,
@@ -4276,6 +4277,7 @@ ReplayVideoExporter::ExportCourseReplay(
                                : materialized.diagnostic};
       }
       materializationSeed = {
+          .carriedGauge = materialized.value->gaugeState,
           .carriedCombo = materialized.value->attempt.combo,
           .carriedMaxCombo = materialized.value->attempt.maxCombo,
       };

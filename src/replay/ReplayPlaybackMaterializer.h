@@ -15,6 +15,7 @@ class Chart;
 namespace replay {
 
 struct ReplayMaterializationSeed {
+  std::optional<GaugeStateSnapshot> carriedGauge;
   int carriedCombo = 0;
   int carriedMaxCombo = 0;
 };
@@ -22,6 +23,7 @@ struct ReplayMaterializationSeed {
 struct MaterializedReplay {
   std::vector<gameplay::GameplayReplayEvent> judgedEvents;
   gameplay::GameplayAttemptSnapshot attempt;
+  GaugeStateSnapshot gaugeState;
   std::vector<float> gaugeHistory;
 };
 
