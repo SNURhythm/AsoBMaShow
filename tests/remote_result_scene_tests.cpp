@@ -1,4 +1,5 @@
 #include "scene/ResultScene.h"
+#include "scene/ResultCoursePersistence.h"
 #include "scene/RemoteResultRecallController.h"
 
 #include <cstdlib>
@@ -208,6 +209,78 @@ void testRecalledResultExcludesItselfFromPreviousBest() {
           "previous-best cutoff");
 }
 
+void testCoursePersistenceAttemptParticipatesInRetryPolicy() {
+  constexpr std::string_view attemptId =
+      "123e4567-e89b-42d3-a456-426614174099";
+  result_persistence::CompletedCourseAttempt course;
+  course.result.attemptId = std::string(attemptId);
+  ResultPersistenceOptions persistence;
+  require(result_scene_detail::persistCourseAttempt(
+              persistence, std::move(course),
+              [](const result_persistence::CompletedCourseAttempt &) {
+                return result_persistence::SaveOutcome{
+                    .state = result_persistence::SaveState::Unstaged,
+                    .userMessage = "Course replay was not saved.",
+                };
+              }) &&
+              persistence.outcome.state ==
+                  result_persistence::SaveState::Unstaged,
+          "failed first course save retains its retryable attempt and outcome");
+
+  require(result_scene_detail::hasPersistenceAttempt(persistence),
+          "completed course attempt is available to persistence retry");
+  require(result_scene_detail::persistenceAttemptId(persistence) ==
+              attemptId,
+          "course retry diagnostics use the retained course attempt ID");
+  CoursePlaySession session;
+  require(!result_scene_detail::applyCoursePersistenceReceipt(
+              persistence.courseAttempt, persistence.outcome, session) &&
+              !session.courseReplaySaved &&
+              session.savedCourseReplayId == 0 &&
+              session.courseReplayPlaybackData == nullptr,
+          "failed course save leaves the session unsaved while awaiting a "
+          "decision");
+
+  const ResultPersistenceRetryCallbacks callbacks{
+      .persistChart =
+          [](const result_persistence::CompletedChartAttempt &,
+             std::span<const ir::IrOutboxDraft>) {
+            return result_persistence::SaveOutcome{
+                .state = result_persistence::SaveState::InvalidAttempt};
+          },
+      .persistCourse =
+          [](const result_persistence::CompletedCourseAttempt &attempt) {
+            return result_persistence::SaveOutcome{
+                .state = result_persistence::SaveState::Saved,
+                .receipt = result_persistence::StageReceipt{
+                    .attemptId = *attempt.result.attemptId,
+                    .resultId = 91,
+                    .createdAt = "2026-07-26 01:02:03",
+                }};
+          },
+  };
+  require(result_scene_detail::retryPersistenceAttempt(
+              persistence, {}, callbacks) &&
+              persistence.outcome.state ==
+                  result_persistence::SaveState::Saved,
+          "course retry executes the course persistence branch");
+
+  require(result_scene_detail::applyCoursePersistenceReceipt(
+              persistence.courseAttempt, persistence.outcome, session) &&
+              session.courseReplaySaved &&
+              session.savedCourseReplayId == 91 &&
+              session.courseReplayPlaybackData != nullptr,
+          "saved course retry applies its receipt and replay to the session");
+
+  persistence.attempt =
+      std::make_shared<const result_persistence::CompletedChartAttempt>();
+  require(!result_scene_detail::hasPersistenceAttempt(persistence),
+          "ambiguous chart and course attempts fail closed");
+  require(!result_scene_detail::retryPersistenceAttempt(
+              persistence, {}, callbacks),
+          "ambiguous persistence attempts cannot execute either branch");
+}
+
 ResultRecordSummary
 remoteRecordSummary(std::string origin = "https://ir.example.test:8443") {
   return makeRemoteResultRecord(ir::kTachiProviderId, origin, remoteScore());
@@ -415,6 +488,7 @@ int main() {
   testRemoteRankingDependenciesFailClosed();
   testRemoteActionMatrixIsReadOnly();
   testRecalledResultExcludesItselfFromPreviousBest();
+  testCoursePersistenceAttemptParticipatesInRetryPolicy();
   testRemoteRecordViewResultActionIsPresentedEnabled();
   testRemoteRecallExecutesExactLookupAndRetainedBackLifecycle();
   testRemoteRecallFailsClosedForConcurrentDeletion();

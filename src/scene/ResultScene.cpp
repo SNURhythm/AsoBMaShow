@@ -1,4 +1,5 @@
 #include "ResultScene.h"
+#include "ResultCoursePersistence.h"
 #include "../CourseConstraintUtils.h"
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
@@ -595,22 +596,26 @@ void ResultScene::saveCourseReplay() {
       result.clearType, fullCombo, result.provenance.playback);
   result.resultFingerprint = result_persistence::resultFingerprint(result);
 
-  result_persistence::CompletedCourseAttempt attempt{
-      .result = std::move(result),
-      .replay = session->recordedReplayPlayback,
-  };
-  auto outcome = context.resultPersistence.persistCourse(attempt);
-  if (!outcome.saved() || !outcome.receipt.has_value()) {
-    SDL_Log("Failed to save course replay %s: %s",
-            session->courseName.c_str(), outcome.diagnostic.c_str());
+  auto &persistenceOptions = local->persistenceOptions;
+  if (!result_scene_detail::persistCourseAttempt(
+          persistenceOptions,
+          {.result = std::move(result),
+           .replay = session->recordedReplayPlayback},
+          [this](const result_persistence::CompletedCourseAttempt &attempt) {
+            return context.resultPersistence.persistCourse(attempt);
+          })) {
+    SDL_Log("Could not retain course replay persistence attempt for %s",
+            session->courseName.c_str());
     return;
   }
-
-  session->savedCourseReplayId = outcome.receipt->resultId;
-  session->courseReplaySaved = true;
-  session->courseReplayPlaybackData =
-      std::make_shared<replay::CourseReplayPlaybackData>(
-          session->recordedReplayPlayback);
+  if (!result_scene_detail::applyCoursePersistenceReceipt(
+          persistenceOptions.courseAttempt, persistenceOptions.outcome,
+          *session)) {
+    SDL_Log("Failed to save course replay %s: %s",
+            session->courseName.c_str(),
+            persistenceOptions.outcome.diagnostic.c_str());
+    return;
+  }
 }
 
 void ResultScene::applyResultPersistenceReceipt() {
@@ -642,7 +647,8 @@ bool ResultScene::persistenceDecisionRequired() const {
   const auto *local = localSource();
   return local != nullptr &&
          local->persistenceOptions.outcome.requiresUserDecision(
-             local->persistenceOptions.attempt != nullptr,
+             result_scene_detail::hasPersistenceAttempt(
+                 local->persistenceOptions),
              local->persistenceContinueChosen);
 }
 
@@ -737,7 +743,7 @@ void ResultScene::addResultPersistenceStatus() {
 
   normalResultActions = rootLayout->findViewByName("resultActions");
   const bool hasPersistenceResult =
-      persistenceOptions.attempt != nullptr ||
+      result_scene_detail::hasPersistenceAttempt(persistenceOptions) ||
       !persistenceOptions.outcome.userMessage.empty();
   if (!hasPersistenceResult) {
     return;
@@ -799,7 +805,7 @@ void ResultScene::addResultPersistenceStatus() {
       ui_theme::primaryActionPressed(), ui_theme::cyan(),
       [this]() { retryResultPersistence(); });
   persistenceRetryButton->setEnabled(
-      persistenceOptions.attempt != nullptr &&
+      result_scene_detail::hasPersistenceAttempt(persistenceOptions) &&
       persistenceOptions.outcome.retryable());
   actions->addView(persistenceRetryButton);
   persistenceDetailsButton = makeButton(
@@ -810,11 +816,8 @@ void ResultScene::addResultPersistenceStatus() {
           return;
         }
         const std::string_view attemptId =
-            current->persistenceOptions.attempt == nullptr ||
-                    !current->persistenceOptions.attempt->result.attemptId
-                ? std::string_view{}
-                : std::string_view(
-                      *current->persistenceOptions.attempt->result.attemptId);
+            result_scene_detail::persistenceAttemptId(
+                current->persistenceOptions);
         const auto details = result_persistence::saveConflictDetails(
             current->persistenceOptions.outcome, attemptId);
         if (!details.has_value()) {
@@ -845,10 +848,7 @@ void ResultScene::addResultPersistenceStatus() {
         persistenceDetailsModalRoot->applyYogaLayout();
       });
   const std::string_view attemptId =
-      persistenceOptions.attempt == nullptr ||
-              !persistenceOptions.attempt->result.attemptId
-          ? std::string_view{}
-          : std::string_view(*persistenceOptions.attempt->result.attemptId);
+      result_scene_detail::persistenceAttemptId(persistenceOptions);
   const bool hasConflictDetails =
       result_persistence::saveConflictDetails(persistenceOptions.outcome,
                                               attemptId)
@@ -1205,7 +1205,9 @@ void ResultScene::retryIrResult() {
 
 void ResultScene::retryResultPersistence() {
   auto *local = localSource();
-  if (local == nullptr || local->persistenceOptions.attempt == nullptr ||
+  if (local == nullptr ||
+      !result_scene_detail::hasPersistenceAttempt(
+          local->persistenceOptions) ||
       !local->persistenceOptions.outcome.retryable()) {
     return;
   }
@@ -1213,17 +1215,41 @@ void ResultScene::retryResultPersistence() {
 
   local->persistenceContinueChosen = false;
   std::vector<ir::IrOutboxDraft> automaticDrafts;
-  if (persistenceOptions.irSnapshot) {
+  if (persistenceOptions.attempt != nullptr && persistenceOptions.irSnapshot) {
     automaticDrafts = context.irDrivers.buildAutomaticDrafts(
         context.settings.irProviders,
         *persistenceOptions.irSnapshot);
   }
-  persistenceOptions.outcome = context.resultPersistence.persist(
-      *persistenceOptions.attempt, automaticDrafts);
-  if (persistenceOptions.outcome.saved() &&
+  const ResultPersistenceRetryCallbacks callbacks{
+      .persistChart =
+          [this](const result_persistence::CompletedChartAttempt &attempt,
+                 std::span<const ir::IrOutboxDraft> drafts) {
+            return context.resultPersistence.persist(attempt, drafts);
+          },
+      .persistCourse =
+          [this](const result_persistence::CompletedCourseAttempt &attempt) {
+            return context.resultPersistence.persistCourse(attempt);
+          },
+  };
+  if (!result_scene_detail::retryPersistenceAttempt(
+          persistenceOptions, automaticDrafts, callbacks)) {
+    return;
+  }
+  if (persistenceOptions.attempt != nullptr &&
+      persistenceOptions.outcome.saved() &&
       !automaticDrafts.empty() &&
       context.irSubmissionService) {
     context.irSubmissionService->notifyOutboxChanged();
+  }
+  if (persistenceOptions.courseAttempt != nullptr &&
+      local->courseOptions.session != nullptr) {
+    const bool receiptApplied =
+        result_scene_detail::applyCoursePersistenceReceipt(
+            persistenceOptions.courseAttempt, persistenceOptions.outcome,
+            *local->courseOptions.session);
+    if (persistenceOptions.outcome.saved() && !receiptApplied) {
+      SDL_Log("Course replay retry returned an inconsistent receipt");
+    }
   }
   SDL_Log("Result persistence retry state=%d diagnostic=%s",
           static_cast<int>(persistenceOptions.outcome.state),
@@ -1273,15 +1299,13 @@ void ResultScene::updateResultPersistencePresentation() {
   }
   if (persistenceRetryButton != nullptr) {
     persistenceRetryButton->setEnabled(
-        local->persistenceOptions.attempt != nullptr &&
+        result_scene_detail::hasPersistenceAttempt(
+            local->persistenceOptions) &&
         local->persistenceOptions.outcome.retryable());
   }
   const std::string_view attemptId =
-      local->persistenceOptions.attempt == nullptr ||
-              !local->persistenceOptions.attempt->result.attemptId
-          ? std::string_view{}
-          : std::string_view(
-                *local->persistenceOptions.attempt->result.attemptId);
+      result_scene_detail::persistenceAttemptId(
+          local->persistenceOptions);
   const bool hasConflictDetails =
       result_persistence::saveConflictDetails(
           local->persistenceOptions.outcome, attemptId)

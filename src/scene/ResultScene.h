@@ -20,9 +20,11 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 struct CoursePlaySession;
@@ -69,11 +71,24 @@ struct ResultCourseOptions {
 
 struct ResultPersistenceOptions {
   std::shared_ptr<const result_persistence::CompletedChartAttempt> attempt;
+  std::shared_ptr<const result_persistence::CompletedCourseAttempt>
+      courseAttempt;
   std::shared_ptr<const result_persistence::PersistedChartResult> result;
   std::shared_ptr<const ir::IrSubmissionSnapshot> irSnapshot;
   std::shared_ptr<const ir::IrSubmission> irSubmission;
   result_persistence::SaveOutcome outcome;
   std::optional<std::string> previousBestBeforeCreatedAt;
+};
+
+using CoursePersistenceCallback = std::function<result_persistence::SaveOutcome(
+    const result_persistence::CompletedCourseAttempt &)>;
+
+struct ResultPersistenceRetryCallbacks {
+  std::function<result_persistence::SaveOutcome(
+      const result_persistence::CompletedChartAttempt &,
+      std::span<const ir::IrOutboxDraft>)>
+      persistChart;
+  CoursePersistenceCallback persistCourse;
 };
 
 struct ResultPreviousBestQuery {
@@ -112,6 +127,61 @@ remoteResultSceneActions(bool rankingsAvailable) noexcept {
 }
 
 namespace result_scene_detail {
+[[nodiscard]] inline bool hasPersistenceAttempt(
+    const ResultPersistenceOptions &persistence) noexcept {
+  return (persistence.attempt != nullptr) !=
+         (persistence.courseAttempt != nullptr);
+}
+
+[[nodiscard]] inline std::string_view persistenceAttemptId(
+    const ResultPersistenceOptions &persistence) noexcept {
+  if (!hasPersistenceAttempt(persistence)) {
+    return {};
+  }
+  const auto &attemptId =
+      persistence.attempt != nullptr
+          ? persistence.attempt->result.attemptId
+          : persistence.courseAttempt->result.attemptId;
+  return attemptId ? std::string_view(*attemptId) : std::string_view{};
+}
+
+[[nodiscard]] inline bool persistCourseAttempt(
+    ResultPersistenceOptions &persistence,
+    result_persistence::CompletedCourseAttempt attempt,
+    const CoursePersistenceCallback &persist) {
+  if (persistence.attempt != nullptr || persistence.courseAttempt != nullptr ||
+      !persist) {
+    return false;
+  }
+  persistence.courseAttempt =
+      std::make_shared<const result_persistence::CompletedCourseAttempt>(
+          std::move(attempt));
+  persistence.outcome = persist(*persistence.courseAttempt);
+  return true;
+}
+
+[[nodiscard]] inline bool retryPersistenceAttempt(
+    ResultPersistenceOptions &persistence,
+    std::span<const ir::IrOutboxDraft> automaticDrafts,
+    const ResultPersistenceRetryCallbacks &callbacks) {
+  if (!hasPersistenceAttempt(persistence)) {
+    return false;
+  }
+  if (persistence.courseAttempt != nullptr) {
+    if (!callbacks.persistCourse) {
+      return false;
+    }
+    persistence.outcome = callbacks.persistCourse(*persistence.courseAttempt);
+    return true;
+  }
+  if (!callbacks.persistChart) {
+    return false;
+  }
+  persistence.outcome =
+      callbacks.persistChart(*persistence.attempt, automaticDrafts);
+  return true;
+}
+
 [[nodiscard]] inline bool isLowerHexDigest(std::string_view value,
                                            std::size_t size) noexcept {
   return value.size() == size &&
