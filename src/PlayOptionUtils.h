@@ -3,6 +3,7 @@
 #include "ArchiveFile.h"
 #include "CoursePlaySession.h"
 #include "analysis/JudgedPlaybackData.h"
+#include "replay/LegacyReplayIdentity.h"
 #include "replay/ReplayPlaybackData.h"
 #include "bms_parser.hpp"
 #include "path.h"
@@ -673,6 +674,9 @@ inline std::unique_ptr<bms_parser::Chart> prepareReplayChart(
                           randomValuesOrNull(setup.randomValues), cancelled,
                           "raw replay");
   if (chart == nullptr || cancelled ||
+      !replay::storedChartIdentityMatches(
+          setup.chartSha256, setup.chartMd5, chart->Meta.SHA256,
+          chart->Meta.MD5) ||
       !applyReplayPlayOptions(*chart, playback)) {
     return nullptr;
   }

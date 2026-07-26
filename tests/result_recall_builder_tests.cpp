@@ -1,10 +1,14 @@
 #include "../src/ResultRecallBuilder.h"
 #include "../src/ResultPersistenceModel.h"
+#include "../src/PlayOptionUtils.h"
 #include "../src/replay/LegacyReplayIdentity.h"
 
 #include <atomic>
 #include <cassert>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <random>
 #include <string>
 
 namespace {
@@ -201,6 +205,51 @@ void testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity() {
   assert(outcome.value->chart->Meta.SHA256 == persisted.score.chartSha256);
 }
 
+void testRawReplayPreparationValidatesParsedChartIdentity() {
+  const auto directory =
+      std::filesystem::temp_directory_path() /
+      ("asobmashow-replay-identity-" +
+       std::to_string(std::mt19937_64(std::random_device{}())()));
+  std::filesystem::create_directories(directory);
+  const auto chartPath = directory / "identity.bms";
+  {
+    std::ofstream chart(chartPath, std::ios::binary);
+    chart << "#TITLE REPLAY IDENTITY\n#ARTIST TEST\n#BPM 120\n"
+             "#WAV01 test.wav\n#00111:01\n";
+    assert(chart.good());
+  }
+
+  std::atomic_bool cancelled = false;
+  auto parsed = play_options::parseChart(
+      chartPath, std::nullopt, std::nullopt, std::nullopt, cancelled,
+      "identity fixture");
+  assert(parsed != nullptr);
+
+  replay::ReplayPlaybackData playback;
+  playback.setup.chartSha256 = parsed->Meta.SHA256;
+  playback.setup.chartMd5 = parsed->Meta.MD5;
+  playback.setup.keyMode = parsed->Meta.KeyMode;
+  playback.setup.playOption = "NORMAL";
+  playback.setup.playOption2 = "NORMAL";
+  assert(play_options::prepareReplayChart(chartPath, playback, cancelled) !=
+         nullptr);
+
+  auto legacyMd5Only = playback;
+  legacyMd5Only.setup.chartSha256 =
+      *replay::legacyReplaySha256ForMd5(parsed->Meta.MD5);
+  assert(play_options::prepareReplayChart(chartPath, legacyMd5Only,
+                                          cancelled) != nullptr);
+
+  auto mismatched = playback;
+  mismatched.setup.chartSha256 = std::string(64, 'e');
+  mismatched.setup.chartMd5 = std::string(32, 'd');
+  assert(play_options::prepareReplayChart(chartPath, mismatched, cancelled) ==
+         nullptr);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 result_persistence::PersistedCourseResult validCourseResult() {
   auto first = validResult(101, "charts/stage-1.bms");
   auto second = validResult(102, "charts/stage-2.bms");
@@ -345,6 +394,7 @@ int main() {
   testChartRecallDoesNotPublishMissingOrCancelledAssets();
   testChartRecallRejectsChangedChartIdentity();
   testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity();
+  testRawReplayPreparationValidatesParsedChartIdentity();
   testCourseRecallUsesOrderedPersistedStageFacts();
   testCourseRecallDoesNotPublishPartialSession();
   testCourseRecallRejectsChangedStageIdentity();
