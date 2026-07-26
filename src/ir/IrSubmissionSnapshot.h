@@ -2,11 +2,15 @@
 
 #include "IrSubmission.h"
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
 
 namespace ir {
+
+inline constexpr std::size_t kMaximumIrSubmissionSnapshotBytes =
+    16U * 1024U * 1024U;
 
 struct IrSubmissionSnapshot {
   static constexpr int kSchemaVersion = 1;

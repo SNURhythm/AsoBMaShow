@@ -212,12 +212,33 @@ void testValidationAndFloatCanonicalization() {
          "snapshot canonicalization preserves signed-zero float bits");
 }
 
+void testLargeValidSnapshotRoundTrips() {
+  auto result = validResult();
+  result.adoptedGaugeHistory.assign(100'000, 20.0F);
+  result.resultFingerprint = result_persistence::resultFingerprint(result);
+  const auto snapshot = capture(result);
+  std::string diagnostic;
+  const auto serialized =
+      ir::serializeIrSubmissionSnapshot(snapshot, diagnostic);
+  expect(serialized.has_value() && serialized->size() > 256U * 1024U &&
+             serialized->size() <=
+                 ir::kMaximumIrSubmissionSnapshotBytes,
+         "valid long-play snapshot exceeds the retired 256 KiB ceiling");
+  const auto decoded = serialized
+                           ? ir::deserializeIrSubmissionSnapshot(
+                                 *serialized, snapshot.fingerprint, diagnostic)
+                           : std::nullopt;
+  expect(decoded == snapshot,
+         "large valid IR snapshot round trips below the public size limit");
+}
+
 } // namespace
 
 int main() {
   testCaptureAndReplayIndependence();
   testCanonicalSerializationAndTamperChecks();
   testValidationAndFloatCanonicalization();
+  testLargeValidSnapshotRoundTrips();
   if (failures != 0) {
     std::cerr << failures << " IR submission snapshot test(s) failed\n";
     return 1;

@@ -20,8 +20,6 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-constexpr std::size_t kMaximumSnapshotBytes = 256U * 1024U;
-
 bool lowerHex(std::string_view value, std::size_t size) {
   return value.size() == size &&
          std::ranges::all_of(value, [](unsigned char character) {
@@ -299,7 +297,7 @@ serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
     Json root = fingerprintPayload(snapshot);
     root["fingerprint"] = snapshot.fingerprint;
     std::string serialized = root.dump();
-    if (serialized.size() > kMaximumSnapshotBytes) {
+    if (serialized.size() > kMaximumIrSubmissionSnapshotBytes) {
       diagnostic = "IR snapshot is oversized";
       return std::nullopt;
     }
@@ -316,7 +314,8 @@ deserializeIrSubmissionSnapshot(std::string_view serialized,
                                 std::string &diagnostic) noexcept {
   diagnostic.clear();
   try {
-    if (serialized.empty() || serialized.size() > kMaximumSnapshotBytes) {
+    if (serialized.empty() ||
+        serialized.size() > kMaximumIrSubmissionSnapshotBytes) {
       diagnostic = "IR snapshot is empty or oversized";
       return std::nullopt;
     }
