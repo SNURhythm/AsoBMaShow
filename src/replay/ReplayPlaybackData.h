@@ -16,6 +16,11 @@ namespace replay {
 
 inline constexpr std::int64_t kMinimumReplaySongTimeMicros = -30'000'000;
 
+enum class DoublePlayOption : std::uint8_t {
+  Normal = 0,
+  Flip = 1,
+};
+
 enum class LogicalControlKind : std::uint8_t {
   Lane,
   ScratchClockwise,
@@ -53,6 +58,7 @@ struct ChartPlaybackSetup {
   std::optional<std::int64_t> playOptionSeed;
   std::optional<std::string> playOption2;
   std::optional<std::int64_t> playOption2Seed;
+  DoublePlayOption doublePlayOption = DoublePlayOption::Normal;
   std::string assistOption = assist_options::kOff;
   GaugeType initialGaugeType = GaugeType::Normal;
   GaugeProfile gaugeProfile = GaugeProfile::Standard;

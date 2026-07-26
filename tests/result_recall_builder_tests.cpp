@@ -255,6 +255,62 @@ void testRawReplayPreparationValidatesParsedChartIdentity() {
   std::filesystem::remove_all(directory, ignored);
 }
 
+void testRawReplayPreparationAppliesDoublePlayFlip() {
+  const auto directory =
+      std::filesystem::temp_directory_path() /
+      ("asobmashow-replay-dp-flip-" +
+       std::to_string(std::mt19937_64(std::random_device{}())()));
+  std::filesystem::create_directories(directory);
+  const auto chartPath = directory / "dp-flip.bms";
+  {
+    std::ofstream chart(chartPath, std::ios::binary);
+    chart << "#PLAYER 2\n#TITLE DP FLIP\n#ARTIST TEST\n#BPM 120\n"
+             "#WAV01 player-one-key.wav\n"
+             "#WAV02 player-two-key.wav\n"
+             "#WAV03 player-one-scratch.wav\n"
+             "#WAV04 player-two-scratch.wav\n"
+             "#WAV05 player-one-seventh-key.wav\n"
+             "#00111:01\n#00118:05\n#00121:02\n#00116:03\n#00126:04\n";
+    assert(chart.good());
+  }
+
+  std::atomic_bool cancelled = false;
+  auto parsed = play_options::parseChart(
+      chartPath, std::nullopt, std::nullopt, std::nullopt, cancelled,
+      "DP FLIP fixture");
+  assert(parsed != nullptr && parsed->Meta.IsDP && parsed->Meta.KeyMode == 14);
+
+  replay::ReplayPlaybackData playback;
+  playback.setup.chartSha256 = parsed->Meta.SHA256;
+  playback.setup.chartMd5 = parsed->Meta.MD5;
+  playback.setup.keyMode = parsed->Meta.KeyMode;
+  playback.setup.playOption = "NORMAL";
+  playback.setup.playOption2 = "NORMAL";
+  playback.setup.doublePlayOption = replay::DoublePlayOption::Flip;
+
+  auto prepared =
+      play_options::prepareReplayChart(chartPath, playback, cancelled);
+  assert(prepared != nullptr);
+  const auto wavAtLane = [&prepared](int lane) {
+    for (const auto *measure : prepared->Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        if (lane >= 0 && lane < static_cast<int>(timeline->Notes.size()) &&
+            timeline->Notes[static_cast<std::size_t>(lane)] != nullptr) {
+          return timeline->Notes[static_cast<std::size_t>(lane)]->Wav;
+        }
+      }
+    }
+    return -1;
+  };
+  assert(wavAtLane(0) == 2);
+  assert(wavAtLane(8) == 1);
+  assert(wavAtLane(7) == 4);
+  assert(wavAtLane(15) == 3);
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory, ignored);
+}
+
 result_persistence::PersistedCourseResult validCourseResult() {
   auto first = validResult(101, "charts/stage-1.bms");
   auto second = validResult(102, "charts/stage-2.bms");
@@ -443,6 +499,7 @@ int main() {
   testChartRecallRejectsChangedChartIdentity();
   testChartRecallAcceptsMatchingMd5OnlyMigrationIdentity();
   testRawReplayPreparationValidatesParsedChartIdentity();
+  testRawReplayPreparationAppliesDoublePlayFlip();
   testCourseRecallUsesOrderedPersistedStageFacts();
   testIncompleteCourseRecallPreservesPersistedTotalAndOutcome();
   testCourseRecallDoesNotPublishPartialSession();

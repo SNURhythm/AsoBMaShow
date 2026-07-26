@@ -278,6 +278,42 @@ void testIndependentBeatorajaFixtures() {
   }
 }
 
+void testDoublePlayOptions() {
+  replay::BeatorajaReplayCodec codec;
+  Json stockFlip = outerJson(readFixture("beatoraja-chart.brd"));
+  stockFlip["doubleoption"] = 1;
+  const auto decodedFlip = codec.decode(encodeJson(stockFlip), 14);
+  expect(decodedFlip.chart.has_value(), "stock Beatoraja DP FLIP decodes");
+  if (decodedFlip.chart) {
+    expectEqual(decodedFlip.chart->setup.doublePlayOption,
+                replay::DoublePlayOption::Flip,
+                "stock Beatoraja DP FLIP maps exactly");
+  }
+
+  Json stockBattle = stockFlip;
+  stockBattle["doubleoption"] = 2;
+  const auto decodedBattle = codec.decode(encodeJson(stockBattle), 14);
+  expect(!decodedBattle.chart.has_value() &&
+             decodedBattle.diagnostic.find("double-play option") !=
+                 std::string::npos,
+         "unsupported Beatoraja BATTLE replay fails closed");
+
+  auto source = extensionReplay();
+  source.setup.keyMode = 14;
+  source.setup.doublePlayOption = replay::DoublePlayOption::Flip;
+  std::string diagnostic;
+  const auto encoded =
+      codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
+  expect(encoded.has_value(), "Aso DP FLIP replay encodes");
+  if (encoded) {
+    expectEqual(outerJson(*encoded).at("doubleoption").get<int>(), 1,
+                "Aso DP FLIP projects to the stock Beatoraja field");
+    const auto decoded = codec.decode(*encoded, 14);
+    expect(decoded.chart.has_value() && *decoded.chart == source,
+           "Aso DP FLIP setup round-trips through the extension");
+  }
+}
+
 void expectMapping(int keyMode, const replay::LogicalControl &logical,
                    int keyCode, std::string_view message) {
   const auto encoded =
@@ -803,6 +839,7 @@ void testMalformedAndBoundedInputs() {
 
 int main() {
   testIndependentBeatorajaFixtures();
+  testDoublePlayOptions();
   testKeyModeTables();
   testPrimitiveCodecs();
   testAsoExtensionRoundTripsWithoutBreakingStock();

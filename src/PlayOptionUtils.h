@@ -441,6 +441,44 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
   return true;
 }
 
+inline std::optional<std::string>
+doublePlayFlipOption(const bms_parser::ChartMeta &meta) {
+  if (!meta.IsDP || (meta.KeyMode != 10 && meta.KeyMode != 14)) {
+    return std::nullopt;
+  }
+  constexpr std::string_view symbols = "123456789ABCDE";
+  const std::size_t keysPerPlayer =
+      static_cast<std::size_t>(meta.KeyMode / 2);
+  std::string notation;
+  notation.reserve(static_cast<std::size_t>(meta.GetTotalLaneCount()));
+  notation.push_back('R');
+  notation.append(symbols.substr(keysPerPlayer, keysPerPlayer));
+  notation.append(symbols.substr(0, keysPerPlayer));
+  notation.push_back('L');
+  return makeLaneAssignOption(notation);
+}
+
+inline bool applyReplayDoublePlayOption(
+    bms_parser::Chart &chart, replay::DoublePlayOption option) {
+  if (option == replay::DoublePlayOption::Normal) {
+    return true;
+  }
+  if (option != replay::DoublePlayOption::Flip) {
+    return false;
+  }
+  const auto flip = doublePlayFlipOption(chart.Meta);
+  if (!flip.has_value()) {
+    SDL_Log("Unsupported raw replay DP FLIP for key mode %d",
+            chart.Meta.KeyMode);
+    return false;
+  }
+  std::optional<std::string> ignoredOption;
+  std::optional<long long> ignoredSeed;
+  return applyPlayOptionModifier(chart, *flip, std::nullopt, 0,
+                                 ignoredOption, ignoredSeed,
+                                 "raw replay DP FLIP");
+}
+
 inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
                                    const JudgedPlaybackData &replay) {
   std::optional<std::string> ignoredOption;
@@ -464,6 +502,9 @@ inline bool applyReplayPlayOptions(
   std::optional<std::string> ignoredOption;
   std::optional<long long> ignoredSeed;
   const auto &setup = playback.setup;
+  if (!applyReplayDoublePlayOption(chart, setup.doublePlayOption)) {
+    return false;
+  }
   if (setup.playOption.has_value() &&
       !applyPlayOptionModifier(chart, *setup.playOption,
                                setup.playOptionSeed, 0, ignoredOption,

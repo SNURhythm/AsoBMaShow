@@ -551,6 +551,13 @@ bool validateSetup(const ChartPlaybackSetup &setup, std::string &diagnostic) {
   if (setup.longNoteMode < 0 || setup.longNoteMode > 2) {
     return fail(diagnostic, "Replay long-note mode is invalid");
   }
+  const int doublePlayOption = static_cast<int>(setup.doublePlayOption);
+  if (doublePlayOption < static_cast<int>(DoublePlayOption::Normal) ||
+      doublePlayOption > static_cast<int>(DoublePlayOption::Flip) ||
+      (setup.doublePlayOption == DoublePlayOption::Flip &&
+       setup.keyMode != 10 && setup.keyMode != 14)) {
+    return fail(diagnostic, "Replay double-play option is unsupported");
+  }
   if (!projectSetupOptions(setup, diagnostic)) {
     return false;
   }
@@ -650,6 +657,7 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
       {"playOptionSeed", optionalJson(setup.playOptionSeed)},
       {"playOption2", optionalJson(setup.playOption2)},
       {"playOption2Seed", optionalJson(setup.playOption2Seed)},
+      {"doublePlayOption", static_cast<int>(setup.doublePlayOption)},
       {"assistOption", setup.assistOption},
       {"gaugeProfile", static_cast<int>(setup.gaugeProfile)},
       {"gaugeAutoShift", static_cast<int>(setup.gaugeAutoShift)},
@@ -837,7 +845,7 @@ encodeStage(const ReplayPlaybackData &replay, std::int64_t playedAtUnixMillis,
       {"randomoptionseed", replay.setup.playOptionSeed.value_or(-1)},
       {"randomoption2", options->option2},
       {"randomoption2seed", replay.setup.playOption2Seed.value_or(-1)},
-      {"doubleoption", 0},
+      {"doubleoption", static_cast<int>(replay.setup.doublePlayOption)},
       {"config",
        {{"lanecover", replay.setup.initialLaneCoverPercent / 100.0F},
         {"enablelanecover", replay.setup.laneCoverEnabled}}},
@@ -925,6 +933,22 @@ bool decodeSetupExtension(const Json &source, ChartPlaybackSetup &setup,
                     diagnostic) ||
       !readRequired(source, "clubMode", setup.clubMode, diagnostic)) {
     return false;
+  }
+  const auto doublePlayOption = source.find("doublePlayOption");
+  if (doublePlayOption != source.end()) {
+    int value = 0;
+    try {
+      value = doublePlayOption->get<int>();
+    } catch (const Json::exception &) {
+      return fail(diagnostic,
+                  "Replay extension double-play option has the wrong type");
+    }
+    if (value < static_cast<int>(DoublePlayOption::Normal) ||
+        value > static_cast<int>(DoublePlayOption::Flip)) {
+      return fail(diagnostic,
+                  "Replay extension double-play option is unsupported");
+    }
+    setup.doublePlayOption = static_cast<DoublePlayOption>(value);
   }
   const auto startingState = source.find("startingGaugeState");
   if (startingState != source.end() && !startingState->is_null()) {
@@ -1167,6 +1191,7 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
   int gauge = 0;
   int option1 = 0;
   int option2 = 0;
+  int doubleOption = 0;
   std::int64_t seed1 = -1;
   std::int64_t seed2 = -1;
   if (!readRequired(stage, "sha256", setup.chartSha256, diagnostic) ||
@@ -1217,6 +1242,7 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
   };
   if (!readStockInteger("randomoption", option1, 0) ||
       !readStockInteger("randomoption2", option2, 0) ||
+      !readStockInteger("doubleoption", doubleOption, 0) ||
       !readStockInteger("randomoptionseed", seed1,
                         static_cast<std::int64_t>(-1)) ||
       !readStockInteger("randomoption2seed", seed2,
@@ -1228,6 +1254,11 @@ bool decodeStockSetup(const Json &stage, ChartPlaybackSetup &setup,
   if (!setup.playOption || !setup.playOption2) {
     return fail(diagnostic, "Replay stock play option is unsupported");
   }
+  if (doubleOption < static_cast<int>(DoublePlayOption::Normal) ||
+      doubleOption > static_cast<int>(DoublePlayOption::Flip)) {
+    return fail(diagnostic, "Replay stock double-play option is unsupported");
+  }
+  setup.doublePlayOption = static_cast<DoublePlayOption>(doubleOption);
   setup.playOptionSeed =
       seed1 >= 0 ? std::optional<std::int64_t>(seed1) : std::nullopt;
   setup.playOption2Seed =
@@ -1269,6 +1300,8 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
   if (!decodeStockSetup(stage, result.data.setup, diagnostic)) {
     return false;
   }
+  const DoublePlayOption stockDoublePlayOption =
+      result.data.setup.doublePlayOption;
 
   const auto extension = stage.find("asobmashow");
   const Json *supported = nullptr;
@@ -1288,6 +1321,10 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
       if (setup == supported->end() ||
           !decodeSetupExtension(*setup, result.data.setup, diagnostic)) {
         return false;
+      }
+      if (result.data.setup.doublePlayOption != stockDoublePlayOption) {
+        return fail(diagnostic,
+                    "Replay stock and extension double-play options differ");
       }
     } else {
       result.unsupportedExtension = true;
@@ -1311,6 +1348,11 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
     return fail(diagnostic, "Replay key mode does not match the chart context");
   }
   result.data.setup.keyMode = *keyMode;
+  if (result.data.setup.doublePlayOption == DoublePlayOption::Flip &&
+      *keyMode != 10 && *keyMode != 14) {
+    return fail(diagnostic,
+                "Replay double-play option is unsupported for its key mode");
+  }
   const auto stockInput = decodeStockInput(stage, *keyMode, limits, diagnostic);
   if (!stockInput) {
     return false;
