@@ -35,6 +35,11 @@ replay::LogicalControl lane(int laneIndex = 0, int player = 1) {
           .lane = laneIndex};
 }
 
+replay::LogicalControl scratch(replay::LogicalControlKind kind,
+                               int player = 1) {
+  return {.kind = kind, .player = player, .lane = -1};
+}
+
 void testRecordsMappedOrderedEdgesAndFinishesOnce() {
   ClockFixture clock{.offset = -1'000};
   replay::ReplayInputRecorder recorder(
@@ -259,6 +264,67 @@ void testCaptureBufferFiltersRedundantStateAtFinish() {
           "capture buffer filters redundant state without invalidating replay");
 }
 
+void testCaptureBufferPreservesOnlyValidReplayOnlyScratchHandoffs() {
+  std::string diagnostic;
+  replay::ReplayInputCaptureBuffer valid;
+  require(
+      valid.capture({.songTimeMicros = 100,
+                     .control = scratch(
+                         replay::LogicalControlKind::ScratchCounterClockwise),
+                     .pressed = true},
+                    diagnostic) &&
+          valid.capture(
+              {.songTimeMicros = 200,
+               .control =
+                   scratch(replay::LogicalControlKind::ScratchCounterClockwise),
+               .pressed = false,
+               .replayOnly = true},
+              diagnostic) &&
+          valid.capture(
+              {.songTimeMicros = 200, .control = lane(2), .pressed = true},
+              diagnostic) &&
+          valid.capture(
+              {.songTimeMicros = 200,
+               .control = scratch(replay::LogicalControlKind::ScratchClockwise),
+               .pressed = true,
+               .replayOnly = true},
+              diagnostic) &&
+          valid.capture(
+              {.songTimeMicros = 250, .control = lane(2), .pressed = false},
+              diagnostic) &&
+          valid.capture(
+              {.songTimeMicros = 300,
+               .control = scratch(replay::LogicalControlKind::ScratchClockwise),
+               .pressed = false},
+              diagnostic),
+      "capture accepts a complete logical-only held-scratch handoff");
+  const auto result = valid.finish(diagnostic);
+  require(result && result->size() == 6 && (*result)[1].replayOnly &&
+              (*result)[3].replayOnly && !(*result)[0].replayOnly &&
+              !(*result)[2].replayOnly && !(*result)[4].replayOnly &&
+              !(*result)[5].replayOnly,
+          "finish preserves only the two logical-only handoff markers");
+
+  replay::ReplayInputCaptureBuffer arbitraryLane;
+  require(arbitraryLane.capture(
+              {.songTimeMicros = 100, .control = lane(), .pressed = true},
+              diagnostic) &&
+              arbitraryLane.capture({.songTimeMicros = 200,
+                                     .control = lane(),
+                                     .pressed = false,
+                                     .replayOnly = true},
+                                    diagnostic) &&
+              arbitraryLane.capture({.songTimeMicros = 200,
+                                     .control = lane(),
+                                     .pressed = true,
+                                     .replayOnly = true},
+                                    diagnostic),
+          "buffering does not need to guess at an incomplete marker pair");
+  require(!arbitraryLane.finish(diagnostic).has_value() &&
+              diagnostic.find("scratch") != std::string::npos,
+          "finish rejects replay-only markers on arbitrary lane input");
+}
+
 } // namespace
 
 int main() {
@@ -270,5 +336,6 @@ int main() {
   testCaptureBufferSortsAcrossControlsButRejectsPerControlReversal();
   testCaptureBufferBoundsPendingSamplesAndPropagatesClockFailure();
   testCaptureBufferFiltersRedundantStateAtFinish();
+  testCaptureBufferPreservesOnlyValidReplayOnlyScratchHandoffs();
   return 0;
 }

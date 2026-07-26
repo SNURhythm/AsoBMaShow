@@ -535,6 +535,42 @@ void insertPartialCourseFixture(sqlite3 *database, const FixtureFacts &chart,
       "replay_id,rest_micros_after_stage) VALUES(89,78,0,42,500000)");
 }
 
+void insertCanonicalCoursePathAliasFixtures(sqlite3 *database,
+                                            const FixtureFacts &chart) {
+  const std::array identities{
+      course_identity::ChartIdentity{.sha256 = chart.sha256, .md5 = chart.md5}};
+  const auto insertCourse = [&](int id, std::string_view constraints,
+                                const std::string &createdAt) {
+    const std::string courseKey =
+        course_identity::makeCourseKey(identities, constraints);
+    executeOrThrow(
+        database,
+        "INSERT INTO course_replays(id,course_id,course_key,course_name,"
+        "course_group_name,constraint_json,gauge_type,gauge_profile,"
+        "gauge_auto_shift,ln_mode,requested_play_option,assist_option,"
+        "final_score,max_combo,final_gauge,clear_type,completed_charts,"
+        "total_charts,created_at,ruleset_version,eligibility,provenance_json) "
+        "VALUES(" +
+            std::to_string(id) + "," + std::to_string(id) + "," +
+            sqlQuote(courseKey) + ",'Alias Course','Folder'," +
+            sqlQuote(constraints) +
+            ",2,1,0,1,'NORMAL','OFF',3,2,64.5,300,1,1," + sqlQuote(createdAt) +
+            ",0,2," + sqlQuote(chart.provenance) + ")");
+    executeOrThrow(
+        database,
+        "INSERT INTO course_replay_stages(id,course_replay_id,stage_index,"
+        "replay_id,rest_micros_after_stage) VALUES(" +
+            std::to_string(1000 + id) + "," + std::to_string(id) + ",0,42,0)");
+  };
+
+  for (int index = 0; index <= 12; ++index) {
+    const std::string minute =
+        index < 10 ? "0" + std::to_string(index) : std::to_string(index);
+    insertCourse(100 + index, "[]", "2026-07-25 02:" + minute + ":00");
+  }
+  insertCourse(200, R"(["ln"])", "2026-07-25 03:00:00");
+}
+
 std::string insertEarlierSameStemFixture(sqlite3 *database,
                                          const FixtureFacts &chart) {
   const std::string attemptId = "123e4567-e89b-42d3-a456-426614174002";
@@ -581,7 +617,8 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
 
   if (outcome.status !=
       replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
@@ -683,7 +720,8 @@ void testPreservesEmptyLegacyReplayInput() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
   expect(outcome.status ==
              replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
          "all-miss legacy replay migrates successfully");
@@ -707,6 +745,28 @@ void testPreservesEmptyLegacyReplayInput() {
   const auto decoded = store.load(metadata, codec);
   expect(decoded.chart.has_value() && decoded.chart->input.empty(),
          "all-miss migration preserves an empty replay input stream");
+}
+
+void testUnavailableKeyModeBlocksAllMissMigrationAtomically() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM replay_events WHERE replay_id=42");
+  const LegacySnapshot before = snapshotLegacyDatabase(database.get());
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store);
+
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+             outcome.diagnostic.find("key mode") != std::string::npos,
+         "all-miss migration without authoritative key mode fails closed");
+  expect(snapshotLegacyDatabase(database.get()) == before,
+         "unresolved key mode leaves every schema-v10 row and table intact");
 }
 
 void testChartMetadataPreservesSparseFourteenKeyMode() {
@@ -852,7 +912,8 @@ void testMigratesMd5OnlyChartWithDeterministicReplayStem() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
   const std::string fallbackSha = file_checksum::sha256(
       "asobmashow:legacy-md5:v1:" + fixture.md5);
 
@@ -942,7 +1003,8 @@ void testMissingChartMetadataBlocksResultReconstruction() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(0));
   expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
                                Status::InvalidLegacyData &&
              integer(database.get(), "PRAGMA user_version") == 10 &&
@@ -978,7 +1040,8 @@ void testRejectsInvalidLegacyReplayEnums() {
     replay::BeatorajaReplayCodec codec;
     replay::ReplayFileStore store(temporary.path());
     const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-        database.get(), temporary.path(), codec, store);
+        database.get(), temporary.path(), codec, store, {},
+        fixedChartMetadata(2));
     expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
                                  Status::InvalidLegacyData &&
                integer(database.get(), "PRAGMA user_version") == 10 &&
@@ -1052,7 +1115,8 @@ void testNormalizesLegacyPrerollSupplementalTimestamps() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
 
   expect(outcome.status ==
              replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
@@ -1103,7 +1167,8 @@ void testOrdersLegacyInputBeforeRemovingRedundantTransitions() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
 
   expect(outcome.status ==
              replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
@@ -1141,7 +1206,8 @@ void testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
   if (outcome.status !=
       replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
     std::cerr << "course migration diagnostic: " << outcome.diagnostic << '\n';
@@ -1218,7 +1284,8 @@ void testAssignsSameStemHistoryByTimestampThenPublicId() {
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
   if (outcome.status !=
       replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
     std::cerr << "history migration diagnostic: " << outcome.diagnostic << '\n';
@@ -1242,6 +1309,85 @@ void testAssignsSameStemHistoryByTimestampThenPublicId() {
                      "SELECT history_index FROM replay_files WHERE "
                      "chart_result_id=42") == 1,
          "history indexes are independent of insertion and public ID order");
+}
+
+void testMigrationSkipsCanonicalCrossStemPathAlias() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  const FixtureFacts chart = insertChartFixture(database.get());
+  insertCanonicalCoursePathAliasFixtures(database.get(), chart);
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store, {},
+      fixedChartMetadata(2));
+  if (outcome.status !=
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    std::cerr << "path alias migration diagnostic: " << outcome.diagnostic
+              << '\n';
+  }
+
+  const std::string stem = chart.sha256.substr(0, 10);
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "migration resolves canonical cross-stem replay path aliases");
+  if (outcome.status ==
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    expect(text(database.get(),
+                "SELECT relative_path FROM replay_files WHERE "
+                "course_result_id=112") == "replay/" + stem + "_12.brd",
+           "unconstrained course keeps deterministic history twelve");
+    expect(text(database.get(),
+                "SELECT relative_path FROM replay_files WHERE "
+                "course_result_id=200") == "replay/" + stem + "_12_1.brd" &&
+               integer(database.get(),
+                       "SELECT history_index FROM replay_files WHERE "
+                       "course_result_id=200") == 1,
+           "constraint-twelve course advances past aliased filename");
+  }
+}
+
+void testMigrationLocksLegacySnapshotBeforeFinalizingFiles() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  Database database(databasePath);
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  Database competingWriter(databasePath);
+
+  int competingWriteResult = SQLITE_OK;
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store,
+      {.failAt =
+           [&](std::string_view phase, std::int64_t) {
+             if (phase == "pre-cutover-revalidation") {
+               competingWriteResult =
+                   sqlite3_exec(competingWriter.get(),
+                                "UPDATE pending_chart_score_writes SET "
+                                "score=1,pgreat=0,great=1 "
+                                "WHERE replay_id=42",
+                                nullptr, nullptr, nullptr);
+             }
+             return false;
+           }},
+      fixedChartMetadata(2));
+
+  expect(competingWriteResult == SQLITE_BUSY ||
+             competingWriteResult == SQLITE_LOCKED,
+         "migration locks the authoritative v10 snapshot before writing files");
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "migration completes after rejecting a competing legacy write");
+  expect(integer(database.get(),
+                 "SELECT score FROM chart_results WHERE id=42") == 3 &&
+             integer(database.get(),
+                     "SELECT score FROM pending_chart_score_writes WHERE "
+                     "result_id=42") == 3,
+         "cutover cannot combine stale result facts with newer durable work");
 }
 
 void testEveryDatabaseFailureRollsBackAndRetryReusesFiles() {
@@ -1272,9 +1418,9 @@ void testEveryDatabaseFailureRollsBackAndRetryReusesFiles() {
     replay::ReplayFileStore store(temporary.path());
     const auto failed = replay_repository_detail::migrateReplaySchema10To11(
         database.get(), temporary.path(), codec, store,
-        {.failAt = [phase](std::string_view candidate, std::int64_t) {
-          return candidate == phase;
-        }});
+        {.failAt = [phase](std::string_view candidate,
+                           std::int64_t) { return candidate == phase; }},
+        fixedChartMetadata(2));
     expect(
         failed.status != replay_repository_detail::ReplayMigrationOutcome::
                              Status::Migrated &&
@@ -1293,7 +1439,8 @@ void testEveryDatabaseFailureRollsBackAndRetryReusesFiles() {
 
     replay::ReplayFileStore retryStore(temporary.path());
     const auto retry = replay_repository_detail::migrateReplaySchema10To11(
-        database.get(), temporary.path(), codec, retryStore);
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
     expect(retry.status == replay_repository_detail::ReplayMigrationOutcome::
                                Status::Migrated &&
                retry.chartFiles == 1 && retry.courseFiles == 1,
@@ -1321,7 +1468,8 @@ void testEveryReplayFileFailurePreservesV10AndCanRetry() {
           return candidate == phase;
         }});
     const auto failed = replay_repository_detail::migrateReplaySchema10To11(
-        database.get(), temporary.path(), codec, failingStore);
+        database.get(), temporary.path(), codec, failingStore, {},
+        fixedChartMetadata(2));
     expect(failed.status == replay_repository_detail::ReplayMigrationOutcome::
                                 Status::FileFailure,
            std::string("injected replay file phase fails: ") +
@@ -1332,7 +1480,8 @@ void testEveryReplayFileFailurePreservesV10AndCanRetry() {
 
     replay::ReplayFileStore retryStore(temporary.path());
     const auto retry = replay_repository_detail::migrateReplaySchema10To11(
-        database.get(), temporary.path(), codec, retryStore);
+        database.get(), temporary.path(), codec, retryStore, {},
+        fixedChartMetadata(2));
     expect(retry.status == replay_repository_detail::ReplayMigrationOutcome::
                                Status::Migrated &&
                retry.chartFiles == 1 && retry.courseFiles == 1,
@@ -1344,14 +1493,20 @@ void testEveryReplayFileFailurePreservesV10AndCanRetry() {
 void testRepositoryStartupRunsAtomicV10Migration() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replays.db";
+  const auto chartDatabasePath = temporary.path() / "chart.db";
   FixtureFacts chart;
   {
     Database database(databasePath);
     replay_schema10_fixture::createExactSchema(database.get());
     chart = insertChartFixture(database.get());
   }
+  {
+    Database database(chartDatabasePath);
+    createChartMetadataDatabase(database.get(), chart, 7);
+  }
 
   ReplayRepository repository(databasePath);
+  repository.SetChartDatabasePath(chartDatabasePath);
   expect(repository.EnsureSchema(),
          "normal replay repository startup migrates a schema-v10 profile");
   repository.Shutdown();
@@ -1371,6 +1526,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
   testPreservesEmptyLegacyReplayInput();
+  testUnavailableKeyModeBlocksAllMissMigrationAtomically();
   testChartMetadataPreservesSparseFourteenKeyMode();
   testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
@@ -1383,6 +1539,8 @@ int main() {
   testOrdersLegacyInputBeforeRemovingRedundantTransitions();
   testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles();
   testAssignsSameStemHistoryByTimestampThenPublicId();
+  testMigrationSkipsCanonicalCrossStemPathAlias();
+  testMigrationLocksLegacySnapshotBeforeFinalizingFiles();
   testEveryDatabaseFailureRollsBackAndRetryReusesFiles();
   testEveryReplayFileFailurePreservesV10AndCanRetry();
   testRepositoryStartupRunsAtomicV10Migration();

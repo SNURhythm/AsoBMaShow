@@ -19,6 +19,7 @@ struct RealtimePhysicalInputTransition {
       RealtimePhysicalInputTransitionType::Press;
   int lane = 0;
   bool backSpin = false;
+  bool replayOnly = false;
   replay::LogicalControlKind replayControl =
       replay::LogicalControlKind::Lane;
   LogicalInputTransition command;
@@ -52,6 +53,8 @@ private:
             bool backSpin = false,
             replay::LogicalControlKind replayControl =
                 replay::LogicalControlKind::Lane);
+  bool emitReplayOnly(RealtimePhysicalInputTransitionType, int lane,
+                      replay::LogicalControlKind);
   void emitApplied(const LogicalGameplayInputAdapter::AppliedTransition &);
   void prepare(RealtimePhysicalInputTransitionType, int lane,
                bool backSpin = false);
@@ -65,6 +68,8 @@ private:
   std::array<bool, kTrackedLaneCapacity> publishedLanePressed_{};
   std::array<replay::LogicalControlKind, kTrackedLaneCapacity>
       desiredReplayControls_{};
+  std::array<replay::LogicalControlKind, kTrackedLaneCapacity>
+      publishedReplayControls_{};
   std::deque<RealtimePhysicalInputTransition> pendingTransitions_;
   LogicalGameplayInputPipeline pipeline_;
 };

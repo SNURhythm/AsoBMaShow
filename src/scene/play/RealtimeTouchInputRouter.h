@@ -60,7 +60,8 @@ public:
   bool cancelAll(std::int64_t steadyTimestampMicros) noexcept;
   bool updateLayout(RealtimeTouchLayout layout,
                     std::int64_t steadyTimestampMicros) noexcept;
-  void setGameplayEnabled(bool enabled) noexcept;
+  bool setGameplayEnabled(bool enabled,
+                          std::int64_t steadyTimestampMicros) noexcept;
   void reset() noexcept;
 
 private:

@@ -48,6 +48,7 @@ struct InputTransition {
   std::int64_t songTimeMicros = 0;
   LogicalControl control;
   bool pressed = false;
+  bool replayOnly = false;
 
   bool operator==(const InputTransition &) const = default;
 };

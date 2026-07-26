@@ -56,6 +56,14 @@ inline bool initializeReplayDatabase(
   return helper.EnsureSchema();
 }
 
+inline bool
+initializeReplayDatabase(const std::filesystem::path &databasePath,
+                         const std::filesystem::path &chartDatabasePath) {
+  ReplayRepository helper(databasePath);
+  helper.SetChartDatabasePath(chartDatabasePath);
+  return helper.EnsureSchema();
+}
+
 inline bool initializeMusicDatabase(MusicPlaylistRepository &repository) {
   return repository.EnsureReady();
 }

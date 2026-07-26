@@ -299,7 +299,7 @@ void testLayoutReplacementCancelsOldLaneBeforeNewMapping() {
           "layout replacement releases the old projected lane first");
 }
 
-void testPausePreservesHeldFingerWithoutSyntheticRelease() {
+void testPauseCancelsHeldFingerAtIngressGateTimestamp() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
       10, makeLayout(), {.context = &capture, .emit = &InputCapture::emit});
@@ -309,21 +309,30 @@ void testPausePreservesHeldFingerWithoutSyntheticRelease() {
                           .normalizedY = 0.5F,
                           .steadyTimestampMicros = 110}),
           "pause fixture presses a lane");
-  router.setGameplayEnabled(false);
-  require(capture.events.size() == 1,
-          "closing the touch gate emits no synthetic release");
-  router.setGameplayEnabled(true);
-  require(router.consume({.fingerId = 23,
-                          .phase = gameplay::RealtimeTouchPhase::Up,
-                          .normalizedX = 0.31F,
-                          .normalizedY = 0.5F,
-                          .steadyTimestampMicros = 120}),
-          "held finger remains routable after resume");
+  require(router.setGameplayEnabled(false, 120),
+          "closing the touch gate cancels active fingers");
   require(capture.events.size() == 2 &&
               capture.events.back().type ==
                   gameplay::RealtimeGameplayInputType::Release &&
+              capture.events.back().lane == 0 &&
+              !capture.events.back().backSpin &&
+              capture.events.back().replayControl ==
+                  gameplay::RealtimeLogicalControlKind::Lane &&
               capture.events.back().steadyTimestampMicros == 120,
-          "the real post-resume lift releases the held lane");
+          "pause emits a normal release at the ingress gate timestamp");
+  require(router.setGameplayEnabled(true, 130),
+          "touch routing resumes after pause");
+  require(router.consume({.fingerId = 23,
+                          .phase = gameplay::RealtimeTouchPhase::Down,
+                          .normalizedX = 0.31F,
+                          .normalizedY = 0.5F,
+                          .steadyTimestampMicros = 140}),
+          "the cancelled finger id can start a fresh touch after resume");
+  require(capture.events.size() == 3 &&
+              capture.events.back().type ==
+                  gameplay::RealtimeGameplayInputType::Press &&
+              capture.events.back().steadyTimestampMicros == 140,
+          "pause leaves no stale finger or lane ownership behind");
 }
 
 void testCancelledTouchUsesGraceAndContinuationCancelsExpiry() {
@@ -404,7 +413,7 @@ int main() {
   testNormalModeMapsTouchesBelowProjectedPlayfield();
   testUiExcludedFingerNeverEmitsGameplayEdges();
   testLayoutReplacementCancelsOldLaneBeforeNewMapping();
-  testPausePreservesHeldFingerWithoutSyntheticRelease();
+  testPauseCancelsHeldFingerAtIngressGateTimestamp();
   testCancelledTouchUsesGraceAndContinuationCancelsExpiry();
   return 0;
 }

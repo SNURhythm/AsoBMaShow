@@ -342,6 +342,26 @@ constexpr std::string_view kChartSha =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 constexpr std::string_view kChartMd5 = "0123456789abcdef0123456789abcdef";
 
+void seedReplayMigrationChartMetadata(const std::filesystem::path &path) {
+  Database database = openDatabase(path);
+  expect(database != nullptr, "replay migration chart database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(database.get(),
+              "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,md5 TEXT NOT NULL,"
+              "sha256 TEXT NOT NULL,keys INTEGER,ln_mode INTEGER,"
+              "total_long_notes INTEGER,total_backspin_notes INTEGER,"
+              "total_notes INTEGER);"
+              "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+              "total_long_notes,total_backspin_notes,total_notes) VALUES("
+              "'chart.bms','" +
+                  std::string(kChartMd5) + "','" + std::string(kChartSha) +
+                  "',7,1,1,0,1)"),
+      "replay migration chart metadata is authoritative");
+}
+
 void seedScore(const std::filesystem::path &path, int clearType, int score) {
   Database database = openDatabase(path);
   expect(database != nullptr, "score seed database opens");
@@ -595,6 +615,9 @@ struct SwitchFixture {
     appliedInputPath = firstPaths.inputJson;
     score.SetDatabasePath(firstPaths.scoresDb);
     replay.SetDatabasePath(firstPaths.replaysDb);
+    const auto migrationChartDatabase = temp.path() / "migration-chart.db";
+    seedReplayMigrationChartMetadata(migrationChartDatabase);
+    replay.SetChartDatabasePath(migrationChartDatabase);
     switchEvents.clear();
   }
 

@@ -6,11 +6,13 @@
 #include "../src/ProfileArchive.h"
 #include "../src/ProfileDatabaseActivity.h"
 #include "../src/ProfileDatabaseTools.h"
+#include "../src/ScoreProvenance.h"
 #include "../src/practice/PracticePresetStore.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/input/InputProfileStore.h"
 #include "../src/sqlite3.h"
+#include "support/ReplaySchema10Fixture.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 
 #include <archive_entry.h>
@@ -2167,6 +2169,101 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
   expect(true, "pre-v10 replay archive migration remains dropped");
 }
 
+void testSchema10ArchiveUsesAuthoritativeLocalChartMetadata() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "schema10-source.zip");
+  std::string error;
+  auto members = readArchive(source, error);
+  expect(error.empty(), "schema-10 source archive reads: " + error);
+  if (!error.empty()) {
+    return;
+  }
+
+  std::erase_if(members, [](const ArchiveMember &member) {
+    return member.name.starts_with("replay/");
+  });
+  auto *databaseMember = findMember(members, "replays.db");
+  auto *manifestMember = findMember(members, "manifest.json");
+  expect(databaseMember != nullptr && manifestMember != nullptr,
+         "schema-10 source members exist");
+  if (databaseMember == nullptr || manifestMember == nullptr) {
+    return;
+  }
+
+  const auto replayDatabasePath = fixture.temp.path() / "schema10-replays.db";
+  {
+    Database database = openDatabase(replayDatabasePath);
+    expect(database != nullptr, "schema-10 replay fixture opens");
+    if (!database) {
+      return;
+    }
+    replay_schema10_fixture::createExactSchema(database.get());
+    const std::string provenance =
+        serializeScoreProvenance(ScoreProvenance::Legacy());
+    constexpr std::string_view attemptId =
+        "20000000-0000-4000-8000-000000000010";
+    replay_schema10_fixture::insertSimpleChart(
+        database.get(), 1, "0123456789abcdef0123456789abcdef", kReplaySha,
+        "2026-07-11 01:23:45", 2, provenance, attemptId, 1);
+    replay_schema10_fixture::insertSimplePendingChart(
+        database.get(), 1, "0123456789abcdef0123456789abcdef", kReplaySha,
+        "2026-07-11 01:23:45", 2, provenance, attemptId, 1);
+  }
+  databaseMember->contents = readFile(replayDatabasePath);
+  Json manifest = Json::parse(manifestMember->contents);
+  manifest["replaySchemaVersion"] = 10;
+  manifestMember->contents = manifest.dump(2) + "\n";
+  refreshChecksums(members);
+  const auto archive = fixture.temp.path() / "schema10-import.zip";
+  expect(writeArchive(archive, members, error),
+         "schema-10 archive writes: " + error);
+
+  const auto chartDatabasePath = fixture.temp.path() / "db" / "chart.db";
+  std::filesystem::create_directories(chartDatabasePath.parent_path());
+  {
+    Database database = openDatabase(chartDatabasePath);
+    expect(database != nullptr, "schema-10 chart metadata database opens");
+    if (!database) {
+      return;
+    }
+    expect(execute(database.get(),
+                   "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,md5 TEXT NOT "
+                   "NULL,sha256 TEXT NOT NULL,keys INTEGER,ln_mode INTEGER,"
+                   "total_long_notes INTEGER,total_backspin_notes INTEGER,"
+                   "total_notes INTEGER);"
+                   "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+                   "total_long_notes,total_backspin_notes,total_notes) VALUES("
+                   "'chart.bms','0123456789abcdef0123456789abcdef','" +
+                       std::string(kReplaySha) + "',7,1,1,0,1)"),
+           "schema-10 authoritative chart metadata is seeded");
+  }
+
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(imported.ok() && imported.profile.has_value(),
+         "schema-10 archive imports with authoritative local chart metadata: " +
+             imported.message);
+  if (imported.profile.has_value()) {
+    const auto paths = fixture.manager.pathsFor(imported.profile->id);
+    expect(sqliteDatabaseUserVersion(paths.replaysDb, error) ==
+                   ReplayRepository::kCurrentSchemaVersion &&
+               rowCount(paths.replaysDb, "chart_results") == 1 &&
+               std::filesystem::is_regular_file(
+                   paths.replayDirectory / (std::string(kReplaySha) + ".brd")),
+           "schema-10 import installs the compact result and migrated replay");
+  }
+
+  std::error_code removeError;
+  std::filesystem::remove(chartDatabasePath, removeError);
+  expect(!removeError, "schema-10 authoritative chart metadata is removed");
+  const std::size_t profileCount = fixture.manager.listProfiles().size();
+  const auto rejected = service.Import(archive);
+  expect(!rejected.ok() && rejected.error == ProfileError::IntegrityFailure,
+         "schema-10 archive fails closed without authoritative chart metadata");
+  expect(fixture.manager.listProfiles().size() == profileCount,
+         "failed schema-10 metadata resolution leaves profiles unchanged");
+}
+
 void testSchema13ArchiveMigratesAndPreservesRows() {
   Fixture fixture;
   const auto source = exportFixture(fixture, "schema13-source.zip");
@@ -2244,6 +2341,37 @@ void testImportRejectsMalformedReplayReferenceRows() {
   const auto imported = service.Import(archive);
   expect(!imported.ok() && imported.error == ProfileError::IntegrityFailure,
          "profile import rejects malformed replay reference rows");
+}
+
+void testImportRejectsReplayBytesThatDoNotMatchReference() {
+  Fixture fixture;
+  const auto source = exportFixture(fixture, "tampered-replay-source.zip");
+  std::string error;
+  auto members = readArchive(source, error);
+  expect(error.empty(), "tampered-replay source archive reads: " + error);
+  if (!error.empty()) {
+    return;
+  }
+
+  auto *replayMember =
+      findMember(members, "replay/" + std::string(kReplayFilename));
+  expect(replayMember != nullptr, "tampered-replay member exists");
+  if (replayMember == nullptr) {
+    return;
+  }
+  replayMember->contents = "tampered-portable-brd-v1\n";
+  refreshChecksums(members);
+  const auto archive = fixture.temp.path() / "tampered-replay-import.zip";
+  expect(writeArchive(archive, members, error),
+         "tampered-replay archive writes: " + error);
+
+  const std::size_t profileCount = fixture.manager.listProfiles().size();
+  ProfileArchiveService service(fixture.manager);
+  const auto imported = service.Import(archive);
+  expect(!imported.ok() && imported.error == ProfileError::IntegrityFailure,
+         "profile import rejects replay bytes that disagree with replay_files");
+  expect(fixture.manager.listProfiles().size() == profileCount,
+         "replay-reference mismatch does not install a profile");
 }
 
 void testImportRejectsOrphanReplayReferenceRows() {
@@ -3097,8 +3225,10 @@ int main() {
   testSizePolicyBoundariesWithoutLargeAllocations();
   testZipParserEnforcesDeclaredAndStreamedSizeLimits();
   testSupportedOlderSchemasMigrateAndPreserveRows();
+  testSchema10ArchiveUsesAuthoritativeLocalChartMetadata();
   testSchema13ArchiveMigratesAndPreservesRows();
   testImportRejectsMalformedReplayReferenceRows();
+  testImportRejectsReplayBytesThatDoNotMatchReference();
   testImportRejectsOrphanReplayReferenceRows();
   testFutureDatabaseAndCorruptionAreRejected();
   testExportFailurePreservesDestinationAndCleansTemps();

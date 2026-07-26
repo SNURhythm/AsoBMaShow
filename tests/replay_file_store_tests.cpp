@@ -324,6 +324,25 @@ void testUnsafePathsAndLinks() {
               .finalize(unsafePath, encoded, codec, chartIdentity(), "unsafe")
               .metadata,
          "finalization rejects absolute path");
+
+  TempDirectory inconsistent("inconsistent-identity");
+  replay::ReplayFileStore inconsistentStore(inconsistent.path);
+  std::string pathDiagnostic;
+  const auto otherChartPath = replay::pathForStem(kShaB, 0, pathDiagnostic);
+  expect(otherChartPath.has_value(), "alternate canonical chart path is valid");
+  if (otherChartPath) {
+    replay::ReplayPathIdentity inconsistentIdentity = chartPath();
+    inconsistentIdentity.relativePath = otherChartPath->relativePath;
+    const auto outcome = inconsistentStore.finalize(
+        inconsistentIdentity, encoded, codec, chartIdentity(), "inconsistent");
+    expect(!outcome.metadata,
+           "finalization rejects a safe path inconsistent with its stem and "
+           "history index");
+    expect(!std::filesystem::exists(inconsistent.path /
+                                    otherChartPath->relativePath),
+           "inconsistent replay identity writes no aliased final file");
+  }
+
   replay::ReplayFileMetadata unsafeMetadata{
       .relativePath = "../outside.brd",
       .sha256 = std::string(64, '0'),

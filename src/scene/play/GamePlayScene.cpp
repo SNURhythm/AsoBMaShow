@@ -756,11 +756,11 @@ struct GamePlayScene::RealtimeGameplaySession {
              transition.replayControl ==
                      replay::LogicalControlKind::ScratchClockwise
                  ? gameplay::RealtimeLogicalControlKind::ScratchClockwise
-                 : transition.replayControl ==
-                           replay::LogicalControlKind::ScratchCounterClockwise
-                       ? gameplay::RealtimeLogicalControlKind::
-                             ScratchCounterClockwise
-                       : gameplay::RealtimeLogicalControlKind::Lane});
+             : transition.replayControl ==
+                     replay::LogicalControlKind::ScratchCounterClockwise
+                 ? gameplay::RealtimeLogicalControlKind::ScratchCounterClockwise
+                 : gameplay::RealtimeLogicalControlKind::Lane,
+         .replayOnly = transition.replayOnly});
   }
 
   static int SDLCALL sdlInputWatch(void *context, SDL_Event *event) {
@@ -1178,18 +1178,19 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   if (enabled) {
     if (session.touchRouter != nullptr) {
-      session.touchRouter->setGameplayEnabled(true);
+      (void)session.touchRouter->setGameplayEnabled(true, nowMicros());
     }
     session.acceptingTouch.store(true, std::memory_order_release);
     IOSSetRawTouchEventSink(&RealtimeGameplaySession::rawTouchSink, &session);
     return;
   }
-  session.acceptingTouch.store(false, std::memory_order_release);
   IOSSetRawTouchEventSink(nullptr, nullptr);
-  session.clearUiOwnedFingers();
-  if (session.touchRouter != nullptr) {
-    session.touchRouter->setGameplayEnabled(false);
+  if (session.touchRouter != nullptr &&
+      !session.touchRouter->setGameplayEnabled(false, nowMicros())) {
+    SDL_LogError(SDL_LOG_CATEGORY_INPUT, "Realtime touch cancellation failed");
   }
+  session.acceptingTouch.store(false, std::memory_order_release);
+  session.clearUiOwnedFingers();
 #else
   (void)enabled;
 #endif
@@ -1511,8 +1512,8 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
         session.worker->copyAcceptedReplayInputAfterStop();
     for (const auto &transition : workerInput) {
       captureReplayControlAtSongTime(transition.songTimeMicros,
-                                     transition.control,
-                                     transition.pressed);
+                                     transition.control, transition.pressed,
+                                     transition.replayOnly);
     }
   }
   if (inputHandler != nullptr) {
@@ -2875,8 +2876,8 @@ void GamePlayScene::captureReplayControl(
 }
 
 void GamePlayScene::captureReplayControlAtSongTime(
-    std::int64_t songTimeMicros, replay::LogicalControl control,
-    bool pressed) {
+    std::int64_t songTimeMicros, replay::LogicalControl control, bool pressed,
+    bool replayOnly) {
   if (!shouldRecordReplay() || replayInputCapture == nullptr ||
       rawReplayFinished) {
     return;
@@ -2884,7 +2885,8 @@ void GamePlayScene::captureReplayControlAtSongTime(
   std::string diagnostic;
   if (!replayInputCapture->capture({.songTimeMicros = songTimeMicros,
                                     .control = control,
-                                    .pressed = pressed},
+                                    .pressed = pressed,
+                                    .replayOnly = replayOnly},
                                    diagnostic)) {
     rawReplayCaptureFailed = true;
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "Replay input sample was rejected: %s",

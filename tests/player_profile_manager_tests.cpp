@@ -3,6 +3,7 @@
 #include "../src/PlayerProfileManager.h"
 #include "../src/ProfileDatabaseTools.h"
 #include "../src/ProfileDatabaseActivity.h"
+#include "../src/Utils.h"
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/input/InputProfileStore.h"
@@ -59,6 +60,19 @@ public:
 
 private:
   std::filesystem::path path_;
+};
+
+class ScopedDocumentsRoot {
+public:
+  explicit ScopedDocumentsRoot(const std::filesystem::path &root)
+      : previousGameName_(Utils::GameName) {
+    Utils::GameName = root.string();
+  }
+
+  ~ScopedDocumentsRoot() { Utils::GameName = previousGameName_; }
+
+private:
+  std::string previousGameName_;
 };
 
 std::filesystem::path fixture(std::string_view name) {
@@ -131,6 +145,28 @@ Database openDatabase(const std::filesystem::path &path) {
     return {};
   }
   return Database(raw);
+}
+
+void seedReplayMigrationChartMetadata(const std::filesystem::path &path) {
+  std::filesystem::create_directories(path.parent_path());
+  Database database = openDatabase(path);
+  expect(database != nullptr, "replay migration chart database opens");
+  if (!database) {
+    return;
+  }
+  expect(
+      execute(
+          database.get(),
+          "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,md5 TEXT NOT NULL,"
+          "sha256 TEXT NOT NULL,keys INTEGER,ln_mode INTEGER,"
+          "total_long_notes INTEGER,total_backspin_notes INTEGER,"
+          "total_notes INTEGER);"
+          "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
+          "total_long_notes,total_backspin_notes,total_notes) VALUES("
+          "'chart.bms','0123456789abcdef0123456789abcdef',"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "7,1,1,0,1)"),
+      "replay migration chart metadata is authoritative");
 }
 
 PlayerProfileManagerDependencies
@@ -512,6 +548,8 @@ void testSqliteSnapshotIncludesWalAndValidatesIdentifiers() {
 
 void testFirstRunMigrationIsLosslessAndIdempotent() {
   TempDirectory temp("profile-migration");
+  ScopedDocumentsRoot documents(temp.path());
+  seedReplayMigrationChartMetadata(Utils::GetDocumentsPath("db") / "chart.db");
   LegacyData legacy = seedLegacyData(temp.path());
   std::filesystem::create_directories(temp.path() / "profiles" /
                                       ".staging-abandoned");

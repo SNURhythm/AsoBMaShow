@@ -1146,6 +1146,144 @@ void testRealtimePhysicalInputPreservesScratchDirection() {
           "native realtime scratch press and release retain direction");
 }
 
+void testRealtimePhysicalInputForwardsLogicalOnlyScratchHandoff() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "native-scratch-ccw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::ScratchCounterClockwise},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  profile.bindings.push_back(
+      {.id = "native-digital-scratch",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+       .control = {.deviceId = "pad:one",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_B}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(profile, makeGameplayInputScopes(7),
+                                            [&](const auto &value) {
+                                              output.push_back(value);
+                                              return true;
+                                            });
+  const auto consumeButton = [&](int button, bool pressed,
+                                 std::int64_t timestamp) {
+    router.consume(
+        {.control = {.deviceId = "pad:one",
+                     .deviceClass = input::DeviceClass::GameController,
+                     .kind = input::ControlKind::Button,
+                     .index = button},
+         .rawValue = pressed ? 1.0 : 0.0,
+         .normalizedValue = pressed ? 1.0F : 0.0F},
+        timestamp);
+  };
+
+  router.setGameplayEnabled(true, 100);
+  consumeButton(SDL_CONTROLLER_BUTTON_A, true, 200);
+  consumeButton(SDL_CONTROLLER_BUTTON_B, true, 250);
+  consumeButton(SDL_CONTROLLER_BUTTON_A, false, 300);
+  consumeButton(SDL_CONTROLLER_BUTTON_B, false, 400);
+
+  require(
+      output.size() == 4 &&
+          output[0].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[0].replayControl ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          !output[0].replayOnly &&
+          output[1].type ==
+              input::RealtimePhysicalInputTransitionType::Release &&
+          output[1].replayControl ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          output[1].replayOnly && output[1].steadyTimestampMicros == 300 &&
+          output[2].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[2].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          output[2].replayOnly && output[2].steadyTimestampMicros == 300 &&
+          output[3].type ==
+              input::RealtimePhysicalInputTransitionType::Release &&
+          output[3].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          !output[3].replayOnly && output[3].steadyTimestampMicros == 400,
+      "native realtime replay balances a logical-only scratch handoff");
+}
+
+void testRealtimePhysicalInputDefersScratchHandoffUntilResume() {
+  InputProfile profile;
+  profile.bindings.push_back(
+      {.id = "paused-scratch-ccw",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::ScratchCounterClockwise},
+       .control = {.deviceId = "pad:pause",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_A}});
+  profile.bindings.push_back(
+      {.id = "paused-digital-scratch",
+       .scope = {.player = 1, .keyMode = 7},
+       .action = {.kind = input::LogicalActionKind::Lane, .lane = 7},
+       .control = {.deviceId = "pad:pause",
+                   .deviceClass = input::DeviceClass::GameController,
+                   .kind = input::ControlKind::Button,
+                   .index = SDL_CONTROLLER_BUTTON_B}});
+  std::vector<input::RealtimePhysicalInputTransition> output;
+  input::RealtimePhysicalInputRouter router(profile, makeGameplayInputScopes(7),
+                                            [&](const auto &value) {
+                                              output.push_back(value);
+                                              return true;
+                                            });
+  const auto consumeButton = [&](int button, bool pressed,
+                                 std::int64_t timestamp) {
+    router.consume(
+        {.control = {.deviceId = "pad:pause",
+                     .deviceClass = input::DeviceClass::GameController,
+                     .kind = input::ControlKind::Button,
+                     .index = button},
+         .rawValue = pressed ? 1.0 : 0.0,
+         .normalizedValue = pressed ? 1.0F : 0.0F},
+        timestamp);
+  };
+
+  router.setGameplayEnabled(true, 100);
+  consumeButton(SDL_CONTROLLER_BUTTON_A, true, 200);
+  router.setGameplayEnabled(false, 250);
+  consumeButton(SDL_CONTROLLER_BUTTON_B, true, 260);
+  consumeButton(SDL_CONTROLLER_BUTTON_A, false, 270);
+  require(output.size() == 1,
+          "paused scratch ownership changes do not enter the worker");
+
+  router.setGameplayEnabled(true, 300);
+  require(
+      output.size() == 3 && !output[0].replayOnly &&
+          output[0].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[0].replayControl ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          output[1].replayOnly &&
+          output[1].type ==
+              input::RealtimePhysicalInputTransitionType::Release &&
+          output[1].replayControl ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          output[1].steadyTimestampMicros == 300 && output[2].replayOnly &&
+          output[2].type == input::RealtimePhysicalInputTransitionType::Press &&
+          output[2].replayControl ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          output[2].steadyTimestampMicros == 300,
+      "resume publishes the deferred replay handoff without releasing the "
+      "physical scratch lane");
+
+  consumeButton(SDL_CONTROLLER_BUTTON_B, false, 400);
+  require(output.size() == 4 && !output[3].replayOnly &&
+              output[3].type ==
+                  input::RealtimePhysicalInputTransitionType::Release &&
+              output[3].replayControl ==
+                  replay::LogicalControlKind::ScratchClockwise &&
+              output[3].steadyTimestampMicros == 400,
+          "the resumed scratch owner releases with a balanced replay edge");
+}
+
 void testRealtimePhysicalInputPublishesOrderedScratchReversal() {
   InputProfile profile;
   profile.bindings.push_back(
@@ -1282,6 +1420,8 @@ int main() {
   testRealtimePhysicalInputHeldThroughPauseStaysPressed();
   testRealtimePhysicalInputDisconnectReleasesHeldLane();
   testRealtimePhysicalInputPreservesScratchDirection();
+  testRealtimePhysicalInputForwardsLogicalOnlyScratchHandoff();
+  testRealtimePhysicalInputDefersScratchHandoffUntilResume();
   testRealtimePhysicalInputPublishesOrderedScratchReversal();
   testPlaybackClearPolicyCapsEverySuccessfulClearPath();
   return 0;

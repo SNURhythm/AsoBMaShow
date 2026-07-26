@@ -407,12 +407,34 @@ ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
     return {.status = ReservationOutcome::Status::StorageFailure,
             .diagnostic = "could not finish replay index allocation"};
   }
+  SqliteStatementHandle pathOwner;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT EXISTS(SELECT 1 FROM replay_files WHERE relative_path=?1 "
+          "UNION ALL SELECT 1 FROM replay_file_reservations WHERE "
+          "relative_path=?1)",
+          pathOwner) != SQLITE_OK) {
+    return {.status = ReservationOutcome::Status::StorageFailure,
+            .diagnostic = "could not inspect replay path ownership"};
+  }
   std::optional<replay::ReplayPathIdentity> identity;
   while (true) {
     identity = replay::pathForStem(stem, historyIndex, pathDiagnostic);
     if (!identity.has_value()) {
       return {.status = ReservationOutcome::Status::IntegrityConflict,
               .diagnostic = std::move(pathDiagnostic)};
+    }
+    if (sqlite3_reset(pathOwner.get()) != SQLITE_OK ||
+        sqlite3_clear_bindings(pathOwner.get()) != SQLITE_OK ||
+        !bindText(pathOwner.get(), 1, pathText(identity->relativePath)) ||
+        sqlite3_step(pathOwner.get()) != SQLITE_ROW) {
+      return {.status = ReservationOutcome::Status::StorageFailure,
+              .diagnostic = "could not inspect replay path ownership"};
+    }
+    const bool pathOwned = sqlite3_column_int(pathOwner.get(), 0) != 0;
+    if (sqlite3_step(pathOwner.get()) != SQLITE_DONE) {
+      return {.status = ReservationOutcome::Status::StorageFailure,
+              .diagnostic = "could not finish replay path ownership read"};
     }
     std::error_code pathError;
     const auto status = std::filesystem::symlink_status(
@@ -421,10 +443,10 @@ ReservationOutcome ReserveReplayFileOnConnection(sqlite3 *database,
         (!pathError &&
          status.type() == std::filesystem::file_type::not_found) ||
         pathError == std::errc::no_such_file_or_directory;
-    if (missing) {
+    if (missing && !pathOwned) {
       break;
     }
-    if (pathError) {
+    if (pathError && !missing) {
       return {.status = ReservationOutcome::Status::StorageFailure,
               .diagnostic =
                   "could not inspect candidate replay history path"};

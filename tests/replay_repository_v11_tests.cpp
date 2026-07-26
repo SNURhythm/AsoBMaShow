@@ -938,6 +938,59 @@ void testReservationSkipsExistingUntrackedReplay() {
          "allocator skips an existing replay that is absent from SQLite");
 }
 
+void testReservationSkipsCanonicalCrossStemPathAlias() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path() / "replay.db";
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "cross-stem collision reservation schema is ready");
+
+  replay::CoursePathInput unconstrainedInput{
+      .stageSha256 = {repeated('a', 64)},
+  };
+  replay::CoursePathInput constrainedInput = unconstrainedInput;
+  constrainedInput.beatorajaConstraintIds = {12};
+  std::string diagnostic;
+  const auto unconstrainedStem =
+      replay::courseStem(unconstrainedInput, diagnostic);
+  const auto constrainedStem = replay::courseStem(constrainedInput, diagnostic);
+  expect(unconstrainedStem == "aaaaaaaaaa" &&
+             constrainedStem == "aaaaaaaaaa_12",
+         "course fixtures produce the canonical history/constraint alias");
+  if (!unconstrainedStem || !constrainedStem) {
+    return;
+  }
+
+  std::optional<ReplayFileReservation> twelfthHistory;
+  for (int index = 0; index <= 12; ++index) {
+    const std::string suffix =
+        index < 10 ? "0" + std::to_string(index) : std::to_string(index);
+    const auto reserved = repository.reserveReplayFile(
+        "123e4567-e89b-42d3-a456-4266141742" + suffix, *unconstrainedStem);
+    expect(reserved.status == ReservationOutcome::Status::Reserved &&
+               reserved.reservation &&
+               reserved.reservation->historyIndex == index,
+           "unconstrained course allocates the expected history path");
+    if (index == 12) {
+      twelfthHistory = reserved.reservation;
+    }
+  }
+
+  const auto constrained = repository.reserveReplayFile(
+      "123e4567-e89b-42d3-a456-426614174300", *constrainedStem);
+  expect(twelfthHistory.has_value(),
+         "unconstrained course owns its twelfth history path");
+  expect(constrained.status == ReservationOutcome::Status::Reserved,
+         "aliased constrained course reservation succeeds");
+  expect(constrained.reservation && constrained.reservation->historyIndex == 1,
+         "aliased constrained course advances to history one");
+  expect(twelfthHistory && constrained.reservation &&
+             constrained.reservation->relativePath !=
+                 twelfthHistory->relativePath,
+         "allocator skips a SQLite-owned path aliased by another canonical "
+         "course stem");
+}
+
 void testProfileStartupPreservesUnownedReplayCollision() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path() / "replay.db";
@@ -1086,6 +1139,7 @@ int main() {
   testChartReplayRejectsLongNoteModeMismatch();
   testReservationIntegrityAndMonotonicity();
   testReservationSkipsExistingUntrackedReplay();
+  testReservationSkipsCanonicalCrossStemPathAlias();
   testProfileStartupReclaimsFilelessReservations();
   testProfileStartupPreservesUnownedReplayCollision();
   testProfileStartupReclaimsOwnedFinalReplay();

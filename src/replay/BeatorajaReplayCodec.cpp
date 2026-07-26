@@ -1,4 +1,5 @@
 #include "BeatorajaReplayCodec.h"
+#include "ReplayInputValidation.h"
 
 #include "Base64Url.h"
 #include "BeatorajaLongNoteMode.h"
@@ -427,7 +428,10 @@ bool validateInput(const std::vector<InputTransition> &input, int keyMode,
       effective->push_back(transition);
     }
   }
-  return true;
+  return validateReplayOnlyScratchHandoffs(
+      effective != nullptr ? std::span<const InputTransition>(*effective)
+                           : std::span<const InputTransition>(input),
+      diagnostic);
 }
 
 std::optional<std::vector<InputTransition>>
@@ -760,13 +764,17 @@ Json encodeSetupExtension(const ChartPlaybackSetup &setup) {
 Json encodeInputExtension(const std::vector<InputTransition> &input) {
   Json result = Json::array();
   for (const auto &transition : input) {
-    result.push_back({
+    Json item{
         {"songTimeMicros", transition.songTimeMicros},
         {"kind", static_cast<int>(transition.control.kind)},
         {"player", transition.control.player},
         {"lane", transition.control.lane},
         {"pressed", transition.pressed},
-    });
+    };
+    if (transition.replayOnly) {
+      item["replayOnly"] = true;
+    }
+    result.push_back(std::move(item));
   }
   return result;
 }
@@ -1150,6 +1158,14 @@ bool decodeInputExtension(const Json &source, int keyMode,
       return fail(diagnostic,
                   "Replay extension logical control kind is invalid");
     }
+    if (const auto replayOnly = item.find("replayOnly");
+        replayOnly != item.end()) {
+      if (!replayOnly->is_boolean()) {
+        return fail(diagnostic,
+                    "Replay extension replay-only marker has the wrong type");
+      }
+      transition.replayOnly = replayOnly->get<bool>();
+    }
     transition.control.kind = static_cast<LogicalControlKind>(kind);
     raw.push_back(transition);
   }
@@ -1421,7 +1437,16 @@ bool validateStockProjection(const ChartPlaybackSetup &stock,
   if (!expectedInput) {
     return false;
   }
-  if (*expectedInput != stockInput) {
+  const bool sameInputSemantics =
+      expectedInput->size() == stockInput.size() &&
+      std::ranges::equal(*expectedInput, stockInput,
+                         [](const auto &expected, const auto &actual) {
+                           return expected.songTimeMicros ==
+                                      actual.songTimeMicros &&
+                                  expected.control == actual.control &&
+                                  expected.pressed == actual.pressed;
+                         });
+  if (!sameInputSemantics) {
     return fail(diagnostic,
                 "Replay stock and extension input projections differ");
   }

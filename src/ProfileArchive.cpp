@@ -2114,15 +2114,6 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
                                     errorMessage)) {
           return false;
         }
-        if (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
-                                                          errorMessage) ||
-            !ScoreRepository::ClearImportedIrScoresSnapshot(staging.scoresDb,
-                                                            errorMessage)) {
-          errorMessage =
-              "unable to remove account-scoped IR data from import: " +
-              errorMessage;
-          return false;
-        }
         return true;
       });
   if (!installed.ok() || !installed.profile) {

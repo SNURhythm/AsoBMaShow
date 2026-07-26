@@ -1,4 +1,5 @@
 #include "ReplayInputRecorder.h"
+#include "ReplayInputValidation.h"
 
 #include <algorithm>
 #include <exception>
@@ -42,7 +43,8 @@ bool ReplayInputRecorder::rejectCapture(std::string &diagnostic,
 
 bool ReplayInputRecorder::record(std::int64_t steadyTimestampMicros,
                                  LogicalControl control, bool pressed,
-                                 std::string &diagnostic) noexcept {
+                                 std::string &diagnostic,
+                                 bool replayOnly) noexcept {
   try {
     if (finished_) {
       diagnostic = "Replay input recording has already finished";
@@ -57,7 +59,7 @@ bool ReplayInputRecorder::record(std::int64_t steadyTimestampMicros,
       return rejectCapture(diagnostic,
                            "Replay input clock could not map the timestamp");
     }
-    return recordSongTime(*songTime, control, pressed, diagnostic);
+    return recordSongTime(*songTime, control, pressed, diagnostic, replayOnly);
   } catch (const std::exception &error) {
     return rejectCapture(
         diagnostic, std::string("Replay input clock failed: ") + error.what());
@@ -68,7 +70,8 @@ bool ReplayInputRecorder::record(std::int64_t steadyTimestampMicros,
 
 bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
                                          LogicalControl control, bool pressed,
-                                         std::string &diagnostic) noexcept {
+                                         std::string &diagnostic,
+                                         bool replayOnly) noexcept {
   try {
     if (finished_) {
       diagnostic = "Replay input recording has already finished";
@@ -101,7 +104,8 @@ bool ReplayInputRecorder::recordSongTime(std::int64_t songTimeMicros,
 
     transitions_.push_back({.songTimeMicros = songTimeMicros,
                             .control = control,
-                            .pressed = pressed});
+                            .pressed = pressed,
+                            .replayOnly = replayOnly});
     if (state == states_.end()) {
       states_.push_back({.control = control, .pressed = pressed});
     } else {
@@ -128,6 +132,10 @@ ReplayInputRecorder::finish(std::string &diagnostic) noexcept {
   finished_ = true;
   if (!failureDiagnostic_.empty()) {
     diagnostic = failureDiagnostic_;
+    transitions_.clear();
+    return std::nullopt;
+  }
+  if (!validateReplayOnlyScratchHandoffs(transitions_, diagnostic)) {
     transitions_.clear();
     return std::nullopt;
   }
@@ -232,7 +240,7 @@ ReplayInputCaptureBuffer::finish(std::string &diagnostic) noexcept {
       // failures remain sticky and are reported by finish().
       (void)recorder.recordSongTime(transition.songTimeMicros,
                                     transition.control, transition.pressed,
-                                    diagnostic);
+                                    diagnostic, transition.replayOnly);
     }
     auto result = recorder.finish(diagnostic);
     if (!result) {

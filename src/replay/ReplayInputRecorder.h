@@ -26,9 +26,11 @@ public:
   explicit ReplayInputRecorder(ReplayClock, ReplayInputRecorderLimits = {});
 
   bool record(std::int64_t steadyTimestampMicros, LogicalControl control,
-              bool pressed, std::string &diagnostic) noexcept;
+              bool pressed, std::string &diagnostic,
+              bool replayOnly = false) noexcept;
   bool recordSongTime(std::int64_t songTimeMicros, LogicalControl control,
-                      bool pressed, std::string &diagnostic) noexcept;
+                      bool pressed, std::string &diagnostic,
+                      bool replayOnly = false) noexcept;
   std::optional<std::vector<InputTransition>>
   finish(std::string &diagnostic) noexcept;
 

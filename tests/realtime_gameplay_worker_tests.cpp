@@ -737,6 +737,61 @@ void testStoppedWorkerTransfersEveryAcceptedDirectedInput() {
           "stopped worker retains the full accepted directed input stream");
 }
 
+void testReplayOnlyScratchHandoffDoesNotTouchThePhysicalLane() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                          makeConfig(clock, audio));
+  require(worker.start(), "replay-only scratch handoff fixture starts");
+  require(waitUntil([&] {
+            const auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > 0;
+          }),
+          "replay-only scratch handoff fixture publishes an initial snapshot");
+  require(
+      worker.enqueueInput(
+          {.epoch = 7,
+           .type = gameplay::RealtimeGameplayInputType::Release,
+           .lane = 7,
+           .steadyTimestampMicros = 1'500'000,
+           .replayControl =
+               gameplay::RealtimeLogicalControlKind::ScratchCounterClockwise,
+           .replayOnly = true}) &&
+          worker.enqueueInput(
+              {.epoch = 7,
+               .type = gameplay::RealtimeGameplayInputType::Press,
+               .lane = 7,
+               .compensateLane = 7,
+               .steadyTimestampMicros = 1'500'000,
+               .replayControl =
+                   gameplay::RealtimeLogicalControlKind::ScratchClockwise,
+               .replayOnly = true}),
+      "logical-only scratch handoff enters the authority");
+  require(waitUntil([&] {
+            const auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && snapshot->generation > 1;
+          }),
+          "logical-only scratch handoff publishes without a frame pump");
+  const auto snapshot = worker.acquireLatestSnapshot();
+  worker.stop();
+
+  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  require(snapshot && !snapshot->lanePressed[7] &&
+              snapshot->transactionSequence == 0 &&
+              snapshot->attempt.judgeCounts ==
+                  std::array<int, JudgementCount>{} &&
+              audio.reserveCount.load() == 0 && audio.commitCount.load() == 0 &&
+              replayInput.size() == 2 && !replayInput[0].pressed &&
+              replayInput[0].replayOnly &&
+              replayInput[0].control.kind ==
+                  replay::LogicalControlKind::ScratchCounterClockwise &&
+              replayInput[1].pressed && replayInput[1].replayOnly &&
+              replayInput[1].control.kind ==
+                  replay::LogicalControlKind::ScratchClockwise,
+          "replay-only handoff is captured without lane, judgement, or audio "
+          "side effects");
+}
+
 void testReplayInputCapacityFailsClosed() {
   FakeClock clock;
   FakeAudio audio;
@@ -754,7 +809,8 @@ void testReplayInputCapacityFailsClosed() {
                              : gameplay::RealtimeGameplayInputType::Release,
                  .lane = 1,
                  .compensateLane = 1,
-                 .steadyTimestampMicros = 1'000 + index}),
+                 .steadyTimestampMicros = 1'000 + index,
+                 .replayOnly = index == 2}),
             "bounded replay input enters ingress before the worker faults");
   }
   require(worker.start(), "bounded replay-input fixture starts");
@@ -763,9 +819,12 @@ void testReplayInputCapacityFailsClosed() {
                    gameplay::RealtimeGameplayFault::ReplayCapacityExceeded;
           }),
           "accepted raw replay input latches a capacity fault at its bound");
+  const auto snapshot = worker.acquireLatestSnapshot();
   worker.stop();
-  require(worker.copyAcceptedReplayInputAfterStop().size() == 2,
-          "the worker never stores input beyond the replay transition cap");
+  require(worker.copyAcceptedReplayInputAfterStop().size() == 2 && snapshot &&
+              !snapshot->lanePressed[1] && snapshot->transactionSequence == 2,
+          "the worker never stores or applies replay-only input beyond the "
+          "replay transition cap");
 }
 
 void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
@@ -838,6 +897,7 @@ int main() {
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
   testStoppedWorkerTransfersEveryAcceptedDirectedInput();
+  testReplayOnlyScratchHandoffDoesNotTouchThePhysicalLane();
   testReplayInputCapacityFailsClosed();
   testLr2MultiBadPublishesEveryTransactionWithOneKeysound();
   return 0;

@@ -497,6 +497,15 @@ FinalizeOutcome ReplayFileStore::finalize(
     outcome.diagnostic = "Expected replay identity is invalid";
     return outcome;
   }
+  std::string pathDiagnostic;
+  const auto canonicalIdentity =
+      pathForStem(identity.stem, identity.historyIndex, pathDiagnostic);
+  if (!canonicalIdentity.has_value() || *canonicalIdentity != identity) {
+    outcome.diagnostic = pathDiagnostic.empty()
+                             ? "Replay path identity is inconsistent"
+                             : std::move(pathDiagnostic);
+    return outcome;
+  }
   std::filesystem::path finalPath;
   if (!resolveContained(profileRoot_, identity.relativePath, finalPath,
                         outcome.diagnostic)) {

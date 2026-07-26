@@ -3,6 +3,7 @@
 #include "AppDatabaseInitializer.h"
 #include "AppSettingsStore.h"
 #include "AtomicFile.h"
+#include "FileChecksum.h"
 #include "ProfileDatabaseActivity.h"
 #include "ProfileDatabaseTools.h"
 #include "repositories/ReplayRepository.h"
@@ -574,6 +575,53 @@ bool validateReplayDirectory(const std::filesystem::path &applicationRoot,
   if (files != nullptr) {
     std::ranges::sort(*files);
   }
+  return true;
+}
+
+bool validatePresentReplayFilesAgainstReferences(
+    const std::filesystem::path &applicationRoot,
+    const PlayerProfilePaths &paths,
+    const std::vector<ReplayFileReference> &references,
+    std::string &errorMessage) {
+  for (const auto &reference : references) {
+    const auto replayPath = paths.root / reference.relativePath;
+    if (!ensureContainedPath(applicationRoot, replayPath, errorMessage)) {
+      return false;
+    }
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(replayPath, error);
+    if (error == std::errc::no_such_file_or_directory ||
+        status.type() == std::filesystem::file_type::not_found) {
+      error.clear();
+      continue;
+    }
+    if (error || !std::filesystem::is_regular_file(status) ||
+        hasUnsafeLink(replayPath, status, errorMessage)) {
+      if (errorMessage.empty()) {
+        errorMessage = "imported replay reference is not a safe regular file";
+      }
+      return false;
+    }
+    const auto size = std::filesystem::file_size(replayPath, error);
+    if (error || size != reference.compressedSize) {
+      errorMessage = error ? "unable to inspect imported replay file size: " +
+                                 error.message()
+                           : "imported replay file size disagrees with its "
+                             "database reference";
+      return false;
+    }
+    const auto hash = file_checksum::sha256File(replayPath, errorMessage,
+                                                reference.compressedSize);
+    if (!hash.has_value() || *hash != reference.contentSha256) {
+      if (errorMessage.empty()) {
+        errorMessage =
+            "imported replay file checksum disagrees with its database "
+            "reference";
+      }
+      return false;
+    }
+  }
+  errorMessage.clear();
   return true;
 }
 
@@ -1580,7 +1628,8 @@ ProfileResult buildProfile(
   if (!migrationPhase(ProfileMigrationPhase::EnsureReplaySchema)) {
     return fail(ProfileError::MigrationFailure, errorMessage);
   }
-  if (!app_database_initializer::initializeReplayDatabase(staging.replaysDb)) {
+  if (!app_database_initializer::initializeReplayDatabase(
+          staging.replaysDb, applicationRoot / "db" / "chart.db")) {
     return fail(mode == BuildMode::Migration ? ProfileError::MigrationFailure
                                              : ProfileError::IntegrityFailure,
                 "unable to initialize profile replay database");
@@ -2501,7 +2550,8 @@ ProfileResult PlayerProfileManager::installProfile(
                                "imported database is newer than supported");
   }
   if (!app_database_initializer::initializeScoreDatabase(staging.scoresDb) ||
-      !app_database_initializer::initializeReplayDatabase(staging.replaysDb)) {
+      !app_database_initializer::initializeReplayDatabase(
+          staging.replaysDb, applicationDataRoot_ / "db" / "chart.db")) {
     return cleanStagingAndFail(ProfileError::IntegrityFailure,
                                "unable to migrate imported databases");
   }
@@ -2523,11 +2573,25 @@ ProfileResult PlayerProfileManager::installProfile(
         ProfileError::IntegrityFailure,
         "database migration changed imported row counts: " + errorMessage);
   }
+  if (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,
+                                                    errorMessage) ||
+      !ScoreRepository::ClearImportedIrScoresSnapshot(staging.scoresDb,
+                                                      errorMessage)) {
+    return cleanStagingAndFail(
+        ProfileError::IntegrityFailure,
+        "unable to remove account-scoped IR data from import: " + errorMessage);
+  }
   std::vector<ReplayFileReference> replayReferences;
   if (!ReplayRepository::ListReplayFileReferencesSnapshot(
           staging.replaysDb, replayReferences, errorMessage)) {
     return cleanStagingAndFail(ProfileError::IntegrityFailure,
                                "imported replay references are invalid: " +
+                                   errorMessage);
+  }
+  if (!validatePresentReplayFilesAgainstReferences(
+          applicationDataRoot_, staging, replayReferences, errorMessage)) {
+    return cleanStagingAndFail(ProfileError::IntegrityFailure,
+                               "imported replay bytes are invalid: " +
                                    errorMessage);
   }
   ProfileResult staged = validateProfileFiles(

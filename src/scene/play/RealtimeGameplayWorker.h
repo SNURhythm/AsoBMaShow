@@ -38,6 +38,7 @@ struct RealtimeGameplayInput {
   std::int64_t inputDelayMicros = 0;
   RealtimeLogicalControlKind replayControl =
       RealtimeLogicalControlKind::Lane;
+  bool replayOnly = false;
 };
 
 struct RealtimeGameplayAudioReservation {

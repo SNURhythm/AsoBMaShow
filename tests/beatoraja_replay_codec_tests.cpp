@@ -534,6 +534,109 @@ void testAsoExtensionRoundTripsWithoutBreakingStock() {
   }
 }
 
+void testReplayOnlyScratchHandoffExtensionIsStrictAndStockCompatible() {
+  replay::BeatorajaReplayCodec codec;
+  auto marked = extensionReplay();
+  marked.input = {
+      {.songTimeMicros = 100,
+       .control =
+           control(replay::LogicalControlKind::ScratchCounterClockwise, 1),
+       .pressed = true},
+      {.songTimeMicros = 200,
+       .control =
+           control(replay::LogicalControlKind::ScratchCounterClockwise, 1),
+       .pressed = false,
+       .replayOnly = true},
+      {.songTimeMicros = 200, .control = lane(1, 0), .pressed = true},
+      {.songTimeMicros = 200,
+       .control = control(replay::LogicalControlKind::ScratchClockwise, 1),
+       .pressed = true,
+       .replayOnly = true},
+      {.songTimeMicros = 250, .control = lane(1, 0), .pressed = false},
+      {.songTimeMicros = 300,
+       .control = control(replay::LogicalControlKind::ScratchClockwise, 1),
+       .pressed = false},
+  };
+  auto physical = marked;
+  physical.input[1].replayOnly = false;
+  physical.input[3].replayOnly = false;
+
+  std::string diagnostic;
+  const auto markedBytes = codec.encodeChart(marked, 1000, diagnostic);
+  const auto physicalBytes = codec.encodeChart(physical, 1000, diagnostic);
+  expect(markedBytes.has_value() && physicalBytes.has_value(),
+         "valid marked and physical scratch handoffs encode");
+  if (!markedBytes || !physicalBytes) {
+    return;
+  }
+
+  const Json markedJson = outerJson(*markedBytes);
+  const Json physicalJson = outerJson(*physicalBytes);
+  expectEqual(stockKeyRecords(markedJson), stockKeyRecords(physicalJson),
+              "replay-only metadata does not change stock keyinput");
+  expect(markedJson["asobmashow"]["input"][1].value("replayOnly", false) &&
+             markedJson["asobmashow"]["input"][3].value("replayOnly", false),
+         "only the Aso input extension carries replay-only metadata");
+  const auto decoded = codec.decode(*markedBytes, 7);
+  expect(decoded.chart.has_value() && *decoded.chart == marked,
+         "valid replay-only scratch handoff round-trips exactly");
+
+  Json legacyExtension = markedJson;
+  for (auto &item : legacyExtension["asobmashow"]["input"]) {
+    item.erase("replayOnly");
+  }
+  const auto decodedLegacy = codec.decode(encodeJson(legacyExtension), 7);
+  expect(decodedLegacy.chart.has_value() &&
+             std::ranges::none_of(decodedLegacy.chart->input,
+                                  &replay::InputTransition::replayOnly),
+         "missing replay-only extension fields default to false");
+
+  Json wrongType = markedJson;
+  wrongType["asobmashow"]["input"][1]["replayOnly"] = "true";
+  const auto wrongTypeDecoded = codec.decode(encodeJson(wrongType), 7);
+  expect(!wrongTypeDecoded.chart && !wrongTypeDecoded.course &&
+             !wrongTypeDecoded.diagnostic.empty(),
+         "wrong-type replay-only marker is rejected");
+
+  const auto rejected = [&](replay::ReplayPlaybackData candidate,
+                            std::string_view message) {
+    diagnostic.clear();
+    expect(!codec.encodeChart(candidate, 1000, diagnostic), message);
+    expect(!diagnostic.empty(),
+           "invalid replay-only handoff reports an encode diagnostic");
+  };
+
+  auto arbitraryLane = marked;
+  arbitraryLane.input = {
+      {.songTimeMicros = 100, .control = lane(1, 0), .pressed = true},
+      {.songTimeMicros = 200,
+       .control = lane(1, 0),
+       .pressed = false,
+       .replayOnly = true},
+      {.songTimeMicros = 200,
+       .control = lane(1, 0),
+       .pressed = true,
+       .replayOnly = true},
+  };
+  rejected(arbitraryLane,
+           "replay-only marker cannot suppress arbitrary lane input");
+
+  auto mismatchedTime = marked;
+  mismatchedTime.input[3].songTimeMicros = 201;
+  rejected(mismatchedTime, "replay-only scratch pair must share one timestamp");
+
+  auto sameDirection = marked;
+  sameDirection.input[3].control = sameDirection.input[1].control;
+  sameDirection.input[5].control = sameDirection.input[1].control;
+  rejected(sameDirection,
+           "replay-only scratch pair must change logical direction");
+
+  auto markedInitialPress = marked;
+  markedInitialPress.input[0].replayOnly = true;
+  rejected(markedInitialPress,
+           "replay-only scratch pair must begin by releasing a held owner");
+}
+
 void testPreRollInputEncodesForChartsAndCourses() {
   replay::BeatorajaReplayCodec codec;
   auto source = extensionReplay();
@@ -1010,6 +1113,7 @@ int main() {
   testKeyModeTables();
   testPrimitiveCodecs();
   testAsoExtensionRoundTripsWithoutBreakingStock();
+  testReplayOnlyScratchHandoffExtensionIsStrictAndStockCompatible();
   testPreRollInputEncodesForChartsAndCourses();
   testStockProjectionCarriesPreRollHoldsAcrossTimeZero();
   testAllMissReplayRoundTripsWithEmptyInput();

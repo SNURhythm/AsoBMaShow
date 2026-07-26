@@ -20,6 +20,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -236,17 +237,6 @@ std::vector<int> parseIntegers(std::string_view source) {
     begin = end + 1;
   }
   return values;
-}
-
-int inferredKeyMode(const LegacyChart &chart) {
-  int maximumLane = -1;
-  for (const auto &entry : chart.events) {
-    if (entry.event.action == replay::LegacyPlaybackAction::Press ||
-        entry.event.action == replay::LegacyPlaybackAction::Release) {
-      maximumLane = std::max(maximumLane, entry.event.lane);
-    }
-  }
-  return maximumLane > 7 ? 14 : 7;
 }
 
 bool supportedKeyMode(int keyMode) noexcept {
@@ -758,21 +748,19 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
     if (!readEvents(database, chart, diagnostic)) {
       return false;
     }
-    int keyMode = inferredKeyMode(chart);
-    std::optional<int> chartTotalNotes;
-    if (resolveMetadata) {
-      const auto resolved = resolveMetadata(
-          {.chartPath = chart.chartPath,
-           .chartMd5 = chart.chartMd5,
-           .chartSha256 = chart.chartSha256});
-      if (resolved.has_value()) {
-        keyMode = resolved->keyMode;
-        chart.hasUndefinedLongNotes = resolved->hasUndefinedLongNotes;
-        chartTotalNotes = resolved->totalNotes;
-      }
+    const auto resolved =
+        resolveMetadata ? resolveMetadata({.chartPath = chart.chartPath,
+                                           .chartMd5 = chart.chartMd5,
+                                           .chartSha256 = chart.chartSha256})
+                        : std::nullopt;
+    if (!resolved.has_value()) {
+      diagnostic =
+          "authoritative chart metadata is required to resolve key mode";
+      return false;
     }
-    if (!readPendingResult(database, chart, keyMode, chartTotalNotes,
-                           diagnostic) ||
+    chart.hasUndefinedLongNotes = resolved->hasUndefinedLongNotes;
+    if (!readPendingResult(database, chart, resolved->keyMode,
+                           resolved->totalNotes, diagnostic) ||
         !buildPlayback(chart, diagnostic)) {
       return false;
     }
@@ -990,6 +978,7 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
 
 void assignPaths(std::vector<LegacyChart> &charts,
                  std::vector<LegacyCourse> &courses, std::string &diagnostic) {
+  std::set<std::filesystem::path> assignedPaths;
   std::vector<LegacyChart *> order;
   order.reserve(charts.size());
   for (auto &chart : charts) {
@@ -1003,13 +992,32 @@ void assignPaths(std::vector<LegacyChart> &charts,
   std::string previous;
   std::int64_t index = -1;
   for (LegacyChart *chart : order) {
-    index = chart->path.stem == previous ? index + 1 : 0;
-    previous = chart->path.stem;
-    const auto path = replay::pathForStem(chart->path.stem, index, diagnostic);
-    if (!path.has_value()) {
-      return;
+    if (chart->path.stem == previous) {
+      if (index == std::numeric_limits<std::int64_t>::max()) {
+        diagnostic = "Replay history index is exhausted";
+        return;
+      }
+      ++index;
+    } else {
+      index = 0;
     }
-    chart->path = *path;
+    previous = chart->path.stem;
+    while (true) {
+      const auto path =
+          replay::pathForStem(chart->path.stem, index, diagnostic);
+      if (!path.has_value()) {
+        return;
+      }
+      if (assignedPaths.insert(path->relativePath).second) {
+        chart->path = *path;
+        break;
+      }
+      if (index == std::numeric_limits<std::int64_t>::max()) {
+        diagnostic = "Replay history index is exhausted";
+        return;
+      }
+      ++index;
+    }
   }
 
   std::vector<LegacyCourse *> courseOrder;
@@ -1025,13 +1033,32 @@ void assignPaths(std::vector<LegacyChart> &charts,
   previous.clear();
   index = -1;
   for (LegacyCourse *course : courseOrder) {
-    index = course->path.stem == previous ? index + 1 : 0;
-    previous = course->path.stem;
-    const auto path = replay::pathForStem(course->path.stem, index, diagnostic);
-    if (!path.has_value()) {
-      return;
+    if (course->path.stem == previous) {
+      if (index == std::numeric_limits<std::int64_t>::max()) {
+        diagnostic = "Replay history index is exhausted";
+        return;
+      }
+      ++index;
+    } else {
+      index = 0;
     }
-    course->path = *path;
+    previous = course->path.stem;
+    while (true) {
+      const auto path =
+          replay::pathForStem(course->path.stem, index, diagnostic);
+      if (!path.has_value()) {
+        return;
+      }
+      if (assignedPaths.insert(path->relativePath).second) {
+        course->path = *path;
+        break;
+      }
+      if (index == std::numeric_limits<std::int64_t>::max()) {
+        diagnostic = "Replay history index is exhausted";
+        return;
+      }
+      ++index;
+    }
   }
 }
 
@@ -1663,6 +1690,18 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
     return failure(MigrationStatus::StorageFailure,
                    "replay migration database or profile root is missing");
   }
+
+  // Acquire the migration lock before classifying the schema version. A
+  // second repository may have observed v10 while another migrator was still
+  // running; after it obtains this lock, the database may already be current.
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active()) {
+    return failure(MigrationStatus::StorageFailure,
+                   "could not lock replay migration source: " +
+                       transactionError);
+  }
   int userVersion = -1;
   {
     Statement version(database, "PRAGMA user_version");
@@ -1737,19 +1776,10 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
     }
   }
 
-  std::string transactionError;
   if (fault(faults, "begin")) {
     return failure(MigrationStatus::StorageFailure,
                    "injected migration transaction failure", charts.size(),
                    courses.size());
-  }
-  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
-                                      transactionError);
-  if (!transaction.active()) {
-    return failure(MigrationStatus::StorageFailure,
-                   "could not start replay migration cutover: " +
-                       transactionError,
-                   charts.size(), courses.size());
   }
   if (!renameLegacyTables(database, diagnostic)) {
     return failure(MigrationStatus::StorageFailure, std::move(diagnostic),

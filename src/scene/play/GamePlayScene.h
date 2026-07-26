@@ -126,7 +126,8 @@ private:
   void captureReplayControl(std::int64_t steadyTimestampMicros,
                             replay::LogicalControl, bool pressed);
   void captureReplayControlAtSongTime(std::int64_t songTimeMicros,
-                                      replay::LogicalControl, bool pressed);
+                                      replay::LogicalControl, bool pressed,
+                                      bool replayOnly = false);
   void publishPracticeGhost();
   void buildReplayNoteLookup();
   void processReplayEvents(long long gameplayTimeMicros);

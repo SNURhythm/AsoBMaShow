@@ -105,6 +105,31 @@ void ReplayPlaybackDriver::apply(std::size_t index) {
   }
 
   const auto active = activeScratchDirections_.find(lane);
+  if (transition.replayOnly && !transition.pressed &&
+      transition.control.lane == -1 &&
+      (transition.control.player == 1 || transition.control.player == 2) &&
+      active != activeScratchDirections_.end() &&
+      active->second == transition.control.kind && heldLanes_.contains(lane) &&
+      index + 1 < replay_.input.size()) {
+    for (std::size_t candidateIndex = index + 1;
+         candidateIndex < replay_.input.size(); ++candidateIndex) {
+      const auto &candidate = replay_.input[candidateIndex];
+      if (candidate.songTimeMicros != transition.songTimeMicros) {
+        break;
+      }
+      if (!isScratch(candidate.control) ||
+          candidate.control.player != transition.control.player) {
+        continue;
+      }
+      if (candidate.replayOnly && candidate.pressed &&
+          candidate.control.lane == -1 &&
+          candidate.control.kind != transition.control.kind) {
+        active->second = candidate.control.kind;
+        return;
+      }
+      break;
+    }
+  }
   if (transition.pressed) {
     if (active != activeScratchDirections_.end() &&
         active->second != transition.control.kind) {

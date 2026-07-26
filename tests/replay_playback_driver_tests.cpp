@@ -172,6 +172,106 @@ void testDoubleLaneCommandsScratchReversalAndReset() {
          "rewound playback can run to completion again");
 }
 
+void testReplayOnlyScratchHandoffChangesOwnershipWithoutPhysicalEdges() {
+  replay::ReplayPlaybackData playback;
+  playback.setup.keyMode = 7;
+  playback.input = {
+      {.songTimeMicros = 100,
+       .control = {.kind = replay::LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1},
+       .pressed = true},
+      {.songTimeMicros = 200,
+       .control = {.kind = replay::LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1},
+       .pressed = false,
+       .replayOnly = true},
+      {.songTimeMicros = 200,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 2},
+       .pressed = true},
+      {.songTimeMicros = 200,
+       .control = {.kind = replay::LogicalControlKind::ScratchClockwise,
+                   .player = 1},
+       .pressed = true,
+       .replayOnly = true},
+      {.songTimeMicros = 250,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 2},
+       .pressed = false},
+      {.songTimeMicros = 300,
+       .control = {.kind = replay::LogicalControlKind::ScratchClockwise,
+                   .player = 1},
+       .pressed = false},
+  };
+
+  FakeRhythmControl control;
+  replay::ReplayPlaybackDriver driver(playback, control);
+  driver.advanceTo(200);
+  expect(control.calls ==
+             std::vector<ControlCall>{{true, 7, false}, {true, 2, false}},
+         "marked ownership handoff keeps the held physical scratch intact");
+  driver.advanceTo(300);
+  expect(control.calls == std::vector<ControlCall>{{true, 7, false},
+                                                   {true, 2, false},
+                                                   {false, 2, false},
+                                                   {false, 7, false}},
+         "the new logical scratch owner performs the eventual release");
+
+  replay::ReplayPlaybackData invalidLane;
+  invalidLane.setup.keyMode = 7;
+  invalidLane.input = {
+      {.songTimeMicros = 400,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 2},
+       .pressed = true,
+       .replayOnly = true},
+      {.songTimeMicros = 500,
+       .control = {.kind = replay::LogicalControlKind::Lane,
+                   .player = 1,
+                   .lane = 2},
+       .pressed = false,
+       .replayOnly = true},
+  };
+  FakeRhythmControl invalidControl;
+  replay::ReplayPlaybackDriver invalidDriver(invalidLane, invalidControl);
+  invalidDriver.advanceTo(500);
+  expect(invalidControl.calls ==
+             std::vector<ControlCall>{{true, 2, false}, {false, 2, false}},
+         "invalid replay-only lane markers fail safe as physical input");
+
+  replay::ReplayPlaybackData malformedScratch;
+  malformedScratch.setup.keyMode = 7;
+  malformedScratch.input = {
+      {.songTimeMicros = 600,
+       .control = {.kind = replay::LogicalControlKind::ScratchClockwise,
+                   .player = 1},
+       .pressed = true},
+      {.songTimeMicros = 700,
+       .control = {.kind = replay::LogicalControlKind::ScratchClockwise,
+                   .player = 1,
+                   .lane = 0},
+       .pressed = false,
+       .replayOnly = true},
+      {.songTimeMicros = 700,
+       .control = {.kind = replay::LogicalControlKind::ScratchCounterClockwise,
+                   .player = 1,
+                   .lane = 0},
+       .pressed = true,
+       .replayOnly = true},
+  };
+  FakeRhythmControl malformedControl;
+  replay::ReplayPlaybackDriver malformedDriver(malformedScratch,
+                                               malformedControl);
+  malformedDriver.advanceTo(700);
+  expect(malformedControl.calls == std::vector<ControlCall>{{true, 7, false},
+                                                            {false, 7, true},
+                                                            {true, 7, false}},
+         "malformed marked scratch controls cannot suppress physical edges");
+}
+
 void testMaterializesRawInputsThroughGameplaySimulation() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -329,6 +429,7 @@ void testMaterializationRejectsCompletionTimeOverflow() {
 int main() {
   testDrivesPinnedStockReplayAtRecordedTimes();
   testDoubleLaneCommandsScratchReversalAndReset();
+  testReplayOnlyScratchHandoffChangesOwnershipWithoutPhysicalEdges();
   testMaterializesRawInputsThroughGameplaySimulation();
   testMaterializationHonorsRecordedCandidateSelection();
   testMaterializationRejectsCompletionTimeOverflow();

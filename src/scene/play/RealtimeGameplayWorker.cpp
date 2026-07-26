@@ -291,6 +291,10 @@ void RealtimeGameplayWorker::processInput(
     latchFault(RealtimeGameplayFault::ClockUnavailable);
     return;
   }
+  if (input.replayOnly) {
+    (void)recordAcceptedReplayInput(input, *songTime);
+    return;
+  }
   const bool preparationInput =
       config_.activationSongTimeMicros.has_value() &&
       *songTime < *config_.activationSongTimeMicros;
@@ -442,7 +446,8 @@ bool RealtimeGameplayWorker::recordAcceptedReplayInput(
     acceptedReplayInput_.push_back(
         {.songTimeMicros = songTimeMicros,
          .control = control,
-         .pressed = input.type == RealtimeGameplayInputType::Press});
+         .pressed = input.type == RealtimeGameplayInputType::Press,
+         .replayOnly = input.replayOnly});
     return true;
   } catch (...) {
     latchFault(RealtimeGameplayFault::InternalConsistency);
