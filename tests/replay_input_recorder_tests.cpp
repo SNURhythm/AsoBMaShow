@@ -179,6 +179,63 @@ void testRedundantStateDoesNotInvalidateCapture() {
           "redundant state samples preserve a valid replay capture");
 }
 
+void testCaptureBufferSortsAcrossControlsButRejectsPerControlReversal() {
+  std::string diagnostic;
+  replay::ReplayInputCaptureBuffer accepted(
+      {.minimumSongTimeMicros = -100, .maximumTransitions = 8});
+  require(accepted.capture(
+              {.songTimeMicros = 200, .control = lane(0), .pressed = true},
+              diagnostic) &&
+              accepted.capture({.songTimeMicros = 100,
+                                .control = lane(1),
+                                .pressed = true},
+                               diagnostic),
+          "different controls may arrive out of global song-time order");
+  const auto sorted = accepted.finish(diagnostic);
+  require(sorted && sorted->size() == 2 &&
+              (*sorted)[0].control == lane(1) &&
+              (*sorted)[1].control == lane(0),
+          "capture buffer produces a stable global song-time order");
+
+  replay::ReplayInputCaptureBuffer reversed(
+      {.minimumSongTimeMicros = -100, .maximumTransitions = 8});
+  require(reversed.capture(
+              {.songTimeMicros = 200, .control = lane(), .pressed = true},
+              diagnostic),
+          "per-control reversal fixture accepts its first edge");
+  require(!reversed.capture(
+              {.songTimeMicros = 100, .control = lane(), .pressed = false},
+              diagnostic) &&
+              !reversed.finish(diagnostic).has_value() &&
+              diagnostic.find("control") != std::string::npos,
+          "sorting cannot hide a decreasing timestamp for one control");
+}
+
+void testCaptureBufferBoundsPendingSamplesAndPropagatesClockFailure() {
+  std::string diagnostic;
+  replay::ReplayInputCaptureBuffer bounded(
+      {.minimumSongTimeMicros = -100, .maximumTransitions = 2});
+  require(bounded.capture(
+              {.songTimeMicros = 0, .control = lane(), .pressed = false},
+              diagnostic) &&
+              bounded.capture(
+                  {.songTimeMicros = 1, .control = lane(), .pressed = false},
+                  diagnostic),
+          "pending capture counts even redundant source samples");
+  require(!bounded.capture(
+              {.songTimeMicros = 2, .control = lane(), .pressed = false},
+              diagnostic) &&
+              !bounded.finish(diagnostic).has_value() &&
+              diagnostic.find("limit") != std::string::npos,
+          "pending replay input is bounded before finish-time materialization");
+
+  replay::ReplayInputCaptureBuffer failed;
+  failed.fail("Replay input clock could not map the timestamp");
+  require(!failed.finish(diagnostic).has_value() &&
+              diagnostic.find("clock") != std::string::npos,
+          "an unmappable gameplay timestamp invalidates replay capture");
+}
+
 } // namespace
 
 int main() {
@@ -187,5 +244,7 @@ int main() {
   testCapacityOverflowInvalidatesAcceptedPrefix();
   testRejectsInvalidControlsAndDuplicateState();
   testRedundantStateDoesNotInvalidateCapture();
+  testCaptureBufferSortsAcrossControlsButRejectsPerControlReversal();
+  testCaptureBufferBoundsPendingSamplesAndPropagatesClockFailure();
   return 0;
 }

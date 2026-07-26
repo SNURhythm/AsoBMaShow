@@ -1507,8 +1507,11 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
     }
     const auto workerInput =
         session.worker->copyAcceptedReplayInputAfterStop();
-    pendingReplayInput.insert(pendingReplayInput.end(), workerInput.begin(),
-                              workerInput.end());
+    for (const auto &transition : workerInput) {
+      captureReplayControlAtSongTime(transition.songTimeMicros,
+                                     transition.control,
+                                     transition.pressed);
+    }
   }
   if (inputHandler != nullptr) {
     inputHandler->discardPendingTouchEvents();
@@ -2708,8 +2711,7 @@ void GamePlayScene::beginReplayRecording() {
   recordedAttemptCompleted = false;
   rawReplayFinished = false;
   rawReplayCaptureFailed = false;
-  pendingReplayInput.clear();
-  replayInputRecorder.reset();
+  replayInputCapture.reset();
   recordedPlaybackReplay = {};
   lastRecordedTouchSamples.clear();
   const auto capturePolicy = resultCapturePolicy();
@@ -2798,11 +2800,8 @@ void GamePlayScene::beginReplayRecording() {
   setup.clubMode = options.clubMode;
   setup.initialLaneCoverPercent = effectiveNoteStartPositionPercent();
   setup.laneCoverEnabled = setup.initialLaneCoverPercent > 0;
-  replayInputRecorder = std::make_unique<replay::ReplayInputRecorder>(
-      replay::ReplayClock{});
-  pendingReplayInput.reserve(
-      static_cast<std::size_t>(std::max(0, chart->Meta.TotalNotes)) * 2U +
-      256U);
+  replayInputCapture =
+      std::make_unique<replay::ReplayInputCaptureBuffer>();
   recordedPlaybackReplay.touchSamples.reserve(1024);
   recordedPlaybackReplay.laneCoverEvents.reserve(128);
   appendReplayLaneCoverEvent(
@@ -2816,28 +2815,9 @@ void GamePlayScene::finishReplayRecording() {
   }
 
   rawReplayFinished = true;
-  std::stable_sort(pendingReplayInput.begin(), pendingReplayInput.end(),
-                   [](const auto &left, const auto &right) {
-                     return left.songTimeMicros < right.songTimeMicros;
-                   });
-  if (replayInputRecorder != nullptr) {
+  if (replayInputCapture != nullptr) {
     std::string diagnostic;
-    for (const auto &transition : pendingReplayInput) {
-      if (!replayInputRecorder->recordSongTime(
-              transition.songTimeMicros, transition.control,
-              transition.pressed, diagnostic)) {
-        const bool redundant =
-            diagnostic.find("Duplicate") != std::string::npos ||
-            diagnostic.find("Unmatched") != std::string::npos;
-        if (!redundant) {
-          rawReplayCaptureFailed = true;
-          SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
-                      "Replay input sample was rejected: %s",
-                      diagnostic.c_str());
-        }
-      }
-    }
-    auto input = replayInputRecorder->finish(diagnostic);
+    auto input = replayInputCapture->finish(diagnostic);
     if (input.has_value()) {
       recordedPlaybackReplay.input = std::move(*input);
     } else {
@@ -2868,16 +2848,24 @@ void GamePlayScene::captureReplayAppliedTransition(
 }
 
 void GamePlayScene::captureReplayControl(
-    std::int64_t steadyTimestampMicros, replay::LogicalControl control,
+  std::int64_t steadyTimestampMicros, replay::LogicalControl control,
     bool pressed) {
-  if (!shouldRecordReplay() || replayInputRecorder == nullptr ||
-      rawReplayFinished || steadyTimestampMicros <= 0) {
+  if (!shouldRecordReplay() || replayInputCapture == nullptr ||
+      rawReplayFinished) {
+    return;
+  }
+  if (steadyTimestampMicros <= 0) {
+    replayInputCapture->fail("Replay input steady timestamp is invalid");
+    rawReplayCaptureFailed = true;
     return;
   }
   const auto rawSongTime = context.jukebox.audioRuntime()
                                .songTimeMicrosAtSteadyMicros(
                                    steadyTimestampMicros);
   if (!rawSongTime.has_value()) {
+    replayInputCapture->fail(
+        "Replay input clock could not map the steady timestamp");
+    rawReplayCaptureFailed = true;
     return;
   }
   captureReplayControlAtSongTime(*rawSongTime + getAudioOffsetMicros(),
@@ -2887,13 +2875,19 @@ void GamePlayScene::captureReplayControl(
 void GamePlayScene::captureReplayControlAtSongTime(
     std::int64_t songTimeMicros, replay::LogicalControl control,
     bool pressed) {
-  if (!shouldRecordReplay() || replayInputRecorder == nullptr ||
+  if (!shouldRecordReplay() || replayInputCapture == nullptr ||
       rawReplayFinished) {
     return;
   }
-  pendingReplayInput.push_back({.songTimeMicros = songTimeMicros,
-                                .control = control,
-                                .pressed = pressed});
+  std::string diagnostic;
+  if (!replayInputCapture->capture({.songTimeMicros = songTimeMicros,
+                                    .control = control,
+                                    .pressed = pressed},
+                                   diagnostic)) {
+    rawReplayCaptureFailed = true;
+    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "Replay input sample was rejected: %s",
+                diagnostic.c_str());
+  }
 }
 
 void GamePlayScene::publishPracticeGhost() {
@@ -4519,7 +4513,7 @@ void GamePlayScene::appendReplayLaneCoverEvent(int noteStartPositionPercent,
       AppSettings::kMaxNoteStartPositionPercent);
   event.resetVisibleTimeReference = resetVisibleTimeReference;
   recordedReplay.laneCoverEvents.push_back(event);
-  if (replayInputRecorder != nullptr && resetVisibleTimeReference) {
+  if (replayInputCapture != nullptr && resetVisibleTimeReference) {
     recordedPlaybackReplay.laneCoverEvents.push_back(event);
   }
 }
@@ -4683,7 +4677,7 @@ void GamePlayScene::appendReplayTouchSample(SDL_FingerID fingerIndex,
   }
 
   recordedReplay.touchSamples.push_back(sample);
-  if (replayInputRecorder != nullptr) {
+  if (replayInputCapture != nullptr) {
     recordedPlaybackReplay.touchSamples.push_back(sample);
   }
   if (action == ReplayTouchAction::Up || action == ReplayTouchAction::Cancel) {

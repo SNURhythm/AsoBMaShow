@@ -220,9 +220,8 @@ private:
   std::unordered_map<int, bool> lanePressed;
   JudgedPlaybackData recordedReplay;
   replay::ReplayPlaybackData recordedPlaybackReplay;
-  std::unique_ptr<replay::ReplayInputRecorder> replayInputRecorder;
+  std::unique_ptr<replay::ReplayInputCaptureBuffer> replayInputCapture;
   std::unique_ptr<replay::ReplayPlaybackDriver> replayPlaybackDriver;
-  std::vector<replay::InputTransition> pendingReplayInput;
   JudgedPlaybackData analyticsReplay;
   ResultPersistenceOptions resultPersistenceOptions;
   std::string resultPersistenceAttemptId;

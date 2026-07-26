@@ -135,4 +135,116 @@ ReplayInputRecorder::finish(std::string &diagnostic) noexcept {
   return std::move(transitions_);
 }
 
+ReplayInputCaptureBuffer::ReplayInputCaptureBuffer(
+    ReplayInputRecorderLimits limits)
+    : limits_(limits) {
+  pending_.reserve(std::min<std::size_t>(limits.maximumTransitions, 4096));
+}
+
+void ReplayInputCaptureBuffer::fail(std::string diagnostic) noexcept {
+  if (!failureDiagnostic_.empty()) {
+    return;
+  }
+  try {
+    failureDiagnostic_ = diagnostic.empty()
+                             ? "Replay input capture failed"
+                             : std::move(diagnostic);
+  } catch (...) {
+    failureDiagnostic_ = "Replay input capture failed";
+  }
+}
+
+bool ReplayInputCaptureBuffer::capture(InputTransition transition,
+                                       std::string &diagnostic) noexcept {
+  try {
+    if (finished_) {
+      diagnostic = "Replay input capture has already finished";
+      return false;
+    }
+    if (!failureDiagnostic_.empty()) {
+      diagnostic = failureDiagnostic_;
+      return false;
+    }
+    if (!validControl(transition.control)) {
+      diagnostic = "Replay input control is invalid";
+      fail(diagnostic);
+      return false;
+    }
+    if (transition.songTimeMicros < limits_.minimumSongTimeMicros) {
+      diagnostic = "Replay input is outside the supported pre-roll";
+      fail(diagnostic);
+      return false;
+    }
+    const auto timestamp = std::ranges::find(
+        controlTimestamps_, transition.control, &ControlTimestamp::control);
+    if (timestamp != controlTimestamps_.end() &&
+        transition.songTimeMicros < timestamp->songTimeMicros) {
+      diagnostic = "Replay input timestamp decreased for one control";
+      fail(diagnostic);
+      return false;
+    }
+    if (pending_.size() >= limits_.maximumTransitions) {
+      diagnostic = "Replay input pending sample limit exceeded";
+      fail(diagnostic);
+      return false;
+    }
+    pending_.push_back(std::move(transition));
+    if (timestamp == controlTimestamps_.end()) {
+      controlTimestamps_.push_back(
+          {.control = pending_.back().control,
+           .songTimeMicros = pending_.back().songTimeMicros});
+    } else {
+      timestamp->songTimeMicros = pending_.back().songTimeMicros;
+    }
+    diagnostic.clear();
+    return true;
+  } catch (const std::exception &error) {
+    diagnostic = std::string("Could not buffer replay input: ") + error.what();
+    fail(diagnostic);
+    return false;
+  } catch (...) {
+    diagnostic = "Could not buffer replay input";
+    fail(diagnostic);
+    return false;
+  }
+}
+
+std::optional<std::vector<InputTransition>>
+ReplayInputCaptureBuffer::finish(std::string &diagnostic) noexcept {
+  try {
+    if (finished_) {
+      diagnostic = "Replay input capture has already finished";
+      return std::nullopt;
+    }
+    finished_ = true;
+    if (!failureDiagnostic_.empty()) {
+      diagnostic = failureDiagnostic_;
+      pending_.clear();
+      return std::nullopt;
+    }
+    std::stable_sort(pending_.begin(), pending_.end(),
+                     [](const auto &left, const auto &right) {
+                       return left.songTimeMicros < right.songTimeMicros;
+                     });
+    ReplayInputRecorder recorder({}, limits_);
+    for (const auto &transition : pending_) {
+      (void)recorder.recordSongTime(transition.songTimeMicros,
+                                    transition.control, transition.pressed,
+                                    diagnostic);
+    }
+    auto result = recorder.finish(diagnostic);
+    if (!result) {
+      pending_.clear();
+    }
+    return result;
+  } catch (const std::exception &error) {
+    diagnostic =
+        std::string("Could not finish buffered replay input: ") + error.what();
+  } catch (...) {
+    diagnostic = "Could not finish buffered replay input";
+  }
+  pending_.clear();
+  return std::nullopt;
+}
+
 } // namespace replay

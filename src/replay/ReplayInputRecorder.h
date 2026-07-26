@@ -49,4 +49,26 @@ private:
   bool finished_ = false;
 };
 
+class ReplayInputCaptureBuffer {
+public:
+  explicit ReplayInputCaptureBuffer(ReplayInputRecorderLimits limits = {});
+
+  bool capture(InputTransition transition, std::string &diagnostic) noexcept;
+  void fail(std::string diagnostic) noexcept;
+  std::optional<std::vector<InputTransition>>
+  finish(std::string &diagnostic) noexcept;
+
+private:
+  struct ControlTimestamp {
+    LogicalControl control;
+    std::int64_t songTimeMicros = 0;
+  };
+
+  ReplayInputRecorderLimits limits_;
+  std::vector<InputTransition> pending_;
+  std::vector<ControlTimestamp> controlTimestamps_;
+  std::string failureDiagnostic_;
+  bool finished_ = false;
+};
+
 } // namespace replay
