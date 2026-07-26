@@ -112,5 +112,19 @@ int main() {
     return 1;
   }
 
+  auto unsupported = std::make_shared<replay::ReplayPlaybackData>();
+  unsupported->setup.playbackRulesetId = "beatoraja";
+  unsupported->setup.playbackRulesetRevision = 1;
+  StartOptions unsupportedOptions;
+  applyReplayPlaybackToStartOptions(unsupportedOptions, unsupported);
+  const auto required = unsupportedOptions.requiredRulesetDescriptor;
+  if (!expect(required.has_value() && required->id == "beatoraja" &&
+                  required->version == 1 &&
+                  !isSupportedRulesetDescriptor(*required),
+              "raw replay preserves an unsupported recorded ruleset "
+              "revision")) {
+    return 1;
+  }
+
   return 0;
 }

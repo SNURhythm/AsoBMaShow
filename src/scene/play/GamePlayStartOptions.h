@@ -252,10 +252,9 @@ inline void applyReplayPlaybackToStartOptions(
   if (const auto ruleset =
           gameplayRulesetFromId(setup.playbackRulesetId)) {
     options.ruleset = *ruleset;
-    const auto descriptor = RulesetDescriptor::For(*ruleset);
-    if (descriptor.version == setup.playbackRulesetRevision) {
-      options.requiredRulesetDescriptor = descriptor;
-    }
+    auto descriptor = RulesetDescriptor::For(*ruleset);
+    descriptor.version = setup.playbackRulesetRevision;
+    options.requiredRulesetDescriptor = std::move(descriptor);
   }
 }
 
