@@ -176,6 +176,16 @@ resultRetryLongNoteMode(const bms_parser::ChartMeta &chartMeta,
              : normalizeChartLongNoteModeValue(stage->longNoteMode);
 }
 
+[[nodiscard]] inline replay::DoublePlayOption resultRetryDoublePlayOption(
+    bool practiceEnabled,
+    replay::DoublePlayOption practiceDoublePlayOption,
+    const replay::ReplayPlaybackData *rawReplayPlayback) noexcept {
+  if (!practiceEnabled && rawReplayPlayback != nullptr) {
+    return rawReplayPlayback->setup.doublePlayOption;
+  }
+  return practiceDoublePlayOption;
+}
+
 [[nodiscard]] inline Judge
 makeEffectiveJudgeAtPlayStart(const StartOptions &options, int rank) {
   Judge judge(rank);

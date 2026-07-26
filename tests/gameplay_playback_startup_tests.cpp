@@ -91,6 +91,12 @@ int main() {
   rawStartingGauge.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] = 100.0F;
   raw->setup.startingGaugeState = rawStartingGauge;
   raw->setup.clubMode = true;
+  if (!expect(resultRetryDoublePlayOption(
+                  false, replay::DoublePlayOption::Normal, raw.get()) ==
+                  replay::DoublePlayOption::Flip,
+              "raw replay retry preserves its recorded DP FLIP option")) {
+    return 1;
+  }
   StartOptions rawOptions;
   applyReplayPlaybackToStartOptions(rawOptions, raw);
   auto rawAnalysis = std::make_shared<JudgedPlaybackData>();

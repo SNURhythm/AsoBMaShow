@@ -2295,7 +2295,10 @@ void ResultScene::startRetry(bool samePattern) {
                       context.settings.selectedPacemakerTarget);
         options.playback = retryPlayback;
         options.ownsChart = true;
-        options.doublePlayOption = local->practiceOptions.doublePlayOption;
+        options.doublePlayOption = resultRetryDoublePlayOption(
+            local->practiceOptions.enabled,
+            local->practiceOptions.doublePlayOption,
+            local->rawReplayPlayback.get());
         options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
         if (const auto completedRuleset =
                 gameplayRulesetFromId(local->attemptProvenance.ruleset.id)) {
