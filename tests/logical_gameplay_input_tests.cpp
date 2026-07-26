@@ -685,6 +685,86 @@ void testLaneAndDirectionalScratchShareOneEffectiveLaneHold() {
           "digital and directional scratch bindings reference one lane hold");
 }
 
+void testDirectionalScratchHandsReplayOwnershipToDigitalHold() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+
+  adapter.apply(std::vector{transition(
+      {1, 7}, input::LogicalActionKind::ScratchCounterClockwise, true)});
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 7)});
+  adapter.apply(std::vector{transition(
+      {1, 7}, input::LogicalActionKind::ScratchCounterClockwise, false, 0,
+      0.0F)});
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 7, 0.0F)});
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 7},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 7,
+                   .backSpin = false},
+              },
+          "directional-to-digital replay handoff keeps one physical hold");
+  require(
+      applied.size() == 4 && applied[0].pressed &&
+          applied[0].control.kind ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          !applied[1].pressed &&
+          applied[1].control.kind ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          applied[2].pressed &&
+          applied[2].control.kind ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          !applied[3].pressed &&
+          applied[3].control.kind ==
+              replay::LogicalControlKind::ScratchClockwise,
+      "directional-to-digital replay handoff balances both logical owners");
+}
+
+void testDigitalScratchHandsReplayOwnershipToDirectionalHold() {
+  RecordingControl control;
+  std::vector<LogicalGameplayInputAdapter::AppliedTransition> applied;
+  LogicalGameplayInputAdapter adapter(
+      control, {}, [&](const auto &value) { applied.push_back(value); });
+
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, true, 7)});
+  adapter.apply(std::vector{transition(
+      {1, 7}, input::LogicalActionKind::ScratchCounterClockwise, true)});
+  adapter.apply(std::vector{
+      transition({1, 7}, input::LogicalActionKind::Lane, false, 7, 0.0F)});
+  adapter.apply(std::vector{transition(
+      {1, 7}, input::LogicalActionKind::ScratchCounterClockwise, false, 0,
+      0.0F)});
+
+  require(control.calls ==
+              std::vector<ControlCall>{
+                  {.kind = ControlCall::Kind::Press, .lane = 7},
+                  {.kind = ControlCall::Kind::Release,
+                   .lane = 7,
+                   .backSpin = false},
+              },
+          "digital-to-directional replay handoff keeps one physical hold");
+  require(
+      applied.size() == 4 && applied[0].pressed &&
+          applied[0].control.kind ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          !applied[1].pressed &&
+          applied[1].control.kind ==
+              replay::LogicalControlKind::ScratchClockwise &&
+          applied[2].pressed &&
+          applied[2].control.kind ==
+              replay::LogicalControlKind::ScratchCounterClockwise &&
+          !applied[3].pressed &&
+          applied[3].control.kind ==
+              replay::LogicalControlKind::ScratchCounterClockwise,
+      "digital-to-directional replay handoff balances both logical owners");
+}
+
 void testSameLaneAcrossScopesUsesReferenceSemantics() {
   RecordingControl control;
   LogicalGameplayInputAdapter adapter(control, {});
@@ -1077,6 +1157,8 @@ int main() {
   testDefaultDpProfileActivatesSecondPlayerScope();
   testLegacyKeyboardCallbacksPreservePhysicalScancodes();
   testLaneAndDirectionalScratchShareOneEffectiveLaneHold();
+  testDirectionalScratchHandsReplayOwnershipToDigitalHold();
+  testDigitalScratchHandsReplayOwnershipToDirectionalHold();
   testSameLaneAcrossScopesUsesReferenceSemantics();
   testScratchReversalKeepsAnOverlappingDigitalHoldCoherent();
   testEscapeFallbackYieldsToAnActiveLogicalPauseBinding();

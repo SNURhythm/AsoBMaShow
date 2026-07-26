@@ -46,7 +46,6 @@ private:
   struct ScratchLaneState {
     std::set<ScratchDirection> heldDirections;
     std::optional<ScratchDirection> activeDirection;
-    std::optional<ScratchDirection> deferredReleaseDirection;
   };
 
   static int scratchLane(input::InputScope scope);
@@ -60,6 +59,10 @@ private:
   [[nodiscard]] static replay::LogicalControl
   replayScratchControl(const input::LogicalInputTransition &transition,
                        ScratchDirection direction);
+  [[nodiscard]] std::optional<replay::LogicalControl>
+  effectiveScratchReplayControl(int lane) const;
+  void synchronizeScratchReplayControl(
+      const input::LogicalInputTransition &transition, int lane);
   void notifyApplied(const input::LogicalInputTransition &,
                      replay::LogicalControl, bool pressed);
 
@@ -68,6 +71,7 @@ private:
   AppliedTransitionCallback appliedTransitionCallback_;
   std::map<int, std::set<input::InputScope>> heldLaneScopes_;
   std::map<int, ScratchLaneState> scratchLaneStates_;
+  std::map<int, replay::LogicalControl> recordedScratchControls_;
 };
 
 struct LogicalGameplayRegistryPolicy {
