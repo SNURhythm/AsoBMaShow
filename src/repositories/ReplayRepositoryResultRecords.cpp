@@ -1348,118 +1348,170 @@ std::vector<ReplaySummary> ListCompactChartResultsOnConnection(
     return summaries;
   }
 
-  SqliteStatementHandle ids;
-  if (prepareSqliteStatement(
-          database,
-          "SELECT id FROM chart_results WHERE "
-          "((?<>'' AND chart_sha256=?) OR (?<>'' AND chart_md5=?)) "
-          "ORDER BY played_at_unix_ms DESC,id DESC LIMIT ?",
-          ids) != SQLITE_OK ||
-      !bindText(ids.get(), 1, sha256) || !bindText(ids.get(), 2, sha256) ||
-      !bindText(ids.get(), 3, md5) || !bindText(ids.get(), 4, md5) ||
-      sqlite3_bind_int(ids.get(), 5, limit > 0 ? limit : -1) != SQLITE_OK) {
-    return summaries;
-  }
-
   const auto normalizedOrigin = irServerOrigin.empty()
                                     ? std::optional<std::string>{}
                                     : ir::normalizeServerOrigin(irServerOrigin);
-  int step = SQLITE_OK;
-  while ((step = sqlite3_step(ids.get())) == SQLITE_ROW) {
-    const int resultId = sqlite3_column_int(ids.get(), 0);
-    auto loaded = LoadChartResultOnConnection(database, resultId);
-    if (loaded.status != ResultReadOutcome::Status::Loaded ||
-        !loaded.record.has_value()) {
-      continue;
+  const std::int64_t scanBudget =
+      limit > 0 ? static_cast<std::int64_t>(limit) +
+                      replay_summary_scan::kCorruptCandidateAllowance
+                : std::numeric_limits<std::int64_t>::max();
+  std::int64_t inspected = 0;
+  std::optional<std::pair<std::int64_t, int>> cursor;
+  while ((limit <= 0 || summaries.size() < static_cast<std::size_t>(limit)) &&
+         inspected < scanBudget) {
+    const int pageLimit =
+        limit > 0
+            ? static_cast<int>(std::min<std::int64_t>(
+                  replay_summary_scan::kChunkSize, scanBudget - inspected))
+            : replay_summary_scan::kChunkSize;
+    SqliteStatementHandle ids;
+    const char *query = cursor.has_value()
+                            ? "SELECT id,played_at_unix_ms FROM chart_results "
+                              "WHERE ((?<>'' AND chart_sha256=?) OR (?<>'' "
+                              "AND chart_md5=?)) AND (played_at_unix_ms<? OR "
+                              "(played_at_unix_ms=? AND id<?)) ORDER BY "
+                              "played_at_unix_ms DESC,id DESC LIMIT ?"
+                            : "SELECT id,played_at_unix_ms FROM chart_results "
+                              "WHERE ((?<>'' AND chart_sha256=?) OR (?<>'' "
+                              "AND chart_md5=?)) ORDER BY played_at_unix_ms "
+                              "DESC,id DESC LIMIT ?";
+    if (prepareSqliteStatement(database, query, ids) != SQLITE_OK ||
+        !bindText(ids.get(), 1, sha256) || !bindText(ids.get(), 2, sha256) ||
+        !bindText(ids.get(), 3, md5) || !bindText(ids.get(), 4, md5)) {
+      return {};
     }
-    const auto &record = *loaded.record;
-    const auto &result = record.result;
-    const auto &score = result.score;
-    ReplaySummary summary;
-    summary.id = result.resultId;
-    summary.initialGaugeType = score.provenance.gaugeType;
-    summary.gaugeAutoShift = score.provenance.gaugeAutoShift;
-    summary.finalScore = score.score;
-    summary.maxScore = score.maxScore;
-    summary.maxCombo = score.maxCombo;
-    summary.finalGauge = score.finalGauge;
-    summary.clearType = score.clearType;
-    summary.createdAt =
-        readCreatedAt(database, resultId).value_or(std::string{});
-    summary.replayFileState = record.replayFile.has_value()
-                                  ? ReplaySummary::ReplayFileState::Available
-                                  : ReplaySummary::ReplayFileState::Missing;
-    if (record.replayFile.has_value()) {
-      summary.replayFileSize = record.replayFile->compressedSize;
+    int bindIndex = 5;
+    if (cursor.has_value() && (sqlite3_bind_int64(ids.get(), bindIndex++,
+                                                  cursor->first) != SQLITE_OK ||
+                               sqlite3_bind_int64(ids.get(), bindIndex++,
+                                                  cursor->first) != SQLITE_OK ||
+                               sqlite3_bind_int(ids.get(), bindIndex++,
+                                                cursor->second) != SQLITE_OK)) {
+      return {};
     }
-    summary.chartMeta = bms_parser::ChartMeta{
-        .BmsPath = score.chartPath,
-        .MD5 = score.chartMd5,
-        .SHA256 = score.chartSha256,
-        .Title = score.chartTitle,
-        .Artist = score.chartArtist,
-        .KeyMode = result.keyMode,
-        .TotalNotes = score.maxScore / 2,
-        .LnMode = score.longNoteMode,
-    };
-    summary.playOption = score.provenance.player1.option;
-    summary.playOptionSeed = score.provenance.player1.seed;
-    summary.playOption2 = score.provenance.player2.option;
-    summary.playOption2Seed = score.provenance.player2.seed;
-    summary.assistOption = score.provenance.assistOption;
-    summary.rulesetVersion = score.provenance.ruleset.version;
-    summary.eligibility = score.provenance.eligibility;
-    summary.playback = score.provenance.playback;
-    summary.provenance =
-        std::make_shared<const ScoreProvenance>(score.provenance);
-    summary.attemptId = result.attemptId;
-    summary.hasCanonicalAttemptFingerprint =
-        result.attemptId.has_value() && !result.resultFingerprint.empty();
+    if (sqlite3_bind_int(ids.get(), bindIndex, pageLimit) != SQLITE_OK) {
+      return {};
+    }
 
-    if (!irProviderId.empty() && result.attemptId.has_value()) {
-      SqliteStatementHandle outbox;
-      if (prepareSqliteStatement(
-              database,
-              "SELECT state,last_error_message FROM ir_outbox "
-              "WHERE provider_id=? AND attempt_id=? LIMIT 1",
-              outbox) == SQLITE_OK &&
-          bindText(outbox.get(), 1, irProviderId) &&
-          bindText(outbox.get(), 2, *result.attemptId) &&
-          sqlite3_step(outbox.get()) == SQLITE_ROW) {
-        const int state = sqlite3_column_int(outbox.get(), 0);
-        if (ir::isKnownIrOutboxState(state)) {
-          summary.requestedIrOutboxState =
-              static_cast<ir::IrOutboxState>(state);
-        }
-        if (sqlite3_column_type(outbox.get(), 1) == SQLITE_TEXT) {
-          summary.requestedIrOutboxDiagnostic =
-              ir::sanitizeDiagnostic(columnText(outbox.get(), 1));
+    std::vector<std::pair<int, std::int64_t>> page;
+    int step = SQLITE_OK;
+    while ((step = sqlite3_step(ids.get())) == SQLITE_ROW) {
+      page.emplace_back(sqlite3_column_int(ids.get(), 0),
+                        sqlite3_column_int64(ids.get(), 1));
+    }
+    if (step != SQLITE_DONE) {
+      return {};
+    }
+    if (page.empty()) {
+      break;
+    }
+    for (const auto &[resultId, playedAtUnixMillis] : page) {
+      (void)playedAtUnixMillis;
+      ++inspected;
+      auto loaded = LoadChartResultOnConnection(database, resultId);
+      if (loaded.status != ResultReadOutcome::Status::Loaded ||
+          !loaded.record.has_value()) {
+        continue;
+      }
+      const auto &record = *loaded.record;
+      const auto &result = record.result;
+      const auto &score = result.score;
+      ReplaySummary summary;
+      summary.id = result.resultId;
+      summary.initialGaugeType = score.provenance.gaugeType;
+      summary.gaugeAutoShift = score.provenance.gaugeAutoShift;
+      summary.finalScore = score.score;
+      summary.maxScore = score.maxScore;
+      summary.maxCombo = score.maxCombo;
+      summary.finalGauge = score.finalGauge;
+      summary.clearType = score.clearType;
+      summary.createdAt =
+          readCreatedAt(database, resultId).value_or(std::string{});
+      summary.replayFileState = record.replayFile.has_value()
+                                    ? ReplaySummary::ReplayFileState::Available
+                                    : ReplaySummary::ReplayFileState::Missing;
+      if (record.replayFile.has_value()) {
+        summary.replayFileSize = record.replayFile->compressedSize;
+      }
+      summary.chartMeta = bms_parser::ChartMeta{
+          .BmsPath = score.chartPath,
+          .MD5 = score.chartMd5,
+          .SHA256 = score.chartSha256,
+          .Title = score.chartTitle,
+          .Artist = score.chartArtist,
+          .KeyMode = result.keyMode,
+          .TotalNotes = score.maxScore / 2,
+          .LnMode = score.longNoteMode,
+      };
+      summary.playOption = score.provenance.player1.option;
+      summary.playOptionSeed = score.provenance.player1.seed;
+      summary.playOption2 = score.provenance.player2.option;
+      summary.playOption2Seed = score.provenance.player2.seed;
+      summary.assistOption = score.provenance.assistOption;
+      summary.rulesetVersion = score.provenance.ruleset.version;
+      summary.eligibility = score.provenance.eligibility;
+      summary.playback = score.provenance.playback;
+      summary.provenance =
+          std::make_shared<const ScoreProvenance>(score.provenance);
+      summary.attemptId = result.attemptId;
+      summary.hasCanonicalAttemptFingerprint =
+          result.attemptId.has_value() && !result.resultFingerprint.empty();
+
+      if (!irProviderId.empty() && result.attemptId.has_value()) {
+        SqliteStatementHandle outbox;
+        if (prepareSqliteStatement(
+                database,
+                "SELECT state,last_error_message FROM ir_outbox "
+                "WHERE provider_id=? AND attempt_id=? LIMIT 1",
+                outbox) == SQLITE_OK &&
+            bindText(outbox.get(), 1, irProviderId) &&
+            bindText(outbox.get(), 2, *result.attemptId) &&
+            sqlite3_step(outbox.get()) == SQLITE_ROW) {
+          const int state = sqlite3_column_int(outbox.get(), 0);
+          if (ir::isKnownIrOutboxState(state)) {
+            summary.requestedIrOutboxState =
+                static_cast<ir::IrOutboxState>(state);
+          }
+          if (sqlite3_column_type(outbox.get(), 1) == SQLITE_TEXT) {
+            summary.requestedIrOutboxDiagnostic =
+                ir::sanitizeDiagnostic(columnText(outbox.get(), 1));
+          }
         }
       }
-    }
-    if (!irProviderId.empty() && normalizedOrigin.has_value()) {
-      SqliteStatementHandle receipt;
-      if (prepareSqliteStatement(
-              database,
-              "SELECT remote_score_id FROM ir_submission_receipts "
-              "WHERE provider_id=? AND server_origin=? AND result_id=? "
-              "LIMIT 1",
-              receipt) == SQLITE_OK &&
-          bindText(receipt.get(), 1, irProviderId) &&
-          bindText(receipt.get(), 2, *normalizedOrigin) &&
-          sqlite3_bind_int(receipt.get(), 3, resultId) == SQLITE_OK &&
-          sqlite3_step(receipt.get()) == SQLITE_ROW) {
-        summary.hasIrReceipt = true;
-        summary.receiptProviderId = std::string(irProviderId);
-        summary.receiptServerOrigin = *normalizedOrigin;
-        if (sqlite3_column_type(receipt.get(), 0) == SQLITE_TEXT) {
-          summary.receiptRemoteScoreId = columnText(receipt.get(), 0);
+      if (!irProviderId.empty() && normalizedOrigin.has_value()) {
+        SqliteStatementHandle receipt;
+        if (prepareSqliteStatement(
+                database,
+                "SELECT remote_score_id FROM ir_submission_receipts "
+                "WHERE provider_id=? AND server_origin=? AND result_id=? "
+                "LIMIT 1",
+                receipt) == SQLITE_OK &&
+            bindText(receipt.get(), 1, irProviderId) &&
+            bindText(receipt.get(), 2, *normalizedOrigin) &&
+            sqlite3_bind_int(receipt.get(), 3, resultId) == SQLITE_OK &&
+            sqlite3_step(receipt.get()) == SQLITE_ROW) {
+          summary.hasIrReceipt = true;
+          summary.receiptProviderId = std::string(irProviderId);
+          summary.receiptServerOrigin = *normalizedOrigin;
+          if (sqlite3_column_type(receipt.get(), 0) == SQLITE_TEXT) {
+            summary.receiptRemoteScoreId = columnText(receipt.get(), 0);
+          }
         }
       }
+      summaries.push_back(std::move(summary));
+      if (limit > 0 && summaries.size() >= static_cast<std::size_t>(limit)) {
+        return summaries;
+      }
+      if (inspected >= scanBudget) {
+        break;
+      }
     }
-    summaries.push_back(std::move(summary));
+    cursor = std::pair(page.back().second, page.back().first);
+    if (page.size() < static_cast<std::size_t>(pageLimit)) {
+      break;
+    }
   }
-  return step == SQLITE_DONE ? summaries : std::vector<ReplaySummary>{};
+  return summaries;
 }
 
 std::vector<ReplaySummary> ListCompactCourseResultsOnConnection(
@@ -1469,67 +1521,119 @@ std::vector<ReplaySummary> ListCompactCourseResultsOnConnection(
       (lookup.courseKey.empty() && lookup.legacyCourseId <= 0)) {
     return summaries;
   }
-  SqliteStatementHandle ids;
-  if (prepareSqliteStatement(
-          database,
-          "SELECT id FROM course_results WHERE "
-          "((?<>'' AND course_key=?) OR (?='' AND ? > 0 AND "
-          "legacy_course_id=?)) ORDER BY played_at_unix_ms DESC,id DESC "
-          "LIMIT ?",
-          ids) != SQLITE_OK ||
-      !bindText(ids.get(), 1, lookup.courseKey) ||
-      !bindText(ids.get(), 2, lookup.courseKey) ||
-      !bindText(ids.get(), 3, lookup.courseKey) ||
-      sqlite3_bind_int(ids.get(), 4, lookup.legacyCourseId) != SQLITE_OK ||
-      sqlite3_bind_int(ids.get(), 5, lookup.legacyCourseId) != SQLITE_OK ||
-      sqlite3_bind_int(ids.get(), 6, limit > 0 ? limit : -1) != SQLITE_OK) {
-    return summaries;
-  }
+  const std::int64_t scanBudget =
+      limit > 0 ? static_cast<std::int64_t>(limit) +
+                      replay_summary_scan::kCorruptCandidateAllowance
+                : std::numeric_limits<std::int64_t>::max();
+  std::int64_t inspected = 0;
+  std::optional<std::pair<std::int64_t, int>> cursor;
+  while ((limit <= 0 || summaries.size() < static_cast<std::size_t>(limit)) &&
+         inspected < scanBudget) {
+    const int pageLimit =
+        limit > 0
+            ? static_cast<int>(std::min<std::int64_t>(
+                  replay_summary_scan::kChunkSize, scanBudget - inspected))
+            : replay_summary_scan::kChunkSize;
+    SqliteStatementHandle ids;
+    const char *query =
+        cursor.has_value()
+            ? "SELECT id,played_at_unix_ms FROM course_results WHERE "
+              "((?<>'' AND course_key=?) OR (?='' AND ? > 0 AND "
+              "legacy_course_id=?)) AND (played_at_unix_ms<? OR "
+              "(played_at_unix_ms=? AND id<?)) ORDER BY played_at_unix_ms "
+              "DESC,id DESC LIMIT ?"
+            : "SELECT id,played_at_unix_ms FROM course_results WHERE "
+              "((?<>'' AND course_key=?) OR (?='' AND ? > 0 AND "
+              "legacy_course_id=?)) ORDER BY played_at_unix_ms DESC,id DESC "
+              "LIMIT ?";
+    if (prepareSqliteStatement(database, query, ids) != SQLITE_OK ||
+        !bindText(ids.get(), 1, lookup.courseKey) ||
+        !bindText(ids.get(), 2, lookup.courseKey) ||
+        !bindText(ids.get(), 3, lookup.courseKey) ||
+        sqlite3_bind_int(ids.get(), 4, lookup.legacyCourseId) != SQLITE_OK ||
+        sqlite3_bind_int(ids.get(), 5, lookup.legacyCourseId) != SQLITE_OK) {
+      return {};
+    }
+    int bindIndex = 6;
+    if (cursor.has_value() && (sqlite3_bind_int64(ids.get(), bindIndex++,
+                                                  cursor->first) != SQLITE_OK ||
+                               sqlite3_bind_int64(ids.get(), bindIndex++,
+                                                  cursor->first) != SQLITE_OK ||
+                               sqlite3_bind_int(ids.get(), bindIndex++,
+                                                cursor->second) != SQLITE_OK)) {
+      return {};
+    }
+    if (sqlite3_bind_int(ids.get(), bindIndex, pageLimit) != SQLITE_OK) {
+      return {};
+    }
 
-  int step = SQLITE_OK;
-  while ((step = sqlite3_step(ids.get())) == SQLITE_ROW) {
-    const int resultId = sqlite3_column_int(ids.get(), 0);
-    auto loaded = LoadCourseResultOnConnection(database, resultId);
-    if (loaded.status != CourseResultReadOutcome::Status::Loaded ||
-        !loaded.record.has_value()) {
-      continue;
+    std::vector<std::pair<int, std::int64_t>> page;
+    int step = SQLITE_OK;
+    while ((step = sqlite3_step(ids.get())) == SQLITE_ROW) {
+      page.emplace_back(sqlite3_column_int(ids.get(), 0),
+                        sqlite3_column_int64(ids.get(), 1));
     }
-    const auto &record = *loaded.record;
-    const auto &result = record.result;
-    ReplaySummary summary;
-    summary.id = result.resultId;
-    summary.courseReplay = true;
-    summary.initialGaugeType = result.initialGaugeType;
-    summary.gaugeAutoShift = result.gaugeAutoShift;
-    summary.finalScore = result.finalScore;
-    summary.maxScore = result.maxScore;
-    summary.maxCombo = result.maxCombo;
-    summary.finalGauge = result.finalGauge;
-    summary.clearType = result.clearType;
-    summary.createdAt =
-        readCourseCreatedAt(database, resultId).value_or(std::string{});
-    summary.replayFileState = record.replayFile.has_value()
-                                  ? ReplaySummary::ReplayFileState::Available
-                                  : ReplaySummary::ReplayFileState::Missing;
-    if (record.replayFile.has_value()) {
-      summary.replayFileSize = record.replayFile->compressedSize;
+    if (step != SQLITE_DONE) {
+      return {};
     }
-    summary.playOption = result.requestedPlayOption;
-    summary.assistOption = result.assistOption;
-    summary.completedCharts = result.completedCharts;
-    summary.totalCharts = result.totalCharts;
-    summary.stageCount = static_cast<int>(result.stages.size());
-    summary.rulesetVersion = result.provenance.ruleset.version;
-    summary.eligibility = result.provenance.eligibility;
-    summary.playback = result.provenance.playback;
-    summary.provenance =
-        std::make_shared<const ScoreProvenance>(result.provenance);
-    summary.attemptId = result.attemptId;
-    summary.hasCanonicalAttemptFingerprint =
-        result.attemptId.has_value() && !result.resultFingerprint.empty();
-    summaries.push_back(std::move(summary));
+    if (page.empty()) {
+      break;
+    }
+    for (const auto &[resultId, playedAtUnixMillis] : page) {
+      (void)playedAtUnixMillis;
+      ++inspected;
+      auto loaded = LoadCourseResultOnConnection(database, resultId);
+      if (loaded.status != CourseResultReadOutcome::Status::Loaded ||
+          !loaded.record.has_value()) {
+        continue;
+      }
+      const auto &record = *loaded.record;
+      const auto &result = record.result;
+      ReplaySummary summary;
+      summary.id = result.resultId;
+      summary.courseReplay = true;
+      summary.initialGaugeType = result.initialGaugeType;
+      summary.gaugeAutoShift = result.gaugeAutoShift;
+      summary.finalScore = result.finalScore;
+      summary.maxScore = result.maxScore;
+      summary.maxCombo = result.maxCombo;
+      summary.finalGauge = result.finalGauge;
+      summary.clearType = result.clearType;
+      summary.createdAt =
+          readCourseCreatedAt(database, resultId).value_or(std::string{});
+      summary.replayFileState = record.replayFile.has_value()
+                                    ? ReplaySummary::ReplayFileState::Available
+                                    : ReplaySummary::ReplayFileState::Missing;
+      if (record.replayFile.has_value()) {
+        summary.replayFileSize = record.replayFile->compressedSize;
+      }
+      summary.playOption = result.requestedPlayOption;
+      summary.assistOption = result.assistOption;
+      summary.completedCharts = result.completedCharts;
+      summary.totalCharts = result.totalCharts;
+      summary.stageCount = static_cast<int>(result.stages.size());
+      summary.rulesetVersion = result.provenance.ruleset.version;
+      summary.eligibility = result.provenance.eligibility;
+      summary.playback = result.provenance.playback;
+      summary.provenance =
+          std::make_shared<const ScoreProvenance>(result.provenance);
+      summary.attemptId = result.attemptId;
+      summary.hasCanonicalAttemptFingerprint =
+          result.attemptId.has_value() && !result.resultFingerprint.empty();
+      summaries.push_back(std::move(summary));
+      if (limit > 0 && summaries.size() >= static_cast<std::size_t>(limit)) {
+        return summaries;
+      }
+      if (inspected >= scanBudget) {
+        break;
+      }
+    }
+    cursor = std::pair(page.back().second, page.back().first);
+    if (page.size() < static_cast<std::size_t>(pageLimit)) {
+      break;
+    }
   }
-  return step == SQLITE_DONE ? summaries : std::vector<ReplaySummary>{};
+  return summaries;
 }
 
 } // namespace replay_repository_detail

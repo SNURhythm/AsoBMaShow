@@ -83,6 +83,23 @@ std::int64_t scalar(const std::filesystem::path &databasePath,
   return complete ? value : -1;
 }
 
+bool executeSql(const std::filesystem::path &databasePath,
+                std::string_view query) {
+  sqlite3 *database = nullptr;
+  if (sqlite3_open_v2(databasePath.string().c_str(), &database,
+                      SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK) {
+    sqlite3_close(database);
+    return false;
+  }
+  char *message = nullptr;
+  const bool success =
+      sqlite3_exec(database, std::string(query).c_str(), nullptr, nullptr,
+                   &message) == SQLITE_OK;
+  sqlite3_free(message);
+  sqlite3_close(database);
+  return success;
+}
+
 std::map<std::string, std::int64_t>
 tableRowCounts(const std::filesystem::path &databasePath) {
   std::map<std::string, std::int64_t> result;
@@ -707,6 +724,115 @@ void testReplayVolumeOnlyGrowsTheBrdFile() {
          "transition-volume growth is confined to standalone .brd bytes");
 }
 
+void testSummaryLimitsCountOnlyValidatedRows() {
+  TemporaryDirectory temporary("summary-valid-limit");
+  Environment environment(temporary.path());
+
+  std::vector<int> chartIds;
+  for (int index = 0; index < 3; ++index) {
+    auto attempt = validAttempt(
+        "123e4567-e89b-42d3-a456-42661417410" + std::to_string(index));
+    const auto saved = environment.coordinator.persist(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "chart summary corruption fixture persists");
+    if (saved.receipt.has_value()) {
+      chartIds.push_back(saved.receipt->resultId);
+    }
+  }
+  expect(chartIds.size() == 3, "three chart summary fixtures are available");
+  if (chartIds.size() != 3) {
+    return;
+  }
+  expect(executeSql(environment.replayDatabase,
+                    "UPDATE chart_results SET result_fingerprint='bad' "
+                    "WHERE id=" +
+                        std::to_string(chartIds.back())),
+         "newest chart summary row is corrupted");
+  bms_parser::ChartMeta chartLookup;
+  chartLookup.MD5 = repeated('b', 32);
+  chartLookup.SHA256 = repeated('a', 64);
+  const auto charts = environment.replayRepository.ListReplays(chartLookup, 2);
+  expect(charts.size() == 2 && charts[0].id == chartIds[1] &&
+             charts[1].id == chartIds[0],
+         "chart summary limit counts valid rows after corrupt newest row");
+
+  std::vector<int> courseIds;
+  std::string courseKey;
+  for (int index = 0; index < 2; ++index) {
+    auto attempt = validCourseAttempt(
+        "123e4567-e89b-42d3-a456-42661417411" + std::to_string(index));
+    attempt.result.playedAtUnixMillis += index;
+    attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+    courseKey = attempt.result.courseKey;
+    const auto saved = environment.coordinator.persistCourse(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "course summary corruption fixture persists");
+    if (saved.receipt.has_value()) {
+      courseIds.push_back(saved.receipt->resultId);
+    }
+  }
+  expect(courseIds.size() == 2, "two course summary fixtures are available");
+  if (courseIds.size() != 2) {
+    return;
+  }
+  expect(executeSql(environment.replayDatabase,
+                    "UPDATE course_results SET result_fingerprint='bad' "
+                    "WHERE id=" +
+                        std::to_string(courseIds.back())),
+         "newest course summary row is corrupted");
+  const auto courses = environment.replayRepository.ListCourseReplays(
+      {.courseKey = courseKey, .legacyCourseId = 7}, 1);
+  expect(courses.size() == 1 && courses[0].id == courseIds[0],
+         "course summary limit counts valid rows after corrupt newest row");
+}
+
+void testSummaryCorruptionAllowanceIsBounded() {
+  TemporaryDirectory temporary("summary-corruption-bound");
+  Environment environment(temporary.path());
+  auto attempt =
+      validAttempt("123e4567-e89b-42d3-a456-426614174120");
+  const auto saved = environment.coordinator.persist(attempt);
+  expect(saved.saved() && saved.receipt.has_value(),
+         "bounded summary fixture persists");
+  if (!saved.receipt.has_value()) {
+    return;
+  }
+
+  const int corruptCount =
+      replay_summary_scan::kCorruptCandidateAllowance + 1;
+  const std::string cloneSql =
+      "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq "
+      "WHERE x<" +
+      std::to_string(corruptCount) +
+      ") INSERT INTO chart_results("
+      "attempt_id,chart_path,chart_md5,chart_sha256,chart_title,chart_artist,"
+      "key_mode,long_note_mode,score,max_score,max_combo,combo_break,p_great,"
+      "great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
+      "gauge_history_json,judgement_timing_json,provenance_json,"
+      "result_fingerprint,played_at_unix_ms) SELECT NULL,chart_path,chart_md5,"
+      "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
+      "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
+      "fast,slow,final_gauge,clear_type,gauge_history_json,"
+      "judgement_timing_json,provenance_json,'bad',played_at_unix_ms+x "
+      "FROM chart_results JOIN seq WHERE id=" +
+      std::to_string(saved.receipt->resultId);
+  expect(executeSql(environment.replayDatabase, cloneSql),
+         "corrupt summary candidates are cloned ahead of the valid row");
+
+  bms_parser::ChartMeta chartLookup;
+  chartLookup.MD5 = attempt.result.score.chartMd5;
+  chartLookup.SHA256 = attempt.result.score.chartSha256;
+  const auto bounded =
+      environment.replayRepository.ListReplays(chartLookup, 1);
+  expect(bounded.empty(),
+         "positive summary limit stops at the corruption allowance");
+  const auto unbounded =
+      environment.replayRepository.ListReplays(chartLookup, 0);
+  expect(unbounded.size() == 1 &&
+             unbounded.front().id == saved.receipt->resultId,
+         "explicit unbounded summary scan reaches the older valid row");
+}
+
 } // namespace
 
 int main() {
@@ -715,6 +841,8 @@ int main() {
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
   testCoursePipelineUsesOneBeatorajaArrayFile();
   testReplayVolumeOnlyGrowsTheBrdFile();
+  testSummaryLimitsCountOnlyValidatedRows();
+  testSummaryCorruptionAllowanceIsBounded();
   if (failures != 0) {
     std::cerr << failures << " result persistence integration test(s) failed\n";
     return 1;
