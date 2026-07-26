@@ -2,6 +2,7 @@
 
 #include "Base64Url.h"
 #include "GzipCodec.h"
+#include "../scene/play/GameplayScoreState.h"
 
 #include "nlohmann/json.hpp"
 
@@ -1218,6 +1219,8 @@ bool decodeStage(const Json &stage, std::string_view expectedEnvelope,
   if (supported == nullptr) {
     result.data.setup.gaugeProfile =
         gaugeProfileForKeyMode(*keyMode, expectedEnvelope == "course-stage");
+    result.data.setup.startingGaugePercent = gaugeInitialValue(
+        result.data.setup.initialGaugeType, result.data.setup.gaugeProfile);
   }
 
   if (supported == nullptr) {

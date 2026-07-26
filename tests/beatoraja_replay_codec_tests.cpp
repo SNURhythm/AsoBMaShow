@@ -181,8 +181,8 @@ void testIndependentBeatorajaFixtures() {
   // src/bms/player/beatoraja/PlayDataAccessor.java
   // src/bms/player/beatoraja/input/KeyInputLog.java
   // SHA-256:
-  // chart  97f1175b7bc802728887191d9cc9c29cdf57fb9c3232b056a2e748b5ddfd7535
-  // course 06fb9857647feef4fa7df2086f17f904e8173c22fae084e096c9b45d8d5dd187
+  // chart  c4f2a22b571a9bc31f5df0290ce9ab80cd39ad42a8c27d708707f8fe7f170ba7
+  // course 75fce78c355a62cf9b21a5f971e019a5682a130c0f941ac2e4ced233ad2d0b08
   // keys   ec101f21efe5c18fb8562ca495f034ccfa75dbab304ac00de647fd3691a8bc1d
   replay::BeatorajaReplayCodec codec;
   const auto chartBytes = readFixture("beatoraja-chart.brd");
@@ -208,6 +208,8 @@ void testIndependentBeatorajaFixtures() {
                 "stock random seed maps exactly");
     expectEqual(value.setup.initialGaugeType, GaugeType::Hard,
                 "stock gauge maps exactly");
+    expectEqual(value.setup.startingGaugePercent, 100.0F,
+                "stock HARD gauge starts at one hundred percent");
     expectEqual(value.setup.playbackRulesetId, std::string("beatoraja"),
                 "stock replay selects Beatoraja interpretation");
     expectEqual(value.setup.playbackRulesetRevision, 2,

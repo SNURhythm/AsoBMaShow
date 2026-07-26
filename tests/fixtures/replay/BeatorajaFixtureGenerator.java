@@ -20,6 +20,8 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Random;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.GZIPInputStream;
 
@@ -28,6 +30,38 @@ public final class BeatorajaFixtureGenerator {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String SHA_B =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    private static int[][] laneShufflePattern(int option, long seed) {
+        if (option == 1) {
+            // Pinned Beatoraja applies MIRROR but does not expose it as a
+            // displayable shuffle pattern.
+            return new int[][] {null};
+        }
+
+        int[] pattern = new int[] {0, 1, 2, 3, 4, 5, 6, 7};
+        Random random = new Random(seed);
+        if (option == 2) {
+            ArrayList<Integer> remaining = new ArrayList<>();
+            for (int lane = 0; lane < 7; lane++) {
+                remaining.add(lane);
+            }
+            for (int lane = 0; lane < 7; lane++) {
+                pattern[lane] = remaining.remove(
+                    random.nextInt(remaining.size()));
+            }
+        } else if (option == 3) {
+            boolean increasing = random.nextInt(2) == 1;
+            int source = random.nextInt(6) + (increasing ? 1 : 0);
+            for (int lane = 0; lane < 7; lane++) {
+                pattern[lane] = source;
+                source = increasing ? (source + 1) % 7 : (source + 6) % 7;
+            }
+        } else {
+            throw new IllegalArgumentException(
+                "fixture option has no displayable lane pattern: " + option);
+        }
+        return new int[][] {pattern};
+    }
 
     private static ReplayData stage(String sha, long timeOffset, int option,
                                     long optionSeed, float laneCover) {
@@ -44,9 +78,7 @@ public final class BeatorajaFixtureGenerator {
             new KeyInputLog(timeOffset + 3_500, 8, false),
         };
         replay.gauge = 3;
-        replay.laneShufflePattern = new int[][] {
-            new int[] {2, 5, 1, 4, 0, 6, 3, 7}
-        };
+        replay.laneShufflePattern = laneShufflePattern(option, optionSeed);
         replay.rand = new int[] {4, 2, 7};
         replay.date = 1_725_000_000L;
         replay.sevenToNinePattern = 0;
