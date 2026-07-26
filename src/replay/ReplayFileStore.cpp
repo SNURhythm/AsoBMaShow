@@ -438,6 +438,26 @@ syncAndValidateExistingFinal(const std::filesystem::path &finalPath,
 
 } // namespace
 
+bool isPrivateReplayTemporaryFilename(std::string_view filename) noexcept {
+  constexpr std::string_view temporarySuffix = ".tmp";
+  constexpr std::string_view replaySeparator = ".brd.";
+  if (filename.size() <= replaySeparator.size() + temporarySuffix.size() + 2 ||
+      filename.front() != '.' || !filename.ends_with(temporarySuffix) ||
+      filename.find('/') != std::string_view::npos ||
+      filename.find('\\') != std::string_view::npos) {
+    return false;
+  }
+  const std::size_t separator = filename.rfind(replaySeparator);
+  if (separator == std::string_view::npos || separator <= 1) {
+    return false;
+  }
+  const std::size_t tokenStart = separator + replaySeparator.size();
+  const std::size_t tokenSize =
+      filename.size() - temporarySuffix.size() - tokenStart;
+  return tokenSize > 0 &&
+         safeAttemptToken(filename.substr(tokenStart, tokenSize));
+}
+
 ReplayFileStore::ReplayFileStore(std::filesystem::path profileRoot,
                                  ReplayFileStoreFaults faults)
     : profileRoot_(normalizedAbsolute(profileRoot)),
@@ -820,9 +840,7 @@ void ReplayFileStore::removeStaleTemporaryFiles(
        end;
        !error && iterator != end; iterator.increment(error)) {
     const std::string filename = iterator->path().filename().string();
-    if (filename.size() < 8 || filename.front() != '.' ||
-        !filename.ends_with(".tmp") ||
-        filename.find(".brd.") == std::string::npos) {
+    if (!isPrivateReplayTemporaryFilename(filename)) {
       continue;
     }
     const auto status = iterator->symlink_status(error);

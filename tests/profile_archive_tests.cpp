@@ -317,14 +317,15 @@ void seedIrOperationalState(const std::filesystem::path &path,
           "INSERT OR IGNORE INTO chart_results(attempt_id,chart_path,chart_md5,"
           "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,"
           "score,max_score,max_combo,combo_break,p_great,great,good,bad,poor,"
-          "k_poor,fast,slow,final_gauge,clear_type,gauge_history_json,"
+          "k_poor,fast,slow,final_gauge,clear_type,adopted_gauge_type,"
+          "gauge_history_json,"
           "judgement_timing_json,provenance_json,result_fingerprint,"
           "played_at_unix_ms) VALUES("
           "'10000000-0000-4000-8000-000000000004','remote.bms',"
           "'dddddddddddddddddddddddddddddddd','"
           "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
           "'Remote Song','Remote Artist',7,0,1,2,1,0,1,0,0,0,0,0,0,0,0.0,0,"
-          "'[]',NULL,'{}',lower(hex(zeroblob(32))),4000);"
+          "2,'[]',NULL,'{}',lower(hex(zeroblob(32))),4000);"
           "INSERT INTO ir_submission_receipts(provider_id,server_origin,"
           "result_id,attempt_id,chart_sha256,confirmation_source,"
           "confirmed_at_ms) VALUES('tachi','https://boku.tachi.ac',"
@@ -676,14 +677,15 @@ struct Fixture {
             "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
             "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,"
             "score,max_score,max_combo,combo_break,p_great,great,good,bad,"
-            "poor,k_poor,fast,slow,final_gauge,clear_type,gauge_history_json,"
-            "judgement_timing_json,provenance_json,result_fingerprint,"
+            "poor,k_poor,fast,slow,final_gauge,clear_type,adopted_gauge_type,"
+            "gauge_history_json,judgement_timing_json,provenance_json,"
+            "result_fingerprint,"
             "played_at_unix_ms) VALUES("
             "'20000000-0000-4000-8000-000000000001','portable.bms',"
             "'0123456789abcdef0123456789abcdef','" +
                 std::string(kReplaySha) +
                 "','Portable Song','Portable Artist',7,0,123,456,7,8,9,"
-                "10,11,12,13,14,15,16,0.75,2,'[0.75]',NULL,'" +
+                "10,11,12,13,14,15,16,0.75,2,2,'[0.75]',NULL,'" +
                 std::string(provenance) +
                 "',lower(hex(zeroblob(32))),1000);"
                 "INSERT INTO replay_files(chart_result_id,stem,"
@@ -774,6 +776,29 @@ void testExportIsDeterministicAndStrict() {
                    ReplayRepository::kCurrentSchemaVersion,
            "export manifest records portable version metadata");
   }
+}
+
+void testExportIgnoresPrivateReplayTemporary() {
+  Fixture fixture;
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  const auto temporary =
+      source.replayDirectory /
+      ("." + std::string(kReplayFilename) + ".attempt_token.tmp");
+  writeFile(temporary, "partial replay");
+
+  const auto destination = fixture.exchange.path() / "replay-temporary.zip";
+  ProfileArchiveService service(fixture.manager);
+  const auto exported = service.Export(fixture.sourceId, destination);
+  expect(exported.ok(),
+         "export ignores a recognized private replay temporary: " +
+             exported.message);
+
+  std::string error;
+  const auto members = readArchive(destination, error);
+  expect(error.empty() && members.size() == kExpectedMembers.size(),
+         "private replay temporary is absent from the exported archive");
+  expect(std::filesystem::exists(temporary),
+         "export does not delete an in-flight replay temporary");
 }
 
 void testExportRejectsReplayBytesThatDoNotMatchReference() {
@@ -2888,6 +2913,7 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testExportIgnoresPrivateReplayTemporary();
   testExportRejectsReplayBytesThatDoNotMatchReference();
   testExportOmitsDeletedReplayAttachment();
   testIrOperationalStateIsNotProfilePortable();

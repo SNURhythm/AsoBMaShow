@@ -7,6 +7,7 @@
 #include "ProfileDatabaseTools.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
+#include "replay/ReplayFileStore.h"
 #include "input/InputProfile.h"
 #include "input/InputProfileStore.h"
 #include "practice/PracticePresetStore.h"
@@ -1714,6 +1715,10 @@ ProfileArchiveService::Export(std::string_view profileId,
     }
     std::ranges::sort(replayFiles);
     for (const auto &replayFile : replayFiles) {
+      if (replay::isPrivateReplayTemporaryFilename(
+              replayFile.filename().string())) {
+        continue;
+      }
       const std::string memberName = "replay/" + replayFile.filename().string();
       const auto stagedReplay = workspace / "replay" / replayFile.filename();
       if (!isReplayMember(memberName) ||

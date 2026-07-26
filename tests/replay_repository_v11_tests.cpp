@@ -459,9 +459,12 @@ void testProfileBindingCleansStaleReplayTemporaries() {
       startupReplay / ("." + repeated('a', 64) + ".brd.startup.tmp");
   const auto recentStartup =
       startupReplay / ("." + repeated('b', 64) + ".brd.recent.tmp");
+  const auto malformedStartup =
+      startupReplay / ("." + repeated('d', 64) + ".brd.bad.token.tmp");
   const auto unrelatedStartup = startupReplay / "keep.tmp";
   writeFile(staleStartup, "stale");
   writeFile(recentStartup, "recent");
+  writeFile(malformedStartup, "malformed");
   writeFile(unrelatedStartup, "unrelated");
   std::error_code timeError;
   std::filesystem::last_write_time(
@@ -469,14 +472,20 @@ void testProfileBindingCleansStaleReplayTemporaries() {
       std::filesystem::file_time_type::clock::now() - std::chrono::hours(2),
       timeError);
   expect(!timeError, "startup stale replay timestamp is set");
+  std::filesystem::last_write_time(
+      malformedStartup,
+      std::filesystem::file_time_type::clock::now() - std::chrono::hours(2),
+      timeError);
+  expect(!timeError, "malformed replay temporary timestamp is set");
 
   ReplayRepository repository;
   repository.SetDatabasePath(startupRoot / "replays.db");
   expect(!std::filesystem::exists(staleStartup),
          "startup replay binding removes a stale private temporary");
   expect(std::filesystem::exists(recentStartup) &&
+             std::filesystem::exists(malformedStartup) &&
              std::filesystem::exists(unrelatedStartup),
-         "startup replay binding preserves recent and unrelated files");
+         "startup replay binding preserves recent and unowned files");
 
   const auto activatedRoot = temporary.path() / "activated-profile";
   const auto staleActivated = activatedRoot / "replay" /

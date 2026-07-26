@@ -16,6 +16,9 @@
 
 namespace replay {
 
+[[nodiscard]] bool
+isPrivateReplayTemporaryFilename(std::string_view filename) noexcept;
+
 enum class ReplayFileState { Available, Missing, Corrupt, Unsafe, IoFailure };
 
 struct ReplayFileMetadata {
