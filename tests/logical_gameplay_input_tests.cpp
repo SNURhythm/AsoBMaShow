@@ -175,6 +175,19 @@ void testTouchReplayTransitionsPreserve48kPlayersAndReversalTime() {
           "touch reversal emits one timestamped release/press pair");
 }
 
+void testTouchScratchReleaseRetainsItsLastDirection() {
+  const auto release =
+      touch_replay::scratchRelease(7, 7, -1, 234'567);
+  require(!release.pressed &&
+              release.control ==
+                  replay::LogicalControl{
+                      .kind = replay::LogicalControlKind::ScratchCounterClockwise,
+                      .player = 1,
+                      .lane = -1} &&
+              release.source.steadyTimestampMicros == 234'567,
+          "lifting a touch scratch records the active direction release");
+}
+
 void testGameplayScopesEnableBothPlayersOnlyForDp() {
   require(makeGameplayInputScopes(7) ==
               std::vector<input::InputScope>{{.player = 1, .keyMode = 7}},
@@ -1239,6 +1252,7 @@ int main() {
   testLaneTransitionsPreserveDpLaneNumbers();
   testAppliedReplayTransitionsContainOnlyEffectiveLogicalEdges();
   testTouchReplayTransitionsPreserve48kPlayersAndReversalTime();
+  testTouchScratchReleaseRetainsItsLastDirection();
   testGameplayScopesEnableBothPlayersOnlyForDp();
   testScratchReversalAndLateReleaseOrdering();
   testScratchReversalFallsBackToOlderHeldDirection();

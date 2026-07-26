@@ -131,7 +131,11 @@ void RhythmInputHandler::releaseFingerLane(SDL_FingerID fingerIndex) {
   flickStates.erase(fingerIndex);
   if (shouldRelease) {
     control->releaseLane(lane, 0.0, false);
-    if (!isScratchLane(lane) || scratchDirection.has_value()) {
+    if (isScratchLane(lane) && scratchDirection.has_value() &&
+        appliedTransitionCallback) {
+      appliedTransitionCallback(touch_replay::scratchRelease(
+          keyMode, lane, *scratchDirection, steadyNowMicros()));
+    } else if (!isScratchLane(lane)) {
       notifyTouchLaneApplied(lane, false, scratchDirection,
                              steadyNowMicros());
     }
@@ -223,13 +227,11 @@ void RhythmInputHandler::onFingerUp(SDL_FingerID fingerIndex,
   }
   SDL_Log("FingerUp: %lld, (%f, %f, %f)", static_cast<long long>(fingerIndex),
           normalizedLocation.x, normalizedLocation.y, normalizedLocation.z);
-  if (flickStates.contains(fingerIndex)) {
-    flickStates.erase(fingerIndex);
-  }
   if (fingerToLane.contains(fingerIndex)) {
     releaseFingerLane(fingerIndex);
   } else {
     fingerLanePressed.erase(fingerIndex);
+    flickStates.erase(fingerIndex);
   }
 }
 void RhythmInputHandler::onFingerMove(SDL_FingerID fingerIndex,

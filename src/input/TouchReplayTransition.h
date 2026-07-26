@@ -56,4 +56,11 @@ scratchReversal(int keyMode, int physicalLane, int previousDirection,
   };
 }
 
+[[nodiscard]] inline LogicalGameplayInputAdapter::AppliedTransition
+scratchRelease(int keyMode, int physicalLane, int direction,
+               std::int64_t steadyTimestampMicros) {
+  return transition(keyMode, physicalLane, false, direction,
+                    steadyTimestampMicros);
+}
+
 } // namespace touch_replay
