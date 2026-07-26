@@ -228,6 +228,10 @@ ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
   const bool replayAvailable =
       summary.autoPlay ||
       summary.replayFileState == ReplaySummary::ReplayFileState::Available;
+  const bool replayDeletable =
+      !summary.autoPlay &&
+      (summary.replayFileState == ReplaySummary::ReplayFileState::Available ||
+       summary.replayFileState == ReplaySummary::ReplayFileState::Corrupt);
   ResultRecordSummary result{
       .identity = LocalResultRecordId{
           .kind = summary.courseReplay
@@ -243,7 +247,7 @@ ResultRecordSummary makeLocalResultRecord(ReplaySummary summary) {
               .resultRecall = !summary.autoPlay,
               .videoExport = replayAvailable,
               .shareReplay = replayAvailable && !summary.autoPlay,
-              .deleteReplayFile = replayAvailable && !summary.autoPlay,
+              .deleteReplayFile = replayDeletable,
               .irUpload = irUploadActionable(summary.irRecordState),
           },
       .course = summary.courseReplay,

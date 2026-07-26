@@ -165,10 +165,12 @@ void testLocalConversionPreservesRecordSemantics() {
          "a missing replay disables file actions without hiding result or IR");
   replay.replayFileState = ReplaySummary::ReplayFileState::Corrupt;
   const ResultRecordSummary corrupt = makeLocalResultRecord(replay);
-  expect(!corrupt.capabilities.watch && !corrupt.capabilities.shareReplay &&
-             !corrupt.capabilities.deleteReplayFile &&
+  expect(!corrupt.capabilities.watch && !corrupt.capabilities.gBattle &&
+             !corrupt.capabilities.videoExport &&
+             !corrupt.capabilities.shareReplay &&
+             corrupt.capabilities.deleteReplayFile &&
              corrupt.capabilities.resultRecall && corrupt.capabilities.irUpload,
-         "a corrupt replay also preserves non-replay capabilities");
+         "a corrupt replay exposes only deletion among file actions");
 }
 
 void testRemoteConversionIsReadOnlyAndRetainsOptionalValues() {
