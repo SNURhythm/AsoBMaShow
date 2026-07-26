@@ -32,6 +32,7 @@ struct ReplayMigrationChartIdentity {
 struct ReplayMigrationChartMetadata {
   int keyMode = 0;
   bool hasUndefinedLongNotes = false;
+  int totalNotes = 0;
 
   bool operator==(const ReplayMigrationChartMetadata &) const = default;
 };

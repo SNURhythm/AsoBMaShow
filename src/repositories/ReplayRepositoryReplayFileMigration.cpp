@@ -265,11 +265,21 @@ bool supportedKeyMode(int keyMode) noexcept {
 }
 
 GaugeProfile gaugeProfileFromInt(int value) {
-  if (value < static_cast<int>(GaugeProfile::Standard) ||
-      value > static_cast<int>(GaugeProfile::Standard24Keys)) {
-    return GaugeProfile::Standard;
-  }
   return static_cast<GaugeProfile>(value);
+}
+
+bool validGaugeTypeValue(int value) noexcept {
+  return value >= 0 && value < static_cast<int>(kGaugeTypeCount);
+}
+
+bool validGaugeAutoShiftValue(int value) noexcept {
+  return value >= gaugeAutoShiftModeValue(GaugeAutoShiftMode::None) &&
+         value <= gaugeAutoShiftModeValue(GaugeAutoShiftMode::BestClear);
+}
+
+bool validGaugeProfileValue(int value) noexcept {
+  return value >= static_cast<int>(GaugeProfile::Standard) &&
+         value <= static_cast<int>(GaugeProfile::Standard24Keys);
 }
 
 bool readEvents(sqlite3 *database, LegacyChart &chart,
@@ -288,21 +298,29 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
   while ((result = sqlite3_step(statement.get())) == SQLITE_ROW) {
     LegacyEvent entry;
     entry.eventIndex = sqlite3_column_int(statement.get(), 0);
-    entry.event.action = static_cast<replay::LegacyPlaybackAction>(
-        std::clamp(sqlite3_column_int(statement.get(), 1), 0, 5));
+    const int action = sqlite3_column_int(statement.get(), 1);
+    const int judgement = sqlite3_column_int(statement.get(), 6);
+    const int gaugeType = sqlite3_column_int(statement.get(), 9);
+    if (sqlite3_column_type(statement.get(), 1) != SQLITE_INTEGER ||
+        action < static_cast<int>(replay::LegacyPlaybackAction::Press) ||
+        action > static_cast<int>(replay::LegacyPlaybackAction::MultiBad) ||
+        sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
+        judgement < PGreat || judgement >= JudgementCount ||
+        sqlite3_column_type(statement.get(), 9) != SQLITE_INTEGER ||
+        !validGaugeTypeValue(gaugeType)) {
+      diagnostic = "legacy replay event enum value is invalid";
+      return false;
+    }
+    entry.event.action = static_cast<replay::LegacyPlaybackAction>(action);
     entry.event.lane = sqlite3_column_int(statement.get(), 2);
     entry.event.noteTimeMicros = sqlite3_column_int64(statement.get(), 3);
     entry.event.songTimeMicros = sqlite3_column_int64(statement.get(), 4);
     entry.event.judgeTimeMicros = sqlite3_column_int64(statement.get(), 5);
-    const int judgement = sqlite3_column_int(statement.get(), 6);
-    entry.event.judgement = judgement >= PGreat && judgement <= None
-                                ? static_cast<Judgement>(judgement)
-                                : None;
+    entry.event.judgement = static_cast<Judgement>(judgement);
     entry.event.diffMicros = sqlite3_column_int64(statement.get(), 7);
     entry.event.gauge =
         static_cast<float>(sqlite3_column_double(statement.get(), 8));
-    entry.event.gaugeType =
-        gaugeTypeAtIndex(sqlite3_column_int(statement.get(), 9));
+    entry.event.gaugeType = gaugeTypeAtIndex(gaugeType);
     entry.event.combo = sqlite3_column_int(statement.get(), 10);
     entry.event.score = sqlite3_column_int(statement.get(), 11);
     chart.events.push_back(std::move(entry));
@@ -322,9 +340,15 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
     return false;
   }
   while ((result = sqlite3_step(touch.get())) == SQLITE_ROW) {
+    const int action = sqlite3_column_int(touch.get(), 0);
+    if (sqlite3_column_type(touch.get(), 0) != SQLITE_INTEGER ||
+        action < static_cast<int>(replay::ReplayTouchAction::Down) ||
+        action > static_cast<int>(replay::ReplayTouchAction::Cancel)) {
+      diagnostic = "legacy replay touch action is invalid";
+      return false;
+    }
     chart.touchSamples.push_back(
-        {.action = static_cast<replay::ReplayTouchAction>(
-             std::clamp(sqlite3_column_int(touch.get(), 0), 0, 3)),
+        {.action = static_cast<replay::ReplayTouchAction>(action),
          .fingerId = sqlite3_column_int64(touch.get(), 1),
          .songTimeMicros = sqlite3_column_int64(touch.get(), 2),
          .x = static_cast<float>(sqlite3_column_double(touch.get(), 3)),
@@ -363,6 +387,7 @@ bool readEvents(sqlite3 *database, LegacyChart &chart,
 }
 
 bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
+                       std::optional<int> chartTotalNotes,
                        std::string &diagnostic) {
   Statement statement(
       database,
@@ -421,6 +446,12 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
       return false;
     }
   } else if (result == SQLITE_DONE) {
+    if (!chartTotalNotes.has_value() || *chartTotalNotes <= 0 ||
+        *chartTotalNotes > std::numeric_limits<int>::max() / 2) {
+      diagnostic =
+          "chart note metadata is required to reconstruct a legacy result";
+      return false;
+    }
     auto &score = persisted.score;
     score.chartPath = chart.chartPath;
     score.chartMd5 = chart.chartMd5;
@@ -478,20 +509,7 @@ bool readPendingResult(sqlite3 *database, LegacyChart &chart, int keyMode,
         ++score.slow;
       }
     }
-    const int judged = score.pGreat + score.great + score.good + score.bad +
-                       score.poor + score.kPoor;
-    const std::int64_t minimumMaxScore =
-        std::max({2LL, static_cast<std::int64_t>(score.score),
-                  static_cast<std::int64_t>(score.maxCombo) * 2,
-                  static_cast<std::int64_t>(judged) * 2});
-    if (minimumMaxScore > std::numeric_limits<int>::max() - 1LL) {
-      diagnostic = "legacy replay result counters exceed the supported range";
-      return false;
-    }
-    score.maxScore = static_cast<int>(minimumMaxScore);
-    if ((score.maxScore % 2) != 0) {
-      ++score.maxScore;
-    }
+    score.maxScore = *chartTotalNotes * 2;
   } else {
     diagnostic = statement.error();
     return false;
@@ -671,10 +689,17 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
     chart.chartTitle = columnText(statement.get(), 4);
     chart.chartArtist = columnText(statement.get(), 5);
     chart.longNoteMode = sqlite3_column_int(statement.get(), 6);
-    chart.initialGaugeType =
-        gaugeTypeAtIndex(sqlite3_column_int(statement.get(), 7));
-    chart.gaugeAutoShift =
-        gaugeAutoShiftModeFromValue(sqlite3_column_int(statement.get(), 8));
+    const int initialGaugeType = sqlite3_column_int(statement.get(), 7);
+    const int gaugeAutoShift = sqlite3_column_int(statement.get(), 8);
+    if (sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
+        !validGaugeTypeValue(initialGaugeType) ||
+        sqlite3_column_type(statement.get(), 8) != SQLITE_INTEGER ||
+        !validGaugeAutoShiftValue(gaugeAutoShift)) {
+      diagnostic = "legacy replay gauge configuration is invalid";
+      return false;
+    }
+    chart.initialGaugeType = gaugeTypeAtIndex(initialGaugeType);
+    chart.gaugeAutoShift = gaugeAutoShiftModeFromValue(gaugeAutoShift);
     chart.finalScore = sqlite3_column_int(statement.get(), 9);
     chart.maxCombo = sqlite3_column_int(statement.get(), 10);
     chart.finalGauge =
@@ -734,6 +759,7 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
       return false;
     }
     int keyMode = inferredKeyMode(chart);
+    std::optional<int> chartTotalNotes;
     if (resolveMetadata) {
       const auto resolved = resolveMetadata(
           {.chartPath = chart.chartPath,
@@ -742,9 +768,11 @@ bool readCharts(sqlite3 *database, std::vector<LegacyChart> &charts,
       if (resolved.has_value()) {
         keyMode = resolved->keyMode;
         chart.hasUndefinedLongNotes = resolved->hasUndefinedLongNotes;
+        chartTotalNotes = resolved->totalNotes;
       }
     }
-    if (!readPendingResult(database, chart, keyMode, diagnostic) ||
+    if (!readPendingResult(database, chart, keyMode, chartTotalNotes,
+                           diagnostic) ||
         !buildPlayback(chart, diagnostic)) {
       return false;
     }
@@ -900,12 +928,21 @@ bool readCourses(sqlite3 *database, const std::vector<LegacyChart> &charts,
     course.courseName = columnText(statement.get(), 3);
     course.courseGroupName = columnText(statement.get(), 4);
     course.constraintJson = columnText(statement.get(), 5);
-    course.initialGaugeType =
-        gaugeTypeAtIndex(sqlite3_column_int(statement.get(), 6));
-    course.gaugeProfile =
-        gaugeProfileFromInt(sqlite3_column_int(statement.get(), 7));
-    course.gaugeAutoShift =
-        gaugeAutoShiftModeFromValue(sqlite3_column_int(statement.get(), 8));
+    const int initialGaugeType = sqlite3_column_int(statement.get(), 6);
+    const int gaugeProfile = sqlite3_column_int(statement.get(), 7);
+    const int gaugeAutoShift = sqlite3_column_int(statement.get(), 8);
+    if (sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
+        !validGaugeTypeValue(initialGaugeType) ||
+        sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
+        !validGaugeProfileValue(gaugeProfile) ||
+        sqlite3_column_type(statement.get(), 8) != SQLITE_INTEGER ||
+        !validGaugeAutoShiftValue(gaugeAutoShift)) {
+      diagnostic = "legacy course gauge configuration is invalid";
+      return false;
+    }
+    course.initialGaugeType = gaugeTypeAtIndex(initialGaugeType);
+    course.gaugeProfile = gaugeProfileFromInt(gaugeProfile);
+    course.gaugeAutoShift = gaugeAutoShiftModeFromValue(gaugeAutoShift);
     course.longNoteMode = sqlite3_column_int(statement.get(), 9);
     course.requestedPlayOption = columnText(statement.get(), 10);
     course.assistOption = columnText(statement.get(), 11);
@@ -1523,7 +1560,8 @@ ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(
     Statement statement(
         database.get(),
         "SELECT path,lower(trim(md5)),lower(trim(sha256)),keys,ln_mode,"
-        "total_long_notes,total_backspin_notes FROM chart_meta WHERE path=?1 "
+        "total_long_notes,total_backspin_notes,total_notes FROM chart_meta "
+        "WHERE path=?1 "
         "OR (?2<>'' AND lower(trim(md5))=?2) OR "
         "(?3<>'' AND lower(trim(sha256))=?3)");
     if (!statement.valid() ||
@@ -1552,15 +1590,19 @@ ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(
       if (sqlite3_column_type(statement.get(), 3) != SQLITE_INTEGER ||
           sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER ||
           sqlite3_column_type(statement.get(), 5) != SQLITE_INTEGER ||
-          sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER) {
+          sqlite3_column_type(statement.get(), 6) != SQLITE_INTEGER ||
+          sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER) {
         return std::nullopt;
       }
       const int keyMode = sqlite3_column_int(statement.get(), 3);
       const int longNoteMode = sqlite3_column_int(statement.get(), 4);
       const int totalLongNotes = sqlite3_column_int(statement.get(), 5);
       const int totalBackspinNotes = sqlite3_column_int(statement.get(), 6);
+      const int totalNotes = sqlite3_column_int(statement.get(), 7);
       if (!supportedKeyMode(keyMode) || longNoteMode < 0 ||
-          longNoteMode > 3 || totalLongNotes < 0 || totalBackspinNotes < 0) {
+          longNoteMode > 3 || totalLongNotes < 0 || totalBackspinNotes < 0 ||
+          totalNotes <= 0 ||
+          totalNotes > std::numeric_limits<int>::max() / 2) {
         return std::nullopt;
       }
       const ReplayMigrationChartMetadata metadata{
@@ -1568,6 +1610,7 @@ ReplayMigrationChartMetadataResolver makeChartDatabaseReplayMetadataResolver(
           .hasUndefinedLongNotes =
               (totalLongNotes > 0 || totalBackspinNotes > 0) &&
               longNoteMode == 0,
+          .totalNotes = totalNotes,
       };
       if (resolved.has_value() && *resolved != metadata) {
         return std::nullopt;

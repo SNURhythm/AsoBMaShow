@@ -455,19 +455,35 @@ void createChartMetadataDatabase(sqlite3 *database,
                                  const FixtureFacts &chart, int keyMode,
                                  int longNoteMode = 0,
                                  int totalLongNotes = 1,
-                                 int totalBackspinNotes = 0) {
+                                 int totalBackspinNotes = 0,
+                                 int totalNotes = 2) {
   executeOrThrow(
       database,
       "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,md5 TEXT NOT NULL,"
       "sha256 TEXT NOT NULL,keys INTEGER,ln_mode INTEGER,"
-      "total_long_notes INTEGER,total_backspin_notes INTEGER);"
+      "total_long_notes INTEGER,total_backspin_notes INTEGER,"
+      "total_notes INTEGER);"
       "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
-      "total_long_notes,total_backspin_notes) VALUES("
+      "total_long_notes,total_backspin_notes,total_notes) VALUES("
       "'BMS/chart.bms','" +
           chart.md5 + "','" + chart.sha256 + "'," +
           std::to_string(keyMode) + "," + std::to_string(longNoteMode) +
           "," + std::to_string(totalLongNotes) + "," +
-          std::to_string(totalBackspinNotes) + ")");
+          std::to_string(totalBackspinNotes) + "," +
+          std::to_string(totalNotes) + ")");
+}
+
+replay_repository_detail::ReplayMigrationChartMetadataResolver
+fixedChartMetadata(int totalNotes) {
+  return [totalNotes](const auto &)
+             -> std::optional<
+                 replay_repository_detail::ReplayMigrationChartMetadata> {
+    return replay_repository_detail::ReplayMigrationChartMetadata{
+        .keyMode = 7,
+        .hasUndefinedLongNotes = true,
+        .totalNotes = totalNotes,
+    };
+  };
 }
 
 std::string insertCourseFixture(sqlite3 *database, const FixtureFacts &chart) {
@@ -711,6 +727,7 @@ void testChartMetadataPreservesSparseFourteenKeyMode() {
                                   .chartMd5 = chart.md5,
                                   .chartSha256 = chart.sha256});
   expect(resolved.has_value() && resolved->keyMode == 14 &&
+             resolved->totalNotes == 2 &&
              !resolved->hasUndefinedLongNotes,
          "chart resolver returns coherent key and defined-LN metadata");
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
@@ -760,6 +777,7 @@ void testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes() {
                             .chartMd5 = chart.md5,
                             .chartSha256 = chart.sha256});
   expect(resolved.has_value() && resolved->keyMode == 7 &&
+             resolved->totalNotes == 2 &&
              resolved->hasUndefinedLongNotes,
          "positive undefined-LN count resolves true");
 
@@ -775,10 +793,10 @@ void testChartMetadataRejectsAmbiguityAndDetectsUndefinedLongNotes() {
   executeOrThrow(chartDatabase.get(),
                  "UPDATE chart_meta SET total_long_notes=1;"
                  "INSERT INTO chart_meta(path,md5,sha256,keys,ln_mode,"
-                 "total_long_notes,total_backspin_notes) VALUES("
+                 "total_long_notes,total_backspin_notes,total_notes) VALUES("
                  "'BMS/copy.bms','" +
                      chart.md5 + "','" + chart.sha256 +
-                     "',14,1,1,0)");
+                     "',14,1,1,0,2)");
   resolved = resolver({.chartPath = "BMS/chart.bms",
                        .chartMd5 = chart.md5,
                        .chartSha256 = chart.sha256});
@@ -896,8 +914,9 @@ void testReconstructsAcknowledgedResultFromRecordedScoreChanges() {
 
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
+  const auto resolver = fixedChartMetadata(9);
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {}, resolver);
 
   expect(outcome.status ==
              replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
@@ -906,9 +925,66 @@ void testReconstructsAcknowledgedResultFromRecordedScoreChanges() {
       replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
     expect(integer(database.get(),
                    "SELECT count(*) FROM chart_results WHERE id=42 AND "
-                   "score=3 AND max_score=4 AND p_great=1 AND great=1") == 1,
-           "score snapshots exclude non-scoring judgements and include judged "
-           "releases");
+                   "score=3 AND max_score=18 AND p_great=1 AND great=1") == 1,
+           "score snapshots use chart note metadata while reconstructing "
+           "judgements");
+  }
+}
+
+void testMissingChartMetadataBlocksResultReconstruction() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM pending_chart_score_writes WHERE replay_id=42");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store);
+  expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                               Status::InvalidLegacyData &&
+             integer(database.get(), "PRAGMA user_version") == 10 &&
+             tableExists(database.get(), "replay_events"),
+         "result reconstruction without chart note metadata fails atomically");
+}
+
+void testRejectsInvalidLegacyReplayEnums() {
+  struct InvalidEnumCase {
+    std::string_view mutation;
+    std::string_view label;
+  };
+  constexpr std::array cases{
+      InvalidEnumCase{
+          "UPDATE replay_events SET action=99 WHERE replay_id=42", "action"},
+      InvalidEnumCase{
+          "UPDATE replay_events SET judgement=99 WHERE replay_id=42",
+          "judgement"},
+      InvalidEnumCase{
+          "UPDATE replay_events SET gauge_type=99 WHERE replay_id=42",
+          "gauge type"},
+      InvalidEnumCase{
+          "UPDATE replay_touch_samples SET action=99 WHERE replay_id=42",
+          "touch action"},
+  };
+  for (const auto &invalid : cases) {
+    TemporaryDirectory temporary;
+    Database database(temporary.path() / "replay.db");
+    replay_schema10_fixture::createExactSchema(database.get());
+    insertChartFixture(database.get());
+    executeOrThrow(database.get(), invalid.mutation);
+
+    replay::BeatorajaReplayCodec codec;
+    replay::ReplayFileStore store(temporary.path());
+    const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+        database.get(), temporary.path(), codec, store);
+    expect(outcome.status == replay_repository_detail::ReplayMigrationOutcome::
+                                 Status::InvalidLegacyData &&
+               integer(database.get(), "PRAGMA user_version") == 10 &&
+               tableExists(database.get(), "replay_events"),
+           std::string("invalid legacy ") + std::string(invalid.label) +
+               " fails atomically");
   }
 }
 
@@ -933,8 +1009,9 @@ void testMigratesOutdatedProvenanceAsLegacyUnverified() {
 
   replay::BeatorajaReplayCodec codec;
   replay::ReplayFileStore store(temporary.path());
+  const auto resolver = fixedChartMetadata(2);
   const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
-      database.get(), temporary.path(), codec, store);
+      database.get(), temporary.path(), codec, store, {}, resolver);
 
   expect(outcome.status ==
              replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
@@ -1292,6 +1369,8 @@ int main() {
   testMapsLegacyPhysicalLanesForEverySupportedMode();
   testMigratesMd5OnlyChartWithDeterministicReplayStem();
   testReconstructsAcknowledgedResultFromRecordedScoreChanges();
+  testMissingChartMetadataBlocksResultReconstruction();
+  testRejectsInvalidLegacyReplayEnums();
   testMigratesOutdatedProvenanceAsLegacyUnverified();
   testNormalizesLegacyPrerollSupplementalTimestamps();
   testOrdersLegacyInputBeforeRemovingRedundantTransitions();
