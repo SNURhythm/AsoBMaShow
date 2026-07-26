@@ -614,20 +614,6 @@ bool buildPlayback(LegacyChart &chart, std::string &diagnostic) {
     states[key] = pressed;
     chart.playback.input.push_back(transition);
   }
-  if (chart.playback.input.empty()) {
-    chart.playback.input = {
-        {.songTimeMicros = 0,
-         .control = {.kind = replay::LogicalControlKind::Lane,
-                     .player = 1,
-                     .lane = 0},
-         .pressed = true},
-        {.songTimeMicros = 1,
-         .control = {.kind = replay::LogicalControlKind::Lane,
-                     .player = 1,
-                     .lane = 0},
-         .pressed = false},
-    };
-  }
   chart.playback.touchSamples = chart.touchSamples;
   chart.playback.laneCoverEvents = chart.laneCoverEvents;
   replay::LegacyPlaybackTrack legacy;

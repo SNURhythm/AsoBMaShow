@@ -649,6 +649,43 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
   }
 }
 
+void testPreservesEmptyLegacyReplayInput() {
+  TemporaryDirectory temporary;
+  Database database(temporary.path() / "replay.db");
+  replay_schema10_fixture::createExactSchema(database.get());
+  insertChartFixture(database.get());
+  executeOrThrow(database.get(),
+                 "DELETE FROM replay_events WHERE replay_id=42");
+
+  replay::BeatorajaReplayCodec codec;
+  replay::ReplayFileStore store(temporary.path());
+  const auto outcome = replay_repository_detail::migrateReplaySchema10To11(
+      database.get(), temporary.path(), codec, store);
+  expect(outcome.status ==
+             replay_repository_detail::ReplayMigrationOutcome::Status::Migrated,
+         "all-miss legacy replay migrates successfully");
+  if (outcome.status !=
+      replay_repository_detail::ReplayMigrationOutcome::Status::Migrated) {
+    return;
+  }
+
+  replay::ReplayFileMetadata metadata{
+      .relativePath = text(database.get(),
+                           "SELECT relative_path FROM replay_files WHERE "
+                           "chart_result_id=42"),
+      .sha256 = text(database.get(),
+                     "SELECT content_sha256 FROM replay_files WHERE "
+                     "chart_result_id=42"),
+      .compressedSize = static_cast<std::uint64_t>(integer(
+          database.get(),
+          "SELECT compressed_size FROM replay_files WHERE chart_result_id=42")),
+      .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
+  };
+  const auto decoded = store.load(metadata, codec);
+  expect(decoded.chart.has_value() && decoded.chart->input.empty(),
+         "all-miss migration preserves an empty replay input stream");
+}
+
 void testChartMetadataPreservesSparseFourteenKeyMode() {
   TemporaryDirectory temporary;
   Database replayDatabase(temporary.path() / "replay.db");
@@ -1190,6 +1227,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
 
 int main() {
   testMigratesChartRowsToReplayFileAndCompactResult();
+  testPreservesEmptyLegacyReplayInput();
   testChartMetadataPreservesSparseFourteenKeyMode();
   testMapsLegacyPhysicalLanesForEverySupportedMode();
   testMigratesMd5OnlyChartWithDeterministicReplayStem();
