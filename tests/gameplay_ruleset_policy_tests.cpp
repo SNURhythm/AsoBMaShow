@@ -235,6 +235,44 @@ void testReplayStartRebuildsCanonicalPolicyWithoutSnapshot() {
       "a stock replay setup rebuilds its canonical policy from chart metadata");
 }
 
+void testRawReplayUnknownRulesetDoesNotFallBack() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  auto replay = std::make_shared<replay::ReplayPlaybackData>();
+  replay->setup.playbackRulesetId = "future-ruleset";
+  replay->setup.playbackRulesetRevision = 41;
+  StartOptions options;
+  applyReplayPlaybackToStartOptions(options, replay);
+
+  const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+  require(options.requiredRulesetDescriptor.has_value() &&
+              options.requiredRulesetDescriptor->id == "future-ruleset" &&
+              options.requiredRulesetDescriptor->version == 41 &&
+              outcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !outcome.policy.has_value(),
+          "an unknown raw replay ruleset is preserved and rejected");
+}
+
+void testRawCourseReplayUnknownRulesetDoesNotFallBack() {
+  const auto meta = chartMeta(GameplayRuleset::LR2);
+  auto replay = std::make_shared<replay::ReplayPlaybackData>();
+  replay->setup.playbackRulesetId = "future-course-ruleset";
+  replay->setup.playbackRulesetRevision = 17;
+  auto session = std::make_shared<CoursePlaySession>();
+  session->snapshotRulesetFromPlayback(*replay);
+
+  const auto options = makeCourseReplayStageStartOptions(session, replay);
+  const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+  require(session->rulesetDescriptor.id == "future-course-ruleset" &&
+              session->rulesetDescriptor.version == 17 &&
+              outcome.status ==
+                  gameplay::GameplayPolicyBuildStatus::UnsupportedRuleset &&
+              !outcome.policy.has_value(),
+          "an unknown raw course replay ruleset is preserved and rejected");
+}
+
 void testLegacyReplayUsesBeatorajaFallback() {
   auto meta = chartMeta(GameplayRuleset::Beatoraja);
   meta.MD5 = std::string(32, 'b');
@@ -305,8 +343,10 @@ void testRawCourseReplayRestTimingIsPreserved() {
 
 void testRawCourseReplayMaterializationAppliesSavedJudgementConstraint() {
   const auto meta = chartMeta(GameplayRuleset::Beatoraja);
-  auto playback = std::make_shared<const replay::ReplayPlaybackData>(
-      replay::ReplayPlaybackData{});
+  auto playback = std::make_shared<replay::ReplayPlaybackData>();
+  playback->setup.playbackRulesetId = "beatoraja";
+  playback->setup.playbackRulesetRevision =
+      RulesetDescriptor::For(GameplayRuleset::Beatoraja).version;
   StartOptions options;
   applyCourseReplayPlaybackToStartOptions(
       options, playback,
@@ -336,6 +376,8 @@ int main() {
   testValidatedReplayAndCourseConsistency();
   testCanonicalReplaySnapshotStaysCanonical();
   testReplayStartRebuildsCanonicalPolicyWithoutSnapshot();
+  testRawCourseReplayUnknownRulesetDoesNotFallBack();
+  testRawReplayUnknownRulesetDoesNotFallBack();
   testLegacyReplayUsesBeatorajaFallback();
   testRawCourseReplayRestTimingIsPreserved();
   testRawCourseReplayMaterializationAppliesSavedJudgementConstraint();

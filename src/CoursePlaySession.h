@@ -341,8 +341,9 @@ struct CoursePlaySession {
     const auto recorded =
         gameplayRulesetFromId(playback.setup.playbackRulesetId);
     if (!recorded.has_value()) {
-      ruleset = GameplayRuleset::Beatoraja;
-      rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+      rulesetDescriptor = RulesetDescriptor::Legacy();
+      rulesetDescriptor.id = playback.setup.playbackRulesetId;
+      rulesetDescriptor.version = playback.setup.playbackRulesetRevision;
       return;
     }
     const auto descriptor = RulesetDescriptor::For(*recorded);

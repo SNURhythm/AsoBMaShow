@@ -257,6 +257,11 @@ inline void applyReplayPlaybackToStartOptions(
     auto descriptor = RulesetDescriptor::For(*ruleset);
     descriptor.version = setup.playbackRulesetRevision;
     options.requiredRulesetDescriptor = std::move(descriptor);
+  } else {
+    auto descriptor = RulesetDescriptor::Legacy();
+    descriptor.id = setup.playbackRulesetId;
+    descriptor.version = setup.playbackRulesetRevision;
+    options.requiredRulesetDescriptor = std::move(descriptor);
   }
 }
 
