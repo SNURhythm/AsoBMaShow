@@ -208,7 +208,8 @@ inline void insertSimpleChart(sqlite3 *database, std::int64_t id,
                               std::string_view md5, std::string_view sha256,
                               std::string_view createdAt, int score,
                               std::string_view provenance,
-                              std::string_view attemptId = {}) {
+                              std::string_view attemptId = {},
+                              int longNoteMode = 0) {
   const std::string attempt = attemptId.empty() ? "NULL" : quote(attemptId);
   execute(
       database,
@@ -217,7 +218,8 @@ inline void insertSimpleChart(sqlite3 *database, std::int64_t id,
       "final_gauge,clear_type,play_option,play_option2,assist_option,created_at,"
       "ruleset_version,eligibility,provenance_json,attempt_id) VALUES(" +
           std::to_string(id) + ",'chart.bms'," + quote(md5) + "," +
-          quote(sha256) + ",'Chart','Artist',0,0,0," +
+          quote(sha256) + ",'Chart','Artist'," +
+          std::to_string(longNoteMode) + ",0,0," +
           std::to_string(score) +
           ",1,75.0,300,'NORMAL','NORMAL','OFF'," + quote(createdAt) +
           ",0,2," + quote(provenance) + "," + attempt + ")");
@@ -230,6 +232,28 @@ inline void insertSimpleChart(sqlite3 *database, std::int64_t id,
           std::to_string(score) + "),(" + std::to_string(id) +
           ",1,1,1,1000,1100,1100,6,100,75.0,0,1," +
           std::to_string(score) + ")");
+}
+
+inline void insertSimplePendingChart(sqlite3 *database, std::int64_t replayId,
+                                     std::string_view md5,
+                                     std::string_view sha256,
+                                     std::string_view createdAt, int score,
+                                     std::string_view provenance,
+                                     std::string_view attemptId,
+                                     int longNoteMode = 0) {
+  execute(
+      database,
+      "INSERT INTO pending_chart_score_writes(attempt_id,replay_id,"
+      "chart_path,chart_md5,chart_sha256,chart_title,chart_artist,ln_mode,"
+      "score,max_score,max_combo,combo_break,pgreat,great,good,bad,poor,kpoor,"
+      "fast,slow,final_gauge,clear_type,ruleset_version,eligibility,"
+      "provenance_json,created_at,recovery_attempts) VALUES(" +
+          quote(attemptId) + "," + std::to_string(replayId) +
+          ",'chart.bms'," + quote(md5) + "," + quote(sha256) +
+          ",'Chart','Artist'," + std::to_string(longNoteMode) + "," +
+          std::to_string(score) +
+          ",2,1,0,1,0,0,0,0,0,0,0,75.0,300,0,2," + quote(provenance) +
+          "," + quote(createdAt) + ",0)");
 }
 
 } // namespace replay_schema10_fixture

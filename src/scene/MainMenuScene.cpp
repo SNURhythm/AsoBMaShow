@@ -9758,7 +9758,14 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
         session->courseName = persisted.courseName;
         session->courseGroupName = persisted.courseGroupName;
         session->constraintJson = persisted.constraintJson;
-        session->entries.reserve(persisted.stages.size());
+        session->entries.resize(static_cast<std::size_t>(persisted.totalCharts));
+        for (std::size_t index = 0; index < persisted.entryFacts.size();
+             ++index) {
+          session->entries[index].meta.TotalNotes =
+              persisted.entryFacts[index].totalNotes;
+          session->entries[index].meta.PlayLength =
+              persisted.entryFacts[index].playLengthMicros;
+        }
         for (const auto &stage : persisted.stages) {
           bms_parser::ChartMeta meta;
           meta.BmsPath = stage.score.chartPath;
@@ -9769,8 +9776,12 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
           meta.Artist = stage.score.chartArtist;
           meta.KeyMode = stage.keyMode;
           meta.TotalNotes = stage.score.maxScore / 2;
+          meta.PlayLength =
+              persisted.entryFacts[static_cast<std::size_t>(stage.stageIndex)]
+                  .playLengthMicros;
           meta.LnMode = stage.score.longNoteMode;
-          session->entries.push_back({.meta = std::move(meta)});
+          session->entries[static_cast<std::size_t>(stage.stageIndex)].meta =
+              std::move(meta);
         }
         session->snapshotRulesetFromPlayback(playback->stages.front());
         const CourseConstraintSettings constraintSettings =
@@ -9820,6 +9831,8 @@ void MainMenuScene::startCourseReplayPlayback(const ChartMetaRecord &record,
                 .resultId = persisted.resultId,
                 .score = persisted.stages[index].score,
                 .keyMode = persisted.stages[index].keyMode,
+                .adoptedGaugeType =
+                    persisted.stages[index].adoptedGaugeType,
                 .adoptedGaugeHistory =
                     persisted.stages[index].adoptedGaugeHistory,
                 .judgementTiming = persisted.stages[index].judgementTiming,

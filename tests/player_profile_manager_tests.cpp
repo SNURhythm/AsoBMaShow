@@ -227,12 +227,20 @@ LegacyData seedLegacyData(const std::filesystem::path &root) {
   expect(execute(result.replayConnection.get(), "PRAGMA wal_autocheckpoint=0"),
          "replay auto-checkpoint is disabled");
   try {
+    constexpr std::string_view replayAttempt =
+        "123e4567-e89b-42d3-a456-426614174001";
+    const std::string replayProvenance =
+        serializeScoreProvenance(ScoreProvenance::Legacy());
     replay_schema10_fixture::insertSimpleChart(
         result.replayConnection.get(), 1,
         "0123456789abcdef0123456789abcdef",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "2026-07-10 12:34:56", 2,
-        serializeScoreProvenance(ScoreProvenance::Legacy()));
+        "2026-07-10 12:34:56", 2, replayProvenance, replayAttempt, 1);
+    replay_schema10_fixture::insertSimplePendingChart(
+        result.replayConnection.get(), 1,
+        "0123456789abcdef0123456789abcdef",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "2026-07-10 12:34:56", 2, replayProvenance, replayAttempt, 1);
   } catch (const std::exception &exception) {
     expect(false, "WAL-backed replay rows insert: " +
                       std::string(exception.what()));
@@ -311,14 +319,15 @@ void seedIrOperationalState(const std::filesystem::path &path,
           "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
           "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
           "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
-          "fast,slow,final_gauge,clear_type,gauge_history_json,"
+          "fast,slow,final_gauge,clear_type,adopted_gauge_type,"
+          "gauge_history_json,"
           "judgement_timing_json,provenance_json,result_fingerprint,"
           "played_at_unix_ms) VALUES("
           "'10000000-0000-4000-8000-000000000004','remote.bms',"
           "'dddddddddddddddddddddddddddddddd',"
           "'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',"
           "'Remote Song','Remote Artist',7,0,1,2,1,0,0,1,0,0,0,0,0,0,0.0,0,"
-          "'[]',NULL,'{\"ruleset\":{\"version\":0},\"eligibility\":2,"
+          "2,'[]',NULL,'{\"ruleset\":{\"version\":0},\"eligibility\":2,"
           "\"source\":{\"kind\":\"legacy\"}}',lower(hex(zeroblob(32))),"
           "4000);"
           "INSERT INTO ir_submission_receipts(provider_id,server_origin,"

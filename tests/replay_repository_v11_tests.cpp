@@ -376,8 +376,8 @@ void testFreshCompactSchema() {
   repository.Shutdown();
 
   Database database(databasePath);
-  expect(scalarInteger(database.get(), "PRAGMA user_version") == 13,
-         "fresh replay database uses schema version 13");
+  expect(scalarInteger(database.get(), "PRAGMA user_version") == 14,
+         "fresh replay database uses schema version 14");
   const auto chartColumns = stringSet(
       database.get(), "SELECT name FROM pragma_table_info('chart_results')");
   const auto courseStageColumns = stringSet(
@@ -392,6 +392,10 @@ void testFreshCompactSchema() {
   expect(reservationColumns.contains("finalized_content_sha256") &&
              reservationColumns.contains("finalized_compressed_size"),
          "replay reservations store finalized ownership evidence");
+  const auto courseColumns = stringSet(
+      database.get(), "SELECT name FROM pragma_table_info('course_results')");
+  expect(courseColumns.contains("entry_facts_json"),
+         "course results retain presentation facts for every entry");
   const auto tables = stringSet(
       database.get(),
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
@@ -466,6 +470,10 @@ void testVersion11AdoptedGaugeMigration() {
                        "(length(finalized_content_sha256)=64 AND "
                        "finalized_compressed_size>0)),','') WHERE "
                        "type='table' AND name='replay_file_reservations'") &&
+               execute(database.get(),
+                       "UPDATE sqlite_master SET sql=replace(sql,"
+                       "',entry_facts_json TEXT NOT NULL','') WHERE "
+                       "type='table' AND name='course_results'") &&
                execute(database.get(), "PRAGMA writable_schema=OFF") &&
                execute(database.get(), "PRAGMA user_version=11"),
            "schema-12 and schema-13-only columns are removed from the fixture");
@@ -476,7 +484,7 @@ void testVersion11AdoptedGaugeMigration() {
   repository.Shutdown();
 
   Database database(databasePath);
-  expect(scalarInteger(database.get(), "PRAGMA user_version") == 13 &&
+  expect(scalarInteger(database.get(), "PRAGMA user_version") == 14 &&
              stringSet(database.get(),
                        "SELECT name FROM pragma_table_info('chart_results')")
                  .contains("adopted_gauge_type") &&

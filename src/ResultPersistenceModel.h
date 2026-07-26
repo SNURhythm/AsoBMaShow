@@ -136,6 +136,13 @@ struct PersistedCourseStageResult {
   bool operator==(const PersistedCourseStageResult &) const = default;
 };
 
+struct PersistedCourseEntryFacts {
+  int totalNotes = 0;
+  std::int64_t playLengthMicros = 0;
+
+  bool operator==(const PersistedCourseEntryFacts &) const = default;
+};
+
 struct PersistedCourseResult {
   int resultId = 0;
   std::optional<std::string> attemptId;
@@ -160,6 +167,7 @@ struct PersistedCourseResult {
   int clearType = kClearTypeFailedRank;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
   std::vector<PersistedCourseStageResult> stages;
+  std::vector<PersistedCourseEntryFacts> entryFacts;
   std::int64_t playedAtUnixMillis = 0;
   std::string resultFingerprint;
 

@@ -26,6 +26,7 @@ using Json = nlohmann::ordered_json;
 
 constexpr std::size_t kMaximumResultJsonBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kMaximumGaugeSamples = 1'000'000U;
+constexpr std::size_t kMaximumCourseEntries = 256U;
 
 bool lowerHex(std::string_view value, std::size_t size) {
   return value.size() == size &&
@@ -74,6 +75,59 @@ std::optional<std::vector<float>> parseGaugeHistory(std::string_view text) {
             result, [](float value) { return !std::isfinite(value); }) ||
         Json(result).dump() != text) {
       return std::nullopt;
+    }
+    return result;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::string> courseEntryFactsJson(
+    const std::vector<result_persistence::PersistedCourseEntryFacts> &facts) {
+  if (facts.empty() || facts.size() > kMaximumCourseEntries) {
+    return std::nullopt;
+  }
+  Json value = Json::array();
+  for (const auto &entry : facts) {
+    if (entry.totalNotes < 0 || entry.playLengthMicros < 0) {
+      return std::nullopt;
+    }
+    value.push_back(Json::array({entry.totalNotes, entry.playLengthMicros}));
+  }
+  const std::string serialized = value.dump();
+  return serialized.size() <= kMaximumResultJsonBytes
+             ? std::optional<std::string>(serialized)
+             : std::nullopt;
+}
+
+std::optional<std::vector<result_persistence::PersistedCourseEntryFacts>>
+parseCourseEntryFacts(std::string_view text) {
+  try {
+    if (text.empty() || text.size() > kMaximumResultJsonBytes) {
+      return std::nullopt;
+    }
+    const Json value = Json::parse(text);
+    if (!value.is_array() || value.empty() ||
+        value.size() > kMaximumCourseEntries || value.dump() != text) {
+      return std::nullopt;
+    }
+    std::vector<result_persistence::PersistedCourseEntryFacts> result;
+    result.reserve(value.size());
+    for (const auto &entry : value) {
+      if (!entry.is_array() || entry.size() != 2 ||
+          !entry[0].is_number_integer() ||
+          !entry[1].is_number_integer()) {
+        return std::nullopt;
+      }
+      const auto totalNotes = entry[0].get<std::int64_t>();
+      const auto playLength = entry[1].get<std::int64_t>();
+      if (totalNotes < 0 || totalNotes > std::numeric_limits<int>::max() ||
+          playLength < 0) {
+        return std::nullopt;
+      }
+      result.push_back(
+          {.totalNotes = static_cast<int>(totalNotes),
+           .playLengthMicros = playLength});
     }
     return result;
   } catch (...) {
@@ -634,12 +688,46 @@ bool MarkReplayFileReservationFinalizedOnConnection(
     return false;
   }
   const int step = sqlite3_step(current.get());
+  if (step == SQLITE_DONE) {
+    current.reset();
+    SqliteStatementHandle durable;
+    if (prepareSqliteStatement(
+            database,
+            "SELECT f.stem,f.history_index,f.relative_path,f.content_sha256,"
+            "f.compressed_size,f.codec_version FROM replay_files f LEFT JOIN "
+            "chart_results c ON c.id=f.chart_result_id LEFT JOIN "
+            "course_results r ON r.id=f.course_result_id WHERE "
+            "c.attempt_id=? OR r.attempt_id=?",
+            durable) != SQLITE_OK ||
+        !bindText(durable.get(), 1, reservation.attemptId) ||
+        !bindText(durable.get(), 2, reservation.attemptId)) {
+      diagnostic = "could not inspect durable replay ownership";
+      return false;
+    }
+    const int durableStep = sqlite3_step(durable.get());
+    const bool identical =
+        durableStep == SQLITE_ROW &&
+        columnText(durable.get(), 0) == reservation.stem &&
+        sqlite3_column_int64(durable.get(), 1) == reservation.historyIndex &&
+        columnText(durable.get(), 2) == pathText(reservation.relativePath) &&
+        columnText(durable.get(), 3) == metadata.sha256 &&
+        sqlite3_column_int64(durable.get(), 4) ==
+            static_cast<sqlite3_int64>(metadata.compressedSize) &&
+        sqlite3_column_int(durable.get(), 5) == metadata.codecVersion &&
+        sqlite3_step(durable.get()) == SQLITE_DONE;
+    if (!identical || !transaction.commit(transactionError)) {
+      diagnostic = identical
+                       ? "could not finish durable replay ownership read"
+                       : "attempt has no matching durable replay ownership";
+      return false;
+    }
+    diagnostic.clear();
+    return true;
+  }
   if (step != SQLITE_ROW || columnText(current.get(), 0) != reservation.stem ||
       sqlite3_column_int64(current.get(), 1) != reservation.historyIndex ||
       columnText(current.get(), 2) != pathText(reservation.relativePath)) {
-    diagnostic = step == SQLITE_DONE
-                     ? "replay reservation no longer exists"
-                     : "replay reservation changed before finalization";
+    diagnostic = "replay reservation changed before finalization";
     return false;
   }
   const bool hashNull = sqlite3_column_type(current.get(), 3) == SQLITE_NULL;
@@ -909,7 +997,8 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
       "r.assist_option,r.initial_gauge_type,r.gauge_profile,"
       "r.gauge_auto_shift,r.gauge_auto_shift_lower_bound,r.long_note_mode,"
       "r.final_score,r.max_score,r.max_combo,r.final_gauge,r.clear_type,"
-      "r.provenance_json,r.result_fingerprint,r.played_at_unix_ms,"
+      "r.provenance_json,r.entry_facts_json,r.result_fingerprint,"
+      "r.played_at_unix_ms,"
       "f.id,f.stem,f.history_index,f.relative_path,f.content_sha256,"
       "f.compressed_size,f.codec_version FROM course_results r LEFT JOIN "
       "replay_files f ON f.course_result_id=r.id WHERE r.id=?";
@@ -976,25 +1065,30 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
     return invalidCourseResult("course result provenance is malformed");
   }
   result.provenance = std::move(*provenance);
-  result.resultFingerprint = columnText(statement.get(), 22);
-  result.playedAtUnixMillis = sqlite3_column_int64(statement.get(), 23);
+  auto entryFacts = parseCourseEntryFacts(columnText(statement.get(), 22));
+  if (!entryFacts.has_value()) {
+    return invalidCourseResult("course entry facts are malformed");
+  }
+  result.entryFacts = std::move(*entryFacts);
+  result.resultFingerprint = columnText(statement.get(), 23);
+  result.playedAtUnixMillis = sqlite3_column_int64(statement.get(), 24);
 
   CourseResultRecord record{.result = std::move(result)};
-  if (sqlite3_column_type(statement.get(), 24) != SQLITE_NULL) {
-    const auto size = sqlite3_column_int64(statement.get(), 29);
+  if (sqlite3_column_type(statement.get(), 25) != SQLITE_NULL) {
+    const auto size = sqlite3_column_int64(statement.get(), 30);
     if (size <= 0) {
       return invalidCourseResult("course replay file size is invalid");
     }
     record.replayFile = ReplayFileReference{
-        .id = sqlite3_column_int64(statement.get(), 24),
+        .id = sqlite3_column_int64(statement.get(), 25),
         .recordKind = ReplayFileReference::RecordKind::CourseResult,
         .recordId = resultId,
-        .stem = columnText(statement.get(), 25),
-        .historyIndex = sqlite3_column_int64(statement.get(), 26),
-        .relativePath = std::filesystem::path(columnText(statement.get(), 27)),
-        .contentSha256 = columnText(statement.get(), 28),
+        .stem = columnText(statement.get(), 26),
+        .historyIndex = sqlite3_column_int64(statement.get(), 27),
+        .relativePath = std::filesystem::path(columnText(statement.get(), 28)),
+        .contentSha256 = columnText(statement.get(), 29),
         .compressedSize = static_cast<std::uint64_t>(size),
-        .codecVersion = sqlite3_column_int(statement.get(), 30),
+        .codecVersion = sqlite3_column_int(statement.get(), 31),
     };
     ReplayFileReference check = *record.replayFile;
     check.id = 0;
@@ -1506,6 +1600,7 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
 
   const auto provenance =
       serializeValidatedScoreProvenance(sourceResult.provenance, diagnostic);
+  const auto entryFacts = courseEntryFactsJson(sourceResult.entryFacts);
   std::vector<std::string> histories;
   std::vector<std::string> timings;
   std::vector<std::string> provenances;
@@ -1528,7 +1623,7 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
     timings.push_back(*timing);
     provenances.push_back(*stageProvenance);
   }
-  if (!provenance.has_value()) {
+  if (!provenance.has_value() || !entryFacts.has_value()) {
     return {.status = StageStatus::IntegrityConflict,
             .diagnostic = diagnostic.empty()
                               ? "course result cannot be serialized"
@@ -1619,8 +1714,8 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       "total_charts,requested_play_option,assist_option,initial_gauge_type,"
       "gauge_profile,gauge_auto_shift,gauge_auto_shift_lower_bound,"
       "long_note_mode,final_score,max_score,max_combo,final_gauge,clear_type,"
-      "provenance_json,result_fingerprint,played_at_unix_ms)"
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+      "provenance_json,entry_facts_json,result_fingerprint,played_at_unix_ms)"
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
   SqliteStatementHandle resultInsert;
   if (prepareSqliteStatement(database, resultSql, resultInsert) != SQLITE_OK) {
     return {.status = StageStatus::StorageFailure,
@@ -1668,10 +1763,11 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       sqlite3_bind_int(resultInsert.get(), column++, sourceResult.clearType) ==
           SQLITE_OK &&
       bindText(resultInsert.get(), column++, *provenance) &&
+      bindText(resultInsert.get(), column++, *entryFacts) &&
       bindText(resultInsert.get(), column++, sourceResult.resultFingerprint) &&
       sqlite3_bind_int64(resultInsert.get(), column++,
                          sourceResult.playedAtUnixMillis) == SQLITE_OK;
-  if (!bound || column != 24 ||
+  if (!bound || column != 25 ||
       sqlite3_step(resultInsert.get()) != SQLITE_DONE) {
     return {.status = StageStatus::StorageFailure,
             .diagnostic = "could not insert compact course result"};

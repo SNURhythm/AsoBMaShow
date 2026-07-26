@@ -593,7 +593,7 @@ void testMigratesChartRowsToReplayFileAndCompactResult() {
          "schema-v10 chart rows migrate successfully");
   expect(outcome.chartFiles == 1 && outcome.courseFiles == 0,
          "migration reports the finalized chart file");
-  expect(integer(database.get(), "PRAGMA user_version") == 12,
+  expect(integer(database.get(), "PRAGMA user_version") == 14,
          "migration advances the schema exactly once");
   expect(!tableExists(database.get(), "replays") &&
              !tableExists(database.get(), "replay_events") &&
@@ -1159,6 +1159,13 @@ void testMigratesCompleteAndPartialCoursesToBeatorajaCourseFiles() {
   expect(text(database.get(),
               "SELECT course_key FROM course_results WHERE id=77") == courseKey,
          "course result preserves its canonical content identity");
+  expect(text(database.get(),
+              "SELECT entry_facts_json FROM course_results WHERE id=77") ==
+             "[[2,0]]" &&
+             text(database.get(),
+                  "SELECT entry_facts_json FROM course_results WHERE id=78") ==
+                 "[[2,0],[0,0]]",
+         "course migration backfills every entry without replay coupling");
   expect(integer(database.get(),
                  "SELECT count(*) FROM course_results WHERE id=78 AND "
                  "completed_charts=1 AND total_charts=2 AND clear_type=200") ==
@@ -1350,7 +1357,7 @@ void testRepositoryStartupRunsAtomicV10Migration() {
   repository.Shutdown();
 
   Database migrated(databasePath);
-  expect(integer(migrated.get(), "PRAGMA user_version") == 12 &&
+  expect(integer(migrated.get(), "PRAGMA user_version") == 14 &&
              integer(migrated.get(),
                      "SELECT count(*) FROM chart_results WHERE id=42") == 1,
          "startup exposes only the committed compact schema");

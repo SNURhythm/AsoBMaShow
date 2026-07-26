@@ -291,6 +291,12 @@ CompletedCourseAttempt validCourseAttempt(std::string attemptId) {
        .adoptedGaugeHistory = second.result.adoptedGaugeHistory,
        .judgementTiming = second.result.judgementTiming},
   };
+  result.entryFacts = {
+      {.totalNotes = first.result.score.maxScore / 2,
+       .playLengthMicros = 1'000'000},
+      {.totalNotes = second.result.score.maxScore / 2,
+       .playLengthMicros = 2'000'000},
+  };
   result.finalScore = first.result.score.score + second.result.score.score;
   result.maxScore = first.result.score.maxScore + second.result.score.maxScore;
   result.resultFingerprint = resultFingerprint(result);
@@ -365,6 +371,11 @@ ReplayFileReference finalizedReference(Environment &environment,
   if (!finalized.metadata) {
     return {};
   }
+  std::string ownershipDiagnostic;
+  expect(environment.replayRepository.markReplayFileReservationFinalized(
+             *reserved.reservation, *finalized.metadata,
+             ownershipDiagnostic),
+         "manual recovery replay records finalized ownership");
   return {
       .stem = identity.stem,
       .historyIndex = identity.historyIndex,
@@ -752,6 +763,54 @@ void testCoursePipelineUsesOneBeatorajaArrayFile() {
       "deleted course replay disables playback without deleting result facts");
 }
 
+void testVersion13CourseEntryFactsMigration() {
+  TemporaryDirectory temporary("course-entry-facts-migration");
+  auto attempt =
+      validCourseAttempt("123e4567-e89b-42d3-a456-426614174013");
+  for (auto &facts : attempt.result.entryFacts) {
+    facts.playLengthMicros = 0;
+  }
+  attempt.result.resultFingerprint = resultFingerprint(attempt.result);
+  int resultId = 0;
+  {
+    Environment environment(temporary.path());
+    const auto saved = environment.coordinator.persistCourse(attempt);
+    expect(saved.saved() && saved.receipt.has_value(),
+           "schema-13 course fixture persists");
+    if (!saved.receipt.has_value()) {
+      return;
+    }
+    resultId = saved.receipt->resultId;
+  }
+
+  const auto databasePath = temporary.path() / "replay.db";
+  expect(executeSql(
+             databasePath,
+             "PRAGMA writable_schema=ON; UPDATE sqlite_master SET "
+             "sql=replace(sql,',entry_facts_json TEXT NOT NULL','') WHERE "
+             "type='table' AND name='course_results'; "
+             "PRAGMA writable_schema=OFF; PRAGMA user_version=13;"),
+         "schema-13 course fixture removes the new column");
+
+  ReplayRepository repository(databasePath);
+  expect(repository.EnsureSchema(),
+         "schema-13 course entry facts migrate to the current schema");
+  const auto loaded = repository.loadCourseResult(resultId);
+  auto expected = attempt.result;
+  expected.resultId = resultId;
+  const bool migrated =
+      scalar(databasePath, "PRAGMA user_version") == 14 &&
+      loaded.status == CourseResultReadOutcome::Status::Loaded &&
+      loaded.record.has_value() && loaded.record->result == expected;
+  if (!migrated) {
+    std::cerr << "course facts migration status="
+              << static_cast<int>(loaded.status)
+              << " diagnostic=" << loaded.diagnostic << '\n';
+  }
+  expect(migrated,
+         "course entry facts backfill and existing fingerprint remain valid");
+}
+
 void testReplayVolumeOnlyGrowsTheBrdFile() {
   TemporaryDirectory smallRoot("size-small");
   TemporaryDirectory largeRoot("size-large");
@@ -937,6 +996,7 @@ int main() {
   testFilesystemFailuresNeverStageDatabaseRows();
   testCrashAfterCompactStageRecoversWithoutReplayReconstruction();
   testCoursePipelineUsesOneBeatorajaArrayFile();
+  testVersion13CourseEntryFactsMigration();
   testReplayVolumeOnlyGrowsTheBrdFile();
   testSummaryLimitsCountOnlyValidatedRows();
   testSummaryCorruptionAllowanceIsBounded();

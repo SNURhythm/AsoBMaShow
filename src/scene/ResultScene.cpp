@@ -602,6 +602,12 @@ void ResultScene::saveCourseReplay() {
   result.provenance = local->attemptProvenance;
   result.playedAtUnixMillis = nowUnixMillis();
   result.stages.reserve(completedCharts);
+  result.entryFacts.reserve(totalCharts);
+  for (const auto &entry : session->entries) {
+    result.entryFacts.push_back(
+        {.totalNotes = std::max(0, entry.meta.TotalNotes),
+         .playLengthMicros = std::max<std::int64_t>(0, entry.meta.PlayLength)});
+  }
 
   for (std::size_t index = 0; index < completedCharts; ++index) {
     if (!session->stageProvenance[index].has_value()) {

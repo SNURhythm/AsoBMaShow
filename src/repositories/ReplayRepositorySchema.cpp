@@ -165,7 +165,8 @@ bool validateCompactReplayColumnShapes(sqlite3 *database, int version) {
       return (version < 12 && column.name == "adopted_gauge_type") ||
              (version < 13 &&
               (column.name == "finalized_content_sha256" ||
-               column.name == "finalized_compressed_size"));
+               column.name == "finalized_compressed_size")) ||
+             (version < 14 && column.name == "entry_facts_json");
     });
     if (*actual != *expected) {
       valid = false;
@@ -254,6 +255,13 @@ bool validateCompactReplaySchema13(sqlite3 *database) {
                                 "finalized_content_sha256") &&
          namedTableColumnExists(database, "replay_file_reservations",
                                 "finalized_compressed_size");
+}
+
+bool validateCompactReplaySchema14(sqlite3 *database) {
+  return validateCompactReplaySchemaObjects(database) &&
+         validateCompactReplayColumnShapes(database, 14) &&
+         namedTableColumnExists(database, "course_results",
+                                "entry_facts_json");
 }
 
 bool backfillAdoptedGaugeTypes(sqlite3 *database, std::string_view table) {
@@ -365,6 +373,100 @@ bool migrateCompactReplaySchema12To13(sqlite3 *database) {
   return transaction.commit(transactionError);
 }
 
+bool backfillCourseEntryFacts(sqlite3 *database) {
+  SqliteStatementHandle courses;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT id,total_charts,completed_charts FROM course_results "
+          "ORDER BY id",
+          courses) != SQLITE_OK) {
+    return false;
+  }
+  std::vector<std::pair<sqlite3_int64, std::string>> updates;
+  int courseStep = SQLITE_OK;
+  while ((courseStep = sqlite3_step(courses.get())) == SQLITE_ROW) {
+    const sqlite3_int64 courseId = sqlite3_column_int64(courses.get(), 0);
+    const int totalCharts = sqlite3_column_int(courses.get(), 1);
+    const int completedCharts = sqlite3_column_int(courses.get(), 2);
+    if (courseId <= 0 || totalCharts <= 0 || totalCharts > 256 ||
+        completedCharts <= 0 || completedCharts > totalCharts) {
+      return false;
+    }
+    std::vector<int> totalNotes(static_cast<std::size_t>(totalCharts), 0);
+    SqliteStatementHandle stages;
+    if (prepareSqliteStatement(
+            database,
+            "SELECT stage_index,max_score FROM course_result_stages WHERE "
+            "course_result_id=? ORDER BY stage_index",
+            stages) != SQLITE_OK ||
+        sqlite3_bind_int64(stages.get(), 1, courseId) != SQLITE_OK) {
+      return false;
+    }
+    int expectedIndex = 0;
+    int stageStep = SQLITE_OK;
+    while ((stageStep = sqlite3_step(stages.get())) == SQLITE_ROW) {
+      const int stageIndex = sqlite3_column_int(stages.get(), 0);
+      const int maxScore = sqlite3_column_int(stages.get(), 1);
+      if (stageIndex != expectedIndex || expectedIndex >= completedCharts ||
+          maxScore <= 0 || maxScore % 2 != 0) {
+        return false;
+      }
+      totalNotes[static_cast<std::size_t>(expectedIndex)] = maxScore / 2;
+      ++expectedIndex;
+    }
+    if (stageStep != SQLITE_DONE || expectedIndex != completedCharts) {
+      return false;
+    }
+    std::string json = "[";
+    for (std::size_t index = 0; index < totalNotes.size(); ++index) {
+      if (index != 0) {
+        json.push_back(',');
+      }
+      json += "[" + std::to_string(totalNotes[index]) + ",0]";
+    }
+    json.push_back(']');
+    updates.emplace_back(courseId, std::move(json));
+  }
+  if (courseStep != SQLITE_DONE) {
+    return false;
+  }
+  courses.reset();
+  for (const auto &[courseId, json] : updates) {
+    SqliteStatementHandle update;
+    if (prepareSqliteStatement(
+            database,
+            "UPDATE course_results SET entry_facts_json=? WHERE id=?",
+            update) != SQLITE_OK ||
+        !bindSqliteText(update.get(), 1, json) ||
+        sqlite3_bind_int64(update.get(), 2, courseId) != SQLITE_OK ||
+        sqlite3_step(update.get()) != SQLITE_DONE ||
+        sqlite3_changes(database) != 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool migrateCompactReplaySchema13To14(sqlite3 *database) {
+  if (!validateCompactReplaySchema13(database) ||
+      namedTableColumnExists(database, "course_results", "entry_facts_json")) {
+    return false;
+  }
+  std::string transactionError;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE TRANSACTION",
+                                      transactionError);
+  if (!transaction.active() ||
+      !execSql(database,
+               "ALTER TABLE course_results ADD COLUMN entry_facts_json "
+               "TEXT NOT NULL DEFAULT '[]'",
+               "adding course entry facts") ||
+      !backfillCourseEntryFacts(database) ||
+      !setDatabaseUserVersion(database, 14)) {
+    return false;
+  }
+  return transaction.commit(transactionError);
+}
+
 constexpr const char *kIrOutboxTableSql =
     "CREATE TABLE ir_outbox("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id TEXT NOT NULL,"
@@ -438,7 +540,8 @@ bool createCompactReplaySchema11(sqlite3 *database) {
       "final_gauge REAL NOT NULL,clear_type INTEGER NOT NULL,"
       "provenance_json TEXT NOT NULL,result_fingerprint TEXT NOT NULL,"
       "played_at_unix_ms INTEGER NOT NULL,"
-      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+      "entry_facts_json TEXT NOT NULL)",
       "CREATE TABLE course_result_stages("
       "course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
       "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
@@ -575,16 +678,22 @@ bool migrateReplayDatabaseSchema(
     return false;
   }
   if (*version == kReplayDatabaseSchemaVersion) {
-    return validateCompactReplaySchema13(database);
+    return validateCompactReplaySchema14(database);
+  }
+  if (*version == 13) {
+    return migrateCompactReplaySchema13To14(database) &&
+           validateCompactReplaySchema14(database);
   }
   if (*version == 12) {
     return migrateCompactReplaySchema12To13(database) &&
-           validateCompactReplaySchema13(database);
+           migrateCompactReplaySchema13To14(database) &&
+           validateCompactReplaySchema14(database);
   }
   if (*version == 11) {
     return migrateCompactReplaySchema11To12(database) &&
            migrateCompactReplaySchema12To13(database) &&
-           validateCompactReplaySchema13(database);
+           migrateCompactReplaySchema13To14(database) &&
+           validateCompactReplaySchema14(database);
   }
   if (*version != 10) {
     SDL_Log("Replay database schema %d is not supported", *version);
@@ -632,7 +741,17 @@ bool migrateReplayDatabaseSchema(
       !migrateCompactReplaySchema12To13(database)) {
     return false;
   }
-  return validateCompactReplaySchema13(database);
+  std::string finalizedVersionError;
+  const auto finalizedVersion =
+      readSqliteUserVersion(database, finalizedVersionError);
+  if (!finalizedVersion.has_value()) {
+    return false;
+  }
+  if (*finalizedVersion == 13 &&
+      !migrateCompactReplaySchema13To14(database)) {
+    return false;
+  }
+  return validateCompactReplaySchema14(database);
 }
 
 std::filesystem::path resolvedReplayDatabasePath(

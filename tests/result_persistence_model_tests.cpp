@@ -224,6 +224,11 @@ result_persistence::PersistedCourseResult validCourse() {
        .adoptedGaugeType = GaugeType::Normal,
        .adoptedGaugeHistory = {70.0F, 62.5F}},
   };
+  result.entryFacts = {
+      {.totalNotes = 5, .playLengthMicros = 1'000'000},
+      {.totalNotes = 5, .playLengthMicros = 2'000'000},
+      {.totalNotes = 7, .playLengthMicros = 3'000'000},
+  };
   result.playedAtUnixMillis = 1'700'000'000'456LL;
   result.resultFingerprint = result_persistence::resultFingerprint(result);
   return result;
@@ -265,6 +270,12 @@ void testCourseResult() {
   expectCourseFingerprintChange(
       [](auto &value) { value.stages[0].adoptedGaugeType = GaugeType::Easy; },
       "stage adopted gauge type");
+  expectCourseFingerprintChange(
+      [](auto &value) { ++value.entryFacts[2].totalNotes; },
+      "unfinished stage note count");
+  expectCourseFingerprintChange(
+      [](auto &value) { ++value.entryFacts[2].playLengthMicros; },
+      "unfinished stage play length");
 
   auto invalid = result;
   invalid.stages[1].stageIndex = 0;
@@ -284,6 +295,18 @@ void testCourseResult() {
   expect(
       !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
       "course totals must equal ordered stage totals");
+  invalid = result;
+  invalid.entryFacts.pop_back();
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "every course entry must retain presentation facts");
+  invalid = result;
+  invalid.entryFacts[2].playLengthMicros = -1;
+  invalid.resultFingerprint.clear();
+  expect(
+      !result_persistence::validatePersistedCourseResult(invalid, diagnostic),
+      "course entry presentation facts must be nonnegative");
 }
 
 } // namespace

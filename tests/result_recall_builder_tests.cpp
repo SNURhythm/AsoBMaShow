@@ -363,6 +363,12 @@ result_persistence::PersistedCourseResult validCourseResult() {
            .adoptedGaugeHistory = second.adoptedGaugeHistory,
            .judgementTiming = second.judgementTiming},
       },
+      .entryFacts = {
+          {.totalNotes = first.score.maxScore / 2,
+           .playLengthMicros = 1'000'000},
+          {.totalNotes = second.score.maxScore / 2,
+           .playLengthMicros = 2'000'000},
+      },
       .playedAtUnixMillis = 1784420645000LL,
   };
   result.resultFingerprint = result_persistence::resultFingerprint(result);
@@ -417,6 +423,12 @@ void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
   persisted.stages.resize(1);
   persisted.completedCharts = 1;
   persisted.totalCharts = 3;
+  persisted.entryFacts = {
+      {.totalNotes = persisted.stages[0].score.maxScore / 2,
+       .playLengthMicros = 1'000'000},
+      {.totalNotes = 123, .playLengthMicros = 2'000'000},
+      {.totalNotes = 456, .playLengthMicros = 3'000'000},
+  };
   persisted.finalScore = persisted.stages[0].score.score;
   persisted.maxScore = persisted.stages[0].score.maxScore;
   persisted.maxCombo = persisted.stages[0].score.maxCombo;
@@ -437,6 +449,10 @@ void testIncompleteCourseRecallPreservesPersistedTotalAndOutcome() {
   assert(session->ownedResultBrowseCharts.size() == 1);
   assert(session->entries[1].meta.BmsPath.empty());
   assert(session->entries[2].meta.BmsPath.empty());
+  assert(session->entries[1].meta.TotalNotes == 123);
+  assert(session->entries[1].meta.PlayLength == 2'000'000);
+  assert(session->entries[2].meta.TotalNotes == 456);
+  assert(session->entries[2].meta.PlayLength == 3'000'000);
   assert(session->carriedGauge.has_value());
   assert(session->carriedGauge->currentGauge == persisted.finalGauge);
   assert(session->recalledCourseClearTypeRank == persisted.clearType);

@@ -206,6 +206,12 @@ CourseBuildOutcome BuildCourseResult(
     }
 
     session->entries.resize(static_cast<std::size_t>(result.totalCharts));
+    for (std::size_t index = 0; index < result.entryFacts.size(); ++index) {
+      session->entries[index].meta.TotalNotes =
+          result.entryFacts[index].totalNotes;
+      session->entries[index].meta.PlayLength =
+          result.entryFacts[index].playLengthMicros;
+    }
     RhythmState finalGaugeState(nullptr, false, session->ruleset,
                                 result.gaugeProfile);
     finalGaugeState.configureGauge(

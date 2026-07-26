@@ -845,6 +845,7 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
   persisted.clearType = course.clearType;
   persisted.provenance = course.provenance;
   persisted.playedAtUnixMillis = course.playedAtUnixMillis;
+  persisted.entryFacts.resize(static_cast<std::size_t>(course.totalCharts));
 
   std::vector<course_identity::ChartIdentity> identities;
   identities.reserve(course.chartIndexes.size());
@@ -866,6 +867,8 @@ bool buildCourse(LegacyCourse &course, const std::vector<LegacyChart> &charts,
          .adoptedGaugeType = chart.result.adoptedGaugeType,
          .adoptedGaugeHistory = chart.result.adoptedGaugeHistory,
          .judgementTiming = chart.result.judgementTiming});
+    persisted.entryFacts[stageIndex].totalNotes =
+        chart.result.score.maxScore / 2;
     persisted.maxScore += chart.result.score.maxScore;
     course.playback.stages.push_back(chart.playback);
     course.playback.restMicrosAfterStage.push_back(
@@ -1226,13 +1229,21 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
       "total_charts,requested_play_option,assist_option,initial_gauge_type,"
       "gauge_profile,gauge_auto_shift,gauge_auto_shift_lower_bound,"
       "long_note_mode,final_score,max_score,max_combo,final_gauge,clear_type,"
-      "provenance_json,result_fingerprint,played_at_unix_ms,created_at) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+      "provenance_json,entry_facts_json,result_fingerprint,played_at_unix_ms,"
+      "created_at) "
+      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   if (!result.valid()) {
     diagnostic = result.error();
     return false;
   }
   const auto &persisted = course.result;
+  nlohmann::ordered_json entryFacts = nlohmann::ordered_json::array();
+  for (const auto &facts : persisted.entryFacts) {
+    entryFacts.push_back(
+        nlohmann::ordered_json::array({facts.totalNotes,
+                                      facts.playLengthMicros}));
+  }
+  const std::string serializedEntryFacts = entryFacts.dump();
   int column = 1;
   bool okay =
       sqlite3_bind_int64(result.get(), column++, course.id) == SQLITE_OK &&
@@ -1273,11 +1284,12 @@ bool insertCourse(sqlite3 *database, const LegacyCourse &course,
       sqlite3_bind_int(result.get(), column++, persisted.clearType) ==
           SQLITE_OK &&
       bindText(result.get(), column++, course.provenanceJson) &&
+      bindText(result.get(), column++, serializedEntryFacts) &&
       bindText(result.get(), column++, persisted.resultFingerprint) &&
       sqlite3_bind_int64(result.get(), column++,
                          persisted.playedAtUnixMillis) == SQLITE_OK &&
       bindText(result.get(), column++, course.createdAt);
-  if (!okay || column != 26 || sqlite3_step(result.get()) != SQLITE_DONE) {
+  if (!okay || column != 27 || sqlite3_step(result.get()) != SQLITE_DONE) {
     diagnostic = result.error();
     return false;
   }
@@ -1664,7 +1676,8 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                      "replay schema version query is malformed");
     }
   }
-  if (userVersion == 11 || userVersion == 12 || userVersion == 13) {
+  if (userVersion == 11 || userVersion == 12 || userVersion == 13 ||
+      userVersion == 14) {
     return {.status = MigrationStatus::AlreadyCurrent};
   }
   if (userVersion != 10) {
@@ -1799,7 +1812,7 @@ ReplayMigrationOutcome migrateReplaySchema10To11(
                    charts.size(), courses.size());
   }
   if (fault(faults, "version-update") ||
-      !execute(database, "PRAGMA user_version=13", diagnostic)) {
+      !execute(database, "PRAGMA user_version=14", diagnostic)) {
     return failure(MigrationStatus::StorageFailure,
                    "could not advance replay schema version", charts.size(),
                    courses.size());

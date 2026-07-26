@@ -399,14 +399,15 @@ void seedCompactReplayResult(const std::filesystem::path &path, int score,
           "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
           "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,score,"
           "max_score,max_combo,combo_break,p_great,great,good,bad,poor,k_poor,"
-          "fast,slow,final_gauge,clear_type,gauge_history_json,"
+          "fast,slow,final_gauge,clear_type,adopted_gauge_type,"
+          "gauge_history_json,"
           "judgement_timing_json,provenance_json,result_fingerprint,"
           "played_at_unix_ms) VALUES('switch-" +
               std::to_string(playedAtUnixMillis) + "','chart.bms','" +
               std::string(kChartMd5) + "','" + std::string(kChartSha) +
               "','Chart','Artist',7,0," + std::to_string(score) + "," +
               std::to_string(score) +
-              ",1,0,1,0,0,0,0,0,0,0,75.0,300,'[75.0]',NULL," +
+              ",1,0,1,0,0,0,0,0,0,0,75.0,300,2,'[75.0]',NULL," +
               replay_schema10_fixture::quote(provenance) + ",'" +
               std::string(64, 'f') + "'," +
               std::to_string(playedAtUnixMillis) + ")"),
@@ -432,10 +433,17 @@ void replaceWithSchema10Replays(const std::filesystem::path &path,
     const std::string provenance =
         serializeScoreProvenance(ScoreProvenance::Legacy());
     for (std::size_t index = 0; index < scores.size(); ++index) {
+      const std::string attemptId =
+          "123e4567-e89b-42d3-a456-4266141741" +
+          std::to_string(index + 10);
+      const std::string createdAt =
+          "2026-07-11 00:00:0" + std::to_string(index);
       replay_schema10_fixture::insertSimpleChart(
           database.get(), static_cast<std::int64_t>(index + 1), kChartMd5,
-          kChartSha, "2026-07-11 00:00:0" + std::to_string(index),
-          scores[index], provenance);
+          kChartSha, createdAt, scores[index], provenance, attemptId, 1);
+      replay_schema10_fixture::insertSimplePendingChart(
+          database.get(), static_cast<std::int64_t>(index + 1), kChartMd5,
+          kChartSha, createdAt, scores[index], provenance, attemptId, 1);
     }
   } catch (const std::exception &exception) {
     expect(false, std::string(label) + " v10 fixture creates: " +
@@ -777,14 +785,15 @@ struct SwitchFixture {
     return score.LoadBestClearRanks().bestRankForStoredKey(kChartSha, 0);
   }
 
-  [[nodiscard]] std::size_t currentReplayCount() {
+  [[nodiscard]] std::size_t currentReplayCount(int longNoteMode = 0) {
     Database database = openDatabase(replay.GetDatabasePath());
     return database == nullptr
                ? 0
                : static_cast<std::size_t>(queryInt(
                      database.get(),
                      "SELECT count(*) FROM chart_results WHERE chart_sha256='" +
-                         std::string(kChartSha) + "' AND long_note_mode=0"));
+                         std::string(kChartSha) + "' AND long_note_mode=" +
+                         std::to_string(longNoteMode)));
   }
 };
 
@@ -1103,7 +1112,7 @@ void testSupportedOlderTargetMigratesAtSchemaOwnerBoundary() {
              fixture.replay.GetDatabasePath() == fixture.secondPaths.replaysDb,
          "switch commits the migrated target active after both owners bind");
   expect(fixture.currentClearRank() == kClearTypeHardClearRank &&
-             fixture.currentReplayCount() == 2,
+             fixture.currentReplayCount(1) == 2,
          "schema-owner migration preserves target scores and replays");
   expect(queryDatabaseString(fixture.secondPaths.scoresDb,
                              "SELECT value FROM profile_use_marker",

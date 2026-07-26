@@ -7,6 +7,7 @@
 #include "ir/IrSettingsPresentation.h"
 #include "ir/tachi/TachiDriver.h"
 #include "repositories/ReplayRepository.h"
+#include "replay/ReplayFileStore.h"
 
 #include <atomic>
 #include <chrono>
@@ -659,6 +660,16 @@ result_persistence::StageOutcome stageCanonicalAttempt(
       .compressedSize = 1,
       .codecVersion = replay::BeatorajaReplayCodec::kCodecVersion,
   };
+  std::string ownershipDiagnostic;
+  const replay::ReplayFileMetadata metadata{
+      .relativePath = replayFile.relativePath,
+      .sha256 = replayFile.contentSha256,
+      .compressedSize = replayFile.compressedSize,
+      .codecVersion = replayFile.codecVersion,
+  };
+  expect(repository.markReplayFileReservationFinalized(
+             reserved, metadata, ownershipDiagnostic),
+         "service fixture records finalized replay ownership");
   return repository.stageCompletedChartAttempt(
       attempt.result, attempt.irSnapshot, replayFile, {});
 }
