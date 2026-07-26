@@ -663,18 +663,25 @@ bool ReplayFileStore::copyToBeatorajaSlot(const ReplayFileMetadata &source,
     return true;
   }
 
-  const auto existing = readRegularNoLinks(destination, source.compressedSize);
-  if (existing.state == ReadState::Success) {
-    if (existing.bytes == sourceRead.bytes) {
-      return true;
-    }
-    diagnostic = "Beatoraja replay slot already contains different bytes";
+  bool destinationMissing = false;
+  if (!privateRegularPath(destination, destinationMissing, diagnostic)) {
     return false;
   }
-  if (existing.state != ReadState::Missing) {
-    diagnostic = existing.diagnostic.empty() ? "Beatoraja replay slot is unsafe"
-                                             : existing.diagnostic;
-    return false;
+  if (!destinationMissing) {
+    const auto existing =
+        readRegularNoLinks(destination, source.compressedSize);
+    if (existing.state == ReadState::Success &&
+        existing.bytes == sourceRead.bytes) {
+      return true;
+    }
+    if (existing.state != ReadState::Success &&
+        existing.state != ReadState::SizeExceeded &&
+        existing.state != ReadState::Missing) {
+      diagnostic = existing.diagnostic.empty()
+                       ? "Beatoraja replay slot is unsafe"
+                       : existing.diagnostic;
+      return false;
+    }
   }
 
   const auto temporary = temporaryPathFor(destination, "slot_copy");
@@ -685,21 +692,12 @@ bool ReplayFileStore::copyToBeatorajaSlot(const ReplayFileMetadata &source,
     removePrivateTemporary(temporary);
     return false;
   }
-  const auto rename =
-      atomic_file::renameNoReplaceDurably(temporary, destination, diagnostic);
-  if (rename == atomic_file::RenameNoReplaceResult::DestinationExists) {
+  if (!privateRegularPath(destination, destinationMissing, diagnostic)) {
     removePrivateTemporary(temporary);
-    const auto collided =
-        readRegularNoLinks(destination, source.compressedSize);
-    if (collided.state == ReadState::Success &&
-        collided.bytes == sourceRead.bytes) {
-      diagnostic.clear();
-      return true;
-    }
-    diagnostic = "Beatoraja replay slot collision contains different bytes";
     return false;
   }
-  if (rename != atomic_file::RenameNoReplaceResult::Renamed) {
+  if (!atomic_file::renameDurably(temporary, destination, diagnostic)) {
+    removePrivateTemporary(temporary);
     return false;
   }
   return atomic_file::syncDirectory(destination.parent_path(), diagnostic);

@@ -26,9 +26,8 @@ constexpr std::string_view kShaB =
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 std::optional<replay::ReplayPathIdentity>
-chartPath(std::string_view sha256, int longNoteMode,
-          bool hasUndefinedLongNotes, std::int64_t historyIndex,
-          std::string &diagnostic) {
+chartPath(std::string_view sha256, int longNoteMode, bool hasUndefinedLongNotes,
+          std::int64_t historyIndex, std::string &diagnostic) {
   const auto stem = replay::chartStem(sha256, longNoteMode,
                                       hasUndefinedLongNotes, diagnostic);
   if (!stem) {
@@ -56,29 +55,31 @@ void testChartPathsMatchBeatorajaGrammar() {
   std::string diagnostic;
   expectPath(chartPath(kShaA, 0, false, 0, diagnostic), kShaA, 0,
              std::filesystem::path("replay") /
-                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.brd",
+                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                 "aaa.brd",
              "ordinary chart path is produced");
 
   diagnostic.clear();
-  expectPath(chartPath(kShaA, 1, true, 1, diagnostic),
-             "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-             1,
-             std::filesystem::path("replay") /
-                 "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_1.brd",
-             "undefined-LN CN path is produced");
+  expectPath(
+      chartPath(kShaA, 1, true, 1, diagnostic),
+      "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1,
+      std::filesystem::path("replay") / "Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                        "aaaaaaaaaaaaaaaaaaaaaaaaaaa_1.brd",
+      "undefined-LN CN path is produced");
 
   diagnostic.clear();
-  expectPath(chartPath(kShaA, 2, true, 27, diagnostic),
-             "Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-             27,
-             std::filesystem::path("replay") /
-                 "Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_27.brd",
-             "undefined-LN HCN path is produced");
+  expectPath(
+      chartPath(kShaA, 2, true, 27, diagnostic),
+      "Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 27,
+      std::filesystem::path("replay") / "Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                        "aaaaaaaaaaaaaaaaaaaaaaaaaaa_27.brd",
+      "undefined-LN HCN path is produced");
 
   diagnostic.clear();
   expectPath(chartPath(kShaA, 2, false, 4, diagnostic), kShaA, 4,
              std::filesystem::path("replay") /
-                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_4.brd",
+                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                 "aaa_4.brd",
              "non-undefined chart ignores LN interpretation prefix");
 }
 
@@ -105,8 +106,7 @@ void testCoursePathMatchesBeatorajaGrammar() {
   input.hasUndefinedLongNotes = false;
   input.beatorajaConstraintIds.clear();
   diagnostic.clear();
-  expect(replay::courseStem(input, diagnostic) ==
-             "aaaaaaaaaabbbbbbbbbb",
+  expect(replay::courseStem(input, diagnostic) == "aaaaaaaaaabbbbbbbbbb",
          "course without undefined LN or constraints has no separators");
 }
 
@@ -127,8 +127,7 @@ void testMalformedIdentityCannotProducePath() {
 
   replay::CoursePathInput empty;
   diagnostic.clear();
-  expect(!replay::courseStem(empty, diagnostic),
-         "empty course is rejected");
+  expect(!replay::courseStem(empty, diagnostic), "empty course is rejected");
 
   replay::CoursePathInput badConstraint{
       .stageSha256 = {std::string(kShaA)},
@@ -144,8 +143,8 @@ void testMalformedIdentityCannotProducePath() {
   expect(!replay::courseStem(tooManyStages, diagnostic),
          "course stage count is bounded");
 
-  for (const std::string_view unsafe : {"", ".", "..", "a/b", "a\\b",
-                                        "name.brd", "_1"}) {
+  for (const std::string_view unsafe :
+       {"", ".", "..", "a/b", "a\\b", "name.brd", "_1"}) {
     diagnostic.clear();
     expect(!replay::pathForStem(unsafe, 0, diagnostic),
            "unsafe or non-canonical stem is rejected");
@@ -155,11 +154,43 @@ void testMalformedIdentityCannotProducePath() {
   expect(!replay::pathForStem(kShaA, -1, diagnostic),
          "negative history index is rejected");
   diagnostic.clear();
-  expect(replay::pathForStem(kShaA,
-                             std::numeric_limits<std::int64_t>::max(),
+  expect(replay::pathForStem(kShaA, std::numeric_limits<std::int64_t>::max(),
                              diagnostic)
              .has_value(),
          "maximum signed history index formats without overflow");
+}
+
+void testReplayFilenameComponentsStayWithinFilesystemLimit() {
+  replay::CoursePathInput largestSafeCourse;
+  largestSafeCourse.stageSha256.assign(23, std::string(kShaA));
+  std::string diagnostic;
+  const auto largestSafeStem =
+      replay::courseStem(largestSafeCourse, diagnostic);
+  expect(largestSafeStem.has_value() &&
+             replay::pathForStem(*largestSafeStem,
+                                 std::numeric_limits<std::int64_t>::max(),
+                                 diagnostic)
+                 .has_value(),
+         "23-stage course leaves room for the maximum history suffix");
+
+  replay::CoursePathInput tooManyForFilename;
+  tooManyForFilename.stageSha256.assign(24, std::string(kShaA));
+  diagnostic.clear();
+  expect(!replay::courseStem(tooManyForFilename, diagnostic),
+         "24-stage course is rejected before producing an overlong filename");
+
+  replay::CoursePathInput constrained;
+  constrained.stageSha256.assign(22, std::string(kShaA));
+  constrained.longNoteMode = 1;
+  constrained.hasUndefinedLongNotes = true;
+  constrained.beatorajaConstraintIds = {4, 5, 6, 7, 8};
+  diagnostic.clear();
+  expect(!replay::courseStem(constrained, diagnostic),
+         "course filename budget includes LN prefix and constraints");
+
+  diagnostic.clear();
+  expect(!replay::pathForStem(std::string(252, 'a'), 0, diagnostic),
+         "formatted replay path rejects a filename over 255 bytes");
 }
 
 } // namespace
@@ -168,6 +199,7 @@ int main() {
   testChartPathsMatchBeatorajaGrammar();
   testCoursePathMatchesBeatorajaGrammar();
   testMalformedIdentityCannotProducePath();
+  testReplayFilenameComponentsStayWithinFilesystemLimit();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay path test(s) failed\n";
     return 1;

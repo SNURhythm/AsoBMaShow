@@ -9,6 +9,7 @@
 #include <barrier>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <random>
@@ -58,6 +59,12 @@ public:
 private:
   std::filesystem::path path_;
 };
+
+void writeFile(const std::filesystem::path &path, std::string_view contents) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+}
 
 class Database {
 public:
@@ -203,8 +210,7 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
   TemporaryDirectory temporary;
   ReplayRepository repository(temporary.path() / "replay.db");
   expect(repository.EnsureSchema(), "file-backed read schema is available");
-  constexpr std::string_view attempt =
-      "123e4567-e89b-42d3-a456-426614174001";
+  constexpr std::string_view attempt = "123e4567-e89b-42d3-a456-426614174001";
   const std::string stem = repeated('a', 64);
   const auto reservation = repository.reserveReplayFile(attempt, stem);
   expect(reservation.reservation.has_value(),
@@ -216,8 +222,8 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
   const auto playback = samplePlayback();
   replay::BeatorajaReplayCodec codec;
   std::string diagnostic;
-  const auto encoded = codec.encodeChart(
-      playback, 1'700'000'000'123LL, diagnostic);
+  const auto encoded =
+      codec.encodeChart(playback, 1'700'000'000'123LL, diagnostic);
   replay::ReplayFileStore store(temporary.path());
   const replay::ReplayPathIdentity path{
       .stem = reservation.reservation->stem,
@@ -225,12 +231,11 @@ void testReplayFileReadIsIndependentFromResultAndIr() {
       .relativePath = reservation.reservation->relativePath,
   };
   const auto finalized =
-      encoded.has_value()
-          ? store.finalize(path, *encoded, codec,
-                           {.stageSha256 = {repeated('a', 64)},
-                            .course = false},
-                           "repository_read")
-          : replay::FinalizeOutcome{};
+      encoded.has_value() ? store.finalize(path, *encoded, codec,
+                                           {.stageSha256 = {repeated('a', 64)},
+                                            .course = false},
+                                           "repository_read")
+                          : replay::FinalizeOutcome{};
   expect(finalized.metadata.has_value(),
          "file-backed read installs a valid replay file");
   if (!finalized.metadata.has_value()) {
@@ -327,6 +332,51 @@ void testFreshCompactSchema() {
   expect(replayForeignTables.contains("chart_results") &&
              replayForeignTables.contains("course_results"),
          "replay files associate with compact chart or course results");
+}
+
+void testProfileBindingCleansStaleReplayTemporaries() {
+  TemporaryDirectory temporary;
+  const auto startupRoot = temporary.path() / "startup-profile";
+  const auto startupReplay = startupRoot / "replay";
+  const auto staleStartup =
+      startupReplay / ("." + repeated('a', 64) + ".brd.startup.tmp");
+  const auto recentStartup =
+      startupReplay / ("." + repeated('b', 64) + ".brd.recent.tmp");
+  const auto unrelatedStartup = startupReplay / "keep.tmp";
+  writeFile(staleStartup, "stale");
+  writeFile(recentStartup, "recent");
+  writeFile(unrelatedStartup, "unrelated");
+  std::error_code timeError;
+  std::filesystem::last_write_time(
+      staleStartup,
+      std::filesystem::file_time_type::clock::now() - std::chrono::hours(2),
+      timeError);
+  expect(!timeError, "startup stale replay timestamp is set");
+
+  ReplayRepository repository;
+  repository.SetDatabasePath(startupRoot / "replays.db");
+  expect(!std::filesystem::exists(staleStartup),
+         "startup replay binding removes a stale private temporary");
+  expect(std::filesystem::exists(recentStartup) &&
+             std::filesystem::exists(unrelatedStartup),
+         "startup replay binding preserves recent and unrelated files");
+
+  const auto activatedRoot = temporary.path() / "activated-profile";
+  const auto staleActivated = activatedRoot / "replay" /
+                              ("." + repeated('c', 64) + ".brd.activation.tmp");
+  writeFile(staleActivated, "stale");
+  timeError.clear();
+  std::filesystem::last_write_time(
+      staleActivated,
+      std::filesystem::file_time_type::clock::now() - std::chrono::hours(2),
+      timeError);
+  expect(!timeError, "activation stale replay timestamp is set");
+
+  std::string bindError;
+  expect(repository.BindDatabasePath(activatedRoot / "replays.db", bindError),
+         "target replay database binds for activation cleanup");
+  expect(!std::filesystem::exists(staleActivated),
+         "profile activation removes a stale private replay temporary");
 }
 
 void testMalformedVersion11FailsClosed() {
@@ -559,6 +609,7 @@ void testMalformedVersion10FailsClosed() {
 
 int main() {
   testFreshCompactSchema();
+  testProfileBindingCleansStaleReplayTemporaries();
   testMalformedVersion11FailsClosed();
   testCompactStageAndIndependentReads();
   testReplayFileReadIsIndependentFromResultAndIr();

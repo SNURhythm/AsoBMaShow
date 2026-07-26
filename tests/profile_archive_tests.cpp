@@ -242,9 +242,9 @@ void setDatabaseVersion(const std::filesystem::path &path, int version,
   if (!database) {
     return;
   }
-  expect(execute(database.get(),
-                 "PRAGMA user_version=" + std::to_string(version)),
-         std::string(label) + " database version updates");
+  expect(
+      execute(database.get(), "PRAGMA user_version=" + std::to_string(version)),
+      std::string(label) + " database version updates");
 }
 
 std::int64_t rowCount(const std::filesystem::path &path,
@@ -285,32 +285,32 @@ void seedIrOperationalState(const std::filesystem::path &path,
          std::string(label) + " IR outbox schema initializes");
   repository.Shutdown();
   Database database = openDatabase(path);
-  expect(database != nullptr,
-         std::string(label) + " IR outbox database opens");
+  expect(database != nullptr, std::string(label) + " IR outbox database opens");
   if (!database) {
     return;
   }
-  expect(execute(
-             database.get(),
-             "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
-             "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
-             "validation_fingerprint,state,local_result_ready,"
-             "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
-             "updated_at_ms,completed_at_ms) VALUES"
-             "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
-             "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-             "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
-             "0,1,NULL,NULL,NULL,1000,1000,NULL),"
-             "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
-             "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
-             "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
-             "2,1,3000,'job-2','https://example.invalid',"
-             "2000,2000,NULL),"
-             "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
-             "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
-             "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
-             "5,1,NULL,NULL,NULL,3000,3000,3000)"),
-         std::string(label) + " pending, deferred, and succeeded IR rows seed");
+  expect(
+      execute(
+          database.get(),
+          "INSERT INTO ir_outbox(provider_id,attempt_id,chart_md5,"
+          "chart_sha256,payload_json,ruleset_id,ruleset_revision,"
+          "validation_fingerprint,state,local_result_ready,"
+          "next_attempt_at_ms,remote_job_id,remote_origin,created_at_ms,"
+          "updated_at_ms,completed_at_ms) VALUES"
+          "('tachi','10000000-0000-4000-8000-000000000001',NULL,"
+          "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+          "'{\"score\":1}','test-rules',1,lower(hex(zeroblob(32))),"
+          "0,1,NULL,NULL,NULL,1000,1000,NULL),"
+          "('archive_readonly','10000000-0000-4000-8000-000000000002',NULL,"
+          "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',"
+          "'{\"score\":2}','test-rules',1,lower(hex(zeroblob(32))),"
+          "2,1,3000,'job-2','https://example.invalid',"
+          "2000,2000,NULL),"
+          "('tachi_backup','10000000-0000-4000-8000-000000000003',NULL,"
+          "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
+          "'{\"score\":3}','test-rules',1,lower(hex(zeroblob(32))),"
+          "5,1,NULL,NULL,NULL,3000,3000,3000)"),
+      std::string(label) + " pending, deferred, and succeeded IR rows seed");
   expect(
       execute(
           database.get(),
@@ -666,31 +666,33 @@ struct Fixture {
                "13,14,15,16,0.75,2,73,0,'" +
                    std::string(provenance) + "')"),
            "score provenance row inserts");
-    const auto replayPath = paths.replayDirectory / std::string(kReplayFilename);
+    const auto replayPath =
+        paths.replayDirectory / std::string(kReplayFilename);
     writeFile(replayPath, kReplayBytes);
     const std::string contentHash = file_checksum::sha256(kReplayBytes);
-    expect(execute(
-               replays.get(),
-               "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
-               "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,"
-               "score,max_score,max_combo,combo_break,p_great,great,good,bad,"
-               "poor,k_poor,fast,slow,final_gauge,clear_type,gauge_history_json,"
-               "judgement_timing_json,provenance_json,result_fingerprint,"
-               "played_at_unix_ms) VALUES("
-               "'20000000-0000-4000-8000-000000000001','portable.bms',"
-               "'0123456789abcdef0123456789abcdef','" +
-                   std::string(kReplaySha) +
-                   "','Portable Song','Portable Artist',7,0,123,456,7,8,9,"
-                   "10,11,12,13,14,15,16,0.75,2,'[0.75]',NULL,'" +
-                   std::string(provenance) +
-                   "',lower(hex(zeroblob(32))),1000);"
-                   "INSERT INTO replay_files(chart_result_id,stem,"
-                   "history_index,relative_path,content_sha256,compressed_size,"
-                   "codec_version) VALUES(last_insert_rowid(),'" +
-                   std::string(kReplaySha) + "',0,'replay/" +
-                   std::string(kReplayFilename) + "','" + contentHash + "'," +
-                   std::to_string(kReplayBytes.size()) + ",2)"),
-           "compact result and replay reference insert");
+    expect(
+        execute(
+            replays.get(),
+            "INSERT INTO chart_results(attempt_id,chart_path,chart_md5,"
+            "chart_sha256,chart_title,chart_artist,key_mode,long_note_mode,"
+            "score,max_score,max_combo,combo_break,p_great,great,good,bad,"
+            "poor,k_poor,fast,slow,final_gauge,clear_type,gauge_history_json,"
+            "judgement_timing_json,provenance_json,result_fingerprint,"
+            "played_at_unix_ms) VALUES("
+            "'20000000-0000-4000-8000-000000000001','portable.bms',"
+            "'0123456789abcdef0123456789abcdef','" +
+                std::string(kReplaySha) +
+                "','Portable Song','Portable Artist',7,0,123,456,7,8,9,"
+                "10,11,12,13,14,15,16,0.75,2,'[0.75]',NULL,'" +
+                std::string(provenance) +
+                "',lower(hex(zeroblob(32))),1000);"
+                "INSERT INTO replay_files(chart_result_id,stem,"
+                "history_index,relative_path,content_sha256,compressed_size,"
+                "codec_version) VALUES(last_insert_rowid(),'" +
+                std::string(kReplaySha) + "',0,'replay/" +
+                std::string(kReplayFilename) + "','" + contentHash + "'," +
+                std::to_string(kReplayBytes.size()) + ",2)"),
+        "compact result and replay reference insert");
   }
 };
 
@@ -774,16 +776,33 @@ void testExportIsDeterministicAndStrict() {
   }
 }
 
+void testExportRejectsReplayBytesThatDoNotMatchReference() {
+  Fixture fixture;
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  writeFile(source.replayDirectory / std::string(kReplayFilename),
+            "tampered-brd-v1\n");
+
+  const auto destination = fixture.exchange.path() / "corrupt-replay.zip";
+  ProfileArchiveService service(fixture.manager);
+  const auto exported = service.Export(fixture.sourceId, destination);
+
+  expect(!exported.ok() && exported.error == ProfileError::IntegrityFailure,
+         "export rejects replay bytes that disagree with replay_files");
+  expect(!std::filesystem::exists(destination),
+         "replay-reference mismatch never commits a profile archive");
+}
+
 void testIrOperationalStateIsNotProfilePortable() {
   Fixture fixture;
   constexpr std::string_view credential = "sentinel-portable-api-key";
-  const PlayerProfilePaths source =
-      fixture.manager.pathsFor(fixture.sourceId);
-  writeFile(source.irCredentialsJson,
-            R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-portable-api-key"}}})");
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
+  writeFile(
+      source.irCredentialsJson,
+      R"({"schemaVersion":1,"providers":{"tachi":{"apiKey":"sentinel-portable-api-key"}}})");
   constexpr std::string_view cacheMarker = "sentinel-bokutachi-cache-chart";
-  writeFile(source.bokutachiCacheJson,
-            R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
+  writeFile(
+      source.bokutachiCacheJson,
+      R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
   seedIrOperationalState(source.replaysDb, "archive source");
   seedImportedIrScore(source.scoresDb, "archive source");
 
@@ -804,21 +823,27 @@ void testIrOperationalStateIsNotProfilePortable() {
   std::string error;
   auto members = readArchive(exported, error);
   expect(error.empty(), "IR-safe export reads: " + error);
-  expect(std::ranges::none_of(members, [](const ArchiveMember &member) {
-           return member.name == "ir-credentials.json";
-         }),
+  expect(std::ranges::none_of(members,
+                              [](const ArchiveMember &member) {
+                                return member.name == "ir-credentials.json";
+                              }),
          "credential file is absent from archive members and accounting");
-  expect(std::ranges::none_of(members, [](const ArchiveMember &member) {
-           return member.name == "bokutachi-cache.json";
-         }),
+  expect(std::ranges::none_of(members,
+                              [](const ArchiveMember &member) {
+                                return member.name == "bokutachi-cache.json";
+                              }),
          "Bokutachi cache is absent from archive members and accounting");
-  expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
-           return member.contents.find(credential) != std::string::npos;
-         }),
+  expect(std::ranges::none_of(members,
+                              [&](const ArchiveMember &member) {
+                                return member.contents.find(credential) !=
+                                       std::string::npos;
+                              }),
          "archive contains no credential bytes");
-  expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
-           return member.contents.find(cacheMarker) != std::string::npos;
-         }),
+  expect(std::ranges::none_of(members,
+                              [&](const ArchiveMember &member) {
+                                return member.contents.find(cacheMarker) !=
+                                       std::string::npos;
+                              }),
          "archive contains no Bokutachi cache identifiers");
 
   ArchiveMember *replays = findMember(members, "replays.db");
@@ -886,8 +911,7 @@ void testIrOperationalStateIsNotProfilePortable() {
 
 void testExportRejectsSupportedOlderSourceBeforeWritingArchive() {
   Fixture fixture;
-  const PlayerProfilePaths source =
-      fixture.manager.pathsFor(fixture.sourceId);
+  const PlayerProfilePaths source = fixture.manager.pathsFor(fixture.sourceId);
   setDatabaseVersion(source.scoresDb, 5, "supported-older export score");
   setDatabaseVersion(source.replaysDb, 10, "supported-older export replay");
 
@@ -909,22 +933,18 @@ void testExportRejectsSupportedOlderSourceBeforeWritingArchive() {
   ProfileArchiveService service(fixture.manager, std::move(dependencies));
   const auto exported = service.Export(fixture.sourceId, destination);
   expect(exported.error == ProfileError::IntegrityFailure &&
-             !temporaryArchiveWritten &&
-             !std::filesystem::exists(destination),
+             !temporaryArchiveWritten && !std::filesystem::exists(destination),
          "RuntimeReady export rejects supported-older databases before "
          "writing an archive");
 
   std::string versionError;
   expect(sqliteDatabaseUserVersion(source.scoresDb, versionError) == 5,
-         "rejected export preserves the older score version: " +
-             versionError);
+         "rejected export preserves the older score version: " + versionError);
   versionError.clear();
   expect(sqliteDatabaseUserVersion(source.replaysDb, versionError) == 10 &&
-             scalarText(source.scoresDb,
-                        "SELECT value FROM archive_marker") ==
+             scalarText(source.scoresDb, "SELECT value FROM archive_marker") ==
                  "score-source" &&
-             scalarText(source.replaysDb,
-                        "SELECT value FROM archive_marker") ==
+             scalarText(source.replaysDb, "SELECT value FROM archive_marker") ==
                  "replay-source" &&
              transactionArtifacts(fixture.temp.path()).empty(),
          "rejected export neither migrates the source nor creates profile "
@@ -1195,17 +1215,18 @@ void testCreateImportUsesNewIdAndRoundTripsExactly() {
                     "provenance_json FROM scores WHERE chart_path = "
                     "'portable.bms'") == "73|0|" + expectedProvenance,
          "score provenance payload round-trips exactly");
-  expect(scalarText(importedPaths.replaysDb,
-                    "SELECT provenance_json FROM chart_results WHERE chart_path = "
-                    "'portable.bms'") == expectedProvenance &&
-             scalarText(importedPaths.replaysDb,
-                        "SELECT relative_path || '|' || content_sha256 || '|' || "
-                        "compressed_size FROM replay_files") ==
-                 "replay/" + std::string(kReplayFilename) + "|" +
-                     file_checksum::sha256(kReplayBytes) + "|" +
-                     std::to_string(kReplayBytes.size()),
-         "compact result provenance and replay-file reference round-trip "
-         "exactly");
+  expect(
+      scalarText(importedPaths.replaysDb,
+                 "SELECT provenance_json FROM chart_results WHERE chart_path = "
+                 "'portable.bms'") == expectedProvenance &&
+          scalarText(importedPaths.replaysDb,
+                     "SELECT relative_path || '|' || content_sha256 || '|' || "
+                     "compressed_size FROM replay_files") ==
+              "replay/" + std::string(kReplayFilename) + "|" +
+                  file_checksum::sha256(kReplayBytes) + "|" +
+                  std::to_string(kReplayBytes.size()),
+      "compact result provenance and replay-file reference round-trip "
+      "exactly");
   expect(transactionArtifacts(fixture.temp.path()).empty(),
          "successful create import leaves no transaction artifacts");
   expect(!observedWorkspace.empty() &&
@@ -1339,12 +1360,9 @@ void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
   Fixture fixture;
   const auto archive =
       exportFixture(fixture, "supported-older-overwrite.asobprofile");
-  const PlayerProfilePaths target =
-      fixture.manager.pathsFor(fixture.targetId);
-  setDatabaseVersion(target.scoresDb, 5,
-                     "supported-older overwrite score");
-  setDatabaseVersion(target.replaysDb, 10,
-                     "supported-older overwrite replay");
+  const PlayerProfilePaths target = fixture.manager.pathsFor(fixture.targetId);
+  setDatabaseVersion(target.scoresDb, 5, "supported-older overwrite score");
+  setDatabaseVersion(target.replaysDb, 10, "supported-older overwrite replay");
   expect(fixture.manager.validateProfileForActivation(fixture.targetId).ok() &&
              fixture.manager.validateProfile(fixture.targetId).error ==
                  ProfileError::IntegrityFailure,
@@ -1374,15 +1392,14 @@ void testOverwriteAcceptsSupportedOlderTargetAndInstallsCurrentProfile() {
                  ReplayRepository::kCurrentSchemaVersion &&
              fixture.manager.validateProfile(fixture.targetId).ok(),
          "overwrite installs a current RuntimeReady target: " + versionError);
-  expect(scalarText(target.scoresDb,
-                    "SELECT value FROM archive_marker") == "score-source" &&
-             scalarText(target.replaysDb,
-                        "SELECT value FROM archive_marker") ==
-                 "replay-source" &&
-             readFile(target.settingsJson) ==
-                 readFile(fixture.manager.pathsFor(fixture.sourceId)
-                              .settingsJson),
-         "overwrite installs the imported database and settings payload");
+  expect(
+      scalarText(target.scoresDb, "SELECT value FROM archive_marker") ==
+              "score-source" &&
+          scalarText(target.replaysDb, "SELECT value FROM archive_marker") ==
+              "replay-source" &&
+          readFile(target.settingsJson) ==
+              readFile(fixture.manager.pathsFor(fixture.sourceId).settingsJson),
+      "overwrite installs the imported database and settings payload");
   expect(!observedWorkspace.empty() &&
              !std::filesystem::exists(observedWorkspace) &&
              transactionArtifacts(fixture.temp.path()).empty(),
@@ -1400,9 +1417,9 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
         fixture.manager.pathsFor(fixture.targetId);
     const std::filesystem::path futureDatabase =
         futureScoreDatabase ? target.scoresDb : target.replaysDb;
-    const int futureVersion =
-        futureScoreDatabase ? ScoreRepository::kCurrentSchemaVersion + 1
-                            : ReplayRepository::kCurrentSchemaVersion + 1;
+    const int futureVersion = futureScoreDatabase
+                                  ? ScoreRepository::kCurrentSchemaVersion + 1
+                                  : ReplayRepository::kCurrentSchemaVersion + 1;
     setDatabaseVersion(futureDatabase, futureVersion,
                        futureScoreDatabase ? "future overwrite score"
                                            : "future overwrite replay");
@@ -1422,8 +1439,8 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
     ProfileImportOptions options{.mode = ProfileImportMode::Overwrite,
                                  .overwriteProfileId = fixture.targetId};
     const auto imported = service.Import(archive, options);
-    const std::string label = futureScoreDatabase ? "future score"
-                                                  : "future replay";
+    const std::string label =
+        futureScoreDatabase ? "future score" : "future replay";
     expect(imported.error == ProfileError::FutureVersion,
            label + " overwrite target fails closed");
 
@@ -1436,19 +1453,20 @@ void testOverwriteRejectsFutureTargetWithoutMutation() {
                readFile(target.inputJson) == inputBefore &&
                readFile(target.scoresDb) == scoresBefore &&
                readFile(target.replaysDb) == replaysBefore,
-           label + " overwrite rejection preserves target versions, metadata, "
-                   "and component bytes: " +
+           label +
+               " overwrite rejection preserves target versions, metadata, "
+               "and component bytes: " +
                versionError);
-    expect(scalarText(target.scoresDb,
-                      "SELECT value FROM archive_marker") == "score-target" &&
-               scalarText(target.replaysDb,
-                          "SELECT value FROM archive_marker") ==
-                   "replay-target" &&
-               !observedWorkspace.empty() &&
-               !std::filesystem::exists(observedWorkspace) &&
-               transactionArtifacts(fixture.temp.path()).empty(),
-           label + " overwrite rejection preserves target payload and cleans "
-                   "all transaction artifacts");
+    expect(
+        scalarText(target.scoresDb, "SELECT value FROM archive_marker") ==
+                "score-target" &&
+            scalarText(target.replaysDb, "SELECT value FROM archive_marker") ==
+                "replay-target" &&
+            !observedWorkspace.empty() &&
+            !std::filesystem::exists(observedWorkspace) &&
+            transactionArtifacts(fixture.temp.path()).empty(),
+        label + " overwrite rejection preserves target payload and cleans "
+                "all transaction artifacts");
   }
 }
 
@@ -1591,12 +1609,11 @@ void testStrictMemberAllowlistAndTypes() {
   expectRejectedWithoutMutation(fixture, extra, "extra-member");
 
   auto credentials = valid;
-  credentials.push_back({.name = "ir-credentials.json",
-                         .contents = "sentinel-api-key"});
-  expectRejectedWithoutMutation(fixture, credentials,
-                                "credential-member-is-unknown",
-                                ProfileError::IntegrityFailure,
-                                "unexpected member name");
+  credentials.push_back(
+      {.name = "ir-credentials.json", .contents = "sentinel-api-key"});
+  expectRejectedWithoutMutation(
+      fixture, credentials, "credential-member-is-unknown",
+      ProfileError::IntegrityFailure, "unexpected member name");
 
   auto duplicate = valid;
   duplicate.push_back(valid.front());
@@ -2846,6 +2863,7 @@ void testCommittedOverwriteSurvivesBackupCleanupFailures() {
 int main() {
   testStreamingSha256();
   testExportIsDeterministicAndStrict();
+  testExportRejectsReplayBytesThatDoNotMatchReference();
   testIrOperationalStateIsNotProfilePortable();
   testExportRejectsSupportedOlderSourceBeforeWritingArchive();
   testPresetStoreSidecarRemainsProfilePortable();

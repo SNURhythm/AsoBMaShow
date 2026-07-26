@@ -214,6 +214,33 @@ void testDifferentCollisionFailsClosed() {
               "different-byte collision never overwrites final replay");
 }
 
+void testExplicitSlotCopyReplacesOccupiedReplay() {
+  TempDirectory profile("slot-replacement");
+  replay::ReplayFileStore store(profile.path);
+  replay::BeatorajaReplayCodec codec;
+  const Bytes first = encode(sampleReplay(), 1000);
+  const Bytes second = encode(sampleReplay(), 2000);
+  const auto firstReplay =
+      store.finalize(chartPath(0), first, codec, chartIdentity(), "first");
+  const auto secondReplay =
+      store.finalize(chartPath(4), second, codec, chartIdentity(), "second");
+  expect(firstReplay.metadata.has_value() && secondReplay.metadata.has_value(),
+         "occupied slot replacement fixtures finalize");
+  if (!firstReplay.metadata || !secondReplay.metadata) {
+    return;
+  }
+
+  std::string diagnostic;
+  expect(store.copyToBeatorajaSlot(*firstReplay.metadata, kShaA, 1, diagnostic),
+         "first replay occupies a visible Beatoraja slot");
+  expect(
+      store.copyToBeatorajaSlot(*secondReplay.metadata, kShaA, 1, diagnostic),
+      "explicit copy replaces an occupied visible Beatoraja slot");
+  expectEqual(
+      readBytes(profile.path / "replay" / (std::string(kShaA) + "_1.brd")),
+      second, "occupied slot replacement installs the selected replay bytes");
+}
+
 void testInjectedDurabilityFaults() {
   replay::BeatorajaReplayCodec codec;
   const Bytes encoded = encode(sampleReplay());
@@ -421,6 +448,7 @@ void testStaleTemporaryCleanup() {
 int main() {
   testFinalizeInspectLoadRetryCopyAndRemove();
   testDifferentCollisionFailsClosed();
+  testExplicitSlotCopyReplacesOccupiedReplay();
   testInjectedDurabilityFaults();
   testUnsafePathsAndLinks();
   testMissingHashMismatchCorruptAndIdentityMismatch();

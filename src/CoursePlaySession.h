@@ -57,16 +57,17 @@ longNoteHeadOrSelf(const bms_parser::LongNote *longNote) {
                                                          : longNote;
 }
 
-inline bms_parser::LongNoteType resolveEffectiveLongNoteType(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
-    int longNoteModeOverride = 0) {
+inline bms_parser::LongNoteType
+resolveEffectiveLongNoteType(const bms_parser::LongNote *longNote,
+                             const bms_parser::Chart *chart,
+                             int longNoteModeOverride = 0) {
   if (longNote == nullptr) {
     return bms_parser::LongNoteType::LongNote;
   }
   const bms_parser::LongNote *head = longNoteHeadOrSelf(longNote);
-  int lnMode = chart != nullptr ? normalizeChartLongNoteModeValue(
-                                      chart->Meta.LnMode)
-                                : 0;
+  int lnMode = chart != nullptr
+                   ? normalizeChartLongNoteModeValue(chart->Meta.LnMode)
+                   : 0;
   if (lnMode == 0) {
     lnMode = normalizeChartLongNoteModeValue(longNoteModeOverride);
   }
@@ -90,53 +91,52 @@ inline bool longNoteTypeIsHellCharge(bms_parser::LongNoteType type) {
   return type == bms_parser::LongNoteType::HellChargeNote;
 }
 
-inline bool effectiveLongNoteIsClassic(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
-    int longNoteModeOverride = 0) {
+inline bool effectiveLongNoteIsClassic(const bms_parser::LongNote *longNote,
+                                       const bms_parser::Chart *chart,
+                                       int longNoteModeOverride = 0) {
   return longNoteTypeIsClassic(
       resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
 }
 
-inline bool effectiveLongNoteIsClassic(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
-    int longNoteModeOverride = 0) {
+inline bool effectiveLongNoteIsClassic(const bms_parser::LongNote *longNote,
+                                       const bms_parser::Chart &chart,
+                                       int longNoteModeOverride = 0) {
   return effectiveLongNoteIsClassic(longNote, &chart, longNoteModeOverride);
 }
 
-inline bool effectiveLongNoteIsCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
-    int longNoteModeOverride = 0) {
+inline bool effectiveLongNoteIsCharge(const bms_parser::LongNote *longNote,
+                                      const bms_parser::Chart *chart,
+                                      int longNoteModeOverride = 0) {
   return longNoteTypeIsCharge(
       resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
 }
 
-inline bool effectiveLongNoteIsCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
-    int longNoteModeOverride = 0) {
+inline bool effectiveLongNoteIsCharge(const bms_parser::LongNote *longNote,
+                                      const bms_parser::Chart &chart,
+                                      int longNoteModeOverride = 0) {
   return effectiveLongNoteIsCharge(longNote, &chart, longNoteModeOverride);
 }
 
-inline bool effectiveLongNoteIsHellCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart *chart,
-    int longNoteModeOverride = 0) {
+inline bool effectiveLongNoteIsHellCharge(const bms_parser::LongNote *longNote,
+                                          const bms_parser::Chart *chart,
+                                          int longNoteModeOverride = 0) {
   return longNoteTypeIsHellCharge(
       resolveEffectiveLongNoteType(longNote, chart, longNoteModeOverride));
 }
 
-inline bool effectiveLongNoteIsHellCharge(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
-    int longNoteModeOverride = 0) {
+inline bool effectiveLongNoteIsHellCharge(const bms_parser::LongNote *longNote,
+                                          const bms_parser::Chart &chart,
+                                          int longNoteModeOverride = 0) {
   return effectiveLongNoteIsHellCharge(longNote, &chart, longNoteModeOverride);
 }
 
-inline bool effectiveLongNoteIsCounted(
-    const bms_parser::LongNote *longNote, const bms_parser::Chart &chart,
-    int longNoteModeOverride = 0) {
-  return longNote != nullptr &&
-         (resolveEffectiveLongNoteType(longNote, &chart,
-                                       longNoteModeOverride) !=
-              bms_parser::LongNoteType::LongNote ||
-          !longNote->IsTail());
+inline bool effectiveLongNoteIsCounted(const bms_parser::LongNote *longNote,
+                                       const bms_parser::Chart &chart,
+                                       int longNoteModeOverride = 0) {
+  return longNote != nullptr && (resolveEffectiveLongNoteType(
+                                     longNote, &chart, longNoteModeOverride) !=
+                                     bms_parser::LongNoteType::LongNote ||
+                                 !longNote->IsTail());
 }
 
 inline bool chartLaneIsScratch(const bms_parser::ChartMeta &meta, int lane) {
@@ -191,8 +191,8 @@ inline bool chartContainsLongNote(const bms_parser::Chart &chart) {
   return false;
 }
 
-inline void recalculateEffectiveLongNoteCounts(
-    bms_parser::Chart &chart, int longNoteModeOverride = 0) {
+inline void recalculateEffectiveLongNoteCounts(bms_parser::Chart &chart,
+                                               int longNoteModeOverride = 0) {
   int totalNotes = 0;
   int totalLongNotes = 0;
   int totalScratchNotes = 0;
@@ -246,8 +246,8 @@ inline void recalculateEffectiveLongNoteCounts(
   chart.Meta.TotalLandmineNotes = totalLandmineNotes;
 }
 
-inline void applyEffectiveLongNoteModeToChart(
-    bms_parser::Chart &chart, int longNoteModeOverride = 0) {
+inline void applyEffectiveLongNoteModeToChart(bms_parser::Chart &chart,
+                                              int longNoteModeOverride = 0) {
   const int lnMode = normalizeChartLongNoteModeValue(longNoteModeOverride);
   if (chart.Meta.LnMode == 0 && lnMode > 0 && chartContainsLongNote(chart)) {
     chart.Meta.LnMode = lnMode;
@@ -255,9 +255,11 @@ inline void applyEffectiveLongNoteModeToChart(
   recalculateEffectiveLongNoteCounts(chart, lnMode);
 }
 
-inline void applyCourseConstraintsToChart(
-    bms_parser::Chart &chart, const CourseConstraintRules &constraints) {
-  const int lnMode = courseLongNoteModeToChartMetaValue(constraints.longNoteMode);
+inline void
+applyCourseConstraintsToChart(bms_parser::Chart &chart,
+                              const CourseConstraintRules &constraints) {
+  const int lnMode =
+      courseLongNoteModeToChartMetaValue(constraints.longNoteMode);
   if (lnMode > 0 && chart.Meta.LnMode == 0) {
     chart.Meta.LnMode = lnMode;
   }
@@ -325,8 +327,7 @@ struct CoursePlaySession {
   void snapshotRulesetFromReplay(const JudgedPlaybackData &replay) {
     if (replay.context.ruleset == RulesetDescriptor::Legacy()) {
       ruleset = GameplayRuleset::Beatoraja;
-      rulesetDescriptor =
-          RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+      rulesetDescriptor = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
       return;
     }
     rulesetDescriptor = replay.context.ruleset;
@@ -335,8 +336,7 @@ struct CoursePlaySession {
     }
   }
 
-  void snapshotRulesetFromPlayback(
-      const replay::ReplayPlaybackData &playback) {
+  void snapshotRulesetFromPlayback(const replay::ReplayPlaybackData &playback) {
     const auto recorded =
         gameplayRulesetFromId(playback.setup.playbackRulesetId);
     if (!recorded.has_value()) {
@@ -372,7 +372,8 @@ struct CoursePlaySession {
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
     return (courseReplayPlaybackData != nullptr &&
             index < courseReplayPlaybackData->stages.size()) ||
-           (courseReplayData != nullptr && index < courseReplayData->stages.size());
+           (courseReplayData != nullptr &&
+            index < courseReplayData->stages.size());
   }
 
   [[nodiscard]] std::shared_ptr<const replay::ReplayPlaybackData>
@@ -382,12 +383,14 @@ struct CoursePlaySession {
       return nullptr;
     }
     return std::shared_ptr<const replay::ReplayPlaybackData>(
-        courseReplayPlaybackData, &courseReplayPlaybackData->stages[currentIndex]);
+        courseReplayPlaybackData,
+        &courseReplayPlaybackData->stages[currentIndex]);
   }
 
   [[nodiscard]] const JudgedCoursePlaybackStage *
   courseReplayStage(std::size_t index) const {
-    return courseReplayData != nullptr && index < courseReplayData->stages.size()
+    return courseReplayData != nullptr &&
+                   index < courseReplayData->stages.size()
                ? &courseReplayData->stages[index]
                : nullptr;
   }
@@ -395,8 +398,9 @@ struct CoursePlaySession {
   [[nodiscard]] std::shared_ptr<JudgedPlaybackData>
   currentCourseReplayStageReplay() const {
     const auto *stage = courseReplayStage(currentIndex);
-    return stage == nullptr ? nullptr
-                            : std::make_shared<JudgedPlaybackData>(stage->replay);
+    return stage == nullptr
+               ? nullptr
+               : std::make_shared<JudgedPlaybackData>(stage->replay);
   }
 
   void applyReplayStagePlayOptions(const JudgedPlaybackData &replay) {
@@ -406,8 +410,7 @@ struct CoursePlaySession {
     playOption2Seed = replay.playOption2Seed;
   }
 
-  void applyReplayStagePlayOptions(
-      const replay::ReplayPlaybackData &replay) {
+  void applyReplayStagePlayOptions(const replay::ReplayPlaybackData &replay) {
     playOption = replay.setup.playOption;
     playOptionSeed = replay.setup.playOptionSeed;
     playOption2 = replay.setup.playOption2;
@@ -422,6 +425,11 @@ struct CoursePlaySession {
   }
 
   [[nodiscard]] long long restMicrosAfterCurrentStage() const {
+    if (courseReplayPlaybackData != nullptr &&
+        currentIndex < courseReplayPlaybackData->restMicrosAfterStage.size()) {
+      return std::max(
+          0LL, courseReplayPlaybackData->restMicrosAfterStage[currentIndex]);
+    }
     if (courseReplayData != nullptr &&
         currentIndex < courseReplayData->stages.size()) {
       return std::max(
@@ -453,8 +461,7 @@ struct CoursePlaySession {
     ensureReplayStage(currentIndex).replay = replay;
   }
 
-  void recordReplayPlaybackStage(
-      const replay::ReplayPlaybackData &replay) {
+  void recordReplayPlaybackStage(const replay::ReplayPlaybackData &replay) {
     if (recordedReplayPlayback.stages.size() <= currentIndex) {
       recordedReplayPlayback.stages.resize(currentIndex + 1);
     }

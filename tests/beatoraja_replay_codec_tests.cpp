@@ -485,6 +485,35 @@ void testPreRollInputEncodesForChartsAndCourses() {
          "input before the recorder pre-roll remains invalid");
 }
 
+void testAllMissReplayRoundTripsWithEmptyInput() {
+  replay::BeatorajaReplayCodec codec;
+  auto source = extensionReplay();
+  source.input.clear();
+  std::string diagnostic;
+
+  const auto chart = codec.encodeChart(source, 1'725'000'000'123LL, diagnostic);
+  expect(chart.has_value(), "all-miss chart replay encodes with empty input");
+  if (chart.has_value()) {
+    const auto decoded = codec.decode(*chart, 7);
+    expect(decoded.chart.has_value() && decoded.chart->input.empty(),
+           "all-miss chart replay decodes with empty input");
+  }
+
+  replay::CourseReplayPlaybackData course;
+  course.stages = {source};
+  course.restMicrosAfterStage = {0};
+  const auto encodedCourse =
+      codec.encodeCourse(course, 1'725'000'000'123LL, diagnostic);
+  expect(encodedCourse.has_value(),
+         "all-miss course stage encodes with empty input");
+  if (encodedCourse.has_value()) {
+    const auto decoded = codec.decode(*encodedCourse, 7);
+    expect(decoded.course.has_value() &&
+               decoded.course->stages.front().input.empty(),
+           "all-miss course stage decodes with empty input");
+  }
+}
+
 Json minimalStock(std::string keyInput, Json extension = nullptr) {
   Json document = {
       {"player", "fixture"},
@@ -682,6 +711,7 @@ int main() {
   testPrimitiveCodecs();
   testAsoExtensionRoundTripsWithoutBreakingStock();
   testPreRollInputEncodesForChartsAndCourses();
+  testAllMissReplayRoundTripsWithEmptyInput();
   testMalformedAndBoundedInputs();
   if (failures != 0) {
     std::cerr << failures << " Beatoraja replay codec test(s) failed\n";

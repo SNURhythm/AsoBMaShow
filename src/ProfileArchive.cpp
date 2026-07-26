@@ -655,6 +655,11 @@ bool isReplayMember(std::string_view name) {
          filename.ends_with(".brd");
 }
 
+struct ReplayArchiveReference {
+  std::string sha256;
+  std::uint64_t compressedSize = 0;
+};
+
 bool isKnownMember(std::string_view name) {
   return std::ranges::find(kMemberNames, name) != kMemberNames.end() ||
          isPracticeMember(name) || isReplayMember(name);
@@ -879,8 +884,7 @@ ManifestParseResult parseManifest(std::string_view contents) {
       encodedFormatVersion == 1
           ? std::span<const std::string_view>(kVersionOneManifestKeys)
           : std::span<const std::string_view>(kVersionTwoManifestKeys);
-  if (encodedFormatVersion < 1 ||
-      document.size() != requiredKeys.size()) {
+  if (encodedFormatVersion < 1 || document.size() != requiredKeys.size()) {
     return {.error = ProfileError::IntegrityFailure,
             .message = "archive manifest contains unsupported metadata"};
   }
@@ -919,7 +923,8 @@ ManifestParseResult parseManifest(std::string_view contents) {
         manifest.inputSchemaVersion > InputProfile::kSchemaVersion ||
         manifest.practiceSchemaVersion > 1 ||
         manifest.scoreSchemaVersion > ScoreRepository::kCurrentSchemaVersion ||
-        manifest.replaySchemaVersion > ReplayRepository::kCurrentSchemaVersion) {
+        manifest.replaySchemaVersion >
+            ReplayRepository::kCurrentSchemaVersion) {
       return {.error = ProfileError::FutureVersion,
               .message = "archive requires a newer application version"};
     }
@@ -930,8 +935,7 @@ ManifestParseResult parseManifest(std::string_view contents) {
                   "for portable import because their migration requires chart "
                   "library context"};
     }
-    if (manifest.formatVersion < 1 ||
-        manifest.profileSchemaVersion < 0 ||
+    if (manifest.formatVersion < 1 || manifest.profileSchemaVersion < 0 ||
         manifest.settingsSchemaVersion < 0 || manifest.inputSchemaVersion < 0 ||
         manifest.practiceSchemaVersion < 0 ||
         (manifest.formatVersion >= 2 && manifest.practiceSchemaVersion != 1) ||
@@ -1333,11 +1337,11 @@ validateArchive(const std::filesystem::path &archivePath,
   }
   const auto canonicalMemberNames =
       archiveMemberNames(extractDirectory, errorMessage);
-  const std::string expected = errorMessage.empty()
-                                   ? canonicalChecksums(extractDirectory,
-                                                        canonicalMemberNames,
-                                                        errorMessage)
-                                   : std::string{};
+  const std::string expected =
+      errorMessage.empty()
+          ? canonicalChecksums(extractDirectory, canonicalMemberNames,
+                               errorMessage)
+          : std::string{};
   if (!errorMessage.empty()) {
     return {.error = ProfileError::IoFailure, .message = errorMessage};
   }
@@ -1371,10 +1375,8 @@ validateArchive(const std::filesystem::path &archivePath,
     return {.error = ProfileError::IntegrityFailure,
             .message = "version-one archive cannot contain practice data"};
   }
-  const bool hasReplayMembers =
-      std::ranges::any_of(memberNames, [](std::string_view name) {
-        return isReplayMember(name);
-      });
+  const bool hasReplayMembers = std::ranges::any_of(
+      memberNames, [](std::string_view name) { return isReplayMember(name); });
   if (manifest.manifest->formatVersion < 3 && hasReplayMembers) {
     return {.error = ProfileError::IntegrityFailure,
             .message = "archive versions before three cannot contain replay "
@@ -1613,6 +1615,30 @@ ProfileArchiveService::Export(std::string_view profileId,
                    "unable to remove account-scoped IR data from export: " +
                        errorMessage);
   }
+  std::vector<ReplayFileReference> replayFileReferences;
+  if (!ReplayRepository::ListReplayFileReferencesSnapshot(
+          workspace / "replays.db", replayFileReferences, errorMessage)) {
+    return failure(ProfileError::IntegrityFailure,
+                   "unable to validate replay references for export: " +
+                       errorMessage);
+  }
+  std::map<std::string, ReplayArchiveReference> replayReferences;
+  for (const auto &reference : replayFileReferences) {
+    const std::string relativePath = reference.relativePath.generic_string();
+    if (!isReplayMember(relativePath) ||
+        !ProfileArchiveSizePolicy::memberSizeAllowed(
+            relativePath, reference.compressedSize) ||
+        !replayReferences
+             .emplace(relativePath,
+                      ReplayArchiveReference{.sha256 = reference.contentSha256,
+                                             .compressedSize =
+                                                 reference.compressedSize})
+             .second) {
+      return failure(
+          ProfileError::IntegrityFailure,
+          "replay reference snapshot contains an invalid archive member");
+    }
+  }
   if (std::filesystem::exists(source.practiceDirectory, filesystemError)) {
     std::filesystem::directory_iterator iterator(source.practiceDirectory,
                                                  filesystemError);
@@ -1651,13 +1677,13 @@ ProfileArchiveService::Export(std::string_view profileId,
         const auto validation = practice::validatePresetFile(
             practiceFile, practice::kPresetSchemaVersion);
         if (!validation.valid()) {
-          return failure(
-              validation.status == versioned_json::LoadStatus::FutureVersion
-                  ? ProfileError::FutureVersion
-                  : ProfileError::IntegrityFailure,
-              validation.diagnostics.empty()
-                  ? "practice preset is invalid for portable export"
-                  : validation.diagnostics.front());
+          return failure(validation.status ==
+                                 versioned_json::LoadStatus::FutureVersion
+                             ? ProfileError::FutureVersion
+                             : ProfileError::IntegrityFailure,
+                         validation.diagnostics.empty()
+                             ? "practice preset is invalid for portable export"
+                             : validation.diagnostics.front());
         }
       }
       if (kind != practice::PresetFileKind::Primary ||
@@ -1688,20 +1714,43 @@ ProfileArchiveService::Export(std::string_view profileId,
     }
     std::ranges::sort(replayFiles);
     for (const auto &replayFile : replayFiles) {
-      const std::string memberName =
-          "replay/" + replayFile.filename().string();
+      const std::string memberName = "replay/" + replayFile.filename().string();
+      const auto stagedReplay = workspace / "replay" / replayFile.filename();
       if (!isReplayMember(memberName) ||
-          !copyFileStreaming(replayFile,
-                             workspace / "replay" / replayFile.filename(),
-                             memberName, errorMessage)) {
+          !copyFileStreaming(replayFile, stagedReplay, memberName,
+                             errorMessage)) {
         return failure(ProfileError::IoFailure,
                        "unable to stage replay export: " + errorMessage);
       }
+      const auto reference = replayReferences.find(memberName);
+      if (reference == replayReferences.end()) {
+        continue;
+      }
+      filesystemError.clear();
+      const auto stagedSize =
+          std::filesystem::file_size(stagedReplay, filesystemError);
+      if (filesystemError || stagedSize != reference->second.compressedSize) {
+        return failure(ProfileError::IntegrityFailure,
+                       "replay file size does not match its database "
+                       "reference during export");
+      }
+      const auto stagedSha256 = file_checksum::sha256File(
+          stagedReplay, errorMessage, reference->second.compressedSize);
+      if (!stagedSha256 || *stagedSha256 != reference->second.sha256) {
+        return failure(ProfileError::IntegrityFailure,
+                       "replay file checksum does not match its database "
+                       "reference during export");
+      }
+      replayReferences.erase(reference);
     }
   } else if (filesystemError) {
     return failure(ProfileError::IoFailure,
                    "unable to inspect replay data for export: " +
                        filesystemError.message());
+  }
+  if (!replayReferences.empty()) {
+    return failure(ProfileError::IntegrityFailure,
+                   "profile export is missing a referenced replay file");
   }
   for (const std::string_view database : {"scores.db", "replays.db"}) {
     const auto size = std::filesystem::file_size(
@@ -1978,8 +2027,7 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
           return false;
         }
         std::error_code replayError;
-        std::filesystem::create_directory(staging.replayDirectory,
-                                          replayError);
+        std::filesystem::create_directory(staging.replayDirectory, replayError);
         if (replayError) {
           errorMessage = "unable to create imported replay directory: " +
                          replayError.message();
@@ -2055,8 +2103,8 @@ ProfileArchiveService::Import(const std::filesystem::path &archivePath,
         if (!settingsWritten || !inputWritten ||
             !snapshotSqliteDatabase(extracted / "scores.db", staging.scoresDb,
                                     errorMessage) ||
-            !snapshotSqliteDatabase(extracted / "replays.db",
-                                    staging.replaysDb, errorMessage)) {
+            !snapshotSqliteDatabase(extracted / "replays.db", staging.replaysDb,
+                                    errorMessage)) {
           return false;
         }
         if (!ReplayRepository::ClearIrAccountDataSnapshot(staging.replaysDb,

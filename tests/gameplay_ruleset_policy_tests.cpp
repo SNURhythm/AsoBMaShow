@@ -28,8 +28,7 @@ bms_parser::ChartMeta chartMeta(GameplayRuleset ruleset) {
   return meta;
 }
 
-ScoreStageProvenance completeReplaySnapshot(
-    const bms_parser::ChartMeta &meta) {
+ScoreStageProvenance completeReplaySnapshot(const bms_parser::ChartMeta &meta) {
   ScoreStageProvenance result;
   result.chartMd5 = meta.MD5;
   result.chartSha256 = meta.SHA256;
@@ -45,13 +44,12 @@ ScoreStageProvenance completeReplaySnapshot(
       gameplay::JudgeWindowContext::LongScratchTail,
   };
   for (const auto context : contexts) {
-    result.effectiveJudgeWindows.insert(
-        result.effectiveJudgeWindows.end(),
-        {{context, PGreat, -12'000, 12'000},
-         {context, Great, -30'000, 30'000},
-         {context, Good, -60'000, 60'000},
-         {context, Bad, -200'000, 200'000},
-         {context, Kpoor, -1'000'000, 0}});
+    result.effectiveJudgeWindows.insert(result.effectiveJudgeWindows.end(),
+                                        {{context, PGreat, -12'000, 12'000},
+                                         {context, Great, -30'000, 30'000},
+                                         {context, Good, -60'000, 60'000},
+                                         {context, Bad, -200'000, 200'000},
+                                         {context, Kpoor, -1'000'000, 0}});
   }
   return result;
 }
@@ -59,11 +57,11 @@ ScoreStageProvenance completeReplaySnapshot(
 void testLr2PolicyIsCoherent() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
   const auto outcome = gameplay::buildGameplayRulesetPolicy(
-      meta, {.ruleset = GameplayRuleset::LR2,
-             .gaugeProfile = GaugeProfile::Standard,
-             .sourceRank = meta.Rank,
-             .beatorajaCandidateSelection =
-                 gameplay::CandidateSelectionMode::Score});
+      meta,
+      {.ruleset = GameplayRuleset::LR2,
+       .gaugeProfile = GaugeProfile::Standard,
+       .sourceRank = meta.Rank,
+       .beatorajaCandidateSelection = gameplay::CandidateSelectionMode::Score});
   require(outcome.status == gameplay::GameplayPolicyBuildStatus::Built &&
               outcome.policy.has_value(),
           "LR2 policy builds for a valid chart");
@@ -137,8 +135,7 @@ void testInvalidInputsDoNotFallBack() {
       meta, {.ruleset = GameplayRuleset::LR2,
              .gaugeProfile = GaugeProfile::Standard,
              .sourceRank = meta.Rank,
-             .requiredDescriptor =
-                 RulesetDescriptor::For(GameplayRuleset::LR2),
+             .requiredDescriptor = RulesetDescriptor::For(GameplayRuleset::LR2),
              .replaySnapshot = incomplete});
   require(invalidReplay.status ==
                   gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot &&
@@ -154,8 +151,7 @@ void testValidatedReplayAndCourseConsistency() {
              .gaugeProfile = GaugeProfile::CourseDefault,
              .sourceRank = meta.Rank,
              .courseJudgement = CourseJudgementConstraint::NoGood,
-             .requiredDescriptor =
-                 RulesetDescriptor::For(GameplayRuleset::LR2),
+             .requiredDescriptor = RulesetDescriptor::For(GameplayRuleset::LR2),
              .replaySnapshot = snapshot});
   require(replay.status == gameplay::GameplayPolicyBuildStatus::Built &&
               replay.policy.has_value(),
@@ -172,10 +168,11 @@ void testValidatedReplayAndCourseConsistency() {
 
   StartOptions replayOptions;
   replayOptions.ruleset = GameplayRuleset::LR2;
-  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
-      replayOptions, meta, *replay.policy);
-  require(captured.eligibility == ScoreEligibility::Modified,
-          "a safe noncanonical replay policy remains reproducible but modified");
+  const ScoreProvenance captured =
+      captureScoreProvenanceAtPlayStart(replayOptions, meta, *replay.policy);
+  require(
+      captured.eligibility == ScoreEligibility::Modified,
+      "a safe noncanonical replay policy remains reproducible but modified");
 
   CoursePlaySession session;
   session.ruleset = GameplayRuleset::LR2;
@@ -204,8 +201,8 @@ void testCanonicalReplaySnapshotStaysCanonical() {
 
   StartOptions options;
   options.ruleset = GameplayRuleset::LR2;
-  const ScoreProvenance captured = captureScoreProvenanceAtPlayStart(
-      options, meta, *live.policy);
+  const ScoreProvenance captured =
+      captureScoreProvenanceAtPlayStart(options, meta, *live.policy);
   const auto replay = gameplay::buildGameplayRulesetPolicy(
       meta, {.ruleset = GameplayRuleset::LR2,
              .gaugeProfile = GaugeProfile::Standard,
@@ -216,8 +213,8 @@ void testCanonicalReplaySnapshotStaysCanonical() {
               replay.policy->judge.rules() == live.policy->judge.rules() &&
               replay.policy->gauge == live.policy->gauge,
           "a canonical snapshot reconstructs the exact live policy");
-  const ScoreProvenance replayCapture = captureScoreProvenanceAtPlayStart(
-      options, meta, *replay.policy);
+  const ScoreProvenance replayCapture =
+      captureScoreProvenanceAtPlayStart(options, meta, *replay.policy);
   require(replayCapture.eligibility == ScoreEligibility::Verified,
           "an exact canonical replay snapshot remains verified");
 }
@@ -226,15 +223,15 @@ void testReplayStartRebuildsCanonicalPolicyWithoutSnapshot() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
   auto replay = std::make_shared<JudgedPlaybackData>();
   replay->chartMeta = meta;
-  replay->context.ruleset =
-      RulesetDescriptor::For(GameplayRuleset::LR2);
+  replay->context.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
   StartOptions options{.replayData = replay};
   applyJudgedPlaybackContextToStartOptions(options, *replay);
   const auto outcome = buildGameplayRulesetPolicyAtPlayStart(
       options, meta, AppSettings::NotePriorityMode::Lowest);
-  require(outcome.built() && outcome.policy->canonical &&
-              outcome.policy->id == GameplayRuleset::LR2,
-          "a stock replay setup rebuilds its canonical policy from chart metadata");
+  require(
+      outcome.built() && outcome.policy->canonical &&
+          outcome.policy->id == GameplayRuleset::LR2,
+      "a stock replay setup rebuilds its canonical policy from chart metadata");
 }
 
 void testLegacyReplayUsesBeatorajaFallback() {
@@ -282,6 +279,28 @@ void testLegacyReplayUsesBeatorajaFallback() {
               courseOutcome.policy->id == GameplayRuleset::Beatoraja,
           "a migrated legacy course replay uses the same Beatoraja fallback");
 }
+
+void testRawCourseReplayRestTimingIsPreserved() {
+  CoursePlaySession session;
+  session.courseReplayPlaybackData =
+      std::make_shared<replay::CourseReplayPlaybackData>();
+  session.courseReplayPlaybackData->restMicrosAfterStage = {1'500'000, -1};
+
+  session.currentIndex = 0;
+  require(session.restMicrosAfterCurrentStage() == 1'500'000,
+          "raw course replay returns its recorded inter-stage delay");
+
+  session.currentIndex = 1;
+  require(session.restMicrosAfterCurrentStage() == 0,
+          "raw course replay clamps a negative inter-stage delay");
+
+  session.courseReplayPlaybackData.reset();
+  session.replayStages.resize(1);
+  session.replayStages.front().restMicrosAfterStage = 750'000;
+  session.currentIndex = 0;
+  require(session.restMicrosAfterCurrentStage() == 750'000,
+          "freshly recorded course timing remains the fallback");
+}
 } // namespace
 
 int main() {
@@ -292,5 +311,6 @@ int main() {
   testCanonicalReplaySnapshotStaysCanonical();
   testReplayStartRebuildsCanonicalPolicyWithoutSnapshot();
   testLegacyReplayUsesBeatorajaFallback();
+  testRawCourseReplayRestTimingIsPreserved();
   return 0;
 }

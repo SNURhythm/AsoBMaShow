@@ -272,11 +272,6 @@ std::optional<Bytes> stockKeyRecords(const ReplayPlaybackData &replay,
         static_cast<std::uint8_t>(static_cast<std::int8_t>(signedCode))));
     appendLittleEndianInt64(records, transition.songTimeMicros);
   }
-  if (records.empty()) {
-    fail(diagnostic,
-         "A Beatoraja replay must contain at least one stock gameplay input");
-    return std::nullopt;
-  }
   return records;
 }
 
@@ -301,8 +296,8 @@ decodeStockInput(const Json &stage, int keyMode,
     diagnostic = "Replay keyinput gzip is invalid: " + diagnostic;
     return std::nullopt;
   }
-  if (records->empty() || records->size() % kKeyRecordSize != 0) {
-    fail(diagnostic, "Replay keyinput has a partial or empty key record");
+  if (records->size() % kKeyRecordSize != 0) {
+    fail(diagnostic, "Replay keyinput has a partial key record");
     return std::nullopt;
   }
   const std::size_t recordCount = records->size() / kKeyRecordSize;

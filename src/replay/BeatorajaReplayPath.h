@@ -10,6 +10,7 @@
 namespace replay {
 
 inline constexpr std::size_t kMaximumCourseReplayStages = 256;
+inline constexpr std::size_t kMaximumReplayFilenameBytes = 255;
 inline constexpr int kBeatorajaFirstConstraintId = 1;
 inline constexpr int kBeatorajaLastConstraintId = 14;
 inline constexpr int kBeatorajaLastExcludedCourseMarkerId = 3;
@@ -29,9 +30,10 @@ struct ReplayPathIdentity {
   bool operator==(const ReplayPathIdentity &) const = default;
 };
 
-[[nodiscard]] std::optional<std::string>
-chartStem(std::string_view lowerSha256, int longNoteMode,
-          bool hasUndefinedLongNotes, std::string &diagnostic);
+[[nodiscard]] std::optional<std::string> chartStem(std::string_view lowerSha256,
+                                                   int longNoteMode,
+                                                   bool hasUndefinedLongNotes,
+                                                   std::string &diagnostic);
 
 [[nodiscard]] std::optional<std::string>
 courseStem(const CoursePathInput &input, std::string &diagnostic);

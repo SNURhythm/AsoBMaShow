@@ -495,6 +495,9 @@ public:
   static bool
   ClearIrAccountDataSnapshot(const std::filesystem::path &snapshotDatabasePath,
                              std::string &errorMessage);
+  static bool ListReplayFileReferencesSnapshot(
+      const std::filesystem::path &snapshotDatabasePath,
+      std::vector<ReplayFileReference> &references, std::string &errorMessage);
   // Pass limit <= 0 to return all matching rows.
   std::vector<ReplaySummary> ListReplays(const bms_parser::ChartMeta &chartMeta,
                                          int limit = 100,
@@ -502,6 +505,7 @@ public:
                                          std::string_view irServerOrigin = {});
   std::vector<ReplaySummary> ListCourseReplays(const CourseReplayLookup &lookup,
                                                int limit = 100);
+
 private:
   struct Impl;
   [[nodiscard]] std::filesystem::path GetResolvedDatabasePathLocked() const;

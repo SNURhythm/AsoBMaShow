@@ -9,10 +9,12 @@ namespace replay {
 namespace {
 
 constexpr std::array<std::string_view, 3> kLongNotePrefixes = {"", "C", "H"};
+constexpr std::size_t kReplayExtensionBytes = 4;
+constexpr std::size_t kMaximumHistorySuffixBytes =
+    1 + std::numeric_limits<std::int64_t>::digits10 + 1 + kReplayExtensionBytes;
 
 bool isLowerSha256(std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](unsigned char ch) {
+  return value.size() == 64 && std::ranges::all_of(value, [](unsigned char ch) {
            return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
          });
 }
@@ -63,9 +65,10 @@ void appendTwoDigits(std::string &value, int number) {
 
 } // namespace
 
-std::optional<std::string>
-chartStem(std::string_view lowerSha256, int longNoteMode,
-          bool hasUndefinedLongNotes, std::string &diagnostic) {
+std::optional<std::string> chartStem(std::string_view lowerSha256,
+                                     int longNoteMode,
+                                     bool hasUndefinedLongNotes,
+                                     std::string &diagnostic) {
   diagnostic.clear();
   if (!isLowerSha256(lowerSha256)) {
     diagnostic = "Replay chart SHA-256 must be canonical lowercase hex";
@@ -112,8 +115,7 @@ std::optional<std::string> courseStem(const CoursePathInput &input,
   std::string constraints;
   constraints.reserve(input.beatorajaConstraintIds.size() * 2);
   for (const int id : input.beatorajaConstraintIds) {
-    if (id < kBeatorajaFirstConstraintId ||
-        id > kBeatorajaLastConstraintId) {
+    if (id < kBeatorajaFirstConstraintId || id > kBeatorajaLastConstraintId) {
       diagnostic = "Replay course constraint ID is invalid";
       return std::nullopt;
     }
@@ -126,12 +128,17 @@ std::optional<std::string> courseStem(const CoursePathInput &input,
     result.push_back('_');
     result.append(constraints);
   }
+  if (result.size() >
+      kMaximumReplayFilenameBytes - kMaximumHistorySuffixBytes) {
+    diagnostic = "Replay course filename exceeds the filesystem limit";
+    return std::nullopt;
+  }
   return result;
 }
 
-std::optional<ReplayPathIdentity>
-pathForStem(std::string_view stem, std::int64_t historyIndex,
-            std::string &diagnostic) {
+std::optional<ReplayPathIdentity> pathForStem(std::string_view stem,
+                                              std::int64_t historyIndex,
+                                              std::string &diagnostic) {
   diagnostic.clear();
   if (!isCanonicalStem(stem)) {
     diagnostic = "Replay filename stem is not canonical";
@@ -148,6 +155,10 @@ pathForStem(std::string_view stem, std::int64_t historyIndex,
     filename.append(std::to_string(historyIndex));
   }
   filename.append(".brd");
+  if (filename.size() > kMaximumReplayFilenameBytes) {
+    diagnostic = "Replay filename exceeds the filesystem limit";
+    return std::nullopt;
+  }
 
   return ReplayPathIdentity{
       .stem = std::string(stem),

@@ -5,6 +5,7 @@
 #include "ChartSqlExpressions.h"
 #include "../LongNoteModeUtils.h"
 #include "../ProfileDatabaseActivity.h"
+#include "../replay/ReplayFileStore.h"
 #include "SqliteRAII.h"
 #include "../Uuid.h"
 #include "../Utils.h"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -29,6 +31,23 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+namespace {
+
+constexpr auto kStaleReplayTemporaryAge = std::chrono::hours(1);
+
+void removeStaleReplayTemporaryFiles(
+    const std::filesystem::path &resolvedDatabasePath) {
+  if (resolvedDatabasePath.empty() ||
+      resolvedDatabasePath.parent_path().empty()) {
+    return;
+  }
+  replay::ReplayFileStore store(resolvedDatabasePath.parent_path());
+  store.removeStaleTemporaryFiles(std::chrono::system_clock::now() -
+                                  kStaleReplayTemporaryAge);
+}
+
+} // namespace
 
 ReplayRepository::Impl::Impl(std::filesystem::path path)
     : databasePath(std::move(path)) {}
@@ -51,6 +70,7 @@ void ReplayRepository::SetDatabasePath(std::filesystem::path databasePath) {
     ShutdownLocked();
   }
   impl_->databasePath = std::move(databasePath);
+  removeStaleReplayTemporaryFiles(GetResolvedDatabasePathLocked());
 }
 
 std::filesystem::path ReplayRepository::GetDatabasePath() const {
@@ -86,6 +106,7 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
                                                         databasePath)) {
     impl_->databasePath = std::move(databasePath);
     if (replay_repository_detail::MigrateSchema(impl_->sessionDatabase)) {
+      removeStaleReplayTemporaryFiles(GetResolvedDatabasePathLocked());
       errorMessage.clear();
       return true;
     }
@@ -114,6 +135,7 @@ bool ReplayRepository::BindDatabasePath(std::filesystem::path databasePath,
   impl_->sessionDatabase = candidate.release();
   impl_->databasePath = std::move(databasePath);
   closeSqliteDatabase(oldDatabase);
+  removeStaleReplayTemporaryFiles(GetResolvedDatabasePathLocked());
   errorMessage.clear();
   return true;
 }

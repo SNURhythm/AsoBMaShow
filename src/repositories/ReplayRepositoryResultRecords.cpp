@@ -461,9 +461,9 @@ ResultReadOutcome LoadChartResultOnConnection(sqlite3 *database, int resultId) {
     check.id = 0;
     check.recordId = 0;
     std::string referenceDiagnostic;
-    if (!validateReplayReference(
-            check, ReplayFileReference::RecordKind::ChartResult,
-            referenceDiagnostic)) {
+    if (!validateReplayReference(check,
+                                 ReplayFileReference::RecordKind::ChartResult,
+                                 referenceDiagnostic)) {
       return invalidResult(std::move(referenceDiagnostic));
     }
   }
@@ -540,7 +540,8 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
   result.finalScore = sqlite3_column_int(statement.get(), 16);
   result.maxScore = sqlite3_column_int(statement.get(), 17);
   result.maxCombo = sqlite3_column_int(statement.get(), 18);
-  result.finalGauge = static_cast<float>(sqlite3_column_double(statement.get(), 19));
+  result.finalGauge =
+      static_cast<float>(sqlite3_column_double(statement.get(), 19));
   result.clearType = sqlite3_column_int(statement.get(), 20);
   const std::string provenanceJson = columnText(statement.get(), 21);
   if (provenanceJson.size() > kMaximumResultJsonBytes) {
@@ -577,9 +578,9 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
     check.id = 0;
     check.recordId = 0;
     std::string referenceDiagnostic;
-    if (!validateReplayReference(
-            check, ReplayFileReference::RecordKind::CourseResult,
-            referenceDiagnostic)) {
+    if (!validateReplayReference(check,
+                                 ReplayFileReference::RecordKind::CourseResult,
+                                 referenceDiagnostic)) {
       return invalidCourseResult(std::move(referenceDiagnostic));
     }
   }
@@ -637,7 +638,8 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
     score.clearType = sqlite3_column_int(stages.get(), 21);
     auto history = parseGaugeHistory(columnText(stages.get(), 22));
     if (!history.has_value()) {
-      return invalidCourseResult("course result stage gauge history is malformed");
+      return invalidCourseResult(
+          "course result stage gauge history is malformed");
     }
     stage.adoptedGaugeHistory = std::move(*history);
     if (sqlite3_column_type(stages.get(), 23) != SQLITE_NULL) {
@@ -651,8 +653,8 @@ CourseResultReadOutcome LoadCourseResultOnConnection(sqlite3 *database,
     if (stageProvenanceJson.size() > kMaximumResultJsonBytes) {
       return invalidCourseResult("course result stage provenance is oversized");
     }
-    auto stageProvenance = deserializeScoreProvenance(
-        stageProvenanceJson, provenanceDiagnostic);
+    auto stageProvenance =
+        deserializeScoreProvenance(stageProvenanceJson, provenanceDiagnostic);
     if (!stageProvenance.has_value()) {
       return invalidCourseResult("course result stage provenance is malformed");
     }
@@ -740,9 +742,9 @@ result_persistence::StageOutcome StageCompletedChartAttemptOnConnection(
                                                         diagnostic) ||
       sourceResult.resultFingerprint.empty() || !expectedSnapshot.has_value() ||
       *expectedSnapshot != snapshot ||
-      !validateReplayReference(
-          replayFile, ReplayFileReference::RecordKind::ChartResult,
-          diagnostic) ||
+      !validateReplayReference(replayFile,
+                               ReplayFileReference::RecordKind::ChartResult,
+                               diagnostic) ||
       !validateDrafts(snapshot, irDrafts, diagnostic)) {
     return {.status = StageStatus::IntegrityConflict,
             .diagnostic = diagnostic.empty()
@@ -1051,17 +1053,17 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       !result_persistence::validatePersistedCourseResult(sourceResult,
                                                          diagnostic) ||
       sourceResult.resultFingerprint.empty() ||
-      !validateReplayReference(
-          replayFile, ReplayFileReference::RecordKind::CourseResult,
-          diagnostic)) {
+      !validateReplayReference(replayFile,
+                               ReplayFileReference::RecordKind::CourseResult,
+                               diagnostic)) {
     return {.status = StageStatus::IntegrityConflict,
             .diagnostic = diagnostic.empty()
                               ? "completed course attempt is inconsistent"
                               : std::move(diagnostic)};
   }
 
-  const auto provenance = serializeValidatedScoreProvenance(
-      sourceResult.provenance, diagnostic);
+  const auto provenance =
+      serializeValidatedScoreProvenance(sourceResult.provenance, diagnostic);
   std::vector<std::string> histories;
   std::vector<std::string> timings;
   std::vector<std::string> provenances;
@@ -1071,8 +1073,8 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
   for (const auto &stage : sourceResult.stages) {
     const auto history = gaugeHistoryJson(stage.adoptedGaugeHistory);
     const auto timing = judgementTimingJson(stage.judgementTiming);
-    const auto stageProvenance = serializeValidatedScoreProvenance(
-        stage.score.provenance, diagnostic);
+    const auto stageProvenance =
+        serializeValidatedScoreProvenance(stage.score.provenance, diagnostic);
     if (!history.has_value() || !timing.has_value() ||
         !stageProvenance.has_value()) {
       return {.status = StageStatus::IntegrityConflict,
@@ -1158,7 +1160,8 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       columnText(reservation.get(), 2) != pathText(replayFile.relativePath) ||
       sqlite3_step(reservation.get()) != SQLITE_DONE) {
     return {.status = StageStatus::IntegrityConflict,
-            .diagnostic = "completed course replay has no matching reservation"};
+            .diagnostic =
+                "completed course replay has no matching reservation"};
   }
 
   constexpr const char *resultSql =
@@ -1185,8 +1188,8 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
       bindText(resultInsert.get(), column++, sourceResult.constraintJson) &&
       sqlite3_bind_int(resultInsert.get(), column++,
                        sourceResult.completedCharts) == SQLITE_OK &&
-      sqlite3_bind_int(resultInsert.get(), column++, sourceResult.totalCharts) ==
-          SQLITE_OK &&
+      sqlite3_bind_int(resultInsert.get(), column++,
+                       sourceResult.totalCharts) == SQLITE_OK &&
       bindText(resultInsert.get(), column++,
                sourceResult.requestedPlayOption) &&
       bindText(resultInsert.get(), column++, sourceResult.assistOption) &&
@@ -1201,17 +1204,18 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
           SQLITE_OK &&
       sqlite3_bind_int(
           resultInsert.get(), column++,
-          static_cast<int>(sourceResult.gaugeAutoShiftLowerBound)) == SQLITE_OK &&
-      sqlite3_bind_int(resultInsert.get(), column++, sourceResult.longNoteMode) ==
+          static_cast<int>(sourceResult.gaugeAutoShiftLowerBound)) ==
           SQLITE_OK &&
+      sqlite3_bind_int(resultInsert.get(), column++,
+                       sourceResult.longNoteMode) == SQLITE_OK &&
       sqlite3_bind_int(resultInsert.get(), column++, sourceResult.finalScore) ==
           SQLITE_OK &&
       sqlite3_bind_int(resultInsert.get(), column++, sourceResult.maxScore) ==
           SQLITE_OK &&
       sqlite3_bind_int(resultInsert.get(), column++, sourceResult.maxCombo) ==
           SQLITE_OK &&
-      sqlite3_bind_double(resultInsert.get(), column++, sourceResult.finalGauge) ==
-          SQLITE_OK &&
+      sqlite3_bind_double(resultInsert.get(), column++,
+                          sourceResult.finalGauge) == SQLITE_OK &&
       sqlite3_bind_int(resultInsert.get(), column++, sourceResult.clearType) ==
           SQLITE_OK &&
       bindText(resultInsert.get(), column++, *provenance) &&
@@ -1246,40 +1250,39 @@ result_persistence::StageOutcome StageCompletedCourseAttemptOnConnection(
               .diagnostic = "could not prepare compact course stage"};
     }
     column = 1;
-    bound = sqlite3_bind_int(stageInsert.get(), column++, resultId) ==
-                SQLITE_OK &&
-            sqlite3_bind_int(stageInsert.get(), column++, stage.stageIndex) ==
-                SQLITE_OK &&
-            bindText(stageInsert.get(), column++, score.chartPath) &&
-            bindText(stageInsert.get(), column++, score.chartMd5) &&
-            bindText(stageInsert.get(), column++, score.chartSha256) &&
-            bindText(stageInsert.get(), column++, score.chartTitle) &&
-            bindText(stageInsert.get(), column++, score.chartArtist) &&
-            sqlite3_bind_int(stageInsert.get(), column++, stage.keyMode) ==
-                SQLITE_OK;
+    bound =
+        sqlite3_bind_int(stageInsert.get(), column++, resultId) == SQLITE_OK &&
+        sqlite3_bind_int(stageInsert.get(), column++, stage.stageIndex) ==
+            SQLITE_OK &&
+        bindText(stageInsert.get(), column++, score.chartPath) &&
+        bindText(stageInsert.get(), column++, score.chartMd5) &&
+        bindText(stageInsert.get(), column++, score.chartSha256) &&
+        bindText(stageInsert.get(), column++, score.chartTitle) &&
+        bindText(stageInsert.get(), column++, score.chartArtist) &&
+        sqlite3_bind_int(stageInsert.get(), column++, stage.keyMode) ==
+            SQLITE_OK;
     const int values[] = {score.longNoteMode, score.score,      score.maxScore,
-                          score.maxCombo,      score.comboBreak, score.pGreat,
-                          score.great,         score.good,       score.bad,
-                          score.poor,          score.kPoor,      score.fast,
+                          score.maxCombo,     score.comboBreak, score.pGreat,
+                          score.great,        score.good,       score.bad,
+                          score.poor,         score.kPoor,      score.fast,
                           score.slow};
     for (int value : values) {
-      bound = bound && sqlite3_bind_int(stageInsert.get(), column++, value) ==
-                             SQLITE_OK;
+      bound = bound &&
+              sqlite3_bind_int(stageInsert.get(), column++, value) == SQLITE_OK;
     }
     bound = bound &&
-            sqlite3_bind_double(stageInsert.get(), column++, score.finalGauge) ==
-                SQLITE_OK &&
+            sqlite3_bind_double(stageInsert.get(), column++,
+                                score.finalGauge) == SQLITE_OK &&
             sqlite3_bind_int(stageInsert.get(), column++, score.clearType) ==
                 SQLITE_OK &&
             bindText(stageInsert.get(), column++, histories[index]);
     if (stage.judgementTiming.has_value()) {
       bound = bound && bindText(stageInsert.get(), column++, timings[index]);
     } else {
-      bound = bound &&
-              sqlite3_bind_null(stageInsert.get(), column++) == SQLITE_OK;
+      bound =
+          bound && sqlite3_bind_null(stageInsert.get(), column++) == SQLITE_OK;
     }
-    bound = bound &&
-            bindText(stageInsert.get(), column++, provenances[index]);
+    bound = bound && bindText(stageInsert.get(), column++, provenances[index]);
     if (!bound || column != 27 ||
         sqlite3_step(stageInsert.get()) != SQLITE_DONE) {
       return {.status = StageStatus::StorageFailure,
@@ -1381,11 +1384,11 @@ std::vector<ReplaySummary> ListCompactChartResultsOnConnection(
     summary.maxCombo = score.maxCombo;
     summary.finalGauge = score.finalGauge;
     summary.clearType = score.clearType;
-    summary.createdAt = readCreatedAt(database, resultId).value_or(std::string{});
-    summary.replayFileState =
-        record.replayFile.has_value()
-            ? ReplaySummary::ReplayFileState::Available
-            : ReplaySummary::ReplayFileState::Missing;
+    summary.createdAt =
+        readCreatedAt(database, resultId).value_or(std::string{});
+    summary.replayFileState = record.replayFile.has_value()
+                                  ? ReplaySummary::ReplayFileState::Available
+                                  : ReplaySummary::ReplayFileState::Missing;
     if (record.replayFile.has_value()) {
       summary.replayFileSize = record.replayFile->compressedSize;
     }
@@ -1505,10 +1508,9 @@ std::vector<ReplaySummary> ListCompactCourseResultsOnConnection(
     summary.clearType = result.clearType;
     summary.createdAt =
         readCourseCreatedAt(database, resultId).value_or(std::string{});
-    summary.replayFileState =
-        record.replayFile.has_value()
-            ? ReplaySummary::ReplayFileState::Available
-            : ReplaySummary::ReplayFileState::Missing;
+    summary.replayFileState = record.replayFile.has_value()
+                                  ? ReplaySummary::ReplayFileState::Available
+                                  : ReplaySummary::ReplayFileState::Missing;
     if (record.replayFile.has_value()) {
       summary.replayFileSize = record.replayFile->compressedSize;
     }
@@ -1603,8 +1605,7 @@ ReplayRepository::loadChartReplayPlayback(int resultId) {
   {
     std::lock_guard lock(impl_->sessionMutex);
     if (!EnsureSessionDatabaseLocked()) {
-      return {.status =
-                  ChartReplayPlaybackReadOutcome::Status::StorageFailure,
+      return {.status = ChartReplayPlaybackReadOutcome::Status::StorageFailure,
               .diagnostic = "replay storage is unavailable"};
     }
     loaded = replay_repository_detail::LoadChartResultOnConnection(
@@ -1693,8 +1694,7 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
   {
     std::lock_guard lock(impl_->sessionMutex);
     if (!EnsureSessionDatabaseLocked()) {
-      return {.status =
-                  CourseReplayPlaybackReadOutcome::Status::StorageFailure,
+      return {.status = CourseReplayPlaybackReadOutcome::Status::StorageFailure,
               .diagnostic = "replay storage is unavailable"};
     }
     loaded = replay_repository_detail::LoadCourseResultOnConnection(
@@ -1746,11 +1746,12 @@ ReplayRepository::loadCourseReplayPlayback(int resultId) {
     return {.status = unavailable ? ReadStatus::ReplayUnavailable
                                   : ReadStatus::Invalid,
             .result = std::move(result),
-            .diagnostic = inspection.diagnostic.empty()
-                              ? (unavailable
-                                     ? "The course replay file was deleted or moved."
-                                     : "The course replay file is unreadable or corrupt.")
-                              : inspection.diagnostic};
+            .diagnostic =
+                inspection.diagnostic.empty()
+                    ? (unavailable
+                           ? "The course replay file was deleted or moved."
+                           : "The course replay file is unreadable or corrupt.")
+                    : inspection.diagnostic};
   }
   replay::BeatorajaReplayCodec codec;
   auto decoded = store.load(metadata, codec);
@@ -1796,4 +1797,108 @@ ReplayRepository::loadIrSubmissionSnapshot(std::string_view attemptId) {
   }
   return replay_repository_detail::LoadIrSubmissionSnapshotOnConnection(
       impl_->sessionDatabase, attemptId);
+}
+
+bool ReplayRepository::ListReplayFileReferencesSnapshot(
+    const std::filesystem::path &snapshotDatabasePath,
+    std::vector<ReplayFileReference> &references, std::string &errorMessage) {
+  references.clear();
+  if (snapshotDatabasePath.empty()) {
+    errorMessage = "replay reference snapshot path is empty";
+    return false;
+  }
+  std::error_code filesystemError;
+  const auto status =
+      std::filesystem::symlink_status(snapshotDatabasePath, filesystemError);
+  if (filesystemError || !std::filesystem::is_regular_file(status) ||
+      std::filesystem::is_symlink(status)) {
+    errorMessage = "replay reference snapshot is not a regular database file";
+    return false;
+  }
+
+  ReplayRepository snapshot(snapshotDatabasePath);
+  if (!snapshot.EnsureSchema()) {
+    errorMessage = "replay reference snapshot schema is unavailable";
+    return false;
+  }
+
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(snapshot.impl_->sessionMutex);
+  if (!snapshot.EnsureSessionDatabaseLocked()) {
+    errorMessage = "replay reference snapshot storage is unavailable";
+    return false;
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          snapshot.impl_->sessionDatabase,
+          "SELECT id,chart_result_id,course_result_id,stem,history_index,"
+          "relative_path,content_sha256,compressed_size,codec_version FROM "
+          "replay_files ORDER BY relative_path",
+          statement) != SQLITE_OK) {
+    errorMessage = "could not read replay reference snapshot";
+    return false;
+  }
+
+  int result = SQLITE_OK;
+  while ((result = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    const bool chartReference =
+        sqlite3_column_type(statement.get(), 1) == SQLITE_INTEGER;
+    const bool courseReference =
+        sqlite3_column_type(statement.get(), 2) == SQLITE_INTEGER;
+    const std::int64_t recordId =
+        sqlite3_column_int64(statement.get(), chartReference ? 1 : 2);
+    const std::int64_t compressedSize =
+        sqlite3_column_int64(statement.get(), 7);
+    if (sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
+        chartReference == courseReference ||
+        sqlite3_column_type(statement.get(), chartReference ? 2 : 1) !=
+            SQLITE_NULL ||
+        sqlite3_column_type(statement.get(), 3) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 5) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 6) != SQLITE_TEXT ||
+        sqlite3_column_type(statement.get(), 7) != SQLITE_INTEGER ||
+        sqlite3_column_type(statement.get(), 8) != SQLITE_INTEGER ||
+        sqlite3_column_int64(statement.get(), 0) <= 0 || recordId <= 0 ||
+        recordId > std::numeric_limits<int>::max() || compressedSize <= 0 ||
+        sqlite3_column_int64(statement.get(), 8) !=
+            replay::BeatorajaReplayCodec::kCodecVersion) {
+      references.clear();
+      errorMessage = "replay reference snapshot contains an invalid row";
+      return false;
+    }
+    ReplayFileReference reference{
+        .id = sqlite3_column_int64(statement.get(), 0),
+        .recordKind = chartReference
+                          ? ReplayFileReference::RecordKind::ChartResult
+                          : ReplayFileReference::RecordKind::CourseResult,
+        .recordId = static_cast<int>(recordId),
+        .stem = columnText(statement.get(), 3),
+        .historyIndex = sqlite3_column_int64(statement.get(), 4),
+        .relativePath = std::filesystem::path(columnText(statement.get(), 5)),
+        .contentSha256 = columnText(statement.get(), 6),
+        .compressedSize = static_cast<std::uint64_t>(compressedSize),
+        .codecVersion = sqlite3_column_int(statement.get(), 8),
+    };
+    ReplayFileReference validationReference = reference;
+    validationReference.id = 0;
+    validationReference.recordId = 0;
+    std::string diagnostic;
+    if (!validateReplayReference(validationReference, reference.recordKind,
+                                 diagnostic)) {
+      references.clear();
+      errorMessage = diagnostic.empty()
+                         ? "replay reference snapshot contains an invalid row"
+                         : std::move(diagnostic);
+      return false;
+    }
+    references.push_back(std::move(reference));
+  }
+  if (result != SQLITE_DONE) {
+    references.clear();
+    errorMessage = "could not finish reading replay reference snapshot";
+    return false;
+  }
+  errorMessage.clear();
+  return true;
 }
